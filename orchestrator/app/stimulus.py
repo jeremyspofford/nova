@@ -26,6 +26,9 @@ GOAL_SPEC_APPROVED = "goal.spec_approved"
 GOAL_SPEC_REJECTED = "goal.spec_rejected"
 GOAL_COMMENTED = "goal.commented"
 
+# CI capability platform stimuli (M8 — cortex wiring for CI triage)
+CI_WORKFLOW_RUN_FAILURE = "ci.workflow_run.failure"
+
 _redis: aioredis.Redis | None = None
 
 

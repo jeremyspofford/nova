@@ -44,6 +44,9 @@ GOAL_COMPLETED = "goal.completed"
 GOAL_BUDGET_PAUSED = "goal.budget_paused"
 SUBGOAL_TERMINATED = "subgoal.terminated"  # any terminal: completed | failed | cancelled
 
+# CI capability platform stimuli (M8 — cortex wiring for CI triage)
+CI_WORKFLOW_RUN_FAILURE = "ci.workflow_run.failure"
+
 _redis: aioredis.Redis | None = None
 
 

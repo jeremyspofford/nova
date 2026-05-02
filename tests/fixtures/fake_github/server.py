@@ -149,6 +149,52 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
             )
         return {"ok": True, "delivered_status": resp.status_code}
 
+    @app.post("/repos/{owner}/{repo}/hooks/{hook_id}/workflow_run_failure")
+    async def fire_workflow_run_failure(owner: str, repo: str, hook_id: int, body: dict | None = None):
+        """Fire a workflow_run failure event to the hook's target URL.
+
+        Sends an HMAC-signed workflow_run payload with conclusion=failure.
+        Used by integration tests to trigger the cortex CI triage stimulus path.
+        """
+        hook = state.get("hooks", {}).get(hook_id)
+        if not hook:
+            raise HTTPException(status_code=404, detail="hook not found")
+        secret = hook["config"].get("secret", "")
+        target_url = hook["config"].get("url", "")
+
+        body = body or {}
+        run_id = body.get("run_id", 9999001)
+        head_sha = body.get("head_sha", "abc123def456")
+        head_branch = body.get("head_branch", "feature-triage-test")
+        workflow_name = body.get("workflow_name", "tests")
+
+        event_payload = json.dumps({
+            "workflow_run": {
+                "id": run_id,
+                "name": workflow_name,
+                "head_sha": head_sha,
+                "head_branch": head_branch,
+                "conclusion": "failure",
+                "status": "completed",
+                "html_url": (
+                    f"http://fake-github/{owner}/{repo}/actions/runs/{run_id}"
+                ),
+            }
+        }).encode()
+
+        sig = "sha256=" + hmac.new(secret.encode(), event_payload, hashlib.sha256).hexdigest()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                target_url,
+                content=event_payload,
+                headers={
+                    "X-GitHub-Event": "workflow_run",
+                    "X-Hub-Signature-256": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+        return {"ok": True, "delivered_status": resp.status_code, "run_id": run_id}
+
     return app
 
 

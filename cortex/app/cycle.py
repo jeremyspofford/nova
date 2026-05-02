@@ -23,6 +23,7 @@ from .drives import (
     DriveContext,
     DriveResult,
     DriveWinner,
+    ci_triage,
     evaluate,
     improve,
     learn,
@@ -31,6 +32,7 @@ from .drives import (
     reflect,
     serve,
 )
+from .stimulus import CI_WORKFLOW_RUN_FAILURE
 from .journal import read_user_replies_since, write_entry
 from .memory import (
     mark_engrams_used,
@@ -228,6 +230,21 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
                         log.debug("Failed to record background reflection: %s", e2)
             except Exception as e:
                 log.warning("Failed to process background task %s: %s", pending.task_id, e)
+
+        # ── Reactive stimulus dispatch ─────────────────────────────────────
+        # Process CI triage stimuli before drive evaluation — they dispatch
+        # Goals directly and don't need to go through the drive scoring path.
+        for s in state.stimuli:
+            if s.get("type") == CI_WORKFLOW_RUN_FAILURE:
+                try:
+                    result = await ci_triage.handle_stimulus(s)
+                    log.info(
+                        "CI triage stimulus handled: status=%s repo=%s run_id=%s",
+                        result.get("status"), s.get("repo") or s.get("payload", {}).get("repo"),
+                        s.get("run_id") or s.get("payload", {}).get("run_id"),
+                    )
+                except Exception as e:
+                    log.warning("CI triage stimulus handler failed: %s", e)
 
         # Query engram memory for context
         goal_context = ""

@@ -164,17 +164,31 @@ async def github_webhook(
 
     if x_github_event == "workflow_run":
         payload = json.loads(body)
-        conclusion = payload.get("workflow_run", {}).get("conclusion")
+        wfr = payload.get("workflow_run", {})
+        conclusion = wfr.get("conclusion")
         if conclusion == "failure":
-            # v1: cortex stimulus dispatch deferred to M8 — record last_event_at only
             async with pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE github_webhooks SET last_event_at=now() WHERE id=$1",
                     matching_hook["id"],
                 )
+            from app.stimulus import CI_WORKFLOW_RUN_FAILURE, emit_stimulus
+            await emit_stimulus(
+                CI_WORKFLOW_RUN_FAILURE,
+                payload={
+                    "tenant_id": str(matching_hook["tenant_id"]),
+                    "credential_id": str(matching_hook["credential_id"]),
+                    "repo": matching_hook["repo"],
+                    "run_id": wfr.get("id"),
+                    "head_sha": wfr.get("head_sha"),
+                    "head_branch": wfr.get("head_branch"),
+                    "workflow_name": wfr.get("name"),
+                    "html_url": wfr.get("html_url"),
+                },
+            )
             logger.info(
-                "workflow_run.failure on repo=%s — cortex stimulus dispatch deferred to M8",
-                matching_hook["repo"],
+                "workflow_run.failure on repo=%s run_id=%s — cortex stimulus pushed",
+                matching_hook["repo"], wfr.get("id"),
             )
         return {"ok": True}
 
