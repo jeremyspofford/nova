@@ -299,9 +299,30 @@ function RegisterWebhookModal({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<{ hook_id: number; status: string } | null>(null)
 
-  const fullUrl = targetBase
-    ? `${targetBase.replace(/\/$/, '')}/api/v1/webhooks/github`
-    : ''
+  const trimmed = targetBase.trim().replace(/\/$/, '')
+  const fullUrl = trimmed ? `${trimmed}/api/v1/webhooks/github` : ''
+
+  // Reject obvious mistakes: the GitHub repo URL itself, or *.github.com,
+  // or anything that already ends in /api/v1/webhooks/github (double-append).
+  const validationError = ((): string | null => {
+    if (!trimmed) return null
+    if (!/^https?:\/\//.test(trimmed)) return 'Must start with http:// or https://'
+    try {
+      const u = new URL(trimmed)
+      if (u.hostname === 'github.com' || u.hostname.endsWith('.github.com')) {
+        return "That's the GitHub repo URL. Enter your Nova orchestrator's public URL instead — the host GitHub will POST events to."
+      }
+      if (u.pathname.includes('/api/v1/webhooks/github')) {
+        return 'Enter the base URL only — Nova appends /api/v1/webhooks/github automatically.'
+      }
+      if (u.hostname === 'localhost' || u.hostname.startsWith('127.') || u.hostname.startsWith('192.168.') || u.hostname.startsWith('10.')) {
+        return "GitHub can't reach private addresses. You need a public URL via Cloudflare Tunnel, Tailscale Funnel, or ngrok."
+      }
+      return null
+    } catch {
+      return 'Not a valid URL'
+    }
+  })()
 
   const register = useMutation({
     mutationFn: () => registerGithubWebhook({
@@ -310,14 +331,14 @@ function RegisterWebhookModal({
       target_url: fullUrl,
     }),
     onSuccess: (res) => {
-      localStorage.setItem(PERSIST_KEY, targetBase.replace(/\/$/, ''))
+      localStorage.setItem(PERSIST_KEY, trimmed)
       setSuccess({ hook_id: res.hook_id, status: res.status })
       setError(null)
     },
     onError: (e: Error) => setError(e.message),
   })
 
-  const canSubmit = targetBase.trim().length > 0 && /^https?:\/\//.test(targetBase) && !register.isPending
+  const canSubmit = trimmed.length > 0 && !validationError && !register.isPending
 
   return (
     <Modal
@@ -360,30 +381,32 @@ function RegisterWebhookModal({
         ) : (
           <>
             <p className="text-compact text-content-secondary">
-              GitHub needs a publicly-reachable URL to deliver webhook events to.
-              {' '}Enter your orchestrator's public base URL — Nova will append
-              {' '}<code className="text-micro bg-surface-elevated px-1 py-0.5 rounded">/api/v1/webhooks/github</code>.
+              GitHub will POST workflow events to <em>your Nova orchestrator</em>,
+              {' '}so it needs a publicly-reachable URL pointing at this Nova
+              {' '}instance — not the GitHub repo URL. Tailnet-only addresses
+              {' '}don't work; you need a tunnel (Cloudflare Tunnel, Tailscale
+              {' '}Funnel, ngrok) that exposes localhost:8000 publicly.
             </p>
 
             <div>
               <label className="text-caption text-content-secondary block mb-1.5">
-                Public base URL
+                Nova orchestrator public base URL
               </label>
               <Input
                 value={targetBase}
                 onChange={e => setTargetBase(e.target.value)}
-                placeholder="https://nova.example.com"
+                placeholder="https://abc-def-ghi.trycloudflare.com"
                 className="font-mono"
+                error={validationError ?? undefined}
               />
-              {fullUrl && (
+              {fullUrl && !validationError && (
                 <p className="text-micro text-content-tertiary mt-1.5">
                   Webhook target: <span className="font-mono text-content-secondary">{fullUrl}</span>
                 </p>
               )}
               <p className="text-micro text-content-tertiary mt-1.5">
-                Examples: <code>https://nova.&lt;tailnet&gt;.ts.net</code> (Tailscale Funnel),
-                {' '}<code>https://your-tunnel.trycloudflare.com</code> (Cloudflare Tunnel),
-                {' '}or your ngrok URL. Saved to this browser on success.
+                Quick tunnel: <code className="bg-surface-elevated px-1 py-0.5 rounded">cloudflared tunnel --url http://localhost:8000</code>
+                {' '}prints a fresh <code>*.trycloudflare.com</code> URL. Saved to this browser on success.
               </p>
             </div>
 
