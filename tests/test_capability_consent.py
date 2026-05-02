@@ -49,7 +49,7 @@ async def test_propose_tier_auto_allows(pool):
 async def test_mutate_tier_creates_pending(pool):
     decision = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=f"test_open_pr_{uuid4().hex[:8]}", tool_kind="native",
         blast_radius=BlastRadius.MUTATE,
         args={"repo": "x/y", "branch": "fix"},
         provider_kind="github", target="repos/x/y", reversible=True,
@@ -67,7 +67,7 @@ async def test_mutate_tier_creates_pending(pool):
 async def test_approve_flips_status(pool):
     d = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=f"test_open_pr_{uuid4().hex[:8]}", tool_kind="native",
         blast_radius=BlastRadius.MUTATE, args={"repo": "x/y"},
         provider_kind="github", target="repos/x/y", reversible=True,
         actor_kind="agent", actor_id="t",
@@ -85,7 +85,7 @@ async def test_approve_flips_status(pool):
 async def test_reject_flips_status(pool):
     d = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=f"test_open_pr_{uuid4().hex[:8]}", tool_kind="native",
         blast_radius=BlastRadius.MUTATE, args={"repo": "x/y"},
         provider_kind="github", target="repos/x/y", reversible=True,
         actor_kind="agent", actor_id="t",
@@ -103,7 +103,7 @@ async def test_reject_flips_status(pool):
 async def test_decide_already_decided_returns_false(pool):
     d = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=f"test_open_pr_{uuid4().hex[:8]}", tool_kind="native",
         blast_radius=BlastRadius.MUTATE, args={"repo": "x/y"},
         provider_kind="github", target="repos/x/y", reversible=True,
         actor_kind="agent", actor_id="t",
@@ -122,9 +122,11 @@ async def test_decide_already_decided_returns_false(pool):
 
 @pytest.mark.asyncio
 async def test_remember_creates_consent_rule(pool):
+    # Use same unique tool name for both gate calls so the rule applies
+    unique_tool = f"test_open_pr_{uuid4().hex[:8]}"
     d = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=unique_tool, tool_kind="native",
         blast_radius=BlastRadius.MUTATE, args={"repo": "x/y"},
         provider_kind="github", target="repos/x/y", reversible=True,
         actor_kind="agent", actor_id="t",
@@ -140,7 +142,7 @@ async def test_remember_creates_consent_rule(pool):
     # Now a second matching call should auto-approve via rule
     d2 = await gate(
         pool, tenant_id=TENANT, user_id=USER, task_id=None,
-        tool_name="open_fix_pr", tool_kind="native",
+        tool_name=unique_tool, tool_kind="native",
         blast_radius=BlastRadius.MUTATE, args={"repo": "x/z"},
         provider_kind="github", target="repos/x/z", reversible=True,
         actor_kind="agent", actor_id="t",
