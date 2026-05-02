@@ -4,11 +4,20 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
+import asyncpg
 from app.auth import AdminDep
 from app.capabilities import credentials as cred_db
 from app.capabilities import consent as consent_db
+from app.capabilities import watched_repos as wr_db
 from app.capabilities.consent import ApprovalDecision
-from app.capabilities.models import Credential, CredentialCreate, CredentialHealth
+from app.capabilities.models import (
+    Credential,
+    CredentialCreate,
+    CredentialHealth,
+    WatchedRepo,
+    WatchedRepoCreate,
+    WatchedRepoUpdate,
+)
 from app.db import get_pool
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
@@ -152,3 +161,82 @@ async def test_credential(
         api_base=api_base,
     )
     return CredentialTestResult(health=health)
+
+
+# ── Watched repos ────────────────────────────────────────────────────────────
+# Per-repo CI triage configuration. A credential can watch multiple repos with
+# different rules (trigger mode, polling interval, daily budget, active hours).
+# Consumed by cortex.app.drives.ci_triage and orchestrator.app.polling_worker.
+
+
+@router.get(
+    "/credentials/{cred_id}/watched-repos",
+    response_model=list[WatchedRepo],
+)
+async def list_credential_watched_repos(
+    cred_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    return await wr_db.list_watched_repos(
+        pool, tenant_id=DEFAULT_TENANT, credential_id=cred_id,
+    )
+
+
+@router.post(
+    "/credentials/{cred_id}/watched-repos",
+    response_model=WatchedRepo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_credential_watched_repo(
+    cred_id: UUID,
+    payload: WatchedRepoCreate,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    cred = await cred_db.get_credential(
+        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin",
+    )
+    if not cred:
+        raise HTTPException(404, "credential not found")
+    try:
+        return await wr_db.create_watched_repo(
+            pool,
+            tenant_id=DEFAULT_TENANT,
+            user_id=DEFAULT_USER,
+            credential_id=cred_id,
+            payload=payload,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, "repo already watched for this tenant")
+
+
+@router.patch("/watched-repos/{repo_id}", response_model=WatchedRepo)
+async def update_watched_repo_endpoint(
+    repo_id: UUID,
+    payload: WatchedRepoUpdate,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    updated = await wr_db.update_watched_repo(
+        pool, tenant_id=DEFAULT_TENANT, repo_id=repo_id, payload=payload,
+    )
+    if not updated:
+        raise HTTPException(404, "watched repo not found")
+    return updated
+
+
+@router.delete(
+    "/watched-repos/{repo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_watched_repo_endpoint(
+    repo_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    deleted = await wr_db.delete_watched_repo(
+        pool, tenant_id=DEFAULT_TENANT, repo_id=repo_id,
+    )
+    if not deleted:
+        raise HTTPException(404, "watched repo not found")

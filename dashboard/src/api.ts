@@ -1257,3 +1257,107 @@ export async function getSelfModStatus(): Promise<SelfModStatus> {
 export async function getSelfModPRs(): Promise<SelfModPR[]> {
   return apiFetch<SelfModPR[]>('/api/v1/selfmod/prs')
 }
+
+// ── Capability credentials & watched repos ──────────────────────────────────
+
+export type CredentialBackend = 'builtin' | 'vault' | 'onepassword' | 'bitwarden'
+export type AuthMethod = 'pat' | 'github_app' | 'oauth'
+export type CredentialHealth = 'healthy' | 'expired' | 'revoked' | 'invalid' | 'unknown'
+export type TriggerMode = 'webhook_with_polling_fallback' | 'webhook_only' | 'polling_only'
+
+export interface Credential {
+  id: string
+  tenant_id: string
+  user_id: string | null
+  provider_kind: string
+  auth_method: AuthMethod
+  label: string
+  backend: CredentialBackend
+  scopes: Record<string, unknown> | null
+  expires_at: string | null
+  last_validated_at: string | null
+  health: CredentialHealth
+  created_at: string
+}
+
+export interface CredentialCreatePayload {
+  provider_kind: string
+  auth_method: AuthMethod
+  label: string
+  secret: string
+  scopes?: Record<string, unknown>
+  backend?: CredentialBackend
+}
+
+export interface WatchedRepo {
+  id: string
+  tenant_id: string
+  user_id: string | null
+  credential_id: string
+  repo: string
+  trigger_mode: TriggerMode
+  polling_interval_min: number
+  workflow_pattern: string | null
+  // Server returns TIME columns as ISO time strings ("HH:MM:SS"), or null.
+  active_hours_start: string | null
+  active_hours_end: string | null
+  daily_budget: number
+  enabled: boolean
+  created_at: string
+}
+
+export interface WatchedRepoCreatePayload {
+  repo: string
+  trigger_mode?: TriggerMode
+  polling_interval_min?: number
+  workflow_pattern?: string | null
+  active_hours_start?: string | null
+  active_hours_end?: string | null
+  daily_budget?: number
+  enabled?: boolean
+}
+
+export type WatchedRepoUpdatePayload = Partial<Omit<WatchedRepoCreatePayload, 'repo'>>
+
+export const listCredentials = (provider_kind?: string) => {
+  const qs = provider_kind ? `?provider_kind=${encodeURIComponent(provider_kind)}` : ''
+  return apiFetch<Credential[]>(`/api/v1/capabilities/credentials${qs}`)
+}
+
+export const createCredential = (payload: CredentialCreatePayload) =>
+  apiFetch<Credential>('/api/v1/capabilities/credentials', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
+export const deleteCredential = (id: string) =>
+  apiFetch<void>(`/api/v1/capabilities/credentials/${id}`, { method: 'DELETE' })
+
+export const testCredential = (id: string) =>
+  apiFetch<{ health: CredentialHealth }>(
+    `/api/v1/capabilities/credentials/${id}/test`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+
+export const listWatchedRepos = (credentialId: string) =>
+  apiFetch<WatchedRepo[]>(
+    `/api/v1/capabilities/credentials/${credentialId}/watched-repos`,
+  )
+
+export const createWatchedRepo = (
+  credentialId: string,
+  payload: WatchedRepoCreatePayload,
+) =>
+  apiFetch<WatchedRepo>(
+    `/api/v1/capabilities/credentials/${credentialId}/watched-repos`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+
+export const updateWatchedRepo = (id: string, payload: WatchedRepoUpdatePayload) =>
+  apiFetch<WatchedRepo>(`/api/v1/capabilities/watched-repos/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+
+export const deleteWatchedRepo = (id: string) =>
+  apiFetch<void>(`/api/v1/capabilities/watched-repos/${id}`, { method: 'DELETE' })

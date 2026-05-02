@@ -6,6 +6,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
+  Link2,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -18,6 +19,7 @@ import { ProviderStatusSection } from './settings/ProviderStatusSection'
 import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
 import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
+import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
 import { RecoverySection } from './settings/RecoverySection'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { PipelineModelsSection } from './settings/PipelineModelsSection'
@@ -132,6 +134,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Connections',
     icon: Globe,
     items: [
+      { id: 'connected-services', label: 'Connected Services', icon: Link2 },
       { id: 'remote-access', label: 'Remote Access', icon: Globe },
       { id: 'chat-integrations', label: 'Chat Integrations', icon: MessageSquare },
       { id: 'editor', label: 'Editor', icon: Code },
@@ -770,6 +773,12 @@ export function Settings() {
         )}
 
         {/* ── Connections ──────────────────────────────────────────── */}
+
+        {show('connected-services') && (
+          <div id="connected-services">
+            <ConnectedServicesSection />
+          </div>
+        )}
 
         {show('remote-access') && (
           <div id="remote-access">

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, time
 from enum import Enum
 from typing import Literal
 from uuid import UUID
@@ -63,3 +63,50 @@ class CredentialAuditEntry(BaseModel):
     timestamp: datetime
     success: bool
     detail: str | None
+
+
+class TriggerMode(str, Enum):
+    WEBHOOK_WITH_POLLING_FALLBACK = "webhook_with_polling_fallback"
+    WEBHOOK_ONLY = "webhook_only"
+    POLLING_ONLY = "polling_only"
+
+
+class WatchedRepoCreate(BaseModel):
+    """Inbound payload — credential_id comes from the URL path."""
+    repo: str = Field(..., examples=["owner/repo"], pattern=r"^[\w.-]+/[\w.-]+$")
+    trigger_mode: TriggerMode = TriggerMode.WEBHOOK_WITH_POLLING_FALLBACK
+    polling_interval_min: int = Field(15, ge=1, le=1440)
+    workflow_pattern: str | None = None
+    active_hours_start: time | None = None
+    active_hours_end: time | None = None
+    daily_budget: int = Field(20, ge=1, le=1000)
+    enabled: bool = True
+
+
+class WatchedRepoUpdate(BaseModel):
+    """All fields optional. Use exclude_unset semantics — fields not present
+    are left untouched; fields explicitly set to None are cleared (for nullable
+    columns) or rejected (for non-nullable columns)."""
+    trigger_mode: TriggerMode | None = None
+    polling_interval_min: int | None = Field(None, ge=1, le=1440)
+    workflow_pattern: str | None = None
+    active_hours_start: time | None = None
+    active_hours_end: time | None = None
+    daily_budget: int | None = Field(None, ge=1, le=1000)
+    enabled: bool | None = None
+
+
+class WatchedRepo(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    user_id: UUID | None
+    credential_id: UUID
+    repo: str
+    trigger_mode: TriggerMode
+    polling_interval_min: int
+    workflow_pattern: str | None
+    active_hours_start: time | None
+    active_hours_end: time | None
+    daily_budget: int
+    enabled: bool
+    created_at: datetime
