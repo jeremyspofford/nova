@@ -83,11 +83,20 @@ PROPOSE TIER (auto, no consent — diagnostic output only, no external mutation)
 MUTATE TIER (consent required, async one-click approve)
   open_fix_pr(repo, branch, patch, base) → pr_url
   comment_on_pr(repo, pr_number, body) → comment_url
+
+SETUP TIER (consent required at first watched-repo add; MUTATE-classified)
+  register_webhook(repo, events, target_url, secret) → hook_id
+  unregister_webhook(repo, hook_id)
+  verify_webhook(repo, hook_id)            ← READ — health check
 ```
 
 **Branching heuristic** (encoded in `compare_to_main` + agent prompt): default to branching off the failing branch and PR back into it; switch to branching off main when the failing test also fails on main's recent CI history or references files not modified in the PR's diff. This ensures fixes go where the bug lives, not where it was discovered.
 
 **Out of v1:** repo creation, workflow YAML edits, force-push, branch-delete, secret access, releases, cross-org access. Watched repos must be under `jeremyspofford/*`.
+
+**Webhook self-bootstrapping (added):** when a user adds a watched repo via the dashboard, Nova generates a per-hook HMAC secret, calls `POST /repos/.../hooks` to create the `workflow_run` webhook, stores `(hook_id, encrypted_secret, target_url)` in a new `github_webhooks` table, and verifies via the ping event. No manual GitHub-side configuration is required from the user — the credential just needs `admin:repo_hook` scope. If creation fails (scope missing, network error, repo lacks permission), Nova falls back to polling-only for that repo and surfaces the failure in the dashboard. `register_webhook` is a SETUP-tier MUTATE call that goes through the consent gate at first add — exercising the consent platform at setup time, not just runtime.
+
+**Required PAT scopes:** `repo`, `workflow:read`, `admin:repo_hook`. Dashboard credential-add flow surfaces this; if `admin:repo_hook` is absent, the "Webhook + polling fallback" option in the watched-repo form is greyed out and only "Polling only" remains selectable.
 
 **ToolGroup naming:** the registry's existing `GitHub` group keeps display_name `Self-Modification` (Nova's own repo). The new `github_external` group's display_name should be `GitHub (External Repos)` so the dashboard's permissions grid clearly distinguishes the two.
 
@@ -383,14 +392,59 @@ Each row: `content_hash = sha256(prev_hash || canonical_json(row_excluding_hashe
 
 ## 9. Cortex wiring (autonomous loop)
 
-### 9.1 Trigger sources (configurable per repo)
+### 9.1 Trigger sources (per repo, three-tier ingress story)
 
-| Source | When | Setup cost |
-|---|---|---|
-| Cron polling | every 5/15/30/60 min, cortex enumerates watched repos, queries GitHub for failed runs not yet triaged | Zero |
-| Webhook | GitHub `workflow_run.failure` → `POST /api/v1/webhooks/github` on **orchestrator** (HMAC-validated; new router file `orchestrator/app/webhooks_router.py`) → stimulus row in cortex DB via internal HTTP call | One-time webhook config |
+| Tier | Setup | Latency | Works for |
+|---|---|---|---|
+| **Polling** (always available) | Zero config — credential + watchlist only | Up to 15 min | Everyone, including self-hosted Nova without public ingress |
+| **Direct webhook** (v1 default when ingress available) | **Nova creates the hook itself** at `add watched repo` time via `register_webhook` tool. User does no GitHub-side configuration. | Seconds | SaaS, self-hosted with `cloudflared` / ngrok / public IP |
+| **Managed webhook proxy** (v2 future) | User connects self-hosted Nova to a Nova-managed proxy that queues incoming webhooks; instance long-polls to drain | Seconds | Self-hosted without public ingress |
 
-v1 default: polling at 15-min interval. Webhook is wired but optional.
+**Webhook bootstrap flow** (when user has public ingress and `admin:repo_hook` scope):
+
+```
+[User] Add Watched Repo → Trigger: ●(Webhook + polling fallback)
+       │
+       ▼
+[Nova] generates HMAC secret; consent gate fires (MUTATE on third-party repo)
+       │
+       ▼  approved (one-time per repo)
+[Nova] POST /repos/.../hooks { events:['workflow_run'], url, secret, content_type:'json' }
+       │
+       ▼
+[Nova] stores in github_webhooks table; verifies via ping event → status='verified'
+       │
+       ▼
+cortex.quality drive uses webhooks for this repo;
+polling acts as failsafe (re-fires every 60 min to catch dropped events)
+```
+
+**Webhook target endpoint:** `POST /api/v1/webhooks/github` on **orchestrator** (HMAC-validated against `github_webhooks.encrypted_secret`; new router file `orchestrator/app/webhooks_router.py`). Validates payload, writes a stimulus row in cortex DB via internal HTTP call.
+
+**Polling singleton election:** even with webhooks as primary, polling is the always-on fallback (catches dropped webhook events). Polling is run by exactly one orchestrator instance at a time, elected via Redis lease (`nova:poll:github:lease`, 5-min TTL, refreshed every 60s). Multi-instance SaaS deployments avoid duplicate API calls; v1 single-instance pays nothing for this.
+
+**Webhook health monitoring:** cortex `maintain` drive runs daily, pinging each `github_webhooks` row's hook_id. Failed pings → status='failed' → dashboard surfaces an alert and Nova re-bootstraps the webhook automatically (next scheduled `maintain` run).
+
+### 9.1.1 New schema: `github_webhooks`
+
+```sql
+CREATE TABLE github_webhooks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    credential_id   UUID NOT NULL REFERENCES capability_credentials(id),
+    repo            TEXT NOT NULL,                          -- 'jeremyspofford/some-repo'
+    hook_id         BIGINT NOT NULL,                        -- GitHub-issued, used for delete/update
+    target_url      TEXT NOT NULL,
+    encrypted_secret BYTEA NOT NULL,                        -- HMAC secret, vault-encrypted
+    events          TEXT[] NOT NULL,                        -- ['workflow_run']
+    status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','active','verified','failed','revoked')),
+    last_event_at   TIMESTAMPTZ,                            -- last received webhook event
+    last_pinged_at  TIMESTAMPTZ,                            -- last health check
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_github_webhooks_repo ON github_webhooks(tenant_id, repo);
+```
 
 ### 9.2 Stimulus → Goal → Task
 
@@ -563,6 +617,8 @@ Test resources prefixed `nova-test-` per existing convention; teardown via fixtu
 | AWS destructive operations | Large | First DESTRUCT-tier tools; typed-confirm UX; per-resource blast-radius caps |
 | Per-task workspace (build/test/deploy in browser) | Largest | Containerized workspace with Playwright + language toolchains; file-system sandbox; archetype D from the brainstorm |
 | Tier E auto-approve rules (data-driven) | Medium | `consent_rules` table already exists; UI for review/manage; cortex proposal flow |
+| **Managed webhook proxy** (v2) | Medium | Nova-hosted public endpoint receives webhooks for self-hosted instances without public ingress; queues per tenant; instances long-poll to drain. Solves the "I want webhooks but can't expose a public endpoint" gap. |
+| **Phone number for Nova** (v3) | Large | Twilio (or similar) integration: SMS approvals for low-blast-radius mutations, voice-call paging for budget-exceeded or anomaly events, identity binding (phone number → user), reuses approver-agnostic decision API. Likely a new `comms` microservice or extension of the existing `voice-service`. Out of v1 platform scope but architecturally compatible — the consent-gate's approver-agnostic API surface (per Q3 resolution) is exactly what makes this slot in cleanly later. |
 
 ## 12. Risks and open questions
 
@@ -576,18 +632,19 @@ Test resources prefixed `nova-test-` per existing convention; teardown via fixtu
 | Credential rotation breaking long-running stdio MCP processes | Process pool keyed by `key_version`; graceful restart on rotation |
 | Cross-tenant audit log access | Per-tenant chain; queries always scoped by `tenant_id`; tested |
 
-### Open questions for spec review
+### Resolved decisions (post-brainstorm)
 
-1. Should the `github_external` group eventually merge with the existing `GitHub` (Self-Modification) group, or stay separate? (Current proposal: separate. Self-Modification has unique reasoning about Nova's own repo that arbitrary repos don't need.)
-2. Should v1 ship with one polling worker per orchestrator instance, or a singleton-elected polling worker for HA? (Current proposal: singleton via Redis lease. Simpler for v1.)
-3. Do we want Slack/Telegram-side approval for inline-chat mutations (via the existing chat-bridge service), or dashboard-only for v1? (Current proposal: dashboard-only for v1; chat-bridge approval as v1.5 enhancement.)
+1. **`github_external` stays separate from `GitHub` (Self-Modification) for v1.** Plan to merge in a future migration once `consent_rules` is mature enough to express "self-modification requires extra confirmation" without needing two groups.
+2. **Singleton-elected polling via Redis lease.** Even though v1 single-instance pays nothing for this, the design avoids the multi-tenant rate-limit time bomb later. Polling is the always-on fallback even with webhooks as primary trigger.
+3. **Dashboard-only approval surface for v1, but the decision API is approver-agnostic.** The `approval_requests` row records `decided_via TEXT` ('dashboard' | 'slack' | 'telegram' | 'sms' | 'voice' | 'cli'); the `POST /api/v1/capabilities/approvals/{id}/decide` endpoint accepts any authenticated client. v1.5 adds chat-bridge as a second client without backend changes; v3 adds phone-based approvals (SMS/voice via the future phone-number capability) likewise without backend changes.
+4. **Webhooks default-on with self-bootstrapping** (Nova creates the hook itself when scope allows), polling-only as fallback for users without `admin:repo_hook` scope or public ingress. Eliminates the manual webhook config that originally pushed polling to be the default.
 
 ## 13. Acceptance criteria (v1 definition of done)
 
-1. Add a GitHub PAT via dashboard → credential row encrypted at rest, validated against real GitHub `/user` endpoint, health green.
-2. Configure a watched repo with 15-min polling.
+1. Add a GitHub PAT (scopes: `repo`, `workflow:read`, `admin:repo_hook`) via dashboard → credential row encrypted at rest, validated against real GitHub `/user` endpoint, health green.
+2. Configure a watched repo with default trigger (Webhook + polling fallback) → consent card appears for `register_webhook` MUTATE; approve → webhook created on the repo, verified via ping, `github_webhooks.status='verified'`.
 3. Push a commit that breaks CI on that repo.
-4. Within 16 minutes, an approval card appears in the dashboard's Pending Approvals panel.
+4. Within seconds (webhook path) or 16 minutes (polling fallback), an approval card appears in the dashboard's Pending Approvals panel.
 5. Approve the card. A PR opens against the failing branch with a minimal fix.
 6. CI on the fix-PR passes.
 7. View the audit trail for the triage task; every tool call, consent event, and credential use is recorded with hash chain intact.
