@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Github, Link2, Plus, Trash2, RefreshCw, Loader2, Pencil,
-  Eye, EyeOff, AlertCircle, XCircle,
+  Github, Link2, Plus, Trash2, RefreshCw, Loader2, Pencil, Webhook,
+  Eye, EyeOff, AlertCircle, XCircle, CheckCircle2,
 } from 'lucide-react'
 import {
   listCredentials, createCredential, deleteCredential, testCredential,
   listWatchedRepos, createWatchedRepo, updateWatchedRepo, deleteWatchedRepo,
+  registerGithubWebhook,
   type Credential, type CredentialHealth,
   type WatchedRepo, type WatchedRepoUpdatePayload,
 } from '../../api'
@@ -283,12 +284,138 @@ function EditWatchedRepoModal({
   )
 }
 
+// ── Register Webhook Modal ───────────────────────────────────────────────────
+
+function RegisterWebhookModal({
+  repo, open, onClose,
+}: {
+  repo: WatchedRepo
+  open: boolean
+  onClose: () => void
+}) {
+  const PERSIST_KEY = 'nova_webhook_public_base'
+  const stored = (typeof window !== 'undefined' && localStorage.getItem(PERSIST_KEY)) || ''
+  const [targetBase, setTargetBase] = useState(stored)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<{ hook_id: number; status: string } | null>(null)
+
+  const fullUrl = targetBase
+    ? `${targetBase.replace(/\/$/, '')}/api/v1/webhooks/github`
+    : ''
+
+  const register = useMutation({
+    mutationFn: () => registerGithubWebhook({
+      credential_id: repo.credential_id,
+      repo: repo.repo,
+      target_url: fullUrl,
+    }),
+    onSuccess: (res) => {
+      localStorage.setItem(PERSIST_KEY, targetBase.replace(/\/$/, ''))
+      setSuccess({ hook_id: res.hook_id, status: res.status })
+      setError(null)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const canSubmit = targetBase.trim().length > 0 && /^https?:\/\//.test(targetBase) && !register.isPending
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => { if (!register.isPending) { setError(null); setSuccess(null); onClose() } }}
+      title={`Register webhook for ${repo.repo}`}
+      size="md"
+      footer={
+        success ? (
+          <Button onClick={onClose}>Done</Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={register.isPending}>Cancel</Button>
+            <Button
+              onClick={() => register.mutate()}
+              disabled={!canSubmit}
+              loading={register.isPending}
+              icon={<Webhook size={14} />}
+            >
+              Register
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-4">
+        {success ? (
+          <div className="flex items-start gap-2 p-3 rounded-md bg-success/10 text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <p className="text-compact font-medium">Webhook registered</p>
+              <p className="text-caption mt-1">
+                Hook #{success.hook_id} is <span className="font-mono">{success.status}</span> on
+                {' '}<span className="font-mono">{repo.repo}</span>. GitHub will start delivering
+                {' '}workflow_run events to your orchestrator. The next failed run will create
+                {' '}an approval card on the Approvals page.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-compact text-content-secondary">
+              GitHub needs a publicly-reachable URL to deliver webhook events to.
+              {' '}Enter your orchestrator's public base URL — Nova will append
+              {' '}<code className="text-micro bg-surface-elevated px-1 py-0.5 rounded">/api/v1/webhooks/github</code>.
+            </p>
+
+            <div>
+              <label className="text-caption text-content-secondary block mb-1.5">
+                Public base URL
+              </label>
+              <Input
+                value={targetBase}
+                onChange={e => setTargetBase(e.target.value)}
+                placeholder="https://nova.example.com"
+                className="font-mono"
+              />
+              {fullUrl && (
+                <p className="text-micro text-content-tertiary mt-1.5">
+                  Webhook target: <span className="font-mono text-content-secondary">{fullUrl}</span>
+                </p>
+              )}
+              <p className="text-micro text-content-tertiary mt-1.5">
+                Examples: <code>https://nova.&lt;tailnet&gt;.ts.net</code> (Tailscale Funnel),
+                {' '}<code>https://your-tunnel.trycloudflare.com</code> (Cloudflare Tunnel),
+                {' '}or your ngrok URL. Saved to this browser on success.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <p className="text-caption">
+                In v1 this bypasses the consent gate (admin-direct). A future
+                {' '}revision will route through the executor so a pending approval
+                {' '}card appears for the MUTATE call.
+              </p>
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-danger/10 text-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <p className="text-compact">{error}</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 // ── Watched Repo row ─────────────────────────────────────────────────────────
 
 function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () => void }) {
   const qc = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [webhookOpen, setWebhookOpen] = useState(false)
 
   const toggle = useMutation({
     mutationFn: () => updateWatchedRepo(repo.id, { enabled: !repo.enabled }),
@@ -335,6 +462,15 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
         disabled={toggle.isPending}
         size="sm"
       />
+      {repo.trigger_mode !== 'polling_only' && (
+        <button
+          onClick={() => setWebhookOpen(true)}
+          className="text-content-tertiary hover:text-accent p-1 transition-colors"
+          title="Register GitHub webhook"
+        >
+          <Webhook size={14} />
+        </button>
+      )}
       <button
         onClick={() => setEditOpen(true)}
         className="text-content-tertiary hover:text-content-primary p-1 transition-colors"
@@ -362,6 +498,11 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
         repo={repo}
         open={editOpen}
         onClose={() => setEditOpen(false)}
+      />
+      <RegisterWebhookModal
+        repo={repo}
+        open={webhookOpen}
+        onClose={() => setWebhookOpen(false)}
       />
     </div>
   )

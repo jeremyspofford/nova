@@ -56,14 +56,20 @@ docker compose exec postgres psql -U nova -d nova -c "SELECT id, label, health, 
 
 Expected: `health=healthy`, `scopes` contains `"granted": ["repo", "workflow", "admin:repo_hook"]`.
 
-### 2. Configure a watched repo with default trigger; approve `register_webhook`
+### 2. Configure a watched repo + register the GitHub webhook
 
-- [ ] On the same `nova-test-cap` credential card, click **Watch a repo**
+> ⚠️  **Spec deviation in v1**: the spec says webhook registration goes
+> through the consent gate and surfaces a `register_webhook` MUTATE
+> approval card. v1 implementation uses the admin-direct path instead
+> (no approval card). The webhook itself is still created on GitHub and
+> verified end-to-end. Tracking this as a follow-up.
+
+- [ ] On the `nova-test-cap` credential card, click **Watch a repo**
 - [ ] Enter `jeremyspofford/nova-test-cap`, leave trigger mode as **Webhook + poll**, click **Add**
-- [ ] (Webhook registration runs in the orchestrator on first stimulus; the dashboard's UI reaches it via the cortex drive. So no immediate pending approval — see notes below.)
-- [ ] When the first `register_webhook` call fires (could be the first synthetic event), check `Approvals` page for a `register_webhook` approval card with `MUTATE` blast radius
-- [ ] Approve the card
-- [ ] Verify on GitHub: `https://github.com/jeremyspofford/nova-test-cap/settings/hooks` shows a webhook pointing at your orchestrator's public URL
+- [ ] On the new watched-repo row, click the **Webhook** icon (between toggle and edit pencil)
+- [ ] Enter your orchestrator's public base URL (e.g. `https://nova.<tailnet>.ts.net` or your Cloudflare Tunnel hostname). Nova appends `/api/v1/webhooks/github` automatically.
+- [ ] Click **Register**. The success message shows the new hook id and verification status.
+- [ ] Confirm on GitHub: `https://github.com/jeremyspofford/nova-test-cap/settings/hooks` shows a webhook pointing at your URL with a recent green checkmark on the most recent delivery.
 
 ```bash
 docker compose exec postgres psql -U nova -d nova -c "SELECT repo, status, last_verified_at FROM github_webhooks;"

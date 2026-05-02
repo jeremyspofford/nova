@@ -1362,6 +1362,29 @@ export const updateWatchedRepo = (id: string, payload: WatchedRepoUpdatePayload)
 export const deleteWatchedRepo = (id: string) =>
   apiFetch<void>(`/api/v1/capabilities/watched-repos/${id}`, { method: 'DELETE' })
 
+// ── Webhook registration ────────────────────────────────────────────────────
+// Today this is the admin-only direct path. A future revision will route this
+// through the executor + consent gate so a pending approval card appears.
+
+export interface WebhookRegisterPayload {
+  credential_id: string
+  repo: string
+  target_url: string
+  events?: string[]
+}
+
+export interface WebhookRegisterResult {
+  hook_id: number
+  status: string
+  ping_delivery_id?: string
+}
+
+export const registerGithubWebhook = (payload: WebhookRegisterPayload) =>
+  apiFetch<WebhookRegisterResult>('/api/v1/webhooks/github/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
 // ── Approvals (consent gate queue) ──────────────────────────────────────────
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'timeout' | 'superseded'
