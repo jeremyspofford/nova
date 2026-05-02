@@ -6,11 +6,18 @@ from uuid import UUID
 
 import asyncpg
 from app.auth import AdminDep
+from datetime import datetime
+
+from app.capabilities import audit_query
 from app.capabilities import credentials as cred_db
 from app.capabilities import consent as consent_db
+from app.capabilities import consent_rules as cr_db
 from app.capabilities import watched_repos as wr_db
 from app.capabilities.consent import ApprovalDecision
 from app.capabilities.models import (
+    ConsentRule,
+    ConsentRuleCreate,
+    ConsentRuleUpdate,
     Credential,
     CredentialCreate,
     CredentialHealth,
@@ -240,3 +247,125 @@ async def delete_watched_repo_endpoint(
     )
     if not deleted:
         raise HTTPException(404, "watched repo not found")
+
+
+# ── Consent rules ────────────────────────────────────────────────────────────
+# Auto-approve policies. Distinct from /approvals (per-call queue) — these are
+# the saved rules that auto-approve future MUTATE/DESTRUCT calls without
+# prompting. Created either by the user clicking "approve and remember" or
+# proposed by cortex.
+
+
+@router.get("/consent-rules", response_model=list[ConsentRule])
+async def list_consent_rules_endpoint(
+    tool_name: str | None = Query(None),
+    provider_kind: str | None = Query(None),
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    return await cr_db.list_consent_rules(
+        pool, tenant_id=DEFAULT_TENANT,
+        tool_name=tool_name, provider_kind=provider_kind,
+    )
+
+
+@router.post(
+    "/consent-rules",
+    response_model=ConsentRule,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_consent_rule_endpoint(
+    payload: ConsentRuleCreate,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    return await cr_db.create_consent_rule(
+        pool, tenant_id=DEFAULT_TENANT, user_id=DEFAULT_USER, payload=payload,
+    )
+
+
+@router.patch("/consent-rules/{rule_id}", response_model=ConsentRule)
+async def update_consent_rule_endpoint(
+    rule_id: UUID,
+    payload: ConsentRuleUpdate,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    updated = await cr_db.update_consent_rule(
+        pool, tenant_id=DEFAULT_TENANT, rule_id=rule_id, payload=payload,
+    )
+    if not updated:
+        raise HTTPException(404, "consent rule not found")
+    return updated
+
+
+@router.delete(
+    "/consent-rules/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_consent_rule_endpoint(
+    rule_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    deleted = await cr_db.delete_consent_rule(
+        pool, tenant_id=DEFAULT_TENANT, rule_id=rule_id,
+    )
+    if not deleted:
+        raise HTTPException(404, "consent rule not found")
+
+
+# ── Audit log query ──────────────────────────────────────────────────────────
+# Read-only. Writes flow through audit.write_audit_event; updates/deletes are
+# blocked by the append-only RULE in migration 069. This endpoint only feeds
+# the dashboard's audit log viewer with filterable, paginated rows.
+
+
+@router.get("/audit", response_model=list[dict])
+async def query_audit_endpoint(
+    from_ts: datetime | None = Query(None),
+    to_ts: datetime | None = Query(None),
+    actor_id: str | None = Query(None),
+    actor_kind: str | None = Query(None),
+    event_type: str | None = Query(None),
+    tool_name: str | None = Query(None),
+    tool_kind: str | None = Query(None),
+    target: str | None = Query(None),
+    blast_radius: str | None = Query(None),
+    provider_kind: str | None = Query(None),
+    credential_id: UUID | None = Query(None),
+    task_id: UUID | None = Query(None),
+    response_status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=audit_query.MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    return await audit_query.query_audit(
+        pool,
+        tenant_id=DEFAULT_TENANT,
+        from_ts=from_ts, to_ts=to_ts,
+        actor_id=actor_id, actor_kind=actor_kind,
+        event_type=event_type,
+        tool_name=tool_name, tool_kind=tool_kind,
+        target=target,
+        blast_radius=blast_radius,
+        provider_kind=provider_kind,
+        credential_id=credential_id, task_id=task_id,
+        response_status=response_status,
+        limit=limit, offset=offset,
+    )
+
+
+@router.get("/audit/count")
+async def count_audit_endpoint(
+    from_ts: datetime | None = Query(None),
+    to_ts: datetime | None = Query(None),
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    n = await audit_query.count_audit(
+        pool, tenant_id=DEFAULT_TENANT,
+        from_ts=from_ts, to_ts=to_ts,
+    )
+    return {"count": n}

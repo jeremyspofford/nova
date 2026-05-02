@@ -6,7 +6,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
-  Link2,
+  Link2, Bookmark,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -20,6 +20,7 @@ import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
 import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
 import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
+import { AutoApproveRulesSection } from './settings/AutoApproveRulesSection'
 import { RecoverySection } from './settings/RecoverySection'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { PipelineModelsSection } from './settings/PipelineModelsSection'
@@ -86,6 +87,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'trusted-networks', label: 'Trusted Networks', icon: Lock },
       { id: 'guest-access', label: 'Guest Access', icon: Shield },
       { id: 'sandbox', label: 'Agent Sandbox', icon: Shield },
+      { id: 'auto-approve-rules', label: 'Auto-Approve Rules', icon: Bookmark },
       { id: 'keys', label: 'API Keys', icon: Key },
       { id: 'admin-secret', label: 'Admin Secret', icon: ShieldAlert },
       { id: 'vault', label: 'Secrets Manager', icon: Shield },
@@ -577,6 +579,12 @@ export function Settings() {
         {show('sandbox') && (
           <div id="sandbox">
             <SandboxSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
+          </div>
+        )}
+
+        {show('auto-approve-rules') && (
+          <div id="auto-approve-rules">
+            <AutoApproveRulesSection />
           </div>
         )}
 

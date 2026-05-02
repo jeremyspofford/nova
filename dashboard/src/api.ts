@@ -1361,3 +1361,159 @@ export const updateWatchedRepo = (id: string, payload: WatchedRepoUpdatePayload)
 
 export const deleteWatchedRepo = (id: string) =>
   apiFetch<void>(`/api/v1/capabilities/watched-repos/${id}`, { method: 'DELETE' })
+
+// ── Approvals (consent gate queue) ──────────────────────────────────────────
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'timeout' | 'superseded'
+export type ToolKind = 'native' | 'mcp_http' | 'mcp_stdio'
+export type BlastRadius = 'read' | 'propose' | 'mutate' | 'destruct'
+
+export interface Approval {
+  id: string
+  tenant_id: string
+  task_id: string | null
+  requested_by: string
+  tool_name: string
+  tool_kind: ToolKind
+  blast_radius: BlastRadius
+  args_redacted: Record<string, unknown>
+  diff_preview: string | null
+  status: ApprovalStatus
+  decided_by: string | null
+  decided_via: string | null
+  decided_at: string | null
+  rule_id: string | null
+  created_at: string
+  expires_at: string
+}
+
+export interface ApprovalDecisionPayload {
+  decision: 'approve' | 'reject'
+  remember?: boolean
+  rule_scope?: Record<string, unknown>
+}
+
+export const listApprovals = () =>
+  apiFetch<Approval[]>('/api/v1/capabilities/approvals')
+
+export const getApproval = (id: string) =>
+  apiFetch<Approval>(`/api/v1/capabilities/approvals/${id}`)
+
+export const decideApproval = (id: string, payload: ApprovalDecisionPayload) =>
+  apiFetch<{ status: string }>(
+    `/api/v1/capabilities/approvals/${id}/decide`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+
+// ── Consent rules (auto-approve policies) ───────────────────────────────────
+
+export type ConsentRuleSource = 'user_remember' | 'cortex_proposed'
+
+export interface ConsentRule {
+  id: string
+  tenant_id: string
+  user_id: string
+  tool_name: string
+  provider_kind: string
+  scope_match: Record<string, unknown>
+  source: ConsentRuleSource
+  proposed_at: string | null
+  accepted_at: string
+  enabled: boolean
+  last_applied_at: string | null
+  apply_count: number
+}
+
+export interface ConsentRuleCreatePayload {
+  tool_name: string
+  provider_kind: string
+  scope_match: Record<string, unknown>
+  source?: ConsentRuleSource
+}
+
+export const listConsentRules = (filters: { tool_name?: string; provider_kind?: string } = {}) => {
+  const qs = new URLSearchParams()
+  if (filters.tool_name) qs.set('tool_name', filters.tool_name)
+  if (filters.provider_kind) qs.set('provider_kind', filters.provider_kind)
+  const suffix = qs.toString()
+  return apiFetch<ConsentRule[]>(
+    `/api/v1/capabilities/consent-rules${suffix ? `?${suffix}` : ''}`,
+  )
+}
+
+export const createConsentRule = (payload: ConsentRuleCreatePayload) =>
+  apiFetch<ConsentRule>('/api/v1/capabilities/consent-rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
+export const updateConsentRule = (id: string, payload: { enabled: boolean }) =>
+  apiFetch<ConsentRule>(`/api/v1/capabilities/consent-rules/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+
+export const deleteConsentRule = (id: string) =>
+  apiFetch<void>(`/api/v1/capabilities/consent-rules/${id}`, { method: 'DELETE' })
+
+// ── Audit log query ─────────────────────────────────────────────────────────
+
+export interface AuditEvent {
+  id: string
+  tenant_id: string
+  user_id: string | null
+  timestamp: string
+  actor_kind: string
+  actor_id: string
+  task_id: string | null
+  event_type: string
+  tool_name: string | null
+  tool_kind: string | null
+  blast_radius: string | null
+  provider_kind: string | null
+  target: string | null
+  credential_id: string | null
+  args_redacted: Record<string, unknown> | null
+  response_status: string
+  response_summary: string | null
+  error_class: string | null
+  duration_ms: number | null
+}
+
+export interface AuditFilters {
+  from_ts?: string
+  to_ts?: string
+  actor_id?: string
+  actor_kind?: string
+  event_type?: string
+  tool_name?: string
+  target?: string
+  blast_radius?: string
+  provider_kind?: string
+  credential_id?: string
+  task_id?: string
+  response_status?: string
+  limit?: number
+  offset?: number
+}
+
+export const queryAudit = (filters: AuditFilters = {}) => {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v))
+  }
+  const suffix = qs.toString()
+  return apiFetch<AuditEvent[]>(
+    `/api/v1/capabilities/audit${suffix ? `?${suffix}` : ''}`,
+  )
+}
+
+export const countAudit = (filters: { from_ts?: string; to_ts?: string } = {}) => {
+  const qs = new URLSearchParams()
+  if (filters.from_ts) qs.set('from_ts', filters.from_ts)
+  if (filters.to_ts) qs.set('to_ts', filters.to_ts)
+  const suffix = qs.toString()
+  return apiFetch<{ count: number }>(
+    `/api/v1/capabilities/audit/count${suffix ? `?${suffix}` : ''}`,
+  )
+}

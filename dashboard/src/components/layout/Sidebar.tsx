@@ -20,12 +20,15 @@ import {
   ChevronDown,
   Users,
   User,
+  ShieldCheck,
+  ScrollText,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { useDebug } from '../../stores/debug-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useAttentionCount } from '../../hooks/useAttentionCount'
+import { useApprovalsCount } from '../../hooks/useApprovalsCount'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 
 export type NavItem = {
@@ -49,6 +52,7 @@ export const navSections: NavSection[] = [
       { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
       { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member' },
       { to: '/goals', label: 'Goals', icon: Target, minRole: 'member' },
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin' },
       { to: '/friction', label: 'Friction', icon: AlertTriangle, minRole: 'member', debugOnly: true },
     ],
   },
@@ -76,6 +80,7 @@ export const navSections: NavSection[] = [
       { to: '/usage', label: 'Usage', icon: BarChart3, minRole: 'member' },
       { to: '/ai-quality', label: 'AI Quality', icon: FlaskConical, minRole: 'admin' },
       { to: '/users', label: 'Users', icon: Users, minRole: 'admin' },
+      { to: '/audit-log', label: 'Audit Log', icon: ScrollText, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },
@@ -100,6 +105,7 @@ export function Sidebar({
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
   const { avatarUrl } = useNovaIdentity()
   const { data: attentionCount = 0 } = useAttentionCount()
+  const { data: approvalsCount = 0 } = useApprovalsCount()
   const { isDebug } = useDebug()
   const [brainEnabled] = useLocalStorage('brain.enabled', true)
   const isActive = (to: string) => {
@@ -144,7 +150,10 @@ export function Sidebar({
                 {visibleItems.map(item => {
                   const Icon = item.icon
                   const active = isActive(item.to)
-                  const badge = item.to === '/tasks' ? attentionCount : (item.badge ?? 0)
+                  const badge =
+                    item.to === '/tasks' ? attentionCount
+                    : item.to === '/approvals' ? approvalsCount
+                    : (item.badge ?? 0)
                   return (
                     <NavLink
                       key={item.to}

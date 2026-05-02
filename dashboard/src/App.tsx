@@ -23,6 +23,8 @@ import { Models } from './pages/Models'
 import { Tasks } from './pages/Tasks'
 import { Pods } from './pages/Pods'
 import { Goals } from './pages/Goals'
+import { PendingApprovals } from './pages/PendingApprovals'
+import { AuditLog } from './pages/AuditLog'
 import { Sources } from './pages/Sources'
 import { Recovery } from './pages/Recovery'
 import { About } from './pages/About'
@@ -289,6 +291,8 @@ function RoutedContent() {
         <Route path="/pods" element={<MobileGuard><AppLayout><ErrorBoundary><Pods /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/usage" element={<MobileGuard><AppLayout><ErrorBoundary><Usage /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/goals" element={<MobileGuard><AppLayout><ErrorBoundary><Goals /></ErrorBoundary></AppLayout></MobileGuard>} />
+        <Route path="/approvals" element={<MobileGuard><AppLayout><ErrorBoundary><PendingApprovals /></ErrorBoundary></AppLayout></MobileGuard>} />
+        <Route path="/audit-log" element={<MobileGuard><AppLayout><ErrorBoundary><AuditLog /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/sources" element={<MobileGuard><AppLayout><ErrorBoundary><Sources /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/integrations" element={<MobileGuard><AppLayout><ErrorBoundary><Integrations /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/models" element={<MobileGuard><AppLayout><ErrorBoundary><Models /></ErrorBoundary></AppLayout></MobileGuard>} />

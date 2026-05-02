@@ -110,3 +110,34 @@ class WatchedRepo(BaseModel):
     daily_budget: int
     enabled: bool
     created_at: datetime
+
+
+class ConsentRuleSource(str, Enum):
+    USER_REMEMBER = "user_remember"
+    CORTEX_PROPOSED = "cortex_proposed"
+
+
+class ConsentRuleCreate(BaseModel):
+    tool_name: str
+    provider_kind: str
+    scope_match: dict
+    source: ConsentRuleSource = ConsentRuleSource.USER_REMEMBER
+
+
+class ConsentRuleUpdate(BaseModel):
+    enabled: bool | None = None
+
+
+class ConsentRule(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    user_id: UUID
+    tool_name: str
+    provider_kind: str
+    scope_match: dict
+    source: ConsentRuleSource
+    proposed_at: datetime | None
+    accepted_at: datetime
+    enabled: bool
+    last_applied_at: datetime | None
+    apply_count: int

@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Github, Link2, Plus, Trash2, RefreshCw, Loader2,
-  Eye, EyeOff, AlertCircle, CheckCircle2, XCircle,
+  Github, Link2, Plus, Trash2, RefreshCw, Loader2, Pencil,
+  Eye, EyeOff, AlertCircle, XCircle,
 } from 'lucide-react'
 import {
   listCredentials, createCredential, deleteCredential, testCredential,
   listWatchedRepos, createWatchedRepo, updateWatchedRepo, deleteWatchedRepo,
   type Credential, type CredentialHealth,
-  type WatchedRepo,
+  type WatchedRepo, type WatchedRepoUpdatePayload,
 } from '../../api'
 import {
   Section, Button, Input, Modal, EmptyState, ConfirmDialog,
@@ -153,11 +153,142 @@ function AddCredentialModal({
   )
 }
 
+// ── Edit Watched Repo Modal ──────────────────────────────────────────────────
+
+function EditWatchedRepoModal({
+  repo, open, onClose,
+}: {
+  repo: WatchedRepo
+  open: boolean
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [draft, setDraft] = useState<WatchedRepoUpdatePayload>({
+    trigger_mode: repo.trigger_mode,
+    polling_interval_min: repo.polling_interval_min,
+    workflow_pattern: repo.workflow_pattern,
+    active_hours_start: repo.active_hours_start,
+    active_hours_end: repo.active_hours_end,
+    daily_budget: repo.daily_budget,
+  })
+  const [error, setError] = useState<string | null>(null)
+
+  const save = useMutation({
+    mutationFn: () => updateWatchedRepo(repo.id, draft),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watched-repos', repo.credential_id] })
+      onClose()
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  // active_hours columns return as "HH:MM:SS"; the time input wants "HH:MM"
+  const trimSeconds = (v: string | null | undefined) => v ? v.slice(0, 5) : ''
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => { if (!save.isPending) { setError(null); onClose() } }}
+      title={`Edit ${repo.repo}`}
+      size="lg"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button onClick={() => save.mutate()} loading={save.isPending}>Save</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="text-caption text-content-secondary block mb-1.5">Trigger mode</label>
+          <Select
+            value={draft.trigger_mode ?? repo.trigger_mode}
+            onChange={e => setDraft(d => ({ ...d, trigger_mode: e.target.value as WatchedRepo['trigger_mode'] }))}
+          >
+            <option value="webhook_with_polling_fallback">Webhook + polling fallback</option>
+            <option value="webhook_only">Webhook only</option>
+            <option value="polling_only">Polling only</option>
+          </Select>
+          <p className="text-micro text-content-tertiary mt-1">
+            How Nova learns of failed CI runs. Webhook is realtime; polling is periodic.
+          </p>
+        </div>
+
+        {(draft.trigger_mode ?? repo.trigger_mode) !== 'webhook_only' && (
+          <div>
+            <label className="text-caption text-content-secondary block mb-1.5">Polling interval (minutes)</label>
+            <Input
+              type="number"
+              value={String(draft.polling_interval_min ?? repo.polling_interval_min)}
+              onChange={e => setDraft(d => ({ ...d, polling_interval_min: Number(e.target.value) }))}
+              min={1}
+              max={1440}
+            />
+          </div>
+        )}
+
+        <div>
+          <label className="text-caption text-content-secondary block mb-1.5">Workflow pattern (glob)</label>
+          <Input
+            value={draft.workflow_pattern ?? ''}
+            onChange={e => setDraft(d => ({ ...d, workflow_pattern: e.target.value || null }))}
+            placeholder="e.g. ci-*.yml — leave blank for any workflow"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-caption text-content-secondary block mb-1.5">Active hours start</label>
+            <Input
+              type="time"
+              value={trimSeconds(draft.active_hours_start)}
+              onChange={e => setDraft(d => ({ ...d, active_hours_start: e.target.value || null }))}
+            />
+          </div>
+          <div>
+            <label className="text-caption text-content-secondary block mb-1.5">Active hours end</label>
+            <Input
+              type="time"
+              value={trimSeconds(draft.active_hours_end)}
+              onChange={e => setDraft(d => ({ ...d, active_hours_end: e.target.value || null }))}
+            />
+          </div>
+        </div>
+        <p className="text-micro text-content-tertiary -mt-2">
+          When set, Nova only triages within this window. Local server time. Leave both blank for 24/7.
+        </p>
+
+        <div>
+          <label className="text-caption text-content-secondary block mb-1.5">Daily budget (max triage runs / 24h)</label>
+          <Input
+            type="number"
+            value={String(draft.daily_budget ?? repo.daily_budget)}
+            onChange={e => setDraft(d => ({ ...d, daily_budget: Number(e.target.value) }))}
+            min={1}
+            max={1000}
+          />
+          <p className="text-micro text-content-tertiary mt-1">
+            Hard cap. Beyond this, Nova logs a budget_exceeded audit row and skips the failure.
+          </p>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-danger/10 text-danger">
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            <p className="text-compact">{error}</p>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 // ── Watched Repo row ─────────────────────────────────────────────────────────
 
 function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () => void }) {
   const qc = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
 
   const toggle = useMutation({
     mutationFn: () => updateWatchedRepo(repo.id, { enabled: !repo.enabled }),
@@ -174,7 +305,7 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
       <Github size={14} className="text-content-tertiary shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="text-compact font-mono text-content-primary truncate">{repo.repo}</div>
-        <div className="flex items-center gap-3 text-micro text-content-tertiary mt-0.5">
+        <div className="flex items-center gap-3 text-micro text-content-tertiary mt-0.5 flex-wrap">
           <span>{TRIGGER_LABEL[repo.trigger_mode]}</span>
           <span>·</span>
           <span>{repo.daily_budget}/day</span>
@@ -182,6 +313,18 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
             <>
               <span>·</span>
               <span>poll {repo.polling_interval_min}min</span>
+            </>
+          )}
+          {repo.workflow_pattern && (
+            <>
+              <span>·</span>
+              <span className="font-mono">{repo.workflow_pattern}</span>
+            </>
+          )}
+          {repo.active_hours_start && repo.active_hours_end && (
+            <>
+              <span>·</span>
+              <span>active {repo.active_hours_start.slice(0, 5)}–{repo.active_hours_end.slice(0, 5)}</span>
             </>
           )}
         </div>
@@ -192,6 +335,13 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
         disabled={toggle.isPending}
         size="sm"
       />
+      <button
+        onClick={() => setEditOpen(true)}
+        className="text-content-tertiary hover:text-content-primary p-1 transition-colors"
+        title="Edit"
+      >
+        <Pencil size={14} />
+      </button>
       <button
         onClick={() => setConfirmDelete(true)}
         className="text-content-tertiary hover:text-danger p-1 transition-colors"
@@ -207,6 +357,11 @@ function WatchedRepoRow({ repo, onChanged }: { repo: WatchedRepo; onChanged: () 
         destructive
         onConfirm={() => { remove.mutate(); setConfirmDelete(false) }}
         onClose={() => setConfirmDelete(false)}
+      />
+      <EditWatchedRepoModal
+        repo={repo}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
       />
     </div>
   )
