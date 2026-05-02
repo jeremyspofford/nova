@@ -887,29 +887,38 @@ async def test_credential(
     return CredentialTestResult(health=health)
 ```
 
-- [ ] **Step 4: Test — credential validation roundtrip**
+- [ ] **Step 4: Test — credential validation roundtrip (env-var pattern)**
 
-In `tests/test_capability_credentials.py`:
+`monkeypatch` does not reach a Dockerized orchestrator process. Use an env-var override instead:
+
+a) Add to `orchestrator/app/config.py`:
+   ```python
+   GITHUB_API_BASE_URL: str = "https://api.github.com"  # tests override to fake-github
+   ```
+b) In `credentials.py`, `_validate_github` reads from `settings.GITHUB_API_BASE_URL` when `api_base` arg is None. Add a docstring noting this env is **for testing only**.
+c) The test starts fake-github, restarts the orchestrator with `GITHUB_API_BASE_URL=http://host.docker.internal:<fake-port>` set, runs the API call, then restores.
 
 ```python
+# tests/test_capability_credentials.py
 from tests.fixtures.fake_github import FakeGitHubServer
 
 
 @pytest.mark.asyncio
-async def test_credential_health_healthy_via_fake_github(monkeypatch):
+async def test_credential_health_healthy_via_fake_github():
     """Validation against fake-github with a good token returns HEALTHY."""
     fake = FakeGitHubServer()
     await fake.start()
     try:
-        # Patch the GitHub API base used during validation
-        from app.capabilities import credentials as cred_db
-        original = cred_db._validate_github
-
-        async def patched(base, token):
-            return await original(fake.base_url, token)
-        monkeypatch.setattr(cred_db, "_validate_github", patched)
-
+        # Tell the running orchestrator to use fake-github for the duration
+        # (Use a per-test override endpoint OR docker compose exec to set env.)
+        # Simplest: orchestrator exposes an admin-only POST /api/v1/__test/override-env
+        # that sets settings.GITHUB_API_BASE_URL temporarily. Implement as part of this task.
         async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{ORCH_URL}/api/v1/__test/override-env",
+                headers=ADMIN_HEADERS,
+                json={"GITHUB_API_BASE_URL": fake.base_url},
+            )
             create = await client.post(
                 f"{ORCH_URL}/api/v1/capabilities/credentials",
                 headers=ADMIN_HEADERS,
@@ -930,17 +939,16 @@ async def test_credential_health_healthy_via_fake_github(monkeypatch):
                 f"{ORCH_URL}/api/v1/capabilities/credentials/{cred_id}",
                 headers=ADMIN_HEADERS,
             )
+            await client.post(
+                f"{ORCH_URL}/api/v1/__test/override-env",
+                headers=ADMIN_HEADERS,
+                json={"GITHUB_API_BASE_URL": "https://api.github.com"},
+            )
     finally:
         await fake.stop()
 ```
 
-**Note**: `monkeypatch` only works in unit tests — for the integration test against a real running orchestrator, the fake-github URL must instead be passed via an environment variable to the orchestrator container. Adjust by:
-
-a) Adding `GITHUB_API_BASE_URL` to `Settings` (default `https://api.github.com`).
-b) `_validate_github` reads from settings if no `api_base` arg given.
-c) Test sets the env via `docker compose exec ... env GITHUB_API_BASE_URL=...` or restarts orchestrator with the env. **Simpler:** test patches by directly inserting a credential row pointing at fake-github via SQL, then calls validate.
-
-Choose option (a)+(b) and adjust the test accordingly. Document in code that this env override is **for testing only**.
+The `__test/override-env` endpoint is a small admin-gated test seam — only enabled when `settings.NOVA_TEST_MODE` is true. Document this in the route.
 
 - [ ] **Step 5: Run all credential tests**
 
@@ -1531,7 +1539,52 @@ git commit -m "feat(capability): credential ops emit capability_audit events"
 
 - [ ] **Step 1: Write migration**
 
-(Use the schemas from spec §7.4 verbatim — see `docs/designs/2026-05-01-nova-capability-platform-design.md`.)
+```sql
+-- Capability platform: approval queue and consent rules
+-- See docs/designs/2026-05-01-nova-capability-platform-design.md §7.4
+
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    task_id         UUID,
+    requested_by    TEXT NOT NULL,
+    tool_name       TEXT NOT NULL,
+    tool_kind       TEXT NOT NULL CHECK (tool_kind IN ('native','mcp_http','mcp_stdio')),
+    blast_radius    TEXT NOT NULL CHECK (blast_radius IN ('mutate','destruct')),
+    args_redacted   JSONB NOT NULL,
+    diff_preview    TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','approved','rejected','timeout','superseded')),
+    decided_by      TEXT,
+    decided_via     TEXT,                                  -- 'dashboard','slack','telegram','sms','voice','cli'
+    decided_at      TIMESTAMPTZ,
+    rule_id         UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at      TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '24 hours')
+);
+CREATE INDEX IF NOT EXISTS idx_approval_pending
+    ON approval_requests(tenant_id, status, expires_at)
+    WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS consent_rules (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    user_id         UUID NOT NULL,
+    tool_name       TEXT NOT NULL,
+    provider_kind   TEXT NOT NULL,
+    scope_match     JSONB NOT NULL,
+    source          TEXT NOT NULL CHECK (source IN ('user_remember','cortex_proposed')),
+    proposed_at     TIMESTAMPTZ,
+    accepted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enabled         BOOLEAN NOT NULL DEFAULT true,
+    last_applied_at TIMESTAMPTZ,
+    apply_count     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_consent_rules_lookup
+    ON consent_rules(tenant_id, user_id, tool_name) WHERE enabled = true;
+```
+
+The three v1 matcher kinds in `scope_match` are `target_glob`, `max_diff_lines`, `failure_signature`. Evaluator implementation lives in `consent.py` (Task 3.3).
 
 - [ ] **Step 2: Apply, verify, commit**
 
@@ -2156,13 +2209,15 @@ async def test_open_fix_pr_creates_pending_approval(pool, fake_github):
 - [ ] **Step 2: Implement `_open_fix_pr` and `_comment_on_pr`**
 
 `_open_fix_pr` flow:
-1. Clone the target repo into `/tmp/nova-fix/<task_id>/` via git subprocess
-2. Checkout `base` branch
-3. Apply the patch (`git apply`)
-4. Commit with message
-5. Push to `branch` (force-create new branch)
-6. Open PR via GitHub API: `POST /repos/{owner}/{repo}/pulls`
-7. Cleanup tmp dir
+1. Clone the target repo into `/tmp/nova-fix/<task_id>/` via git subprocess. Authenticate via PAT-in-URL: `git clone https://x-access-token:{pat}@github.com/{owner}/{repo}.git`. Set `core.askPass=/bin/echo` to prevent interactive prompt blocking. **Never log the URL** — use the same redactor.
+2. Checkout `base` branch.
+3. Apply the patch with `git apply --check` first (validates), then `git apply --3way` (applies). Patch input shape: `ProposedPatch.files[]` where each file has `path` and `diff` (unified-diff string from `draft_fix`).
+4. Commit with message: `nova: <diagnosis category> fix — <root_cause one-line>` and `Co-Authored-By: Nova <noreply@arialabs.ai>`.
+5. Push to `branch` via `git push origin <branch>` (force-create new branch with `-u`).
+6. Open PR via GitHub API: `POST /repos/{owner}/{repo}/pulls` with title, body containing the diagnosis, base, head.
+7. Cleanup tmp dir in `finally:` block — even on failure, never leak `/tmp/nova-fix/*` directories.
+
+**Cleanup safety:** wrap the entire flow in a context manager that always rmtrees the tmp dir on exit. If the patch fails to apply, we log the failure, return `{"status": "patch_apply_failed", "stderr": ...}` (redacted), still cleanup, and let the agent retry with a different patch.
 
 `_comment_on_pr` is just `POST /repos/{owner}/{repo}/issues/{number}/comments`.
 
@@ -2365,7 +2420,29 @@ git commit -m "feat(capability): webhook self-bootstrap — register, verify, di
 
 - [ ] **Step 2: New `cortex_watched_repos` schema (in cortex)**
 
-Adjust the schema for cortex to track watched repos with config (polling_interval, active_hours_start/end, daily_budget, workflow_pattern, ...).
+```sql
+-- cortex/app/migrations/0XX_watched_repos.sql (numbered per cortex's migration sequence)
+CREATE TABLE IF NOT EXISTS cortex_watched_repos (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id             UUID NOT NULL,
+    user_id               UUID,
+    credential_id         UUID NOT NULL,                          -- ref to capability_credentials
+    repo                  TEXT NOT NULL,                          -- 'jeremyspofford/nova'
+    trigger_mode          TEXT NOT NULL DEFAULT 'webhook_with_polling_fallback'
+                            CHECK (trigger_mode IN ('webhook_with_polling_fallback','webhook_only','polling_only')),
+    polling_interval_min  INTEGER NOT NULL DEFAULT 15,
+    workflow_pattern      TEXT,                                   -- glob; NULL = all workflows
+    active_hours_start    TIME,                                   -- NULL = always
+    active_hours_end      TIME,
+    daily_budget          INTEGER NOT NULL DEFAULT 20,
+    enabled               BOOLEAN NOT NULL DEFAULT true,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watched_repos_unique
+    ON cortex_watched_repos(tenant_id, repo);
+```
+
+These columns line up 1:1 with the dashboard CI Triage form fields in spec §9.6 — the dashboard reads/writes this table directly.
 
 - [ ] **Step 3: Pod definition seed**
 
@@ -2610,7 +2687,10 @@ git commit -m "feat(capability): v1 acceptance — all 10 criteria met"
 
 # Post-v1 follow-ups (sketched, not in this plan)
 
-These are listed in spec §11. Each gets its own design doc + plan when ready:
+**Explicitly out of v1 scope (spec §6.4 mentions but plan does not implement):**
+- **MCP credential injection plumbing** — `ALTER TABLE mcp_servers ADD COLUMN credential_kind, credential_id`, plus the per-call header injection (HTTP MCP) and stdio process pool keyed by `(server_id, credential_id, key_version)`. Spec describes this as load-bearing for the future Cloudflare/GitLab MCP work but v1 ships only native GitHub. Defer the schema change and the injection logic until the first MCP-based provider is added.
+
+**Future slices each gets its own design doc + plan when ready** (per spec §11):
 
 - Repo creation tools
 - Cloudflare DNS via MCP
