@@ -1,10 +1,13 @@
 """Capability credentials CRUD endpoints."""
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from app.auth import AdminDep
 from app.capabilities import credentials as cred_db
+from app.capabilities import consent as consent_db
+from app.capabilities.consent import ApprovalDecision
 from app.capabilities.models import Credential, CredentialCreate, CredentialHealth
 from app.db import get_pool
 from fastapi import APIRouter, HTTPException, Query, status
@@ -76,6 +79,56 @@ async def delete_credential(
     )
     if not deleted:
         raise HTTPException(404, "credential not found")
+
+
+@router.get("/approvals", response_model=list[dict])
+async def list_pending_approvals(
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    rows = await consent_db.list_pending(pool, tenant_id=DEFAULT_TENANT)
+    return [dict(r) for r in rows]  # asyncpg Record → dict
+
+
+@router.get("/approvals/{approval_id}", response_model=dict)
+async def get_approval(
+    approval_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    row = await consent_db.get_approval(pool, tenant_id=DEFAULT_TENANT, approval_id=approval_id)
+    if not row:
+        raise HTTPException(404, "approval not found")
+    return dict(row)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    remember: bool = False
+    rule_scope: dict | None = None
+
+
+@router.post("/approvals/{approval_id}/decide")
+async def decide_approval(
+    approval_id: UUID,
+    payload: ApprovalDecisionRequest,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    decision = ApprovalDecision(
+        decision=payload.decision,
+        decided_by="admin",
+        decided_via="dashboard",
+        remember=payload.remember,
+        rule_scope=payload.rule_scope,
+    )
+    ok = await consent_db.decide_approval(
+        pool, tenant_id=DEFAULT_TENANT,
+        approval_id=approval_id, decision=decision,
+    )
+    if not ok:
+        raise HTTPException(409, "approval not pending or not found")
+    return {"status": "ok"}
 
 
 @router.post("/credentials/{cred_id}/test", response_model=CredentialTestResult)
