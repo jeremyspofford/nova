@@ -230,6 +230,21 @@ async def llm_available(llm_gateway: httpx.AsyncClient) -> bool:
 
 
 @pytest_asyncio.fixture
+async def pool():
+    """Direct asyncpg connection pool for tests that need raw DB access (e.g. audit chain)."""
+    import asyncpg
+    dsn = os.getenv(
+        "DATABASE_URL",
+        f"postgresql://nova:{os.getenv('POSTGRES_PASSWORD', 'nova_dev_password')}@localhost:5432/nova",
+    )
+    # Strip SQLAlchemy driver prefix if present
+    dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
+    pg_pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    yield pg_pool
+    await pg_pool.close()
+
+
+@pytest_asyncio.fixture
 async def create_test_pod(orchestrator: httpx.AsyncClient, admin_headers: dict):
     """Factory fixture — creates a pod with configurable agents, auto-deletes on teardown."""
     created_pod_ids = []
