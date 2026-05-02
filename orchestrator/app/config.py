@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # Bridge service auth — shared secret for bridge-to-orchestrator trust (X-Service-Secret header)
     bridge_service_secret: str = ""
 
+    # Capability credential vault — master key for AES-256-GCM envelope encryption
+    # 64-character hex string (32 bytes).  Generate with:
+    #   python -c "import os; print(os.urandom(32).hex())"
+    # Shared with knowledge-worker via the same env var.
+    credential_master_key: str = ""
+
     # Self-modification (GitHub PR gate)
     nova_github_pat: str = ""
     nova_github_repo: str = ""
