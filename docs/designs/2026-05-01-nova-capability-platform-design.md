@@ -89,11 +89,15 @@ MUTATE TIER (consent required, async one-click approve)
 
 **Out of v1:** repo creation, workflow YAML edits, force-push, branch-delete, secret access, releases, cross-org access. Watched repos must be under `jeremyspofford/*`.
 
+**ToolGroup naming:** the registry's existing `GitHub` group keeps display_name `Self-Modification` (Nova's own repo). The new `github_external` group's display_name should be `GitHub (External Repos)` so the dashboard's permissions grid clearly distinguishes the two.
+
 ## 6. Credential vault
 
 ### 6.1 Reuse what exists
 
 Nova already has `knowledge_credentials` (migration `041_knowledge_schema.sql`) and a shared `nova_worker_common.credentials` package with `CredentialProvider` interface and pluggable backends (`builtin`, `vault`, `onepassword`, `bitwarden`). The new capability vault uses the same backend abstraction — users with HashiCorp Vault, 1Password, or Bitwarden bring their own backend without changing app code.
+
+**Naming divergence (intentional):** the existing `knowledge_credentials` table uses column `provider` for the *backend* (`builtin`/`vault`/`onepassword`/`bitwarden`). The new `capability_credentials` table renames that to `backend` and introduces `provider_kind` for the *auth target* (`github`/`gitlab`/`aws`/...). This is clearer (auth target ≠ vault backend) and is the model going forward; aligning `knowledge_credentials` to match is deferred until a future migration sweep — out of scope here.
 
 ### 6.2 New schema
 
@@ -225,7 +229,54 @@ Three-step pipeline at MCP server registration time:
 
 Default for unclassified: MUTATE (fail safe — better to over-prompt than under-protect).
 
-### 7.4 Consent state machine
+### 7.4 Schemas (`approval_requests`, `consent_rules`)
+
+```sql
+-- Approval queue rows for MUTATE/DESTRUCT calls awaiting consent
+CREATE TABLE approval_requests (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    task_id         UUID,                              -- ties to orchestrator task
+    requested_by    TEXT NOT NULL,                     -- agent or drive name
+    tool_name       TEXT NOT NULL,
+    tool_kind       TEXT NOT NULL CHECK (tool_kind IN ('native','mcp_http','mcp_stdio')),
+    blast_radius    TEXT NOT NULL CHECK (blast_radius IN ('mutate','destruct')),
+    args_redacted   JSONB NOT NULL,
+    diff_preview    TEXT,                              -- e.g. unified diff for open_fix_pr
+    status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','approved','rejected','timeout','superseded')),
+    decided_by      TEXT,                              -- user id when approved/rejected
+    decided_at      TIMESTAMPTZ,
+    rule_id         UUID,                              -- set when auto-approved by a rule
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at      TIMESTAMPTZ NOT NULL               -- default now() + 24h
+);
+CREATE INDEX idx_approval_pending ON approval_requests(tenant_id, status, expires_at)
+    WHERE status = 'pending';
+
+-- Auto-approve rules from "approve & remember" or cortex outcome-feedback proposals
+CREATE TABLE consent_rules (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    user_id         UUID NOT NULL,
+    tool_name       TEXT NOT NULL,
+    provider_kind   TEXT NOT NULL,
+    scope_match     JSONB NOT NULL,                    -- structured filters: target glob,
+                                                       -- max_diff_lines, blast_radius, etc.
+    source          TEXT NOT NULL CHECK (source IN ('user_remember','cortex_proposed')),
+    proposed_at     TIMESTAMPTZ,                       -- when cortex proposed (if applicable)
+    accepted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enabled         BOOLEAN NOT NULL DEFAULT true,
+    last_applied_at TIMESTAMPTZ,
+    apply_count     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_consent_rules_lookup ON consent_rules(tenant_id, user_id, tool_name)
+    WHERE enabled = true;
+```
+
+`scope_match` example: `{"target_glob":"repos/jeremyspofford/*","max_diff_lines":10,"failure_signature":"eslint:*"}`. Evaluator does an AND-of-keys match against the incoming request's normalized fields. v1 ships with three matcher kinds (`target_glob`, `max_diff_lines`, `failure_signature`); more added on demand.
+
+### 7.5 Consent state machine
 
 ```
 agent calls tool
@@ -246,7 +297,7 @@ create approval_request row
 
 Consent rules are evaluated *before* creating an approval request; matching rules auto-approve and audit with `event_type='rule_apply'`.
 
-### 7.5 Approval UX
+### 7.6 Approval UX
 
 **Inline (chat-triggered):**
 
@@ -337,7 +388,7 @@ Each row: `content_hash = sha256(prev_hash || canonical_json(row_excluding_hashe
 | Source | When | Setup cost |
 |---|---|---|
 | Cron polling | every 5/15/30/60 min, cortex enumerates watched repos, queries GitHub for failed runs not yet triaged | Zero |
-| Webhook | GitHub `workflow_run.failure` → `POST /api/v1/webhooks/github` (HMAC-validated) → stimulus row | One-time webhook config |
+| Webhook | GitHub `workflow_run.failure` → `POST /api/v1/webhooks/github` on **orchestrator** (HMAC-validated; new router file `orchestrator/app/webhooks_router.py`) → stimulus row in cortex DB via internal HTTP call | One-time webhook config |
 
 v1 default: polling at 15-min interval. Webhook is wired but optional.
 
@@ -410,7 +461,7 @@ Capability platform consent gate is the *inner* safety layer (per-tool-call). Qu
 | Context | Pulls memory: past triage outcomes, style preferences. Pauses for clarification on novel failure types. |
 | Task | Does the work, calls tools, hits consent gate at first MUTATE call. |
 | Guardrail | Verifies fix doesn't touch unrelated files, doesn't disable tests, diff size ≤ 50 lines. |
-| Code Review | Runs lint/type check locally on the patch *before* PR opens. |
+| Code Review | Re-runs **the failing job from the original run** locally (using the repo's existing CI config — no novel tooling) against the patched files, before opening the PR. v1 does not invent custom lint/type tooling for arbitrary repos. |
 | Decision | Final go/no-go; can downgrade "open PR" → "comment only" if risk signals are high. |
 
 ### 9.5 Outcome feedback (path to tier E)
@@ -460,7 +511,7 @@ Unit              : ~40 tests, pure functions (redactor, hasher, classifier)
 
 New FastAPI service in `tests/fixtures/fake-github/`. Implements the GitHub REST subset Nova actually calls; HMAC support for webhooks; canned responses driven by per-test scenario JSON. Started by pytest fixtures, listens on a per-test ephemeral port.
 
-This is the same boundary-fake pattern Nova already uses for LLM providers in pipeline tests. Future Cloudflare/AWS work follows the same harness shape.
+**This is a *boundary* fake at the GitHub API edge — not a Nova service mock.** Tests still hit the real Nova stack (orchestrator, cortex, memory, llm-gateway, postgres, redis) per the project's no-mocks-for-internal-services rule. The fake replaces only the third-party network endpoint Nova would otherwise call. This is the same pattern Nova already uses for LLM providers in pipeline tests. Future Cloudflare/AWS work follows the same harness shape.
 
 ### 10.3 Critical scenarios (must-have)
 
