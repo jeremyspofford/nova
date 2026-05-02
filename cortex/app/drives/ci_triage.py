@@ -11,8 +11,11 @@ Work happens via handle_stimulus() called from cycle.py.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 from ..clients import get_orchestrator
 from ..config import settings
@@ -20,6 +23,91 @@ from ..db import get_pool
 from . import DriveContext, DriveResult
 
 log = logging.getLogger(__name__)
+
+_GENESIS_HASH = b'\x00' * 32
+
+
+async def _write_budget_exceeded_audit(
+    pool,
+    *,
+    tenant_id: str,
+    repo: str,
+    daily_budget: int,
+    today_count: int,
+) -> None:
+    """Insert a budget_exceeded audit row into capability_audit.
+
+    Mirrors the hash-chain logic from orchestrator/app/capabilities/audit.py
+    so cortex can write audit events without importing the orchestrator package.
+    """
+    audit_id = uuid4()
+    timestamp = datetime.now(timezone.utc)
+    tenant_uuid = UUID(tenant_id)
+    summary = f"daily_budget={daily_budget} reached (count={today_count}) for repo={repo}"
+
+    def _canonical_json(obj) -> str:
+        return json.dumps(obj, sort_keys=True, default=str, separators=(",", ":"))
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"capability_audit:{tenant_uuid}",
+            )
+            prev_hash_row = await conn.fetchval(
+                "SELECT content_hash FROM capability_audit "
+                "WHERE tenant_id=$1 ORDER BY timestamp DESC, id DESC LIMIT 1",
+                tenant_uuid,
+            )
+            prev_hash: bytes = bytes(prev_hash_row) if prev_hash_row else _GENESIS_HASH
+
+            content = _canonical_json({
+                "id": str(audit_id),
+                "tenant_id": str(tenant_uuid),
+                "user_id": None,
+                "timestamp": timestamp.isoformat(),
+                "actor_kind": "cortex_drive",
+                "actor_id": "ci_triage",
+                "task_id": None,
+                "event_type": "budget_exceeded",
+                "tool_name": None,
+                "tool_kind": None,
+                "blast_radius": None,
+                "provider_kind": "github",
+                "target": repo,
+                "credential_id": None,
+                "args_redacted": None,
+                "response_status": "rejected",
+                "response_summary": summary,
+                "error_class": None,
+                "duration_ms": None,
+                "prev_hash": prev_hash.hex(),
+            })
+            content_hash = hashlib.sha256(content.encode()).digest()
+
+            await conn.execute(
+                """
+                INSERT INTO capability_audit (
+                  id, tenant_id, user_id, timestamp,
+                  actor_kind, actor_id, task_id,
+                  event_type, tool_name, tool_kind, blast_radius,
+                  provider_kind, target, credential_id,
+                  args_redacted, response_status, response_summary,
+                  error_class, duration_ms,
+                  prev_hash, content_hash
+                ) VALUES (
+                  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+                  $15,$16,$17,$18,$19,$20,$21
+                )
+                """,
+                audit_id, tenant_uuid, None, timestamp,
+                "cortex_drive", "ci_triage", None,
+                "budget_exceeded", None, None, None,
+                "github", repo, None,
+                None, "rejected", summary,
+                None, None,
+                prev_hash, content_hash,
+            )
 
 
 async def handle_stimulus(stimulus: dict) -> dict:
@@ -111,7 +199,17 @@ async def handle_stimulus(stimulus: dict) -> dict:
             "ci_triage: daily budget exhausted for repo %s (%d/%d)",
             repo, today_count, daily_budget,
         )
-        return {"status": "skipped", "reason": "daily_budget_exhausted"}
+        try:
+            await _write_budget_exceeded_audit(
+                pool,
+                tenant_id=tenant_id,
+                repo=repo,
+                daily_budget=daily_budget,
+                today_count=today_count,
+            )
+        except Exception as exc:
+            log.warning("ci_triage: failed to write budget_exceeded audit: %s", exc)
+        return {"status": "skipped", "reason": "budget_exceeded"}
 
     # ── 4. Active hours check ──────────────────────────────────────────────
     hours_start = watched["active_hours_start"]

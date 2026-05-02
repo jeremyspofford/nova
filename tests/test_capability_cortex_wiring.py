@@ -640,3 +640,340 @@ async def test_e2e_triage_bug_in_pr_dispatches_goal(
                        goal_ids=goal_ids if goal_ids else None,
                        cred_id=cred_id)
         await fake.stop()
+
+
+# ---------------------------------------------------------------------------
+# T8.3 helpers
+# ---------------------------------------------------------------------------
+
+async def _setup_e2e_environment(
+    orchestrator: httpx.AsyncClient,
+    admin_headers: dict,
+    pool,
+    fake: "FakeGitHubServer",
+    *,
+    repo: str,
+    daily_budget: int = 20,
+    tenant_id: str = "00000000-0000-0000-0000-000000000001",
+) -> tuple[str, int]:
+    """Create credential + watched_repo + webhook. Returns (cred_id, hook_id).
+
+    Caller is responsible for cleanup via _cleanup().
+    """
+    cred_id = await _create_cred(orchestrator, admin_headers)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO cortex_watched_repos
+               (tenant_id, credential_id, repo, enabled, daily_budget)
+               VALUES ($1::uuid, $2::uuid, $3, true, $4)""",
+            tenant_id,
+            cred_id,
+            repo,
+            daily_budget,
+        )
+
+    host_visible_api_base = fake.base_url.replace("127.0.0.1", _DOCKER_HOST)
+    reg_resp = await orchestrator.post(
+        "/api/v1/webhooks/github/register",
+        headers=admin_headers,
+        json={
+            "repo": repo,
+            "target_url": f"{_ORCHESTRATOR_FROM_HOST}/api/v1/webhooks/github",
+            "credential_id": cred_id,
+            "api_base": host_visible_api_base,
+        },
+    )
+    assert reg_resp.status_code == 201, f"Webhook registration failed: {reg_resp.text}"
+    hook_id = reg_resp.json()["hook_id"]
+
+    return cred_id, hook_id
+
+
+async def _fire_workflow_run_failure(
+    fake: "FakeGitHubServer",
+    hook_id: int,
+    *,
+    repo: str,
+    run_id: int,
+    head_branch: str = "main",
+    workflow_name: str = "tests",
+) -> int:
+    """Fire a workflow_run.failure event and return the delivered_status."""
+    owner, name = repo.split("/", 1)
+    async with httpx.AsyncClient(base_url=fake.base_url, timeout=10) as client:
+        fire_resp = await client.post(
+            f"/repos/{owner}/{name}/hooks/{hook_id}/workflow_run_failure",
+            json={
+                "run_id": run_id,
+                "head_branch": head_branch,
+                "workflow_name": workflow_name,
+                "head_sha": f"sha{run_id}",
+            },
+        )
+    assert fire_resp.status_code == 200, f"fire-event failed: {fire_resp.text}"
+    return fire_resp.json().get("delivered_status", 0)
+
+
+async def _drain_cortex_stimuli(cortex_url: str, admin_headers: dict) -> dict | None:
+    """Call cortex test-drain endpoint. Returns the result or None if unavailable."""
+    async with httpx.AsyncClient(base_url=cortex_url, timeout=15) as client:
+        try:
+            resp = await client.post(
+                "/api/v1/cortex/__test/drain-stimuli",
+                params={"max_count": 20},
+                headers=admin_headers,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
+        except Exception:
+            return None
+
+
+async def _require_test_drain(cortex_url: str, admin_headers: dict) -> None:
+    """Skip the test if the cortex test-drain endpoint is not available."""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(base_url=cortex_url, timeout=5) as c:
+            hr = await c.get("/health/ready")
+        if hr.status_code != 200:
+            pytest.skip("Cortex is not running")
+    except Exception:
+        pytest.skip("Cortex is not running")
+
+    result = await _drain_cortex_stimuli(cortex_url, admin_headers)
+    if result is None:
+        pytest.skip(
+            "CORTEX_TEST_MODE is not enabled — set CORTEX_TEST_MODE=true in .env "
+            "for T8.3 wiring tests"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 (T8.3a): Stimulus dedup — same run_id fired twice creates one goal
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_stimulus_dedup_same_run_id_creates_one_goal(
+    orchestrator: httpx.AsyncClient,
+    admin_headers: dict,
+    pool,
+):
+    """Firing the same workflow_run.failure event twice produces only one triage goal.
+
+    Dedup is implemented in ci_triage.handle_stimulus via current_plan->>'ci_run_id'.
+    """
+    from conftest import CORTEX_URL
+
+    await _require_test_drain(CORTEX_URL, admin_headers)
+
+    fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
+    await fake.start()
+
+    run_id = int(f"9900{uuid4().int % 10000:04d}")
+    repo = _test_repo("dedup")
+    cred_id = None
+    hook_id = None
+    goal_ids: list[str] = []
+
+    try:
+        cred_id, hook_id = await _setup_e2e_environment(
+            orchestrator, admin_headers, pool, fake, repo=repo, daily_budget=20
+        )
+
+        # Fire the same run_id twice
+        await _fire_workflow_run_failure(fake, hook_id, repo=repo, run_id=run_id)
+        await _drain_cortex_stimuli(CORTEX_URL, admin_headers)
+
+        await _fire_workflow_run_failure(fake, hook_id, repo=repo, run_id=run_id)
+        await _drain_cortex_stimuli(CORTEX_URL, admin_headers)
+
+        # Collect created goals for cleanup
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM goals WHERE current_plan->>'ci_run_id' = $1",
+                str(run_id),
+            )
+        goal_ids = [str(r["id"]) for r in rows]
+
+        assert len(goal_ids) == 1, (
+            f"Expected exactly 1 goal for dedup run_id={run_id}; got {len(goal_ids)}. "
+            "ci_triage dedup check may be broken."
+        )
+
+    finally:
+        await _cleanup(pool, orchestrator, admin_headers,
+                       hook_id=hook_id, repo=repo,
+                       goal_ids=goal_ids if goal_ids else None,
+                       cred_id=cred_id)
+        await fake.stop()
+
+
+# ---------------------------------------------------------------------------
+# Test 6 (T8.3b): Unwatched repo — stimulus is silently skipped
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_stimulus_for_unwatched_repo_skipped(
+    orchestrator: httpx.AsyncClient,
+    admin_headers: dict,
+    pool,
+):
+    """A stimulus for a repo NOT in cortex_watched_repos creates no goal.
+
+    Pushes a synthetic stimulus directly to cortex:stimuli (Redis db5)
+    to isolate the drive's watchlist-filter logic from the webhook path.
+    """
+    from conftest import CORTEX_URL
+
+    await _require_test_drain(CORTEX_URL, admin_headers)
+
+    unique_run_id = 88000 + uuid4().int % 1000
+    unwatched_repo = f"unwatched-org/nova-test-no-watch-{uuid4().hex[:6]}"
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    # Confirm the repo is NOT in cortex_watched_repos
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT id FROM cortex_watched_repos WHERE repo=$1", unwatched_repo
+        )
+    assert existing is None, "Test setup error: repo should not be watched"
+
+    # Push a synthetic stimulus directly to Redis (bypassing the webhook path)
+    redis = aioredis.from_url(_CORTEX_REDIS_URL, decode_responses=True)
+    try:
+        stimulus = json.dumps({
+            "type": "ci.workflow_run.failure",
+            "source": "test",
+            "payload": {
+                "tenant_id": tenant_id,
+                "credential_id": str(uuid4()),
+                "repo": unwatched_repo,
+                "run_id": unique_run_id,
+                "head_sha": "aabbcc",
+                "head_branch": "main",
+                "workflow_name": "tests",
+                "html_url": f"http://fake/{unique_run_id}",
+            },
+            "priority": 0,
+            "timestamp": "2026-05-01T00:00:00Z",
+        })
+        await redis.lpush("cortex:stimuli", stimulus)
+    finally:
+        await redis.aclose()
+
+    # Drain via cortex test endpoint
+    drain_result = await _drain_cortex_stimuli(CORTEX_URL, admin_headers)
+    assert drain_result is not None, "drain-stimuli endpoint returned unexpected error"
+
+    # No goal should have been created for this unwatched repo
+    async with pool.acquire() as conn:
+        goal = await conn.fetchrow(
+            "SELECT id FROM goals WHERE current_plan->>'ci_run_id' = $1",
+            str(unique_run_id),
+        )
+    assert goal is None, (
+        f"Goal was created for unwatched repo (run_id={unique_run_id}) — "
+        "ci_triage should have skipped it (reason: not_watched)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 (T8.3c): Budget cap — 2nd stimulus is skipped + budget_exceeded audit
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_budget_cap_skips_after_limit(
+    orchestrator: httpx.AsyncClient,
+    admin_headers: dict,
+    pool,
+):
+    """When daily_budget=1, the 2nd stimulus is skipped and a budget_exceeded
+    event is written to capability_audit.
+    """
+    from conftest import CORTEX_URL
+
+    await _require_test_drain(CORTEX_URL, admin_headers)
+
+    fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
+    await fake.start()
+
+    run_id_1 = int(f"8800{uuid4().int % 10000:04d}")
+    run_id_2 = run_id_1 + 1  # distinct run_id so dedup doesn't fire
+    repo = _test_repo("budget")
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    cred_id = None
+    hook_id = None
+    goal_ids: list[str] = []
+
+    try:
+        # Setup with daily_budget=1 so the 2nd stimulus hits the cap
+        cred_id, hook_id = await _setup_e2e_environment(
+            orchestrator, admin_headers, pool, fake, repo=repo, daily_budget=1
+        )
+
+        # Fire run_id_1 → should succeed (budget: 0 → 1)
+        await _fire_workflow_run_failure(fake, hook_id, repo=repo, run_id=run_id_1)
+        drain1 = await _drain_cortex_stimuli(CORTEX_URL, admin_headers)
+        assert drain1 is not None, "drain-stimuli returned None after first stimulus"
+
+        # Verify first goal was dispatched
+        goal_row_1 = await _poll_for_goal(pool, run_id_1, timeout=5.0, interval=0.5)
+        assert goal_row_1 is not None, (
+            f"Goal for run_id={run_id_1} not created — budget=1 first stimulus should succeed"
+        )
+        goal_ids.append(str(goal_row_1["id"]))
+
+        # Fire run_id_2 → budget is now exhausted (1/1), should be skipped
+        await _fire_workflow_run_failure(fake, hook_id, repo=repo, run_id=run_id_2)
+        drain2 = await _drain_cortex_stimuli(CORTEX_URL, admin_headers)
+        assert drain2 is not None, "drain-stimuli returned None after second stimulus"
+
+        # Find the drain result for run_id_2
+        processed = drain2.get("processed", [])
+        our_result = next(
+            (r for r in processed
+             if str((r.get("result") or {}).get("run_id", "")) == str(run_id_2)
+             or str((r.get("stimulus") or {}).get("run_id", "")) == str(run_id_2)),
+            None,
+        )
+        # The second stimulus should be skipped (budget_exceeded)
+        # It's acceptable if we can't pin it to run_id_2 from the drain response —
+        # the authoritative check is that no goal was created for run_id_2.
+        async with pool.acquire() as conn:
+            goal_2 = await conn.fetchrow(
+                "SELECT id FROM goals WHERE current_plan->>'ci_run_id' = $1",
+                str(run_id_2),
+            )
+        assert goal_2 is None, (
+            f"Goal was created for run_id_2={run_id_2} despite daily_budget=1 already exhausted"
+        )
+
+        # Verify a budget_exceeded audit row was written for this repo
+        async with pool.acquire() as conn:
+            audit_row = await conn.fetchrow(
+                """SELECT id, response_status, response_summary
+                   FROM capability_audit
+                   WHERE tenant_id=$1::uuid
+                     AND event_type='budget_exceeded'
+                     AND target=$2
+                   ORDER BY timestamp DESC LIMIT 1""",
+                tenant_id,
+                repo,
+            )
+        assert audit_row is not None, (
+            f"No budget_exceeded audit event found for repo={repo} — "
+            "ci_triage._write_budget_exceeded_audit may not have been called"
+        )
+        assert audit_row["response_status"] == "rejected"
+        assert "daily_budget=1" in (audit_row["response_summary"] or ""), (
+            f"Expected 'daily_budget=1' in response_summary; got: {audit_row['response_summary']!r}"
+        )
+
+    finally:
+        await _cleanup(pool, orchestrator, admin_headers,
+                       hook_id=hook_id, repo=repo,
+                       goal_ids=goal_ids if goal_ids else None,
+                       cred_id=cred_id)
+        await fake.stop()
