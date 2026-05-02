@@ -152,3 +152,44 @@ async def get_reflections(goal_id: UUID, limit: int = Query(default=20, le=100))
     from .reflections import query_reflections
     refs = await query_reflections(str(goal_id), limit=limit)
     return {"reflections": refs, "count": len(refs)}
+
+
+@cortex_router.post("/__test/drain-stimuli")
+async def drain_stimuli_for_test(max_count: int = Query(default=10, le=50)):
+    """Drain pending stimuli synchronously and process them via ci_triage.
+
+    For integration tests only — requires CORTEX_TEST_MODE=true.
+    This endpoint lets tests bypass the background BRPOP loop timing
+    and verify stimulus→goal dispatch deterministically.
+
+    Only handles ci.workflow_run.failure stimuli; other types are re-queued.
+    """
+    import os
+    if os.getenv("CORTEX_TEST_MODE", "").lower() not in ("1", "true"):
+        raise HTTPException(status_code=403, detail="CORTEX_TEST_MODE is not enabled")
+
+    from .drives.ci_triage import handle_stimulus
+    from .stimulus import STIMULUS_KEY, get_redis
+
+    r = await get_redis()
+    processed: list[dict] = []
+    requeued: int = 0
+
+    import json as _json
+    for _ in range(max_count):
+        raw = await r.rpop(STIMULUS_KEY)
+        if raw is None:
+            break
+        try:
+            s = _json.loads(raw)
+        except Exception:
+            continue
+        if s.get("type") == "ci.workflow_run.failure":
+            result = await handle_stimulus(s)
+            processed.append({"stimulus_type": s["type"], "result": result})
+        else:
+            # Re-queue non-CI stimuli so the background loop can handle them
+            await r.lpush(STIMULUS_KEY, raw)
+            requeued += 1
+
+    return {"processed": processed, "requeued": requeued, "count": len(processed)}

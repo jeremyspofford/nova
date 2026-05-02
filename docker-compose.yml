@@ -581,6 +581,7 @@ services:
       CORTEX_MEMORY_ENABLED: ${CORTEX_MEMORY_ENABLED:-true}
       CORTEX_REFLECT_TO_ENGRAMS: ${CORTEX_REFLECT_TO_ENGRAMS:-true}
       CORTEX_IDLE_CONSOLIDATION: ${CORTEX_IDLE_CONSOLIDATION:-true}
+      CORTEX_TEST_MODE: ${CORTEX_TEST_MODE:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       # Loopback-only by default (SEC-004). Override with CORTEX_BIND if needed.
