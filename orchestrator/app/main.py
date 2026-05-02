@@ -162,7 +162,11 @@ async def lifespan(app: FastAPI):
 
     from app.auto_friction import auto_friction_subscriber
     _auto_friction_task = asyncio.create_task(auto_friction_subscriber(), name="auto-friction")
-    log.info("Queue worker, reaper, effectiveness loop, chat scorer, and auto-friction subscriber started")
+
+    from app.polling_worker import GitHubPoller
+    _poller = GitHubPoller()
+    _poll_task = asyncio.create_task(_poller.start(), name="github-poller")
+    log.info("Queue worker, reaper, effectiveness loop, chat scorer, auto-friction subscriber, and GitHub poller started")
 
     # Register quality loops + apply DB-stored agency
     from app.quality_loop.registry import get_registry, load_agency_from_config
@@ -181,8 +185,14 @@ async def lifespan(app: FastAPI):
     _effectiveness_task.cancel()
     _chat_scorer_task.cancel()
     _auto_friction_task.cancel()
+    await _poller.stop()
+    _poll_task.cancel()
     # Wait briefly for graceful shutdown
-    await asyncio.gather(_queue_task, _reaper_task, _effectiveness_task, _chat_scorer_task, _auto_friction_task, return_exceptions=True)
+    await asyncio.gather(
+        _queue_task, _reaper_task, _effectiveness_task, _chat_scorer_task,
+        _auto_friction_task, _poll_task,
+        return_exceptions=True,
+    )
 
     # Gracefully stop MCP server subprocesses
     from app.pipeline.tools import stop_all_servers
