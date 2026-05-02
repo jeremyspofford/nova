@@ -11,6 +11,7 @@ Callers of ``get_secret`` MUST NOT log the return value.
 """
 from __future__ import annotations
 
+import json
 import logging
 from uuid import UUID, uuid4
 
@@ -29,16 +30,21 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton — instantiated once on first use; restart picks up key changes.
+_credential_provider: BuiltinCredentialProvider | None = None
+
 
 def _provider() -> BuiltinCredentialProvider:
-    """Return a configured BuiltinCredentialProvider or raise 500."""
-    key = settings.credential_master_key
-    if not key:
-        raise HTTPException(
-            status_code=500,
-            detail="CREDENTIAL_MASTER_KEY not configured — cannot encrypt credentials",
-        )
-    return BuiltinCredentialProvider(key)
+    """Return the cached BuiltinCredentialProvider, creating it on first call."""
+    global _credential_provider
+    if _credential_provider is None:
+        if not settings.credential_master_key:
+            raise HTTPException(
+                status_code=500,
+                detail="CREDENTIAL_MASTER_KEY not configured — cannot encrypt credentials",
+            )
+        _credential_provider = BuiltinCredentialProvider(settings.credential_master_key)
+    return _credential_provider
 
 
 def _encrypt(tenant_id: UUID, plaintext: str) -> bytes:
@@ -64,7 +70,6 @@ async def create_credential(
 
     cred_id = uuid4()
     # Serialize scopes as JSON string for asyncpg JSONB binding
-    import json
     scopes_json = json.dumps(payload.scopes) if payload.scopes is not None else None
 
     async with pool.acquire() as conn:
@@ -166,7 +171,7 @@ async def get_secret(
         encrypted = row["encrypted_data"]
         if not encrypted:
             return None
-        return _decrypt(tenant_id, bytes(encrypted))
+        return _decrypt(tenant_id, encrypted)
 
     raise NotImplementedError(f"backend {backend} not implemented in v1")
 
