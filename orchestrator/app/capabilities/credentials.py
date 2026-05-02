@@ -233,7 +233,10 @@ async def delete_credential(
 def _row_to_model(row: asyncpg.Record) -> Credential:
     """Convert a raw asyncpg record to a Credential Pydantic model."""
     scopes = row["scopes"]
-    # asyncpg returns JSONB as a dict already; None is fine as-is
+    # asyncpg may return JSONB as a dict or as a JSON string — normalize to dict
+    if isinstance(scopes, str) and scopes:
+        scopes = json.loads(scopes)
+
     return Credential(
         id=row["id"],
         tenant_id=row["tenant_id"],
