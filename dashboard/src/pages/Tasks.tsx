@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Send, RefreshCw, X, Clock, ChevronDown, ChevronUp,
   ThumbsUp, ThumbsDown, Loader2, Trash2, ShieldAlert,
   FileSearch, AlertTriangle, MessageSquare, Zap, CheckCircle2,
-  ListTodo, DollarSign, Timer, Brain,
+  ListTodo, DollarSign, Timer, Brain, ScrollText,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -467,7 +467,7 @@ function SummaryCard({ summary, onFileClick }: { summary: TaskSummary; onFileCli
       <div className="mt-2 flex gap-3 text-caption text-content-tertiary">
         {summary.findings_count > 0 && <span>{summary.findings_count} findings</span>}
         {summary.review_verdict && <span>Review: {summary.review_verdict}</span>}
-        {summary.cost_usd != null && <span>${summary.cost_usd.toFixed(2)}</span>}
+        {summary.cost_usd != null && <span>${Number(summary.cost_usd).toFixed(2)}</span>}
         {summary.duration_s != null && <span>{summary.duration_s}s</span>}
       </div>
     </div>
@@ -505,7 +505,7 @@ function StageCard({ stage, session, checkpoint, isFailed }: {
     ? `${(session.duration_ms / 1000).toFixed(1)}s`
     : null
   const model = session?.model_used?.split('/').pop() ?? null
-  const cost = session?.cost_usd ? `$${session.cost_usd.toFixed(3)}` : null
+  const cost = session?.cost_usd != null ? `$${Number(session.cost_usd).toFixed(3)}` : null
 
   return (
     <div className={clsx(
@@ -765,6 +765,13 @@ export function TaskDetailSheet({
               cortex
             </Badge>
           )}
+          <Link
+            to={`/audit-log?task_id=${task.id}`}
+            className="inline-flex items-center gap-1 text-caption text-content-tertiary hover:text-accent transition-colors ml-auto"
+            title="View capability audit events for this task"
+          >
+            <ScrollText size={12} /> Audit trail
+          </Link>
         </div>
 
         {/* Task input */}

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ScrollText, Filter, Download, ChevronDown, ChevronRight,
@@ -184,9 +185,36 @@ function AuditRow({ event }: { event: AuditEvent }) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+// URL params we mirror into the filter state on mount. Strings only.
+const URL_FILTER_KEYS = [
+  'task_id', 'tool_name', 'target', 'actor_id', 'actor_kind',
+  'event_type', 'blast_radius', 'response_status', 'credential_id',
+  'tool_kind', 'provider_kind',
+] as const
+
 export function AuditLog() {
-  const [filters, setFilters] = useState<AuditFilters>({ limit: PAGE_SIZE, offset: 0 })
-  const [filtersExpanded, setFiltersExpanded] = useState(false)
+  const [searchParams] = useSearchParams()
+
+  // Initial filter state — pre-populated from URL params so /audit-log?task_id=X works.
+  // Run once on mount; the rest is local state.
+  const initialFilters = useMemo<AuditFilters>(() => {
+    const f: AuditFilters = { limit: PAGE_SIZE, offset: 0 }
+    for (const key of URL_FILTER_KEYS) {
+      const v = searchParams.get(key)
+      if (v) (f as Record<string, unknown>)[key] = v
+    }
+    return f
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const [filters, setFilters] = useState<AuditFilters>(initialFilters)
+  // Open advanced section by default if any advanced filter was URL-prefilled,
+  // so users see what's filtering their results.
+  const [filtersExpanded, setFiltersExpanded] = useState(
+    !!(initialFilters.task_id || initialFilters.actor_id || initialFilters.actor_kind ||
+       initialFilters.event_type || initialFilters.from_ts || initialFilters.to_ts ||
+       initialFilters.credential_id),
+  )
 
   const setFilter = useCallback(<K extends keyof AuditFilters>(key: K, value: AuditFilters[K]) => {
     setFilters(f => ({ ...f, [key]: value || undefined, offset: 0 }))
@@ -282,6 +310,15 @@ export function AuditLog() {
 
         {filtersExpanded && (
           <div className="flex items-end gap-2 flex-wrap pt-2 border-t border-border-subtle">
+            <div className="flex-1 min-w-[260px]">
+              <label className="text-caption text-content-secondary block mb-1">Task ID</label>
+              <Input
+                value={filters.task_id ?? ''}
+                onChange={e => setFilter('task_id', e.target.value)}
+                placeholder="UUID — full or prefix"
+                className="font-mono"
+              />
+            </div>
             <div className="flex-1 min-w-[200px]">
               <label className="text-caption text-content-secondary block mb-1">Actor ID</label>
               <Input
