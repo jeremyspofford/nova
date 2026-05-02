@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import json
 import socket
 from pathlib import Path
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 
@@ -101,6 +104,50 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
         }
         comments.append(comment)
         return comment
+
+    @app.post("/repos/{owner}/{repo}/hooks")
+    async def create_hook(owner: str, repo: str, body: dict):
+        """Create a hook. Stores config (including secret) and returns the hook object."""
+        hooks = state.setdefault("hooks", {})
+        next_id = state.setdefault("next_hook_id", 1000000)
+        state["next_hook_id"] = next_id + 1
+        config = body.get("config", {})
+        hook = {
+            "id": next_id,
+            "name": body["name"],
+            "active": body.get("active", True),
+            "events": body.get("events", []),
+            "config": config,
+        }
+        hooks[next_id] = hook
+        return hook
+
+    @app.delete("/repos/{owner}/{repo}/hooks/{hook_id}")
+    async def delete_hook(owner: str, repo: str, hook_id: int):
+        state.setdefault("hooks", {}).pop(hook_id, None)
+        return {}
+
+    @app.post("/repos/{owner}/{repo}/hooks/{hook_id}/pings")
+    async def ping_hook(owner: str, repo: str, hook_id: int):
+        """Fire a ping at the hook's configured URL with an HMAC-signed body."""
+        hook = state.get("hooks", {}).get(hook_id)
+        if not hook:
+            raise HTTPException(status_code=404, detail="hook not found")
+        secret = hook["config"].get("secret", "")
+        target_url = hook["config"].get("url", "")
+        payload = json.dumps({"zen": "test ping", "hook_id": hook_id}).encode()
+        sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                target_url,
+                content=payload,
+                headers={
+                    "X-GitHub-Event": "ping",
+                    "X-Hub-Signature-256": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+        return {"ok": True, "delivered_status": resp.status_code}
 
     return app
 

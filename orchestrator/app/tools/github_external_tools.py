@@ -1,4 +1,4 @@
-"""Native GitHub provider for arbitrary repos (READ + PROPOSE + MUTATE tier).
+"""Native GitHub provider for arbitrary repos (READ + PROPOSE + MUTATE + SETUP tier).
 
 Distinguished from app.tools.github_tools (Self-Modification, Nova's own repo).
 See docs/designs/2026-05-01-nova-capability-platform-design.md §5.
@@ -8,10 +8,12 @@ import asyncio
 import json
 import logging
 import re
+import secrets as _stdlib_secrets
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 from nova_contracts import BlastRadius, ToolDefinition
@@ -187,6 +189,65 @@ GITHUB_EXTERNAL_TOOLS: list[ToolDefinition] = [
             "required": ["repo", "pr_number", "body"],
         },
         blast_radius=BlastRadius.MUTATE,
+        reversible=True,
+    ),
+    # ── SETUP-tier tools (webhook self-bootstrap) ─────────────────────────────
+    ToolDefinition(
+        name="register_webhook",
+        description=(
+            "Create a webhook on a GitHub repo for workflow_run events. "
+            "Generates a per-hook HMAC secret, stores it encrypted, and records the row. "
+            "Setup-time MUTATE: called when the user adds a watched repo via the dashboard."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": _REPO_FIELD,
+                "target_url": {
+                    "type": "string",
+                    "description": "Webhook receiver URL (orchestrator's /api/v1/webhooks/github)",
+                },
+                "credential_id": {
+                    "type": "string",
+                    "description": "UUID of the capability_credentials row whose tenant key encrypts the HMAC secret",
+                },
+                "events": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": ["workflow_run"],
+                },
+            },
+            "required": ["repo", "target_url", "credential_id"],
+        },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="unregister_webhook",
+        description="Delete a webhook from GitHub and mark the github_webhooks row revoked.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": _REPO_FIELD,
+                "hook_id": {"type": "integer"},
+            },
+            "required": ["repo", "hook_id"],
+        },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="verify_webhook",
+        description="Trigger a ping on an existing webhook to confirm reachability and update health.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": _REPO_FIELD,
+                "hook_id": {"type": "integer"},
+            },
+            "required": ["repo", "hook_id"],
+        },
+        blast_radius=BlastRadius.READ,
         reversible=True,
     ),
 ]
@@ -669,6 +730,134 @@ async def _run_git(cwd: Path, cmd: list[str]) -> None:
         )
 
 
+# ── SETUP-tier implementations (webhook self-bootstrap) ──────────────────────
+
+# v1 single-tenant constant — mirrors DEFAULT_TENANT in capabilities/router.py
+_DEFAULT_TENANT = UUID("00000000-0000-0000-0000-000000000001")
+
+
+async def _register_webhook(args: dict, secret: str, *, api_base: str) -> dict:
+    """Generate HMAC secret, call GitHub /repos/{repo}/hooks, persist to github_webhooks.
+
+    The HMAC secret is encrypted using the same BuiltinCredentialProvider that
+    protects PAT credentials — credential_id (tenant key) is used as the
+    encryption context so the ciphertext is bound to the owning credential row.
+    This is semantically appropriate: the webhook secret lives only as long as
+    the credential that authorized its creation.
+    """
+    from app.capabilities import credentials as cred_db
+    from app.db import get_pool
+
+    repo = args["repo"]
+    target_url = args["target_url"]
+    credential_id = UUID(args["credential_id"])
+    events = args.get("events") or ["workflow_run"]
+
+    # Generate a fresh HMAC secret for this webhook
+    hmac_secret = _stdlib_secrets.token_urlsafe(32)
+
+    # Encrypt using the credential row's tenant key (credential_id doubles as
+    # the tenant scoping key — the encrypted secret is useless without the
+    # matching master key and this credential_id)
+    encrypted = cred_db._encrypt(credential_id, hmac_secret)
+
+    # Create the hook on GitHub (or fake-github in tests)
+    async with await _http(api_base, secret) as client:
+        resp = await client.post(
+            f"/repos/{repo}/hooks",
+            json={
+                "name": "web",
+                "active": True,
+                "events": events,
+                "config": {
+                    "url": target_url,
+                    "content_type": "json",
+                    "secret": hmac_secret,
+                    "insecure_ssl": "0",
+                },
+            },
+        )
+        resp.raise_for_status()
+        gh_hook = resp.json()
+        gh_hook_id = gh_hook["id"]
+
+    # Persist the webhook row
+    pool = get_pool()
+    hook_row_id = uuid4()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO github_webhooks
+              (id, tenant_id, credential_id, repo, hook_id, target_url,
+               encrypted_secret, events, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+            """,
+            hook_row_id,
+            _DEFAULT_TENANT,
+            credential_id,
+            repo,
+            gh_hook_id,
+            target_url,
+            encrypted,
+            events,
+        )
+
+    logger.info("Registered webhook hook_id=%s for repo=%s", gh_hook_id, repo)
+    return {
+        "hook_id": gh_hook_id,
+        "row_id": str(hook_row_id),
+        "status": "active",
+    }
+
+
+async def _unregister_webhook(args: dict, secret: str, *, api_base: str) -> dict:
+    """Delete the GitHub webhook and mark the db row revoked."""
+    from app.db import get_pool
+
+    repo = args["repo"]
+    hook_id = args["hook_id"]
+
+    async with await _http(api_base, secret) as client:
+        resp = await client.delete(f"/repos/{repo}/hooks/{hook_id}")
+        # 404 means already gone — still mark revoked
+        if resp.status_code not in (204, 200, 404):
+            resp.raise_for_status()
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE github_webhooks SET status='revoked' WHERE hook_id=$1 AND repo=$2",
+            hook_id,
+            repo,
+        )
+
+    updated = result.endswith(" 1")
+    logger.info("Unregistered webhook hook_id=%s for repo=%s (row updated=%s)", hook_id, repo, updated)
+    return {"hook_id": hook_id, "revoked": True, "db_row_updated": updated}
+
+
+async def _verify_webhook(args: dict, secret: str, *, api_base: str) -> dict:
+    """Trigger a ping on the GitHub webhook to confirm reachability."""
+    from app.db import get_pool
+
+    repo = args["repo"]
+    hook_id = args["hook_id"]
+
+    async with await _http(api_base, secret) as client:
+        resp = await client.post(f"/repos/{repo}/hooks/{hook_id}/pings")
+        resp.raise_for_status()
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE github_webhooks SET last_pinged_at=now() WHERE hook_id=$1 AND repo=$2",
+            hook_id,
+            repo,
+        )
+
+    return {"hook_id": hook_id, "pinged": True}
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | None = None) -> Any:
@@ -686,6 +875,10 @@ async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | No
         "draft_fix": _draft_fix,
         "open_fix_pr": _open_fix_pr,
         "comment_on_pr": _comment_on_pr,
+        # SETUP-tier
+        "register_webhook": _register_webhook,
+        "unregister_webhook": _unregister_webhook,
+        "verify_webhook": _verify_webhook,
     }
     fn = dispatch.get(name)
     if fn is None:
