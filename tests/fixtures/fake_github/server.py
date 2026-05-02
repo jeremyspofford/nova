@@ -9,14 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import socket
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 
 
-def _build_app() -> FastAPI:
+def load_scenario(name: str) -> dict:
+    """Load a fake-github scenario by name from the scenarios/ directory."""
+    base = Path(__file__).parent / "scenarios"
+    with open(base / f"{name}.json") as f:
+        return json.load(f)
+
+
+def _build_app(scenarios: dict | None = None) -> FastAPI:
     app = FastAPI()
+    state = {"scenarios": scenarios or {}}
 
     @app.get("/user")
     async def get_user(authorization: str | None = Header(None)):
@@ -29,13 +39,45 @@ def _build_app() -> FastAPI:
             raise HTTPException(403, "Token has insufficient scopes")
         return {"login": "fake-user", "id": 1}
 
+    @app.get("/repos/{owner}/{repo}/actions/runs")
+    async def list_runs(owner: str, repo: str, status: str | None = None, branch: str | None = None):
+        runs = list(state["scenarios"].get("workflow_runs", []))
+        if status and status != "all":
+            runs = [r for r in runs if r.get("conclusion") == status or r.get("status") == status]
+        if branch:
+            runs = [r for r in runs if r.get("head_branch") == branch]
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    @app.get("/repos/{owner}/{repo}/actions/runs/{run_id}")
+    async def get_run(owner: str, repo: str, run_id: int):
+        for r in state["scenarios"].get("workflow_runs", []):
+            if r.get("id") == run_id:
+                return r
+        raise HTTPException(404, "run not found")
+
+    @app.get("/repos/{owner}/{repo}/actions/runs/{run_id}/logs")
+    async def get_logs(owner: str, repo: str, run_id: int):
+        log_text = state["scenarios"].get("logs", {}).get(str(run_id), "")
+        # Real GitHub returns a zip; for tests we return plain text in a JSON envelope
+        return {"text": log_text}
+
+    @app.get("/repos/{owner}/{repo}/pulls/{pr_number}")
+    async def get_pull(owner: str, repo: str, pr_number: int):
+        """Stub PR — only enough for compare_to_main to find PR head_sha."""
+        return {
+            "number": pr_number,
+            "head": {"sha": f"sha-of-pr-{pr_number}", "ref": "feature-x"},
+            "base": {"sha": "main-sha", "ref": "main"},
+        }
+
     return app
 
 
 class FakeGitHubServer:
     """Fake GitHub API on a local ephemeral port for tests."""
 
-    def __init__(self):
+    def __init__(self, scenarios: dict | None = None):
+        self.scenarios = scenarios
         self.port = self._free_port()
         self._task: asyncio.Task | None = None
         self._server: uvicorn.Server | None = None
@@ -52,7 +94,7 @@ class FakeGitHubServer:
 
     async def start(self):
         config = uvicorn.Config(
-            _build_app(), host="0.0.0.0", port=self.port, log_level="warning"
+            _build_app(scenarios=self.scenarios), host="0.0.0.0", port=self.port, log_level="warning"
         )
         self._server = uvicorn.Server(config)
         self._task = asyncio.create_task(self._server.serve())

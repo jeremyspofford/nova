@@ -1,0 +1,22 @@
+{
+  "repo": "test-org/test-repo",
+  "workflow_runs": [
+    {
+      "id": 12345,
+      "conclusion": "failure",
+      "status": "completed",
+      "head_sha": "abc123",
+      "head_branch": "feature-x",
+      "name": "tests",
+      "created_at": "2026-04-30T12:00:00Z",
+      "html_url": "https://github.com/test-org/test-repo/actions/runs/12345"
+    }
+  ],
+  "logs": {
+    "12345": "ESLint: 3 errors\n  src/utils.ts:12:5 'foo' is not defined\n  src/utils.ts:14:1 missing semicolon\n  src/utils.ts:18:7 unused import 'bar'\n"
+  },
+  "pr_diff": {
+    "12345": "diff --git a/src/utils.ts b/src/utils.ts\n@@ -10,3 +10,5 @@ export function helper() {\n+    foo();  // ← undefined\n+    other()\n }\n"
+  },
+  "main_status": "passing"
+}
