@@ -98,7 +98,7 @@ Each milestone is independently shippable (or independently testable); commit at
 ## Task 1.1: Migration — `capability_credentials` table
 
 **Files:**
-- Create: `orchestrator/app/migrations/067_capability_credentials.sql` (adjust number to next available)
+- Create: `orchestrator/app/migrations/068_capability_credentials.sql` (adjust number to next available)
 - Test: `tests/test_capability_credentials.py`
 
 - [ ] **Step 1: Confirm next migration number**
@@ -174,7 +174,7 @@ Expected: Table with all columns shown.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add orchestrator/app/migrations/067_capability_credentials.sql
+git add orchestrator/app/migrations/068_capability_credentials.sql
 git commit -m "feat(capability): credentials and credential-audit tables"
 ```
 
@@ -976,7 +976,7 @@ git commit -m "feat(capability): credential health validation + fake-github boun
 ## Task 2.1: Migration — `capability_audit` table
 
 **Files:**
-- Create: `orchestrator/app/migrations/068_capability_audit.sql`
+- Create: `orchestrator/app/migrations/069_capability_audit.sql`
 
 - [ ] **Step 1: Write the migration**
 
@@ -1045,7 +1045,7 @@ Expected: table with all columns, two RULES listed.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add orchestrator/app/migrations/068_capability_audit.sql
+git add orchestrator/app/migrations/069_capability_audit.sql
 git commit -m "feat(capability): audit log table with append-only RULE constraints"
 ```
 
@@ -1535,7 +1535,7 @@ git commit -m "feat(capability): credential ops emit capability_audit events"
 ## Task 3.1: Migration — `approval_requests` and `consent_rules`
 
 **Files:**
-- Create: `orchestrator/app/migrations/069_consent_and_approvals.sql`
+- Create: `orchestrator/app/migrations/070_consent_and_approvals.sql`
 
 - [ ] **Step 1: Write migration**
 
@@ -1592,7 +1592,7 @@ The three v1 matcher kinds in `scope_match` are `target_glob`, `max_diff_lines`,
 docker compose restart orchestrator && sleep 5
 docker compose exec postgres psql -U nova -d nova -c "\d approval_requests"
 docker compose exec postgres psql -U nova -d nova -c "\d consent_rules"
-git add orchestrator/app/migrations/069_consent_and_approvals.sql
+git add orchestrator/app/migrations/070_consent_and_approvals.sql
 git commit -m "feat(capability): approval_requests and consent_rules tables"
 ```
 
@@ -2255,7 +2255,7 @@ git commit -m "feat(capability): GitHub provider — MUTATE tier (open_fix_pr + 
 ## Task 7.1: Migration + tools + endpoint
 
 **Files:**
-- Create: `orchestrator/app/migrations/070_github_webhooks.sql` (per spec §9.1.1)
+- Create: `orchestrator/app/migrations/071_github_webhooks.sql` (per spec §9.1.1)
 - Create: `orchestrator/app/webhooks_router.py`
 - Modify: `orchestrator/app/tools/github_external_tools.py` — add `register_webhook`, `unregister_webhook`, `verify_webhook` (all SETUP tier)
 - Modify: `orchestrator/app/main.py` — register webhooks router
@@ -2390,7 +2390,7 @@ async def test_webhook_self_bootstrap_e2e(pool, fake_github):
 
 ```bash
 pytest tests/test_capability_webhooks.py -v
-git add orchestrator/app/migrations/070_github_webhooks.sql orchestrator/app/webhooks_router.py orchestrator/app/tools/github_external_tools.py orchestrator/app/main.py tests/fixtures/fake_github/server.py tests/test_capability_webhooks.py
+git add orchestrator/app/migrations/071_github_webhooks.sql orchestrator/app/webhooks_router.py orchestrator/app/tools/github_external_tools.py orchestrator/app/main.py tests/fixtures/fake_github/server.py tests/test_capability_webhooks.py
 git commit -m "feat(capability): webhook self-bootstrap — register, verify, dispatch"
 ```
 
@@ -2446,7 +2446,7 @@ These columns line up 1:1 with the dashboard CI Triage form fields in spec §9.6
 
 - [ ] **Step 3: Pod definition seed**
 
-Insert `ci_triage_agent` into the pods table via a migration in orchestrator (since pods live there per CLAUDE.md). Migration `071_ci_triage_agent_pod.sql`:
+Insert `ci_triage_agent` into the pods table via a migration in orchestrator (since pods live there per CLAUDE.md). Migration `072_ci_triage_agent_pod.sql`:
 
 ```sql
 INSERT INTO agent_pods (
@@ -2484,7 +2484,7 @@ async def test_e2e_triage_bug_in_pr(pool, fake_github):
 
 ```bash
 pytest tests/test_capability_e2e.py::test_e2e_triage_bug_in_pr -v
-git add cortex/app/drives/quality.py orchestrator/app/migrations/071_ci_triage_agent_pod.sql tests/test_capability_e2e.py
+git add cortex/app/drives/quality.py orchestrator/app/migrations/072_ci_triage_agent_pod.sql tests/test_capability_e2e.py
 git commit -m "feat(capability): cortex quality drive triages CI failures end-to-end"
 ```
 
