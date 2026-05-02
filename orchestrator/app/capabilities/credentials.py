@@ -19,6 +19,7 @@ import asyncpg
 from fastapi import HTTPException
 from nova_worker_common.credentials.builtin import BuiltinCredentialProvider
 
+from app.capabilities.audit import write_audit_event
 from app.capabilities.models import (
     AuthMethod,
     Credential,
@@ -103,6 +104,21 @@ async def create_credential(
                 tenant_id,
                 actor,
             )
+    # ── After commit, write the broader audit (best-effort) ──
+    try:
+        await write_audit_event(
+            pool,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            actor_kind="human",
+            actor_id=actor,
+            event_type="credential_use",
+            credential_id=cred_id,
+            args_redacted={"action": "store", "provider_kind": payload.provider_kind},
+            response_status="success",
+        )
+    except Exception as e:
+        logger.warning("capability_audit write failed for cred %s: %s", cred_id, e)
     return _row_to_model(row)
 
 
@@ -132,6 +148,22 @@ async def get_credential(
             tenant_id,
             actor,
         )
+    # ── After commit, write the broader audit (best-effort) ──
+    try:
+        provider_kind = row.get("provider_kind") if row else None
+        await write_audit_event(
+            pool,
+            tenant_id=tenant_id,
+            actor_kind="human",
+            actor_id=actor,
+            event_type="credential_use",
+            credential_id=cred_id,
+            args_redacted={"action": "retrieve"},
+            response_status="success",
+            provider_kind=provider_kind,
+        )
+    except Exception as e:
+        logger.warning("capability_audit write failed for cred %s: %s", cred_id, e)
     return _row_to_model(row)
 
 
@@ -165,6 +197,21 @@ async def get_secret(
             tenant_id,
             actor,
         )
+
+    # ── After commit, write the broader audit (best-effort) ──
+    try:
+        await write_audit_event(
+            pool,
+            tenant_id=tenant_id,
+            actor_kind="human",
+            actor_id=actor,
+            event_type="credential_use",
+            credential_id=cred_id,
+            args_redacted={"action": "use"},
+            response_status="success",
+        )
+    except Exception as e:
+        logger.warning("capability_audit write failed for cred %s: %s", cred_id, e)
 
     backend = row["backend"]
     if backend == CredentialBackend.BUILTIN.value:
@@ -226,6 +273,20 @@ async def delete_credential(
                 cred_id,
                 tenant_id,
             )
+    # ── After commit, write the broader audit (best-effort) ──
+    try:
+        await write_audit_event(
+            pool,
+            tenant_id=tenant_id,
+            actor_kind="human",
+            actor_id=actor,
+            event_type="credential_use",
+            credential_id=cred_id,
+            args_redacted={"action": "delete"},
+            response_status="success",
+        )
+    except Exception as e:
+        logger.warning("capability_audit write failed for cred %s: %s", cred_id, e)
     # asyncpg returns "DELETE N" — "DELETE 1" means a row was removed
     return result.endswith(" 1")
 
@@ -272,6 +333,21 @@ async def validate_credential(
             actor,
             health == CredentialHealth.HEALTHY,
         )
+    # ── After commit, write the broader audit (best-effort) ──
+    try:
+        await write_audit_event(
+            pool,
+            tenant_id=tenant_id,
+            actor_kind="human",
+            actor_id=actor,
+            event_type="credential_use",
+            credential_id=cred_id,
+            args_redacted={"action": "validate", "health": health.value},
+            response_status="success" if health == CredentialHealth.HEALTHY else "error",
+            provider_kind=cred.provider_kind if cred else None,
+        )
+    except Exception as e:
+        logger.warning("capability_audit write failed for cred %s: %s", cred_id, e)
     return health
 
 
