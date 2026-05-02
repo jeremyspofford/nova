@@ -1,12 +1,16 @@
-"""Native GitHub provider for arbitrary repos (READ + PROPOSE tier).
+"""Native GitHub provider for arbitrary repos (READ + PROPOSE + MUTATE tier).
 
 Distinguished from app.tools.github_tools (Self-Modification, Nova's own repo).
 See docs/designs/2026-05-01-nova-capability-platform-design.md §5.
 """
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import re
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -143,6 +147,46 @@ GITHUB_EXTERNAL_TOOLS: list[ToolDefinition] = [
             "required": ["diagnosis", "file_contents"],
         },
         blast_radius=BlastRadius.PROPOSE,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="open_fix_pr",
+        description=(
+            "Open a pull request with a patch fix on a third-party repo. "
+            "Clones the repo locally, applies the patch, pushes to a new branch, "
+            "and opens a PR. Reversible (PR can be closed)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": _REPO_FIELD,
+                "branch": {"type": "string", "description": "New branch name (e.g., 'nova-fix-ci/abc123')"},
+                "base": {"type": "string", "description": "Branch to PR against (e.g., 'feature-x' or 'main')"},
+                "patch": {
+                    "type": "object",
+                    "description": "ProposedPatch from draft_fix: {files: [{path, diff}], summary, confidence}",
+                },
+                "title": {"type": "string"},
+                "body": {"type": "string", "description": "PR description (often the diagnosis)"},
+            },
+            "required": ["repo", "branch", "base", "patch", "title"],
+        },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="comment_on_pr",
+        description="POST a comment on a PR (or issue). Reversible — comments can be deleted.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": _REPO_FIELD,
+                "pr_number": {"type": "integer"},
+                "body": {"type": "string"},
+            },
+            "required": ["repo", "pr_number", "body"],
+        },
+        blast_radius=BlastRadius.MUTATE,
         reversible=True,
     ),
 ]
@@ -460,6 +504,171 @@ async def _draft_fix(args: dict, secret: str | None = None, *, api_base: str | N
     return parsed
 
 
+
+# ── MUTATE-tier implementations ───────────────────────────────────────────────
+
+async def _comment_on_pr(args: dict, secret: str, *, api_base: str) -> dict:
+    """POST to /repos/{owner}/{repo}/issues/{pr_number}/comments.
+    GitHub treats PRs as issues for comments.
+    """
+    repo = args["repo"]
+    pr_number = args["pr_number"]
+    body = args["body"]
+    async with await _http(api_base, secret) as client:
+        resp = await client.post(
+            f"/repos/{repo}/issues/{pr_number}/comments",
+            json={"body": body},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "comment_url": data.get("html_url"),
+            "comment_id": data.get("id"),
+        }
+
+
+async def _open_fix_pr(args: dict, secret: str, *, api_base: str) -> dict:
+    """Clone repo to /tmp, apply patch, push new branch via PAT-in-URL, open PR.
+
+    For fake-github (localhost), skips the actual git clone/push and hits the
+    PR-creation endpoint directly with the patch contents inline.
+
+    SECURITY: the clone URL embedding the PAT is never logged. Stderr from git
+    is passed through redact_value() before surfacing in any error message.
+    The tmpdir is cleaned up in a finally block — never leaks.
+    """
+    git_host = _git_host_from_api_base(api_base)
+    is_fake = (
+        git_host.startswith("http://127.")
+        or git_host.startswith("http://localhost")
+        or "host.docker.internal" in git_host
+    )
+
+    if is_fake:
+        return await _open_fix_pr_fake_github(args, secret, api_base=api_base)
+
+    repo = args["repo"]
+    branch = args["branch"]
+    base = args["base"]
+    patch = args["patch"]
+    title = args["title"]
+    body_text = args.get("body", "")
+
+    workdir = Path(tempfile.mkdtemp(prefix="nova-fix-"))
+    try:
+        # Strip scheme from git_host to build the PAT-in-URL clone URL
+        git_host_bare = re.sub(r"^https?://", "", git_host)
+        clone_url = f"https://x-access-token:{secret}@{git_host_bare}/{repo}.git"
+
+        # Clone (depth 10 to keep small while still allowing 3-way merge)
+        await _run_git(workdir, ["git", "clone", "--depth", "10", clone_url, "."])
+        await _run_git(workdir, ["git", "fetch", "origin", base])
+        await _run_git(workdir, ["git", "checkout", base])
+        await _run_git(workdir, ["git", "checkout", "-b", branch])
+
+        # Apply each file's diff
+        for file_patch in patch.get("files", []):
+            diff_text = file_patch["diff"]
+            patch_file = workdir / ".nova-patch"
+            patch_file.write_text(diff_text)
+            try:
+                await _run_git(workdir, ["git", "apply", "--3way", str(patch_file)])
+            except RuntimeError as e:
+                logger.warning("git apply --3way failed, retrying without: %s", e)
+                await _run_git(workdir, ["git", "apply", str(patch_file)])
+            patch_file.unlink(missing_ok=True)
+
+        await _run_git(workdir, ["git", "add", "-A"])
+        summary = patch.get("summary", "CI fix")
+        commit_msg = f"nova: {summary}\n\nCo-Authored-By: Nova <noreply@arialabs.ai>"
+        await _run_git(workdir, ["git", "commit", "-m", commit_msg])
+        await _run_git(workdir, ["git", "push", "-u", "origin", branch])
+
+        # Open PR via API
+        async with await _http(api_base, secret) as client:
+            resp = await client.post(
+                f"/repos/{repo}/pulls",
+                json={"title": title, "body": body_text, "head": branch, "base": base},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        return {
+            "pr_url": data.get("html_url"),
+            "pr_number": data.get("number"),
+            "branch_pushed": branch,
+        }
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def _open_fix_pr_fake_github(args: dict, secret: str, *, api_base: str) -> dict:
+    """Test-mode: skip git clone/push; call fake-github's PR endpoint directly
+    with the patch contents inline (_test_patch extension field)."""
+    repo = args["repo"]
+    branch = args["branch"]
+    base = args["base"]
+    patch = args["patch"]
+    title = args["title"]
+    body_text = args.get("body", "")
+
+    async with await _http(api_base, secret) as client:
+        resp = await client.post(
+            f"/repos/{repo}/pulls",
+            json={
+                "title": title,
+                "body": body_text,
+                "head": branch,
+                "base": base,
+                "_test_patch": patch,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    return {
+        "pr_url": data.get("html_url", f"http://fake/{repo}/pulls/{data.get('number')}"),
+        "pr_number": data.get("number"),
+        "branch_pushed": branch,
+    }
+
+
+def _git_host_from_api_base(api_base: str) -> str:
+    """Map api.github.com -> github.com; pass through fakes unchanged."""
+    return api_base.replace("api.github.com", "github.com")
+
+
+async def _run_git(cwd: Path, cmd: list[str]) -> None:
+    """Run a git command via subprocess; raise RuntimeError on non-zero exit.
+
+    SECURITY: argv is never logged (clone URL may contain a PAT).
+    stderr is passed through redact_value() before surfacing in exceptions.
+    Uses asyncio.create_subprocess_exec (no shell interpolation).
+    """
+    from app.capabilities.redactor import redact_value
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={
+            "GIT_TERMINAL_PROMPT": "0",  # never prompt for credentials
+            "GIT_ASKPASS": "/bin/echo",
+            "HOME": "/tmp",
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+        },
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raw = stderr.decode(errors="ignore") or stdout.decode(errors="ignore")
+        safe_msg = redact_value(raw)
+        raise RuntimeError(
+            f"git {cmd[1] if len(cmd) > 1 else ''} failed "
+            f"(exit {proc.returncode}): {safe_msg[:500]}"
+        )
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | None = None) -> Any:
@@ -475,6 +684,8 @@ async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | No
         "compare_to_main": _compare_to_main,
         "diagnose_failure": _diagnose_failure,
         "draft_fix": _draft_fix,
+        "open_fix_pr": _open_fix_pr,
+        "comment_on_pr": _comment_on_pr,
     }
     fn = dispatch.get(name)
     if fn is None:

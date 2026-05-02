@@ -1,13 +1,15 @@
-"""GitHub external provider — READ + PROPOSE tier tools against fake-github."""
+"""GitHub external provider — READ + PROPOSE + MUTATE tier tools against fake-github."""
 from __future__ import annotations
 import importlib.util
 import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from uuid import UUID, uuid4
 
 # Insert nova-contracts first so nova_contracts is importable
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-contracts')
+sys.path.insert(0, '/home/jeremy/workspace/nova/orchestrator')
 
 # Load github_external_tools directly (bypasses app.tools.__init__ which has
 # transitive deps on nova_worker_common that aren't installed in the test env)
@@ -24,6 +26,12 @@ _get_run_logs = _mod._get_run_logs
 _compare_to_main = _mod._compare_to_main
 _diagnose_failure = _mod._diagnose_failure
 _draft_fix = _mod._draft_fix
+_comment_on_pr = _mod._comment_on_pr
+_open_fix_pr = _mod._open_fix_pr
+
+# Shared constants (mirrors test_capability_consent.py)
+TENANT = UUID("00000000-0000-0000-0000-000000000001")
+USER = UUID("00000000-0000-0000-0000-000000000001")
 
 import pytest
 
@@ -180,3 +188,79 @@ async def test_draft_fix_returns_files():
     assert result["files"][0]["path"] == "src/utils.ts"
     assert "@@ -12" in result["files"][0]["diff"]
     assert result["confidence"] == 0.85
+
+# ── MUTATE tier: comment_on_pr + open_fix_pr ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_comment_on_pr_against_fake_github():
+    """comment_on_pr posts to the issues/comments endpoint and returns IDs."""
+    fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
+    await fake.start()
+    try:
+        result = await _comment_on_pr(
+            {"repo": "test-org/test-repo", "pr_number": 42, "body": "Diagnosis posted by Nova"},
+            secret="ghp_validtoken",
+            api_base=fake.base_url,
+        )
+        assert result["comment_id"] is not None
+        assert "issuecomment" in result["comment_url"]
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_open_fix_pr_against_fake_github_skips_git_push():
+    """open_fix_pr in fake-github mode skips git entirely and returns a PR number."""
+    fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
+    await fake.start()
+    try:
+        result = await _open_fix_pr(
+            {
+                "repo": "test-org/test-repo",
+                "branch": "nova-fix-ci/abc123",
+                "base": "feature-x",
+                "patch": {
+                    "files": [{"path": "src/utils.ts", "diff": "@@ -1,1 +1,1 @@\n-foo\n+bar\n"}],
+                    "summary": "Fix lint errors",
+                    "confidence": 0.8,
+                },
+                "title": "fix(lint): nova-proposed fix",
+                "body": "Diagnosed by Nova: undefined identifier",
+            },
+            secret="ghp_validtoken",
+            api_base=fake.base_url,
+        )
+        assert result["pr_number"] is not None
+        assert result["branch_pushed"] == "nova-fix-ci/abc123"
+        assert "fake-github" in result["pr_url"]
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_open_fix_pr_via_executor_returns_consent_pending(pool):
+    """When called through the platform executor (without an auto-approve rule),
+    open_fix_pr returns consent_pending and does NOT call the underlying."""
+    from app.capabilities.executor import execute_tool as _execute
+    from nova_contracts import BlastRadius
+
+    called = []
+
+    async def underlying(args, secret):
+        called.append(args)
+        return {"pr_number": 1}
+
+    result = await _execute(
+        pool,
+        tenant_id=TENANT, user_id=USER, task_id=None,
+        actor_kind="agent", actor_id=f"executor-test-{uuid4().hex[:8]}",
+        tool_name=f"test_open_fix_pr_{uuid4().hex[:8]}", tool_kind="native",
+        blast_radius=BlastRadius.MUTATE, reversible=True,
+        provider_kind="github", target="repos/test-org/test-repo",
+        credential_id=None,
+        args={"repo": "test-org/test-repo", "branch": "fix"},
+        underlying=underlying,
+    )
+    assert result["status"] == "consent_pending"
+    assert "approval_id" in result
+    assert called == []  # underlying must NOT have been called

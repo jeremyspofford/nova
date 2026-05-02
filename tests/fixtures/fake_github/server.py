@@ -70,6 +70,38 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
             "base": {"sha": "main-sha", "ref": "main"},
         }
 
+    @app.post("/repos/{owner}/{repo}/pulls")
+    async def create_pull(owner: str, repo: str, body: dict):
+        """Create a fake PR. Captures the optional _test_patch for test inspection."""
+        pulls = state.setdefault("created_pulls", [])
+        pr_number = len(pulls) + 100  # start numbering at 100 to avoid collisions
+        pull = {
+            "number": pr_number,
+            "title": body.get("title", ""),
+            "body": body.get("body", ""),
+            "head": {"ref": body.get("head", "")},
+            "base": {"ref": body.get("base", "")},
+            "html_url": f"http://fake-github/{owner}/{repo}/pull/{pr_number}",
+            "_test_patch": body.get("_test_patch"),
+        }
+        pulls.append(pull)
+        return pull
+
+    @app.post("/repos/{owner}/{repo}/issues/{issue_number}/comments")
+    async def create_comment(owner: str, repo: str, issue_number: int, body: dict):
+        comments = state.setdefault("created_comments", [])
+        comment_id = len(comments) + 1000
+        comment = {
+            "id": comment_id,
+            "body": body.get("body", ""),
+            "html_url": (
+                f"http://fake-github/{owner}/{repo}"
+                f"/issues/{issue_number}#issuecomment-{comment_id}"
+            ),
+        }
+        comments.append(comment)
+        return comment
+
     return app
 
 
