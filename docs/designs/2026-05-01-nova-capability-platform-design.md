@@ -419,7 +419,21 @@ cortex.quality drive uses webhooks for this repo;
 polling acts as failsafe (re-fires every 60 min to catch dropped events)
 ```
 
-**Webhook target endpoint:** `POST /api/v1/webhooks/github` on **orchestrator** (HMAC-validated against `github_webhooks.encrypted_secret`; new router file `orchestrator/app/webhooks_router.py`). Validates payload, writes a stimulus row in cortex DB via internal HTTP call.
+**Webhook target endpoint:** `POST /api/v1/webhooks/github` on **orchestrator** (HMAC-validated against the *decrypted* secret retrieved via the credential vault backend; new router file `orchestrator/app/webhooks_router.py`). Validates payload, writes a stimulus row in cortex DB via internal HTTP call.
+
+**Status state machine for `github_webhooks.status`:**
+
+```
+pending  ──register_webhook API call succeeded──► active
+active   ──ping event verified at target──────► verified
+verified ──ping fails on health check─────────► failed
+verified ──user removes watched repo──────────► revoked
+failed   ──automatic re-bootstrap succeeds────► verified
+```
+
+`pending` is the row's state between the consent approval and the API call returning; `active` means GitHub has the hook but Nova hasn't yet seen a ping; `verified` is the steady-state. Most rows transition `pending → active → verified` within seconds of approval.
+
+**Auto re-bootstrap consent:** the first `register_webhook` call for a repo goes through the consent gate explicitly. At that approval, Nova auto-inserts a `consent_rules` row scoped to `tool=register_webhook, target=<this-repo>` so subsequent re-bootstraps (after webhook-failure detection) auto-approve under that rule. The user can remove the rule from the dashboard's auto-approve rules manager to revert to manual-consent for re-bootstraps. This keeps the user in control without consent-card spam during normal recovery.
 
 **Polling singleton election:** even with webhooks as primary, polling is the always-on fallback (catches dropped webhook events). Polling is run by exactly one orchestrator instance at a time, elected via Redis lease (`nova:poll:github:lease`, 5-min TTL, refreshed every 60s). Multi-instance SaaS deployments avoid duplicate API calls; v1 single-instance pays nothing for this.
 
@@ -445,6 +459,8 @@ CREATE TABLE github_webhooks (
 );
 CREATE UNIQUE INDEX idx_github_webhooks_repo ON github_webhooks(tenant_id, repo);
 ```
+
+**Constraint note:** `UNIQUE(tenant_id, repo)` is correct for v1 (one `workflow_run` hook per repo). Future slices that add additional event types per repo (e.g., `push`, `pull_request_review`) need to widen this to `UNIQUE(tenant_id, repo, hook_id)` and enforce per-event-type uniqueness via partial indexes — flagged in §11.
 
 ### 9.2 Stimulus → Goal → Task
 
@@ -480,6 +496,12 @@ Task agent calls capability-platform tools
        ▼
 outcome recorded → cortex feedback → updates rule candidates
 ```
+
+### 9.2.1 Pod separation: `ci_triage_agent` vs setup-time tools
+
+Webhook lifecycle tools (`register_webhook`, `unregister_webhook`, `verify_webhook`) are **admin-tier setup actions** triggered by the dashboard's watched-repo form, not part of the runtime triage agent's tool set. The `ci_triage_agent` pod (defined below) explicitly excludes them — the agent never needs to manage webhooks during a triage task. This prevents over-broad pod permissions and means an agent prompt-injection at runtime cannot register or remove webhooks.
+
+Setup-time webhook calls run under a lightweight system-only execution path (no LLM agent loop): the dashboard form submits to an orchestrator endpoint that resolves the credential, calls the consent gate, runs the `register_webhook` tool directly, and writes the audit row. Same machinery, different invocation path.
 
 ### 9.3 New agent pod: `ci_triage_agent`
 
@@ -618,6 +640,7 @@ Test resources prefixed `nova-test-` per existing convention; teardown via fixtu
 | Per-task workspace (build/test/deploy in browser) | Largest | Containerized workspace with Playwright + language toolchains; file-system sandbox; archetype D from the brainstorm |
 | Tier E auto-approve rules (data-driven) | Medium | `consent_rules` table already exists; UI for review/manage; cortex proposal flow |
 | **Managed webhook proxy** (v2) | Medium | Nova-hosted public endpoint receives webhooks for self-hosted instances without public ingress; queues per tenant; instances long-poll to drain. Solves the "I want webhooks but can't expose a public endpoint" gap. |
+| **Multi-event-type webhooks per repo** (v1.5+) | Small | When repos need additional hook event types beyond `workflow_run` (`push`, `pull_request_review`, etc.), widen the `github_webhooks` unique constraint from `(tenant_id, repo)` to `(tenant_id, repo, hook_id)` with partial-index per-event-type uniqueness. |
 | **Phone number for Nova** (v3) | Large | Twilio (or similar) integration: SMS approvals for low-blast-radius mutations, voice-call paging for budget-exceeded or anomaly events, identity binding (phone number → user), reuses approver-agnostic decision API. Likely a new `comms` microservice or extension of the existing `voice-service`. Out of v1 platform scope but architecturally compatible — the consent-gate's approver-agnostic API surface (per Q3 resolution) is exactly what makes this slot in cleanly later. |
 
 ## 12. Risks and open questions
