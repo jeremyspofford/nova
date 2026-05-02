@@ -12,6 +12,7 @@ from app.capabilities.consent import (
     gate, get_approval, list_pending, decide_approval,
     ConsentDecision, ApprovalDecision,
 )
+from app.capabilities.executor import execute_tool
 from nova_contracts import BlastRadius
 
 
@@ -179,3 +180,84 @@ async def test_rule_scope_mismatch_still_requires_approval(pool):
         actor_kind="agent", actor_id="t",
     )
     assert d2.action == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Executor end-to-end tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_executor_read_tier_runs_and_audits(pool):
+    """READ tier flows through executor; underlying gets called; audit row emitted."""
+    async def fake_tool(args, secret):
+        return {"runs": [{"id": 42}], "echoed_arg": args.get("repo")}
+
+    result = await execute_tool(
+        pool,
+        tenant_id=TENANT, user_id=None, task_id=None,
+        actor_kind="agent", actor_id="executor-test",
+        tool_name="exec_test_list_runs", tool_kind="native",
+        blast_radius=BlastRadius.READ, reversible=True,
+        provider_kind="github", target="repos/x/y", credential_id=None,
+        args={"repo": "x/y"},
+        underlying=fake_tool,
+    )
+    assert result == {"runs": [{"id": 42}], "echoed_arg": "x/y"}
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM capability_audit "
+            "WHERE tool_name='exec_test_list_runs' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        )
+    assert row is not None
+    assert row["response_status"] == "success"
+    assert row["blast_radius"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_executor_mutate_returns_pending_without_calling(pool):
+    """MUTATE without a matching rule short-circuits at the gate; underlying NOT called."""
+    called = []
+    async def fake_tool(args, secret):
+        called.append(args)
+        return {"ok": True}
+
+    result = await execute_tool(
+        pool,
+        tenant_id=TENANT, user_id=USER, task_id=None,
+        actor_kind="agent", actor_id="executor-test-mutate",
+        tool_name="exec_test_open_pr", tool_kind="native",
+        blast_radius=BlastRadius.MUTATE, reversible=True,
+        provider_kind="github", target="repos/x/y", credential_id=None,
+        args={"repo": "x/y", "title": "test"},
+        underlying=fake_tool,
+    )
+    assert result["status"] == "consent_pending"
+    assert "approval_id" in result
+    assert called == []  # underlying must NOT have been called
+
+
+@pytest.mark.asyncio
+async def test_executor_records_error_on_underlying_exception(pool):
+    """When underlying raises, audit gets an error row and the exception re-raises."""
+    async def boom(args, secret):
+        raise RuntimeError("upstream service down")
+
+    with pytest.raises(RuntimeError, match="upstream service down"):
+        await execute_tool(
+            pool,
+            tenant_id=TENANT, user_id=None, task_id=None,
+            actor_kind="agent", actor_id="executor-test-err",
+            tool_name="exec_test_boom", tool_kind="native",
+            blast_radius=BlastRadius.READ, reversible=True,
+            provider_kind="github", target=None, credential_id=None,
+            args={},
+            underlying=boom,
+        )
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM capability_audit "
+            "WHERE tool_name='exec_test_boom' ORDER BY timestamp DESC LIMIT 1"
+        )
+    assert row["response_status"] == "error"
+    assert row["error_class"] == "RuntimeError"
