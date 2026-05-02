@@ -1,8 +1,10 @@
-"""GitHub external provider — READ tier tools against fake-github."""
+"""GitHub external provider — READ + PROPOSE tier tools against fake-github."""
 from __future__ import annotations
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 # Insert nova-contracts first so nova_contracts is importable
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-contracts')
@@ -20,6 +22,8 @@ _list_workflow_runs = _mod._list_workflow_runs
 _get_workflow_run = _mod._get_workflow_run
 _get_run_logs = _mod._get_run_logs
 _compare_to_main = _mod._compare_to_main
+_diagnose_failure = _mod._diagnose_failure
+_draft_fix = _mod._draft_fix
 
 import pytest
 
@@ -122,3 +126,57 @@ async def test_get_workflow_run_returns_run():
         assert result["head_branch"] == "feature-x"
     finally:
         await fake.stop()
+
+
+# ── PROPOSE tier: diagnose_failure + draft_fix ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_diagnose_failure_classifies_lint():
+    """When given lint-style logs, diagnosis returns category=lint."""
+    fake_llm_response = json.dumps({
+        "category": "lint",
+        "suspected_files": ["src/utils.ts"],
+        "root_cause": "ESLint reports 3 errors in src/utils.ts",
+        "severity": "low",
+        "confidence": 0.9,
+    })
+    # The module was loaded via importlib — patch.object on the module is the
+    # only reliable way to intercept _call_llm_gateway in this test environment.
+    with patch.object(_mod, "_call_llm_gateway", new=AsyncMock(return_value=fake_llm_response)):
+        result = await _diagnose_failure({
+            "logs": "ESLint: 3 errors\n  src/utils.ts:12:5 'foo' is not defined\n",
+            "context": {"repo": "test-org/test-repo"},
+        })
+    assert result["category"] == "lint"
+    assert "src/utils.ts" in result["suspected_files"]
+    assert result["confidence"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_diagnose_failure_handles_non_json_response():
+    """When LLM returns non-JSON garbage, diagnose_failure returns category=unknown gracefully."""
+    with patch.object(_mod, "_call_llm_gateway", new=AsyncMock(return_value="I'm sorry, I cannot help with that.")):
+        result = await _diagnose_failure({"logs": "anything"})
+    assert result["category"] == "unknown"
+    assert result["confidence"] == 0.0
+    assert result["suspected_files"] == []
+
+
+@pytest.mark.asyncio
+async def test_draft_fix_returns_files():
+    """draft_fix parses the LLM response and returns the files list."""
+    fake_response = json.dumps({
+        "files": [{"path": "src/utils.ts",
+                   "diff": "@@ -12,5 +12,5 @@\n-foo\n+bar\n"}],
+        "summary": "Fix undefined 'foo' by renaming to 'bar'",
+        "confidence": 0.85,
+    })
+    with patch.object(_mod, "_call_llm_gateway", new=AsyncMock(return_value=fake_response)):
+        result = await _draft_fix({
+            "diagnosis": {"category": "lint", "root_cause": "undefined foo"},
+            "file_contents": {"src/utils.ts": "const x = foo + 1;"},
+        })
+    assert len(result["files"]) == 1
+    assert result["files"][0]["path"] == "src/utils.ts"
+    assert "@@ -12" in result["files"][0]["diff"]
+    assert result["confidence"] == 0.85

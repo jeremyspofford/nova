@@ -1,10 +1,12 @@
-"""Native GitHub provider for arbitrary repos (READ tier).
+"""Native GitHub provider for arbitrary repos (READ + PROPOSE tier).
 
 Distinguished from app.tools.github_tools (Self-Modification, Nova's own repo).
 See docs/designs/2026-05-01-nova-capability-platform-design.md §5.
 """
 from __future__ import annotations
+import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -99,6 +101,48 @@ GITHUB_EXTERNAL_TOOLS: list[ToolDefinition] = [
             "required": ["repo", "run_id"],
         },
         blast_radius=BlastRadius.READ,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="diagnose_failure",
+        description=(
+            "Analyze a CI failure's logs and return a structured diagnosis: category, "
+            "suspected files, root cause explanation, severity, and confidence score. "
+            "Pure reasoning — no external mutation."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "logs": {"type": "string", "description": "Raw CI log text"},
+                "context": {"type": "object", "description": "Optional repo/run context"},
+            },
+            "required": ["logs"],
+        },
+        blast_radius=BlastRadius.PROPOSE,
+        reversible=True,
+    ),
+    ToolDefinition(
+        name="draft_fix",
+        description=(
+            "Given a diagnosis and the relevant file content, draft a minimal patch as a "
+            "set of unified diffs. Returns a ProposedPatch (in-memory, never committed). "
+            "Pure reasoning — no external mutation."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "diagnosis": {
+                    "type": "object",
+                    "description": "The DiagnosisReport from diagnose_failure",
+                },
+                "file_contents": {
+                    "type": "object",
+                    "description": "{path: content} for the files implicated in the diagnosis",
+                },
+            },
+            "required": ["diagnosis", "file_contents"],
+        },
+        blast_radius=BlastRadius.PROPOSE,
         reversible=True,
     ),
 ]
@@ -275,6 +319,147 @@ async def _compare_to_main(args: dict, secret: str, *, api_base: str) -> dict:
         }
 
 
+# ── LLM gateway helper ───────────────────────────────────────────────────────
+
+async def _call_llm_gateway(prompt: str, *, tier: str = "mid", task_type: str | None = None) -> str:
+    """Send a single-turn prompt to Nova's LLM gateway /complete endpoint.
+
+    Uses the shared ``get_llm_client()`` singleton — same client the orchestrator
+    already uses for agent turns — to avoid creating an extra connection pool.
+
+    Args:
+        prompt:    User-role message to send.
+        tier:      Advisory tier hint — "best", "mid", or "cheap".
+        task_type: RoutingTaskType string for outcome tracking.
+
+    Returns:
+        The assistant content string from the gateway response.
+    """
+    from app.clients import get_llm_client
+    client = get_llm_client()
+    payload: dict[str, Any] = {
+        "messages": [{"role": "user", "content": prompt}],
+        "tier": tier,
+        "max_tokens": 2000,
+    }
+    if task_type:
+        payload["task_type"] = task_type
+    resp = await client.post("/complete", json=payload)
+    resp.raise_for_status()
+    body = resp.json()
+    # CompleteResponse shape: {"content": "...", "model": "...", ...}
+    if "content" in body:
+        return body["content"]
+    if "choices" in body:
+        return body["choices"][0]["message"]["content"]
+    if "text" in body:
+        return body["text"]
+    return str(body)[:2000]
+
+
+def _extract_json(text: str) -> dict | None:
+    """Extract the first JSON object from an LLM response string."""
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+# ── PROPOSE-tier implementations ──────────────────────────────────────────────
+
+async def _diagnose_failure(args: dict, secret: str | None = None, *, api_base: str | None = None) -> dict:
+    """Call LLM gateway to analyze CI logs. Returns DiagnosisReport.
+
+    Output schema:
+      {
+        "category": "lint" | "type" | "test" | "build" | "dependency" | "infra" | "unknown",
+        "suspected_files": list[str],
+        "root_cause": str,
+        "severity": "low" | "medium" | "high",
+        "confidence": float,  # 0.0–1.0
+      }
+    """
+    logs = args["logs"]
+    context = args.get("context") or {}
+
+    prompt = (
+        "Analyze this CI failure log and return ONLY valid JSON with these keys:\n"
+        '  - category: one of "lint", "type", "test", "build", "dependency", "infra", "unknown"\n'
+        '  - suspected_files: list of file paths most likely to contain the bug\n'
+        '  - root_cause: one-paragraph explanation of why CI failed\n'
+        '  - severity: "low" | "medium" | "high"\n'
+        '  - confidence: float between 0.0 and 1.0\n'
+        "\n"
+        "Do not include any prose outside the JSON object.\n"
+        "\n"
+        f"Repository context: {context}\n"
+        "\n"
+        "Logs (truncated to first 8000 chars):\n"
+        f"{logs[:8000]}\n"
+    )
+
+    response_text = await _call_llm_gateway(prompt, tier="mid", task_type="extraction")
+    parsed = _extract_json(response_text)
+    if parsed is None:
+        return {
+            "category": "unknown",
+            "suspected_files": [],
+            "root_cause": "LLM returned non-JSON response: " + response_text[:300],
+            "severity": "medium",
+            "confidence": 0.0,
+        }
+    return parsed
+
+
+async def _draft_fix(args: dict, secret: str | None = None, *, api_base: str | None = None) -> dict:
+    """Generate a minimal unified-diff patch given a diagnosis and current file content.
+
+    Output schema:
+      {
+        "files": [
+          {"path": str, "diff": str},  # unified diff
+        ],
+        "summary": str,                 # one-line description of the fix
+        "confidence": float,
+      }
+    """
+    diagnosis = args["diagnosis"]
+    file_contents = args.get("file_contents") or {}
+
+    files_section = "\n\n".join(
+        f"=== {path} ===\n{content[:4000]}"
+        for path, content in file_contents.items()
+    )
+
+    prompt = (
+        "Given this diagnosis and source files, produce a minimal patch.\n"
+        "Return ONLY valid JSON with:\n"
+        '  - files: list of {path: str, diff: str (unified diff format)}\n'
+        '  - summary: one-line description of the fix\n'
+        '  - confidence: float 0.0-1.0 (how confident the fix is correct)\n'
+        "\n"
+        "Constraints:\n"
+        "  - Touch only files implicated by the diagnosis\n"
+        "  - Make the smallest change that addresses the root_cause\n"
+        "  - Don't refactor; don't add features; don't change tests unless they're broken\n"
+        "  - Output unified diff format with proper @@ hunk headers\n"
+        "\n"
+        f"Diagnosis: {diagnosis}\n"
+        "\n"
+        "Source files:\n"
+        f"{files_section}\n"
+    )
+
+    response_text = await _call_llm_gateway(prompt, tier="mid", task_type="code_review")
+    parsed = _extract_json(response_text)
+    if parsed is None:
+        return {"files": [], "summary": "LLM returned non-JSON", "confidence": 0.0}
+    return parsed
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | None = None) -> Any:
@@ -288,6 +473,8 @@ async def execute_tool(name: str, args: dict, *, secret: str, api_base: str | No
         "get_run_logs": _get_run_logs,
         "get_run_diff": _get_run_diff,
         "compare_to_main": _compare_to_main,
+        "diagnose_failure": _diagnose_failure,
+        "draft_fix": _draft_fix,
     }
     fn = dispatch.get(name)
     if fn is None:
