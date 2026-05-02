@@ -1,0 +1,69 @@
+"""Capability credentials CRUD endpoints."""
+from __future__ import annotations
+
+from uuid import UUID
+
+from app.auth import AdminDep
+from app.capabilities import credentials as cred_db
+from app.capabilities.models import Credential, CredentialCreate
+from app.db import get_pool
+from fastapi import APIRouter, HTTPException, Query, status
+
+router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
+
+# v1 single-tenant: hardcoded; multi-tenant later derives from auth context
+DEFAULT_TENANT = UUID("00000000-0000-0000-0000-000000000001")
+DEFAULT_USER = UUID("00000000-0000-0000-0000-000000000001")
+
+
+@router.post("/credentials", response_model=Credential, status_code=status.HTTP_201_CREATED)
+async def create_credential(
+    payload: CredentialCreate,
+    _admin: AdminDep,
+):
+    pool = get_pool()
+    return await cred_db.create_credential(
+        pool,
+        tenant_id=DEFAULT_TENANT,
+        user_id=DEFAULT_USER,
+        payload=payload,
+        actor="admin",
+    )
+
+
+@router.get("/credentials", response_model=list[Credential])
+async def list_credentials(
+    provider_kind: str | None = Query(None),
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    return await cred_db.list_credentials(
+        pool, tenant_id=DEFAULT_TENANT, provider_kind=provider_kind
+    )
+
+
+@router.get("/credentials/{cred_id}", response_model=Credential)
+async def get_credential(
+    cred_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    cred = await cred_db.get_credential(
+        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin"
+    )
+    if not cred:
+        raise HTTPException(404, "credential not found")
+    return cred
+
+
+@router.delete("/credentials/{cred_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_credential(
+    cred_id: UUID,
+    _admin: AdminDep = None,
+):
+    pool = get_pool()
+    deleted = await cred_db.delete_credential(
+        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin"
+    )
+    if not deleted:
+        raise HTTPException(404, "credential not found")

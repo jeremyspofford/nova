@@ -7,6 +7,7 @@ import os
 from contextlib import asynccontextmanager
 
 from app.auth_router import router as auth_router
+from app.capabilities.router import router as capabilities_router
 from app.clients import close_clients
 from app.config import settings
 from app.db import close_db, init_db
@@ -237,6 +238,7 @@ app.include_router(friction_router)
 app.include_router(goals_router)
 app.include_router(intel_router)
 app.include_router(knowledge_router)
+app.include_router(capabilities_router)
 app.include_router(engram_router)
 app.include_router(linked_accounts_router)
 app.include_router(workspace_router)
