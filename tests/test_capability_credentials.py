@@ -4,6 +4,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.fixtures.fake_github import FakeGitHubServer
+
 
 @pytest.mark.asyncio
 async def test_create_and_retrieve_credential(orchestrator: httpx.AsyncClient, admin_headers: dict):
@@ -76,3 +78,49 @@ async def test_secret_never_returned(orchestrator: httpx.AsyncClient, admin_head
         await orchestrator.delete(
             f"/api/v1/capabilities/credentials/{cred_id}", headers=admin_headers
         )
+
+
+@pytest.mark.asyncio
+async def test_credential_health_healthy_via_fake_github(
+    orchestrator: httpx.AsyncClient, admin_headers: dict
+):
+    """Validation against fake-github with a good token returns HEALTHY.
+
+    Networking: fake-github binds 0.0.0.0; orchestrator container reaches the
+    host via host.docker.internal (mapped to host-gateway in docker-compose.yml).
+    """
+    fake = FakeGitHubServer()
+    await fake.start()
+    try:
+        # Rewrite the loopback address to host.docker.internal so the orchestrator
+        # container can route the request back to the test-runner host.
+        host_visible_base = fake.base_url.replace("127.0.0.1", "host.docker.internal")
+
+        create = await orchestrator.post(
+            "/api/v1/capabilities/credentials",
+            headers=admin_headers,
+            json={
+                "provider_kind": "github",
+                "auth_method": "pat",
+                "label": "nova-test-validate-1",
+                "secret": "ghp_validtoken",
+            },
+        )
+        assert create.status_code == 201, create.text
+        cred_id = create.json()["id"]
+
+        try:
+            test = await orchestrator.post(
+                f"/api/v1/capabilities/credentials/{cred_id}/test",
+                headers=admin_headers,
+                json={"api_base": host_visible_base},
+            )
+            assert test.status_code == 200, test.text
+            assert test.json()["health"] == "healthy"
+        finally:
+            await orchestrator.delete(
+                f"/api/v1/capabilities/credentials/{cred_id}",
+                headers=admin_headers,
+            )
+    finally:
+        await fake.stop()

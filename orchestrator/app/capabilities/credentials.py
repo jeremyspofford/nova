@@ -230,6 +230,72 @@ async def delete_credential(
     return result.endswith(" 1")
 
 
+async def validate_credential(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: UUID,
+    cred_id: UUID,
+    actor: str,
+    api_base: str | None = None,
+) -> CredentialHealth:
+    """Ping the provider's identity endpoint; record health + last_validated_at.
+
+    api_base override is for tests pointing at fake-github. Production uses settings.
+    Admin callers only — the api_base override is an admin-gated test seam;
+    production callers should not pass api_base.
+    """
+    cred = await get_credential(pool, tenant_id=tenant_id, cred_id=cred_id, actor=actor)
+    if not cred:
+        return CredentialHealth.UNKNOWN
+    secret = await get_secret(pool, tenant_id=tenant_id, cred_id=cred_id, actor=actor)
+    if not secret:
+        health = CredentialHealth.INVALID
+    elif cred.provider_kind == "github":
+        base = api_base or settings.github_api_base_url
+        health = await _validate_github(base, secret)
+    else:
+        health = CredentialHealth.UNKNOWN
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE capability_credentials SET health=$1, last_validated_at=now() WHERE id=$2",
+            health.value,
+            cred_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO capability_credential_audit (credential_id, tenant_id, action, actor, success)
+            VALUES ($1, $2, 'validate', $3, $4)
+            """,
+            cred_id,
+            tenant_id,
+            actor,
+            health == CredentialHealth.HEALTHY,
+        )
+    return health
+
+
+async def _validate_github(base: str, token: str) -> CredentialHealth:
+    """Call GET /user on the GitHub API (or fake); map status code to CredentialHealth."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{base}/user", headers={"Authorization": f"Bearer {token}"}
+            )
+        if resp.status_code == 200:
+            return CredentialHealth.HEALTHY
+        if resp.status_code == 401:
+            return CredentialHealth.REVOKED
+        if resp.status_code == 403:
+            return CredentialHealth.INVALID
+        return CredentialHealth.UNKNOWN
+    except httpx.HTTPError as exc:
+        logger.warning("github validate failed: %s", exc)
+        return CredentialHealth.UNKNOWN
+
+
 def _row_to_model(row: asyncpg.Record) -> Credential:
     """Convert a raw asyncpg record to a Credential Pydantic model."""
     scopes = row["scopes"]

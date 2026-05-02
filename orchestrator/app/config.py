@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     # Shared with knowledge-worker via the same env var.
     credential_master_key: str = ""
 
+    # GitHub API base URL — override in tests to point at fake-github boundary fake
+    github_api_base_url: str = "https://api.github.com"
+
     # Self-modification (GitHub PR gate)
     nova_github_pat: str = ""
     nova_github_repo: str = ""

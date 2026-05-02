@@ -5,15 +5,24 @@ from uuid import UUID
 
 from app.auth import AdminDep
 from app.capabilities import credentials as cred_db
-from app.capabilities.models import Credential, CredentialCreate
+from app.capabilities.models import Credential, CredentialCreate, CredentialHealth
 from app.db import get_pool
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
 
 # v1 single-tenant: hardcoded; multi-tenant later derives from auth context
 DEFAULT_TENANT = UUID("00000000-0000-0000-0000-000000000001")
 DEFAULT_USER = UUID("00000000-0000-0000-0000-000000000001")
+
+
+class CredentialTestRequest(BaseModel):
+    api_base: str | None = None  # admin-only override for tests pointing at fake-github
+
+
+class CredentialTestResult(BaseModel):
+    health: CredentialHealth
 
 
 @router.post("/credentials", response_model=Credential, status_code=status.HTTP_201_CREATED)
@@ -67,3 +76,26 @@ async def delete_credential(
     )
     if not deleted:
         raise HTTPException(404, "credential not found")
+
+
+@router.post("/credentials/{cred_id}/test", response_model=CredentialTestResult)
+async def test_credential(
+    cred_id: UUID,
+    payload: CredentialTestRequest | None = None,
+    _admin: AdminDep = None,
+):
+    """Validate a credential against its provider identity endpoint.
+
+    api_base in the request body is an admin-only override for test environments
+    pointing at a fake-github boundary fake. Production callers should not pass api_base.
+    """
+    pool = get_pool()
+    api_base = payload.api_base if payload else None
+    health = await cred_db.validate_credential(
+        pool,
+        tenant_id=DEFAULT_TENANT,
+        cred_id=cred_id,
+        actor="admin",
+        api_base=api_base,
+    )
+    return CredentialTestResult(health=health)
