@@ -18,6 +18,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 
 
 def load_scenario(name: str) -> dict:
@@ -31,6 +32,14 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
     app = FastAPI()
     state = {"scenarios": scenarios or {}}
 
+    # Per-token scope sets — keyed on prefix so existing tests keep working.
+    # Real GitHub returns scopes as a comma-separated `X-OAuth-Scopes` header.
+    _TOKEN_SCOPES: dict[str, str] = {
+        "ghp_minimal_scopes": "repo",
+        "ghp_full_scopes": "repo, workflow, admin:repo_hook",
+    }
+    _DEFAULT_SCOPES = "repo, workflow, admin:repo_hook"
+
     @app.get("/user")
     async def get_user(authorization: str | None = Header(None)):
         if not authorization or not authorization.startswith("Bearer ghp_"):
@@ -40,7 +49,11 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
             raise HTTPException(401, "Bad credentials")
         if token == "ghp_invalid_scope":
             raise HTTPException(403, "Token has insufficient scopes")
-        return {"login": "fake-user", "id": 1}
+        scope_str = _TOKEN_SCOPES.get(token, _DEFAULT_SCOPES)
+        return JSONResponse(
+            {"login": "fake-user", "id": 1},
+            headers={"X-OAuth-Scopes": scope_str},
+        )
 
     @app.get("/repos/{owner}/{repo}/actions/runs")
     async def list_runs(owner: str, repo: str, status: str | None = None, branch: str | None = None):

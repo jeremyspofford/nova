@@ -301,16 +301,21 @@ async def validate_credential(
     api_base override is for tests pointing at fake-github. Production uses settings.
     Admin callers only — the api_base override is an admin-gated test seam;
     production callers should not pass api_base.
+
+    Also captures granted scopes (GitHub `X-OAuth-Scopes` header) into
+    `credential.scopes.granted` so the dashboard can warn before a tool 403s
+    on a missing scope.
     """
     cred = await get_credential(pool, tenant_id=tenant_id, cred_id=cred_id, actor=actor)
     if not cred:
         return CredentialHealth.UNKNOWN
     secret = await get_secret(pool, tenant_id=tenant_id, cred_id=cred_id, actor=actor)
+    granted: list[str] = []
     if not secret:
         health = CredentialHealth.INVALID
     elif cred.provider_kind == "github":
         base = api_base or settings.github_api_base_url
-        health = await _validate_github(base, secret)
+        health, granted = await _validate_github(base, secret)
     else:
         health = CredentialHealth.UNKNOWN
 
@@ -320,6 +325,15 @@ async def validate_credential(
             health.value,
             cred_id,
         )
+        # Merge granted scopes into existing scopes JSONB. Done in a separate
+        # statement so a failure here doesn't roll back the health update.
+        if cred.provider_kind == "github" and health == CredentialHealth.HEALTHY:
+            existing = cred.scopes or {}
+            updated = {**existing, "granted": granted}
+            await conn.execute(
+                "UPDATE capability_credentials SET scopes=$1 WHERE id=$2",
+                updated, cred_id,
+            )
         await conn.execute(
             """
             INSERT INTO capability_credential_audit (credential_id, tenant_id, action, actor, success)
@@ -348,8 +362,13 @@ async def validate_credential(
     return health
 
 
-async def _validate_github(base: str, token: str) -> CredentialHealth:
-    """Call GET /user on the GitHub API (or fake); map status code to CredentialHealth."""
+async def _validate_github(base: str, token: str) -> tuple[CredentialHealth, list[str]]:
+    """Call GET /user on the GitHub API (or fake); return (health, granted_scopes).
+
+    GitHub returns the token's scopes via the `X-OAuth-Scopes` response header
+    as a comma-separated list. On non-200 responses or HTTP errors, scopes is
+    an empty list — the caller should treat that as 'no info', not 'no scopes'.
+    """
     import httpx
 
     try:
@@ -358,15 +377,17 @@ async def _validate_github(base: str, token: str) -> CredentialHealth:
                 f"{base}/user", headers={"Authorization": f"Bearer {token}"}
             )
         if resp.status_code == 200:
-            return CredentialHealth.HEALTHY
+            scopes_header = resp.headers.get("X-OAuth-Scopes", "")
+            granted = [s.strip() for s in scopes_header.split(",") if s.strip()]
+            return CredentialHealth.HEALTHY, granted
         if resp.status_code == 401:
-            return CredentialHealth.REVOKED
+            return CredentialHealth.REVOKED, []
         if resp.status_code == 403:
-            return CredentialHealth.INVALID
-        return CredentialHealth.UNKNOWN
+            return CredentialHealth.INVALID, []
+        return CredentialHealth.UNKNOWN, []
     except httpx.HTTPError as exc:
         logger.warning("github validate failed: %s", exc)
-        return CredentialHealth.UNKNOWN
+        return CredentialHealth.UNKNOWN, []
 
 
 def _row_to_model(row: asyncpg.Record) -> Credential:
