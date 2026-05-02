@@ -11,7 +11,6 @@ Callers of ``get_secret`` MUST NOT log the return value.
 """
 from __future__ import annotations
 
-import json
 import logging
 from uuid import UUID, uuid4
 
@@ -70,8 +69,6 @@ async def create_credential(
         encrypted = _encrypt(tenant_id, payload.secret)
 
     cred_id = uuid4()
-    # Serialize scopes as JSON string for asyncpg JSONB binding
-    scopes_json = json.dumps(payload.scopes) if payload.scopes is not None else None
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -80,7 +77,7 @@ async def create_credential(
                 INSERT INTO capability_credentials (
                     id, tenant_id, user_id, provider_kind, auth_method, label,
                     backend, encrypted_data, external_ref, scopes
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING *
                 """,
                 cred_id,
@@ -92,7 +89,7 @@ async def create_credential(
                 payload.backend.value,
                 encrypted,
                 payload.external_ref,
-                scopes_json,
+                payload.scopes,
             )
             await conn.execute(
                 """
@@ -375,10 +372,6 @@ async def _validate_github(base: str, token: str) -> CredentialHealth:
 def _row_to_model(row: asyncpg.Record) -> Credential:
     """Convert a raw asyncpg record to a Credential Pydantic model."""
     scopes = row["scopes"]
-    # asyncpg may return JSONB as a dict or as a JSON string — normalize to dict
-    if isinstance(scopes, str) and scopes:
-        scopes = json.loads(scopes)
-
     return Credential(
         id=row["id"],
         tenant_id=row["tenant_id"],

@@ -87,9 +87,6 @@ async def write_audit_event(
             })
             content_hash = hashlib.sha256(content.encode()).digest()
 
-            # asyncpg requires JSONB args via json-string + ::jsonb cast
-            args_json = json.dumps(args) if args is not None else None
-
             await conn.execute(
                 """
                 INSERT INTO capability_audit (
@@ -102,14 +99,14 @@ async def write_audit_event(
                   prev_hash, content_hash
                 ) VALUES (
                   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-                  $15::jsonb,$16,$17,$18,$19,$20,$21
+                  $15,$16,$17,$18,$19,$20,$21
                 )
                 """,
                 audit_id, tenant_id, user_id, timestamp,
                 actor_kind, actor_id, task_id,
                 event_type, tool_name, tool_kind, blast_radius,
                 provider_kind, target, credential_id,
-                args_json, response_status, summary,
+                args, response_status, summary,
                 error_class, duration_ms,
                 prev_hash, content_hash,
             )
@@ -140,10 +137,7 @@ async def verify_chain(pool: asyncpg.Pool, *, tenant_id: UUID) -> ChainResult:
             return ChainResult(is_valid=False, row_count=len(rows),
                                broken_at=row["id"])
         # Recompute content hash from stored fields
-        # asyncpg may return JSONB as dict or string depending on codec registration
         args = row["args_redacted"]
-        if isinstance(args, str) and args:
-            args = json.loads(args)
 
         recomputed_content = _canonical_json({
             "id": str(row["id"]),

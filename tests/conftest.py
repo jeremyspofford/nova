@@ -231,15 +231,35 @@ async def llm_available(llm_gateway: httpx.AsyncClient) -> bool:
 
 @pytest_asyncio.fixture
 async def pool():
-    """Direct asyncpg connection pool for tests that need raw DB access (e.g. audit chain)."""
+    """Direct asyncpg connection pool for tests that need raw DB access (e.g. audit chain).
+
+    Registers the same JSON/JSONB codecs as orchestrator/app/db.py so that dict
+    values can be passed to JSONB parameters without manual json.dumps.
+    """
+    import json
     import asyncpg
+
+    async def _init_connection(conn: asyncpg.Connection) -> None:
+        await conn.set_type_codec(
+            "json",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+
     dsn = os.getenv(
         "DATABASE_URL",
         f"postgresql://nova:{os.getenv('POSTGRES_PASSWORD', 'nova_dev_password')}@localhost:5432/nova",
     )
     # Strip SQLAlchemy driver prefix if present
     dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
-    pg_pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    pg_pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2, init=_init_connection)
     yield pg_pool
     await pg_pool.close()
 
