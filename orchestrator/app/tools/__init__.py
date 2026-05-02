@@ -24,6 +24,8 @@ from app.tools.diagnosis_tools import DIAGNOSIS_TOOLS
 from app.tools.diagnosis_tools import execute_tool as _exec_diagnosis
 from app.tools.git_tools import GIT_TOOLS
 from app.tools.git_tools import execute_tool as _exec_git
+from app.tools.github_external_tools import GITHUB_EXTERNAL_TOOLS
+from app.tools.github_external_tools import execute_tool as _exec_github_external
 from app.tools.github_tools import GITHUB_TOOLS
 from app.tools.github_tools import execute_tool as _exec_github
 from app.tools.intel_tools import INTEL_TOOLS
@@ -59,6 +61,7 @@ _REGISTRY: list[ToolGroup] = [
     ToolGroup("Intel", "Intelligence Analysis", "Query intel feeds, create recommendations, check dismissed content", INTEL_TOOLS, _exec_intel),
     ToolGroup("Config", "Skills & Rules", "Manage prompt skills and behavior rules", CONFIG_TOOLS, _exec_config),
     ToolGroup("GitHub", "Self-Modification", "Create branches, push code, and manage pull requests on Nova's own repo", GITHUB_TOOLS, _exec_github),
+    ToolGroup("github_external", "GitHub (External Repos)", "Read CI runs, logs, diffs, and locate bugs on arbitrary GitHub repos.", GITHUB_EXTERNAL_TOOLS, _exec_github_external),
 ]
 
 # Derived from registry — same shapes the rest of the codebase expects
