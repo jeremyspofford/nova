@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ INTEL_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="create_recommendation",
@@ -105,6 +106,7 @@ INTEL_TOOLS: list[ToolDefinition] = [
             },
             "required": ["title", "summary", "grade", "confidence"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="get_dismissed_hashes",
@@ -119,6 +121,7 @@ INTEL_TOOLS: list[ToolDefinition] = [
             "properties": {},
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

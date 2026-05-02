@@ -19,6 +19,20 @@ class ModelCapability(str, Enum):
     structured_output = "structured_output"
 
 
+class BlastRadius(str, Enum):
+    """Security posture of a tool call — how much damage it can do.
+
+    READ     — no external mutation (reads, queries, GETs, listings)
+    PROPOSE  — generates output, no external side effects
+    MUTATE   — writes, commits, creates, sends, modifies state
+    DESTRUCT — deletes, wipes, force-pushes, irreversibly destroys
+    """
+    READ = "read"
+    PROPOSE = "propose"
+    MUTATE = "mutate"
+    DESTRUCT = "destruct"
+
+
 class ToolCallRef(BaseModel):
     """Tool invocation embedded in an assistant message.
     Separate from ToolCall (which is used in CompleteResponse) so that
@@ -65,6 +79,10 @@ class ToolDefinition(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any]  # JSON Schema
+    # Security posture — defaults are safe-fail (unclassified = MUTATE, never under-protected)
+    blast_radius: BlastRadius = BlastRadius.MUTATE
+    reversible: bool = True
+    rate_limit_per_hour: int | None = None
 
 
 class CompleteRequest(BaseModel):

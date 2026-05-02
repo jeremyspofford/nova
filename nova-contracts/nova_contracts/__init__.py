@@ -18,6 +18,7 @@ from .engram import (
     IngestResponse,
 )
 from .llm import (
+    BlastRadius,
     CompleteRequest,
     CompleteResponse,
     ContentBlock,
@@ -52,6 +53,7 @@ from .orchestrator import (
 )
 
 __all__ = [
+    "BlastRadius",
     "ModelCapability", "ContentBlock", "Message", "extract_text_content",
     "ToolCallRef", "ToolDefinition",
     "CompleteRequest", "CompleteResponse", "StreamChunk",

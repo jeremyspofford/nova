@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 from urllib.parse import quote_plus, unquote
 
 import httpx
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 from nova_worker_common.url_validator import validate_url
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ WEB_TOOLS: list[ToolDefinition] = [
             },
             "required": ["query"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="web_fetch",
@@ -72,6 +73,7 @@ WEB_TOOLS: list[ToolDefinition] = [
             },
             "required": ["url"],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

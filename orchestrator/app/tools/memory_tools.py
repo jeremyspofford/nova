@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="search_memory",
@@ -81,6 +82,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             },
             "required": ["query"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="recall_topic",
@@ -109,6 +111,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             },
             "required": ["entity"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="read_source",
@@ -128,6 +131,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             },
             "required": ["source_id"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_consolidation_status",
@@ -147,6 +151,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_memory_stats",
@@ -160,6 +165,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             "properties": {},
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="trigger_consolidation",
@@ -175,6 +181,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             "properties": {},
             "required": [],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="get_router_status",
@@ -189,6 +196,7 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             "properties": {},
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

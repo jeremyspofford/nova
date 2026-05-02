@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
             },
             "required": ["task_id"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="check_service_health",
@@ -55,6 +56,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
             "if a failure is caused by a service being down or queues backing up."
         ),
         parameters={"type": "object", "properties": {}, "required": []},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_recent_errors",
@@ -74,6 +76,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_stage_output",
@@ -100,6 +103,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
             },
             "required": ["task_id", "stage"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_task_timeline",
@@ -119,6 +123,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
             },
             "required": ["task_id"],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

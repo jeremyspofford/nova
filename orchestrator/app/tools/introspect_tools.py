@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ INTROSPECT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="list_knowledge_sources",
@@ -76,6 +77,7 @@ INTROSPECT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="list_mcp_servers",
@@ -86,6 +88,7 @@ INTROSPECT_TOOLS: list[ToolDefinition] = [
             "external tools are available (e.g. Firecrawl, filesystem, Brave Search)."
         ),
         parameters={"type": "object", "properties": {}, "required": []},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_user_profile",
@@ -104,6 +107,7 @@ INTROSPECT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

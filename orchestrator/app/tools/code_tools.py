@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 if TYPE_CHECKING:
     from app.tools.sandbox import SandboxTier
@@ -61,6 +61,7 @@ CODE_TOOLS: list[ToolDefinition] = [
             },
             "required": ["path"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="read_file",
@@ -78,6 +79,7 @@ CODE_TOOLS: list[ToolDefinition] = [
             },
             "required": ["path"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="write_file",
@@ -100,6 +102,8 @@ CODE_TOOLS: list[ToolDefinition] = [
             },
             "required": ["path", "content"],
         },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=False,
     ),
     ToolDefinition(
         name="run_shell",
@@ -126,6 +130,8 @@ CODE_TOOLS: list[ToolDefinition] = [
             },
             "required": ["command"],
         },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=False,
     ),
     ToolDefinition(
         name="search_codebase",
@@ -156,6 +162,7 @@ CODE_TOOLS: list[ToolDefinition] = [
             },
             "required": ["pattern"],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 
@@ -176,6 +183,7 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Use absolute paths (e.g., '/home/user/project/src') or relative paths from home."
                 ),
                 parameters=_CODE_PARAMS["list_dir"],
+                blast_radius=BlastRadius.READ,
             ),
             ToolDefinition(
                 name="read_file",
@@ -185,6 +193,7 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Large files are truncated at 8000 characters."
                 ),
                 parameters=_CODE_PARAMS["read_file"],
+                blast_radius=BlastRadius.READ,
             ),
             ToolDefinition(
                 name="write_file",
@@ -193,6 +202,8 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Use absolute paths or relative. Creates parent directories automatically."
                 ),
                 parameters=_CODE_PARAMS["write_file"],
+                blast_radius=BlastRadius.MUTATE,
+                reversible=False,
             ),
             ToolDefinition(
                 name="run_shell",
@@ -202,6 +213,8 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Blocks sudo, curl|sh, and privilege escalation."
                 ),
                 parameters=_CODE_PARAMS["run_shell"],
+                blast_radius=BlastRadius.MUTATE,
+                reversible=False,
             ),
             ToolDefinition(
                 name="search_codebase",
@@ -210,6 +223,7 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Returns matching lines with file paths and line numbers."
                 ),
                 parameters=_CODE_PARAMS["search_codebase"],
+                blast_radius=BlastRadius.READ,
             ),
         ]
 

@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 if TYPE_CHECKING:
     from app.tools.sandbox import SandboxTier
@@ -44,6 +44,7 @@ GIT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="git_diff",
@@ -69,6 +70,7 @@ GIT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="git_log",
@@ -87,6 +89,7 @@ GIT_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="git_commit",
@@ -114,6 +117,7 @@ GIT_TOOLS: list[ToolDefinition] = [
             },
             "required": ["message", "files"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
 ]
 
@@ -135,6 +139,7 @@ def get_git_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     "Returns staged, unstaged, and untracked file lists."
                 ),
                 parameters=_GIT_PARAMS["git_status"],
+                blast_radius=BlastRadius.READ,
             ),
             ToolDefinition(
                 name="git_diff",
@@ -142,11 +147,13 @@ def get_git_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     f"Show unstaged or staged changes in any git repository on the {scope}."
                 ),
                 parameters=_GIT_PARAMS["git_diff"],
+                blast_radius=BlastRadius.READ,
             ),
             ToolDefinition(
                 name="git_log",
                 description=f"Show recent git commit history for any repo on the {scope}.",
                 parameters=_GIT_PARAMS["git_log"],
+                blast_radius=BlastRadius.READ,
             ),
             ToolDefinition(
                 name="git_commit",
@@ -154,6 +161,7 @@ def get_git_tools(tier: "SandboxTier") -> list[ToolDefinition]:
                     f"Stage files and commit in any git repository on the {scope}."
                 ),
                 parameters=_GIT_PARAMS["git_commit"],
+                blast_radius=BlastRadius.MUTATE,
             ),
         ]
 

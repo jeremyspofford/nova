@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 import httpx
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +56,7 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": ["branch_name"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="github_push_branch",
@@ -73,6 +74,8 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=False,
     ),
     ToolDefinition(
         name="github_create_pr",
@@ -102,6 +105,7 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": ["title"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="github_pr_status",
@@ -118,6 +122,7 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": ["pr_number"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="github_list_prs",
@@ -139,6 +144,7 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="github_diff_branch",
@@ -156,6 +162,7 @@ GITHUB_TOOLS: list[ToolDefinition] = [
             },
             "required": [],
         },
+        blast_radius=BlastRadius.READ,
     ),
 ]
 

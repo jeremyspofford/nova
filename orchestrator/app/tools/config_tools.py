@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from app.db import get_pool
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ CONFIG_TOOLS: list[ToolDefinition] = [
         description="List all behavior rules. Returns name, what it prevents, action (block/warn), "
                     "target tools, and whether it's enabled.",
         parameters={"type": "object", "properties": {}},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="create_rule",
@@ -34,6 +35,7 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name", "rule_text", "action"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="update_rule",
@@ -50,6 +52,7 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name", "updates"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="delete_rule",
@@ -61,11 +64,14 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name"],
         },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=False,
     ),
     ToolDefinition(
         name="list_skills",
         description="List all prompt skills. Returns name, content preview, priority, and enabled status.",
         parameters={"type": "object", "properties": {}},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="create_skill",
@@ -81,6 +87,7 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name", "content"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="update_skill",
@@ -96,6 +103,7 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name", "updates"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="delete_skill",
@@ -107,6 +115,8 @@ CONFIG_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name"],
         },
+        blast_radius=BlastRadius.MUTATE,
+        reversible=False,
     ),
 ]
 

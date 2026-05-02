@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from nova_contracts import ToolDefinition
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             "Returns each agent's ID, name, model, status, and creation time."
         ),
         parameters={"type": "object", "properties": {}, "required": []},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="get_agent_info",
@@ -45,6 +46,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             },
             "required": ["agent_id"],
         },
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="create_agent",
@@ -73,6 +75,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             },
             "required": ["name", "model", "system_prompt"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="list_available_models",
@@ -81,6 +84,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             "Use this to pick a model when creating agents or switching models."
         ),
         parameters={"type": "object", "properties": {}, "required": []},
+        blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
         name="send_message_to_agent",
@@ -103,6 +107,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             },
             "required": ["agent_id", "message"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="create_task",
@@ -130,6 +135,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             },
             "required": ["description"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
         name="create_goal",
@@ -192,6 +198,7 @@ PLATFORM_TOOLS: list[ToolDefinition] = [
             },
             "required": ["title", "description"],
         },
+        blast_radius=BlastRadius.MUTATE,
     ),
 ]
 
