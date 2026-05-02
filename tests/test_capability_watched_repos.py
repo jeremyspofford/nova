@@ -1,7 +1,7 @@
 """Watched repos CRUD — list/create/update/delete via the capability router."""
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -163,3 +163,42 @@ async def test_watched_repo_for_unknown_credential_returns_404(
         json={"repo": "nova-test/unreachable"},
     )
     assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.asyncio
+async def test_credential_delete_cascades_watched_repos(
+    orchestrator: httpx.AsyncClient, admin_headers: dict, pool
+):
+    """Deleting a credential removes its watched_repos via DB-level FK cascade."""
+    cred_id = await _make_credential(orchestrator, admin_headers)
+    repo_slug = f"nova-test/wr-cascade-{uuid4().hex[:8]}"
+
+    create = await orchestrator.post(
+        f"/api/v1/capabilities/credentials/{cred_id}/watched-repos",
+        headers=admin_headers,
+        json={"repo": repo_slug},
+    )
+    assert create.status_code == 201
+    wr_id = create.json()["id"]
+
+    # Sanity check: row exists in DB
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id FROM cortex_watched_repos WHERE id=$1",
+            UUID(wr_id),
+        )
+    assert row is not None
+
+    # Delete the credential
+    d = await orchestrator.delete(
+        f"/api/v1/capabilities/credentials/{cred_id}", headers=admin_headers,
+    )
+    assert d.status_code == 204
+
+    # FK cascade should have removed the watched_repo row in the DB
+    async with pool.acquire() as conn:
+        row_after = await conn.fetchrow(
+            "SELECT id FROM cortex_watched_repos WHERE id=$1",
+            UUID(wr_id),
+        )
+    assert row_after is None, "watched_repo row should have been cascaded"
