@@ -22,15 +22,16 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 - **intel-worker** (8110) — AI ecosystem feed poller: RSS, Reddit JSON, page change detection, GitHub trending/releases. Pushes content via orchestrator HTTP API, queues to engram ingestion (FastAPI, health-only server)
 - **knowledge-worker** (8120) — Autonomous personal knowledge crawler: LLM-guided web crawling, GitHub API extraction, encrypted credential storage (FastAPI). Optional, start with `--profile knowledge`.
 - **voice-service** (8130) — STT/TTS provider proxy: OpenAI Whisper, OpenAI TTS, Deepgram, ElevenLabs (FastAPI). Optional, start with `--profile voice`.
+- **screenpipe-bridge** (8140) — Subscribes to a user-installed [screenpipe](https://screenpi.pe/) daemon (workstation-side) over WebSocket (HTTP polling fallback), aggregates raw events into 30-min-capped focus sessions, applies a two-layer privacy denylist, pushes payloads to engram ingestion queue (FastAPI + websockets + httpx + redis). Optional, requires user-installed screenpipe daemon.
 - **redis** (6379) — State, task queue (BRPOP), rate limiting, session memory (data bind-mounted to `./data/redis/`)
 
-**Inter-service communication:** All HTTP. Orchestrator calls llm-gateway (`/complete`, `/stream`, `/embed`) and memory-service (`/api/v1/engrams/*`). Dashboard proxies to orchestrator (`/api`), llm-gateway (`/v1`), recovery (`/recovery-api`), cortex (`/cortex-api`), and voice-service (`/voice-api`). Chat-api forwards to orchestrator's streaming endpoint. Chat-bridge calls orchestrator (`/api/v1/tasks/stream`) to relay messages from external platforms. Cortex calls orchestrator (task dispatch, goal management), llm-gateway (planning, evaluation), and memory-service (read/write knowledge). Intel-worker calls orchestrator (`/api/v1/intel/feeds`, `/api/v1/intel/content`, `/api/v1/intel/feeds/{id}/status`) and pushes to Redis queues (db0 engram ingestion, db6 intel new-items). Knowledge-worker calls orchestrator (`/api/v1/knowledge/sources`, `/api/v1/knowledge/crawl-log`), llm-gateway (`/complete` for relevance scoring), and pushes to Redis queues (db0 engram ingestion, db8 knowledge state). Dashboard depends only on recovery at startup — shows a startup screen while other services come online.
+**Inter-service communication:** All HTTP. Orchestrator calls llm-gateway (`/complete`, `/stream`, `/embed`) and memory-service (`/api/v1/engrams/*`). Dashboard proxies to orchestrator (`/api`), llm-gateway (`/v1`), recovery (`/recovery-api`), cortex (`/cortex-api`), and voice-service (`/voice-api`). Chat-api forwards to orchestrator's streaming endpoint. Chat-bridge calls orchestrator (`/api/v1/tasks/stream`) to relay messages from external platforms. Cortex calls orchestrator (task dispatch, goal management), llm-gateway (planning, evaluation), and memory-service (read/write knowledge). Intel-worker calls orchestrator (`/api/v1/intel/feeds`, `/api/v1/intel/content`, `/api/v1/intel/feeds/{id}/status`) and pushes to Redis queues (db0 engram ingestion, db6 intel new-items). Knowledge-worker calls orchestrator (`/api/v1/knowledge/sources`, `/api/v1/knowledge/crawl-log`), llm-gateway (`/complete` for relevance scoring), and pushes to Redis queues (db0 engram ingestion, db8 knowledge state). Screenpipe-bridge subscribes to a user-installed screenpipe daemon over the network (WS primary, /search poll fallback) and pushes focus-session payloads to the engram ingestion queue (Redis db0). Reads runtime config from Redis db1. Dashboard depends only on recovery at startup — shows a startup screen while other services come online.
 
 **Shared contracts:** `nova-contracts/` is a Pydantic-only package defining the API contract between services (chat, llm, memory, orchestrator models). Any service satisfying these models is a drop-in replacement.
 
 **Quartet Pipeline:** 5-stage agent chain — Context → Task → Guardrail → Code Review → Decision. Runs via Redis BRPOP task queue with heartbeat (30s) and stale reaper (150s timeout). Pipeline code lives in `orchestrator/app/pipeline/`.
 
-**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, chat-bridge=db4, cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9.
+**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, chat-bridge=db4, cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10.
 
 ## Build & Run Commands
 
@@ -138,7 +139,7 @@ The old 4-tier memory (working/episodic/semantic/procedural) has been replaced b
 
 Every engram links back to a `sources` table tracking where knowledge came from. Sources store metadata (URI, title, author, trust score) and optionally full content (hybrid: DB for small <100KB, filesystem for large at `data/sources/`, URI for re-fetchable). Dedup by content hash and URI.
 
-**Trust defaults by source kind:** chat=0.95, manual_paste=0.90, task_output=0.85, knowledge_crawl=0.70, intel_feed=0.70, pipeline_extraction=0.80, consolidation=0.85, api_response=0.50.
+**Trust defaults by source kind:** chat=0.95, manual_paste=0.90, task_output=0.85, knowledge_crawl=0.70, intel_feed=0.70, pipeline_extraction=0.80, consolidation=0.85, api_response=0.50, screenpipe=0.80.
 
 **API:** `POST /sources` (create/dedup), `GET /sources` (list), `GET /sources/{id}` (detail), `GET /sources/{id}/content` (full content), `DELETE /sources/{id}`, `GET /sources/domain-summary` (knowledge overview), `POST /sources/{id}/redecompose` (re-ingest from stored content).
 
@@ -163,6 +164,16 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 | `inference.state` | `ready`, `starting`, `error`, `draining` | Whether local inference is accepting requests |
 | `inference.url` | URL | Runtime override for the local inference endpoint (replaces legacy `llm.ollama_url`, which is now migrated on gateway startup) |
 | `llm.routing_strategy` | `local-first`, `local-only`, `cloud-first`, `cloud-only` | How the gateway routes requests between local and cloud |
+| `screenpipe.enabled` | `true`/`false` | Whether the bridge connects to screenpipe |
+| `screenpipe.url` | URL | Workstation screenpipe daemon URL (e.g. `http://workstation:3030`) |
+| `screenpipe.api_key` | string | Bearer token for screenpipe (write-only after entry in Settings) |
+| `capture.paused` | `true`/`false` | Pause capture without disconnecting (sessions still received but discarded) |
+| `capture.denylist.apps` | JSON array | App names to exclude from capture |
+| `capture.denylist.url_patterns` | JSON array | URL regex patterns to exclude |
+| `capture.denylist.window_titles` | JSON array | Window title substrings to exclude |
+| `capture.session_max_minutes` | int (5–120) | Max focus session duration before split (default 30) |
+| `capture.session_min_seconds` | int (0–300) | Min focus session duration before drop (default 30) |
+| `capture.buffer_size` | int (1–100) | Bridge backpressure buffer (default 10) |
 
 **Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.state` and `inference.backend` in Redis before debugging code. The gateway treats `OLLAMA_BASE_URL=auto`/`host` as aliases for the bundled service URL (`http://ollama:11434`); Redis runtime overrides via `inference.url` win when set.
 
@@ -229,6 +240,7 @@ Nova's website lives at `website/` (Astro/Starlight, arialabs.ai). The site serv
 | `cortex/` | (new — no docs yet) |
 | `intel-worker/`, `orchestrator/app/intel_router.py` | (new — no docs yet) |
 | `knowledge-worker/` | (new — no docs yet) |
+| `screenpipe-bridge/` | (new — no docs yet; `nova/docs/services/screenpipe-bridge.md` when web docs added) |
 | `voice-service/` | `nova/docs/services/voice-service.md` |
 | `orchestrator/` (general) | `nova/docs/services/orchestrator.md` |
 | `docker-compose*.yml`, `Makefile`, `scripts/setup.sh` | `nova/docs/deployment.md`, `nova/docs/quickstart.md` |
