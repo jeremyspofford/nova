@@ -7,11 +7,17 @@ from nova_worker_common.  The master key is read from ``settings.credential_mast
 
     python -c "import os; print(os.urandom(32).hex())"
 
+If the env var is unset, ``ensure_credential_master_key()`` (called from the
+orchestrator startup lifespan) generates one and persists it to
+``platform_config`` so the key survives container restarts. The env var still
+takes precedence when set — DB bootstrap is the day-1 fallback only.
+
 Callers of ``get_secret`` MUST NOT log the return value.
 """
 from __future__ import annotations
 
 import logging
+import os
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -34,8 +40,69 @@ logger = logging.getLogger(__name__)
 _credential_provider: BuiltinCredentialProvider | None = None
 
 
+async def ensure_credential_master_key() -> None:
+    """Auto-generate and persist CREDENTIAL_MASTER_KEY if not set.
+
+    Called at orchestrator startup. Mirrors ``jwt_auth.ensure_jwt_secret``.
+
+    Order of precedence:
+
+      1. ``settings.credential_master_key`` already loaded from env — return.
+         The env var wins; DB row is left untouched.
+      2. ``platform_config`` has a non-empty value — copy it into settings.
+      3. Otherwise generate ``os.urandom(32).hex()``, write it to
+         platform_config, set settings, log INFO.
+
+    Fails fast (RuntimeError) if the platform_config table is unreachable —
+    the existing init_db retry loop should make this impossible in practice.
+    """
+    from app.db import get_pool
+
+    if settings.credential_master_key:
+        return
+
+    pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            existing = await conn.fetchval(
+                "SELECT value #>> '{}' FROM platform_config "
+                "WHERE key = 'capability.credential_master_key'"
+            )
+            if existing and existing.strip('"'):
+                settings.credential_master_key = existing.strip('"')
+                return
+
+            generated = os.urandom(32).hex()
+            await conn.execute(
+                """
+                INSERT INTO platform_config (key, value, description, is_secret, updated_at)
+                VALUES (
+                    'capability.credential_master_key',
+                    $1::jsonb,
+                    'Auto-generated master key for capability credential vault (AES-256-GCM).',
+                    TRUE,
+                    NOW()
+                )
+                ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()
+                """,
+                f'"{generated}"',
+            )
+            settings.credential_master_key = generated
+            logger.info("Generated and stored CREDENTIAL_MASTER_KEY in platform_config")
+    except asyncpg.PostgresError as exc:
+        raise RuntimeError(
+            f"Failed to bootstrap CREDENTIAL_MASTER_KEY from platform_config: {exc}"
+        ) from exc
+
+
 def _provider() -> BuiltinCredentialProvider:
-    """Return the cached BuiltinCredentialProvider, creating it on first call."""
+    """Return the cached BuiltinCredentialProvider, creating it on first call.
+
+    Assumes ``ensure_credential_master_key()`` has already populated
+    ``settings.credential_master_key`` at startup. The HTTPException branch
+    only fires if the startup hook was bypassed (e.g. a service that
+    instantiated this module without going through the orchestrator lifespan).
+    """
     global _credential_provider
     if _credential_provider is None:
         if not settings.credential_master_key:

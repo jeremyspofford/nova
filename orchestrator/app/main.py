@@ -113,6 +113,13 @@ async def lifespan(app: FastAPI):
     from app.jwt_auth import ensure_jwt_secret
     await ensure_jwt_secret()
 
+    # Auto-generate credential master key if not configured (T1-04)
+    # Day-1 users running `make up` without the install wizard arrive with an
+    # empty CREDENTIAL_MASTER_KEY; this self-heals before any credentials
+    # endpoint can be hit.
+    from app.capabilities.credentials import ensure_credential_master_key
+    await ensure_credential_master_key()
+
     # Seed platform_config from .env for existing deployments
     await _seed_config_from_env()
 
