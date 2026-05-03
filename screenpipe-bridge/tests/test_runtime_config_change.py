@@ -3,7 +3,7 @@ import asyncio
 import pytest
 import redis.asyncio as redis_async
 
-from screenpipe_bridge.app.runtime_config import RuntimeConfig
+from app.runtime_config import RuntimeConfig
 
 REDIS_URL = "redis://localhost:6379/1"
 
