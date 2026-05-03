@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     # Service
     redis_url: str = "redis://redis:6379/10"
+    redis_password: str = ""
     service_host: str = "0.0.0.0"
     service_port: int = 8140
     log_level: str = "INFO"

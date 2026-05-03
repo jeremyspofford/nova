@@ -24,7 +24,10 @@ _redis: aioredis.Redis | None = None
 def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        kwargs: dict = {"decode_responses": True}
+        if settings.redis_password:
+            kwargs["password"] = settings.redis_password
+        _redis = aioredis.from_url(settings.redis_url, **kwargs)
     return _redis
 
 
@@ -73,7 +76,7 @@ app.add_middleware(
 
 @app.get("/health/live")
 async def health_live():
-    return {"status": "ok"}
+    return {"status": "alive"}
 
 
 @app.get("/health/ready")
