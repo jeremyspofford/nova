@@ -1553,3 +1553,32 @@ export interface ScreenpipeConnectionTest {
 export async function testScreenpipeConnection(): Promise<ScreenpipeConnectionTest> {
   return apiFetch<ScreenpipeConnectionTest>('/screenpipe-api/test-connection')
 }
+
+export interface CaptureSession {
+  id: string
+  source_kind: string
+  uri: string
+  title: string
+  metadata: Record<string, any>
+  trust_score: number
+  ingested_at: string
+}
+
+export interface CaptureTodayStats {
+  sessions_count: number
+  captured_seconds: number
+  dropped_count: number
+  top_apps: Array<{ app: string; captured_seconds: number }>
+}
+
+export async function getCaptureSessions(limit = 50): Promise<{ sessions: CaptureSession[] }> {
+  return apiFetch<{ sessions: CaptureSession[] }>(`/api/v1/capture/sessions?limit=${limit}`)
+}
+
+export async function getCaptureTodayStats(): Promise<CaptureTodayStats> {
+  return apiFetch<CaptureTodayStats>('/api/v1/capture/today-stats')
+}
+
+export async function getSourceContent(id: string): Promise<{ content: string; title?: string }> {
+  return apiFetch<{ content: string; title?: string }>(`/mem/api/v1/engrams/sources/${id}/content`)
+}
