@@ -6,7 +6,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
-  Link2, Bookmark, Monitor,
+  Link2, Bookmark, Monitor, Settings2,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -21,6 +21,7 @@ import { RemoteAccessSection } from './settings/RemoteAccessSection'
 import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
 import { ScreenpipeConnectionSection } from './settings/ScreenpipeConnectionSection'
 import { CapturePrivacySection } from './settings/CapturePrivacySection'
+import { CaptureAdvancedSection } from './settings/CaptureAdvancedSection'
 import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
 import { AutoApproveRulesSection } from './settings/AutoApproveRulesSection'
 import { RecoverySection } from './settings/RecoverySection'
@@ -143,6 +144,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'chat-integrations', label: 'Chat Integrations', icon: MessageSquare },
       { id: 'screenpipe', label: 'Screenpipe', icon: Monitor },
       { id: 'capture-privacy', label: 'Capture Privacy', icon: ShieldAlert },
+      { id: 'capture-advanced', label: 'Capture Advanced', icon: Settings2 },
       { id: 'editor', label: 'Editor', icon: Code },
       { id: 'notifications', label: 'Notifications', icon: Bell },
     ],
@@ -813,6 +815,12 @@ export function Settings() {
         {show('capture-privacy') && (
           <div id="capture-privacy">
             <CapturePrivacySection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
+          </div>
+        )}
+
+        {show('capture-advanced') && (
+          <div id="capture-advanced">
+            <CaptureAdvancedSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
           </div>
         )}
 
