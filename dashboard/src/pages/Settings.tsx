@@ -20,6 +20,7 @@ import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
 import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
 import { ScreenpipeConnectionSection } from './settings/ScreenpipeConnectionSection'
+import { CapturePrivacySection } from './settings/CapturePrivacySection'
 import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
 import { AutoApproveRulesSection } from './settings/AutoApproveRulesSection'
 import { RecoverySection } from './settings/RecoverySection'
@@ -141,6 +142,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'remote-access', label: 'Remote Access', icon: Globe },
       { id: 'chat-integrations', label: 'Chat Integrations', icon: MessageSquare },
       { id: 'screenpipe', label: 'Screenpipe', icon: Monitor },
+      { id: 'capture-privacy', label: 'Capture Privacy', icon: ShieldAlert },
       { id: 'editor', label: 'Editor', icon: Code },
       { id: 'notifications', label: 'Notifications', icon: Bell },
     ],
@@ -805,6 +807,12 @@ export function Settings() {
         {show('screenpipe') && (
           <div id="screenpipe">
             <ScreenpipeConnectionSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
+          </div>
+        )}
+
+        {show('capture-privacy') && (
+          <div id="capture-privacy">
+            <CapturePrivacySection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
           </div>
         )}
 
