@@ -762,7 +762,6 @@ services:
   # ── Screenpipe Bridge ───────────────────────────────────────────────────────
   screenpipe-bridge:
     <<: *nova-common
-    profiles: ["screenpipe"]
     build:
       context: .
       dockerfile: screenpipe-bridge/Dockerfile
