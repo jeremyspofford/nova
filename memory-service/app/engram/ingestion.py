@@ -196,6 +196,7 @@ def _map_source_type_to_kind(source_type: str) -> str:
         "cortex": "task_output",
         "journal": "manual_paste",
         "external": "knowledge_crawl",
+        "screenpipe": "screenpipe",
         "self_reflection": "consolidation",
     }
     return mapping.get(source_type, "manual_paste")
