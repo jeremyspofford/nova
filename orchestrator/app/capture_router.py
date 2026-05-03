@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import redis.asyncio as aioredis
 from app.config import settings
 from app.db import get_pool
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +138,61 @@ async def today_stats():
         "dropped_count": dropped_total,
         "top_apps": [{"app": a, "captured_seconds": int(s)} for a, s in top_apps],
     }
+
+
+@router.post("/exclude")
+async def add_exclude(payload: dict):
+    """Add a value to one of the three capture denylists.
+
+    Payload: {"scope": "app" | "url_pattern" | "window_title", "value": "..."}
+
+    Reads the current Redis JSON list, dedupes the new value, writes back
+    to both Redis (for the bridge to pick up immediately) and platform_config
+    Postgres (for persistence across Redis flushes).
+    """
+    scope = payload.get("scope")
+    value = (payload.get("value") or "").strip()
+    if scope not in ("app", "url_pattern", "window_title"):
+        raise HTTPException(status_code=400, detail="invalid scope")
+    if not value:
+        raise HTTPException(status_code=400, detail="empty value")
+
+    list_key = {
+        "app": "capture.denylist.apps",
+        "url_pattern": "capture.denylist.url_patterns",
+        "window_title": "capture.denylist.window_titles",
+    }[scope]
+    redis_key = f"nova:config:{list_key}"
+
+    redis_client = _get_capture_redis()
+    raw = await redis_client.get(redis_key)
+    try:
+        items = json.loads(raw) if raw else []
+        if not isinstance(items, list):
+            items = []
+    except (json.JSONDecodeError, TypeError):
+        items = []
+
+    if value in items:
+        return {"ok": True, "added": False, "items": items}
+
+    items.append(value)
+    new_json = json.dumps(items)
+
+    # Write to Redis — bridge picks up within its config poll interval
+    await redis_client.set(redis_key, new_json)
+
+    # Upsert to Postgres for persistence across Redis flushes
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO platform_config (key, value)
+            VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            list_key,
+            new_json,
+        )
+
+    return {"ok": True, "added": True, "items": items}

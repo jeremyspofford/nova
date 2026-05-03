@@ -1582,3 +1582,16 @@ export async function getCaptureTodayStats(): Promise<CaptureTodayStats> {
 export async function getSourceContent(id: string): Promise<{ content: string; title?: string }> {
   return apiFetch<{ content: string; title?: string }>(`/mem/api/v1/engrams/sources/${id}/content`)
 }
+
+export type ExcludeScope = 'app' | 'url_pattern' | 'window_title'
+
+export async function addCaptureExclude(scope: ExcludeScope, value: string): Promise<{
+  ok: boolean
+  added: boolean
+  items: string[]
+}> {
+  return apiFetch('/api/v1/capture/exclude', {
+    method: 'POST',
+    body: JSON.stringify({ scope, value }),
+  })
+}

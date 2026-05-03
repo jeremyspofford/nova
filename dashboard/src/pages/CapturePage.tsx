@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Settings, Wifi, WifiOff, Loader2, Eye, Ban } from 'lucide-react'
 import { formatDistanceToNow, parseISO } from 'date-fns'
@@ -10,9 +10,14 @@ import {
   getPlatformConfig,
   updatePlatformConfig,
   testScreenpipeConnection,
+  addCaptureExclude,
   type CaptureSession,
+  type ExcludeScope,
 } from '../api'
 import { Modal } from '../components/ui/Modal'
+import { Popover } from '../components/ui/Popover'
+import { RadioGroup } from '../components/ui/Radio'
+import { useToast } from '../components/ToastProvider'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -197,6 +202,101 @@ function SessionViewModal({
   )
 }
 
+// ── Exclude popover ────────────────────────────────────────────────────────────
+
+function ExcludePopover({ session }: { session: CaptureSession }) {
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const { addToast } = useToast()
+
+  const meta = session.metadata ?? {}
+  const app: string = meta.app ?? session.source_kind
+  const windowTitle: string = meta.window ?? session.title ?? ''
+  const url: string | undefined = meta.url
+
+  // Build option list: App always first, URL only if present, Window title always
+  type ScopeOption = { value: ExcludeScope; label: string; displayValue: string }
+  const options: ScopeOption[] = [
+    { value: 'app', label: 'App', displayValue: app },
+    ...(url ? [{ value: 'url_pattern' as ExcludeScope, label: 'URL pattern', displayValue: url }] : []),
+    ...(windowTitle && windowTitle !== app
+      ? [{ value: 'window_title' as ExcludeScope, label: 'Window title', displayValue: windowTitle }]
+      : []),
+  ]
+
+  const [selected, setSelected] = useState<ExcludeScope>('app')
+
+  const mutation = useMutation({
+    mutationFn: ({ scope, value }: { scope: ExcludeScope; value: string }) =>
+      addCaptureExclude(scope, value),
+    onSuccess: (data, { scope, value }) => {
+      qc.invalidateQueries({ queryKey: ['capture', 'sessions'] })
+      const msg = data.added
+        ? `Excluded "${value}" from future captures.`
+        : `"${value}" was already in the ${scope} denylist.`
+      addToast({
+        variant: 'success',
+        message: msg,
+        action: {
+          label: 'Privacy settings',
+          onClick: () => navigate('/settings#capture-privacy'),
+        },
+      })
+    },
+    onError: (err) => {
+      addToast({ variant: 'error', message: `Failed to exclude: ${(err as Error).message}` })
+    },
+  })
+
+  const selectedOption = options.find(o => o.value === selected) ?? options[0]
+
+  const handleConfirm = () => {
+    const opt = options.find(o => o.value === selected) ?? options[0]
+    mutation.mutate({ scope: opt.value, value: opt.displayValue })
+  }
+
+  return (
+    <Popover
+      align="end"
+      trigger={
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-md border border-border-subtle px-2 py-1 text-xs text-content-secondary hover:text-content-primary hover:border-border-strong transition-colors"
+          aria-label="Exclude from future captures"
+        >
+          <Ban size={11} />
+          exclude
+        </button>
+      }
+    >
+      <div className="w-56 space-y-3 p-1">
+        <p className="text-xs font-semibold text-content-secondary">Exclude from future captures</p>
+        <RadioGroup
+          name={`exclude-${session.id}`}
+          value={selected}
+          onChange={(v) => setSelected(v as ExcludeScope)}
+          options={options.map(o => ({
+            value: o.value,
+            label: o.label,
+            description: o.displayValue,
+          }))}
+        />
+        <button
+          type="button"
+          onClick={handleConfirm}
+          disabled={mutation.isPending}
+          className="w-full rounded-md bg-danger px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-1.5"
+        >
+          {mutation.isPending && <Loader2 size={11} className="animate-spin" />}
+          Exclude {selectedOption.displayValue.length > 20
+            ? selectedOption.displayValue.slice(0, 20) + '…'
+            : selectedOption.displayValue}
+        </button>
+      </div>
+    </Popover>
+  )
+}
+
 // ── Activity row ───────────────────────────────────────────────────────────────
 
 function ActivityRow({
@@ -259,16 +359,7 @@ function ActivityRow({
             <Eye size={11} />
             view
           </button>
-          <button
-            type="button"
-            disabled
-            className="flex items-center gap-1 rounded-md border border-border-subtle px-2 py-1 text-xs text-content-tertiary opacity-50 cursor-not-allowed"
-            aria-label="Exclude (coming soon)"
-            title="Exclude — available in next task"
-          >
-            <Ban size={11} />
-            exclude
-          </button>
+          <ExcludePopover session={session} />
         </div>
       </div>
     </div>
