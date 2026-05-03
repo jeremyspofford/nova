@@ -67,6 +67,48 @@ async def _create_cred(orchestrator: httpx.AsyncClient, admin_headers: dict, suf
     return resp.json()["id"]
 
 
+_DEFAULT_TENANT_UUID = "00000000-0000-0000-0000-000000000001"
+
+
+async def _seed_consent_rule_for_repo(pool, *, repo: str) -> str:
+    """Pre-seed a consent_rule auto-approving register_webhook for `repo`.
+
+    Required because POST /api/v1/webhooks/github/register now flows through
+    the consent gate (T1-02). Without a matching rule, the endpoint would
+    return 202 consent_pending and these receiver-path tests would have no
+    webhook to test. Cleanup deletes the rule by id at teardown.
+
+    target_glob matches the literal repo string ("owner/name") because
+    consent._matches calls fnmatch.fnmatchcase(target, scope["target_glob"])
+    where target is set from args["repo"] (tools/__init__.py:280). Using
+    "owner/name/*" would NOT match because fnmatch requires a trailing
+    path segment after the slash.
+
+    The conftest pool registers a jsonb codec using json.dumps, so pass the
+    dict directly — pre-serialising would double-encode.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO consent_rules (
+              tenant_id, user_id, tool_name, provider_kind,
+              scope_match, source
+            ) VALUES ($1, $1, 'register_webhook', 'github', $2, 'user_remember')
+            RETURNING id
+            """,
+            _DEFAULT_TENANT_UUID,
+            {"target_glob": repo},
+        )
+    return str(row["id"])
+
+
+async def _delete_consent_rule(pool, rule_id: str | None) -> None:
+    if rule_id is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM consent_rules WHERE id=$1", rule_id)
+
+
 async def _cleanup(pool, orchestrator, admin_headers, hook_id=None, cred_id=None, repo=None):
     """Delete webhook rows first (FK constraint), then credential.
 
@@ -96,14 +138,20 @@ async def test_register_webhook_creates_hook_and_db_row(
     pool,
 ):
     """POST /api/v1/webhooks/github/register creates a hook on fake-github and
-    persists an active row in github_webhooks."""
+    persists an active row in github_webhooks.
+
+    Pre-seeds a consent_rule so the call auto-approves through the gate (T1-02).
+    The receiver-path tests below all do the same.
+    """
     fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     repo = _test_repo("register")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "register")
+        rule_id = await _seed_consent_rule_for_repo(pool, repo=repo)
 
         resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -134,6 +182,7 @@ async def test_register_webhook_creates_hook_and_db_row(
 
     finally:
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -153,9 +202,11 @@ async def test_webhook_receiver_validates_hmac_via_ping_roundtrip(
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     repo = _test_repo("ping")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "ping")
+        rule_id = await _seed_consent_rule_for_repo(pool, repo=repo)
 
         reg_resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -191,6 +242,7 @@ async def test_webhook_receiver_validates_hmac_via_ping_roundtrip(
 
     finally:
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -205,9 +257,11 @@ async def test_webhook_receiver_rejects_bad_hmac(
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     repo = _test_repo("badhmac")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "badhmac")
+        rule_id = await _seed_consent_rule_for_repo(pool, repo=repo)
 
         reg_resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -239,6 +293,7 @@ async def test_webhook_receiver_rejects_bad_hmac(
 
     finally:
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -253,9 +308,11 @@ async def test_unregister_webhook_revokes_row(
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     repo = _test_repo("unreg")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "unreg")
+        rule_id = await _seed_consent_rule_for_repo(pool, repo=repo)
 
         reg_resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -293,6 +350,7 @@ async def test_unregister_webhook_revokes_row(
     finally:
         # Pass repo to ensure even revoked rows are cleaned up
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -311,9 +369,11 @@ async def test_workflow_run_failure_event_accepted(
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     repo = _test_repo("wfrun")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "wfrun")
+        rule_id = await _seed_consent_rule_for_repo(pool, repo=repo)
 
         reg_resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -345,4 +405,5 @@ async def test_workflow_run_failure_event_accepted(
 
     finally:
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()

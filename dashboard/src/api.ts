@@ -1373,11 +1373,13 @@ export interface WebhookRegisterPayload {
   events?: string[]
 }
 
-export interface WebhookRegisterResult {
-  hook_id: number
-  status: string
-  ping_delivery_id?: string
-}
+// Two response shapes after T1-02:
+//  - Auto-approved (matching consent_rule exists) → 201 with hook fields
+//  - Pending consent → 202 with {status:"consent_pending", approval_id}
+// Callers must check `status` before reading hook_id.
+export type WebhookRegisterResult =
+  | { status: 'consent_pending'; approval_id: string }
+  | { status: string; hook_id: number; row_id?: string; ping_delivery_id?: string }
 
 export const registerGithubWebhook = (payload: WebhookRegisterPayload) =>
   apiFetch<WebhookRegisterResult>('/api/v1/webhooks/github/register', {

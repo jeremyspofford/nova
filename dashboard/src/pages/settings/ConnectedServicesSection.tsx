@@ -297,7 +297,11 @@ function RegisterWebhookModal({
   const stored = (typeof window !== 'undefined' && localStorage.getItem(PERSIST_KEY)) || ''
   const [targetBase, setTargetBase] = useState(stored)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<{ hook_id: number; status: string } | null>(null)
+  const [success, setSuccess] = useState<
+    | { kind: 'created'; hook_id: number; status: string }
+    | { kind: 'pending'; approval_id: string }
+    | null
+  >(null)
 
   const trimmed = targetBase.trim().replace(/\/$/, '')
   const fullUrl = trimmed ? `${trimmed}/api/v1/webhooks/github` : ''
@@ -332,7 +336,11 @@ function RegisterWebhookModal({
     }),
     onSuccess: (res) => {
       localStorage.setItem(PERSIST_KEY, trimmed)
-      setSuccess({ hook_id: res.hook_id, status: res.status })
+      if (res.status === 'consent_pending' && 'approval_id' in res) {
+        setSuccess({ kind: 'pending', approval_id: res.approval_id })
+      } else if ('hook_id' in res) {
+        setSuccess({ kind: 'created', hook_id: res.hook_id, status: res.status })
+      }
       setError(null)
     },
     onError: (e: Error) => setError(e.message),
@@ -366,18 +374,33 @@ function RegisterWebhookModal({
     >
       <div className="space-y-4">
         {success ? (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-success/10 text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-            <div>
-              <p className="text-compact font-medium">Webhook registered</p>
-              <p className="text-caption mt-1">
-                Hook #{success.hook_id} is <span className="font-mono">{success.status}</span> on
-                {' '}<span className="font-mono">{repo.repo}</span>. GitHub will start delivering
-                {' '}workflow_run events to your orchestrator. The next failed run will create
-                {' '}an approval card on the Approvals page.
-              </p>
+          success.kind === 'created' ? (
+            <div className="flex items-start gap-2 p-3 rounded-md bg-success/10 text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="text-compact font-medium">Webhook registered</p>
+                <p className="text-caption mt-1">
+                  Hook #{success.hook_id} is <span className="font-mono">{success.status}</span> on
+                  {' '}<span className="font-mono">{repo.repo}</span>. GitHub will start delivering
+                  {' '}workflow_run events to your orchestrator. The next failed run will create
+                  {' '}an approval card on the Approvals page.
+                </p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400">
+              <AlertCircle size={16} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="text-compact font-medium">Approval pending</p>
+                <p className="text-caption mt-1">
+                  Webhook creation for <span className="font-mono">{repo.repo}</span> is
+                  {' '}awaiting your approval. Visit{' '}
+                  <a href="/approvals" className="underline font-medium">Pending Approvals</a>
+                  {' '}to approve and (optionally) remember the choice for this repo.
+                </p>
+              </div>
+            </div>
+          )
         ) : (
           <>
             <p className="text-compact text-content-secondary">
@@ -413,9 +436,10 @@ function RegisterWebhookModal({
             <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <p className="text-caption">
-                In v1 this bypasses the consent gate (admin-direct). A future
-                {' '}revision will route through the executor so a pending approval
-                {' '}card appears for the MUTATE call.
+                Webhook creation routes through the consent gate (MUTATE). On
+                {' '}first registration for a repo without a saved rule, you'll
+                {' '}see a pending approval card — approve and "remember" to
+                {' '}skip the prompt for future re-registrations of this repo.
               </p>
             </div>
 

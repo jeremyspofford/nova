@@ -9,6 +9,7 @@ from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.auth import AdminDep
@@ -16,6 +17,10 @@ from app.db import get_pool
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
+
+# v1 single-tenant default; multi-tenant will derive from auth context (T2-01).
+_DEFAULT_TENANT = UUID("00000000-0000-0000-0000-000000000001")
+_DEFAULT_USER = UUID("00000000-0000-0000-0000-000000000001")
 
 
 # ── Admin management endpoints ────────────────────────────────────────────────
@@ -33,43 +38,88 @@ class WebhookUnregisterRequest(BaseModel):
     api_base: str | None = None  # admin-only test seam
 
 
-@router.post("/github/register", status_code=201)
+@router.post("/github/register")
 async def register_webhook(
     body: WebhookRegisterRequest,
     _admin: AdminDep,
 ):
-    """Create a webhook on GitHub and persist the row. Admin-only.
+    """Create a webhook on GitHub via the consent gate. Admin-only.
 
-    api_base override is for tests pointing at fake-github.
+    First-call flow (no matching consent_rule): returns 202 with
+    ``{"status":"consent_pending","approval_id":"<uuid>"}``. The caller
+    must approve via /api/v1/capabilities/approvals/<id>/decide; the
+    approval-worker then re-executes the tool and the webhook is created.
+
+    Auto-approved flow (matching consent_rule exists): the executor runs
+    the underlying tool synchronously and we return 201 with the existing
+    {"hook_id","row_id","status"} dict.
+
+    api_base override is admin-only and used by tests pointing at fake-github.
     Production callers should omit api_base.
     """
-    from app.capabilities import credentials as cred_db
+    from app.capabilities.executor import execute_tool as cap_execute_tool
     from app.config import settings
+    from app.tools.github_external_tools import _register_webhook
+    from nova_contracts import BlastRadius
 
     pool = get_pool()
-    secret = await cred_db.get_secret(
-        pool,
-        tenant_id=UUID("00000000-0000-0000-0000-000000000001"),
-        cred_id=body.credential_id,
-        actor="admin",
-    )
-    if not secret:
-        raise HTTPException(status_code=422, detail="credential not found or has no secret")
-
-    from app.tools.github_external_tools import _register_webhook
-
     api_base = body.api_base or settings.github_api_base_url
-    result = await _register_webhook(
-        {
-            "repo": body.repo,
-            "target_url": body.target_url,
-            "credential_id": str(body.credential_id),
-            "events": body.events,
-        },
-        secret=secret,
-        api_base=api_base,
-    )
-    return result
+
+    async def _underlying(args: dict, secret: str | None) -> dict:
+        # The executor has already passed the consent gate and resolved the
+        # secret from the vault. We just dispatch to the tool implementation.
+        if secret is None:
+            return {"status": "error", "message": "no credential resolved"}
+        return await _register_webhook(args, secret=secret, api_base=api_base)
+
+    args = {
+        "repo": body.repo,
+        "target_url": body.target_url,
+        "credential_id": str(body.credential_id),
+        "events": body.events,
+    }
+
+    try:
+        result = await cap_execute_tool(
+            pool,
+            tenant_id=_DEFAULT_TENANT,
+            user_id=_DEFAULT_USER,
+            task_id=None,
+            actor_kind="human",
+            actor_id="admin",
+            tool_name="register_webhook",
+            tool_kind="native",
+            blast_radius=BlastRadius.MUTATE,
+            reversible=True,
+            provider_kind="github",
+            target=body.repo,
+            credential_id=body.credential_id,
+            args=args,
+            underlying=_underlying,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a structured 422
+        logger.warning(
+            "register_webhook executor raised %s: %s", type(exc).__name__, exc,
+        )
+        raise HTTPException(status_code=422, detail=f"{type(exc).__name__}: {exc}")
+
+    if result.get("status") == "consent_pending":
+        return JSONResponse(
+            content={
+                "status": "consent_pending",
+                "approval_id": result["approval_id"],
+            },
+            status_code=202,
+        )
+    if result.get("status") == "user_rejected":
+        # Should not happen on first call (no rule yet), but a stale "deny"
+        # path may exist later. Surface as 403 with structured body.
+        return JSONResponse(content=result, status_code=403)
+    if isinstance(result, dict) and result.get("status") == "error":
+        # Underlying tool returned an error envelope (e.g., credential
+        # could not be resolved). Surface as 422.
+        return JSONResponse(content=result, status_code=422)
+    return JSONResponse(content=result, status_code=201)
 
 
 @router.delete("/github/{hook_id}", status_code=200)

@@ -104,6 +104,38 @@ async def _create_cred(orchestrator: httpx.AsyncClient, admin_headers: dict, suf
     return resp.json()["id"]
 
 
+_DEFAULT_TENANT_UUID = "00000000-0000-0000-0000-000000000001"
+
+
+async def _seed_register_webhook_rule(pool, *, repo: str) -> str:
+    """Pre-seed a consent_rule auto-approving register_webhook for `repo`.
+
+    Required because POST /api/v1/webhooks/github/register flows through the
+    consent gate (T1-02). target_glob equals the literal repo string because
+    consent._matches uses fnmatch against `target = args["repo"]`.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO consent_rules (
+              tenant_id, user_id, tool_name, provider_kind,
+              scope_match, source
+            ) VALUES ($1, $1, 'register_webhook', 'github', $2, 'user_remember')
+            RETURNING id
+            """,
+            _DEFAULT_TENANT_UUID,
+            {"target_glob": repo},
+        )
+    return str(row["id"])
+
+
+async def _delete_consent_rule(pool, rule_id: str | None) -> None:
+    if rule_id is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM consent_rules WHERE id=$1", rule_id)
+
+
 async def _cleanup(pool, orchestrator, admin_headers, hook_id=None, cred_id=None, repo=None, goal_ids=None):
     """Clean up test rows in correct FK order."""
     async with pool.acquire() as conn:
@@ -151,11 +183,13 @@ async def test_workflow_run_failure_pushes_cortex_stimulus(
     await fake.start()
     cred_id = None
     hook_id = None
+    rule_id = None
     # Use a unique run_id per invocation to distinguish our stimulus from others
     run_id = int(f"9999{uuid4().int % 10000:04d}")
     repo = _test_repo("stimulus")
     try:
         cred_id = await _create_cred(orchestrator, admin_headers, "stimulus")
+        rule_id = await _seed_register_webhook_rule(pool, repo=repo)
 
         reg_resp = await orchestrator.post(
             "/api/v1/webhooks/github/register",
@@ -213,6 +247,7 @@ async def test_workflow_run_failure_pushes_cortex_stimulus(
 
     finally:
         await _cleanup(pool, orchestrator, admin_headers, hook_id=hook_id, cred_id=cred_id, repo=repo)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -521,11 +556,13 @@ async def test_e2e_triage_bug_in_pr_dispatches_goal(
     repo = _test_repo("e2e")
     cred_id = None
     hook_id = None
+    rule_id = None
     goal_ids: list[str] = []
 
     try:
         # ── 1. Credential ─────────────────────────────────────────────────────
         cred_id = await _create_cred(orchestrator, admin_headers, "e2e")
+        rule_id = await _seed_register_webhook_rule(pool, repo=repo)
 
         # ── 2. Watched repo row (direct DB — dashboard would create this via UI) ─
         tenant_id = "00000000-0000-0000-0000-000000000001"
@@ -639,6 +676,7 @@ async def test_e2e_triage_bug_in_pr_dispatches_goal(
                        hook_id=hook_id, repo=repo,
                        goal_ids=goal_ids if goal_ids else None,
                        cred_id=cred_id)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -655,12 +693,14 @@ async def _setup_e2e_environment(
     repo: str,
     daily_budget: int = 20,
     tenant_id: str = "00000000-0000-0000-0000-000000000001",
-) -> tuple[str, int]:
-    """Create credential + watched_repo + webhook. Returns (cred_id, hook_id).
+) -> tuple[str, int, str]:
+    """Create credential + watched_repo + consent rule + webhook.
 
-    Caller is responsible for cleanup via _cleanup().
+    Returns (cred_id, hook_id, rule_id). Caller is responsible for cleanup
+    via _cleanup() + _delete_consent_rule().
     """
     cred_id = await _create_cred(orchestrator, admin_headers)
+    rule_id = await _seed_register_webhook_rule(pool, repo=repo)
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -687,7 +727,7 @@ async def _setup_e2e_environment(
     assert reg_resp.status_code == 201, f"Webhook registration failed: {reg_resp.text}"
     hook_id = reg_resp.json()["hook_id"]
 
-    return cred_id, hook_id
+    return cred_id, hook_id, rule_id
 
 
 async def _fire_workflow_run_failure(
@@ -775,10 +815,11 @@ async def test_stimulus_dedup_same_run_id_creates_one_goal(
     repo = _test_repo("dedup")
     cred_id = None
     hook_id = None
+    rule_id = None
     goal_ids: list[str] = []
 
     try:
-        cred_id, hook_id = await _setup_e2e_environment(
+        cred_id, hook_id, rule_id = await _setup_e2e_environment(
             orchestrator, admin_headers, pool, fake, repo=repo, daily_budget=20
         )
 
@@ -807,6 +848,7 @@ async def test_stimulus_dedup_same_run_id_creates_one_goal(
                        hook_id=hook_id, repo=repo,
                        goal_ids=goal_ids if goal_ids else None,
                        cred_id=cred_id)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
 
 
@@ -905,11 +947,12 @@ async def test_budget_cap_skips_after_limit(
     tenant_id = "00000000-0000-0000-0000-000000000001"
     cred_id = None
     hook_id = None
+    rule_id = None
     goal_ids: list[str] = []
 
     try:
         # Setup with daily_budget=1 so the 2nd stimulus hits the cap
-        cred_id, hook_id = await _setup_e2e_environment(
+        cred_id, hook_id, rule_id = await _setup_e2e_environment(
             orchestrator, admin_headers, pool, fake, repo=repo, daily_budget=1
         )
 
@@ -976,4 +1019,5 @@ async def test_budget_cap_skips_after_limit(
                        hook_id=hook_id, repo=repo,
                        goal_ids=goal_ids if goal_ids else None,
                        cred_id=cred_id)
+        await _delete_consent_rule(pool, rule_id)
         await fake.stop()
