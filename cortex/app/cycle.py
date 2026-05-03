@@ -668,16 +668,35 @@ async def _execute_serve(drive: DriveResult, plan: str, state: CycleState) -> st
     except Exception as e:
         log.debug("Approach dedup check failed: %s", e)
 
-    # Dispatch a pipeline task for this goal
+    # Dispatch a pipeline task for this goal.
+    # Honor pod hints set by upstream drives (e.g. ci_triage drive sets
+    # current_plan.pod = "ci_triage_agent" so its tasks reach the agent
+    # that actually has open_fix_pr / register_webhook in scope). When no
+    # hint is present we fall through to the orchestrator's default pod.
+    pod_hint: str | None = None
+    try:
+        cp = goal.get("current_plan")
+        if isinstance(cp, str):
+            cp = json.loads(cp)
+        if isinstance(cp, dict):
+            v = cp.get("pod")
+            if isinstance(v, str) and v.strip():
+                pod_hint = v.strip()
+    except Exception as e:
+        log.debug("Could not read pod hint from goal %s: %s", goal_id, e)
+
     try:
         orch = get_orchestrator()
+        body = {
+            "user_input": f"[Cortex goal work] Goal: {goal['title']}. Plan: {plan}",
+            "goal_id": goal_id,
+            "metadata": {"source": "cortex", "cycle": state.cycle_number, "drive": "serve"},
+        }
+        if pod_hint:
+            body["pod_name"] = pod_hint
         resp = await orch.post(
             "/api/v1/pipeline/tasks",
-            json={
-                "user_input": f"[Cortex goal work] Goal: {goal['title']}. Plan: {plan}",
-                "goal_id": goal_id,
-                "metadata": {"source": "cortex", "cycle": state.cycle_number, "drive": "serve"},
-            },
+            json=body,
             headers={"Authorization": f"Bearer {settings.cortex_api_key}"},
         )
         if resp.status_code in (200, 201, 202):
@@ -687,20 +706,23 @@ async def _execute_serve(drive: DriveResult, plan: str, state: CycleState) -> st
             # Register for background monitoring instead of blocking poll
             task_monitor.dispatch(task_id, goal_id, state.cycle_number, plan)
 
-            # Persist plan AFTER successful dispatch (iteration/progress updated after task completes)
+            # Persist plan AFTER successful dispatch. Merge into existing
+            # current_plan rather than replacing — replacement wipes pod hints
+            # and ci_* metadata that downstream drives + dedup logic rely on.
             pool = get_pool()
             async with pool.acquire() as conn:
                 await conn.execute(
                     """UPDATE goals
                        SET last_checked_at = NOW(),
-                           current_plan = $1::jsonb,
+                           current_plan = COALESCE(current_plan, '{}'::jsonb)
+                                          || $1::jsonb,
                            updated_at = NOW()
                        WHERE id = $2::uuid""",
                     json.dumps({"plan": plan, "cycle": state.cycle_number, "task_id": task_id, "consecutive_skips": 0}),
                     goal_id,
                 )
 
-            return f"Dispatched task {task_id} for goal '{goal['title']}'"
+            return f"Dispatched task {task_id} for goal '{goal['title']}' (pod={pod_hint or 'default'})"
         else:
             return f"Failed to dispatch task: HTTP {resp.status_code} — {resp.text[:200]}"
     except Exception as e:
