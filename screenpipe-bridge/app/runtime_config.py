@@ -1,6 +1,9 @@
 """Polls nova:config:* from Redis db1 every 30s and caches values in-process.
 
-Matches the cache pattern at orchestrator/app/auth.py:57-85.
+Active-poll variant of the runtime config pattern (compare orchestrator/app/auth.py
+which uses lazy-on-read with TTL): a background task refreshes every
+poll_interval_seconds so accessor reads are always cache hits — no inline Redis
+round-trip on the session-ingestion hot path.
 """
 
 import asyncio
@@ -60,7 +63,13 @@ class RuntimeConfig:
 
     async def get_int(self, key: str, default: int) -> int:
         raw = self._cache.get(key)
-        return int(raw) if raw is not None else default
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning("runtime_config: failed to parse int for %s=%r", key, raw)
+            return default
 
     async def get_bool(self, key: str, default: bool = False) -> bool:
         raw = self._cache.get(key)
