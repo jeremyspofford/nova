@@ -7,6 +7,7 @@ from uuid import UUID
 import asyncpg
 from datetime import datetime
 
+from app.capabilities import audit
 from app.capabilities import audit_query
 from app.capabilities import credentials as cred_db
 from app.capabilities import consent as consent_db
@@ -370,3 +371,44 @@ async def count_audit_endpoint(
         from_ts=from_ts, to_ts=to_ts,
     )
     return {"count": n}
+
+
+# ── Audit chain verification (T2-03) ────────────────────────────────────────
+# Admin-only. Walks each tenant's hash chain in `capability_audit` and reports
+# per-tenant validity. Used by cortex's maintain drive (HTTP, not direct
+# Python import) to surface tamper events as `security.audit_chain_broken`
+# stimuli. See docs/work/2026-05-03-v1/T2-03-verify-chain-in-maintain-drive.md.
+
+
+@router.post("/audit/verify-chain")
+async def verify_audit_chain_all_tenants(
+    ctx: CapabilityCtxDep,
+):
+    """Walk every tenant's audit chain and return per-tenant ChainResult.
+
+    Admin-only. Cortex's maintain drive calls this nightly (or on-demand via
+    a `security.verify_chain` stimulus) and emits a
+    `security.audit_chain_broken` stimulus for any tenant whose chain is
+    invalid.
+    """
+    if not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="admin required")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        tenant_rows = await conn.fetch(
+            "SELECT DISTINCT tenant_id FROM capability_audit ORDER BY tenant_id"
+        )
+
+    results: list[dict] = []
+    for tr in tenant_rows:
+        tenant_id = tr["tenant_id"]
+        chain = await audit.verify_chain(pool, tenant_id=tenant_id)
+        results.append({
+            "tenant_id": str(tenant_id),
+            "is_valid": chain.is_valid,
+            "row_count": chain.row_count,
+            "broken_at": str(chain.broken_at) if chain.broken_at else None,
+        })
+
+    return {"tenants": results}

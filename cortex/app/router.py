@@ -154,6 +154,25 @@ async def get_reflections(goal_id: UUID, limit: int = Query(default=20, le=100))
     return {"reflections": refs, "count": len(refs)}
 
 
+@cortex_router.post("/__test/run-verify-chain")
+async def run_verify_chain_for_test():
+    """Run the maintain drive's `_run_verify_chain` synchronously.
+
+    For integration tests only — requires CORTEX_TEST_MODE=true. This
+    bypasses the BRPOP loop's variable cadence so tests can deterministically
+    trigger the audit-chain sweep and assert against its output.
+
+    Returns the same dict that `_run_verify_chain` returns:
+      ``{"status": "ok"|"error", "checked": n, "broken": n, "broken_tenants": [...]}``.
+    """
+    import os
+    if os.getenv("CORTEX_TEST_MODE", "").lower() not in ("1", "true"):
+        raise HTTPException(status_code=403, detail="CORTEX_TEST_MODE is not enabled")
+
+    from .drives.maintain import _run_verify_chain
+    return await _run_verify_chain(None)
+
+
 @cortex_router.post("/__test/drain-stimuli")
 async def drain_stimuli_for_test(max_count: int = Query(default=10, le=50)):
     """Drain pending stimuli synchronously and process them via ci_triage.
