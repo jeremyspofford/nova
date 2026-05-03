@@ -124,6 +124,7 @@ async def lifespan(app: FastAPI):
         sync_llm_config_to_redis,
         sync_quality_config_to_redis,
         sync_retrieval_config_to_redis,
+        sync_screenpipe_config_to_redis,
         sync_voice_config_to_redis,
     )
     await sync_llm_config_to_redis()
@@ -133,6 +134,7 @@ async def lifespan(app: FastAPI):
     await sync_features_config_to_redis()
     await sync_retrieval_config_to_redis()
     await sync_quality_config_to_redis()
+    await sync_screenpipe_config_to_redis()
 
     # Guarantee one canonical Nova agent exists; prune any duplicates
     primary = await ensure_primary_agent()
