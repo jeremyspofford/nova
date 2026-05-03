@@ -78,15 +78,15 @@ async def gate(
             INSERT INTO approval_requests (
               id, tenant_id, task_id, requested_by,
               tool_name, tool_kind, blast_radius,
-              args_redacted, diff_preview, status,
+              args_redacted, diff_preview, provider_kind, status,
               created_at, expires_at
             ) VALUES (
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',now(),$10
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',now(),$11
             )
             """,
             approval_id, tenant_id, task_id, actor_id,
             tool_name, tool_kind, blast_radius.value,
-            args, diff_preview, expires_at,
+            args, diff_preview, provider_kind, expires_at,
         )
     return ConsentDecision(action="pending", approval_id=approval_id)
 
@@ -195,6 +195,10 @@ async def decide_approval(
                     raise ValueError("remember=True requires rule_scope")
                 # Get the user_id from… well, v1 single-tenant — derive from tenant
                 # For now, hardcoded to _DEFAULT_USER. Caller should pass user_id explicitly later.
+                # provider_kind comes from the approval row (set by gate()).
+                # Fallback to "github" handles legacy rows created before migration 079
+                # added the column — they have provider_kind=NULL.
+                rule_provider_kind = row["provider_kind"] or "github"
                 rule_row = await conn.fetchrow(
                     """
                     INSERT INTO consent_rules (
@@ -204,7 +208,7 @@ async def decide_approval(
                     RETURNING id
                     """,
                     tenant_id, _DEFAULT_USER, row["tool_name"],
-                    "github",  # FIXME: derive from approval row context
+                    rule_provider_kind,
                     decision.rule_scope,
                 )
                 rule_id = rule_row["id"]
