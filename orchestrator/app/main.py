@@ -205,6 +205,8 @@ async def lifespan(app: FastAPI):
     await close_stimulus_redis()
     from app.knowledge_router import close_engram_redis
     await close_engram_redis()
+    from app.capture_router import close_capture_redis
+    await close_capture_redis()
     # Close the admin-secret config Redis connection (lazy-opened in app.auth)
     from app import auth as _auth
     if _auth._config_redis is not None:
@@ -237,6 +239,7 @@ app.add_middleware(
     proxy_header=settings.trusted_proxy_header,
 )
 
+from app.capture_router import router as capture_router
 from app.engram_router import router as engram_router
 from app.linked_accounts_router import router as linked_accounts_router
 from app.quality_router import quality_router
@@ -256,4 +259,5 @@ app.include_router(engram_router)
 app.include_router(linked_accounts_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
+app.include_router(capture_router)
 app.include_router(webhooks_router)
