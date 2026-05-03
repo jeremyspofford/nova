@@ -13,6 +13,12 @@ log = logging.getLogger(__name__)
 def _user_dict(row) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
+    # Stringify UUID fields so callers (and JSON encoders) get strings.
+    # Historically only `id` came back stringified because `tenant_id`
+    # wasn't selected. T2-01 added it to the SELECT — keep the contract
+    # consistent so JWT encoding (json.dumps) doesn't choke on UUID.
+    if d.get("tenant_id") is not None and not isinstance(d["tenant_id"], str):
+        d["tenant_id"] = str(d["tenant_id"])
     return d
 
 
@@ -42,12 +48,21 @@ async def create_user(
     return _user_dict(row)
 
 
+# Columns returned by user lookups. Includes tenant_id, role, status, and
+# expires_at — these are needed by the auth flow to mint correctly-claimed
+# JWTs (T2-01). Do not narrow this without checking auth_router.create_access_token
+# and `AuthenticatedUser` field reads.
+_USER_COLS = (
+    "id, email, display_name, avatar_url, password_hash, provider, provider_id, "
+    "is_admin, role, tenant_id, status, expires_at, created_at, updated_at"
+)
+
+
 async def get_user_by_email(email: str) -> dict[str, Any] | None:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, display_name, avatar_url, password_hash, provider, provider_id, is_admin, created_at, updated_at "
-            "FROM users WHERE email = $1",
+            f"SELECT {_USER_COLS} FROM users WHERE email = $1",
             email,
         )
     return _user_dict(row) if row else None
@@ -57,8 +72,7 @@ async def get_user_by_provider(provider: str, provider_id: str) -> dict[str, Any
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, display_name, avatar_url, password_hash, provider, provider_id, is_admin, created_at, updated_at "
-            "FROM users WHERE provider = $1 AND provider_id = $2",
+            f"SELECT {_USER_COLS} FROM users WHERE provider = $1 AND provider_id = $2",
             provider, provider_id,
         )
     return _user_dict(row) if row else None
@@ -69,8 +83,7 @@ async def get_user_by_id(user_id: str | UUID) -> dict[str, Any] | None:
     uid = UUID(user_id) if isinstance(user_id, str) else user_id
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, display_name, avatar_url, password_hash, provider, provider_id, is_admin, created_at, updated_at "
-            "FROM users WHERE id = $1",
+            f"SELECT {_USER_COLS} FROM users WHERE id = $1",
             uid,
         )
     return _user_dict(row) if row else None

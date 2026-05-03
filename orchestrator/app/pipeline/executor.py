@@ -1262,9 +1262,14 @@ async def _load_pod_agents(pod_id: str) -> list[AgentRow]:
 async def _build_tool_context_for_task(task_id: str, agent_role: str) -> dict:
     """Build the tool_context dict passed to agents instantiated for this task.
 
-    Resolves credential_id by walking task → goal.current_plan.ci_watched_repo_id →
-    cortex_watched_repos.credential_id. Falls back gracefully (empty context)
-    when the chain doesn't apply — most tasks are not credential-driven.
+    Resolves:
+      * tenant_id + user_id by walking task.user_id → users.tenant_id. Falls
+        back to the seeded tenant/user when the task has no associated user
+        (legacy tasks pre-migration-081, or system-created tasks without an
+        owning human).
+      * credential_id by walking task → goal.current_plan.ci_watched_repo_id →
+        cortex_watched_repos.credential_id. Most tasks are not credential-driven,
+        so this falls back gracefully.
 
     The dispatch layer (app/tools/__init__.py) only USES tool_context for
     github_external tools; other tools ignore it. So a missing credential_id
@@ -1278,9 +1283,13 @@ async def _build_tool_context_for_task(task_id: str, agent_role: str) -> dict:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT t.id AS task_id, g.id AS goal_id, g.current_plan,
+                SELECT t.id AS task_id,
+                       t.user_id AS task_user_id,
+                       u.tenant_id AS user_tenant_id,
+                       g.id AS goal_id, g.current_plan,
                        wr.credential_id
                 FROM tasks t
+                LEFT JOIN users u ON u.id = t.user_id
                 LEFT JOIN goals g ON g.id = t.goal_id
                 LEFT JOIN cortex_watched_repos wr
                   ON wr.id = NULLIF(g.current_plan->>'ci_watched_repo_id','')::uuid
@@ -1288,9 +1297,20 @@ async def _build_tool_context_for_task(task_id: str, agent_role: str) -> dict:
                 """,
                 task_id,
             )
+        # Resolve owner: if the task has a user_id, use that user's tenant;
+        # otherwise fall back to the seeded tenant/user. The fallback path is
+        # taken by cortex- and intel-spawned tasks (no owning human) — those
+        # legitimately operate as the seeded tenant.
+        if row and row["task_user_id"]:
+            tenant_id = str(row["user_tenant_id"]) if row["user_tenant_id"] else DEFAULT_TENANT
+            user_id = str(row["task_user_id"])
+        else:
+            tenant_id = DEFAULT_TENANT
+            user_id = DEFAULT_USER
+
         ctx: dict = {
-            "tenant_id": DEFAULT_TENANT,
-            "user_id": DEFAULT_USER,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
             "task_id": str(task_id),
             "actor_kind": "agent",
             "actor_id": agent_role,

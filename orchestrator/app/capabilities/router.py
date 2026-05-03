@@ -5,7 +5,6 @@ from typing import Literal
 from uuid import UUID
 
 import asyncpg
-from app.auth import AdminDep
 from datetime import datetime
 
 from app.capabilities import audit_query
@@ -14,6 +13,7 @@ from app.capabilities import consent as consent_db
 from app.capabilities import consent_rules as cr_db
 from app.capabilities import watched_repos as wr_db
 from app.capabilities.consent import ApprovalDecision
+from app.capabilities.context import CapabilityCtxDep
 from app.capabilities.models import (
     ConsentRule,
     ConsentRuleCreate,
@@ -31,9 +31,10 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
 
-# v1 single-tenant: hardcoded; multi-tenant later derives from auth context
-DEFAULT_TENANT = UUID("00000000-0000-0000-0000-000000000001")
-DEFAULT_USER = UUID("00000000-0000-0000-0000-000000000001")
+
+def _actor_for(ctx) -> str:
+    """Audit actor string — admin for admin/trusted-network, user UUID for JWT."""
+    return "admin" if ctx.is_admin else str(ctx.user_id)
 
 
 class CredentialTestRequest(BaseModel):
@@ -47,37 +48,37 @@ class CredentialTestResult(BaseModel):
 @router.post("/credentials", response_model=Credential, status_code=status.HTTP_201_CREATED)
 async def create_credential(
     payload: CredentialCreate,
-    _admin: AdminDep,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     return await cred_db.create_credential(
         pool,
-        tenant_id=DEFAULT_TENANT,
-        user_id=DEFAULT_USER,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
         payload=payload,
-        actor="admin",
+        actor=_actor_for(ctx),
     )
 
 
 @router.get("/credentials", response_model=list[Credential])
 async def list_credentials(
+    ctx: CapabilityCtxDep,
     provider_kind: str | None = Query(None),
-    _admin: AdminDep = None,
 ):
     pool = get_pool()
     return await cred_db.list_credentials(
-        pool, tenant_id=DEFAULT_TENANT, provider_kind=provider_kind
+        pool, tenant_id=ctx.tenant_id, provider_kind=provider_kind
     )
 
 
 @router.get("/credentials/{cred_id}", response_model=Credential)
 async def get_credential(
     cred_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     cred = await cred_db.get_credential(
-        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin"
+        pool, tenant_id=ctx.tenant_id, cred_id=cred_id, actor=_actor_for(ctx)
     )
     if not cred:
         raise HTTPException(404, "credential not found")
@@ -87,11 +88,11 @@ async def get_credential(
 @router.delete("/credentials/{cred_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_credential(
     cred_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     deleted = await cred_db.delete_credential(
-        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin"
+        pool, tenant_id=ctx.tenant_id, cred_id=cred_id, actor=_actor_for(ctx)
     )
     if not deleted:
         raise HTTPException(404, "credential not found")
@@ -99,20 +100,20 @@ async def delete_credential(
 
 @router.get("/approvals", response_model=list[dict])
 async def list_pending_approvals(
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
-    rows = await consent_db.list_pending(pool, tenant_id=DEFAULT_TENANT)
+    rows = await consent_db.list_pending(pool, tenant_id=ctx.tenant_id)
     return [dict(r) for r in rows]  # asyncpg Record → dict
 
 
 @router.get("/approvals/{approval_id}", response_model=dict)
 async def get_approval(
     approval_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
-    row = await consent_db.get_approval(pool, tenant_id=DEFAULT_TENANT, approval_id=approval_id)
+    row = await consent_db.get_approval(pool, tenant_id=ctx.tenant_id, approval_id=approval_id)
     if not row:
         raise HTTPException(404, "approval not found")
     return dict(row)
@@ -128,18 +129,18 @@ class ApprovalDecisionRequest(BaseModel):
 async def decide_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     decision = ApprovalDecision(
         decision=payload.decision,
-        decided_by="admin",
+        decided_by=_actor_for(ctx),
         decided_via="dashboard",
         remember=payload.remember,
         rule_scope=payload.rule_scope,
     )
     ok = await consent_db.decide_approval(
-        pool, tenant_id=DEFAULT_TENANT,
+        pool, tenant_id=ctx.tenant_id,
         approval_id=approval_id, decision=decision,
     )
     if not ok:
@@ -150,8 +151,8 @@ async def decide_approval(
 @router.post("/credentials/{cred_id}/test", response_model=CredentialTestResult)
 async def test_credential(
     cred_id: UUID,
+    ctx: CapabilityCtxDep,
     payload: CredentialTestRequest | None = None,
-    _admin: AdminDep = None,
 ):
     """Validate a credential against its provider identity endpoint.
 
@@ -162,9 +163,9 @@ async def test_credential(
     api_base = payload.api_base if payload else None
     health = await cred_db.validate_credential(
         pool,
-        tenant_id=DEFAULT_TENANT,
+        tenant_id=ctx.tenant_id,
         cred_id=cred_id,
-        actor="admin",
+        actor=_actor_for(ctx),
         api_base=api_base,
     )
     return CredentialTestResult(health=health)
@@ -182,11 +183,11 @@ async def test_credential(
 )
 async def list_credential_watched_repos(
     cred_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     return await wr_db.list_watched_repos(
-        pool, tenant_id=DEFAULT_TENANT, credential_id=cred_id,
+        pool, tenant_id=ctx.tenant_id, credential_id=cred_id,
     )
 
 
@@ -198,19 +199,19 @@ async def list_credential_watched_repos(
 async def create_credential_watched_repo(
     cred_id: UUID,
     payload: WatchedRepoCreate,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     cred = await cred_db.get_credential(
-        pool, tenant_id=DEFAULT_TENANT, cred_id=cred_id, actor="admin",
+        pool, tenant_id=ctx.tenant_id, cred_id=cred_id, actor=_actor_for(ctx),
     )
     if not cred:
         raise HTTPException(404, "credential not found")
     try:
         return await wr_db.create_watched_repo(
             pool,
-            tenant_id=DEFAULT_TENANT,
-            user_id=DEFAULT_USER,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
             credential_id=cred_id,
             payload=payload,
         )
@@ -222,11 +223,11 @@ async def create_credential_watched_repo(
 async def update_watched_repo_endpoint(
     repo_id: UUID,
     payload: WatchedRepoUpdate,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     updated = await wr_db.update_watched_repo(
-        pool, tenant_id=DEFAULT_TENANT, repo_id=repo_id, payload=payload,
+        pool, tenant_id=ctx.tenant_id, repo_id=repo_id, payload=payload,
     )
     if not updated:
         raise HTTPException(404, "watched repo not found")
@@ -239,11 +240,11 @@ async def update_watched_repo_endpoint(
 )
 async def delete_watched_repo_endpoint(
     repo_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     deleted = await wr_db.delete_watched_repo(
-        pool, tenant_id=DEFAULT_TENANT, repo_id=repo_id,
+        pool, tenant_id=ctx.tenant_id, repo_id=repo_id,
     )
     if not deleted:
         raise HTTPException(404, "watched repo not found")
@@ -258,13 +259,13 @@ async def delete_watched_repo_endpoint(
 
 @router.get("/consent-rules", response_model=list[ConsentRule])
 async def list_consent_rules_endpoint(
+    ctx: CapabilityCtxDep,
     tool_name: str | None = Query(None),
     provider_kind: str | None = Query(None),
-    _admin: AdminDep = None,
 ):
     pool = get_pool()
     return await cr_db.list_consent_rules(
-        pool, tenant_id=DEFAULT_TENANT,
+        pool, tenant_id=ctx.tenant_id,
         tool_name=tool_name, provider_kind=provider_kind,
     )
 
@@ -276,11 +277,11 @@ async def list_consent_rules_endpoint(
 )
 async def create_consent_rule_endpoint(
     payload: ConsentRuleCreate,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     return await cr_db.create_consent_rule(
-        pool, tenant_id=DEFAULT_TENANT, user_id=DEFAULT_USER, payload=payload,
+        pool, tenant_id=ctx.tenant_id, user_id=ctx.user_id, payload=payload,
     )
 
 
@@ -288,11 +289,11 @@ async def create_consent_rule_endpoint(
 async def update_consent_rule_endpoint(
     rule_id: UUID,
     payload: ConsentRuleUpdate,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     updated = await cr_db.update_consent_rule(
-        pool, tenant_id=DEFAULT_TENANT, rule_id=rule_id, payload=payload,
+        pool, tenant_id=ctx.tenant_id, rule_id=rule_id, payload=payload,
     )
     if not updated:
         raise HTTPException(404, "consent rule not found")
@@ -305,11 +306,11 @@ async def update_consent_rule_endpoint(
 )
 async def delete_consent_rule_endpoint(
     rule_id: UUID,
-    _admin: AdminDep = None,
+    ctx: CapabilityCtxDep,
 ):
     pool = get_pool()
     deleted = await cr_db.delete_consent_rule(
-        pool, tenant_id=DEFAULT_TENANT, rule_id=rule_id,
+        pool, tenant_id=ctx.tenant_id, rule_id=rule_id,
     )
     if not deleted:
         raise HTTPException(404, "consent rule not found")
@@ -323,6 +324,7 @@ async def delete_consent_rule_endpoint(
 
 @router.get("/audit", response_model=list[dict])
 async def query_audit_endpoint(
+    ctx: CapabilityCtxDep,
     from_ts: datetime | None = Query(None),
     to_ts: datetime | None = Query(None),
     actor_id: str | None = Query(None),
@@ -338,12 +340,11 @@ async def query_audit_endpoint(
     response_status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=audit_query.MAX_LIMIT),
     offset: int = Query(0, ge=0),
-    _admin: AdminDep = None,
 ):
     pool = get_pool()
     return await audit_query.query_audit(
         pool,
-        tenant_id=DEFAULT_TENANT,
+        tenant_id=ctx.tenant_id,
         from_ts=from_ts, to_ts=to_ts,
         actor_id=actor_id, actor_kind=actor_kind,
         event_type=event_type,
@@ -359,13 +360,13 @@ async def query_audit_endpoint(
 
 @router.get("/audit/count")
 async def count_audit_endpoint(
+    ctx: CapabilityCtxDep,
     from_ts: datetime | None = Query(None),
     to_ts: datetime | None = Query(None),
-    _admin: AdminDep = None,
 ):
     pool = get_pool()
     n = await audit_query.count_audit(
-        pool, tenant_id=DEFAULT_TENANT,
+        pool, tenant_id=ctx.tenant_id,
         from_ts=from_ts, to_ts=to_ts,
     )
     return {"count": n}
