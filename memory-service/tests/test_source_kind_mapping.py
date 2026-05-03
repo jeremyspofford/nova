@@ -41,6 +41,7 @@ def _load_ingestion_module():
             link_engrams=MagicMock(),
             get_or_create_source=MagicMock(),
         ),
+        "sqlalchemy": MagicMock(text=MagicMock()),
     }
 
     # Mark package stubs so submodule lookups work
