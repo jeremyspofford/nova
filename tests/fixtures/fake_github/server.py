@@ -140,9 +140,43 @@ def _build_app(scenarios: dict | None = None) -> FastAPI:
         state.setdefault("hooks", {}).pop(hook_id, None)
         return {}
 
+    @app.post("/_test/ping_responses")
+    async def set_ping_response(body: dict):
+        """Pin the ``/repos/.../hooks/{hook_id}/pings`` response status for a
+        hook_id (T2-04 health-ping seam test override).
+
+        With this override set, the ping route returns the configured status
+        with an empty body — no signed delivery is performed. Without it, the
+        route falls back to the legacy 200 + ``{ok, delivered_status}`` shape
+        used by ``test_capability_webhooks.py`` (which fires real HMAC
+        roundtrips through the receiver).
+        """
+        hook_id = int(body["hook_id"])
+        status_code = int(body["status_code"])
+        overrides = state.setdefault("ping_responses", {})
+        overrides[hook_id] = status_code
+        return {"hook_id": hook_id, "status_code": status_code}
+
     @app.post("/repos/{owner}/{repo}/hooks/{hook_id}/pings")
     async def ping_hook(owner: str, repo: str, hook_id: int):
-        """Fire a ping at the hook's configured URL with an HMAC-signed body."""
+        """Ping a hook on GitHub.
+
+        Two modes:
+          * Override mode (T2-04 health check): if ``state["ping_responses"]``
+            has an entry for this ``hook_id``, return that status code with an
+            empty body. Real GitHub returns 204 for a healthy ping.
+          * Legacy mode (older webhook tests): fire an HMAC-signed delivery at
+            the hook's configured URL and return ``{ok, delivered_status}``.
+        """
+        # T2-04 override: skip the delivery and return the canned status.
+        overrides = state.get("ping_responses") or {}
+        if hook_id in overrides:
+            status_code = overrides[hook_id]
+            # 204 is real GitHub's healthy response. Don't return a body.
+            if status_code == 204:
+                return JSONResponse(content=None, status_code=204)
+            raise HTTPException(status_code=status_code, detail="ping override")
+
         hook = state.get("hooks", {}).get(hook_id)
         if not hook:
             raise HTTPException(status_code=404, detail="hook not found")

@@ -173,6 +173,31 @@ async def run_verify_chain_for_test():
     return await _run_verify_chain(None)
 
 
+@cortex_router.post("/__test/ping-webhooks")
+async def ping_webhooks_for_test(body: dict | None = None):
+    """Run the maintain drive's `_ping_webhooks` synchronously.
+
+    For integration tests only — requires CORTEX_TEST_MODE=true. Mirrors the
+    T2-03 ``__test/run-verify-chain`` pattern: bypasses the BRPOP cadence so
+    seam tests can deterministically trigger the webhook-health sweep and
+    assert against its result.
+
+    Optional body: ``{"api_base": "<override>"}`` — admin-only seam that
+    points the orchestrator's ping-all call at fake-github
+    (host.docker.internal:{port}) instead of the real GitHub API.
+
+    Returns the same dict that `_ping_webhooks` returns:
+      ``{"status": "ok"|"error", "pinged": n, "failed": [...]}``.
+    """
+    import os
+    if os.getenv("CORTEX_TEST_MODE", "").lower() not in ("1", "true"):
+        raise HTTPException(status_code=403, detail="CORTEX_TEST_MODE is not enabled")
+
+    from .drives.maintain import _ping_webhooks
+    api_base = (body or {}).get("api_base")
+    return await _ping_webhooks(None, api_base=api_base)
+
+
 @cortex_router.post("/__test/drain-stimuli")
 async def drain_stimuli_for_test(max_count: int = Query(default=10, le=50)):
     """Drain pending stimuli synchronously and process them via ci_triage.

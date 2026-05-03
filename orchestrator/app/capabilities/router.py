@@ -1,10 +1,12 @@
 """Capability credentials CRUD endpoints."""
 from __future__ import annotations
 
+import logging
 from typing import Literal
 from uuid import UUID
 
 import asyncpg
+import httpx
 from datetime import datetime
 
 from app.capabilities import audit
@@ -29,6 +31,8 @@ from app.capabilities.models import (
 from app.db import get_pool
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
 
@@ -412,3 +416,145 @@ async def verify_audit_chain_all_tenants(
         })
 
     return {"tenants": results}
+
+
+# ── Webhook health ping (T2-04) ─────────────────────────────────────────────
+# Admin-only. Pings every active/verified github_webhooks row at GitHub's
+# `POST /repos/{owner}/{repo}/hooks/{hook_id}/pings`. Real GitHub returns 204
+# on success. Anything else (404 hook deleted, 401/403 token revoked or
+# missing admin:repo_hook scope) flips the row to status='failed' and
+# surfaces in the response so cortex can emit a `github.webhook_failed`
+# stimulus per failed hook. State machine is one-way: failed→verified is
+# NOT allowed via ping (re-verification goes through the consent gate per
+# T1-02).
+
+
+@router.post("/webhooks/ping-all")
+async def ping_all_webhooks(
+    ctx: CapabilityCtxDep,
+    api_base: str | None = Query(
+        None,
+        description="Admin-only override for tests pointing at fake-github. "
+                    "Production callers must omit; uses settings.github_api_base_url.",
+    ),
+):
+    """Ping every active/verified webhook to detect silent failures.
+
+    Iterates ``github_webhooks`` rows with status IN ('active','verified'),
+    decrypts each credential, and POSTs to the GitHub pings endpoint.
+
+    * 204 → mark ``last_pinged_at = now()``, status unchanged.
+    * 404 (hook not found / deleted) → status='failed'.
+    * 401 / 403 (token revoked or missing ``admin:repo_hook`` scope) →
+      status='failed'. The 403 case is surfaced as ``message='scope_missing'``
+      so the user knows to fix the PAT scope.
+    * Any other non-204 → status='failed'.
+
+    Returns ``{"pinged": n_attempted, "failed": [{hook_id, repo, status_code, message?}, …]}``.
+    """
+    if not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="admin required")
+
+    from app.config import settings as _settings
+    base = (api_base or _settings.github_api_base_url).rstrip("/")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, tenant_id, credential_id, repo, hook_id, status "
+            "FROM github_webhooks "
+            "WHERE status IN ('active','verified')"
+        )
+
+    failed: list[dict] = []
+    pinged = 0
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for row in rows:
+            pinged += 1
+            row_id = row["id"]
+            tenant_id = row["tenant_id"]
+            credential_id = row["credential_id"]
+            repo = row["repo"]
+            hook_id = row["hook_id"]
+
+            secret = await cred_db.get_secret(
+                pool, tenant_id=tenant_id, cred_id=credential_id, actor="cortex.maintain",
+            )
+            if not secret:
+                # Credential disappeared — flip to failed. We can't ping
+                # without a token; the hook is effectively orphaned.
+                await _mark_webhook_failed(pool, row_id)
+                failed.append({
+                    "hook_id": hook_id,
+                    "repo": repo,
+                    "status_code": 0,
+                    "message": "credential_missing",
+                })
+                continue
+
+            try:
+                resp = await client.post(
+                    f"{base}/repos/{repo}/hooks/{hook_id}/pings",
+                    headers={
+                        "Authorization": f"token {secret}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "ping for hook_id=%s repo=%s raised %s; marking failed",
+                    hook_id, repo, type(exc).__name__,
+                )
+                await _mark_webhook_failed(pool, row_id)
+                failed.append({
+                    "hook_id": hook_id,
+                    "repo": repo,
+                    "status_code": 0,
+                    "message": f"http_error:{type(exc).__name__}",
+                })
+                continue
+
+            if resp.status_code == 204:
+                # Healthy. Bump last_pinged_at; do NOT touch status (one-way
+                # state machine: ping cannot promote failed→verified).
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE github_webhooks SET last_pinged_at=now() WHERE id=$1",
+                        row_id,
+                    )
+                continue
+
+            # Non-204: mark failed. Surface 403 with message='scope_missing'
+            # so the user can fix their PAT (real GitHub requires
+            # admin:repo_hook scope to ping).
+            entry: dict = {
+                "hook_id": hook_id,
+                "repo": repo,
+                "status_code": resp.status_code,
+            }
+            if resp.status_code == 403:
+                entry["message"] = "scope_missing"
+            elif resp.status_code == 401:
+                entry["message"] = "auth_failure"
+            elif resp.status_code == 404:
+                entry["message"] = "hook_not_found"
+            await _mark_webhook_failed(pool, row_id)
+            failed.append(entry)
+
+    return {"pinged": pinged, "failed": failed}
+
+
+async def _mark_webhook_failed(pool: asyncpg.Pool, row_id) -> None:
+    """Helper: flip status='failed' and set last_pinged_at=now() on a webhook
+    row. Always-allowed transition (verified→failed, active→failed). The
+    inverse failed→verified is intentionally NOT performed by this code path
+    — re-verification requires re-registration through the consent gate.
+    """
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE github_webhooks SET status='failed', last_pinged_at=now() "
+            "WHERE id=$1",
+            row_id,
+        )

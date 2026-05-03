@@ -15,6 +15,12 @@ Side-effects:
     * on-demand when a `security.verify_chain` stimulus is observed.
   Any broken chain is logged at ERROR and re-emitted as a
   `security.audit_chain_broken` stimulus (see T2-03).
+- Pings every active/verified GitHub webhook via
+  POST /api/v1/capabilities/webhooks/ping-all on the orchestrator. Runs on
+  the same schedule as the chain check (nightly 02:00–04:59 UTC OR on a
+  `security.verify_chain` stimulus). Each failed ping is re-emitted as a
+  `github.webhook_failed` stimulus carrying {hook_id, repo, status_code}
+  (see T2-04).
 """
 from __future__ import annotations
 
@@ -39,14 +45,19 @@ SERVICES = [
 
 # Stimulus types this drive listens for and emits. Defined here (not in
 # stimulus.py) because they're scoped to the maintain drive's nightly
-# audit-chain check.
+# audit-chain check + webhook health sweep.
 SECURITY_VERIFY_CHAIN = "security.verify_chain"
 SECURITY_AUDIT_CHAIN_BROKEN = "security.audit_chain_broken"
+GITHUB_WEBHOOK_FAILED = "github.webhook_failed"
 
 # Module-level latch so we run the nightly chain check at most once per
 # UTC date during the 02:00–04:59 window. Stimulus-triggered runs bypass
 # this latch.
 _last_chain_check_date: str | None = None
+
+# Same latch concept for the webhook health sweep. Separate so the two
+# nightly jobs don't clobber each other if one runs before the other.
+_last_webhook_ping_date: str | None = None
 
 
 # Module-level dedupe — prevents duplicate in-flight triages when the same
@@ -215,6 +226,111 @@ def _should_run_chain_check(ctx: DriveContext | None) -> bool:
     return False
 
 
+async def _ping_webhooks(
+    ctx: DriveContext | None = None,
+    *,
+    api_base: str | None = None,
+) -> dict:
+    """Sweep every active/verified github_webhooks row via the orchestrator
+    and emit a ``github.webhook_failed`` stimulus for each failed entry.
+
+    Returns the orchestrator response augmented with ``status``:
+      ``{"status": "ok"|"error", "pinged": n, "failed": [...]}``.
+
+    ``api_base`` is an admin-only test seam — production callers omit it and
+    let the orchestrator default to ``settings.github_api_base_url``. Tests
+    point it at fake-github (host.docker.internal:{port}).
+
+    Mirrors ``_run_verify_chain`` style: errors during the HTTP call itself
+    are logged WARNING and surfaced as ``status="error"`` — they never raise
+    so the drive cycle keeps going.
+    """
+    orch = get_orchestrator()
+    try:
+        resp = await orch.post(
+            "/api/v1/capabilities/webhooks/ping-all",
+            headers={"X-Admin-Secret": settings.admin_secret},
+            params={"api_base": api_base} if api_base else None,
+            timeout=60.0,
+        )
+    except Exception as e:
+        log.warning("ping_webhooks HTTP call failed: %s", e)
+        return {"status": "error", "error": str(e), "pinged": 0, "failed": []}
+
+    if resp.status_code != 200:
+        log.warning(
+            "ping_webhooks endpoint returned %d: %s",
+            resp.status_code, resp.text[:200],
+        )
+        return {
+            "status": "error",
+            "http_status": resp.status_code,
+            "pinged": 0,
+            "failed": [],
+        }
+
+    body = resp.json()
+    failed = body.get("failed") or []
+    pinged = int(body.get("pinged") or 0)
+
+    for entry in failed:
+        hook_id = entry.get("hook_id")
+        repo = entry.get("repo")
+        status_code = entry.get("status_code")
+        message = entry.get("message")
+        log.error(
+            "webhook_failed: hook_id=%s repo=%s status_code=%s message=%s",
+            hook_id, repo, status_code, message,
+        )
+        # Fire-and-forget stimulus so any subscriber (dashboard banner,
+        # downstream re-bootstrap drive) can react. emit() swallows Redis
+        # failures so a broken queue can't mask the ERROR log above.
+        await emit(
+            GITHUB_WEBHOOK_FAILED,
+            source="cortex.maintain",
+            payload={
+                "hook_id": hook_id,
+                "repo": repo,
+                "status_code": status_code,
+                "message": message,
+            },
+            priority=2,
+        )
+
+    log.info(
+        "ping_webhooks swept %d webhooks; %d failed", pinged, len(failed)
+    )
+    return {
+        "status": "ok",
+        "pinged": pinged,
+        "failed": failed,
+    }
+
+
+def _should_run_webhook_ping(ctx: DriveContext | None) -> bool:
+    """Decide whether ``_ping_webhooks`` should fire this cycle.
+
+    Same trigger semantics as ``_should_run_chain_check`` (nightly 02–04 UTC
+    window OR on-demand via ``security.verify_chain`` stimulus). The two
+    drives intentionally share a stimulus type because both are "audit your
+    capability surface tonight" jobs and there's no reason to cycle them
+    independently. They use separate latches so a failure in one doesn't
+    skip the other.
+    """
+    global _last_webhook_ping_date
+    if ctx and ctx.stimuli_of_type(SECURITY_VERIFY_CHAIN):
+        return True
+
+    now = datetime.now(timezone.utc)
+    if 2 <= now.hour <= 4:
+        today = now.date().isoformat()
+        if _last_webhook_ping_date != today:
+            _last_webhook_ping_date = today
+            return True
+
+    return False
+
+
 async def assess(ctx: DriveContext | None = None) -> DriveResult:
     """Assess maintain drive urgency based on service health and stimuli."""
     # Side-effect: dispatch background triage for newly-created goals.
@@ -228,6 +344,13 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
     if _should_run_chain_check(ctx):
         log.info("Triggering verify_chain (stimulus or nightly window)")
         asyncio.create_task(_run_verify_chain(ctx))
+
+    # Side-effect: nightly (or stimulus-driven) webhook health sweep.
+    # Same detach-and-fire pattern; production callers don't pass api_base
+    # so the orchestrator uses its configured GitHub base URL.
+    if _should_run_webhook_ping(ctx):
+        log.info("Triggering ping_webhooks (stimulus or nightly window)")
+        asyncio.create_task(_ping_webhooks(ctx))
 
     checks: dict[str, str] = {}
 
