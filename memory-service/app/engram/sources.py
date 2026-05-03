@@ -31,6 +31,7 @@ DEFAULT_TRUST: dict[str, float] = {
     "pipeline_extraction": 0.80,
     "consolidation": 0.85,
     "api_response": 0.50,
+    "screenpipe": 0.80,
 }
 
 # Sources larger than this threshold are stored on filesystem
