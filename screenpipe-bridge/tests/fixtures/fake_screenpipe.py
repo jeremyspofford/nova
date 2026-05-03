@@ -40,7 +40,7 @@ class FakeScreenpipe:
         self._task: asyncio.Task | None = None
         self._app = Starlette(
             routes=[
-                WebSocketRoute("/ws/events", self._ws_handler),
+                WebSocketRoute("/ws/events", self._dispatch_ws),
                 Route("/search", self._search_handler, methods=["GET"]),
             ]
         )
@@ -109,6 +109,10 @@ class FakeScreenpipe:
         }
         self._events.append(event)
         await self._broadcast(event)
+
+    async def _dispatch_ws(self, websocket: WebSocket) -> None:
+        """Indirection so tests can monkey-patch self._ws_handler at runtime."""
+        await self._ws_handler(websocket)
 
     async def disconnect_all(self) -> None:
         """Force-close all active WebSocket connections."""
