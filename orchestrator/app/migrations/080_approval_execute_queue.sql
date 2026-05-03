@@ -1,0 +1,22 @@
+-- T1-01: Approve→Execute Worker — closes the loop from approve to PR.
+-- Closes G1 from docs/audits/2026-05-03-readiness-assessment.md.
+--
+-- Today, decide_approval() flips status to 'approved' and returns. Nothing
+-- re-executes the originally-pended tool call. The approval-worker (running
+-- as an asyncio task in the orchestrator lifespan) BRPOPs from
+-- nova:queue:approved_executions and dispatches the underlying tool — but it
+-- needs a re-hydration envelope on the approval row to do so without a
+-- cross-table join chain.
+--
+-- This migration adds tool_context JSONB. It carries the routing envelope
+-- that the worker uses to call the underlying tool: tenant_id, user_id,
+-- task_id, credential_id, actor_kind, actor_id, provider_kind, target.
+-- Tool-specific arguments still live in args_redacted (raw — consent.gate()
+-- stores args without redaction; only audit.write_audit_event redacts).
+-- Distinct from provider_kind (its own column added in 079) which is
+-- a stable scalar used by consent_rules; tool_context is the wider routing
+-- payload that's only needed by the worker.
+--
+-- Idempotent — ADD COLUMN IF NOT EXISTS so re-runs are no-ops.
+
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS tool_context JSONB;

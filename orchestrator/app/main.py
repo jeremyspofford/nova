@@ -175,7 +175,15 @@ async def lifespan(app: FastAPI):
     from app.polling_worker import GitHubPoller
     _poller = GitHubPoller()
     _poll_task = asyncio.create_task(_poller.start(), name="github-poller")
-    log.info("Queue worker, reaper, effectiveness loop, chat scorer, auto-friction subscriber, and GitHub poller started")
+
+    from app.capabilities.approval_worker import approval_worker_loop
+    _approval_worker_task = asyncio.create_task(
+        approval_worker_loop(), name="approval-worker",
+    )
+    log.info(
+        "Queue worker, reaper, effectiveness loop, chat scorer, auto-friction "
+        "subscriber, GitHub poller, and approval-worker started"
+    )
 
     # Register quality loops + apply DB-stored agency
     from app.quality_loop.registry import get_registry, load_agency_from_config
@@ -194,14 +202,21 @@ async def lifespan(app: FastAPI):
     _effectiveness_task.cancel()
     _chat_scorer_task.cancel()
     _auto_friction_task.cancel()
+    _approval_worker_task.cancel()
     await _poller.stop()
     _poll_task.cancel()
     # Wait briefly for graceful shutdown
     await asyncio.gather(
         _queue_task, _reaper_task, _effectiveness_task, _chat_scorer_task,
-        _auto_friction_task, _poll_task,
+        _auto_friction_task, _poll_task, _approval_worker_task,
         return_exceptions=True,
     )
+
+    # Close approval-worker's Redis connections (producer + consumer sides)
+    from app.capabilities.approval_worker import close_approval_worker_redis
+    from app.capabilities.consent import close_consent_redis
+    await close_approval_worker_redis()
+    await close_consent_redis()
 
     # Gracefully stop MCP server subprocesses
     from app.pipeline.tools import stop_all_servers

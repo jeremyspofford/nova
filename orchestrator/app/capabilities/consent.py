@@ -11,13 +11,44 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import asyncpg
+import redis.asyncio as aioredis
 
+from app.config import settings
 from nova_contracts import BlastRadius
 
 # v1 single-tenant default; multi-tenant will derive from auth context
 _DEFAULT_USER = UUID("00000000-0000-0000-0000-000000000001")
 
+# Redis key for approved-execution queue. Worker BRPOPs from here (db2 — same
+# database as the orchestrator's main task queue). LPUSH from decide_approval.
+APPROVED_EXEC_QUEUE = "nova:queue:approved_executions"
+APPROVED_EXEC_DEAD_QUEUE = "nova:queue:approved_executions:dead"
+
 logger = logging.getLogger(__name__)
+
+# Lazily-initialized aioredis client used by decide_approval to enqueue.
+# Closed via close_consent_redis() during orchestrator lifespan shutdown.
+_consent_redis: aioredis.Redis | None = None
+
+
+def _get_consent_redis() -> aioredis.Redis:
+    """Lazy aioredis singleton scoped to db2 (orchestrator's db)."""
+    global _consent_redis
+    if _consent_redis is None:
+        _consent_redis = aioredis.from_url(
+            settings.redis_url, decode_responses=True,
+        )
+    return _consent_redis
+
+
+async def close_consent_redis() -> None:
+    """Close the lazy consent-side Redis connection. Call at lifespan shutdown."""
+    global _consent_redis
+    if _consent_redis is not None:
+        try:
+            await _consent_redis.aclose()
+        finally:
+            _consent_redis = None
 
 
 @dataclass
@@ -44,6 +75,7 @@ async def gate(
     actor_kind: str,
     actor_id: str,
     diff_preview: str | None = None,
+    tool_context: dict | None = None,
 ) -> ConsentDecision:
     """Decide whether a tool call may proceed.
 
@@ -72,6 +104,10 @@ async def gate(
     # No matching rule → create pending approval row
     approval_id = uuid4()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    # tool_context is the routing envelope the worker needs to re-hydrate the
+    # call after approval. {} stays an empty object — never NULL — so the
+    # worker can safely .get() without a null-guard.
+    ctx = tool_context if tool_context is not None else {}
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -79,14 +115,14 @@ async def gate(
               id, tenant_id, task_id, requested_by,
               tool_name, tool_kind, blast_radius,
               args_redacted, diff_preview, provider_kind, status,
-              created_at, expires_at
+              created_at, expires_at, tool_context
             ) VALUES (
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',now(),$11
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',now(),$11,$12
             )
             """,
             approval_id, tenant_id, task_id, actor_id,
             tool_name, tool_kind, blast_radius.value,
-            args, diff_preview, provider_kind, expires_at,
+            args, diff_preview, provider_kind, expires_at, ctx,
         )
     return ConsentDecision(action="pending", approval_id=approval_id)
 
@@ -178,8 +214,12 @@ async def decide_approval(
     decision: ApprovalDecision,
 ) -> bool:
     """Record approve/reject. If remember=True, insert a consent_rule.
+    On approve, push approval_id onto the approved-execution queue so the
+    approval-worker (running in the orchestrator lifespan) can pick it up
+    and re-execute the originally-pended tool call.
     Returns True if the row was decided; False if not found / already decided.
     """
+    decided = False
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
@@ -222,4 +262,23 @@ async def decide_approval(
                 new_status, decision.decided_by, decision.decided_via,
                 rule_id, approval_id,
             )
-    return True
+            decided = True
+
+    # After commit, enqueue for the approval-worker (only on approve).
+    # Best-effort: a Redis hiccup must not roll back the DB decision.
+    if decided and decision.decision == "approve":
+        try:
+            redis = _get_consent_redis()
+            await redis.lpush(APPROVED_EXEC_QUEUE, str(approval_id))
+            logger.info("Enqueued approved approval %s for execution", approval_id)
+        except Exception as exc:
+            # Worker has a separate sweeper path: on missed enqueue the
+            # approval row stays status='approved' and a manual replay can
+            # fix it. Logging at WARNING (not ERROR) to avoid alarm spam
+            # during transient Redis outages.
+            logger.warning(
+                "Failed to enqueue approved %s for execution: %s",
+                approval_id, exc,
+            )
+
+    return decided
