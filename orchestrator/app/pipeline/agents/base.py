@@ -112,6 +112,7 @@ class BaseAgent:
         fallback_models: list[str] | None = None,
         tier: str | None = None,
         task_type: str | None = None,
+        tool_context: dict | None = None,
     ) -> None:
         from datetime import date
         self.model          = model
@@ -123,6 +124,12 @@ class BaseAgent:
         self.fallback_models = fallback_models or []
         self.tier           = tier       # Routing tier hint for llm-gateway
         self.task_type      = task_type  # Task type for outcome tracking
+        # tool_context: scope info forwarded to credentialed tool dispatch.
+        # Carries tenant_id, user_id, task_id, credential_id, actor_kind/id —
+        # consumed by github_external (and future credentialed tools) so they
+        # route through the capability platform's consent gate + secret vault
+        # rather than crashing on a missing 'secret' kwarg.
+        self.tool_context   = tool_context or {}
         # Usage accumulator — populated by _call_llm_full()
         self._usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "llm_calls": 0}
         # Training data log — populated by _call_llm_full() when training logging is enabled

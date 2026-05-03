@@ -139,8 +139,26 @@ def get_all_tools() -> list[ToolDefinition]:
         return list(ALL_TOOLS)
 
 
-async def execute_tool(name: str, arguments: dict) -> str:
-    """Dispatch a tool call to the appropriate module."""
+async def execute_tool(
+    name: str,
+    arguments: dict,
+    *,
+    context: dict | None = None,
+) -> str:
+    """Dispatch a tool call to the appropriate module.
+
+    `context` carries task-scope info — tenant_id, user_id, task_id,
+    actor_kind, actor_id, credential_id — that credentialed tools
+    (currently github_external) need in order to:
+      - look up the right credential's secret from the vault
+      - run consent.gate (creates pending approval for MUTATE/DESTRUCT)
+      - write capability_audit rows tagged to the task
+
+    Non-credentialed tools (Code, Memory, Web, …) ignore context. Callers
+    that don't know about credentialed tools (most legacy paths) can omit
+    context entirely; only github_external invocations need it, and those
+    fail loud with a clear error rather than crashing on `missing 'secret'`.
+    """
     # ── Hard rule enforcement (pre-execution) ──
     try:
         from app.rules import check_hard_rules
@@ -159,9 +177,116 @@ async def execute_tool(name: str, arguments: dict) -> str:
         except Exception as e:
             return f"MCP dispatch error: {e}"
 
+    # github_external tools require a credential. Route through the capability
+    # platform (consent gate + secret resolution + audit) instead of calling
+    # the underlying executor directly. The agent runner is expected to pass
+    # `context` for any task that runs on a pod with these tools in scope.
+    if name in _GROUP_NAMES.get("github_external", set()):
+        return await _dispatch_github_external_via_capabilities(name, arguments, context)
+
     executor = _DISPATCH.get(name)
     if executor:
         return await executor(name, arguments)
 
     all_names = [t.name for t in ALL_TOOLS]
     return f"Unknown tool '{name}'. Available: {all_names}"
+
+
+async def _dispatch_github_external_via_capabilities(
+    name: str, arguments: dict, context: dict | None,
+) -> str:
+    """Route github_external tool through capabilities.executor.
+
+    Returns a JSON-serialized string (the agent runner consumes it as a
+    Message content). On consent_pending the result includes the approval_id
+    so an external observer can correlate to the dashboard's approval card.
+    """
+    import json as _json
+    from uuid import UUID as _UUID
+
+    from app.capabilities.executor import execute_tool as cap_execute_tool
+    from app.config import settings
+    from app.db import get_pool
+    from app.tools.github_external_tools import (
+        GITHUB_EXTERNAL_TOOLS,
+        execute_tool as _github_external_execute,
+    )
+
+    if not context or not context.get("credential_id"):
+        return _json.dumps({
+            "status": "error",
+            "message": (
+                f"Tool '{name}' requires a credential, but no credential_id "
+                f"was provided in the agent's task context. The watched_repo's "
+                f"credential_id must be threaded from the goal/task metadata "
+                f"into the agent runner. Refusing to call without it."
+            ),
+        })
+
+    tool_def = next((t for t in GITHUB_EXTERNAL_TOOLS if t.name == name), None)
+    if tool_def is None:
+        return _json.dumps({
+            "status": "error",
+            "message": f"github_external tool '{name}' has no ToolDefinition",
+        })
+
+    def _as_uuid(value, field):
+        if value is None or value == "":
+            return None
+        if isinstance(value, _UUID):
+            return value
+        try:
+            return _UUID(str(value))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ValueError(f"context.{field}={value!r} is not a valid UUID") from exc
+
+    api_base = settings.github_api_base_url
+
+    async def _underlying(args: dict, secret: str | None) -> dict:
+        # capabilities.executor passes secret it just decrypted from the vault.
+        # Our github_external execute_tool expects it as a kwarg.
+        if secret is None:
+            return {"status": "error", "message": "no credential resolved"}
+        result = await _github_external_execute(name, args, secret=secret, api_base=api_base)
+        return result if isinstance(result, dict) else {"result": result}
+
+    try:
+        tenant_id = _as_uuid(context.get("tenant_id"), "tenant_id")
+        if tenant_id is None:
+            return _json.dumps({
+                "status": "error",
+                "message": "context.tenant_id is required",
+            })
+        user_id = _as_uuid(context.get("user_id"), "user_id")
+        task_id = _as_uuid(context.get("task_id"), "task_id")
+        credential_id = _as_uuid(context["credential_id"], "credential_id")
+    except ValueError as exc:
+        return _json.dumps({"status": "error", "message": str(exc)})
+
+    pool = get_pool()
+    try:
+        result = await cap_execute_tool(
+            pool,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            task_id=task_id,
+            actor_kind=context.get("actor_kind", "agent"),
+            actor_id=context.get("actor_id", "agent"),
+            tool_name=name,
+            tool_kind="native",
+            blast_radius=tool_def.blast_radius,
+            reversible=getattr(tool_def, "reversible", True),
+            provider_kind="github",
+            target=arguments.get("repo"),
+            credential_id=credential_id,
+            args=arguments,
+            underlying=_underlying,
+        )
+        return _json.dumps(result, default=str)
+    except Exception as exc:
+        # Capability executor re-raises tool errors; surface a structured
+        # result so the agent's tool-result message stays parseable.
+        return _json.dumps({
+            "status": "error",
+            "message": f"{type(exc).__name__}: {exc}",
+        })

@@ -862,6 +862,12 @@ async def _run_agent(
         base_prompt = _system_prompt or agent_cls.DEFAULT_SYSTEM
         _system_prompt = _merge_note + base_prompt
 
+    # Build tool_context for credentialed-tool dispatch (see app/tools/__init__.py).
+    # Looks up the watched_repo's credential_id via the task's goal — the
+    # capability platform consumes this to resolve secrets + run the consent
+    # gate when the agent calls github_external (and future credentialed) tools.
+    _tool_context = await _build_tool_context_for_task(task_id, agent.role)
+
     instance = agent_cls(
         model=model,
         system_prompt=_system_prompt,
@@ -871,6 +877,7 @@ async def _run_agent(
         fallback_models=agent.fallback_models,
         tier=_tier,
         task_type=_task_type,
+        tool_context=_tool_context,
     )
 
     # Create agent_session row — store the actually-resolved model, not agent.model
@@ -1250,6 +1257,56 @@ async def _load_pod_agents(pod_id: str) -> list[AgentRow]:
         )
         for r in rows
     ]
+
+
+async def _build_tool_context_for_task(task_id: str, agent_role: str) -> dict:
+    """Build the tool_context dict passed to agents instantiated for this task.
+
+    Resolves credential_id by walking task → goal.current_plan.ci_watched_repo_id →
+    cortex_watched_repos.credential_id. Falls back gracefully (empty context)
+    when the chain doesn't apply — most tasks are not credential-driven.
+
+    The dispatch layer (app/tools/__init__.py) only USES tool_context for
+    github_external tools; other tools ignore it. So a missing credential_id
+    on a non-credentialed task is fine.
+    """
+    DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001"
+    DEFAULT_USER = "00000000-0000-0000-0000-000000000001"
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT t.id AS task_id, g.id AS goal_id, g.current_plan,
+                       wr.credential_id
+                FROM tasks t
+                LEFT JOIN goals g ON g.id = t.goal_id
+                LEFT JOIN cortex_watched_repos wr
+                  ON wr.id = NULLIF(g.current_plan->>'ci_watched_repo_id','')::uuid
+                WHERE t.id = $1::uuid
+                """,
+                task_id,
+            )
+        ctx: dict = {
+            "tenant_id": DEFAULT_TENANT,
+            "user_id": DEFAULT_USER,
+            "task_id": str(task_id),
+            "actor_kind": "agent",
+            "actor_id": agent_role,
+        }
+        if row and row["credential_id"]:
+            ctx["credential_id"] = str(row["credential_id"])
+        return ctx
+    except Exception as exc:
+        logger.warning("Could not build tool_context for task %s: %s", task_id, exc)
+        return {
+            "tenant_id": DEFAULT_TENANT,
+            "user_id": DEFAULT_USER,
+            "task_id": str(task_id),
+            "actor_kind": "agent",
+            "actor_id": agent_role,
+        }
 
 
 async def _set_task_status(

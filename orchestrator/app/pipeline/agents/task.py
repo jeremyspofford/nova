@@ -125,6 +125,7 @@ After completing your work, return ONLY valid JSON matching this exact schema:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             return_usage=True,
+            tool_context=self.tool_context,
         )
         # Accumulate tool-loop usage into agent usage
         self._usage["input_tokens"] += in_tokens

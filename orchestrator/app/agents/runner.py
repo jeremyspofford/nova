@@ -954,6 +954,7 @@ async def run_agent_turn_raw(
     max_tokens: int = 4096,
     max_rounds: int = 10,
     return_usage: bool = False,
+    tool_context: dict | None = None,
 ) -> str | tuple[str, int, int, float | None]:
     """
     Lightweight agent turn for pipeline stages (ContextAgent, TaskAgent).
@@ -990,6 +991,7 @@ async def run_agent_turn_raw(
         temperature=temperature,
         max_tokens=max_tokens,
         max_rounds=max_rounds,
+        tool_context=tool_context,
     )
     if return_usage:
         return content, in_tokens, out_tokens, cost_usd
@@ -1006,6 +1008,7 @@ async def _run_tool_loop(
     max_rounds: int = 5,
     return_messages: bool = False,
     on_tool_status: Callable | None = None,
+    tool_context: dict | None = None,
 ) -> tuple[str, int, int, float | None] | tuple[str, int, int, float | None, list[Message], bool]:
     """
     Non-streaming tool loop — used by run_agent_turn, run_agent_turn_raw, and _resolve_tool_rounds.
@@ -1070,7 +1073,7 @@ async def _run_tool_loop(
                 await on_tool_status({"step": tc["name"], "state": "running", "detail": args_summary or tc["name"]})
 
             t0 = time.perf_counter()
-            result = await execute_tool(tc["name"], tc.get("arguments", {}))
+            result = await execute_tool(tc["name"], tc.get("arguments", {}), context=tool_context)
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
             if on_tool_status:
