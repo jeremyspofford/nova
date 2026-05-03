@@ -6,6 +6,37 @@ This is the manual walkthrough for the capability platform's first slice — aut
 
 ---
 
+## Automated alternative (T1-03 — preferred)
+
+Steps 1-7 below are automated in `tests/test_capability_e2e_ci_triage.py`. When
+your Nova instance is reachable from public internet (Cloudflare Tunnel,
+Tailscale Funnel, ngrok), run the test instead of stepping through the
+checklist by hand:
+
+```bash
+REQUIRES_GITHUB=1 \
+  NOVA_GITHUB_PAT=ghp_xxx \
+  NOVA_PUBLIC_URL=https://your-nova-public-url \
+  pytest tests/test_capability_e2e_ci_triage.py -v -s
+```
+
+Expected: 2 tests pass — `test_full_ci_triage_loop_opens_pr` (the headline
+seam) and `test_ci_triage_budget_cap_skips_second_failure`.
+
+If `NOVA_PUBLIC_URL` is unset or unreachable, the test falls back to a longer
+polling-mode wait window. Manual validation via the checklist below is only
+strictly needed when the automated test cannot reach Nova externally **and**
+you need fresh sign-off (e.g. a release gate where the automated path is
+blocked).
+
+The test pre-seeds a `consent_rule` for `register_webhook`, so it skips the
+consent-prompt UX of step 2 — that path is covered by
+`tests/test_capability_webhooks_consent.py`. Steps 8-10 (bug-on-main, daily
+budget — covered by the second test, and the test-suite invocation) remain in
+this checklist for completeness; the budget cap behavior is also automated.
+
+---
+
 ## Pre-flight
 
 Before starting:

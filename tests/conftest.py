@@ -60,6 +60,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "requires_local_ollama: skip if the local-ollama compose profile is not active",
     )
+    config.addinivalue_line(
+        "markers",
+        "requires_github: skip unless REQUIRES_GITHUB=1 and NOVA_GITHUB_PAT are set "
+        "(real-GitHub e2e tests against jeremyspofford/nova-test-cap)",
+    )
 
 
 def _local_ollama_in_profiles() -> bool:
@@ -78,13 +83,34 @@ def local_ollama_active() -> bool:
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip `requires_local_ollama` tests when the profile is inactive."""
-    if _local_ollama_in_profiles():
-        return
-    skip = pytest.mark.skip(reason="local-ollama profile is not active (COMPOSE_PROFILES)")
-    for item in items:
-        if "requires_local_ollama" in item.keywords:
-            item.add_marker(skip)
+    """Skip `requires_local_ollama` and `requires_github` tests when their gating
+    env / profile is missing.
+
+    Both markers are evaluated independently — a test marked with both stays
+    skipped if either gate is closed.
+    """
+    # ── requires_local_ollama: tied to COMPOSE_PROFILES=local-ollama ──────────
+    if not _local_ollama_in_profiles():
+        skip_ollama = pytest.mark.skip(
+            reason="local-ollama profile is not active (COMPOSE_PROFILES)"
+        )
+        for item in items:
+            if "requires_local_ollama" in item.keywords:
+                item.add_marker(skip_ollama)
+
+    # ── requires_github: tied to REQUIRES_GITHUB=1 + NOVA_GITHUB_PAT ──────────
+    # Aligns with tests/test_capability_smoke_real_github.py's gating env vars.
+    requires_github_active = (
+        os.environ.get("REQUIRES_GITHUB") == "1"
+        and bool(os.environ.get("NOVA_GITHUB_PAT", ""))
+    )
+    if not requires_github_active:
+        skip_github = pytest.mark.skip(
+            reason="REQUIRES_GITHUB not set (need REQUIRES_GITHUB=1 and NOVA_GITHUB_PAT=ghp_...)"
+        )
+        for item in items:
+            if "requires_github" in item.keywords:
+                item.add_marker(skip_github)
 
 
 def pytest_sessionstart(session):
