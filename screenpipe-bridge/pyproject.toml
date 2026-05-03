@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "nova-contracts",
     "websockets>=13.0",
+    "prometheus-client>=0.19",
 ]
 
 [tool.hatch.build.targets.wheel]

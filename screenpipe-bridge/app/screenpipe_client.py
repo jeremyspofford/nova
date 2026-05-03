@@ -15,6 +15,8 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
+from app.metrics import polling_active, websocket_reconnects_total
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +110,7 @@ class ScreenpipeClient:
                     self._ws_failure_count = 0
                 except Exception as exc:
                     logger.warning("screenpipe ws error: %s", exc)
+                    websocket_reconnects_total.inc()
                     self._ws_failure_count += 1
                     if self._ws_failure_count >= self._ws_failures_before_polling:
                         logger.info(
@@ -115,6 +118,7 @@ class ScreenpipeClient:
                             self._ws_failure_count,
                         )
                         self._polling_mode = True
+                        polling_active.set(1)
                         continue  # jump directly into polling without sleeping
 
                 if self._stopped:
@@ -157,6 +161,7 @@ class ScreenpipeClient:
                     logger.info("screenpipe: WS reconnected; leaving polling mode")
                     self._polling_mode = False
                     self._ws_failure_count = 0
+                    polling_active.set(0)
                     return
                 except Exception as exc:
                     logger.debug("screenpipe ws retry failed: %s", exc)

@@ -7,13 +7,21 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import httpx
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.denylist import Denylist
 from app.engram_producer import EngramProducer
+from app.metrics import (
+    polling_active,
+    sessions_dropped_total,
+    sessions_ingested_total,
+    websocket_reconnects_total,
+)
 from app.runtime_config import RuntimeConfig
 from app.screenpipe_client import ScreenpipeClient
 from app.session_aggregator import FocusSession, SessionAggregator
@@ -29,6 +37,7 @@ logger = log  # alias used by BridgePipeline internals
 
 _redis: aioredis.Redis | None = None
 _runtime_cfg: "RuntimeConfig | None" = None
+_bridge_pipeline: "BridgePipeline | None" = None
 
 
 def get_redis() -> aioredis.Redis:
@@ -107,6 +116,7 @@ class BridgePipeline:
         self._producer_blocked = producer_blocked
         self._consumer_task: asyncio.Task | None = None
         self._stopped = False
+        self._screenpipe_client: ScreenpipeClient | None = None
 
     async def start_consumer(self) -> None:
         """Spawn the background consumer coroutine."""
@@ -157,12 +167,14 @@ class BridgePipeline:
 
             try:
                 await self._producer.push(session)
+                sessions_ingested_total.labels(app=session.app).inc()
             except Exception as exc:
                 logger.error("engram push failed: %s", exc)
 
     async def _increment_dropped(self, reason: str) -> None:
-        """Increment the in-memory dropped counter and persist to Redis."""
+        """Increment the in-memory dropped counter, persist to Redis, and record metric."""
         self._dropped[reason] = self._dropped.get(reason, 0) + 1
+        sessions_dropped_total.labels(reason=reason).inc()
         try:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             await self._redis_db0.hincrby(f"nova:capture:dropped:{today}", reason, 1)
@@ -237,6 +249,7 @@ async def lifespan(app: FastAPI):
     trust = float(await runtime_cfg.get_str("screenpipe.trust", "0.80"))
 
     # --- Pipeline ---
+    global _bridge_pipeline
     pipeline = BridgePipeline(
         redis_db0=redis_db0,
         redis_db10=redis_db10,
@@ -249,6 +262,7 @@ async def lifespan(app: FastAPI):
         paused_check=lambda: runtime_cfg.get_bool_sync("capture.paused", False),
     )
     await pipeline.start_consumer()
+    _bridge_pipeline = pipeline
 
     # --- ScreenpipeClient (may be absent if no URL configured) ---
     screenpipe_url = await runtime_cfg.get_str("screenpipe.url", "")
@@ -262,6 +276,7 @@ async def lifespan(app: FastAPI):
             on_event=pipeline.process_event,
         )
         await client.start()
+        pipeline._screenpipe_client = client
         log.info("screenpipe client started → %s", screenpipe_url)
     else:
         log.info("screenpipe.url not configured; client not started")
@@ -287,6 +302,7 @@ async def lifespan(app: FastAPI):
                 if client is not None:
                     await client.stop()
                     client = None
+                pipeline._screenpipe_client = None
 
                 screenpipe_url = new_url
                 screenpipe_api_key = new_key
@@ -298,6 +314,7 @@ async def lifespan(app: FastAPI):
                         on_event=pipeline.process_event,
                     )
                     await client.start()
+                    pipeline._screenpipe_client = client
                     log.info("screenpipe client reconnected → %s", screenpipe_url)
                 else:
                     log.info("screenpipe.url cleared; client stopped")
@@ -322,6 +339,7 @@ async def lifespan(app: FastAPI):
             await client.stop()
 
         await pipeline.stop()
+        _bridge_pipeline = None
         await runtime_cfg.stop()
         _runtime_cfg = None
 
@@ -347,6 +365,11 @@ app.add_middleware(
 )
 
 
+async def require_admin_secret(x_admin_secret: str | None = Header(None)) -> None:
+    if x_admin_secret != settings.nova_admin_secret:
+        raise HTTPException(status_code=401, detail="invalid admin secret")
+
+
 @app.get("/health/live")
 async def health_live():
     return {"status": "alive"}
@@ -354,18 +377,62 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
+    paused = False
+    if _runtime_cfg is not None:
+        paused = await _runtime_cfg.get_bool("capture.paused", False)
+    if paused:
+        return {"status": "ready", "paused": True}
+
+    # Check Redis
+    redis_ok = False
     try:
         r = get_redis()
         await r.ping()
         redis_ok = True
     except Exception:
-        redis_ok = False
+        pass
 
-    paused = (
-        await _runtime_cfg.get_bool("capture.paused", False)
-        if _runtime_cfg is not None
-        else False
-    )
+    # Check screenpipe (connected via WS or actively polling)
+    screenpipe_ok = False
+    if _bridge_pipeline is not None and _bridge_pipeline._screenpipe_client is not None:
+        client = _bridge_pipeline._screenpipe_client
+        screenpipe_ok = client._connected.is_set() or client._polling_mode
+    elif _runtime_cfg is not None:
+        # If no URL configured, there's nothing to connect to — not a fault
+        url = await _runtime_cfg.get_str("screenpipe.url", "")
+        if not url:
+            screenpipe_ok = True
+    else:
+        # No runtime config yet — treat screenpipe as OK to avoid false alarms at startup
+        screenpipe_ok = True
 
-    status = "ready" if redis_ok else "degraded"
-    return {"status": status, "redis": redis_ok, "paused": paused}
+    if not redis_ok or not screenpipe_ok:
+        reasons = []
+        if not redis_ok:
+            reasons.append("redis unreachable")
+        if not screenpipe_ok:
+            reasons.append("screenpipe disconnected")
+        return JSONResponse(
+            {"status": "down", "reason": ", ".join(reasons), "redis": redis_ok, "paused": paused},
+            status_code=503,
+        )
+    return {"status": "ready", "redis": True, "paused": paused}
+
+
+@app.get("/test-connection", dependencies=[Depends(require_admin_secret)])
+async def test_connection():
+    if _runtime_cfg is None:
+        return {"ok": False, "error": "runtime config not initialized"}
+    url = await _runtime_cfg.get_str("screenpipe.url", "")
+    if not url:
+        return {"ok": False, "error": "screenpipe.url not configured"}
+    api_key = await _runtime_cfg.get_str("screenpipe.api_key", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{url}/search", params={"limit": "1"}, headers=headers)
+            r.raise_for_status()
+            data = r.json().get("data", [])
+        return {"ok": True, "message": "connected", "sample_event_count": len(data)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
