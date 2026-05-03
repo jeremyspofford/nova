@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 logger = log  # alias used by BridgePipeline internals
 
 _redis: aioredis.Redis | None = None
+_runtime_cfg: "RuntimeConfig | None" = None
 
 
 def get_redis() -> aioredis.Redis:
@@ -222,8 +223,10 @@ async def lifespan(app: FastAPI):
     redis_db10 = aioredis.from_url(settings.redis_url, **redis_kwargs)
 
     # --- Runtime config (polls Redis db1 every 30s) ---
+    global _runtime_cfg
     runtime_cfg = RuntimeConfig(redis=redis_db1, poll_interval_seconds=30)
     await runtime_cfg.start()
+    _runtime_cfg = runtime_cfg
 
     # Read initial denylist + capture config
     denylist_apps = await runtime_cfg.get_list("screenpipe.denylist_apps")
@@ -243,6 +246,7 @@ async def lifespan(app: FastAPI):
         buffer_size=buffer_size,
         device_id=device_id,
         trust=trust,
+        paused_check=lambda: runtime_cfg.get_bool_sync("capture.paused", False),
     )
     await pipeline.start_consumer()
 
@@ -319,6 +323,7 @@ async def lifespan(app: FastAPI):
 
         await pipeline.stop()
         await runtime_cfg.stop()
+        _runtime_cfg = None
 
         await redis_db0.aclose()
         await redis_db1.aclose()
@@ -356,5 +361,11 @@ async def health_ready():
     except Exception:
         redis_ok = False
 
+    paused = (
+        await _runtime_cfg.get_bool("capture.paused", False)
+        if _runtime_cfg is not None
+        else False
+    )
+
     status = "ready" if redis_ok else "degraded"
-    return {"status": status, "redis": redis_ok}
+    return {"status": status, "redis": redis_ok, "paused": paused}

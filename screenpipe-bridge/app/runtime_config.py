@@ -77,6 +77,17 @@ class RuntimeConfig:
             return default
         return raw.lower() in ("1", "true", "yes")
 
+    def get_bool_sync(self, key: str, default: bool = False) -> bool:
+        """Synchronous cache read — safe to call from non-async contexts.
+
+        The cache is maintained by the background poll task; Python's GIL
+        protects dict reads so this is thread-safe without additional locking.
+        """
+        raw = self._cache.get(key)
+        if raw is None:
+            return default
+        return raw.lower() in ("1", "true", "yes")
+
     async def get_list(self, key: str, default: list | None = None) -> list:
         raw = self._cache.get(key)
         if raw is None:
