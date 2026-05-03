@@ -22,19 +22,33 @@ class ScreenpipeClient:
         url: str,
         api_key: str | None,
         on_event: Callable[[dict[str, Any]], None | Any],
+        startup_connect_timeout: float = 30.0,
     ):
         self._url = url
         self._api_key = api_key
         self._on_event = on_event
+        self._startup_connect_timeout = startup_connect_timeout
         self._task: asyncio.Task | None = None
         self._stopped = False
         self._connected = asyncio.Event()
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
-        # Wait until the first connection is established so callers can immediately
-        # send events without a race condition.
-        await self._connected.wait()
+        # Wait briefly for the first connection so tests + healthy boots are
+        # deterministic. If screenpipe is offline at boot, return anyway and let
+        # the background task keep retrying — bridge stays up so the user can fix
+        # screenpipe without restarting Nova.
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._connected.wait()),
+                timeout=self._startup_connect_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "screenpipe not reachable within %.1fs at startup; "
+                "background reconnect continues",
+                self._startup_connect_timeout,
+            )
 
     async def stop(self) -> None:
         self._stopped = True
