@@ -68,7 +68,7 @@ def get_llm_client() -> httpx.AsyncClient:
     if _llm_client is None or _llm_client.is_closed:
         _llm_client = httpx.AsyncClient(
             base_url=settings.llm_gateway_url,
-            timeout=120.0,
+            timeout=settings.llm_request_timeout_seconds,
             limits=httpx.Limits(max_connections=20),
         )
     return _llm_client

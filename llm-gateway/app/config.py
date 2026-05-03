@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     # Ollama timeouts
     ollama_health_check_timeout: float = 3.0     # fast probe before routing
-    ollama_request_timeout: float = 120.0        # actual inference timeout
+    ollama_request_timeout: float = 600.0        # actual inference timeout — generous for slow CPU local
     ollama_health_check_interval: float = 15.0   # cache health result this long
 
     # Routing
