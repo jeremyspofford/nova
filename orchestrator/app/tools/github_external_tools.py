@@ -781,7 +781,9 @@ async def _register_webhook(args: dict, secret: str, *, api_base: str) -> dict:
         gh_hook = resp.json()
         gh_hook_id = gh_hook["id"]
 
-    # Persist the webhook row
+    # Persist the webhook row. Upsert on (tenant_id, repo) so a stale row
+    # from a prior failed/orphaned registration doesn't block re-registration —
+    # the new hook_id supersedes whatever was there.
     pool = get_pool()
     hook_row_id = uuid4()
     async with pool.acquire() as conn:
@@ -791,6 +793,14 @@ async def _register_webhook(args: dict, secret: str, *, api_base: str) -> dict:
               (id, tenant_id, credential_id, repo, hook_id, target_url,
                encrypted_secret, events, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+            ON CONFLICT (tenant_id, repo) DO UPDATE SET
+              credential_id    = EXCLUDED.credential_id,
+              hook_id          = EXCLUDED.hook_id,
+              target_url       = EXCLUDED.target_url,
+              encrypted_secret = EXCLUDED.encrypted_secret,
+              events           = EXCLUDED.events,
+              status           = 'active',
+              created_at       = now()
             """,
             hook_row_id,
             _DEFAULT_TENANT,
