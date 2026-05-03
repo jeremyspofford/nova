@@ -259,6 +259,13 @@ async def handle_stimulus(stimulus: dict) -> dict:
                 "priority": 5,
                 "max_iterations": 12,
                 "created_via": "cortex_ci_triage",
+                # CI triage goals run autonomously — the human-in-the-loop
+                # gate is the per-call MUTATE approval (open_fix_pr etc.)
+                # surfaced through the capability platform's consent gate,
+                # not a per-goal spec review. Setting review_policy='auto'
+                # lets cortex skip the speccing-approval phase and dispatch
+                # straight to ci_triage_agent.
+                "review_policy": "auto",
             },
             headers={"Authorization": f"Bearer {settings.cortex_api_key}"},
         )

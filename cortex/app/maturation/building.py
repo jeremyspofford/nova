@@ -31,7 +31,7 @@ async def run_building(goal_id: str) -> str:
         goal = await conn.fetchrow(
             """SELECT id, title, description, complexity, depth, max_depth,
                       max_cost_usd, cost_so_far_usd, max_retries, review_policy,
-                      scope_analysis, spec_children, parent_goal_id
+                      scope_analysis, spec_children, parent_goal_id, current_plan
                FROM goals WHERE id = $1::uuid""",
             goal_id,
         )
@@ -112,11 +112,21 @@ async def _materialize_as_subgoals(goal, children: list[dict]) -> str:
     the next maturation step. Cycle's existing scoping branch picks them up.
     """
     pool = get_pool()
+    # Inherit pod hint + key CI metadata from the parent's current_plan so
+    # spawned subgoals route to the right pod when their tasks dispatch.
+    # Without this, subgoals fall back to the default Quartet pod and lose
+    # access to credentialed tools (open_fix_pr, register_webhook, etc.).
+    parent_plan = _decode_jsonb(goal.get("current_plan")) or {}
+    inherited_keys = {"pod", "ci_repo", "ci_run_id", "ci_watched_repo_id",
+                      "ci_head_branch", "ci_head_sha", "ci_workflow_name", "ci_html_url"}
+    inherited = {k: v for k, v in parent_plan.items() if k in inherited_keys}
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             for idx, c in enumerate(children):
                 hint = c.get("hint") or c.get("description")
                 child_plan = {
+                    **inherited,
                     "hint": hint,
                     "depends_on": c.get("depends_on") or [],
                     "spawn_index": idx,
@@ -138,7 +148,10 @@ async def _materialize_as_subgoals(goal, children: list[dict]) -> str:
                     policy,
                     float(c.get("estimated_cost_usd") or 0.0) or None,
                     goal["max_retries"],
-                    json.dumps(child_plan),
+                    # Pass dict directly — the asyncpg JSONB codec (db.py)
+                    # already runs json.dumps. Calling json.dumps here too
+                    # produces a string scalar instead of a JSONB object.
+                    child_plan,
                     child_complexity,
                 )
             await conn.execute(
@@ -163,6 +176,17 @@ async def _materialize_as_tasks(goal, children: list[dict]) -> str:
         children = [{"title": goal["title"], "description": goal["description"] or "",
                      "hint": "(simple goal — single task)"}]
 
+    # Honor pod hints set by upstream drives (e.g. ci_triage drive sets
+    # current_plan.pod = "ci_triage_agent"). Without this, tasks dispatch
+    # to the orchestrator's default pod and never see credentialed tools
+    # like open_fix_pr / register_webhook.
+    pod_hint: str | None = None
+    cp = _decode_jsonb(goal.get("current_plan"))
+    if isinstance(cp, dict):
+        v = cp.get("pod")
+        if isinstance(v, str) and v.strip():
+            pod_hint = v.strip()
+
     task_ids: list[str] = []
     dispatch_errors: list[str] = []
     for idx, c in enumerate(children):
@@ -171,10 +195,16 @@ async def _materialize_as_tasks(goal, children: list[dict]) -> str:
             f"{c.get('hint') or c.get('description') or '(no detail)'}"
         )
         try:
+            payload = {
+                "user_input": body,
+                "goal_id": str(goal["id"]),
+                "metadata": {"source": "cortex.building", "child_index": idx},
+            }
+            if pod_hint:
+                payload["pod_name"] = pod_hint
             r = await orch.post(
                 "/api/v1/pipeline/tasks",
-                json={"user_input": body, "goal_id": str(goal["id"]),
-                      "metadata": {"source": "cortex.building", "child_index": idx}},
+                json=payload,
                 headers={"Authorization": f"Bearer {settings.cortex_api_key}"},
             )
             r.raise_for_status()

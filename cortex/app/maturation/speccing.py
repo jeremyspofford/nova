@@ -22,6 +22,11 @@ def _should_auto_approve(goal, envelope) -> tuple[bool, str]:
     # Note: goal here is an asyncpg Row — needs review_policy + parent_goal_id columns
     # Make sure run_speccing's SELECT includes them.
     policy = goal.get("review_policy") if isinstance(goal, dict) else goal["review_policy"]
+    if policy == "auto":
+        # Skip the spec approval gate. The human-in-the-loop checkpoint for
+        # this goal is the per-call MUTATE approval surfaced through the
+        # capability platform's consent gate, not a per-goal spec review.
+        return True, "policy=auto — skipping spec approval"
     if policy == "all":
         return False, "policy=all"
     if policy == "top-only":
