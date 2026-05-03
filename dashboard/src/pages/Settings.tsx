@@ -6,7 +6,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
-  Link2, Bookmark,
+  Link2, Bookmark, Monitor,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -19,6 +19,7 @@ import { ProviderStatusSection } from './settings/ProviderStatusSection'
 import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
 import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
+import { ScreenpipeConnectionSection } from './settings/ScreenpipeConnectionSection'
 import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
 import { AutoApproveRulesSection } from './settings/AutoApproveRulesSection'
 import { RecoverySection } from './settings/RecoverySection'
@@ -139,6 +140,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'connected-services', label: 'Connected Services', icon: Link2 },
       { id: 'remote-access', label: 'Remote Access', icon: Globe },
       { id: 'chat-integrations', label: 'Chat Integrations', icon: MessageSquare },
+      { id: 'screenpipe', label: 'Screenpipe', icon: Monitor },
       { id: 'editor', label: 'Editor', icon: Code },
       { id: 'notifications', label: 'Notifications', icon: Bell },
     ],
@@ -797,6 +799,12 @@ export function Settings() {
         {show('chat-integrations') && (
           <div id="chat-integrations">
             <ChatIntegrationsSection />
+          </div>
+        )}
+
+        {show('screenpipe') && (
+          <div id="screenpipe">
+            <ScreenpipeConnectionSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
           </div>
         )}
 

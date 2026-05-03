@@ -1540,3 +1540,16 @@ export const countAudit = (filters: { from_ts?: string; to_ts?: string } = {}) =
     `/api/v1/capabilities/audit/count${suffix ? `?${suffix}` : ''}`,
   )
 }
+
+// ── Screenpipe ─────────────────────────────────────────────────────────────────
+
+export interface ScreenpipeConnectionTest {
+  ok: boolean
+  message?: string
+  sample_event_count?: number
+  error?: string
+}
+
+export async function testScreenpipeConnection(): Promise<ScreenpipeConnectionTest> {
+  return apiFetch<ScreenpipeConnectionTest>('/screenpipe-api/test-connection')
+}
