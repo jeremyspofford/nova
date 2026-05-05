@@ -60,7 +60,15 @@ VALID_STRATEGIES = {"local-only", "local-first", "cloud-only", "cloud-first"}
 
 
 def _inject_litellm_env_keys() -> None:
-    """Inject configured API keys into environment for LiteLLM auto-detection."""
+    """Inject configured API keys into environment for LiteLLM auto-detection.
+
+    Resolution order (last write wins): settings/.env → platform_secrets store
+    (SEC-006a). When the orchestrator is unreachable at boot, the
+    platform_secrets pass returns empty and only .env values apply — gateway
+    still starts cleanly.
+    """
+    # Layer 1 — settings/.env (preserves behavior for installs that haven't
+    # migrated to platform_secrets yet).
     if settings.anthropic_api_key:
         os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
     if settings.openai_api_key:
@@ -75,6 +83,26 @@ def _inject_litellm_env_keys() -> None:
         os.environ["OPENROUTER_API_KEY"] = settings.openrouter_api_key
     if settings.github_token:
         os.environ["GITHUB_TOKEN"] = settings.github_token
+    if settings.chatgpt_access_token:
+        os.environ["CHATGPT_ACCESS_TOKEN"] = settings.chatgpt_access_token
+
+    # Layer 2 — platform_secrets (overrides .env when the orchestrator has
+    # an entry). Sync because providers below construct at module load.
+    from nova_worker_common.platform_secrets import fetch_platform_secrets_sync
+    resolved = fetch_platform_secrets_sync(
+        orchestrator_url=settings.orchestrator_url,
+        admin_secret=settings.nova_admin_secret,
+        keys=[
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
+            "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+            "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN",
+        ],
+    )
+    for k, v in resolved.items():
+        os.environ[k] = v
+    if resolved:
+        log.info("platform_secrets: applied %d key(s) at startup: %s",
+                 len(resolved), sorted(resolved.keys()))
 
 
 _inject_litellm_env_keys()
@@ -93,7 +121,12 @@ _groq = LiteLLMProvider(default_model=settings.default_groq_model)
 _cerebras = LiteLLMProvider(default_model=settings.default_cerebras_model)
 _openrouter = LiteLLMProvider(default_model=settings.default_openrouter_model)
 _github = LiteLLMProvider(default_model=settings.default_github_model)
-_gemini = GeminiADCProvider(api_key=settings.gemini_api_key, use_adc=settings.gemini_use_adc)
+# Read GEMINI_API_KEY from os.environ — it's authoritative after _inject_litellm_env_keys
+# applied platform_secrets overrides on top of settings/.env values.
+_gemini = GeminiADCProvider(
+    api_key=os.environ.get("GEMINI_API_KEY", ""),
+    use_adc=settings.gemini_use_adc,
+)
 
 # ── Subscription providers — auto-detect credentials at startup ────────────────
 
