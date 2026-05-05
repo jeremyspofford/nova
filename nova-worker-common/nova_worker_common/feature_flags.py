@@ -31,3 +31,59 @@ class FlagDef:
                        user_id: str | None = None) -> Any:
         """Evaluate the flag, falling back to in-code default."""
         return self.default
+
+
+_registry: dict[str, FlagDef] = {}
+
+
+def _registry_clear():
+    """Test helper. NOT for production use."""
+    _registry.clear()
+
+
+def register_flag(
+    *,
+    key: str,
+    type: FlagType,
+    variants: Sequence[Any] | None = None,
+    default: Any,
+    description: str,
+) -> FlagDef:
+    """Register a flag. Idempotent on re-import (returns existing FlagDef).
+
+    Raises ValueError on:
+    - schema mismatch with an existing registration
+    - bool flag with non-bool default
+    - enum flag with default not in variants (or empty variants)
+    """
+    if type == "bool" and not isinstance(default, bool):
+        raise ValueError(f"bool flag {key!r} must have bool default")
+    if type == "enum":
+        if not variants:
+            raise ValueError(f"enum flag {key!r} requires non-empty variants")
+        if default not in variants:
+            raise ValueError(
+                f"enum flag {key!r} default {default!r} not in variants {variants!r}"
+            )
+
+    flag = FlagDef(
+        key=key,
+        type=type,
+        variants=tuple(variants) if variants else None,
+        default=default,
+        description=description,
+    )
+
+    existing = _registry.get(key)
+    if existing is not None:
+        if existing != flag:
+            raise ValueError(f"flag {key!r} schema mismatch on re-registration")
+        return existing
+
+    _registry[key] = flag
+    return flag
+
+
+def declared_flags() -> list[FlagDef]:
+    """Snapshot of every flag currently registered in this process."""
+    return list(_registry.values())
