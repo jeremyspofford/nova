@@ -6,29 +6,23 @@ import re
 
 logger = logging.getLogger("nova.recovery.env")
 
-# Only these keys can be read/written via the API
+# Only these keys can be read/written via the API.
+# SEC-006a: secret-bearing keys (LLM provider keys, chat-bridge tokens, OAuth
+# client secret, GitHub PAT for self-modification) live in `platform_secrets`
+# now and must be managed via orchestrator's /api/v1/admin/secrets, NOT here.
+# Keys that remain in this whitelist are infra/compose-time values that have
+# to live in `.env` because Docker / sidecar containers consume them.
 ENV_WHITELIST = {
+    # Infra tunnels — consumed by sidecar containers at compose-up
     "CLOUDFLARE_TUNNEL_TOKEN",
     "TAILSCALE_AUTHKEY",
-    "TELEGRAM_BOT_TOKEN",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
+    # Compose / runtime config
     "COMPOSE_PROFILES",
     "CORS_ALLOWED_ORIGINS",
     "REQUIRE_AUTH",
     "TRUSTED_PROXY_HEADER",
-    # LLM provider API keys
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GROQ_API_KEY",
-    "GEMINI_API_KEY",
-    "CEREBRAS_API_KEY",
-    "OPENROUTER_API_KEY",
-    "GITHUB_TOKEN",
-    "CHATGPT_ACCESS_TOKEN",
-    # Auth / OAuth
+    # OAuth client ID is non-secret and used by docker-compose env interpolation
     "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
     "REGISTRATION_MODE",
     # Inference model config (used by docker compose for vLLM/SGLang containers)
     "VLLM_MODEL",
@@ -37,8 +31,7 @@ ENV_WHITELIST = {
     # Inference mode (user-facing rollup of routing strategy + bundled service)
     "NOVA_INFERENCE_MODE",
     "OLLAMA_BASE_URL",
-    # Self-modification
-    "NOVA_GITHUB_PAT",
+    # Self-modification config that's not the secret PAT itself
     "NOVA_GITHUB_REPO",
     "NOVA_GITHUB_USER",
     "NOVA_GITHUB_EMAIL",
@@ -46,18 +39,12 @@ ENV_WHITELIST = {
     "SELFMOD_RATE_LIMIT_PER_HOUR",
 }
 
-# Keys whose values should be masked in GET responses
+# Keys whose values should be masked in GET responses. The infra tunnel tokens
+# stay in .env so they get masked here; provider keys / bridge tokens / OAuth
+# secrets / GitHub PATs are no longer reachable through this path at all.
 SECRET_KEYS = {
-    "CLOUDFLARE_TUNNEL_TOKEN", "TAILSCALE_AUTHKEY", "TELEGRAM_BOT_TOKEN",
-    "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
-    # LLM provider secrets
-    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY",
-    "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN",
-    "CHATGPT_ACCESS_TOKEN",
-    # OAuth secret
-    "GOOGLE_CLIENT_SECRET",
-    # Self-modification
-    "NOVA_GITHUB_PAT",
+    "CLOUDFLARE_TUNNEL_TOKEN",
+    "TAILSCALE_AUTHKEY",
 }
 
 ENV_FILE = os.getenv("NOVA_ENV_FILE", "/project/.env")
