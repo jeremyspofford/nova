@@ -48,13 +48,13 @@ curl http://localhost:8000/api/v1/agents \
 curl -X POST http://localhost:8000/api/v1/agents \
   -H "Authorization: Bearer sk-nova-..." \
   -H "Content-Type: application/json" \
-  -d '{"config": {"model": "claude-max/claude-sonnet-4-6"}}'
+  -d '{"config": {"model": "qwen2.5:7b"}}'
 
 # Update agent config (admin)
 curl -X PATCH http://localhost:8000/api/v1/agents/{agent_id}/config \
   -H "X-Admin-Secret: your-secret" \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-max/claude-opus-4"}'
+  -d '{"model": "hermes3:8b"}'
 ```
 
 ### Tasks (interactive)
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8000/api/v1/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [{"role": "user", "content": "Hello Nova"}],
-    "model": "claude-max/claude-sonnet-4-6"
+    "model": "qwen2.5:7b"
   }'
 ```
 
@@ -154,7 +154,7 @@ curl -X POST http://localhost:8000/api/v1/pods \
 curl -X POST http://localhost:8000/api/v1/pods/{pod_id}/agents \
   -H "X-Admin-Secret: your-secret" \
   -H "Content-Type: application/json" \
-  -d '{"name": "researcher", "role": "task", "model": "claude-max/claude-sonnet-4-6"}'
+  -d '{"name": "researcher", "role": "task", "model": "qwen2.5:7b"}'
 ```
 
 ### API keys (admin)
@@ -233,7 +233,7 @@ curl http://localhost:8000/health/ready   # Readiness (checks DB + Redis)
 curl http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 
@@ -241,7 +241,7 @@ curl http://localhost:8001/v1/chat/completions \
 curl http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
@@ -257,7 +257,7 @@ curl http://localhost:8001/v1/models
 curl -X POST http://localhost:8001/complete \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 
@@ -265,7 +265,7 @@ curl -X POST http://localhost:8001/complete \
 curl -X POST http://localhost:8001/stream \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 
@@ -398,7 +398,7 @@ curl http://localhost:8888/api/v1/recovery/env \
 curl -X PATCH http://localhost:8888/api/v1/recovery/env \
   -H "X-Admin-Secret: your-secret" \
   -H "Content-Type: application/json" \
-  -d '{"updates": {"DEFAULT_CHAT_MODEL": "claude-max/claude-sonnet-4-6"}}'
+  -d '{"updates": {"DEFAULT_CHAT_MODEL": "qwen2.5:7b"}}'
 ```
 
 ### Health

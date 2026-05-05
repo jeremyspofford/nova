@@ -3,7 +3,7 @@ title: "LLM Gateway"
 description: "Multi-provider model routing via LiteLLM with an OpenAI-compatible endpoint. Port 8001."
 ---
 
-The LLM Gateway is Nova's model routing layer. It exposes a unified API that translates requests to any configured provider -- Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub Models, and subscription-based providers (Claude Max, ChatGPT Plus).
+The LLM Gateway is Nova's model routing layer. It exposes a unified API that translates requests to any configured provider -- Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub Models, and the ChatGPT Plus subscription provider.
 
 ## At a glance
 
@@ -18,7 +18,7 @@ The LLM Gateway is Nova's model routing layer. It exposes a unified API that tra
 
 - **Model routing** -- resolve model IDs to provider instances and forward requests
 - **OpenAI compatibility** -- expose `/v1/chat/completions` and `/v1/models` so any OpenAI-compatible tool works out of the box
-- **Subscription auth** -- use Claude Max/Pro and ChatGPT Plus/Pro subscriptions as zero-cost providers
+- **Subscription auth** -- use ChatGPT Plus/Pro subscriptions as zero-cost providers
 - **Rate limiting** -- per-provider daily quotas enforced via Redis sliding window
 - **Response caching** -- cache deterministic (temperature=0) completions to avoid duplicate API calls
 - **Local inference routing** -- auto-discovers models from the active managed backend (Ollama, vLLM) and routes via `LocalInferenceProvider`
@@ -51,7 +51,6 @@ The routing strategy is configurable at runtime via the platform config:
 
 | Provider | Setup | Model prefix |
 |----------|-------|-------------|
-| **Claude Max/Pro** | Run `claude setup-token` or auto-read from `~/.claude/.credentials.json` | `claude-max/` |
 | **ChatGPT Plus/Pro** | Run `codex login` or auto-read from `~/.codex/auth.json` | `chatgpt/` |
 
 ### Free-tier API keys
@@ -139,7 +138,7 @@ curl http://localhost:8001/v1/models | jq '.data[].id'
 curl http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello from Nova"}]
   }'
 
@@ -147,7 +146,7 @@ curl http://localhost:8001/v1/chat/completions \
 curl http://localhost:8001/complete \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```

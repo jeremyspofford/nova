@@ -15,9 +15,9 @@ Nova exposes an OpenAI-compatible API on the LLM Gateway (`http://localhost:8001
 
 ```yaml
 models:
-  - name: Nova (Claude Sonnet)
+  - name: Nova (Default)
     provider: openai
-    model: claude-max/claude-sonnet-4-6
+    model: qwen2.5:7b
     apiBase: http://localhost:8001/v1
     roles:
       - chat
@@ -32,25 +32,25 @@ Add multiple entries to switch models from the Continue sidebar. Use `roles` to 
 
 ```yaml
 models:
-  - name: "Nova: Sonnet (fast)"
+  - name: "Nova: Qwen 1.5B (fast)"
     provider: openai
-    model: claude-max/claude-sonnet-4-5
+    model: qwen2.5:1.5b
     apiBase: http://localhost:8001/v1
     roles:
       - chat
       - edit
       - apply
-  - name: "Nova: Sonnet (latest)"
+  - name: "Nova: Qwen 7B (default)"
     provider: openai
-    model: claude-max/claude-sonnet-4-6
+    model: qwen2.5:7b
     apiBase: http://localhost:8001/v1
     roles:
       - chat
       - edit
       - apply
-  - name: "Nova: Opus (most capable)"
+  - name: "Nova: Hermes 3 (tool-calling)"
     provider: openai
-    model: claude-max/claude-opus-4
+    model: hermes3:8b
     apiBase: http://localhost:8001/v1
     roles:
       - chat
@@ -87,9 +87,9 @@ Then add `apiKey` to your model entries:
 
 ```yaml
 models:
-  - name: Nova (Claude Sonnet)
+  - name: Nova (Default)
     provider: openai
-    model: claude-max/claude-sonnet-4-6
+    model: qwen2.5:7b
     apiBase: http://localhost:8001/v1
     apiKey: sk-nova-your-key-here
     roles:
@@ -112,7 +112,7 @@ Same approach -- Cursor supports custom OpenAI-compatible endpoints:
 aider \
   --openai-api-base http://localhost:8001/v1 \
   --openai-api-key unused \
-  --model claude-max/claude-sonnet-4-6
+  --model qwen2.5:7b
 ```
 
 ## Raw API (curl / scripts)
@@ -121,7 +121,7 @@ aider \
 curl http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-max/claude-sonnet-4-6",
+    "model": "qwen2.5:7b",
     "messages": [{"role": "user", "content": "Hello from Nova"}]
   }'
 ```

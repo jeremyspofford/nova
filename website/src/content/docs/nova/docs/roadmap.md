@@ -34,7 +34,7 @@ Workspace-scoped file I/O (`list_dir`, `read_file`, `write_file`), shell executi
 
 ### Phase 4 -- Quartet Pipeline & Async Queue
 
-The 5-stage agent pipeline (Context, Task, Guardrail, Code Review, Decision), Redis BRPOP task queue with heartbeat and stale reaper, 11-state task state machine, human-in-the-loop review, clarification requests, pod and agent configuration (per-agent model, tools, system prompt, run conditions), and subscription-based LLM providers (Claude Max, ChatGPT Plus) for zero-cost operation.
+The 5-stage agent pipeline (Context, Task, Guardrail, Code Review, Decision), Redis BRPOP task queue with heartbeat and stale reaper, 11-state task state machine, human-in-the-loop review, clarification requests, pod and agent configuration (per-agent model, tools, system prompt, run conditions), and subscription-based LLM providers (ChatGPT Plus) for zero-cost operation.
 
 ### Phase 5 -- Dashboard
 
