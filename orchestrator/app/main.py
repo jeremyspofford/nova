@@ -265,6 +265,7 @@ from app.capture_router import router as capture_router
 from app.engram_router import router as engram_router
 from app.linked_accounts_router import router as linked_accounts_router
 from app.quality_router import quality_router
+from app.secrets_router import router as secrets_router
 from app.webhooks_router import router as webhooks_router
 from app.workspace_router import workspace_router
 
@@ -282,4 +283,5 @@ app.include_router(linked_accounts_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
 app.include_router(capture_router)
+app.include_router(secrets_router)
 app.include_router(webhooks_router)
