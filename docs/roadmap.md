@@ -871,6 +871,7 @@ Comprehensive 5-discipline review (architecture, backend, frontend, security, te
 - Admin secret default (`nova-admin-secret-change-me`) accepted without warning in production
 - Dead letter queue grows unbounded — no TTL, no cleanup, no archival
 - Episodic memory partitions hardcoded through 2026-04 — need auto-creation
+- `IngestionSourceType` contract drift — `nova-contracts/engram.py` enum lists 8 types (`chat`, `pipeline`, `tool`, `consolidation`, `cortex`, `journal`, `external`, `self_reflection`) but memory-service `_map_source_type_to_kind` runtime handles 11 (adds `intel`, `knowledge`, `screenpipe`). Producers (intel-worker, knowledge-worker, screenpipe-bridge) push strings not in the formal contract. Either tighten the enum to match runtime reality, or formally support custom `source_type` strings and document the extension path so future workers (e.g. a homegrown screenpipe replacement) know the contract surface.
 
 **Cortex — partially resolved (2026-03-25, updated 2026-03-28):**
 - Partial test coverage — `test_cortex_goals.py` covers cost tracking + goal schema. Thinking loop tests still needed.
