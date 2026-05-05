@@ -10,7 +10,7 @@ Nova runs as a multi-service Docker Compose stack. Each service has a single res
 | Service | Port | Role |
 |---------|------|------|
 | **orchestrator** | 8000 | Agent lifecycle, task queue, pipeline execution, MCP tool dispatch, DB migrations |
-| **llm-gateway** | 8001 | Multi-provider model routing via LiteLLM (Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub, Claude/ChatGPT subscription providers) |
+| **llm-gateway** | 8001 | Multi-provider model routing via LiteLLM (Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub, ChatGPT subscription provider) |
 | **memory-service** | 8002 | Embedding + hybrid semantic/keyword retrieval via pgvector |
 | **chat-api** | 8080 | WebSocket streaming bridge for external clients |
 | **dashboard** | 3000 / 5173 | React admin UI (nginx in production, Vite dev server in development) |

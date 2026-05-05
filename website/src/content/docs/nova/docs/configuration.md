@@ -65,7 +65,6 @@ Nova supports many LLM providers. Configure the ones you want to use:
 
 | Variable | Provider | Setup |
 |----------|----------|-------|
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Max/Pro | Run: `claude auth login && claude setup-token` |
 | `CHATGPT_ACCESS_TOKEN` | ChatGPT Plus/Pro | Run: `codex login` |
 
 ### Free tier providers (no credit card required)
@@ -95,7 +94,6 @@ Override the default model for each provider:
 | `DEFAULT_GROQ_MODEL` | `groq/llama-3.3-70b-versatile` |
 | `DEFAULT_GEMINI_MODEL` | `gemini/gemini-2.5-flash` |
 | `DEFAULT_CEREBRAS_MODEL` | `cerebras/llama-3.3-70b` |
-| `DEFAULT_CLAUDE_MAX_MODEL` | `claude-max/claude-sonnet-4-6` |
 | `DEFAULT_CHATGPT_MODEL` | `chatgpt/gpt-4o` |
 | `DEFAULT_OPENROUTER_MODEL` | `openrouter/meta-llama/llama-3.1-8b-instruct:free` |
 | `DEFAULT_GITHUB_MODEL` | `github/gpt-4o-mini` |
