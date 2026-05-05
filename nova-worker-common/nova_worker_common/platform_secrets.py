@@ -120,3 +120,36 @@ class PlatformSecretsResolver:
                 await self._client.aclose()
             finally:
                 self._client = None
+
+
+def fetch_platform_secrets_sync(
+    *,
+    orchestrator_url: str,
+    admin_secret: str,
+    keys: list[str],
+    timeout: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, str]:
+    """Synchronous batch fetch of platform secrets — for service module load.
+
+    Worker services (llm-gateway, chat-bridge) need to populate ``os.environ``
+    before any provider/adapter is constructed at module import time, which
+    runs before the FastAPI event loop exists. This helper does one blocking
+    HTTP POST and returns ``{key: value}`` for every key the orchestrator
+    has on file. Missing keys are simply absent.
+
+    On any failure (orchestrator unreachable, 4xx/5xx, malformed JSON) the
+    function returns an empty dict — the caller is expected to fall back to
+    its existing ``os.environ`` values, so service boot is never blocked.
+    """
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(
+                f"{orchestrator_url.rstrip('/')}/api/v1/admin/secrets/resolve",
+                headers={"X-Admin-Secret": admin_secret},
+                json={"keys": keys},
+            )
+            r.raise_for_status()
+            return r.json().get("values", {}) or {}
+    except Exception as e:
+        log.debug("fetch_platform_secrets_sync failed (%s) — caller will fall through", e)
+        return {}

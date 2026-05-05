@@ -18,7 +18,10 @@ import os
 
 import pytest
 
-from nova_worker_common.platform_secrets import PlatformSecretsResolver
+from nova_worker_common.platform_secrets import (
+    PlatformSecretsResolver,
+    fetch_platform_secrets_sync,
+)
 
 # Use a key prefix that test cleanup recognizes and that no real consumer reads.
 _TEST_PREFIX = "nova-test-resolver"
@@ -135,3 +138,49 @@ async def test_cache_serves_value_after_backend_deletion(
     finally:
         await _clear_secret(orchestrator, admin_headers, key)
         await resolver.aclose()
+
+
+# ─── fetch_platform_secrets_sync ──────────────────────────────────────────────
+# Sync batch helper for service startup (gateway/bridge), where module-level
+# code runs before any event loop exists. Returns {key: value} for every key
+# present in platform_secrets; missing keys are simply absent from the dict.
+
+
+@pytest.mark.asyncio
+async def test_sync_fetch_returns_seeded_values_only(
+    orchestrator, admin_headers, admin_secret
+):
+    present = f"{_TEST_PREFIX}-sync-present"
+    missing = f"{_TEST_PREFIX}-sync-missing"
+    await _seed_secret(orchestrator, admin_headers, present, "sync-hit-001")
+    try:
+        got = fetch_platform_secrets_sync(
+            orchestrator_url="http://localhost:8000",
+            admin_secret=admin_secret,
+            keys=[present, missing],
+        )
+        assert got == {present: "sync-hit-001"}
+    finally:
+        await _clear_secret(orchestrator, admin_headers, present)
+
+
+def test_sync_fetch_returns_empty_on_unreachable_orchestrator(admin_secret):
+    """If the orchestrator is down, the helper must NOT crash boot — empty dict."""
+    got = fetch_platform_secrets_sync(
+        orchestrator_url="http://127.0.0.1:1",  # nothing listening
+        admin_secret=admin_secret,
+        keys=["whatever"],
+        timeout=0.5,
+    )
+    assert got == {}
+
+
+def test_sync_fetch_returns_empty_on_bad_admin_secret():
+    """Wrong admin secret → 401 from orchestrator → empty dict, not raise."""
+    got = fetch_platform_secrets_sync(
+        orchestrator_url="http://localhost:8000",
+        admin_secret="not-the-real-secret",
+        keys=["nova-test-resolver-anything"],
+        timeout=2.0,
+    )
+    assert got == {}
