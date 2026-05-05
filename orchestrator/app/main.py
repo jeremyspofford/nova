@@ -30,6 +30,77 @@ configure_logging("orchestrator", settings.log_level)
 log = logging.getLogger(__name__)
 
 
+async def _bootstrap_platform_secrets_from_env() -> None:
+    """SEC-006a — sync platform_secrets ↔ .env on every orchestrator startup.
+
+    Two passes, both idempotent:
+
+      1. **Bootstrap** — for each managed key, if ``platform_secrets`` has no
+         entry AND ``os.environ`` has a non-empty value, copy it in.
+         Existing platform_secrets entries are NEVER overwritten — once a
+         user rotates via the dashboard, that wins forever.
+      2. **Apply** — for orchestrator-internal consumers that read
+         ``settings`` directly (``oauth.py``, ``github_tools.py``), copy the
+         platform_secrets value into the running ``Settings`` instance so
+         every existing call site picks up the right value without code
+         changes.
+
+    The end goal is to drop the ``.env`` bind-mount to ``:ro``: once an
+    install has booted at least once, every secret the user supplied via
+    .env is mirrored into encrypted platform_secrets and the .env file is
+    no longer the source of truth.
+    """
+    from app.db import get_pool
+    from app.secrets_store import get_secret, set_secret
+
+    # Full list of secret-bearing keys Nova manages — LLM providers,
+    # chat-bridge tokens, and orchestrator-internal credentials. Adding a
+    # new key here is the only place a new secret needs to be registered.
+    BOOTSTRAP_KEYS = [
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
+        "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+        "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN",
+        "TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
+        "GOOGLE_CLIENT_SECRET", "NOVA_GITHUB_PAT",
+    ]
+
+    # Settings attributes that orchestrator code reads directly and that
+    # therefore need a runtime override when platform_secrets has them.
+    SETTINGS_OVERRIDES = {
+        "GOOGLE_CLIENT_SECRET": "google_client_secret",
+        "NOVA_GITHUB_PAT": "nova_github_pat",
+    }
+
+    pool = get_pool()
+    bootstrapped: list[str] = []
+    applied: list[str] = []
+
+    for key in BOOTSTRAP_KEYS:
+        existing = await get_secret(pool, key)
+        if not existing:
+            env_val = os.environ.get(key, "")
+            if env_val:
+                await set_secret(pool, key, env_val)
+                bootstrapped.append(key)
+                existing = env_val
+        if existing and key in SETTINGS_OVERRIDES:
+            attr = SETTINGS_OVERRIDES[key]
+            if getattr(settings, attr, "") != existing:
+                setattr(settings, attr, existing)
+                applied.append(attr)
+
+    if bootstrapped:
+        log.info(
+            "platform_secrets: bootstrapped %d key(s) from .env: %s",
+            len(bootstrapped), sorted(bootstrapped),
+        )
+    if applied:
+        log.info(
+            "platform_secrets: applied %d override(s) to settings: %s",
+            len(applied), sorted(applied),
+        )
+
+
 async def _seed_config_from_env() -> None:
     """Seed platform_config from .env values for existing deployments.
 
@@ -119,6 +190,13 @@ async def lifespan(app: FastAPI):
     # endpoint can be hit.
     from app.capabilities.credentials import ensure_credential_master_key
     await ensure_credential_master_key()
+
+    # SEC-006a — mirror .env secret-bearing keys into platform_secrets and
+    # apply any platform_secrets values back onto settings for consumers that
+    # read settings directly. Must run AFTER ensure_credential_master_key()
+    # (the master key is needed to encrypt) and BEFORE any settings-reading
+    # code (oauth.py, github_tools.py) handles a request.
+    await _bootstrap_platform_secrets_from_env()
 
     # Seed platform_config from .env for existing deployments
     await _seed_config_from_env()
