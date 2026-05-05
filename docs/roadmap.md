@@ -581,6 +581,22 @@ Tests written during this analysis. Expand to cover the new code from Tiers 1-4.
 
 **Next step (when resuming):** Continue brainstorming via `superpowers:brainstorming` skill from the platform-priority question, then complete spec → plan → implementation.
 
+### Onboarding Model Recommender — Pending Design (2026-05-04)
+
+**Why:** Today's `./install` wizard picks an inference *mode* (local / hybrid / cloud) but defers model selection to a static default (`qwen2.5:7b`). New users are left guessing which model to actually use. The wizard should detect hardware (RAM, GPU vendor, VRAM) and ask the user's priority (privacy / cost / quality / speed), then recommend a concrete path: local-only with a specific model, hybrid with primary/fallback pair, or cloud-only with a specific provider. Removing this friction reinforces the "local AI is primary" stance by making good local choices the *easy* choice — and gives every new install a working setup tailored to its hardware instead of a one-size-fits-none default.
+
+**Status:** Captured 2026-05-04. Surface area to think through:
+
+- **Hardware detection** — reuse the bundled GPU detection (already drives the NVIDIA/ROCm overlay choice) and probe RAM/CPU. macOS Metal vs. Linux NVIDIA vs. AMD ROCm vs. CPU-only vs. Apple Silicon all hit different model viability bands.
+- **Priority elicitation** — one or two questions during the wizard ("privacy-critical?", "cost-sensitive?"); skippable if the user opts into "expert mode" / pre-supplies env vars.
+- **Recommendation logic** — rules-based (RAM/VRAM thresholds map to qwen2.5:1.5b / qwen2.5:7b / hermes3:8b / phi4 / etc.) is enough for v1. Don't over-engineer with ML-based prediction.
+- **Cloud picks** — depend on which API keys the wizard sees the user enter. If only `GROQ_API_KEY` → recommend `groq/llama-3.3-70b-versatile`. If multiple → recommend by category (cost-tier vs. quality-tier) using current free-tier vs. paid landscape.
+- **Update path** — `./install --reconfigure-models` after hardware change (added GPU, freed RAM, etc.) without re-running the full wizard.
+
+**Effort estimate:** ~1 week for v1 (rules-based recommender, basic hardware detection, reuses existing wizard prompts).
+
+**Linked context:** This gap is why the website docs use `qwen2.5:7b` as a generic example rather than per-install recommendations — the install flow is the right place for that personalization, not the docs.
+
 ### P1: Skills & Rules System `[spec]`
 
 **Why:** Agent extensibility without code changes. Skills = reusable prompt templates shared across agents/pods. Rules = declarative behavior constraints with pre-execution enforcement, complementing the Guardrail Agent.
