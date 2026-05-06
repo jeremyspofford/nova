@@ -339,3 +339,136 @@ def test_envvar_key_translation_dots_become_underscores(monkeypatch):
     )
     monkeypatch.setenv("NOVA_FLAG_KILL_INTEL_WORKER_POLL", "true")
     assert flag.value() is True
+
+
+# ----------------------------------------------------------------------------
+# B3b: OpenFeature-shaped FlagResolver Protocol — swap-out boundary
+# ----------------------------------------------------------------------------
+
+from nova_contracts.feature_flags import (
+    FlagResolver,
+    DefaultResolver,
+    set_resolver,
+    get_resolver,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_resolver():
+    """Restore the default resolver between tests so plug-in tests
+    don't leak across the suite."""
+    yield
+    set_resolver(DefaultResolver())
+
+
+def test_default_resolver_returns_cache_when_present():
+    populate_cache({"r.cached": True})
+    resolver = DefaultResolver()
+    assert resolver.resolve_bool("r.cached", default=False) is True
+
+
+def test_default_resolver_returns_default_on_miss():
+    resolver = DefaultResolver()
+    assert resolver.resolve_bool("r.never_cached", default=True) is True
+    assert resolver.resolve_string("r.never_cached", default="fallback") == "fallback"
+
+
+def test_resolver_is_consulted_after_envvar(monkeypatch):
+    """Resolution order: override > env-var > resolver > in-code default.
+    Resolver layer is between env-var (S2 audit-bypass path) and the
+    in-code default."""
+
+    class CountingResolver:
+        calls: list[str] = []
+
+        def resolve_bool(self, key: str, default: bool,
+                         *, tenant_id=None, user_id=None) -> bool:
+            self.calls.append(key)
+            return True
+
+        def resolve_string(self, key: str, default: str,
+                           *, tenant_id=None, user_id=None) -> str:
+            self.calls.append(key)
+            return default
+
+    counting = CountingResolver()
+    set_resolver(counting)
+
+    flag = register_flag(
+        key="r.consulted", type="bool", default=False, description=""
+    )
+    # No override, no env-var → resolver is consulted.
+    assert flag.value() is True
+    assert counting.calls == ["r.consulted"]
+
+
+def test_resolver_is_skipped_when_envvar_set(monkeypatch):
+    class FailingResolver:
+        def resolve_bool(self, key, default, *, tenant_id=None, user_id=None):
+            raise AssertionError("must not be called when env-var override is set")
+        def resolve_string(self, key, default, *, tenant_id=None, user_id=None):
+            raise AssertionError("must not be called when env-var override is set")
+
+    set_resolver(FailingResolver())
+    monkeypatch.setenv("NOVA_FLAG_R_SKIP", "true")
+    flag = register_flag(key="r.skip", type="bool", default=False, description="")
+    assert flag.value() is True
+
+
+def test_resolver_is_skipped_when_test_override_set():
+    class FailingResolver:
+        def resolve_bool(self, key, default, *, tenant_id=None, user_id=None):
+            raise AssertionError("must not be called inside flag_override")
+        def resolve_string(self, key, default, *, tenant_id=None, user_id=None):
+            raise AssertionError("must not be called inside flag_override")
+
+    set_resolver(FailingResolver())
+    flag = register_flag(key="r.skip2", type="bool", default=False, description="")
+    with flag_override("r.skip2", False):
+        assert flag.value() is False
+
+
+def test_get_resolver_returns_currently_registered():
+    custom = DefaultResolver()
+    set_resolver(custom)
+    assert get_resolver() is custom
+
+
+def test_resolver_protocol_runtime_checkable():
+    """Any object that implements both resolve_bool and resolve_string
+    should satisfy the Protocol — no inheritance required."""
+
+    class DuckTyped:
+        def resolve_bool(self, key, default, *, tenant_id=None, user_id=None):
+            return default
+        def resolve_string(self, key, default, *, tenant_id=None, user_id=None):
+            return default
+
+    assert isinstance(DuckTyped(), FlagResolver)
+
+
+def test_enum_flag_routes_to_resolve_string():
+    """Enum-typed flags consult resolve_string, not resolve_bool."""
+
+    class TypeWatcher:
+        method_called: list[str] = []
+
+        def resolve_bool(self, key, default, *, tenant_id=None, user_id=None):
+            self.method_called.append("bool")
+            return default
+        def resolve_string(self, key, default, *, tenant_id=None, user_id=None):
+            self.method_called.append("string")
+            return default
+
+    watcher = TypeWatcher()
+    set_resolver(watcher)
+
+    flag = register_flag(
+        key="r.enum",
+        type="enum",
+        variants=["a", "b"],
+        default="a",
+        description="",
+    )
+    flag.value()
+    assert watcher.method_called == ["string"]

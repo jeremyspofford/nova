@@ -11,7 +11,7 @@ import contextvars
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Iterator, Literal, Sequence
+from typing import Any, Iterator, Literal, Protocol, Sequence, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +73,16 @@ class FlagDef:
                        user_id: str | None = None) -> Any:
         """Evaluate the flag.
 
-        Resolution order (Phase A + B3a):
+        Resolution order (Phase A + B3a + B3b):
           1. flag_override(...) context manager (process-local, contextvars)
           2. NOVA_FLAG_<KEY> environment variable (boot-time only;
              changing it requires container restart — NOT a hot kill-switch)
-          3. in-process cache (populated via populate_cache() — pre-warmed
-             at service startup in B3c)
+          3. registered FlagResolver (DefaultResolver reads from in-process
+             cache; HttpFlagResolver lands in B3c; future Flagsmith adapter
+             swaps in here)
           4. in-code default
 
-        Layer 4.5 (last-seen cache file) lands in B3d.
+        Layer 3.5 (last-seen cache file) lands in B3d.
         """
         overrides = _overrides.get()
         if overrides is not None and self.key in overrides:
@@ -107,10 +108,15 @@ class FlagDef:
                 )
                 return coerced
 
-        if self.key in _cache:
-            return _cache[self.key]
-
-        return self.default
+        if self.type == "bool":
+            return _resolver.resolve_bool(
+                self.key, self.default,
+                tenant_id=tenant_id, user_id=user_id,
+            )
+        return _resolver.resolve_string(
+            self.key, self.default,
+            tenant_id=tenant_id, user_id=user_id,
+        )
 
 
 def populate_cache(values: dict[str, Any]) -> None:
@@ -135,6 +141,92 @@ def cache_clear() -> None:
     """Empty the in-process cache. Used by tests and by the pubsub
     'flush all' path."""
     _cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# B3b: OpenFeature-shaped FlagResolver Protocol
+#
+# The resolver is the swap-out boundary. Today's DefaultResolver reads from
+# the in-process cache (populated by populate_cache from B3a); B3c will add
+# an HttpFlagResolver that warms the cache from the orchestrator; a future
+# Flagsmith adapter would implement the same Protocol and require no
+# flag-consumer rewrites.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class FlagResolver(Protocol):
+    """Per-key value lookup. Implementations choose where the answer comes
+    from (cache, file, network) but must return synchronously so
+    FlagDef.value() stays sync (B1 acceptance criterion)."""
+
+    def resolve_bool(
+        self,
+        key: str,
+        default: bool,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> bool: ...
+
+    def resolve_string(
+        self,
+        key: str,
+        default: str,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str: ...
+
+
+class DefaultResolver:
+    """Reads from the in-process cache (the hot path). Falls back to the
+    caller-provided default on cache miss. Network and file-cache layers
+    plug in via cache pre-population, not via Resolver method calls — so
+    `.value()` stays synchronous and never blocks the event loop."""
+
+    def resolve_bool(
+        self,
+        key: str,
+        default: bool,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> bool:
+        cached = _cache.get(key, _NO_OVERRIDE)
+        if cached is _NO_OVERRIDE:
+            return default
+        return bool(cached)
+
+    def resolve_string(
+        self,
+        key: str,
+        default: str,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str:
+        cached = _cache.get(key, _NO_OVERRIDE)
+        if cached is _NO_OVERRIDE:
+            return default
+        return str(cached)
+
+
+_resolver: FlagResolver = DefaultResolver()
+
+
+def set_resolver(resolver: FlagResolver) -> None:
+    """Replace the process-wide flag resolver. Production services swap
+    in HttpFlagResolver during their FastAPI lifespan startup; tests can
+    swap in a fake to assert resolver-call patterns; a future Flagsmith
+    migration replaces it with a Flagsmith-backed adapter."""
+    global _resolver
+    _resolver = resolver
+
+
+def get_resolver() -> FlagResolver:
+    """Return the currently registered resolver."""
+    return _resolver
 
 
 @contextlib.contextmanager
