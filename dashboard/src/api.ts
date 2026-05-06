@@ -1613,3 +1613,27 @@ export async function addCaptureExclude(scope: ExcludeScope, value: string): Pro
     body: JSON.stringify({ scope, value }),
   })
 }
+
+// ── Platform secrets (SEC-006a) ──────────────────────────────────────────────
+// Encrypted at-rest store for instance-level secrets (provider keys, bridge
+// tokens, OAuth secrets, GitHub PAT). Replaces the recovery /env path —
+// values flow through orchestrator and are never round-tripped to the UI.
+
+export interface PlatformSecretListEntry {
+  key: string
+  updated_at: string
+}
+
+export const listPlatformSecrets = () =>
+  apiFetch<{ keys: PlatformSecretListEntry[] }>('/api/v1/admin/secrets')
+
+export const patchPlatformSecrets = (updates: Record<string, string>) =>
+  apiFetch<{ updated: string[] }>('/api/v1/admin/secrets', {
+    method: 'PATCH',
+    body: JSON.stringify({ updates }),
+  })
+
+export const deletePlatformSecret = (key: string) =>
+  apiFetch<void>(`/api/v1/admin/secrets/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  })

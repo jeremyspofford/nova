@@ -123,5 +123,9 @@ class Settings(BaseSettings):
     nova_admin_secret: str = ""
     trusted_network_cidrs: str = ""  # empty = default list from nova_worker_common
 
+    # SEC-006a — orchestrator URL for the platform_secrets sync fetch at startup.
+    # Falls back to in-cluster DNS; override only for tests / split-host setups.
+    orchestrator_url: str = "http://orchestrator:8000"
+
 
 settings = Settings()
