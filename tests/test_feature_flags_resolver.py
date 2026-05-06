@@ -472,3 +472,130 @@ def test_enum_flag_routes_to_resolve_string():
     )
     flag.value()
     assert watcher.method_called == ["string"]
+
+
+# ----------------------------------------------------------------------------
+# B3d: last-seen cache file fallback (SR3 — the kill-switch fail-closed fix)
+# ----------------------------------------------------------------------------
+
+import json
+
+from nova_contracts.feature_flags import init_cache_file
+
+
+@pytest.fixture(autouse=True)
+def _reset_cache_file():
+    """Each test starts with no file persistence configured."""
+    init_cache_file(None)
+    yield
+    init_cache_file(None)
+
+
+def test_init_cache_file_loads_existing_json(tmp_path):
+    """A previously-written cache file populates _cache at startup —
+    this is the partition-fallback path: even if orchestrator/Redis
+    are unreachable on cold boot, last-seen kill-switch values apply."""
+    cache_path = tmp_path / "orchestrator.json"
+    cache_path.write_text(json.dumps({
+        "kill.intel_worker.poll": True,
+        "memory.retrieval_mode": "tools",
+    }))
+
+    init_cache_file(cache_path)
+
+    bool_flag = register_flag(
+        key="kill.intel_worker.poll", type="bool", default=False,
+        description="",
+    )
+    enum_flag = register_flag(
+        key="memory.retrieval_mode", type="enum",
+        variants=["inject", "tools"], default="inject", description="",
+    )
+    assert bool_flag.value() is True   # NOT the in-code default False
+    assert enum_flag.value() == "tools"
+
+
+def test_init_cache_file_silent_when_missing(tmp_path):
+    """Cold boot with no cache file is fine — defaults apply, no error."""
+    init_cache_file(tmp_path / "never-written.json")
+    flag = register_flag(key="cf.cold", type="bool", default=False, description="")
+    assert flag.value() is False
+
+
+def test_init_cache_file_warns_on_corrupt_json(tmp_path, caplog):
+    cache_path = tmp_path / "corrupt.json"
+    cache_path.write_text("{not valid json")
+    with caplog.at_level("WARNING", logger="nova_contracts.feature_flags"):
+        init_cache_file(cache_path)
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "flag_cache_file_corrupt" in r.message]
+    assert warns, (
+        f"corrupt cache file must WARN; got {[r.message for r in caplog.records]}"
+    )
+    # Cache is empty; defaults apply.
+    flag = register_flag(key="cf.corrupt", type="bool", default=False, description="")
+    assert flag.value() is False
+
+
+def test_populate_cache_writes_to_file_when_configured(tmp_path):
+    cache_path = tmp_path / "persist.json"
+    init_cache_file(cache_path)
+
+    populate_cache({"persist.k1": True, "persist.k2": "tools"})
+
+    on_disk = json.loads(cache_path.read_text())
+    assert on_disk == {"persist.k1": True, "persist.k2": "tools"}
+
+
+def test_populate_cache_no_disk_write_when_file_disabled(tmp_path):
+    """init_cache_file(None) means in-memory only; nothing persists."""
+    init_cache_file(None)
+    populate_cache({"nopersist.k": True})
+    # No assertion on disk — but ensure no exception was raised.
+    assert _read_cache_dict_for_test()["nopersist.k"] is True
+
+
+def test_partition_fallback_kill_switch_stays_armed(tmp_path):
+    """SR3 acceptance scenario: kill switch is set in the cache file
+    (a previous online state), then the service cold-boots in a
+    partition (no orchestrator reachable). The cached True must apply,
+    NOT the in-code default of False — because the in-code default
+    'feature-enabled' would silently disarm the kill switch."""
+
+    cache_path = tmp_path / "orchestrator.json"
+    cache_path.write_text(json.dumps({
+        "kill.engram.ingestion": True,  # someone flipped this online
+    }))
+
+    # Simulate a cold boot (cache empty before init).
+    cache_clear()
+    init_cache_file(cache_path)
+
+    flag = register_flag(
+        key="kill.engram.ingestion", type="bool", default=False,
+        description="kill ingestion",
+    )
+    # Even without any HTTP success, the kill switch is still armed.
+    assert flag.value() is True
+
+
+def test_init_cache_file_overwrites_previous_path(tmp_path):
+    """Switching the cache-file path (e.g. on test re-init) clears any
+    in-memory cache from the previous file."""
+    first = tmp_path / "a.json"
+    second = tmp_path / "b.json"
+    first.write_text(json.dumps({"sw.k": True}))
+    second.write_text(json.dumps({"sw.k": False}))
+
+    init_cache_file(first)
+    flag = register_flag(key="sw.k", type="bool", default=False, description="")
+    assert flag.value() is True
+
+    init_cache_file(second)
+    assert flag.value() is False
+
+
+def _read_cache_dict_for_test():
+    """Test helper: peek at the SDK's in-memory cache directly."""
+    from nova_contracts.feature_flags import _cache
+    return dict(_cache)

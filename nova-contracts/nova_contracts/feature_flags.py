@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterator, Literal, Protocol, Sequence, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,9 @@ class FlagDef:
         )
 
 
+_cache_file: Path | None = None
+
+
 def populate_cache(values: dict[str, Any]) -> None:
     """Set or update cache entries. Used by the bulk-warm-at-startup
     path (B3c) and by pubsub-driven invalidate-and-refresh (B-Task 4).
@@ -126,21 +131,92 @@ def populate_cache(values: dict[str, Any]) -> None:
     Per SR1: emit a structured INFO log on every actual value change so
     operators can correlate flag flips with downstream behavior. No log
     fires when a key is set to the same value it already had.
+
+    Per SR3: when a cache file is configured (init_cache_file), every
+    successful update is also persisted so the next cold boot serves
+    the last-seen value during a partition.
     """
+    changed = False
     for key, new_value in values.items():
         old_value = _cache.get(key, _NO_OVERRIDE)
         if old_value is _NO_OVERRIDE or old_value != new_value:
             _cache[key] = new_value
+            changed = True
             logger.info(
                 "flag_value_changed key=%s old=%r new=%r source=cache_populate",
                 key, None if old_value is _NO_OVERRIDE else old_value, new_value,
             )
+    if changed:
+        _persist_cache_file()
 
 
 def cache_clear() -> None:
     """Empty the in-process cache. Used by tests and by the pubsub
     'flush all' path."""
     _cache.clear()
+
+
+def init_cache_file(path: Path | str | None) -> None:
+    """Configure a JSON file as the durable cache backing.
+
+    Behavior:
+      - If `path` exists, its contents seed `_cache` (populate, not merge —
+        the previous in-memory state is replaced).
+      - The path is registered for future `populate_cache()` writes.
+      - Pass `None` to disable file persistence.
+      - Missing files are silent (cold boot is normal).
+      - Corrupt JSON logs a WARNING ("flag_cache_file_corrupt") and
+        leaves the cache empty so the SDK falls back to in-code defaults
+        rather than crashing the service at startup.
+
+    This is the SR3 acceptance scenario: kill switches stay armed during
+    a partition because the previous online state is on disk.
+    """
+    global _cache_file
+    if path is None:
+        _cache_file = None
+        return
+
+    p = Path(path) if not isinstance(path, Path) else path
+    _cache_file = p
+    _cache.clear()  # switching files replaces, doesn't merge
+
+    if not p.exists():
+        return
+
+    try:
+        loaded = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "flag_cache_file_corrupt path=%s reason=%s — starting empty cache",
+            p, exc,
+        )
+        return
+
+    if not isinstance(loaded, dict):
+        logger.warning(
+            "flag_cache_file_corrupt path=%s reason=%s — starting empty cache",
+            p, f"top-level must be a JSON object, saw {type(loaded).__name__}",
+        )
+        return
+
+    _cache.update(loaded)
+
+
+def _persist_cache_file() -> None:
+    """Write the in-memory cache to the registered file. No-op when no
+    file is configured. Failures log WARNING but don't propagate — flag
+    persistence is best-effort, not a service-blocker."""
+    if _cache_file is None:
+        return
+    try:
+        _cache_file.parent.mkdir(parents=True, exist_ok=True)
+        _cache_file.write_text(json.dumps(_cache, sort_keys=True))
+    except OSError as exc:
+        logger.warning(
+            "flag_cache_file_write_failed path=%s reason=%s",
+            _cache_file, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
