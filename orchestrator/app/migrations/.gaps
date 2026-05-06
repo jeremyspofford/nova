@@ -14,3 +14,7 @@
 
 042
 043
+# 084 was reserved for sec-006b-socket-proxy but that PR (#3) shipped a
+# Docker socket-proxy change with no schema migration, so the number was
+# never claimed. Intentional skip — confirmed via gh pr view 3.
+084
