@@ -17,6 +17,7 @@ from app.engram.ingestion import ingestion_loop
 from app.engram.neural_router.serve import load_latest_model
 from app.engram.router import engram_router
 from app.health import health_router
+from app.http_client import close_http_client
 from fastapi import Depends, FastAPI
 from nova_contracts.logging import configure_logging
 from nova_worker_common.admin_secret import AdminSecretResolver
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
         log.warning("Shutdown grace period expired — some tasks may not have completed")
     await close_embedding_redis()
+    await close_http_client()
     await _admin_resolver.close()
     log.info("Memory Service shutdown complete")
 

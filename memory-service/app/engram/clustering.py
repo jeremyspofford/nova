@@ -14,10 +14,10 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-import httpx
 import numpy as np
 from app.config import settings
 from app.embedding import get_embedding, to_pg_vector
+from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,51 +370,50 @@ async def _name_topic(
 
     try:
         model = await resolve_model(settings.engram_consolidation_model)
-        async with httpx.AsyncClient(
-            base_url=settings.llm_gateway_url, timeout=30.0
-        ) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are naming a knowledge topic cluster. Generate a short topic name "
-                                "(2-5 words) followed by a summary paragraph describing what this "
-                                "knowledge domain covers.\n\n"
-                                "Format:\n"
-                                "TOPIC: <name>\n"
-                                "<summary paragraph>" + careful_note
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Anchor entities: {anchors_text}\n\nSample knowledge:\n{samples_text}",
-                        },
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": settings.engram_schema_max_tokens,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are naming a knowledge topic cluster. Generate a short topic name "
+                            "(2-5 words) followed by a summary paragraph describing what this "
+                            "knowledge domain covers.\n\n"
+                            "Format:\n"
+                            "TOPIC: <name>\n"
+                            "<summary paragraph>" + careful_note
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Anchor entities: {anchors_text}\n\nSample knowledge:\n{samples_text}",
+                    },
+                ],
+                "temperature": 0.3,
+                "max_tokens": settings.engram_schema_max_tokens,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-            stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
-            if stop_reason in ("length", "max_tokens"):
-                log.warning("Topic naming truncated, discarding")
-                return None
+        stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
+        if stop_reason in ("length", "max_tokens"):
+            log.warning("Topic naming truncated, discarding")
+            return None
 
-            content = data.get("content", "")
-            if isinstance(content, list):
-                content = content[0].get("text", "") if content else ""
-            content = content.strip()
+        content = data.get("content", "")
+        if isinstance(content, list):
+            content = content[0].get("text", "") if content else ""
+        content = content.strip()
 
-            if len(content) < 10:
-                return None
+        if len(content) < 10:
+            return None
 
-            return content
+        return content
     except Exception:
         log.warning("Topic naming failed", exc_info=True)
         return None

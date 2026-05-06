@@ -9,9 +9,9 @@ import hashlib
 import json
 import logging
 
-import httpx
 import redis.asyncio as aioredis
 from app.config import settings
+from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -191,22 +191,20 @@ async def _call_with_retry_fallback(
             log.info("Using fallback embedding model: %s", model_to_try)
         for attempt in range(settings.embedding_max_retries):
             try:
-                async with httpx.AsyncClient(
-                    base_url=settings.llm_gateway_url, timeout=10.0
-                ) as client:
-                    resp = await client.post(
-                        "/embed", json={"model": model_to_try, **payload}
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    # Primary model recovered — clear the cooldown
-                    if not is_fallback:
-                        _primary_failed_until = 0.0
-                    return (
-                        data["embeddings"][0]
-                        if extract == "single"
-                        else data["embeddings"]
-                    )
+                client = get_http_client()
+                resp = await client.post(
+                    f"{settings.llm_gateway_url}/embed",
+                    json={"model": model_to_try, **payload},
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                # Primary model recovered — clear the cooldown
+                if not is_fallback:
+                    _primary_failed_until = 0.0
+                return (
+                    data["embeddings"][0] if extract == "single" else data["embeddings"]
+                )
             except Exception:
                 if attempt < settings.embedding_max_retries - 1:
                     await _aio.sleep(settings.embedding_retry_delay)

@@ -25,10 +25,10 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import httpx
 from app.config import settings
 from app.db.database import AsyncSessionLocal
 from app.embedding import get_embedding, get_redis, to_pg_vector
+from app.http_client import get_http_client
 from sqlalchemy import text
 
 from .cortex_stimulus import emit_to_cortex
@@ -468,67 +468,66 @@ async def _synthesize_schema(entity_name: str, items_text: str) -> str | None:
         from .decomposition import resolve_model
 
         model = await resolve_model(settings.engram_consolidation_model)
-        async with httpx.AsyncClient(
-            base_url=settings.llm_gateway_url, timeout=30.0
-        ) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                f'You are synthesizing a knowledge pattern from observations about "{entity_name}".\n\n'
-                                "Capture the full pattern — include key details, relationships, and conditions, "
-                                "not just the conclusion. Be concise but complete. If the pattern is simple, "
-                                "one sentence is fine. If it's complex, use a short paragraph.\n\n"
-                                "The pattern must:\n"
-                                f"- Reference {entity_name} by name\n"
-                                "- Be self-contained (understandable without reading the source observations)\n"
-                                "- Capture specifics, not vague generalizations"
-                            ),
-                        },
-                        {"role": "user", "content": f"Observations:\n{items_text}"},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": settings.engram_schema_max_tokens,
-                },
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            f'You are synthesizing a knowledge pattern from observations about "{entity_name}".\n\n'
+                            "Capture the full pattern — include key details, relationships, and conditions, "
+                            "not just the conclusion. Be concise but complete. If the pattern is simple, "
+                            "one sentence is fine. If it's complex, use a short paragraph.\n\n"
+                            "The pattern must:\n"
+                            f"- Reference {entity_name} by name\n"
+                            "- Be self-contained (understandable without reading the source observations)\n"
+                            "- Capture specifics, not vague generalizations"
+                        ),
+                    },
+                    {"role": "user", "content": f"Observations:\n{items_text}"},
+                ],
+                "temperature": 0.2,
+                "max_tokens": settings.engram_schema_max_tokens,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Gate 1: Check stop reason — reject truncated responses
+        stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
+        if stop_reason in ("length", "max_tokens"):
+            log.warning(
+                "Schema synthesis truncated for entity=%s, discarding", entity_name
             )
-            resp.raise_for_status()
-            data = resp.json()
+            return None
 
-            # Gate 1: Check stop reason — reject truncated responses
-            stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
-            if stop_reason in ("length", "max_tokens"):
-                log.warning(
-                    "Schema synthesis truncated for entity=%s, discarding", entity_name
-                )
-                return None
+        content = data.get("content", "")
+        if isinstance(content, list):
+            content = content[0].get("text", "") if content else ""
+        content = content.strip()
 
-            content = data.get("content", "")
-            if isinstance(content, list):
-                content = content[0].get("text", "") if content else ""
-            content = content.strip()
+        # Gate 2: Non-trivial length
+        if len(content) < 20:
+            log.warning(
+                "Schema synthesis too short (%d chars) for entity=%s",
+                len(content),
+                entity_name,
+            )
+            return None
 
-            # Gate 2: Non-trivial length
-            if len(content) < 20:
-                log.warning(
-                    "Schema synthesis too short (%d chars) for entity=%s",
-                    len(content),
-                    entity_name,
-                )
-                return None
+        # Gate 3: Must reference the entity
+        if entity_name.lower() not in content.lower():
+            log.warning(
+                "Schema synthesis doesn't reference entity=%s, discarding",
+                entity_name,
+            )
+            return None
 
-            # Gate 3: Must reference the entity
-            if entity_name.lower() not in content.lower():
-                log.warning(
-                    "Schema synthesis doesn't reference entity=%s, discarding",
-                    entity_name,
-                )
-                return None
-
-            return content
+        return content
     except Exception:
         log.warning("Schema synthesis failed for entity=%s", entity_name, exc_info=True)
         return None

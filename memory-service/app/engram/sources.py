@@ -15,8 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-import httpx
 from app.config import settings
+from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,23 +246,24 @@ async def generate_source_summary(content: str) -> str:
     from .decomposition import SOURCE_SUMMARY_PROMPT, resolve_model
 
     model = await resolve_model(settings.engram_decomposition_model)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.post(
-            f"{settings.llm_gateway_url}/complete",
-            json={
-                "model": model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": SOURCE_SUMMARY_PROMPT.format(content=content[:8000]),
-                    },
-                ],
-                "temperature": 0.3,
-                "max_tokens": 300,
-            },
-        )
-        if resp.status_code == 200:
-            return resp.json().get("content", "")
+    client = get_http_client()
+    resp = await client.post(
+        f"{settings.llm_gateway_url}/complete",
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": SOURCE_SUMMARY_PROMPT.format(content=content[:8000]),
+                },
+            ],
+            "temperature": 0.3,
+            "max_tokens": 300,
+        },
+        timeout=30.0,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("content", "")
     return ""
 
 

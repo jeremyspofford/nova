@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-import httpx
 from app.config import settings
+from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -332,27 +332,26 @@ async def _narrative_reconstruct(
     user_prompt = f"Current context: {context}\n\nMemory fragments:\n{engram_text}"
 
     try:
-        async with httpx.AsyncClient(
-            base_url=settings.llm_gateway_url, timeout=30.0
-        ) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": settings.engram_reconstruction_model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 500,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("content", "")
-            if isinstance(content, list):
-                content = content[0].get("text", "") if content else ""
-            return content.strip()
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": settings.engram_reconstruction_model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 500,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("content", "")
+        if isinstance(content, list):
+            content = content[0].get("text", "") if content else ""
+        return content.strip()
     except Exception:
         log.warning(
             "Narrative reconstruction failed, falling back to template", exc_info=True
