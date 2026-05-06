@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     engram_edge_decay: float = 0.95
     engram_prune_activation_floor: float = 0.01
     engram_merge_similarity_threshold: float = 0.88
+    engram_merge_shortlist_k: int = 10  # HNSW top-K per candidate (P2)
+    engram_merge_cycle_cap: int = (
+        200  # candidates processed per consolidation cycle (P2)
+    )
+    engram_hnsw_ef_search: int = (
+        40  # higher = better recall, slower probe; stable top-K (P2)
+    )
 
     # Engram Network (Topic Clustering)
     engram_cluster_min_size: int = 5  # HDBSCAN min_cluster_size

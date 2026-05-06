@@ -8,7 +8,7 @@
       "type": "fact"
     },
     {
-      "access_count": 7,
+      "access_count": 5,
       "content": "dup-b",
       "source_type": "chat",
       "superseded": true,
@@ -71,5 +71,5 @@
       "type": "fact"
     }
   ],
-  "merged_count": 3
+  "merged_count": 2
 }

@@ -673,38 +673,90 @@ async def _decay_unused_activations(session) -> int:
 
 
 async def _merge_duplicates(session) -> int:
-    """Phase 5b: Merge near-duplicate engrams (same type, similarity > threshold, default 0.88).
+    """Phase 5b: Merge near-duplicate engrams via HNSW shortlist (P2 fix).
 
-    Keeps the one with higher access_count, combines edge connections.
+    For each candidate (capped at engram_merge_cycle_cap), find the top-K
+    nearest engrams of the same type/source_type via the HNSW index and
+    merge any pairs above engram_merge_similarity_threshold.
+
+    HNSW is approximate; we set hnsw.ef_search to stabilize top-K across runs.
     """
-    # Find candidate pairs
-    result = await session.execute(
-        text("""
-            SELECT e1.id AS id1, e2.id AS id2,
-                   e1.access_count AS ac1, e2.access_count AS ac2,
-                   1 - (e1.embedding <=> e2.embedding) AS similarity
-            FROM engrams e1
-            JOIN engrams e2 ON e2.id > e1.id
-              AND e2.type = e1.type
-              AND e2.source_type = e1.source_type
-              AND NOT e2.superseded
-              AND NOT e1.superseded
-              AND e1.embedding IS NOT NULL
-              AND e2.embedding IS NOT NULL
-              AND 1 - (e1.embedding <=> e2.embedding) > :threshold
-            LIMIT 20
-        """),
-        {"threshold": settings.engram_merge_similarity_threshold},
+    # Stabilize HNSW recall — required for the "bounded merge churn" contract.
+    # SET LOCAL does not accept parameterized values, so inline the integer directly.
+    await session.execute(
+        text(f"SET LOCAL hnsw.ef_search = {int(settings.engram_hnsw_ef_search)}")
     )
-    pairs = result.fetchall()
+
+    # Step 1: snapshot the candidate set for this cycle
+    candidates_result = await session.execute(
+        text("""
+            SELECT id, type, source_type, embedding, access_count
+            FROM engrams
+            WHERE NOT superseded
+              AND embedding IS NOT NULL
+            ORDER BY id
+            LIMIT :cycle_cap
+        """),
+        {"cycle_cap": settings.engram_merge_cycle_cap},
+    )
+    candidates = candidates_result.fetchall()
+
+    # loser_ids: engrams superseded in this cycle; excluded from neighbor queries
+    # (they're already gone so can't be targets or candidates)
+    loser_ids: set[str] = set()
     merged = 0
 
-    for pair in pairs:
-        # Keep the one with more access
-        keep_id = pair.id1 if pair.ac1 >= pair.ac2 else pair.id2
-        lose_id = pair.id2 if keep_id == pair.id1 else pair.id1
+    for cand in candidates:
+        cand_id_str = str(cand.id)
+        if cand_id_str in loser_ids:
+            continue
 
-        # Re-point loser's edges to winner
+        loser_uuid_array = list(loser_ids)  # list[str]; cast to uuid[] in SQL
+
+        neighbors_result = await session.execute(
+            text("""
+                SELECT id, access_count,
+                       1 - (embedding <=> :emb) AS similarity
+                FROM engrams
+                WHERE id <> :self_id
+                  AND NOT superseded
+                  AND type = :ctype
+                  AND source_type = :csrc
+                  AND embedding IS NOT NULL
+                  AND id <> ALL(CAST(:loser_uuids AS uuid[]))
+                ORDER BY embedding <=> :emb
+                LIMIT :k
+            """),
+            {
+                "emb": cand.embedding,
+                "self_id": cand.id,
+                "ctype": cand.type,
+                "csrc": cand.source_type,
+                "loser_uuids": loser_uuid_array,
+                "k": settings.engram_merge_shortlist_k,
+            },
+        )
+        neighbors = neighbors_result.fetchall()
+
+        merge_partners = [
+            n
+            for n in neighbors
+            if n.similarity is not None
+            and n.similarity > settings.engram_merge_similarity_threshold
+        ]
+        if not merge_partners:
+            continue
+
+        partner = max(merge_partners, key=lambda n: n.similarity)
+
+        if cand.access_count >= partner.access_count:
+            keep_id, lose_id = cand.id, partner.id
+            keep_ac, lose_ac = cand.access_count, partner.access_count
+        else:
+            keep_id, lose_id = partner.id, cand.id
+            keep_ac, lose_ac = partner.access_count, cand.access_count
+
+        # Re-point loser's edges to winner (de-dup via NOT EXISTS guard)
         await session.execute(
             text("""
                 UPDATE engram_edges SET source_id = CAST(:keep AS uuid)
@@ -732,7 +784,7 @@ async def _merge_duplicates(session) -> int:
             {"keep": str(keep_id), "lose": str(lose_id)},
         )
 
-        # Merge access counts
+        # Bump winner's access count + activation
         await session.execute(
             text("""
                 UPDATE engrams
@@ -740,10 +792,7 @@ async def _merge_duplicates(session) -> int:
                     activation = LEAST(1.0, activation + 0.1)
                 WHERE id = CAST(:keep AS uuid)
             """),
-            {
-                "keep": str(keep_id),
-                "extra": pair.ac2 if keep_id == pair.id1 else pair.ac1,
-            },
+            {"keep": str(keep_id), "extra": lose_ac},
         )
 
         # Supersede loser
@@ -751,6 +800,8 @@ async def _merge_duplicates(session) -> int:
             text("UPDATE engrams SET superseded = TRUE WHERE id = CAST(:id AS uuid)"),
             {"id": str(lose_id)},
         )
+
+        loser_ids.add(str(lose_id))
         merged += 1
 
     return merged

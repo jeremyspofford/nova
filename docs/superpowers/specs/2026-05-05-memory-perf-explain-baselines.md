@@ -215,3 +215,20 @@ Execution Time: 0.129 ms
 ```
 
 **Plan summary:** Branch 1 (source→target) uses `Index Only Scan using engram_edges_source_id_target_id_relation_key` with relation filter inlined; Branch 2 (target→source) uses `Index Scan using idx_edges_structural`. No BitmapOr. Total execution time 0.129 ms.
+
+### Post-Sprint-3 — Consolidation HNSW shortlist (after rewrite)
+
+```
+Limit  (cost=8.18..8.19 rows=1 width=36) (actual time=0.063..0.064 rows=0 loops=1)
+  ->  Sort  (cost=8.18..8.19 rows=1 width=36) (actual time=0.063..0.063 rows=0 loops=1)
+        Sort Key: ((embedding <=> <probe_vector>))
+        Sort Method: quicksort  Memory: 25kB
+        ->  Index Scan using idx_engrams_source on engrams  (cost=0.14..8.17 rows=1 width=36) (actual time=0.055..0.055 rows=0 loops=1)
+              Index Cond: (source_type = 'chat'::text)
+              Filter: ((NOT superseded) AND (embedding IS NOT NULL) AND (type = 'fact'::text))
+Planning Time: 0.442 ms
+Execution Time: 0.093 ms
+```
+
+**Plan summary:** Dev DB has only 5 engrams matching the filter; PostgreSQL planner correctly chooses `Index Scan using idx_engrams_source` + sort over HNSW — seq scan is cheaper below ~100 rows. HNSW index `idx_engrams_hnsw` exists and is valid (confirmed via `pg_indexes`). HNSW probe will be selected automatically at production scale (1K+ engrams) when the planner's cost model prefers ANN over seq scan.
+**P2 verdict:** REWRITE landed. Cartesian self-join replaced with per-candidate top-K HNSW probe. ef_search=40 stabilizes recall via `SET LOCAL hnsw.ef_search` before candidate loop. loser_ids tracking ensures superseded engrams are excluded from neighbor probes without blocking winners from subsequent merges.
