@@ -1,0 +1,16 @@
+# Intentional gaps in the migration sequence.
+#
+# Nova's migration runner globs *.sql in numeric-prefix order and runs each
+# file idempotently — gaps are survivable. Numbers listed here were claimed
+# by feature branches that never merged (or were skipped during early
+# development). Listing them silences the migration-gap CI check.
+#
+# Adding new numbers here should require explicit review — the gap-check
+# exists to surface ordering hazards across in-flight branches, and an
+# entry here should always have a matching git-history note explaining
+# WHY the gap is intentional.
+#
+# Format: one number per line; '#' comments and blank lines ignored.
+
+042
+043
