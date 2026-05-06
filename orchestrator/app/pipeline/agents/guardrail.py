@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import logging
 
+from nova_contracts.feature_flags import register_flag
+
 from ..prompt_safety import (
     TAG_TASK_OUTPUT,
     TAG_USER_REQUEST,
@@ -34,6 +36,22 @@ from ..schemas import GuardrailOutput
 from .base import BaseAgent, PipelineState
 
 logger = logging.getLogger(__name__)
+
+# AQ-003: when enabled, medium-severity findings also escalate to Tier 2
+# deep analysis (and downstream loopback semantics in executor). Default
+# off = legacy behavior (only high/critical escalate). Operators flip
+# this when they need stricter guardrail vetting; the cost is more
+# Tier 2 LLM calls.
+GUARDRAIL_STRICT_MODE = register_flag(
+    key="pipeline.guardrail_strict_mode",
+    type="bool",
+    default=False,
+    description=(
+        "AQ-003: treat medium-severity guardrail findings as fail-closed "
+        "(escalate to Tier 2, allow refactor loopback). Default off = "
+        "only high/critical escalate."
+    ),
+)
 
 # Finding types the guardrail checks for
 FINDING_TYPES = (
@@ -144,12 +162,19 @@ class GuardrailAgent(BaseAgent):
         tier1_result.setdefault("tier", 1)
 
         # ── Tier 2: deep analysis if Tier 1 found anything ────────────────
-        has_high_findings = any(
-            f.get("severity") in ("high", "critical")
+        # Severity threshold is flag-controlled (AQ-003). Default = high/critical
+        # only; strict mode adds medium so stealthy attacks don't slip past Tier 1.
+        escalation_severities = (
+            ("medium", "high", "critical")
+            if GUARDRAIL_STRICT_MODE.value()
+            else ("high", "critical")
+        )
+        has_escalating_findings = any(
+            f.get("severity") in escalation_severities
             for f in tier1_result["findings"]
         )
 
-        if tier1_result["blocked"] or has_high_findings:
+        if tier1_result["blocked"] or has_escalating_findings:
             logger.info("Guardrail: Tier 1 flagged findings — escalating to Tier 2")
             tier2_model = self.tier2_model or self.model
             tier2_agent = BaseAgent(
