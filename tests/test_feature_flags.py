@@ -222,6 +222,150 @@ async def _wait_for(predicate, *, timeout: float, interval: float = 0.05):
     raise TimeoutError(f"predicate stayed False after {timeout}s")
 
 
+# ----------------------------------------------------------------------------
+# B-Task 5: orchestrator-side store (DB CRUD + pubsub publish)
+# ----------------------------------------------------------------------------
+
+import sys
+from pathlib import Path as _Path
+
+# orchestrator's package isn't installed via uv; add it to path so we can
+# import `app.feature_flags_store` like other orchestrator-touching tests do.
+_ORCH = _Path(__file__).parent.parent / "orchestrator"
+if str(_ORCH) not in sys.path:
+    sys.path.insert(0, str(_ORCH))
+
+
+@pytest.fixture
+async def orch_pool():
+    """asyncpg pool against the same DB the orchestrator uses, with the
+    JSONB codec init that store ops expect."""
+    import json as _json
+    import asyncpg as _asyncpg
+
+    async def _init_connection(conn):
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=_json.dumps,
+            decoder=_json.loads,
+            schema="pg_catalog",
+        )
+
+    dsn = DB_DSN
+    pool = await _asyncpg.create_pool(dsn, min_size=1, max_size=2, init=_init_connection)
+    yield pool
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_store_upsert_creates_row_and_audit(orch_pool):
+    from app.feature_flags_store import upsert_override, get_override, list_audit
+
+    actor = {"actor": "admin", "ip": "10.0.0.1", "user_agent": "test", "request_id": None}
+    await upsert_override(
+        orch_pool,
+        key="store.bool",
+        value=True,
+        notes="initial set",
+        **actor,
+    )
+    row = await get_override(orch_pool, "store.bool")
+    assert row is not None
+    assert row["key"] == "store.bool"
+    assert row["value"] is True
+    assert row["set_by"] == "admin"
+
+    audit = await list_audit(orch_pool, key="store.bool")
+    assert len(audit) == 1
+    assert audit[0]["action"] == "set"
+    assert audit[0]["old_value"] is None
+    assert audit[0]["new_value"] is True
+    assert audit[0]["actor"] == "admin"
+    assert str(audit[0]["actor_ip"]) == "10.0.0.1"
+    assert audit[0]["actor_user_agent"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_store_upsert_records_old_value_on_update(orch_pool):
+    from app.feature_flags_store import upsert_override, list_audit
+
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    await upsert_override(orch_pool, key="store.update", value=False, notes=None, **actor)
+    await upsert_override(orch_pool, key="store.update", value=True, notes=None, **actor)
+
+    audit = await list_audit(orch_pool, key="store.update")
+    # Newest first.
+    assert audit[0]["action"] == "set"
+    assert audit[0]["old_value"] is False
+    assert audit[0]["new_value"] is True
+    assert audit[1]["old_value"] is None
+    assert audit[1]["new_value"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_delete_records_reset_audit(orch_pool):
+    from app.feature_flags_store import (
+        upsert_override, delete_override, get_override, list_audit,
+    )
+
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    await upsert_override(orch_pool, key="store.del", value=True, notes=None, **actor)
+    deleted = await delete_override(orch_pool, key="store.del", **actor)
+    assert deleted is True
+
+    assert await get_override(orch_pool, "store.del") is None
+
+    audit = await list_audit(orch_pool, key="store.del")
+    assert audit[0]["action"] == "reset"
+    assert audit[0]["old_value"] is True
+    assert audit[0]["new_value"] is None
+
+
+@pytest.mark.asyncio
+async def test_store_delete_idempotent_when_no_row(orch_pool):
+    from app.feature_flags_store import delete_override
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    deleted = await delete_override(orch_pool, key="store.never_was", **actor)
+    assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_store_list_overrides_returns_all(orch_pool):
+    from app.feature_flags_store import upsert_override, list_overrides
+
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    await upsert_override(orch_pool, key="store.l1", value=True, notes=None, **actor)
+    await upsert_override(orch_pool, key="store.l2", value="tools", notes=None, **actor)
+
+    rows = await list_overrides(orch_pool)
+    keys = {r["key"] for r in rows}
+    assert {"store.l1", "store.l2"}.issubset(keys)
+
+
+@pytest.mark.asyncio
+async def test_store_list_audit_recent_across_keys(orch_pool):
+    from app.feature_flags_store import upsert_override, list_audit
+
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    await upsert_override(orch_pool, key="store.aud1", value=True, notes=None, **actor)
+    await upsert_override(orch_pool, key="store.aud2", value=False, notes=None, **actor)
+
+    audit = await list_audit(orch_pool, limit=10)  # no key filter -> all
+    keys = {a["key"] for a in audit}
+    assert {"store.aud1", "store.aud2"}.issubset(keys)
+
+
+#
+# Note: `publish_invalidation` is intentionally NOT covered by a dedicated
+# test. It's a one-line `redis.publish(channel, key)` call that uses
+# `app.store.get_redis()` — settings.redis_url points to the Docker service
+# hostname, not localhost, so it isn't directly callable from host-side tests.
+# The pubsub channel-correctness contract is covered end-to-end by the SDK's
+# `test_pubsub_subscriber_refetches_on_invalidate` (which subscribes and
+# publishes from the host using a localhost-connected client) — that's the
+# behavior we actually care about, not the in-process plumbing.
+
+
 @pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
