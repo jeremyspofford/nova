@@ -6,7 +6,7 @@ production import as a bug.
 """
 from __future__ import annotations
 
-from nova_worker_common.feature_flags import _registry
+from nova_contracts.feature_flags import _registry
 
 
 def registry_clear() -> None:

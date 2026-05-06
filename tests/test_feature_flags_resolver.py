@@ -2,24 +2,33 @@
 import asyncio
 
 import pytest
-from nova_worker_common import feature_flags as ff
-from nova_worker_common.feature_flags import (
+from nova_contracts import feature_flags as ff
+from nova_contracts.feature_flags import (
     FlagDef,
     flag_override,
     register_flag,
 )
-from nova_worker_common.feature_flags_testing import registry_clear
+from nova_contracts.feature_flags_testing import registry_clear
 
 
 def test_registry_clear_not_exported_from_production_module():
     """Test-only helpers must live in feature_flags_testing, never the prod module."""
     assert not hasattr(ff, "_registry_clear"), (
-        "_registry_clear must live in nova_worker_common.feature_flags_testing, "
+        "_registry_clear must live in nova_contracts.feature_flags_testing, "
         "not feature_flags — moving it prevents accidental production imports."
     )
     assert not hasattr(ff, "registry_clear"), (
         "registry_clear must not be exported from the prod module either."
     )
+
+
+def test_sdk_lives_in_nova_contracts_not_nova_worker_common():
+    """SDK location is nova-contracts (Pydantic-only contract package).
+    nova-worker-common is for shared async utilities, which the SDK isn't.
+    """
+    import importlib
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("nova_worker_common.feature_flags")
 
 
 @pytest.fixture(autouse=True)
