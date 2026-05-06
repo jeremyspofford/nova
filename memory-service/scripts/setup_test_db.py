@@ -13,6 +13,7 @@ Usage:
     uv run scripts/setup_test_db.py
     uv run scripts/setup_test_db.py --reset
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,6 @@ import sys
 from pathlib import Path
 
 import asyncpg
-
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "app" / "db" / "schema.sql"
 
@@ -65,7 +65,9 @@ def _test_db_name() -> str:
 
 
 async def _database_exists(conn: asyncpg.Connection, name: str) -> bool:
-    return bool(await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name))
+    return bool(
+        await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
+    )
 
 
 async def _setup(reset: bool) -> None:
@@ -106,7 +108,9 @@ async def _setup(reset: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--reset", action="store_true", help="Drop and recreate the test DB")
+    parser.add_argument(
+        "--reset", action="store_true", help="Drop and recreate the test DB"
+    )
     args = parser.parse_args()
     asyncio.run(_setup(reset=args.reset))
 
