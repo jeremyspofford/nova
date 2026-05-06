@@ -14,30 +14,34 @@ export const differentiators: Feature[] = [
   },
   {
     title: 'Private & Secure',
-    description: 'Runs entirely on your hardware. Your data never leaves. Sandbox tiers control what agents can access.',
+    description: 'Runs on your hardware. Your data never leaves. Credentialed actions land in an HMAC-chained audit log; mutating actions require explicit user consent.',
   },
   {
     title: 'Parallel By Design',
-    description: 'Continuous batching, concurrent pipelines, 4 inference backends. No bottleneck.',
+    description: 'Continuous batching, concurrent pipelines, multiple inference backends. No bottleneck.',
   },
 ];
 
 export const features: Feature[] = [
   {
     title: 'Managed Local Inference',
-    description: 'vLLM, Ollama, or cloud -- select from the UI. Nova handles container lifecycle, health monitoring, and graceful backend switching.',
+    description: 'vLLM, Ollama, or cloud — select from the UI. Nova handles container lifecycle, health monitoring, and graceful backend switching.',
   },
   {
-    title: 'RadixAttention Optimization',
-    description: 'SGLang caches shared agent system prompts across parallel tasks for significant inference speedup.',
+    title: 'Capability Platform',
+    description: 'Consent gate for mutating tool calls. Encrypted credential vault. Hash-chained audit log. GitHub provider with READ/PROPOSE/MUTATE/SETUP tiers.',
   },
   {
-    title: 'Skills & Rules',
-    description: 'Extensible prompt templates and declarative behavior constraints without code changes.',
+    title: 'Autonomous CI Triage',
+    description: 'Cortex watches GitHub webhooks; failing CI dispatches a goal that proposes a fix PR. Per-cycle cost budget; nothing merges without your approval.',
   },
   {
-    title: 'Sandbox Tiers',
-    description: 'Isolated, nova, workspace, host — execution environments with security-first defaults.',
+    title: 'Personal Context Capture',
+    description: 'Optional screenpipe-bridge ingests your screen activity into Nova\'s memory with a privacy denylist (apps, URL patterns, window titles) and pause-without-disconnect.',
+  },
+  {
+    title: 'Engram Memory',
+    description: 'Graph-based associative memory with spreading activation, sleep-cycle consolidation, neural reranking, and source provenance. Bounded query plans verified by 200+ unit tests.',
   },
   {
     title: 'MCP Tool Ecosystem',
@@ -53,7 +57,7 @@ export const features: Feature[] = [
   },
   {
     title: 'Recovery & Resilience',
-    description: 'Backup/restore, factory reset, service health monitoring via dedicated sidecar service.',
+    description: 'Backup/restore, factory reset, service health monitoring via dedicated sidecar service. Docker SDK gated behind socket-proxy for blast-radius reduction.',
   },
   {
     title: 'IDE Integration',
@@ -62,9 +66,5 @@ export const features: Feature[] = [
   {
     title: 'Voice Conversation',
     description: 'Talk to Nova hands-free with Gemini-style conversation mode. Barge-in interruption, live transcription, auto-listen between turns.',
-  },
-  {
-    title: 'Self-Configuration',
-    description: 'Nova can modify its own settings, prompts, and pod definitions via the nova sandbox tier.',
   },
 ];

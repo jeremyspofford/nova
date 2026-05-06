@@ -26,12 +26,21 @@
 
 ## What's Shipped
 
-Everything below is deployed and functional. Nova runs as a 12-service Docker Compose stack
+Everything below is deployed and functional. Nova runs as a 13-service Docker Compose stack (plus optional profiles for Ollama, chat-bridge, knowledge-worker, voice-service, screenpipe-bridge)
 with PostgreSQL (pgvector), Redis, and optional profiles for bridges, knowledge, and inference backends.
+
+### Recent major releases
+
+See the [changelog](https://arialabs.ai/changelog/) for full notes:
+
+- **2026-05-06** — Memory subsystem hardening (P1 + P2 cliff queries fixed; 214 unit tests on real Postgres + pgvector)
+- **2026-05-05** — Platform secrets store (provider keys + bridge tokens move out of writable `.env`; recovery's Docker SDK gated behind socket-proxy)
+- **2026-05-02** — Personal context capture (`screenpipe-bridge` service + Capture top-level dashboard nav)
+- **2026-05-01** — Capability Platform (consent gate, encrypted credential vault, hash-chained audit log, autonomous CI triage drive — v1 release gate)
 
 ### Core Platform & Orchestrator (Port 8000)
 
-Agent lifecycle management with 11-state task machine. 66 auto-run SQL migrations (pure SQL, no Alembic). Task queue via Redis BRPOP with heartbeat (30s) and stale reaper (150s). Shared contracts library (`nova-contracts/`) defining Pydantic API shapes used by all services.
+Agent lifecycle management with 11-state task machine. Auto-run SQL migrations (pure SQL, no Alembic). Task queue via Redis BRPOP with heartbeat (30s) and stale reaper (150s). Shared contracts library (`nova-contracts/`) defining Pydantic API shapes used by all services.
 
 - Multi-turn agent loop with tool use and streaming
 - Pod/agent configuration stored in DB, editable via dashboard
@@ -60,7 +69,7 @@ Graph-based cognitive memory. 8 node types (fact, episode, entity, preference, p
 
 - **Ingestion** — Async Redis queue worker decomposes raw text into structured engrams via LLM. Entity resolution, contradiction detection, edge creation. Backpressure via Semaphore(5).
 - **Spreading Activation** — Graph traversal via recursive CTE. Seeds by cosine similarity, then spreads through weighted edges. <100ms.
-- **Working Memory** — 5-tier slot system (pinned/sticky/refreshed/sliding/expiring) with token budgeting. Background cleanup every 5 min.
+- **Working Memory** — `assemble_context` reads activation results, sticky decisions, and open threads, then trims by token budget. The `working_memory_slots` table has 5 named slot types (pinned/sticky/refreshed/sliding/expiring) reserved for future runtime promotion/demotion logic; today only sticky is actively written. Background cleanup every 5 min.
 - **Consolidation** — 6-phase "sleep cycle": replay, pattern extraction, Hebbian learning, contradiction resolution, pruning/merging, self-model update. Mutex-protected, 3 triggers (idle/nightly/threshold).
 - **Outcome Feedback** — Post-LLM scoring adjusts engram activation/importance.
 - **Neural Router** — Full PyTorch training pipeline (878 lines, ScalarReranker + EmbeddingReranker). Activates organically after 200+ labeled retrieval observations.
