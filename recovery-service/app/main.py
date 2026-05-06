@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from nova_worker_common.service_auth import TrustedNetworkMiddleware, load_trusted_cidrs_from_env
 
 from .config import settings
 from .inference.routes import router as inference_router
@@ -62,6 +63,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Trusted-network middleware stamps request.state.is_trusted_network so admin
+# routes can bypass auth for callers on loopback / Docker bridge / LAN /
+# Tailscale — symmetric with orchestrator + memory + cortex + llm-gateway.
+app.add_middleware(TrustedNetworkMiddleware, trusted_cidrs=load_trusted_cidrs_from_env())
 
 app.add_middleware(
     CORSMiddleware,
