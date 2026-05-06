@@ -176,7 +176,7 @@ def test_flag_override_clears_even_on_exception():
 # B3a: in-process cache + env-var override + structured INFO log on cache update
 # ----------------------------------------------------------------------------
 
-from nova_contracts.feature_flags import populate_cache, cache_clear
+from nova_contracts.feature_flags import cache_clear, populate_cache
 
 
 @pytest.fixture(autouse=True)
@@ -346,10 +346,10 @@ def test_envvar_key_translation_dots_become_underscores(monkeypatch):
 # ----------------------------------------------------------------------------
 
 from nova_contracts.feature_flags import (
-    FlagResolver,
     DefaultResolver,
-    set_resolver,
+    FlagResolver,
     get_resolver,
+    set_resolver,
 )
 
 
@@ -607,7 +607,6 @@ def _read_cache_dict_for_test():
 # ----------------------------------------------------------------------------
 
 import httpx
-
 from nova_contracts.feature_flags_http import warm_cache_from_http
 
 

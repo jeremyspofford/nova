@@ -121,13 +121,14 @@ async def test_b_starts_with_clean_state():
 import asyncio
 
 import httpx
-from redis.asyncio import Redis as AsyncRedis
-
 from nova_contracts.feature_flags import (
-    cache_clear, init_cache_file, populate_cache, register_flag,
+    cache_clear,
+    init_cache_file,
+    register_flag,
 )
-from nova_contracts.feature_flags_testing import registry_clear
 from nova_contracts.feature_flags_pubsub import PubsubSubscriber
+from nova_contracts.feature_flags_testing import registry_clear
+from redis.asyncio import Redis as AsyncRedis
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/1")
 INVALIDATE_CHANNEL = "nova:flags:invalidate"
@@ -242,6 +243,7 @@ async def orch_pool():
     """asyncpg pool against the same DB the orchestrator uses, with the
     JSONB codec init that store ops expect."""
     import json as _json
+
     import asyncpg as _asyncpg
 
     async def _init_connection(conn):
@@ -260,7 +262,7 @@ async def orch_pool():
 
 @pytest.mark.asyncio
 async def test_store_upsert_creates_row_and_audit(orch_pool):
-    from app.feature_flags_store import upsert_override, get_override, list_audit
+    from app.feature_flags_store import get_override, list_audit, upsert_override
 
     actor = {"actor": "admin", "ip": "10.0.0.1", "user_agent": "test", "request_id": None}
     await upsert_override(
@@ -288,7 +290,7 @@ async def test_store_upsert_creates_row_and_audit(orch_pool):
 
 @pytest.mark.asyncio
 async def test_store_upsert_records_old_value_on_update(orch_pool):
-    from app.feature_flags_store import upsert_override, list_audit
+    from app.feature_flags_store import list_audit, upsert_override
 
     actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
     await upsert_override(orch_pool, key="store.update", value=False, notes=None, **actor)
@@ -306,7 +308,10 @@ async def test_store_upsert_records_old_value_on_update(orch_pool):
 @pytest.mark.asyncio
 async def test_store_delete_records_reset_audit(orch_pool):
     from app.feature_flags_store import (
-        upsert_override, delete_override, get_override, list_audit,
+        delete_override,
+        get_override,
+        list_audit,
+        upsert_override,
     )
 
     actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
@@ -332,7 +337,7 @@ async def test_store_delete_idempotent_when_no_row(orch_pool):
 
 @pytest.mark.asyncio
 async def test_store_list_overrides_returns_all(orch_pool):
-    from app.feature_flags_store import upsert_override, list_overrides
+    from app.feature_flags_store import list_overrides, upsert_override
 
     actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
     await upsert_override(orch_pool, key="store.l1", value=True, notes=None, **actor)
@@ -366,7 +371,7 @@ async def test_store_warm_cache_from_store_populates_sdk_cache(orch_pool):
 
 @pytest.mark.asyncio
 async def test_store_list_audit_recent_across_keys(orch_pool):
-    from app.feature_flags_store import upsert_override, list_audit
+    from app.feature_flags_store import list_audit, upsert_override
 
     actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
     await upsert_override(orch_pool, key="store.aud1", value=True, notes=None, **actor)
@@ -540,7 +545,6 @@ async def test_router_audit_records_request_metadata():
 
 
 import uuid  # noqa: E402  — used in the request-id test above
-
 
 # ----------------------------------------------------------------------------
 # B-Task 10: canonical PATCH → pubsub → SDK-eval round-trip

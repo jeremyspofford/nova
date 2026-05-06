@@ -197,10 +197,10 @@ async def lifespan(app: FastAPI):
     # Feature-flags SDK wiring (Phase B7): warm the cache from our own DB,
     # then subscribe to nova:flags:invalidate so future PATCHes (from any
     # admin client) propagate to in-process FlagDef.value() reads.
+    import httpx as _httpx
     from app.db import get_pool as _get_pool_for_flags
     from app.feature_flags_store import warm_cache_from_store
     from nova_contracts.feature_flags_pubsub import PubsubSubscriber
-    import httpx as _httpx
 
     _flag_http_client = _httpx.AsyncClient(timeout=5.0)
     pool = _get_pool_for_flags()
@@ -315,6 +315,7 @@ app.include_router(router)
 app.include_router(auth_router)
 app.include_router(pipeline_router)
 from app.feature_flags_router import router as feature_flags_router  # noqa: E402
+
 app.include_router(feature_flags_router)
 app.include_router(friction_router)
 app.include_router(goals_router)

@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
 
     # Feature-flags SDK wiring (B7f).
     from pathlib import Path as _Path
+
     import httpx as _httpx
     from nova_contracts.feature_flags import init_cache_file
     from nova_contracts.feature_flags_http import warm_cache_from_http

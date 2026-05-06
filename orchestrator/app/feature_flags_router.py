@@ -19,6 +19,15 @@ import logging
 import uuid
 from typing import Any
 
+# Force-import flag-registering modules at startup so their register_flag()
+# calls fire and the GET /registry endpoint reflects the full orchestrator
+# slice of declared flags. Lazy imports (e.g. pipeline agents only loaded
+# when a task hits that stage) wouldn't otherwise appear in the registry
+# until the first task ran. Tool modules under app.tools are imported by
+# the tool registry, so their flags already register; the pipeline agents
+# need this explicit nudge.
+import app.pipeline.agents.guardrail  # noqa: F401  — registers pipeline.guardrail_strict_mode
+import app.tools.web_tools  # noqa: F401  — registers pipeline.web_fetch_strict_sanitize
 from app.auth import AdminDep
 from app.db import get_pool
 from app.feature_flags_store import (
@@ -31,16 +40,6 @@ from app.feature_flags_store import (
 from fastapi import APIRouter, HTTPException, Request
 from nova_contracts.feature_flags import declared_flags
 from pydantic import BaseModel
-
-# Force-import flag-registering modules at startup so their register_flag()
-# calls fire and the GET /registry endpoint reflects the full orchestrator
-# slice of declared flags. Lazy imports (e.g. pipeline agents only loaded
-# when a task hits that stage) wouldn't otherwise appear in the registry
-# until the first task ran. Tool modules under app.tools are imported by
-# the tool registry, so their flags already register; the pipeline agents
-# need this explicit nudge.
-import app.pipeline.agents.guardrail  # noqa: F401  — registers pipeline.guardrail_strict_mode
-import app.tools.web_tools  # noqa: F401  — registers pipeline.web_fetch_strict_sanitize
 
 logger = logging.getLogger(__name__)
 

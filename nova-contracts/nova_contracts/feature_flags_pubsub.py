@@ -29,7 +29,8 @@ import logging
 
 import httpx
 from redis.asyncio import Redis as AsyncRedis
-from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 
 from nova_contracts.feature_flags_http import warm_cache_from_http
 

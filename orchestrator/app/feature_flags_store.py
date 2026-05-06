@@ -18,7 +18,6 @@ import logging
 from typing import Any
 
 import asyncpg
-
 from app.store import get_redis
 
 logger = logging.getLogger(__name__)
