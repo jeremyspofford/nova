@@ -1,6 +1,29 @@
-"""Docker API helper for service management."""
+"""Docker API helper for service management.
+
+SEC-006b trust boundary
+-----------------------
+The recovery container interacts with Docker through two paths:
+
+  - This module (Docker SDK) — list/inspect/restart/logs operations.
+  - compose_client.py (docker compose CLI subprocess) — start/stop profiled
+    services.
+
+In production, the SDK path is routed through a ``docker-socket-proxy``
+sidecar via ``DOCKER_SDK_HOST=tcp://docker-socket-proxy:2375``.  The proxy
+exposes only the Docker API surface the SDK actually uses (CONTAINERS=1,
+POST=1) and rejects everything else.  The compose CLI subprocess keeps
+talking to the raw unix socket because compose ops require unrestricted
+API access.  Splitting the two paths is the trust boundary: a vulnerability
+in SDK code can only restart containers, not exec, mount volumes, or pull
+images.
+
+When ``DOCKER_SDK_HOST`` is unset (e.g. local pytest, dev shells outside
+the stack) the SDK falls back to ``docker.DockerClient.from_env()``, which
+honors ``DOCKER_HOST`` or the default unix socket.
+"""
 
 import logging
+import os
 
 import docker
 from docker.errors import DockerException
@@ -40,6 +63,9 @@ OPTIONAL_SERVICES = {
 
 
 def _client() -> docker.DockerClient:
+    sdk_host = os.getenv("DOCKER_SDK_HOST")
+    if sdk_host:
+        return docker.DockerClient(base_url=sdk_host)
     return docker.DockerClient.from_env()
 
 
