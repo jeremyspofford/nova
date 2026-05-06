@@ -16,6 +16,12 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 
 WORKDIR /app
 
+# Install shared internal package first — the trusted-network middleware lives
+# here, alongside admin secret resolution used by the other internal services.
+COPY nova-worker-common /nova-worker-common
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir /nova-worker-common
+
 COPY recovery-service/pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install .
