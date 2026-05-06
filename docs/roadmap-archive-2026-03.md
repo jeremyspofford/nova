@@ -1657,7 +1657,7 @@ All instances share one memory-service (on mini-PC)
 
 | Device | `LLM_ROUTING_STRATEGY` | Ollama endpoint | Notes |
 |---|---|---|---|
-| Mini-PC (Beelink) | `cloud-first` | Dell via WoL | Always-on gateway, wakes Dell on demand |
+| Always-on host | `cloud-first` | GPU host via WoL | Gateway, wakes GPU host on demand |
 | Dell Desktop | `local-only` | `localhost:11434` | GPU box, no cloud spend |
 | Work Laptop | `cloud-first` | Dell via Tailscale | Remote Ollama when Dell is awake |
 
@@ -1698,7 +1698,7 @@ All instances share one memory-service (on mini-PC)
 - Dogfooding: accessing your own Nova from your phone at `nova.arialabs.ai` validates the product
 
 **`nova.arialabs.ai` — Private instance:**
-- Cloudflare Tunnel from Beelink → `nova.arialabs.ai`
+- Cloudflare Tunnel from always-on host → `nova.arialabs.ai`
 - Cloudflare Access policy: email-based auth (whitelist your email)
 - PWA installable to phone home screen
 - When SaaS launches (Phase 14), personal instance moves to `home.nova.arialabs.ai` or `jeremy.nova.arialabs.ai`, and `nova.arialabs.ai` becomes the SaaS app. This is a 2-minute DNS swap.
@@ -1716,14 +1716,14 @@ All instances share one memory-service (on mini-PC)
 - [ ] Set up redirects from `nova.arialabs.ai/docs/*` → `arialabs.ai/nova/docs/*` (Cloudflare Page Rules or `_redirects`)
 - [ ] Update all internal links and references to the new URL structure
 - [ ] Deploy company site to `arialabs.ai` (Cloudflare Pages or similar)
-- [ ] Set up Cloudflare Tunnel: Beelink → `nova.arialabs.ai`
+- [ ] Set up Cloudflare Tunnel: always-on host → `nova.arialabs.ai`
 - [ ] Configure Cloudflare Access policy on `nova.arialabs.ai` (email whitelist)
 - [ ] Install PWA on phone, verify full access from mobile
 - [ ] Update GitHub repo links, README, CLAUDE.md references
 
 **Order of operations:**
 1. Migrate docs site first (ensure no broken links)
-2. Then point `nova.arialabs.ai` at Beelink
+2. Then point `nova.arialabs.ai` at the gateway host
 3. These can happen in either order, but docs migration is lower risk
 
 ---
@@ -1807,7 +1807,7 @@ All instances share one memory-service (on mini-PC)
 
 ### Devices & Infrastructure Dashboard
 
-**Motivation:** Nova runs across multiple physical machines (Beelink always-on, Dell GPU box via WoL, potentially Pi or NAS). There's currently no visibility into what's connected, what's available, and what capabilities each device brings. The Devices page makes Nova aware of its own physical infrastructure.
+**Motivation:** Nova may run across multiple physical machines (always-on gateway, GPU host via WoL, potentially Pi or NAS). There's currently no visibility into what's connected, what's available, and what capabilities each device brings. The Devices page makes Nova aware of its own physical infrastructure.
 
 **Dashboard page: "Devices"**
 
@@ -1815,7 +1815,7 @@ Displays all registered devices in a grid/list with real-time status:
 
 | Column | Description |
 |---|---|
-| **Device name** | User-defined label (e.g., "Beelink", "Dell GPU Box") |
+| **Device name** | User-defined label (e.g., "Home Server", "GPU Box") |
 | **Status** | Online / Sleeping / Offline (with last-seen timestamp) |
 | **Role** | Primary host, GPU inference, edge sensor, storage, etc. |
 | **Hardware** | CPU, RAM, GPU (if any), disk capacity |

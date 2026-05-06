@@ -355,7 +355,7 @@ Run: `chmod +x scripts/detect_hardware.sh`
 - [ ] **Step 3: Test it locally**
 
 Run: `cd /home/jeremy/workspace/nova && ./scripts/detect_hardware.sh data/hardware.json && cat data/hardware.json`
-Expected: Valid JSON with gpu/cpu/ram/disk info. On the Dell (WSL2 with NVIDIA GPU), `gpus` should be populated. On the Beelink (no GPU), `gpus` should be `[]`.
+Expected: Valid JSON with gpu/cpu/ram/disk info. On a host with NVIDIA GPU, `gpus` should be populated. On a CPU-only host, `gpus` should be `[]`.
 
 - [ ] **Step 4: Add data/ to .gitignore**
 

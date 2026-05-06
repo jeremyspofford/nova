@@ -43,10 +43,10 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:3001,http://localhost:5173,http://localhost:8080"
 
     # LLM gateway HTTP client timeout for completions. Generous default
-    # because local CPU inference of mid-tier models (qwen2.5:7b) on a
-    # Beelink-class machine routinely needs 60-120s+ for context-stage
-    # prompts; the prior 120s default produced empty timeouts. Override
-    # via env (LLM_REQUEST_TIMEOUT_SECONDS) if you have GPU-fast local.
+    # because local CPU inference of mid-tier models (qwen2.5:7b) on
+    # CPU-only hosts routinely needs 60-120s+ for context-stage prompts;
+    # the prior 120s default produced empty timeouts. Override via env
+    # (LLM_REQUEST_TIMEOUT_SECONDS) on GPU-fast local setups.
     llm_request_timeout_seconds: float = 600.0
 
     # Phase 3: Code & Terminal Tools

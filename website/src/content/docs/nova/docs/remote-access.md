@@ -150,7 +150,7 @@ Since Tailscale IPs (`100.x.x.x`) are not routable on the public internet, only 
 Your browser will show a "not secure" warning over plain HTTP. The connection is actually encrypted by Tailscale's WireGuard tunnel — your browser just can't see that.
 
 To get a green padlock:
-- **Using `.ts.net` domain:** Run `tailscale cert mini-pc.your-tailnet.ts.net` on the Beelink to get a real TLS certificate. Then configure Nova's reverse proxy to use it. This only works for `.ts.net` domains.
+- **Using `.ts.net` domain:** Run `tailscale cert your-host.your-tailnet.ts.net` on the Nova host to get a real TLS certificate. Then configure Nova's reverse proxy to use it. This only works for `.ts.net` domains.
 - **Using a custom domain:** Requires a reverse proxy (e.g., Caddy, nginx) with a certificate. Since the domain isn't publicly reachable, you'd need DNS-01 ACME validation (supported by Caddy with Cloudflare DNS plugin) or a self-signed cert.
 
 For most self-hosted setups, plain HTTP over Tailscale is fine — the traffic is already encrypted.

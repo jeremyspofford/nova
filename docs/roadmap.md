@@ -575,7 +575,7 @@ Tests written during this analysis. Expand to cover the new code from Tiers 1-4.
 **Still open (resume here):**
 - **Platform priority** — Neovim first (primary daily-driver per CLAUDE.md, smaller Lua plugin), then VS Code extension (covers Cursor via fork)? Or both in parallel? Or VS Code first for broader reach? Sanity-check the user's "built in ide" phrasing — external IDE plugin vs. Nova's embedded editor vs. Claude Code's IDE integration.
 - **Trigger model** — Push (IDE streams events continuously, Nova caches current state in Redis) vs. pull (Nova queries IDE at chat time) vs. hybrid (events for C/timeline, Redis cache for B/chat).
-- **Cross-machine topology** — Nova runs on Beelink; user also develops on Dell PC over Tailscale. Does the IDE plugin push across the tailnet, or is monitoring local-only per machine?
+- **Cross-machine topology** — if Nova ever runs on multiple machines, does the IDE plugin push across a network, or is monitoring local-only per machine? (Currently dev-only on a single host; revisit when topology is real.)
 - **Engram ingestion shape** — One episode engram per file-focus event? Aggregated per session? How to dedupe noisy editor signals (rapid file switches, etc.).
 - **What chat actually does with the signal** — Auto-injected into every chat turn? Tool-callable (`get_current_editor_state`)? Pinned working memory slot?
 
@@ -769,7 +769,7 @@ Planning Agent reads prior episode memory for proven approaches. Goal similarity
 Evaluate whether Nova should adopt structured development workflows (planning, TDD, systematic debugging, verification gates) as native orchestration-level capability vs prompt-level discipline. Two paths: adopt existing prompt-based workflows, or build native state-machine workflow engine integrating with cortex and engrams.
 
 ### Multi-Device Gateway Network
-Distributed Nova instances sharing one memory backend via Tailscale. Per-device LLM routing config (Beelink: cloud-first, Dell: local-only, laptop: cloud-first + remote Ollama). WoL integration for on-demand GPU inference.
+Distributed Nova instances sharing one memory backend via Tailscale. Per-device LLM routing config (e.g., always-on host with cloud-first routing; GPU host with local-only). WoL integration for on-demand GPU inference. (Future — not in scope while Nova is dev-only on a single host.)
 
 ### Domain Restructuring
 `arialabs.ai` as company website (landing + Nova product pages + docs at `/nova/docs/`). `nova.arialabs.ai` as private live instance behind Cloudflare Access with email auth. Docs migration with redirects from current URLs.

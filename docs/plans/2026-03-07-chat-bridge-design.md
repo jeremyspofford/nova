@@ -23,7 +23,7 @@ WhatsApp (later)──>  |   slack.py          |
 ### Why One Service, Not One Per Platform
 
 - Shared session management, auth, error handling, config
-- One container, one port, one healthcheck (resource-efficient on Beelink Mini)
+- One container, one port, one healthcheck (resource-efficient)
 - Adding a new platform = one new adapter file
 - Consistent behavior across all platforms
 

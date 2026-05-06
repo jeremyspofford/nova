@@ -126,8 +126,8 @@ CREATE INDEX idx_engrams_occurred ON engrams(occurred_at);
 | Type | Description | Decay Rate | Example |
 |------|-------------|------------|---------|
 | `fact` | Objective knowledge | Medium | "Nova runs on Tailscale" |
-| `episode` | Temporal event | Fast | "Deployed to Beelink on March 5" |
-| `entity` | Person, place, concept, thing | Slow | "Beelink Mini S13 Pro" |
+| `episode` | Temporal event | Fast | "Deployed to home server on March 5" |
+| `entity` | Person, place, concept, thing | Slow | "home server" |
 | `preference` | User or Nova preference | Slow | "Jeremy prefers simplicity" |
 | `procedure` | How to do something | Slow | "To deploy: docker compose up -d" |
 | `schema` | Generalized pattern from episodes | Very slow | "Jeremy always chooses the simpler option" |
