@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
-
 from app.auth import AdminDep
 from app.db import get_pool
 from app.secrets_store import (
@@ -19,6 +16,8 @@ from app.secrets_store import (
     list_secrets,
     set_secret,
 )
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 

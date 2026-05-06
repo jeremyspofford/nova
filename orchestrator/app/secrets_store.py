@@ -15,10 +15,9 @@ from __future__ import annotations
 import logging
 
 import asyncpg
+from app.config import settings
 from fastapi import HTTPException
 from nova_worker_common.credentials.builtin import BuiltinCredentialProvider
-
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 

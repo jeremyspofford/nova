@@ -6,7 +6,6 @@ These tests run against the live bridge container on port 8140.
 import httpx
 import pytest
 
-
 BASE = "http://localhost:8140"
 
 

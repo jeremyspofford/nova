@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from app.quality_loop.cases import load_cases, BenchmarkCase
+from app.quality_loop.cases import load_cases
 
 
 def test_load_cases_finds_all_seven_categories():

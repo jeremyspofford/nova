@@ -3,7 +3,6 @@
 This test fails today (no building.py executor) and starts passing after Task 6.
 """
 import asyncio
-import json
 import os
 
 import httpx

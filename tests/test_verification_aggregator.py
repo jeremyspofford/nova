@@ -2,7 +2,6 @@
 
 This test fails today (no aggregator module) and starts passing after Task 11.
 """
-import pytest
 from cortex.app.maturation.aggregator import aggregate
 
 

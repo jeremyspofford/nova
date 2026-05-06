@@ -17,7 +17,6 @@ import logging
 import os
 
 import pytest
-
 from nova_worker_common.platform_secrets import (
     PlatformSecretsResolver,
     fetch_platform_secrets_sync,

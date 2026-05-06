@@ -1,7 +1,6 @@
 """Integration tests for AI Quality v2 endpoints — real services, no mocks."""
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 
@@ -24,7 +23,7 @@ async def _trigger_benchmark_get_snapshot_id(client) -> str:
     # Snapshot is captured synchronously before kickoff returns.
     # Read the run row to get the snapshot id.
     list_r = await client.get(
-        f"/api/v1/quality/benchmarks/runs?limit=5",
+        "/api/v1/quality/benchmarks/runs?limit=5",
         headers={"X-Admin-Secret": ADMIN_SECRET},
     )
     runs = list_r.json()

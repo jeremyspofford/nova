@@ -264,13 +264,13 @@ async def lifespan(app: FastAPI):
     )
 
     # Register quality loops + apply DB-stored agency
-    from app.quality_loop.registry import get_registry, load_agency_from_config
     from app.quality_loop.loops.retrieval_tuning import RetrievalTuningLoop
+    from app.quality_loop.registry import get_registry, load_agency_from_config
 
     registry = get_registry()
     registry.register(RetrievalTuningLoop())
     await load_agency_from_config(registry)
-    log.info("Quality loops registered: %s", [l.name for l in registry.list()])
+    log.info("Quality loops registered: %s", [loop.name for loop in registry.list()])
 
     yield
 

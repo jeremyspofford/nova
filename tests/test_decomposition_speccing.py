@@ -4,8 +4,9 @@ This test fails today and starts passing after Task 4 (the speccing.py rewrite).
 """
 import asyncio
 import os
-import pytest
+
 import httpx
+import pytest
 
 ORCH = os.getenv("NOVA_ORCH_URL", "http://localhost:8000")
 ADMIN = os.getenv("NOVA_ADMIN_SECRET", "nova-admin-secret-change-me")

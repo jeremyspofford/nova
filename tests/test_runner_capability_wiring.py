@@ -25,6 +25,7 @@ path is covered by the M11 acceptance walkthrough.
 from __future__ import annotations
 
 import sys
+
 sys.path.insert(0, '/home/jeremy/workspace/nova/orchestrator')
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-contracts')
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-worker-common')

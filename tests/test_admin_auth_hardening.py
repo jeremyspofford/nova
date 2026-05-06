@@ -21,7 +21,6 @@ endpoints don't accept random bad secrets when auth is actually checked.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 import time
@@ -99,7 +98,7 @@ async def test_admin_failure_counter_increments_and_reads():
     # Import orchestrator's own settings + auth helpers
     try:
         from app.auth import _admin_failure_count, _record_admin_failure
-        from app.store import init_redis, close_redis
+        from app.store import close_redis, init_redis
     except Exception as e:
         pytest.skip(f"Could not import orchestrator auth: {e}")
 

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import sys
+
 sys.path.insert(0, "/home/jeremy/workspace/nova/orchestrator")
 
-from app.capabilities.redactor import redact_value, redact_dict
+from app.capabilities.redactor import redact_dict, redact_value
 
 
 def test_redacts_github_token():

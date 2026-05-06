@@ -17,10 +17,8 @@ from app.config import settings
 from app.denylist import Denylist
 from app.engram_producer import EngramProducer
 from app.metrics import (
-    polling_active,
     sessions_dropped_total,
     sessions_ingested_total,
-    websocket_reconnects_total,
 )
 from app.runtime_config import RuntimeConfig
 from app.screenpipe_client import ScreenpipeClient

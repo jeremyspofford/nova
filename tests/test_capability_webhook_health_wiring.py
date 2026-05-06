@@ -41,7 +41,6 @@ from uuid import uuid4
 import httpx
 import pytest
 import redis.asyncio as aioredis
-
 from fixtures.fake_github.server import FakeGitHubServer, load_scenario
 
 CORTEX_URL = "http://localhost:8100"

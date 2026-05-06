@@ -1,10 +1,8 @@
 """Tests for RetrievalTuningLoop — the first concrete QualityLoop."""
 from __future__ import annotations
 
-import pytest
 from app.quality_loop.base import SenseReading
 from app.quality_loop.loops.retrieval_tuning import (
-    RetrievalTuningLoop,
     propose_step,
 )
 

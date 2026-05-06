@@ -1,20 +1,22 @@
 """Consent gate: blast-radius classification, approval lifecycle, rule auto-approve."""
 from __future__ import annotations
+
 import sys
+
 sys.path.insert(0, '/home/jeremy/workspace/nova/orchestrator')
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-contracts')
 
-import asyncio
 from uuid import UUID, uuid4
-import pytest
 
+import pytest
 from app.capabilities.consent import (
-    gate, get_approval, list_pending, decide_approval,
-    ConsentDecision, ApprovalDecision,
+    ApprovalDecision,
+    decide_approval,
+    gate,
+    get_approval,
 )
 from app.capabilities.executor import execute_tool
 from nova_contracts import BlastRadius
-
 
 TENANT = UUID("00000000-0000-0000-0000-000000000001")
 USER = UUID("00000000-0000-0000-0000-000000000001")

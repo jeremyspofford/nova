@@ -8,12 +8,11 @@ import logging
 from typing import List
 from uuid import UUID
 
+from app.auth import AdminDep
+from app.db import get_pool
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
-from app.auth import AdminDep
-from app.db import get_pool
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])

@@ -32,7 +32,6 @@ from .drives import (
     reflect,
     serve,
 )
-from .stimulus import CI_WORKFLOW_RUN_FAILURE
 from .journal import read_user_replies_since, write_entry
 from .memory import (
     mark_engrams_used,
@@ -51,6 +50,7 @@ from .reflections import (
     record_reflection,
 )
 from .scheduler import check_schedules
+from .stimulus import CI_WORKFLOW_RUN_FAILURE
 from .task_tracker import TaskOutcome
 
 log = logging.getLogger(__name__)

@@ -7,7 +7,6 @@ import sys
 from uuid import UUID, uuid4
 
 import pytest
-import pytest_asyncio
 from redis.asyncio import Redis
 
 sys.path.insert(0, "/home/jeremy/workspace/nova/orchestrator")
@@ -29,7 +28,7 @@ _CORTEX_REDIS_URL = os.environ.get("CORTEX_REDIS_URL", "redis://localhost:6379/5
 @pytest.mark.asyncio
 async def test_lease_acquisition_singleton():
     """Two pollers contend for the lease; only one acquires."""
-    from app.polling_worker import GitHubPoller, LEASE_KEY
+    from app.polling_worker import LEASE_KEY, GitHubPoller
 
     r = Redis.from_url(_REDIS_URL, decode_responses=True)
     await r.delete(LEASE_KEY)
@@ -52,7 +51,7 @@ async def test_lease_acquisition_singleton():
 @pytest.mark.asyncio
 async def test_lease_self_refresh_returns_true():
     """The same instance can refresh its own lease."""
-    from app.polling_worker import GitHubPoller, LEASE_KEY
+    from app.polling_worker import LEASE_KEY, GitHubPoller
 
     r = Redis.from_url(_REDIS_URL, decode_responses=True)
     await r.delete(LEASE_KEY)
@@ -73,7 +72,7 @@ async def test_lease_self_refresh_returns_true():
 @pytest.mark.asyncio
 async def test_non_holder_cannot_steal_lease():
     """A third poller cannot acquire a lease held by a different instance."""
-    from app.polling_worker import GitHubPoller, LEASE_KEY
+    from app.polling_worker import LEASE_KEY, GitHubPoller
 
     r = Redis.from_url(_REDIS_URL, decode_responses=True)
     await r.delete(LEASE_KEY)
@@ -150,8 +149,8 @@ async def test_poll_one_repo_pushes_stimuli_for_new_runs(orchestrator, admin_hea
 
         # Run the poller against fake-github.
         # Override the settings singleton so _poll_one_repo talks to fake-github instead.
-        from app.polling_worker import GitHubPoller
         from app.config import settings
+        from app.polling_worker import GitHubPoller
 
         original_base = settings.github_api_base_url
         settings.github_api_base_url = fake.base_url
