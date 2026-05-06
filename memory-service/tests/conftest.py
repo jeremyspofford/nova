@@ -10,14 +10,19 @@ per-test schema cost.
 
 from __future__ import annotations
 
+import json as _json
 import os
 import uuid
+from pathlib import Path as _Path
 from typing import Any
 
+import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from ._llm_prompt_norm import hash_prompt as _hash_prompt
 
 
 def _test_database_url() -> str:
@@ -178,3 +183,45 @@ async def edge_factory(db_session):
         return eid
 
     return _make
+
+
+_DEFAULT_LLM_FIXTURE_DIR = _Path(__file__).parent / "fixtures" / "llm"
+
+
+@pytest.fixture
+def fake_llm_factory():
+    """Returns a callable that constructs a fake_llm async function.
+
+    The factory pattern lets tests override extra_normalizers.
+    Default mode: replay from LLM_FIXTURE_DIR.
+    Set RECORD_LLM_FIXTURES=1 to record (separate task).
+    """
+
+    def _factory(*, extra_normalizers=()):
+        fixture_dir = _Path(os.environ.get("LLM_FIXTURE_DIR", _DEFAULT_LLM_FIXTURE_DIR))
+
+        async def _fake_llm(*, prompt: str, model: str, **kwargs) -> str:
+            key = _hash_prompt(prompt, extra_normalizers=extra_normalizers)
+            path = fixture_dir / f"{key}.json"
+            if not path.exists():
+                if os.environ.get("RECORD_LLM_FIXTURES") == "1":
+                    raise NotImplementedError(
+                        "Record mode not yet implemented (Task 1.9)"
+                    )
+                raise FileNotFoundError(
+                    f"No LLM fixture for prompt key={key} at {path}. "
+                    f"Run with RECORD_LLM_FIXTURES=1 to record. Prompt prefix: "
+                    f"{prompt[:80]!r}"
+                )
+            data = _json.loads(path.read_text())
+            return data["response"]
+
+        return _fake_llm
+
+    return _factory
+
+
+@pytest.fixture
+def fake_llm(fake_llm_factory):
+    """Default fake_llm with no extra normalizers."""
+    return fake_llm_factory()
