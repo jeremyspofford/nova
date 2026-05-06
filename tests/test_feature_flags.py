@@ -111,6 +111,117 @@ async def test_b_starts_with_clean_state():
         await conn.close()
 
 
+# ----------------------------------------------------------------------------
+# B-Task 4: Redis pubsub invalidation subscriber
+#
+# Hits real Redis (port 6379, db 1) per the project convention "tests run
+# against real services, no mocks."
+# ----------------------------------------------------------------------------
+
+import asyncio
+
+import httpx
+from redis.asyncio import Redis as AsyncRedis
+
+from nova_contracts.feature_flags import (
+    cache_clear, init_cache_file, populate_cache,
+)
+from nova_contracts.feature_flags_pubsub import PubsubSubscriber
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/1")
+INVALIDATE_CHANNEL = "nova:flags:invalidate"
+
+
+@pytest.fixture
+async def fake_orchestrator():
+    """An httpx.AsyncClient backed by a MockTransport that returns a
+    configurable flag list. Tests mutate the response to simulate flag
+    changes coming from the real orchestrator."""
+    state: dict = {"rows": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/feature-flags/" in str(request.url):
+            return httpx.Response(200, json=state["rows"])
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        client._test_state = state  # type: ignore[attr-defined]
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_pubsub_subscriber_refetches_on_invalidate(fake_orchestrator):
+    """When the orchestrator publishes to nova:flags:invalidate, every
+    subscribed service must refetch and update its cache."""
+    cache_clear()
+    init_cache_file(None)
+
+    fake_orchestrator._test_state["rows"] = [
+        {"key": "pub.k1", "current_value": False},
+    ]
+
+    subscriber = PubsubSubscriber(
+        redis_url=REDIS_URL,
+        http_client=fake_orchestrator,
+        base_url="http://orchestrator:8000",
+    )
+    await subscriber.start()
+    try:
+        # Subscriber should report connected once the loop is reading.
+        await _wait_for(lambda: subscriber.is_connected, timeout=2.0)
+
+        # Initial state — no warm has happened yet (start() doesn't warm).
+        # But the orchestrator now reflects an updated value:
+        fake_orchestrator._test_state["rows"] = [
+            {"key": "pub.k1", "current_value": True},
+        ]
+
+        # Publish an invalidation message; subscriber must refetch.
+        async with AsyncRedis.from_url(REDIS_URL) as publisher:
+            await publisher.publish(INVALIDATE_CHANNEL, "pub.k1")
+
+        # Cache should reflect the orchestrator's new value within 5 seconds
+        # (per CICD blocker CI3: PUBSUB_PROPAGATION_TIMEOUT_S = 5).
+        from nova_contracts.feature_flags import _cache
+        await _wait_for(lambda: _cache.get("pub.k1") is True, timeout=5.0)
+    finally:
+        await subscriber.stop()
+
+
+@pytest.mark.asyncio
+async def test_pubsub_subscriber_clean_shutdown_cancels_task(fake_orchestrator):
+    subscriber = PubsubSubscriber(
+        redis_url=REDIS_URL,
+        http_client=fake_orchestrator,
+        base_url="http://orchestrator:8000",
+    )
+    await subscriber.start()
+    await _wait_for(lambda: subscriber.is_connected, timeout=2.0)
+    await subscriber.stop()
+    assert subscriber.is_connected is False
+
+
+@pytest.mark.asyncio
+async def test_pubsub_is_connected_false_before_start(fake_orchestrator):
+    subscriber = PubsubSubscriber(
+        redis_url=REDIS_URL,
+        http_client=fake_orchestrator,
+        base_url="http://orchestrator:8000",
+    )
+    assert subscriber.is_connected is False
+
+
+async def _wait_for(predicate, *, timeout: float, interval: float = 0.05):
+    """Spin until predicate() is truthy or timeout expires."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise TimeoutError(f"predicate stayed False after {timeout}s")
+
+
 @pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
