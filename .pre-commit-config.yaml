@@ -1,0 +1,14 @@
+# Pre-commit hooks for Nova. Mirrors the Python Lint job in .github/workflows/nova-ci.yml
+# so the gate that breaks main also breaks at commit time.
+#
+# Setup (one-time per clone):
+#   pip install pre-commit && pre-commit install
+#
+# The ruff version is pinned to match the local toolchain. Bump deliberately.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        name: ruff check (matches Nova CI)
+        args: [--fix]

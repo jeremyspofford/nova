@@ -10,6 +10,7 @@ Plus execute_approved() — bypasses the consent gate (already decided) and
 re-hydrates a previously-pended call from approval_requests.tool_context.
 """
 from __future__ import annotations
+
 import json
 import logging
 import time
@@ -18,7 +19,6 @@ from typing import Awaitable, Callable
 from uuid import UUID
 
 import asyncpg
-
 from app.capabilities import audit, consent
 from nova_contracts import BlastRadius
 

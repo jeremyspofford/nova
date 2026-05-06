@@ -15,9 +15,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-
 from app.routes import _check_admin
+from fastapi import HTTPException
 
 
 def fake_request(*, is_trusted: bool) -> SimpleNamespace:

@@ -11,7 +11,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from nova_worker_common.service_auth import TrustedNetworkMiddleware, load_trusted_cidrs_from_env
+from nova_worker_common.service_auth import (
+    TrustedNetworkMiddleware,
+    load_trusted_cidrs_from_env,
+)
 
 from .config import settings
 from .inference.routes import router as inference_router

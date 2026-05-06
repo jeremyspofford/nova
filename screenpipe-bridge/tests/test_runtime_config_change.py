@@ -2,7 +2,6 @@ import asyncio
 
 import pytest
 import redis.asyncio as redis_async
-
 from app.runtime_config import RuntimeConfig
 
 REDIS_URL = "redis://localhost:6379/1"

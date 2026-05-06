@@ -21,9 +21,6 @@ import os
 from uuid import UUID, uuid4
 
 import asyncpg
-from fastapi import HTTPException
-from nova_worker_common.credentials.builtin import BuiltinCredentialProvider
-
 from app.capabilities.audit import write_audit_event
 from app.capabilities.models import (
     AuthMethod,
@@ -33,6 +30,8 @@ from app.capabilities.models import (
     CredentialHealth,
 )
 from app.config import settings
+from fastapi import HTTPException
+from nova_worker_common.credentials.builtin import BuiltinCredentialProvider
 
 logger = logging.getLogger(__name__)
 

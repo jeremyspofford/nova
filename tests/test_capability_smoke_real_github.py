@@ -63,7 +63,6 @@ from uuid import uuid4
 import httpx
 import pytest
 
-
 REPO = "jeremyspofford/nova-test-cap"
 GITHUB_API = "https://api.github.com"
 PAT = os.environ.get("NOVA_GITHUB_PAT", "")

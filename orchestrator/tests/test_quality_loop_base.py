@@ -1,9 +1,9 @@
 """Tests for QualityLoop dataclasses and Decision logic."""
 from __future__ import annotations
 
-import pytest
 from app.quality_loop.base import (
-    SenseReading, Proposal, AppliedChange, Verification, Decision,
+    SenseReading,
+    Verification,
     decide_default,
 )
 

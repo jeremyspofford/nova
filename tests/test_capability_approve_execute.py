@@ -16,9 +16,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-
 from fixtures.fake_github import FakeGitHubServer
-
 
 TENANT = UUID("00000000-0000-0000-0000-000000000001")
 USER = UUID("00000000-0000-0000-0000-000000000001")

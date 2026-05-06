@@ -1,6 +1,5 @@
 """API endpoints for AI quality scores and benchmark results."""
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

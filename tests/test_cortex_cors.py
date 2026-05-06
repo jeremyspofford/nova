@@ -6,7 +6,6 @@ import os
 import httpx
 import pytest
 
-
 CORTEX_URL = os.getenv("NOVA_CORTEX_URL", "http://localhost:8100")
 
 

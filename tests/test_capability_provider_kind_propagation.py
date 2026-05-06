@@ -7,21 +7,21 @@ approval would create a github-scoped rule, causing accidental
 auto-approvals when M12's second provider lands.
 """
 from __future__ import annotations
+
 import sys
+
 sys.path.insert(0, '/home/jeremy/workspace/nova/orchestrator')
 sys.path.insert(0, '/home/jeremy/workspace/nova/nova-contracts')
 
 from uuid import UUID, uuid4
 
 import pytest
-
 from app.capabilities.consent import (
     ApprovalDecision,
     decide_approval,
     gate,
 )
 from nova_contracts import BlastRadius
-
 
 TENANT = UUID("00000000-0000-0000-0000-000000000001")
 USER = UUID("00000000-0000-0000-0000-000000000001")

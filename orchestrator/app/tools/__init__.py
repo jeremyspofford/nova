@@ -209,6 +209,8 @@ async def _dispatch_github_external_via_capabilities(
     from app.db import get_pool
     from app.tools.github_external_tools import (
         GITHUB_EXTERNAL_TOOLS,
+    )
+    from app.tools.github_external_tools import (
         execute_tool as _github_external_execute,
     )
 

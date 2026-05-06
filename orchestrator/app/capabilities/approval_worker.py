@@ -28,7 +28,6 @@ import logging
 from uuid import UUID
 
 import redis.asyncio as aioredis
-
 from app.capabilities import consent
 from app.capabilities.executor import execute_approved
 from app.config import settings

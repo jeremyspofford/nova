@@ -263,6 +263,7 @@ async def pool():
     values can be passed to JSONB parameters without manual json.dumps.
     """
     import json
+
     import asyncpg
 
     async def _init_connection(conn: asyncpg.Connection) -> None:

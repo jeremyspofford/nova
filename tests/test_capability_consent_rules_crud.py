@@ -6,8 +6,6 @@ this file just exercises the management API.
 """
 from __future__ import annotations
 
-from uuid import UUID
-
 import httpx
 import pytest
 

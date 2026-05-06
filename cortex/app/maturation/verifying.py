@@ -12,8 +12,8 @@ from ..clients import get_orchestrator
 from ..config import settings
 from ..db import get_pool
 from ..journal import emit_journal, emit_notification
-from ..reflections import record_reflection, check_approach_blocked
-from ..stimulus import emit, GOAL_COMPLETED, SUBGOAL_TERMINATED
+from ..reflections import check_approach_blocked, record_reflection
+from ..stimulus import GOAL_COMPLETED, SUBGOAL_TERMINATED, emit
 from .aggregator import aggregate
 from .commands import run_commands
 from .criteria import evaluate_criteria
@@ -85,11 +85,15 @@ async def _load_goal(goal_id: str):
 
 
 def _decode(raw):
-    if raw is None: return None
-    if isinstance(raw, (list, dict)): return raw
+    if raw is None:
+        return None
+    if isinstance(raw, (list, dict)):
+        return raw
     if isinstance(raw, str):
-        try: return json.loads(raw)
-        except json.JSONDecodeError: return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
     return None
 
 
@@ -303,4 +307,4 @@ async def _escalate(goal_id, goal, attempt, reason: str) -> str:
             goal_id,
         )
     await emit_journal(goal_id, "verify.fail.terminal", {"reason": reason})
-    return f"Verification exhausted → goal failed (autonomous policy)"
+    return "Verification exhausted → goal failed (autonomous policy)"

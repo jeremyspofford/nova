@@ -27,7 +27,6 @@ import time
 import httpx
 import pytest
 
-
 COMPOSE_DIR = "/home/jeremy/workspace/nova"
 
 
@@ -150,7 +149,7 @@ async def test_orchestrator_starts_and_encrypts_without_env_master_key(
         "\n"
         "asyncio.run(run())\n"
     )
-    last_line = [l for l in output.strip().split("\n") if l.startswith("{")][-1]
+    last_line = [line for line in output.strip().split("\n") if line.startswith("{")][-1]
     result = json.loads(last_line)
     assert result["persisted_len"] == 64, f"key length wrong: {result}"
     assert result["in_memory_len"] == 64, f"in-memory key not set: {result}"
@@ -290,7 +289,7 @@ async def test_env_master_key_takes_precedence(
         "\n"
         "asyncio.run(run())\n"
     )
-    last_line = [l for l in output.strip().split("\n") if l.startswith("{")][-1]
+    last_line = [line for line in output.strip().split("\n") if line.startswith("{")][-1]
     result = json.loads(last_line)
     assert result["unchanged"], (
         f"platform_config was clobbered when env var path active: {result}"

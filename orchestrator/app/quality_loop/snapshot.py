@@ -13,7 +13,6 @@ from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
-
 from app.db import get_pool
 
 log = logging.getLogger(__name__)

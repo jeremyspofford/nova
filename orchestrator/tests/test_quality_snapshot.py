@@ -1,8 +1,7 @@
 """Tests for quality_loop/snapshot.py — config snapshot capture and dedup."""
 from __future__ import annotations
 
-import pytest
-from app.quality_loop.snapshot import normalize_config, hash_config
+from app.quality_loop.snapshot import hash_config, normalize_config
 
 
 def test_normalize_config_sorts_keys_recursively():

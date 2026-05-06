@@ -1,7 +1,7 @@
 """Tests for quality_scorer.py — live (chat) dimension scorers."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from app.quality_scorer import score_safety_compliance

@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
 import asyncpg
 import httpx
-from datetime import datetime
-
-from app.capabilities import audit
-from app.capabilities import audit_query
-from app.capabilities import credentials as cred_db
+from app.capabilities import audit, audit_query
 from app.capabilities import consent as consent_db
 from app.capabilities import consent_rules as cr_db
+from app.capabilities import credentials as cred_db
 from app.capabilities import watched_repos as wr_db
 from app.capabilities.consent import ApprovalDecision
 from app.capabilities.context import CapabilityCtxDep

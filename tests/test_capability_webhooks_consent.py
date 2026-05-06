@@ -19,9 +19,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-
 from fixtures.fake_github import FakeGitHubServer, load_scenario
-
 
 _DOCKER_HOST = "host.docker.internal"
 _ORCHESTRATOR_FROM_HOST = "http://localhost:8000"

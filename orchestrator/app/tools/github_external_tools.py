@@ -4,6 +4,7 @@ Distinguished from app.tools.github_tools (Self-Modification, Nova's own repo).
 See docs/designs/2026-05-01-nova-capability-platform-design.md §5.
 """
 from __future__ import annotations
+
 import asyncio
 import json
 import logging

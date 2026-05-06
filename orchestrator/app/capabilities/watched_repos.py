@@ -15,7 +15,6 @@ import logging
 from uuid import UUID
 
 import asyncpg
-
 from app.capabilities.models import (
     TriggerMode,
     WatchedRepo,

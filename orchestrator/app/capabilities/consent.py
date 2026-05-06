@@ -4,6 +4,7 @@ The gate is the boundary between an agent's tool-call decision and execution.
 Every external action — native tool, MCP HTTP, MCP stdio — flows through here.
 """
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,6 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import redis.asyncio as aioredis
-
 from app.config import settings
 from nova_contracts import BlastRadius
 
