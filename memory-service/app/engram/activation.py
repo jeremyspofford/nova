@@ -133,23 +133,37 @@ async def spreading_activation(
 
                 UNION ALL
 
-                -- Spread through edges (both directions — bidirectional graph)
+                -- Spread through edges (both directions, fan-out capped per hop)
+                -- Uses two index-friendly branches inside LATERAL to avoid BitmapOr
+                -- on the OR predicate, then re-joins engrams for the neighbor row.
                 SELECT
                     neighbor.id,
                     LEAST(1.0, spread.activation * edge.weight * :decay_factor)::real AS activation,
                     spread.hop + 1,
                     spread.path || neighbor.id
                 FROM activation_spread spread
-                JOIN engram_edges edge ON (edge.source_id = spread.id OR edge.target_id = spread.id)
-                JOIN engrams neighbor ON neighbor.id = CASE
-                    WHEN edge.source_id = spread.id THEN edge.target_id
-                    ELSE edge.source_id
-                END
+                JOIN LATERAL (
+                    -- Source-side: idx_edges_source
+                    SELECT e.target_id AS neighbor_id, e.weight
+                    FROM engram_edges e
+                    WHERE e.source_id = spread.id
+                      AND e.relation != 'contradicts'
+                      AND (spread.activation * e.weight * :decay_factor) > :threshold
+                    UNION ALL
+                    -- Target-side: idx_edges_target
+                    SELECT e.source_id AS neighbor_id, e.weight
+                    FROM engram_edges e
+                    WHERE e.target_id = spread.id
+                      AND e.relation != 'contradicts'
+                      AND (spread.activation * e.weight * :decay_factor) > :threshold
+                    ORDER BY weight DESC
+                    LIMIT :max_fanout
+                ) edge ON TRUE
+                JOIN engrams neighbor ON neighbor.id = edge.neighbor_id
                 WHERE spread.hop < :max_hops
                   AND NOT neighbor.superseded
-                  AND edge.relation != 'contradicts'
+                  AND neighbor.tenant_id = CAST(:tenant_id AS uuid)
                   AND NOT (neighbor.id = ANY(spread.path))
-                  AND (spread.activation * edge.weight * :decay_factor) > :threshold
             )
             SELECT
                 a.id,
@@ -185,6 +199,7 @@ async def spreading_activation(
             "threshold": activation_threshold,
             "max_results": max_results,
             "activation_floor": settings.engram_prune_activation_floor,
+            "max_fanout": settings.engram_max_fanout_per_hop,
         },
     )
 
