@@ -93,7 +93,7 @@ Override the default model for each provider:
 | `DEFAULT_OLLAMA_MODEL` | `llama3.2` |
 | `DEFAULT_GROQ_MODEL` | `groq/llama-3.3-70b-versatile` |
 | `DEFAULT_GEMINI_MODEL` | `gemini/gemini-2.5-flash` |
-| `DEFAULT_CEREBRAS_MODEL` | `cerebras/llama-3.3-70b` |
+| `DEFAULT_CEREBRAS_MODEL` | `cerebras/llama3.1-8b` |
 | `DEFAULT_CHATGPT_MODEL` | `chatgpt/gpt-4o` |
 | `DEFAULT_OPENROUTER_MODEL` | `openrouter/meta-llama/llama-3.1-8b-instruct:free` |
 | `DEFAULT_GITHUB_MODEL` | `github/gpt-4o-mini` |
