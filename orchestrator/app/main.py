@@ -194,9 +194,51 @@ async def lifespan(app: FastAPI):
     await load_agency_from_config(registry)
     log.info("Quality loops registered: %s", [loop.name for loop in registry.list()])
 
+    # Feature-flags SDK wiring (Phase B7): warm the cache from our own DB,
+    # then subscribe to nova:flags:invalidate so future PATCHes (from any
+    # admin client) propagate to in-process FlagDef.value() reads.
+    from app.db import get_pool as _get_pool_for_flags
+    from app.feature_flags_store import warm_cache_from_store
+    from nova_contracts.feature_flags_pubsub import PubsubSubscriber
+    import httpx as _httpx
+
+    _flag_http_client = _httpx.AsyncClient(timeout=5.0)
+    pool = _get_pool_for_flags()
+    try:
+        await warm_cache_from_store(pool)
+        log.info("Feature-flags cache warmed from store")
+    except Exception:
+        log.warning(
+            "Feature-flags cache warm-from-store failed at startup; "
+            "in-code defaults apply until first successful warm",
+            exc_info=True,
+        )
+
+    _flag_subscriber = PubsubSubscriber(
+        redis_url=settings.redis_url,
+        http_client=_flag_http_client,
+        # Orchestrator subscribes to its own pubsub and re-warms via HTTP
+        # to itself. This is a 5ms localhost call and keeps the post-publish
+        # path uniform with every other consuming service.
+        base_url="http://localhost:8000",
+    )
+    await _flag_subscriber.start()
+    log.info("Feature-flags pubsub subscriber started")
+
     yield
 
     log.info("Orchestrator shutting down")
+
+    # Feature-flags shutdown: stop subscriber + close its HTTP client
+    try:
+        await _flag_subscriber.stop()
+    except Exception:
+        log.warning("Feature-flags subscriber stop failed", exc_info=True)
+    try:
+        await _flag_http_client.aclose()
+    except Exception:
+        log.warning("Feature-flags HTTP client aclose failed", exc_info=True)
+
     _queue_task.cancel()
     _reaper_task.cancel()
     _effectiveness_task.cancel()

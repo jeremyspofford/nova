@@ -187,6 +187,21 @@ async def publish_invalidation(key: str) -> None:
     await redis.publish(INVALIDATE_CHANNEL, key)
 
 
+async def warm_cache_from_store(pool: asyncpg.Pool) -> None:
+    """Populate the SDK's in-process cache directly from the orchestrator's
+    own database. Used by orchestrator's lifespan startup so it doesn't
+    have to HTTP-fetch from itself.
+
+    Other services use `nova_contracts.feature_flags_http.warm_cache_from_http`
+    against `http://orchestrator:8000` instead. This helper is the
+    orchestrator-only fast path.
+    """
+    from nova_contracts.feature_flags import populate_cache
+
+    overrides = await list_overrides(pool)
+    populate_cache({row["key"]: row["value"] for row in overrides})
+
+
 async def _publish_invalidation_safe(key: str) -> None:
     """Wrapper used inside upsert/delete that swallows publish errors so a
     Redis hiccup never rolls back a committed flag change."""

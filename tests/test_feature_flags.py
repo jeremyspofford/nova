@@ -343,6 +343,27 @@ async def test_store_list_overrides_returns_all(orch_pool):
 
 
 @pytest.mark.asyncio
+async def test_store_warm_cache_from_store_populates_sdk_cache(orch_pool):
+    """B-Task 7 helper: orchestrator warms the SDK cache directly from
+    the DB at lifespan startup, avoiding self-HTTP."""
+    from app.feature_flags_store import upsert_override, warm_cache_from_store
+    from nova_contracts.feature_flags import _cache, cache_clear
+
+    actor = {"actor": "admin", "ip": None, "user_agent": None, "request_id": None}
+    await upsert_override(orch_pool, key="warm.bool", value=True, notes=None, **actor)
+    await upsert_override(
+        orch_pool, key="warm.enum", value="tools", notes=None, **actor,
+    )
+
+    cache_clear()
+    assert _cache == {}
+
+    await warm_cache_from_store(orch_pool)
+
+    assert _cache == {"warm.bool": True, "warm.enum": "tools"}
+
+
+@pytest.mark.asyncio
 async def test_store_list_audit_recent_across_keys(orch_pool):
     from app.feature_flags_store import upsert_override, list_audit
 
