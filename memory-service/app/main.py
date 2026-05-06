@@ -1,6 +1,7 @@
 """
 Nova Memory Service — main entrypoint.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +35,7 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # FC-002: refuse to start with the literal default or empty admin secret.
     import os
+
     if settings.nova_admin_secret in ("", "nova-admin-secret-change-me"):
         if os.getenv("NOVA_ALLOW_DEFAULT_ADMIN_SECRET") != "1":
             raise RuntimeError(
@@ -49,16 +51,22 @@ async def lifespan(app: FastAPI):
     await run_schema_migrations()
 
     _ingestion_task = asyncio.create_task(ingestion_loop(), name="engram-ingestion")
-    _consolidation_task = asyncio.create_task(consolidation_loop(), name="engram-consolidation")
+    _consolidation_task = asyncio.create_task(
+        consolidation_loop(), name="engram-consolidation"
+    )
     asyncio.create_task(_warmup_embedding(), name="warmup")
     asyncio.create_task(_verify_decomposition_model(), name="verify-decomp-model")
     asyncio.create_task(_bootstrap_self_model(), name="engram-bootstrap")
-    _neural_router_task = asyncio.create_task(_neural_router_refresh(), name="neural-router-refresh")
+    _neural_router_task = asyncio.create_task(
+        _neural_router_refresh(), name="neural-router-refresh"
+    )
     log.info("Memory Service ready")
 
     yield
 
-    log.info("Memory Service shutting down — waiting up to 15s for active work to finish")
+    log.info(
+        "Memory Service shutting down — waiting up to 15s for active work to finish"
+    )
     # Give tasks a grace period to complete current work before cancelling
     _ingestion_task.cancel()
     _consolidation_task.cancel()
@@ -66,7 +74,9 @@ async def lifespan(app: FastAPI):
     try:
         await asyncio.wait_for(
             asyncio.gather(
-                _ingestion_task, _consolidation_task, _neural_router_task,
+                _ingestion_task,
+                _consolidation_task,
+                _neural_router_task,
                 return_exceptions=True,
             ),
             timeout=15.0,
@@ -97,8 +107,14 @@ app = FastAPI(
 )
 
 # ── Auth (SEC-004) ───────────────────────────────────────────────────────────
-_trusted_cidrs = parse_cidrs(settings.trusted_network_cidrs) if settings.trusted_network_cidrs else load_trusted_cidrs_from_env()
-_admin_resolver = AdminSecretResolver(redis_url=settings.redis_url, fallback=settings.nova_admin_secret)
+_trusted_cidrs = (
+    parse_cidrs(settings.trusted_network_cidrs)
+    if settings.trusted_network_cidrs
+    else load_trusted_cidrs_from_env()
+)
+_admin_resolver = AdminSecretResolver(
+    redis_url=settings.redis_url, fallback=settings.nova_admin_secret
+)
 _admin_auth = create_admin_auth_dep(_admin_resolver)
 
 app.add_middleware(TrustedNetworkMiddleware, trusted_cidrs=_trusted_cidrs)
@@ -114,17 +130,22 @@ async def _warmup_embedding():
             await get_embedding("warmup", session)
         log.info("Embedding warmup complete")
     except Exception:
-        log.warning("Embedding warmup failed (model may not be available yet)", exc_info=True)
+        log.warning(
+            "Embedding warmup failed (model may not be available yet)", exc_info=True
+        )
 
 
 async def _verify_decomposition_model():
     """Verify decomposition model is reachable at startup. Logs a clear warning if not."""
     from app.engram.decomposition import resolve_model
+
     try:
         model = await resolve_model(settings.engram_decomposition_model)
         log.info("Decomposition model resolved: %s", model)
     except Exception:
-        log.warning("Decomposition model unavailable — ingestion will skip decomposition until a model is available")
+        log.warning(
+            "Decomposition model unavailable — ingestion will skip decomposition until a model is available"
+        )
 
 
 async def _bootstrap_self_model():
@@ -136,4 +157,6 @@ async def _bootstrap_self_model():
                 await session.commit()
                 log.info("Bootstrapped %d self-model engrams", created)
     except Exception:
-        log.debug("Self-model bootstrap skipped (table may not exist yet)", exc_info=True)
+        log.debug(
+            "Self-model bootstrap skipped (table may not exist yet)", exc_info=True
+        )

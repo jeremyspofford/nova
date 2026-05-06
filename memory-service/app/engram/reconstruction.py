@@ -9,6 +9,7 @@ Reconstruction is ephemeral — the output is injected into the prompt
 but never stored back to the graph. The engram fragments remain the
 source of truth.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,7 +37,9 @@ RELATION_CONNECTORS = {
 }
 
 
-async def _semantic_dedup(session: AsyncSession, engrams: list[ActivatedEngram]) -> list[ActivatedEngram]:
+async def _semantic_dedup(
+    session: AsyncSession, engrams: list[ActivatedEngram]
+) -> list[ActivatedEngram]:
     """Remove semantic duplicates by embedding cosine similarity.
 
     Fetches embeddings for activated engrams, groups by >0.85 similarity,
@@ -135,7 +138,9 @@ async def reconstruct(
     for cluster in clusters:
         if len(cluster) >= settings.engram_narrative_cluster_threshold:
             # Dense cluster → narrative reconstruction via LLM
-            narrative = await _narrative_reconstruct(cluster, context, self_model_summary)
+            narrative = await _narrative_reconstruct(
+                cluster, context, self_model_summary
+            )
             if narrative:
                 parts.append(narrative)
                 continue
@@ -232,7 +237,7 @@ def _template_assemble(cluster: list[ActivatedEngram]) -> str:
 
     # Source attribution — personal sources render clean, others get a tag
     def _fmt(e: ActivatedEngram) -> str:
-        if e.source_type in ('chat', 'consolidation', 'self_reflection'):
+        if e.source_type in ("chat", "consolidation", "self_reflection"):
             return f"- {e.content}"
         return f"- [{e.source_type}] {e.content}"
 
@@ -266,7 +271,7 @@ def _template_assemble(cluster: list[ActivatedEngram]) -> str:
     # Schemas (generalized patterns)
     if "schema" in by_type:
         for e in by_type["schema"]:
-            if e.source_type in ('chat', 'consolidation', 'self_reflection'):
+            if e.source_type in ("chat", "consolidation", "self_reflection"):
                 lines.append(f"- Pattern: {e.content}")
             else:
                 lines.append(f"- [{e.source_type}] Pattern: {e.content}")
@@ -277,7 +282,7 @@ def _template_assemble(cluster: list[ActivatedEngram]) -> str:
         if entities:
             # Tag with source if any non-personal entities are present
             has_external = any(
-                e.source_type not in ('chat', 'consolidation', 'self_reflection')
+                e.source_type not in ("chat", "consolidation", "self_reflection")
                 for e in entities
             )
             entity_names = [e.content for e in entities]
@@ -289,7 +294,7 @@ def _template_assemble(cluster: list[ActivatedEngram]) -> str:
     # Goals
     if "goal" in by_type:
         for e in by_type["goal"]:
-            if e.source_type in ('chat', 'consolidation', 'self_reflection'):
+            if e.source_type in ("chat", "consolidation", "self_reflection"):
                 lines.append(f"- Goal: {e.content}")
             else:
                 lines.append(f"- [{e.source_type}] Goal: {e.content}")
@@ -327,7 +332,9 @@ async def _narrative_reconstruct(
     user_prompt = f"Current context: {context}\n\nMemory fragments:\n{engram_text}"
 
     try:
-        async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            base_url=settings.llm_gateway_url, timeout=30.0
+        ) as client:
             resp = await client.post(
                 "/complete",
                 json={
@@ -347,7 +354,9 @@ async def _narrative_reconstruct(
                 content = content[0].get("text", "") if content else ""
             return content.strip()
     except Exception:
-        log.warning("Narrative reconstruction failed, falling back to template", exc_info=True)
+        log.warning(
+            "Narrative reconstruction failed, falling back to template", exc_info=True
+        )
         return ""
 
 

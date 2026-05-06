@@ -5,6 +5,7 @@ Replaces cosine similarity search with graph-based associative retrieval.
 Activation flows from seed engrams through weighted edges, with convergent
 amplification boosting engrams reached by multiple independent paths.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ActivatedEngram:
     """An engram with its computed activation score."""
+
     id: str
     type: str
     content: str
@@ -202,9 +204,16 @@ async def spreading_activation(
         convergence_bonus = 1.0 + 0.2 * max(0, row.convergence_paths - 1)
 
         confidence = row.confidence if row.confidence else 0.5
-        final_score = row.activation * row.importance * confidence * recency_boost * convergence_bonus
+        final_score = (
+            row.activation
+            * row.importance
+            * confidence
+            * recency_boost
+            * convergence_bonus
+        )
 
         import json as _json
+
         fragments = None
         if row.fragments:
             try:
@@ -212,21 +221,23 @@ async def spreading_activation(
             except Exception:
                 pass
 
-        activated.append(ActivatedEngram(
-            id=str(row.id),
-            type=row.type,
-            content=row.content,
-            activation=row.activation,
-            importance=row.importance,
-            confidence=row.confidence,
-            convergence_paths=row.convergence_paths,
-            final_score=final_score,
-            access_count=row.access_count,
-            last_accessed=row.last_accessed,
-            created_at=row.created_at,
-            fragments=fragments,
-            source_type=row.source_type,
-        ))
+        activated.append(
+            ActivatedEngram(
+                id=str(row.id),
+                type=row.type,
+                content=row.content,
+                activation=row.activation,
+                importance=row.importance,
+                confidence=row.confidence,
+                convergence_paths=row.convergence_paths,
+                final_score=final_score,
+                access_count=row.access_count,
+                last_accessed=row.last_accessed,
+                created_at=row.created_at,
+                fragments=fragments,
+                source_type=row.source_type,
+            )
+        )
 
     # Shallow mode: only return topic and schema engrams
     if depth == "shallow":
@@ -263,6 +274,7 @@ async def spreading_activation(
         for row in structural_result:
             if str(row.id) not in activated_ids:
                 import json as _json
+
                 fragments = None
                 if row.fragments:
                     try:
@@ -270,21 +282,23 @@ async def spreading_activation(
                     except Exception:
                         pass
 
-                activated.append(ActivatedEngram(
-                    id=str(row.id),
-                    type=row.type,
-                    content=row.content,
-                    activation=0.5,
-                    importance=row.importance,
-                    confidence=row.confidence,
-                    convergence_paths=1,
-                    final_score=0.5 * row.importance,
-                    access_count=row.access_count,
-                    last_accessed=row.last_accessed,
-                    created_at=row.created_at,
-                    fragments=fragments,
-                    source_type=row.source_type,
-                ))
+                activated.append(
+                    ActivatedEngram(
+                        id=str(row.id),
+                        type=row.type,
+                        content=row.content,
+                        activation=0.5,
+                        importance=row.importance,
+                        confidence=row.confidence,
+                        convergence_paths=1,
+                        final_score=0.5 * row.importance,
+                        access_count=row.access_count,
+                        last_accessed=row.last_accessed,
+                        created_at=row.created_at,
+                        fragments=fragments,
+                        source_type=row.source_type,
+                    )
+                )
                 activated_ids.add(str(row.id))
 
         # Touch the newly added structural neighbors

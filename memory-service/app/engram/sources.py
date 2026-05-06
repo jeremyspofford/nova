@@ -5,6 +5,7 @@ Every engram traces back to a source: a conversation, web page, intel feed,
 manual paste, task output, etc. Sources store raw content (hybrid: DB for
 small, filesystem for large, URI for re-fetchable) and metadata.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -71,7 +72,9 @@ async def find_or_create_source(
     the same URI can legitimately exist for two tenants without collision.
     """
     c_hash = _content_hash(content) if content else None
-    trust = trust_score if trust_score is not None else DEFAULT_TRUST.get(source_kind, 0.7)
+    trust = (
+        trust_score if trust_score is not None else DEFAULT_TRUST.get(source_kind, 0.7)
+    )
 
     # Dedup: check content hash first, then URI — scoped per tenant so two
     # tenants reading the same article each get their own source row.
@@ -143,7 +146,12 @@ async def find_or_create_source(
         },
     )
     source_id = row.scalar_one()
-    log.info("Created source %s (%s): %s", source_id, source_kind, title or uri or "(untitled)")
+    log.info(
+        "Created source %s (%s): %s",
+        source_id,
+        source_kind,
+        title or uri or "(untitled)",
+    )
     return source_id
 
 
@@ -244,7 +252,10 @@ async def generate_source_summary(content: str) -> str:
             json={
                 "model": model,
                 "messages": [
-                    {"role": "user", "content": SOURCE_SUMMARY_PROMPT.format(content=content[:8000])},
+                    {
+                        "role": "user",
+                        "content": SOURCE_SUMMARY_PROMPT.format(content=content[:8000]),
+                    },
                 ],
                 "temperature": 0.3,
                 "max_tokens": 300,
@@ -289,7 +300,10 @@ async def get_domain_summary(session: AsyncSession) -> dict:
             ORDER BY cnt DESC
         """)
     )
-    kinds = {r.source_kind: {"count": r.cnt, "stale_count": r.stale_cnt} for r in by_kind.fetchall()}
+    kinds = {
+        r.source_kind: {"count": r.cnt, "stale_count": r.stale_cnt}
+        for r in by_kind.fetchall()
+    }
 
     total = await session.execute(
         text("SELECT COUNT(*) FROM engrams WHERE NOT superseded")
@@ -317,7 +331,9 @@ async def get_domain_summary(session: AsyncSession) -> dict:
             LIMIT 20
         """)
     )
-    recent_sources = [{"title": r.title, "kind": r.source_kind} for r in titles_q.fetchall()]
+    recent_sources = [
+        {"title": r.title, "kind": r.source_kind} for r in titles_q.fetchall()
+    ]
 
     # Incomplete sources
     gaps_q = await session.execute(
@@ -344,7 +360,9 @@ async def get_domain_summary(session: AsyncSession) -> dict:
             LIMIT 10
         """)
     )
-    stale_sources = [{"title": r.title, "kind": r.source_kind} for r in stale_q.fetchall()]
+    stale_sources = [
+        {"title": r.title, "kind": r.source_kind} for r in stale_q.fetchall()
+    ]
 
     return {
         "source_count": sum(v["count"] for v in kinds.values()),

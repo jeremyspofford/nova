@@ -9,6 +9,7 @@ Slot types: pinned (self-model, goal), sticky (key decisions),
 refreshed (memories from activation), sliding (recent conversation),
 expiring (open threads).
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,6 +53,7 @@ class WorkingMemorySlot:
 @dataclass
 class WorkingMemoryContext:
     """The assembled context window — ready for prompt injection."""
+
     self_model: str = ""
     active_goal: str = ""
     memories: str = ""
@@ -108,7 +110,8 @@ async def assemble_context(
         max_results = None
 
     activated = await spreading_activation(
-        session, query,
+        session,
+        query,
         seed_count=seed_count,
         max_results=max_results,
         depth=depth,
@@ -134,23 +137,25 @@ async def assemble_context(
         # Convert ActivatedEngram to dicts for reranking
         candidate_dicts = []
         for e in rerank_candidates:
-            candidate_dicts.append({
-                "id": str(e.id),
-                "type": e.type,
-                "content": e.content,
-                "cosine_similarity": e.activation,
-                "importance": e.importance,
-                "activation": e.activation,
-                "last_accessed": None,
-                "convergence_paths": e.convergence_paths,
-                "outcome_avg": getattr(e, "outcome_avg", None),
-                "outcome_count": getattr(e, "outcome_count", 0),
-                "embedding": None,  # Not stored on ActivatedEngram
-                "final_score": e.final_score,
-                "source_type": e.source_type,
-                "confidence": getattr(e, "confidence", 0.5),
-                "access_count": getattr(e, "access_count", 0),
-            })
+            candidate_dicts.append(
+                {
+                    "id": str(e.id),
+                    "type": e.type,
+                    "content": e.content,
+                    "cosine_similarity": e.activation,
+                    "importance": e.importance,
+                    "activation": e.activation,
+                    "last_accessed": None,
+                    "convergence_paths": e.convergence_paths,
+                    "outcome_avg": getattr(e, "outcome_avg", None),
+                    "outcome_count": getattr(e, "outcome_count", 0),
+                    "embedding": None,  # Not stored on ActivatedEngram
+                    "final_score": e.final_score,
+                    "source_type": e.source_type,
+                    "confidence": getattr(e, "confidence", 0.5),
+                    "access_count": getattr(e, "access_count", 0),
+                }
+            )
 
         reranked_dicts = neural_rerank(
             candidate_dicts,
@@ -225,8 +230,16 @@ async def assemble_context(
 
         # Interleave personal and non-personal engrams so budget truncation
         # doesn't drop all chat memories when intel dominates top scores
-        personal = [e for e in content_engrams if e.source_type in ('chat', 'consolidation', 'self_reflection')]
-        other = [e for e in content_engrams if e.source_type not in ('chat', 'consolidation', 'self_reflection')]
+        personal = [
+            e
+            for e in content_engrams
+            if e.source_type in ("chat", "consolidation", "self_reflection")
+        ]
+        other = [
+            e
+            for e in content_engrams
+            if e.source_type not in ("chat", "consolidation", "self_reflection")
+        ]
         interleaved: list = []
         for i in range(max(len(personal), len(other))):
             if i < len(personal):
@@ -237,18 +250,24 @@ async def assemble_context(
 
         ctx.engram_ids = [str(e.id) for e in content_engrams]
         ctx.engram_summaries = [
-            {"id": str(e.id), "type": e.type, "preview": e.content[:80].strip(), "source_type": e.source_type}
+            {
+                "id": str(e.id),
+                "type": e.type,
+                "preview": e.content[:80].strip(),
+                "source_type": e.source_type,
+            }
             for e in content_engrams
         ]
         memory_text = await reconstruct(
-            session, content_engrams,
+            session,
+            content_engrams,
             context=query,
             self_model_summary=self_model,
         )
         # Trim to memory budget
         budget = settings.engram_wm_memory_budget
         if _estimate_tokens(memory_text) > budget:
-            memory_text = memory_text[:budget * 4]
+            memory_text = memory_text[: budget * 4]
         ctx.memories = memory_text
         ctx.total_tokens += _estimate_tokens(memory_text)
 

@@ -10,6 +10,7 @@ pattern so a kill/OOM/container-restart during decomposition doesn't
 vaporize the payload. On startup, any items still in the processing
 list from a prior crashed run are pushed back to the main queue.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -107,7 +108,9 @@ async def ingestion_loop() -> None:
     # worker that died before completing them.
     recovered = await _recover_processing_list(redis)
     if recovered:
-        log.info("Recovered %d orphaned ingestion payload(s) from processing list", recovered)
+        log.info(
+            "Recovered %d orphaned ingestion payload(s) from processing list", recovered
+        )
 
     log.info("Engram ingestion worker started (queue=%s)", queue)
 
@@ -136,11 +139,17 @@ async def ingestion_loop() -> None:
             try:
                 json.loads(payload_str)
             except json.JSONDecodeError:
-                log.warning("Malformed ingestion event (not valid JSON), dropping: %s", payload_str[:200])
+                log.warning(
+                    "Malformed ingestion event (not valid JSON), dropping: %s",
+                    payload_str[:200],
+                )
                 try:
                     await redis.lrem(processing, 1, payload_raw)
                 except Exception:
-                    log.warning("Failed to clear malformed payload from processing list", exc_info=True)
+                    log.warning(
+                        "Failed to clear malformed payload from processing list",
+                        exc_info=True,
+                    )
                 continue
 
             # Fire into background so the loop isn't blocked.
@@ -213,6 +222,7 @@ async def _process_event(raw_payload: str) -> dict:
     occurred_at = None
     if occurred_at_raw:
         from datetime import datetime, timezone
+
         try:
             occurred_at = datetime.fromisoformat(occurred_at_raw.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
@@ -230,14 +240,24 @@ async def _process_event(raw_payload: str) -> dict:
         tenant_id = DEFAULT_TENANT
 
     if not raw_text.strip():
-        return {"engrams_created": 0, "engrams_updated": 0, "edges_created": 0, "engram_ids": []}
+        return {
+            "engrams_created": 0,
+            "engrams_updated": 0,
+            "edges_created": 0,
+            "engram_ids": [],
+        }
 
     # Step 1: Decompose raw text into structured engrams
     decomposition = await decompose(raw_text, source_type=source_type)
 
     if not decomposition.engrams:
         log.debug("Decomposition produced no engrams for: %s", raw_text[:100])
-        return {"engrams_created": 0, "engrams_updated": 0, "edges_created": 0, "engram_ids": []}
+        return {
+            "engrams_created": 0,
+            "engrams_updated": 0,
+            "edges_created": 0,
+            "engram_ids": [],
+        }
 
     engrams_created = 0
     engrams_updated = 0
@@ -253,6 +273,7 @@ async def _process_event(raw_payload: str) -> dict:
         trust = 0.7
         try:
             from .sources import DEFAULT_TRUST, find_or_create_source
+
             source_kind = _map_source_type_to_kind(source_type)
             source_uri = event.get("source_uri") or metadata.get("url")
             source_title = event.get("source_title") or metadata.get("feed_name")
@@ -271,15 +292,21 @@ async def _process_event(raw_payload: str) -> dict:
                 tenant_id=tenant_id,
             )
             source_meta = {
-                k: v for k, v in {
+                k: v
+                for k, v in {
                     "url": source_uri,
                     "title": source_title,
                     "author": source_author,
                     "feed_name": metadata.get("feed_name"),
                     "session_id": event.get("session_id"),
-                }.items() if v
+                }.items()
+                if v
             }
-            trust = trust_override if trust_override is not None else DEFAULT_TRUST.get(source_kind, 0.7)
+            trust = (
+                trust_override
+                if trust_override is not None
+                else DEFAULT_TRUST.get(source_kind, 0.7)
+            )
         except Exception as exc:
             log.warning("Source creation failed (non-fatal): %s", exc)
 
@@ -288,7 +315,9 @@ async def _process_event(raw_payload: str) -> dict:
             try:
                 engram_id, was_new = await _store_or_update_engram(
                     session=session,
-                    decomposed_type=decomposed.type.value if hasattr(decomposed.type, 'value') else decomposed.type,
+                    decomposed_type=decomposed.type.value
+                    if hasattr(decomposed.type, "value")
+                    else decomposed.type,
                     content=decomposed.content,
                     importance=decomposed.importance,
                     entities_referenced=decomposed.entities_referenced,
@@ -300,7 +329,9 @@ async def _process_event(raw_payload: str) -> dict:
                     source_ref_id=source_ref_id,
                     source_meta=source_meta,
                     trust=trust,
-                    temporal_validity=getattr(decomposed, 'temporal_validity', 'unknown'),
+                    temporal_validity=getattr(
+                        decomposed, "temporal_validity", "unknown"
+                    ),
                     tenant_id=tenant_id,
                 )
                 index_to_id[i] = engram_id
@@ -310,7 +341,9 @@ async def _process_event(raw_payload: str) -> dict:
                 else:
                     engrams_updated += 1
             except Exception:
-                log.exception("Failed to store engram %d: %s", i, decomposed.content[:80])
+                log.exception(
+                    "Failed to store engram %d: %s", i, decomposed.content[:80]
+                )
 
         # Step 3: Create edges from decomposition relationships
         for rel in decomposition.relationships:
@@ -319,8 +352,12 @@ async def _process_event(raw_payload: str) -> dict:
                 tgt_id = index_to_id.get(rel.to_index)
                 if src_id and tgt_id and src_id != tgt_id:
                     created = await _create_edge(
-                        session, src_id, tgt_id,
-                        rel.relation.value if hasattr(rel.relation, 'value') else rel.relation,
+                        session,
+                        src_id,
+                        tgt_id,
+                        rel.relation.value
+                        if hasattr(rel.relation, "value")
+                        else rel.relation,
                         rel.strength,
                     )
                     if created:
@@ -334,8 +371,11 @@ async def _process_event(raw_payload: str) -> dict:
             if all_ids[j] != all_ids[j + 1]:
                 try:
                     created = await _create_edge(
-                        session, all_ids[j], all_ids[j + 1],
-                        "related_to", 0.3,  # co-occurrence edges are weaker
+                        session,
+                        all_ids[j],
+                        all_ids[j + 1],
+                        "related_to",
+                        0.3,  # co-occurrence edges are weaker
                     )
                     if created:
                         edges_created += 1
@@ -350,27 +390,38 @@ async def _process_event(raw_payload: str) -> dict:
                     continue
 
                 # Get embedding for the new engram to find contradiction candidates
-                new_engram_content = decomposition.engrams[contradiction.new_index].content
+                new_engram_content = decomposition.engrams[
+                    contradiction.new_index
+                ].content
                 embedding = await get_embedding(new_engram_content, session)
                 candidates = await find_contradiction_candidates(
-                    session, embedding, contradiction.existing_content_hint,
+                    session,
+                    embedding,
+                    contradiction.existing_content_hint,
                     tenant_id=tenant_id,
                 )
                 for candidate in candidates:
                     created = await _create_edge(
-                        session, new_id, candidate["id"],
-                        "contradicts", 0.8,
+                        session,
+                        new_id,
+                        candidate["id"],
+                        "contradicts",
+                        0.8,
                     )
                     if created:
                         edges_created += 1
                         log.info(
                             "Contradiction edge: '%s' contradicts '%s'",
-                            new_engram_content[:60], candidate["content"][:60],
+                            new_engram_content[:60],
+                            candidate["content"][:60],
                         )
-                        await emit_to_cortex("engram.contradiction", {
-                            "engram_id": str(new_id),
-                            "conflicting_with": str(candidate["id"]),
-                        })
+                        await emit_to_cortex(
+                            "engram.contradiction",
+                            {
+                                "engram_id": str(new_id),
+                                "conflicting_with": str(candidate["id"]),
+                            },
+                        )
             except Exception:
                 log.warning("Failed to process contradiction", exc_info=True)
 
@@ -378,6 +429,7 @@ async def _process_event(raw_payload: str) -> dict:
         if source_ref_id and len(raw_text) > 200:
             try:
                 from .sources import generate_source_summary, update_source_summary
+
                 summary = await generate_source_summary(raw_text)
                 if summary:
                     await update_source_summary(session, source_ref_id, summary)
@@ -394,7 +446,10 @@ async def _process_event(raw_payload: str) -> dict:
     }
     log.info(
         "Ingested: %d created, %d updated, %d edges from: %s",
-        engrams_created, engrams_updated, edges_created, raw_text[:80],
+        engrams_created,
+        engrams_updated,
+        edges_created,
+        raw_text[:80],
     )
 
     # Notify consolidation daemon about new engrams (threshold trigger)
@@ -440,13 +495,17 @@ async def _store_or_update_engram(
         # Strategy 2: embedding similarity for entity-type engrams
         if decomposed_type == "entity":
             existing = await find_similar_engram(
-                session, embedding, decomposed_type, tenant_id=tenant_id,
+                session,
+                embedding,
+                decomposed_type,
+                tenant_id=tenant_id,
             )
 
     if existing:
         # Update existing engram instead of creating duplicate
         await update_existing_engram(
-            session, existing["id"],
+            session,
+            existing["id"],
             importance_boost=max(0, importance - existing["importance"]) * 0.5,
         )
         return existing["id"], False
@@ -454,7 +513,9 @@ async def _store_or_update_engram(
     # Fact-level dedup: merge near-duplicate facts instead of creating duplicates
     if decomposed_type in ("fact", "episode", "procedure", "preference"):
         similar = await find_similar_engram(
-            session, embedding, decomposed_type,
+            session,
+            embedding,
+            decomposed_type,
             threshold=settings.engram_fact_dedup_threshold,
             tenant_id=tenant_id,
         )
@@ -468,13 +529,23 @@ async def _store_or_update_engram(
 
     # Cross-type dedup: catch "Jeremy" as both fact and entity
     cross_match = await find_similar_engram_any_type(
-        session, embedding,
+        session,
+        embedding,
         threshold=settings.engram_entity_similarity_threshold,  # 0.92
         tenant_id=tenant_id,
     )
     if cross_match:
-        await update_existing_engram(session, cross_match["id"], importance_boost=max(0, importance - cross_match["importance"]) * 0.3)
-        log.debug("Cross-type dedup: merged %s into existing %s engram %s", decomposed_type, cross_match["type"], cross_match["id"])
+        await update_existing_engram(
+            session,
+            cross_match["id"],
+            importance_boost=max(0, importance - cross_match["importance"]) * 0.3,
+        )
+        log.debug(
+            "Cross-type dedup: merged %s into existing %s engram %s",
+            decomposed_type,
+            cross_match["type"],
+            cross_match["id"],
+        )
         if source_ref_id:
             await _append_source_ref(session, cross_match["id"], source_ref_id)
         return cross_match["id"], False
@@ -534,9 +605,13 @@ async def _store_or_update_engram(
     # Create edges from this engram to existing entities it references
     for entity_name in entities_referenced:
         try:
-            entity_match = await find_existing_entity(session, entity_name, tenant_id=tenant_id)
+            entity_match = await find_existing_entity(
+                session, entity_name, tenant_id=tenant_id
+            )
             if entity_match and entity_match["id"] != row.id:
-                await _create_edge(session, row.id, entity_match["id"], "related_to", 0.5)
+                await _create_edge(
+                    session, row.id, entity_match["id"], "related_to", 0.5
+                )
         except Exception:
             pass  # entity linking is best-effort
 

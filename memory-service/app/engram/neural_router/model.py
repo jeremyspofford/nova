@@ -4,6 +4,7 @@ Two architectures, auto-selected based on observation count:
 - ScalarReranker: 25 scalar features -> relevance score (200-999 obs)
 - EmbeddingReranker: scalar features + embedding projections (1000+ obs)
 """
+
 from __future__ import annotations
 
 import torch
@@ -88,11 +89,11 @@ class EmbeddingReranker(nn.Module):
         Returns:
             (batch, 1) tensor of relevance scores
         """
-        q_proj = self.query_proj(query_embedding)    # (batch, 32)
+        q_proj = self.query_proj(query_embedding)  # (batch, 32)
         e_proj = self.engram_proj(engram_embeddings)  # (batch, 32)
 
         dot = (q_proj * e_proj).sum(dim=1, keepdim=True)  # (batch, 1)
-        diff = q_proj - e_proj                              # (batch, 32)
+        diff = q_proj - e_proj  # (batch, 32)
 
         combined = torch.cat([scalar_features, dot, diff], dim=1)
         return self.net(combined)

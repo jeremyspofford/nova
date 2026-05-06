@@ -7,6 +7,7 @@ in PostgreSQL.
 
 Usage: python -m app.engram.neural_router.train
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -98,10 +99,14 @@ async def assemble_training_data(tenant_id: str) -> list[dict]:
     for obs in observations:
         used_set = set(str(u) for u in (obs.engrams_used or []))
         surfaced = [str(s) for s in (obs.engrams_surfaced or [])]
-        temporal = obs.temporal_context if isinstance(obs.temporal_context, dict) else {}
+        temporal = (
+            obs.temporal_context if isinstance(obs.temporal_context, dict) else {}
+        )
 
         # Parse query embedding from pgvector text format "[0.1,0.2,...]"
-        query_emb = _parse_pgvector(obs.query_embedding) if obs.query_embedding else None
+        query_emb = (
+            _parse_pgvector(obs.query_embedding) if obs.query_embedding else None
+        )
 
         for eid in surfaced:
             meta = engram_meta.get(eid)
@@ -115,7 +120,9 @@ async def assemble_training_data(tenant_id: str) -> list[dict]:
                 "last_accessed": meta.last_accessed,
                 "type": meta.type or "fact",
                 "convergence_paths": 0,
-                "outcome_avg": float(meta.outcome_avg or 0.0) if meta.outcome_avg is not None else 0.0,
+                "outcome_avg": float(meta.outcome_avg or 0.0)
+                if meta.outcome_avg is not None
+                else 0.0,
                 "outcome_count": int(meta.outcome_count or 0),
             }
 
@@ -124,12 +131,14 @@ async def assemble_training_data(tenant_id: str) -> list[dict]:
 
             engram_emb = _parse_pgvector(meta.embedding) if meta.embedding else None
 
-            examples.append({
-                "scalar_features": scalar_list,
-                "query_embedding": query_emb,
-                "engram_embedding": engram_emb,
-                "label": 1.0 if eid in used_set else 0.0,
-            })
+            examples.append(
+                {
+                    "scalar_features": scalar_list,
+                    "query_embedding": query_emb,
+                    "engram_embedding": engram_emb,
+                    "label": 1.0 if eid in used_set else 0.0,
+                }
+            )
 
     return examples
 
@@ -190,9 +199,7 @@ def train_model(
     val_scalars = torch.tensor(
         [e["scalar_features"] for e in val_examples], dtype=torch.float32
     )
-    val_labels = torch.tensor(
-        [[e["label"]] for e in val_examples], dtype=torch.float32
-    )
+    val_labels = torch.tensor([[e["label"]] for e in val_examples], dtype=torch.float32)
 
     if use_embedding:
         train_q_emb = torch.tensor(
@@ -286,7 +293,9 @@ def train_model(
     return model, arch_name, precision
 
 
-def _precision_at_k(scores: list[float] | float, labels: list[float], k: int = 20) -> float:
+def _precision_at_k(
+    scores: list[float] | float, labels: list[float], k: int = 20
+) -> float:
     """Compute precision@K: of the top K scored items, how many are positive."""
     if isinstance(scores, float):
         scores = [scores]
@@ -329,9 +338,15 @@ async def save_model(
             {"tid": tenant_id},
         )
         current_row = current.fetchone()
-        current_precision = float(current_row.validation_precision_at_k) if current_row and current_row.validation_precision_at_k is not None else 0.0
+        current_precision = (
+            float(current_row.validation_precision_at_k)
+            if current_row and current_row.validation_precision_at_k is not None
+            else 0.0
+        )
 
-        should_promote = precision >= current_precision + settings.neural_router_min_precision_gain
+        should_promote = (
+            precision >= current_precision + settings.neural_router_min_precision_gain
+        )
 
         if should_promote:
             # Atomic swap: deactivate current, insert new as active
@@ -383,12 +398,16 @@ async def save_model(
     if should_promote:
         log.info(
             "Promoted %s model (precision=%.4f) for tenant %s",
-            arch_name, precision, tenant_id,
+            arch_name,
+            precision,
+            tenant_id,
         )
     else:
         log.info(
             "Stored %s model (precision=%.4f < current %.4f) — not promoted",
-            arch_name, precision, current_precision,
+            arch_name,
+            precision,
+            current_precision,
         )
 
     return should_promote
@@ -457,7 +476,8 @@ async def startup_probe(r: aioredis.Redis) -> None:
             if active.fetchone() is None:
                 log.info(
                     "Startup probe: tenant %s has %d observations, no model — enqueuing",
-                    tid, row.cnt,
+                    tid,
+                    row.cnt,
                 )
                 await r.lpush(
                     "neural_router:train_signal",

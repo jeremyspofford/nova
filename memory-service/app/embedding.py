@@ -2,6 +2,7 @@
 Embedding client — calls LLM Gateway for embeddings, caches in Redis (24h) and PostgreSQL.
 Consumers never see vectors; they only pass text in and receive memories out.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -61,20 +62,26 @@ async def get_embedding(
 
     # L2: PostgreSQL embedding cache
     row = await session.execute(
-        text("SELECT embedding FROM embedding_cache WHERE content_hash = :h AND model = :m"),
+        text(
+            "SELECT embedding FROM embedding_cache WHERE content_hash = :h AND model = :m"
+        ),
         {"h": text_hash, "m": model},
     )
     db_row = row.fetchone()
     if db_row:
         embedding = _parse_pg_vector(str(db_row[0]))
-        await redis.setex(redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding))
+        await redis.setex(
+            redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding)
+        )
         return embedding
 
     # L3: LLM Gateway
     embedding = await _call_llm_gateway(content, model)
 
     # Write-through to both caches
-    await redis.setex(redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding))
+    await redis.setex(
+        redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding)
+    )
     await session.execute(
         text("""
             INSERT INTO embedding_cache (content_hash, embedding, model)
@@ -110,13 +117,17 @@ async def get_embeddings_batch(
 
         # L2: PostgreSQL embedding_cache
         row = await session.execute(
-            text("SELECT embedding FROM embedding_cache WHERE content_hash = :h AND model = :m"),
+            text(
+                "SELECT embedding FROM embedding_cache WHERE content_hash = :h AND model = :m"
+            ),
             {"h": text_hash, "m": model},
         )
         db_row = row.fetchone()
         if db_row:
             embedding = _parse_pg_vector(str(db_row[0]))
-            await redis.setex(redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding))
+            await redis.setex(
+                redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding)
+            )
             results[i] = embedding
             continue
 
@@ -135,7 +146,9 @@ async def get_embeddings_batch(
             t = texts[idx]
             text_hash = _hash_text(t, model)
             redis_key = _cache_key(text_hash)
-            await redis.setex(redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding))
+            await redis.setex(
+                redis_key, settings.redis_embedding_cache_ttl, json.dumps(embedding)
+            )
             await session.execute(
                 text("""
                     INSERT INTO embedding_cache (content_hash, embedding, model)
@@ -161,6 +174,7 @@ async def _call_with_retry_fallback(
     """Call LLM gateway /embed with retry + fallback model."""
     import asyncio as _aio
     import time as _time
+
     global _primary_failed_until
 
     models_to_try = [model]
@@ -177,23 +191,37 @@ async def _call_with_retry_fallback(
             log.info("Using fallback embedding model: %s", model_to_try)
         for attempt in range(settings.embedding_max_retries):
             try:
-                async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=10.0) as client:
-                    resp = await client.post("/embed", json={"model": model_to_try, **payload})
+                async with httpx.AsyncClient(
+                    base_url=settings.llm_gateway_url, timeout=10.0
+                ) as client:
+                    resp = await client.post(
+                        "/embed", json={"model": model_to_try, **payload}
+                    )
                     resp.raise_for_status()
                     data = resp.json()
                     # Primary model recovered — clear the cooldown
                     if not is_fallback:
                         _primary_failed_until = 0.0
-                    return data["embeddings"][0] if extract == "single" else data["embeddings"]
+                    return (
+                        data["embeddings"][0]
+                        if extract == "single"
+                        else data["embeddings"]
+                    )
             except Exception:
                 if attempt < settings.embedding_max_retries - 1:
                     await _aio.sleep(settings.embedding_retry_delay)
                 elif not is_fallback:
-                    log.warning("Primary embedding model %s failed after %d retries, cooling down for %ds",
-                                model_to_try, settings.embedding_max_retries, int(_PRIMARY_FAIL_COOLDOWN))
+                    log.warning(
+                        "Primary embedding model %s failed after %d retries, cooling down for %ds",
+                        model_to_try,
+                        settings.embedding_max_retries,
+                        int(_PRIMARY_FAIL_COOLDOWN),
+                    )
                     _primary_failed_until = _time.monotonic() + _PRIMARY_FAIL_COOLDOWN
 
-    raise RuntimeError(f"All embedding attempts failed for model {model} and fallback {settings.embedding_fallback_model}")
+    raise RuntimeError(
+        f"All embedding attempts failed for model {model} and fallback {settings.embedding_fallback_model}"
+    )
 
 
 async def _call_llm_gateway(input_text: str, model: str) -> list[float]:

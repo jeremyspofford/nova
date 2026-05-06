@@ -3,6 +3,7 @@
 Converts spreading activation candidates into tensors suitable for
 ScalarReranker and EmbeddingReranker forward passes.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
