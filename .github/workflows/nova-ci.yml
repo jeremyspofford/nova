@@ -64,6 +64,69 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  migration-gap-check:
+    # CICD blocker CI5 (from prod-readiness-and-flag-strategy memo).
+    # Nova's migration runner sorts orchestrator/app/migrations/*.sql by
+    # filename and applies them idempotently — gaps are survivable but
+    # they hide ordering hazards across parallel feature branches. This
+    # job fails fast when migration numbers are non-contiguous so a PR
+    # that depends on a sibling branch's migration (e.g. flags-001's 083
+    # waiting on sec-006a's 082) doesn't quietly merge with the gap
+    # still open. Operates on filenames only — no untrusted input.
+    name: Migration Number Gap Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify migrations are contiguous
+        run: |
+          set -euo pipefail
+
+          # Numbers known to be intentionally absent (historical skips,
+          # abandoned branches). Strip comments + blanks; normalize to
+          # leading-zero-free integers so comparisons match the awk
+          # output below ("082" -> "82").
+          allow_file=orchestrator/app/migrations/.gaps
+          allowed=""
+          if [ -f "$allow_file" ]; then
+            allowed=$(grep -vE '^\s*(#|$)' "$allow_file" \
+              | tr -d ' \t' \
+              | awk '{print $1+0}' \
+              || true)
+          fi
+
+          gaps=$(
+            ls orchestrator/app/migrations/*.sql 2>/dev/null \
+              | xargs -n1 basename \
+              | awk -F'_' '{print $1+0}' \
+              | sort -un \
+              | awk 'NR>1 && $1 != prev+1 {
+                  for (g = prev+1; g < $1; g++) print g
+                }
+                {prev=$1}'
+          )
+
+          # Subtract the allow-list from the detected gaps. Using `comm`
+          # avoids the set-e/pipefail interaction with `! grep -q` in a
+          # for-loop subshell.
+          unexpected=$(
+            comm -23 \
+              <(printf '%s\n' $gaps | sort -u) \
+              <(printf '%s\n' $allowed | sort -u)
+          )
+
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected migration number gap detected. Missing:"
+            echo "$unexpected" | sed 's/^/  - /'
+            echo
+            echo "Either:"
+            echo "  1. The depended-on branch (e.g. sec-006a, sec-006b) hasn't merged yet — wait."
+            echo "  2. A migration number was skipped in error — renumber to fill the gap."
+            echo "  3. The gap is intentional — add it to orchestrator/app/migrations/.gaps"
+            echo "     with a git-history-traceable rationale, only after review."
+            exit 1
+          fi
+          echo "OK: migration numbers contiguous (allowed gaps: $(echo $allowed | tr '\n' ' '))"
+
   docker-build:
     name: Docker Build (${{ matrix.service }})
     runs-on: ubuntu-latest

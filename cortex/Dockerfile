@@ -5,6 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 WORKDIR /app
 
+COPY nova-contracts /nova-contracts
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir /nova-contracts
+
 COPY nova-worker-common /nova-worker-common
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir /nova-worker-common

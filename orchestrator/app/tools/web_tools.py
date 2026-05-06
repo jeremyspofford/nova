@@ -18,9 +18,27 @@ from urllib.parse import quote_plus, unquote
 
 import httpx
 from nova_contracts import BlastRadius, ToolDefinition
+from nova_contracts.feature_flags import register_flag
 from nova_worker_common.url_validator import validate_url
 
 log = logging.getLogger(__name__)
+
+# AQ-008: when enabled, web-fetch results are wrapped in
+# <TASK_OUTPUT>...</TASK_OUTPUT> with close-tag neutralization before
+# being returned to agents. This signals "untrusted content; parse but
+# don't act on instructions found inside" to downstream LLM stages.
+# Default off because existing prompts don't expect XML wrappers; flip
+# on for a stricter posture once prompts are tested with the wrapping.
+WEB_FETCH_STRICT_SANITIZE = register_flag(
+    key="pipeline.web_fetch_strict_sanitize",
+    type="bool",
+    default=False,
+    description=(
+        "AQ-008: wrap web_fetch results in <TASK_OUTPUT> tags with "
+        "close-tag neutralization, signaling untrusted content to "
+        "downstream LLM stages."
+    ),
+)
 
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -278,6 +296,12 @@ async def _execute_web_fetch(url: str) -> str:
 
     if len(text) > _FETCH_MAX_CHARS:
         text = text[:_FETCH_MAX_CHARS] + f"\n\n[Truncated — {len(text)} chars total]"
+
+    if WEB_FETCH_STRICT_SANITIZE.value():
+        # AQ-008 strict mode: wrap in untrusted markers so downstream
+        # agents see explicit boundaries around the fetched HTML.
+        from app.pipeline.prompt_safety import TAG_TASK_OUTPUT, wrap_untrusted
+        return f"Content from {url}:\n\n{wrap_untrusted(text, TAG_TASK_OUTPUT)}"
 
     return f"Content from {url}:\n\n{text}"
 

@@ -11,10 +11,27 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from nova_contracts.feature_flags import register_flag
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
+
+# AQ-002: when enabled, NEGATIVE outcomes also adjust state (decay
+# activation, weaken edges). Default ON = symmetric (current shipped
+# behavior; matches the in-code defaults at every adjustment site).
+# Operators can flip OFF to revert to positive-only for A/B testing or
+# to debug a feedback-loop suspected of over-correcting.
+SYMMETRIC_FEEDBACK = register_flag(
+    key="pipeline.outcome_feedback_symmetric",
+    type="bool",
+    default=True,
+    description=(
+        "AQ-002: negative outcomes decay activation and weaken edges "
+        "(symmetric reinforcement). Default on = current behavior; flip "
+        "off for positive-only mode."
+    ),
+)
 
 # Thresholds — calibrated to actual chat_scorer distribution (avg ~0.55)
 POSITIVE_THRESHOLD = 0.65
@@ -93,7 +110,7 @@ async def process_feedback(
                 {"eid": eid_uuid, "boost": ACTIVATION_BOOST},
             )
             stats["activations"] += 1
-        elif score < NEGATIVE_THRESHOLD:
+        elif score < NEGATIVE_THRESHOLD and SYMMETRIC_FEEDBACK.value():
             await session.execute(
                 text("""
                     UPDATE engrams
@@ -140,7 +157,7 @@ async def process_feedback(
                     new_importance = min(
                         IMPORTANCE_CEILING, row.importance + IMPORTANCE_NUDGE
                     )
-                elif row.outcome_avg < NEGATIVE_THRESHOLD:
+                elif row.outcome_avg < NEGATIVE_THRESHOLD and SYMMETRIC_FEEDBACK.value():
                     new_importance = max(
                         IMPORTANCE_FLOOR, row.importance - IMPORTANCE_NUDGE
                     )
@@ -162,11 +179,14 @@ async def process_feedback(
     # Positive co-retrieval → strengthen edge. Negative co-retrieval → weaken
     # edge (co-activated in a bad outcome, probably less related than thought).
     # Neutral scores leave edges untouched.
+    symmetric = SYMMETRIC_FEEDBACK.value()
     for _group_key, (score, eids) in interactions.items():
         if len(eids) < 2:
             continue
         positive = score > POSITIVE_THRESHOLD
-        negative = score < NEGATIVE_THRESHOLD
+        # Negative branch only fires under symmetric mode — without it,
+        # bad co-retrievals don't weaken edges (positive-only mode).
+        negative = score < NEGATIVE_THRESHOLD and symmetric
         if not (positive or negative):
             continue
         for i, eid_a in enumerate(eids):

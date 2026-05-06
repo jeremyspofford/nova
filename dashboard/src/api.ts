@@ -1637,3 +1637,56 @@ export const deletePlatformSecret = (key: string) =>
   apiFetch<void>(`/api/v1/admin/secrets/${encodeURIComponent(key)}`, {
     method: 'DELETE',
   })
+
+// ── Feature Flags (B-Task 8) ────────────────────────────────────────────────
+
+export type FeatureFlagRow = {
+  key: string
+  type: 'bool' | 'enum' | null
+  default: boolean | string | null
+  current_value: boolean | string | null
+  is_override: boolean
+  is_orphan?: boolean
+  set_by: string | null
+  set_at: string | null
+  notes: string | null
+}
+
+export type FeatureFlagAuditRow = {
+  id: string
+  key: string
+  action: 'set' | 'reset'
+  old_value: unknown
+  new_value: unknown
+  actor: string
+  actor_ip: string | null
+  actor_user_agent: string | null
+  request_id: string | null
+  occurred_at: string
+  notes: string | null
+}
+
+export const listFeatureFlags = () =>
+  apiFetch<FeatureFlagRow[]>('/api/v1/feature-flags/')
+
+export const patchFeatureFlag = (
+  key: string,
+  body: { value: unknown; notes?: string | null; confirm?: string },
+) =>
+  apiFetch<FeatureFlagRow>(`/api/v1/feature-flags/${encodeURIComponent(key)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+
+export const resetFeatureFlag = (key: string) =>
+  apiFetch<{ deleted: boolean; key: string }>(
+    `/api/v1/feature-flags/${encodeURIComponent(key)}`,
+    { method: 'DELETE' },
+  )
+
+export const getFeatureFlagAudit = (key?: string, limit = 50) => {
+  const path = key
+    ? `/api/v1/feature-flags/${encodeURIComponent(key)}/audit?limit=${limit}`
+    : `/api/v1/feature-flags/audit?limit=${limit}`
+  return apiFetch<FeatureFlagAuditRow[]>(path)
+}

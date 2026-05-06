@@ -6,7 +6,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
-  Link2, Bookmark, Monitor, Settings2,
+  Link2, Bookmark, Monitor, Settings2, ToggleRight,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -51,6 +51,7 @@ import { RouterStatusSection } from './settings/RouterStatusSection'
 import { MemoryProviderSection } from './settings/MemoryProviderSection'
 import { BrainSection } from './settings/BrainSection'
 import EditorSection from './settings/EditorSection'
+import { FeatureFlagsSection } from './settings/FeatureFlagsSection'
 import { useNovaIdentity } from '../hooks/useNovaIdentity'
 import { useAuth } from '../stores/auth-store'
 import { Skeleton } from '../components/ui'
@@ -156,6 +157,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'setup-wizard', label: 'Setup Wizard', icon: RotateCcw },
       { id: 'developer-tools', label: 'Developer Tools', icon: FileCode },
+      { id: 'feature-flags', label: 'Feature Flags', icon: ToggleRight },
       { id: 'debug', label: 'Debug', icon: Bug },
       { id: 'data', label: 'Data', icon: Database },
       { id: 'recovery', label: 'Recovery', icon: HeartPulse },
@@ -847,6 +849,12 @@ export function Settings() {
         {show('developer-tools') && (
           <div id="developer-tools">
             <DeveloperResourcesSection />
+          </div>
+        )}
+
+        {show('feature-flags') && (
+          <div id="feature-flags">
+            <FeatureFlagsSection />
           </div>
         )}
 

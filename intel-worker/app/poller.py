@@ -51,11 +51,44 @@ async def _update_feed_status(
         log.warning("Failed to update feed status %s: %s", feed_id, e)
 
 
+from nova_contracts.feature_flags import register_flag
+
+# Operational kill switch: when enabled, the polling loop sleeps without
+# fetching feeds. Lets an operator pause the worker immediately (within
+# ~5ms via pubsub propagation) without a container restart that would
+# drop in-flight state. Default false = polling-enabled.
+KILL_INTEL_POLL = register_flag(
+    key="kill.intel_worker.poll",
+    type="bool",
+    default=False,
+    description="Pause intel-worker feed polling without a container restart.",
+)
+
+
 async def run_polling_loop() -> None:
     """Main loop: fetch due feeds from orchestrator, process, push to queues."""
     log.info("Polling loop started (interval=%ds)", settings.poll_interval)
+    _last_kill_state = False  # for state-change logging only
     while True:
         try:
+            # Kill-switch check at loop-top: an in-flight cycle finishes
+            # to completion (no torn writes), but the next cycle won't
+            # start until the flag is cleared.
+            if KILL_INTEL_POLL.value():
+                if not _last_kill_state:
+                    log.warning(
+                        "kill.intel_worker.poll=True — pausing feed polling "
+                        "(no fetches until flag cleared)"
+                    )
+                    _last_kill_state = True
+                await asyncio.sleep(settings.poll_interval)
+                continue
+            elif _last_kill_state:
+                log.info(
+                    "kill.intel_worker.poll cleared — resuming feed polling"
+                )
+                _last_kill_state = False
+
             client = get_client()
             resp = await client.get("/api/v1/intel/feeds", params={"enabled": "true"})
             if resp.status_code != 200:

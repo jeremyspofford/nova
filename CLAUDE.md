@@ -177,6 +177,48 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 
 **Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.state` and `inference.backend` in Redis before debugging code. The gateway treats `OLLAMA_BASE_URL=auto`/`host` as aliases for the bundled service URL (`http://ollama:11434`); Redis runtime overrides via `inference.url` win when set.
 
+## Feature Flags
+
+Nova ships a code-first feature-flag system separate from `nova:config:*` runtime config. Flags are declared at module import via `register_flag(...)`; values are read synchronously via `flag.value()`. The orchestrator owns the `feature_flags` and `feature_flag_audit` tables; every other service caches values in-process and re-warms on Redis pubsub `nova:flags:invalidate`.
+
+**SDK** (in `nova-contracts/nova_contracts/`):
+
+- `feature_flags.py` — `FlagDef`, `register_flag`, `flag_override` (test helper), `populate_cache`, `init_cache_file`, `FlagResolver` Protocol, `DefaultResolver`, `set_resolver`/`get_resolver`.
+- `feature_flags_http.py` — `warm_cache_from_http(client, base_url)` for bulk pre-warm at lifespan startup.
+- `feature_flags_pubsub.py` — `PubsubSubscriber` lifecycle (start/stop, `is_connected` health signal).
+- `feature_flags_testing.py` — `registry_clear()` for unit-test cleanup. Production code MUST NOT import this.
+
+**Resolution order** in `FlagDef.value()`:
+
+1. `flag_override(...)` context manager (test scope, contextvars-safe)
+2. `NOVA_FLAG_<KEY>` environment variable (boot-time only — changing at runtime requires container restart and emits an audit-bypass WARN log; **not** a hot kill-switch)
+3. Registered `FlagResolver` (`DefaultResolver` reads from in-process cache)
+4. In-code default
+
+A separate per-service file at `data/flag-cache/<service>.json` is read at startup as a partition-fallback (SR3): kill switches stay armed across restart even when orchestrator/Redis are unreachable.
+
+**Where the system is mounted:**
+
+- Orchestrator router: `orchestrator/app/feature_flags_router.py` at `/api/v1/feature-flags/*` (admin-secret gated).
+- Orchestrator store: `orchestrator/app/feature_flags_store.py`.
+- Migration `083_feature_flags.sql` (tables) + `085_flag_audit_metadata.sql` (actor_ip/UA/request_id columns).
+- Each consuming service's `app/main.py` lifespan starts a `PubsubSubscriber` and calls `warm_cache_from_http` (or `warm_cache_from_store` for orchestrator itself).
+- Dashboard UI: Settings → System → Feature Flags (`dashboard/src/pages/settings/FeatureFlagsSection.tsx`).
+
+**CRITICAL_FLAGS** — hardcoded denylist in `orchestrator/app/feature_flags_router.py` and mirrored in the dashboard. PATCH requires `confirm: <key>` body field. Today's set:
+
+```
+kill.engram.ingestion
+kill.consolidation.cycle
+kill.cortex.thinking_loop
+pipeline.guardrail_strict_mode
+pipeline.web_fetch_strict_sanitize
+```
+
+**Operational runbook** for kill switches: `docs/runbooks/kill-switches.md`. When a Nova subsystem misbehaves, prefer flipping the flag over `docker compose restart` — the flag preserves in-flight state.
+
+**Security-sensitive toggles NOT in the flag system** (v1 deliberate exclusion): `SELFMOD_ENABLED` and the home/root sandbox tiers. They retain `.env` boot-time gating until Phase 2 RBAC + per-write confirmation tokens land — admin-secret-only auth is too weak for "agent gets `$HOME` write" semantics.
+
 ## Key Configuration
 
 - `.env` — DB password, admin secret, infra-only knobs (`COMPOSE_PROFILES`, `OLLAMA_BASE_URL`, `NOVA_INFERENCE_MODE`, `VLLM_MODEL`, etc.), `NOVA_WORKSPACE`, `LOG_LEVEL`, `REQUIRE_AUTH`
