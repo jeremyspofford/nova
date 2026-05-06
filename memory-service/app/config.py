@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     engram_decay_factor: float = 0.6
     engram_activation_threshold: float = 0.1
     engram_max_results: int = 20
+    engram_max_fanout_per_hop: int = 50  # bounds rows examined per spread hop (P1 fix)
     engram_personal_seed_ratio: float = (
         0.4  # fraction of seed slots reserved for personal sources
     )
