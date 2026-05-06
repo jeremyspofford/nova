@@ -1,0 +1,75 @@
+{
+  "engrams": [
+    {
+      "access_count": 17,
+      "content": "dup-a",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 7,
+      "content": "dup-b",
+      "source_type": "chat",
+      "superseded": true,
+      "type": "fact"
+    },
+    {
+      "access_count": 2,
+      "content": "dup-c",
+      "source_type": "chat",
+      "superseded": true,
+      "type": "fact"
+    },
+    {
+      "access_count": 0,
+      "content": "unique-0",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 1,
+      "content": "unique-1",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 2,
+      "content": "unique-2",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 3,
+      "content": "unique-3",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 4,
+      "content": "unique-4",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 5,
+      "content": "unique-5",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    },
+    {
+      "access_count": 6,
+      "content": "unique-6",
+      "source_type": "chat",
+      "superseded": false,
+      "type": "fact"
+    }
+  ],
+  "merged_count": 3
+}

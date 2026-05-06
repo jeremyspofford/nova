@@ -112,6 +112,7 @@ async def engram_factory(db_session):
         tenant_id: str = "00000000-0000-0000-0000-000000000001",
         embedding: list[float] | None = None,
         superseded: bool = False,
+        access_count: int = 0,
     ) -> uuid.UUID:
         eid = uuid.uuid4()
         params: dict[str, Any] = {
@@ -124,23 +125,25 @@ async def engram_factory(db_session):
             "confidence": confidence,
             "tenant_id": tenant_id,
             "superseded": superseded,
+            "access_count": access_count,
         }
         if embedding is not None:
             assert len(embedding) == 768, "engrams.embedding is halfvec(768)"
             params["embedding"] = _to_pg_vector_str(embedding)
             sql = text(
                 "INSERT INTO engrams (id, type, content, source_type, importance, "
-                "activation, confidence, tenant_id, superseded, embedding) "
+                "activation, confidence, tenant_id, superseded, access_count, embedding) "
                 "VALUES (CAST(:id AS uuid), :type, :content, :source_type, :importance, "
                 ":activation, :confidence, CAST(:tenant_id AS uuid), :superseded, "
-                "CAST(:embedding AS halfvec))"
+                ":access_count, CAST(:embedding AS halfvec))"
             )
         else:
             sql = text(
                 "INSERT INTO engrams (id, type, content, source_type, importance, "
-                "activation, confidence, tenant_id, superseded) "
+                "activation, confidence, tenant_id, superseded, access_count) "
                 "VALUES (CAST(:id AS uuid), :type, :content, :source_type, :importance, "
-                ":activation, :confidence, CAST(:tenant_id AS uuid), :superseded)"
+                ":activation, :confidence, CAST(:tenant_id AS uuid), :superseded, "
+                ":access_count)"
             )
         await db_session.execute(sql, params)
         await db_session.flush()
