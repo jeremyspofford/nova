@@ -1,8 +1,14 @@
 """Tests for batch embedding cache hit/miss/write-through."""
+
 from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from .conftest_legacy import (  # noqa: F401  (fixtures used as args)
+    mock_redis,
+    mock_session,
+)
 
 FAKE_EMBEDDING = [0.1, 0.2, 0.3]
 FAKE_EMBEDDING_2 = [0.4, 0.5, 0.6]
@@ -21,6 +27,7 @@ async def test_batch_all_cached_in_redis(mock_redis, mock_session):
         mock_settings.redis_embedding_cache_ttl = 86400
 
         from app.embedding import get_embeddings_batch
+
         result = await get_embeddings_batch(["hello", "world"], mock_session)
 
     assert len(result) == 2
@@ -39,7 +46,9 @@ async def test_batch_miss_calls_gateway(mock_redis, mock_session):
 
     # Mock httpx response
     mock_httpx_resp = AsyncMock()
-    mock_httpx_resp.json.return_value = {"embeddings": [FAKE_EMBEDDING, FAKE_EMBEDDING_2]}
+    mock_httpx_resp.json.return_value = {
+        "embeddings": [FAKE_EMBEDDING, FAKE_EMBEDDING_2]
+    }
     mock_httpx_resp.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
@@ -57,6 +66,7 @@ async def test_batch_miss_calls_gateway(mock_redis, mock_session):
         mock_settings.redis_embedding_cache_ttl = 86400
 
         from app.embedding import get_embeddings_batch
+
         result = await get_embeddings_batch(["hello", "world"], mock_session)
 
     assert result == [FAKE_EMBEDDING, FAKE_EMBEDDING_2]
@@ -68,6 +78,7 @@ async def test_batch_partial_cache_hit(mock_redis, mock_session):
     """Mixed hits/misses: only misses go to gateway."""
     # First text cached, second not
     call_count = 0
+
     async def redis_get(key):
         nonlocal call_count
         call_count += 1
@@ -102,9 +113,10 @@ async def test_batch_partial_cache_hit(mock_redis, mock_session):
         mock_settings.redis_embedding_cache_ttl = 86400
 
         from app.embedding import get_embeddings_batch
+
         result = await get_embeddings_batch(["hello", "world"], mock_session)
 
-    assert result[0] == FAKE_EMBEDDING   # from cache
+    assert result[0] == FAKE_EMBEDDING  # from cache
     assert result[1] == FAKE_EMBEDDING_2  # from gateway
     # Gateway called with only 1 text
     mock_client.post.assert_called_once()

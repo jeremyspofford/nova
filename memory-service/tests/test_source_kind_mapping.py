@@ -4,6 +4,7 @@ The function is a pure dict-lookup helper with no I/O. We load it via
 importlib.util directly from the filesystem so we can test it without
 pulling in the full module-level dependency chain (DB, Redis, LLM gateway).
 """
+
 from __future__ import annotations
 
 import importlib.util

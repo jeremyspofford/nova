@@ -1,22 +1,10 @@
-"""Shared test fixtures for memory-service tests."""
+"""Pytest configuration for memory-service tests.
+
+Real-DB fixtures live here (added in Tasks 1.4–1.10) and are auto-loaded
+by pytest. Legacy mock fixtures live in conftest_legacy.py and must be
+imported explicitly by tests still using them — never via pytest_plugins.
+"""
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
-import pytest
-
-
-@pytest.fixture
-def mock_redis():
-    """Mock async Redis client."""
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.setex = AsyncMock()
-    return redis
-
-
-@pytest.fixture
-def mock_session():
-    """Mock SQLAlchemy async session."""
-    session = AsyncMock()
-    return session
+# Real-DB fixtures will be appended below by Tasks 1.4–1.10.
