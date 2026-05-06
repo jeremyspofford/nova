@@ -170,3 +170,172 @@ def test_flag_override_clears_even_on_exception():
         with flag_override("test.override_cleanup", True):
             raise RuntimeError("boom")
     assert flag.value() is False  # override removed despite exception
+
+
+# ----------------------------------------------------------------------------
+# B3a: in-process cache + env-var override + structured INFO log on cache update
+# ----------------------------------------------------------------------------
+
+from nova_contracts.feature_flags import populate_cache, cache_clear
+
+
+@pytest.fixture(autouse=True)
+def _clean_cache():
+    """Reset the in-process cache between tests so cross-contamination
+    can't mask correctness."""
+    cache_clear()
+    yield
+    cache_clear()
+
+
+# --- Cache layer ---
+
+def test_cache_populated_value_overrides_default():
+    flag = register_flag(
+        key="cache.basic", type="bool", default=False, description=""
+    )
+    assert flag.value() is False
+    populate_cache({"cache.basic": True})
+    assert flag.value() is True
+
+
+def test_cache_clear_reverts_to_default():
+    flag = register_flag(
+        key="cache.clearable", type="bool", default=False, description=""
+    )
+    populate_cache({"cache.clearable": True})
+    assert flag.value() is True
+    cache_clear()
+    assert flag.value() is False
+
+
+def test_populate_cache_emits_info_on_value_change(caplog):
+    register_flag(key="cache.logged", type="bool", default=False, description="")
+    with caplog.at_level("INFO", logger="nova_contracts.feature_flags"):
+        populate_cache({"cache.logged": True})
+    matching = [r for r in caplog.records if r.message and "cache.logged" in r.message]
+    assert any(r.levelname == "INFO" for r in matching), (
+        f"populate_cache must emit INFO when a value changes; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_populate_cache_silent_when_value_unchanged(caplog):
+    register_flag(key="cache.same", type="bool", default=False, description="")
+    populate_cache({"cache.same": True})  # initial set
+    caplog.clear()
+    with caplog.at_level("INFO", logger="nova_contracts.feature_flags"):
+        populate_cache({"cache.same": True})  # same value
+    info_records = [r for r in caplog.records if r.levelname == "INFO"
+                    and r.message and "cache.same" in r.message]
+    assert info_records == [], "no log should fire when value is unchanged"
+
+
+# --- Env-var override ---
+
+def test_envvar_override_bool_true(monkeypatch):
+    flag = register_flag(key="env.b1", type="bool", default=False, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_B1", "true")
+    assert flag.value() is True
+
+
+def test_envvar_override_bool_false(monkeypatch):
+    flag = register_flag(key="env.b2", type="bool", default=True, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_B2", "false")
+    assert flag.value() is False
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("true", True), ("True", True), ("TRUE", True), ("1", True), ("yes", True),
+    ("false", False), ("False", False), ("FALSE", False), ("0", False), ("no", False),
+])
+def test_envvar_override_bool_coercion(monkeypatch, raw, expected):
+    flag = register_flag(key="env.coerce", type="bool", default=not expected, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_COERCE", raw)
+    assert flag.value() is expected
+
+
+def test_envvar_override_bool_invalid_falls_through_to_cache(monkeypatch):
+    flag = register_flag(key="env.bad", type="bool", default=False, description="")
+    populate_cache({"env.bad": True})
+    monkeypatch.setenv("NOVA_FLAG_ENV_BAD", "maybe-truthy")
+    # invalid env-var coercion → falls through to cache (which has True)
+    assert flag.value() is True
+
+
+def test_envvar_override_enum_match(monkeypatch):
+    flag = register_flag(
+        key="env.mode",
+        type="enum",
+        variants=["inject", "tools"],
+        default="inject",
+        description="",
+    )
+    monkeypatch.setenv("NOVA_FLAG_ENV_MODE", "tools")
+    assert flag.value() == "tools"
+
+
+def test_envvar_override_enum_mismatch_falls_through(monkeypatch):
+    flag = register_flag(
+        key="env.mode2",
+        type="enum",
+        variants=["inject", "tools"],
+        default="inject",
+        description="",
+    )
+    monkeypatch.setenv("NOVA_FLAG_ENV_MODE2", "lobotomized")
+    populate_cache({"env.mode2": "tools"})
+    # invalid variant → falls through to cache
+    assert flag.value() == "tools"
+
+
+def test_envvar_override_emits_warning_on_every_read(monkeypatch, caplog):
+    """Security blocker S2: env-var override is an audit-bypass path. Every
+    resolution via env-var must emit a structured WARN so log aggregation
+    can alert on it."""
+    flag = register_flag(key="env.audited", type="bool", default=False, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_AUDITED", "true")
+    with caplog.at_level("WARNING", logger="nova_contracts.feature_flags"):
+        flag.value()
+        flag.value()  # second read also warns
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "env.audited" in r.message]
+    assert len(warns) == 2, (
+        f"every env-var-resolved read must WARN; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_envvar_override_logs_when_invalid_value_seen(monkeypatch, caplog):
+    flag = register_flag(key="env.bad2", type="bool", default=False, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_BAD2", "definitely-not-bool")
+    with caplog.at_level("WARNING", logger="nova_contracts.feature_flags"):
+        flag.value()
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "env.bad2" in r.message]
+    assert warns, (
+        f"invalid env-var value must WARN before fall-through; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_envvar_override_takes_precedence_over_cache(monkeypatch):
+    flag = register_flag(key="env.precedence1", type="bool", default=False, description="")
+    populate_cache({"env.precedence1": False})
+    monkeypatch.setenv("NOVA_FLAG_ENV_PRECEDENCE1", "true")
+    assert flag.value() is True  # env-var wins over cache
+
+
+def test_flag_override_takes_precedence_over_envvar(monkeypatch):
+    """Test override (highest layer) wins even when env-var is set."""
+    flag = register_flag(key="env.precedence2", type="bool", default=False, description="")
+    monkeypatch.setenv("NOVA_FLAG_ENV_PRECEDENCE2", "true")
+    with flag_override("env.precedence2", False):
+        assert flag.value() is False
+
+
+def test_envvar_key_translation_dots_become_underscores(monkeypatch):
+    """Flag key 'kill.intel_worker.poll' resolves to env-var
+    NOVA_FLAG_KILL_INTEL_WORKER_POLL (matches spec §First Flags to Ship)."""
+    flag = register_flag(
+        key="kill.intel_worker.poll", type="bool", default=False, description=""
+    )
+    monkeypatch.setenv("NOVA_FLAG_KILL_INTEL_WORKER_POLL", "true")
+    assert flag.value() is True
