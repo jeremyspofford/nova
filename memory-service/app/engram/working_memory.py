@@ -118,13 +118,13 @@ async def assemble_context(
         tenant_id=tenant_id,
     )
 
+    # Compute query embedding once per turn (P9 fix: reuse downstream in line 211)
+    query_embedding = await get_embedding(query, session) if activated else None
+
     # 3b. Neural re-ranking (if model loaded)
     if activated and model is not None:
         # Before neural reranking, exclude index-node types
         rerank_candidates = [a for a in activated if a.type not in ("topic",)]
-
-        # Get query embedding for embedding-mode reranking
-        query_embedding = await get_embedding(query, session)
 
         # Build temporal context for feature extraction
         now = datetime.now(timezone.utc)
@@ -208,10 +208,9 @@ async def assemble_context(
     # 3c. Log retrieval observation for Neural Router training
     if activated:
         try:
-            query_emb = await get_embedding(query, session)
             log_id = await log_retrieval(
                 session,
-                query_embedding=query_emb,
+                query_embedding=query_embedding,
                 query_text=query,
                 engram_ids_surfaced=[str(e.id) for e in activated],
                 session_id=session_id,
