@@ -8,6 +8,7 @@ Two strategies:
 When a match is found, the existing engram is updated rather than creating a
 duplicate. This keeps the graph clean and edges meaningful.
 """
+
 from __future__ import annotations
 
 import logging

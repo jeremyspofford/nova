@@ -2,6 +2,7 @@
 Health check endpoints — liveness, readiness, startup.
 Every Nova service implements all three for K8s probe compatibility.
 """
+
 from __future__ import annotations
 
 import logging

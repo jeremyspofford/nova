@@ -4,6 +4,7 @@ Loaded by memory-service to re-rank spreading activation candidates
 in the /context code path. Background task refreshes model cache
 every neural_router_model_check_interval seconds.
 """
+
 from __future__ import annotations
 
 import io
@@ -79,7 +80,9 @@ async def load_latest_model(
 
         log.info(
             "Loaded %s model (trained_at=%s) for tenant %s",
-            result.architecture, result.trained_at, tenant_id,
+            result.architecture,
+            result.trained_at,
+            tenant_id,
         )
         return True
 
@@ -143,7 +146,9 @@ def neural_rerank(
                 # Scalar-only forward pass (works for both architectures
                 # but EmbeddingReranker needs embeddings, so fall back to scalar)
                 if arch == "embedding":
-                    log.debug("Embedding model but no query embedding — skipping rerank")
+                    log.debug(
+                        "Embedding model but no query embedding — skipping rerank"
+                    )
                     return candidates[:max_results]
                 scores = model(scalar_features)
 
@@ -159,5 +164,7 @@ def neural_rerank(
         return reranked
 
     except Exception:
-        log.warning("Neural rerank failed — returning un-reranked candidates", exc_info=True)
+        log.warning(
+            "Neural rerank failed — returning un-reranked candidates", exc_info=True
+        )
         return candidates[:max_results]

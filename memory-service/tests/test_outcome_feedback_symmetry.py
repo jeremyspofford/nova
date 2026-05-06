@@ -8,6 +8,7 @@ and negative co-retrievals weaken edges (mirroring the positive Hebbian path).
 Tests mock the SQLAlchemy session at the .execute() boundary and verify the
 shape of each query + parameter set. No real database is required.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -21,6 +22,8 @@ from app.engram.outcome_feedback import (
     POSITIVE_THRESHOLD,
     process_feedback,
 )
+
+from .conftest_legacy import mock_session  # noqa: F401  (fixture used as arg)
 
 EID_A = "11111111-1111-1111-1111-111111111111"
 EID_B = "22222222-2222-2222-2222-222222222222"
@@ -45,10 +48,13 @@ def _executed_sql_snippets(session: AsyncMock) -> list[str]:
 
 def _executed_params(session: AsyncMock) -> list[dict]:
     """Return the parameter dict for every execute call on the session."""
-    return [call.args[1] for call in session.execute.call_args_list if len(call.args) > 1]
+    return [
+        call.args[1] for call in session.execute.call_args_list if len(call.args) > 1
+    ]
 
 
 # ── Activation symmetry ─────────────────────────────────────────────────────
+
 
 async def test_positive_outcome_increases_activation():
     """Existing behavior: score > POSITIVE_THRESHOLD triggers the boost UPDATE."""
@@ -77,7 +83,9 @@ async def test_negative_outcome_decreases_activation():
     assert any("activation - :boost * activation" in s for s in sqls)
     # Verify the floor parameter matches IMPORTANCE_FLOOR (symmetric to the ceiling of 1.0).
     params = _executed_params(session)
-    decay_params = [p for p in params if p.get("boost") == ACTIVATION_BOOST and "floor" in p]
+    decay_params = [
+        p for p in params if p.get("boost") == ACTIVATION_BOOST and "floor" in p
+    ]
     assert decay_params, "expected at least one decay UPDATE with a floor param"
     assert decay_params[0]["floor"] == IMPORTANCE_FLOOR
 
@@ -102,13 +110,21 @@ async def test_positive_and_negative_magnitudes_are_symmetric():
     session_pos = _fresh_session()
     session_neg = _fresh_session()
 
-    await process_feedback(session_pos, [{"engram_id": EID_A, "outcome_score": 0.9, "task_type": "chat"}])
-    await process_feedback(session_neg, [{"engram_id": EID_A, "outcome_score": 0.1, "task_type": "chat"}])
+    await process_feedback(
+        session_pos, [{"engram_id": EID_A, "outcome_score": 0.9, "task_type": "chat"}]
+    )
+    await process_feedback(
+        session_neg, [{"engram_id": EID_A, "outcome_score": 0.1, "task_type": "chat"}]
+    )
 
     pos_params = _executed_params(session_pos)
     neg_params = _executed_params(session_neg)
-    pos_boost_params = [p for p in pos_params if p.get("boost") == ACTIVATION_BOOST and "floor" not in p]
-    neg_boost_params = [p for p in neg_params if p.get("boost") == ACTIVATION_BOOST and "floor" in p]
+    pos_boost_params = [
+        p for p in pos_params if p.get("boost") == ACTIVATION_BOOST and "floor" not in p
+    ]
+    neg_boost_params = [
+        p for p in neg_params if p.get("boost") == ACTIVATION_BOOST and "floor" in p
+    ]
     # Both directions hit the UPDATE once and use the same boost constant.
     assert len(pos_boost_params) == 1
     assert len(neg_boost_params) == 1
@@ -117,12 +133,19 @@ async def test_positive_and_negative_magnitudes_are_symmetric():
 
 # ── Threshold boundary ──────────────────────────────────────────────────────
 
+
 async def test_exactly_positive_threshold_is_not_a_boost():
     """The positive branch is strict > POSITIVE_THRESHOLD, not >=."""
     session = _fresh_session()
     stats = await process_feedback(
         session,
-        [{"engram_id": EID_A, "outcome_score": POSITIVE_THRESHOLD, "task_type": "chat"}],
+        [
+            {
+                "engram_id": EID_A,
+                "outcome_score": POSITIVE_THRESHOLD,
+                "task_type": "chat",
+            }
+        ],
     )
     assert stats["activations"] == 0
 
@@ -132,12 +155,19 @@ async def test_exactly_negative_threshold_is_not_a_decay():
     session = _fresh_session()
     stats = await process_feedback(
         session,
-        [{"engram_id": EID_A, "outcome_score": NEGATIVE_THRESHOLD, "task_type": "chat"}],
+        [
+            {
+                "engram_id": EID_A,
+                "outcome_score": NEGATIVE_THRESHOLD,
+                "task_type": "chat",
+            }
+        ],
     )
     assert stats["deactivations"] == 0
 
 
 # ── Edge weight symmetry ────────────────────────────────────────────────────
+
 
 async def test_negative_co_retrieval_weakens_existing_edges():
     """Negative-outcome interactions weaken edges between co-retrieved engrams."""
@@ -198,6 +228,8 @@ async def test_edge_floor_is_respected_in_weakening_update():
         ],
     )
     params = _executed_params(session)
-    weakening_params = [p for p in params if "floor" in p and p.get("boost") == EDGE_WEIGHT_BOOST]
+    weakening_params = [
+        p for p in params if "floor" in p and p.get("boost") == EDGE_WEIGHT_BOOST
+    ]
     assert weakening_params, "expected at least one edge-weakening UPDATE"
     assert weakening_params[0]["floor"] == EDGE_WEIGHT_FLOOR

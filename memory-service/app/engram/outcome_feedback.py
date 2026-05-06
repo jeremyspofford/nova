@@ -4,6 +4,7 @@ based on LLM interaction outcome scores from the orchestrator.
 Called via POST /api/v1/engrams/outcome-feedback with a batch of
 {engram_id, outcome_score, task_type} entries.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,7 +26,7 @@ IMPORTANCE_CEILING = 1.0
 MIN_OBSERVATIONS = 5
 EDGE_WEIGHT_BOOST = 0.02
 EDGE_WEIGHT_CEILING = 1.0
-EDGE_WEIGHT_FLOOR = 0.01   # Floor for negative-outcome edge decay (AQ-002)
+EDGE_WEIGHT_FLOOR = 0.01  # Floor for negative-outcome edge decay (AQ-002)
 
 
 async def process_feedback(
@@ -136,9 +137,13 @@ async def process_feedback(
             if can_recalibrate:
                 new_importance = row.importance
                 if row.outcome_avg > POSITIVE_THRESHOLD:
-                    new_importance = min(IMPORTANCE_CEILING, row.importance + IMPORTANCE_NUDGE)
+                    new_importance = min(
+                        IMPORTANCE_CEILING, row.importance + IMPORTANCE_NUDGE
+                    )
                 elif row.outcome_avg < NEGATIVE_THRESHOLD:
-                    new_importance = max(IMPORTANCE_FLOOR, row.importance - IMPORTANCE_NUDGE)
+                    new_importance = max(
+                        IMPORTANCE_FLOOR, row.importance - IMPORTANCE_NUDGE
+                    )
                 else:
                     continue  # No change needed
 
@@ -165,7 +170,7 @@ async def process_feedback(
         if not (positive or negative):
             continue
         for i, eid_a in enumerate(eids):
-            for eid_b in eids[i + 1:]:
+            for eid_b in eids[i + 1 :]:
                 try:
                     a_uuid, b_uuid = UUID(eid_a), UUID(eid_b)
                 except ValueError:
@@ -182,7 +187,8 @@ async def process_feedback(
                             RETURNING id
                         """),
                         {
-                            "a": a_uuid, "b": b_uuid,
+                            "a": a_uuid,
+                            "b": b_uuid,
                             "boost": EDGE_WEIGHT_BOOST,
                             "ceiling": EDGE_WEIGHT_CEILING,
                         },
@@ -211,7 +217,8 @@ async def process_feedback(
                                OR (source_id = :b AND target_id = :a)
                         """),
                         {
-                            "a": a_uuid, "b": b_uuid,
+                            "a": a_uuid,
+                            "b": b_uuid,
                             "boost": EDGE_WEIGHT_BOOST,
                             "floor": EDGE_WEIGHT_FLOOR,
                         },

@@ -8,15 +8,16 @@ Three-stage pipeline for creating topic engrams from the engram graph:
 
 Called from consolidation Phase 2.5.
 """
+
 from __future__ import annotations
 
 import logging
 from uuid import UUID
 
-import httpx
 import numpy as np
 from app.config import settings
 from app.embedding import get_embedding, to_pg_vector
+from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,7 +60,9 @@ async def discover_topics(session: AsyncSession) -> int:
         return 0
 
     # Stage 2: Entity validation and refinement
-    validated_clusters = await _validate_with_entities(session, clusters, engram_contents)
+    validated_clusters = await _validate_with_entities(
+        session, clusters, engram_contents
+    )
 
     # Stage 3: LLM naming and topic creation
     topics_created = 0
@@ -99,10 +102,7 @@ def _cluster_embeddings(
             continue
         clusters.setdefault(label, []).append(engram_ids[idx])
 
-    return [
-        {"engram_ids": ids, "label": label}
-        for label, ids in clusters.items()
-    ]
+    return [{"engram_ids": ids, "label": label} for label, ids in clusters.items()]
 
 
 async def _validate_with_entities(
@@ -135,26 +135,29 @@ async def _validate_with_entities(
             engram_entities.setdefault(row.engram_id, set()).add(row.entity_name)
 
         anchor_entities = [
-            name for name, engrams in entity_engrams.items()
-            if len(engrams) >= 2
+            name for name, engrams in entity_engrams.items() if len(engrams) >= 2
         ]
 
         if len(anchor_entities) >= 4:
             sub_clusters = _try_split_by_entities(ids, engram_entities, anchor_entities)
             if sub_clusters:
                 for sub_ids, sub_anchors in sub_clusters:
-                    validated.append({
-                        "engram_ids": sub_ids,
-                        "anchor_entities": sub_anchors,
-                        "needs_careful_naming": len(sub_anchors) < 2,
-                    })
+                    validated.append(
+                        {
+                            "engram_ids": sub_ids,
+                            "anchor_entities": sub_anchors,
+                            "needs_careful_naming": len(sub_anchors) < 2,
+                        }
+                    )
                 continue
 
-        validated.append({
-            "engram_ids": ids,
-            "anchor_entities": anchor_entities,
-            "needs_careful_naming": len(anchor_entities) < 2,
-        })
+        validated.append(
+            {
+                "engram_ids": ids,
+                "anchor_entities": anchor_entities,
+                "needs_careful_naming": len(anchor_entities) < 2,
+            }
+        )
 
     return validated
 
@@ -202,7 +205,10 @@ def _try_split_by_entities(
         else:
             final_b.append(eid)
 
-    if len(final_a) < settings.engram_cluster_min_size or len(final_b) < settings.engram_cluster_min_size:
+    if (
+        len(final_a) < settings.engram_cluster_min_size
+        or len(final_b) < settings.engram_cluster_min_size
+    ):
         return None
 
     return [
@@ -224,7 +230,9 @@ async def _create_topic_engram(
     ids = cluster["engram_ids"]
     anchors = cluster.get("anchor_entities", [])
 
-    sample_contents = [engram_contents[eid] for eid in ids[:10] if eid in engram_contents]
+    sample_contents = [
+        engram_contents[eid] for eid in ids[:10] if eid in engram_contents
+    ]
     if not sample_contents:
         return False
 
@@ -248,7 +256,9 @@ async def _create_topic_engram(
         return False
 
     # LLM: generate topic name and summary
-    topic_content = await _name_topic(anchors, sample_contents, cluster.get("needs_careful_naming", False))
+    topic_content = await _name_topic(
+        anchors, sample_contents, cluster.get("needs_careful_naming", False)
+    )
     if not topic_content:
         return False
 
@@ -306,7 +316,9 @@ async def _create_topic_engram(
             await _create_edge(session, UUID(engram_id), topic_id, "part_of", 0.7)
             edges_created += 1
         except Exception:
-            log.warning("Failed to create part_of edge for topic %s", topic_id, exc_info=True)
+            log.warning(
+                "Failed to create part_of edge for topic %s", topic_id, exc_info=True
+            )
 
     # Create related_to edges to anchor entities
     for entity_name in anchors[:5]:
@@ -325,7 +337,12 @@ async def _create_topic_engram(
             except Exception:
                 pass
 
-    log.info("Created topic '%s' with %d members, %d edges", topic_content[:60], len(ids), edges_created)
+    log.info(
+        "Created topic '%s' with %d members, %d edges",
+        topic_content[:60],
+        len(ids),
+        edges_created,
+    )
     return True
 
 
@@ -337,7 +354,11 @@ async def _name_topic(
     """Use LLM to generate a topic name and summary paragraph."""
     from .decomposition import resolve_model
 
-    anchors_text = ", ".join(anchor_entities[:10]) if anchor_entities else "no clear anchor entities"
+    anchors_text = (
+        ", ".join(anchor_entities[:10])
+        if anchor_entities
+        else "no clear anchor entities"
+    )
     samples_text = "\n".join(f"- {c[:200]}" for c in sample_contents[:10])
 
     careful_note = ""
@@ -349,50 +370,50 @@ async def _name_topic(
 
     try:
         model = await resolve_model(settings.engram_consolidation_model)
-        async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=30.0) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are naming a knowledge topic cluster. Generate a short topic name "
-                                "(2-5 words) followed by a summary paragraph describing what this "
-                                "knowledge domain covers.\n\n"
-                                "Format:\n"
-                                "TOPIC: <name>\n"
-                                "<summary paragraph>"
-                                + careful_note
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Anchor entities: {anchors_text}\n\nSample knowledge:\n{samples_text}",
-                        },
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": settings.engram_schema_max_tokens,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are naming a knowledge topic cluster. Generate a short topic name "
+                            "(2-5 words) followed by a summary paragraph describing what this "
+                            "knowledge domain covers.\n\n"
+                            "Format:\n"
+                            "TOPIC: <name>\n"
+                            "<summary paragraph>" + careful_note
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Anchor entities: {anchors_text}\n\nSample knowledge:\n{samples_text}",
+                    },
+                ],
+                "temperature": 0.3,
+                "max_tokens": settings.engram_schema_max_tokens,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-            stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
-            if stop_reason in ("length", "max_tokens"):
-                log.warning("Topic naming truncated, discarding")
-                return None
+        stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
+        if stop_reason in ("length", "max_tokens"):
+            log.warning("Topic naming truncated, discarding")
+            return None
 
-            content = data.get("content", "")
-            if isinstance(content, list):
-                content = content[0].get("text", "") if content else ""
-            content = content.strip()
+        content = data.get("content", "")
+        if isinstance(content, list):
+            content = content[0].get("text", "") if content else ""
+        content = content.strip()
 
-            if len(content) < 10:
-                return None
+        if len(content) < 10:
+            return None
 
-            return content
+        return content
     except Exception:
         log.warning("Topic naming failed", exc_info=True)
         return None
@@ -436,7 +457,11 @@ async def assign_new_engrams_to_topics(session: AsyncSession) -> int:
 
     topic_centroids = []
     for t in topic_rows:
-        meta = t.source_meta if isinstance(t.source_meta, dict) else _json.loads(t.source_meta or "{}")
+        meta = (
+            t.source_meta
+            if isinstance(t.source_meta, dict)
+            else _json.loads(t.source_meta or "{}")
+        )
         centroid_str = meta.get("centroid")
         if centroid_str:
             topic_centroids.append((t.id, centroid_str))
@@ -463,7 +488,9 @@ async def assign_new_engrams_to_topics(session: AsyncSession) -> int:
 
         if best_topic_id and best_sim > settings.engram_topic_assignment_threshold:
             try:
-                await _create_edge(session, engram_row.id, best_topic_id, "part_of", 0.7)
+                await _create_edge(
+                    session, engram_row.id, best_topic_id, "part_of", 0.7
+                )
                 assigned += 1
             except Exception:
                 pass
@@ -486,6 +513,7 @@ async def maintain_topics(session: AsyncSession) -> dict:
     )
 
     import json as _json
+
     for topic in topics.fetchall():
         if topic.member_count < settings.engram_cluster_min_size:
             await session.execute(
@@ -504,10 +532,19 @@ async def maintain_topics(session: AsyncSession) -> dict:
             )
             edges_removed = edge_result.rowcount
             stats["dissolved"] += 1
-            log.info("Dissolved topic '%s' (only %d members, removed %d part_of edges)", topic.content[:40], topic.member_count, edges_removed)
+            log.info(
+                "Dissolved topic '%s' (only %d members, removed %d part_of edges)",
+                topic.content[:40],
+                topic.member_count,
+                edges_removed,
+            )
             continue
 
-        meta = topic.source_meta if isinstance(topic.source_meta, dict) else _json.loads(topic.source_meta or "{}")
+        meta = (
+            topic.source_meta
+            if isinstance(topic.source_meta, dict)
+            else _json.loads(topic.source_meta or "{}")
+        )
         original_count = meta.get("member_count", topic.member_count)
         if original_count > 0:
             change_pct = abs(topic.member_count - original_count) / original_count
@@ -527,7 +564,9 @@ async def maintain_topics(session: AsyncSession) -> dict:
                 sample_contents = [r.content for r in members.fetchall()]
                 anchors = meta.get("entity_anchors", [])
 
-                new_content = await _name_topic(anchors, sample_contents, len(anchors) < 2)
+                new_content = await _name_topic(
+                    anchors, sample_contents, len(anchors) < 2
+                )
                 if new_content:
                     new_embedding = await get_embedding(new_content, session)
                     meta["member_count"] = topic.member_count
@@ -573,7 +612,9 @@ async def maintain_topics(session: AsyncSession) -> dict:
                     if overlap_row:
                         # Dissolve this topic — it now overlaps with an existing one
                         await session.execute(
-                            text("UPDATE engrams SET superseded = TRUE WHERE id = CAST(:id AS uuid)"),
+                            text(
+                                "UPDATE engrams SET superseded = TRUE WHERE id = CAST(:id AS uuid)"
+                            ),
                             {"id": str(topic.id)},
                         )
                         edge_result = await session.execute(

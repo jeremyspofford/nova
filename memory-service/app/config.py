@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
-    redis_embedding_cache_ttl: int = 86400     # 24h embedding cache
+    redis_embedding_cache_ttl: int = 86400  # 24h embedding cache
 
     # LLM Gateway (for embedding generation)
     llm_gateway_url: str = "http://llm-gateway:8001"
@@ -29,7 +29,9 @@ class Settings(BaseSettings):
     engram_ingestion_queue: str = "engram:ingestion:queue"
     engram_ingestion_batch_timeout: float = 1.0  # BRPOP timeout in seconds
     engram_decomposition_model: str = "auto"
-    engram_entity_similarity_threshold: float = 0.92  # embedding cosine threshold for dedup
+    engram_entity_similarity_threshold: float = (
+        0.92  # embedding cosine threshold for dedup
+    )
     engram_contradiction_similarity_threshold: float = 0.85
     engram_fact_dedup_threshold: float = 0.90  # cosine similarity for fact-level dedup
 
@@ -39,7 +41,10 @@ class Settings(BaseSettings):
     engram_decay_factor: float = 0.6
     engram_activation_threshold: float = 0.1
     engram_max_results: int = 20
-    engram_personal_seed_ratio: float = 0.4  # fraction of seed slots reserved for personal sources
+    engram_max_fanout_per_hop: int = 50  # bounds rows examined per spread hop (P1 fix)
+    engram_personal_seed_ratio: float = (
+        0.4  # fraction of seed slots reserved for personal sources
+    )
     engram_reconstruction_model: str = "auto"
     engram_narrative_cluster_threshold: int = 999  # disabled — template assembly always; LLM narrative hallucinates false connections
 
@@ -64,16 +69,27 @@ class Settings(BaseSettings):
     engram_edge_decay: float = 0.95
     engram_prune_activation_floor: float = 0.01
     engram_merge_similarity_threshold: float = 0.88
+    engram_merge_shortlist_k: int = 10  # HNSW top-K per candidate (P2)
+    engram_merge_cycle_cap: int = (
+        200  # candidates processed per consolidation cycle (P2)
+    )
+    engram_hnsw_ef_search: int = (
+        40  # higher = better recall, slower probe; stable top-K (P2)
+    )
 
     # Engram Network (Topic Clustering)
-    engram_cluster_min_size: int = 5            # HDBSCAN min_cluster_size
-    engram_cluster_umap_dims: int = 30          # UMAP target dimensions
-    engram_cluster_umap_neighbors: int = 15     # UMAP n_neighbors
+    engram_cluster_min_size: int = 5  # HDBSCAN min_cluster_size
+    engram_cluster_umap_dims: int = 30  # UMAP target dimensions
+    engram_cluster_umap_neighbors: int = 15  # UMAP n_neighbors
     engram_topic_assignment_threshold: float = 0.5  # cosine sim for new engram -> topic
-    engram_topic_regeneration_pct: float = 0.3  # % membership change to trigger re-summary
-    engram_schema_coherence_threshold: float = 0.5  # min embedding coherence for schemas
-    engram_schema_max_tokens: int = 800         # max_tokens for schema synthesis
-    engram_schema_dedup_threshold: float = 0.85 # embedding sim for schema dedup
+    engram_topic_regeneration_pct: float = (
+        0.3  # % membership change to trigger re-summary
+    )
+    engram_schema_coherence_threshold: float = (
+        0.5  # min embedding coherence for schemas
+    )
+    engram_schema_max_tokens: int = 800  # max_tokens for schema synthesis
+    engram_schema_dedup_threshold: float = 0.85  # embedding sim for schema dedup
 
     # Engram Network (Phase 5: Neural Router)
     neural_router_enabled: bool = True
@@ -88,7 +104,7 @@ class Settings(BaseSettings):
     neural_router_validation_split: float = 0.2
     neural_router_min_precision_gain: float = 0.0
     neural_router_max_inactive_models: int = 5
-    neural_router_max_training_obs: int = 500    # cap observations to bound memory
+    neural_router_max_training_obs: int = 500  # cap observations to bound memory
 
     # Service
     service_host: str = "0.0.0.0"
