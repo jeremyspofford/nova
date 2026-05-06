@@ -219,11 +219,12 @@ def get_context(...):
 `.value()` checks sources in priority order:
 
 1. **Test override** (process-local dict set by `flag_override(...)`) — pytest fixtures.
-2. **Env-var override** (`NOVA_FLAG_KILL_INTEL_WORKER_POLL=true`) — operator break-glass.
-3. **In-process cache** — hot path; populated lazily from DB on first miss.
-4. **In-code default** — fallback if DB has no row and cache is empty.
+2. **Env-var override** (`NOVA_FLAG_KILL_INTEL_WORKER_POLL=true`) — **boot-time default override only**. The env var is read at process startup; changing its value at runtime requires a container restart, so this is **not** a hot kill-switch. Use it to lock a flag value at deploy time, not to flip a flag on a running process.
+3. **In-process cache** — hot path; populated **bulk-warm at service startup** via a single async HTTP call per service lifespan. `.value()` is synchronous and returns from this dict; it never inline-fetches.
+4. **Last-seen cache file** (`data/flag-cache/<service>.json`) — persisted snapshot of the most recently successful cache-warm. Used as fallback when orchestrator/Redis are unreachable at startup or during a partition. Survives across container restarts.
+5. **In-code default** — final fallback if no cache file exists (cold first boot before any successful warm).
 
-Cache miss triggers an HTTP call to orchestrator's `GET /api/v1/feature-flags/{key}`. To avoid repeated misses on a missing row, the cache stores a sentinel `_DEFAULT` marker so subsequent calls return the in-code default without re-fetching.
+Cache invalidation (Redis pubsub) drops the named key from the in-process dict; the next eval triggers a fresh fetch from orchestrator and refreshes the on-disk snapshot. **Hot kill-switching of `kill.*` flags is via the admin API (PATCH), not env vars** — the env-var path requires a restart and would defeat the kill-switch use case.
 
 ### Variant Validation
 
@@ -252,9 +253,11 @@ The admin API also rejects `PATCH` calls whose value isn't in the declared varia
 
 **Failure modes:**
 
-- **Redis disconnect**: services miss invalidations until reconnect. The cache TTL (default 60 seconds) bounds staleness even when pubsub is silent. Acceptable for v1; documented.
-- **Orchestrator unreachable on cache miss**: cache fill fails; SDK returns the in-code default and logs a `WARNING`. The next eval retries.
+- **Redis disconnect**: services miss invalidations until reconnect. The cache TTL (default 60 seconds) bounds staleness even when pubsub is silent. Acceptable for v1; documented. Each service exposes `flag_pubsub_connected: bool` in `GET /health/ready` so an operator can see when invalidation is degraded.
+- **Orchestrator unreachable at startup (cold-boot partition)**: bulk-warm HTTP call fails; SDK falls back to the **last-seen cache file** at `data/flag-cache/<service>.json`. If that file doesn't exist either (true cold boot), in-code defaults apply and a `WARNING` is logged. The next eval and the next pubsub-driven warm both retry.
+- **Orchestrator unreachable mid-run**: the in-process cache continues to serve last-fetched values. The on-disk snapshot is the durable source for the *next* cold boot. **Crucially, kill-switch flags do NOT silently revert to in-code default during a partition** — the last-seen value wins. This avoids the wrong failure mode where a partition disarms an active kill switch.
 - **Race between write commit and pubsub publish**: pubsub is the *invalidate* signal, not the *value carrier* — services always read the value from DB after invalidation. So a missed pubsub means stale cache for ≤60s, never a torn read.
+- **Cache-file corruption**: if `data/flag-cache/<service>.json` fails to parse on cold boot, the SDK logs `WARNING`, treats the file as absent, and falls through to in-code default. The next successful warm rewrites the file.
 
 The same pattern is the proposal for FU-009 (secrets hot-reload). If FU-009 lands first, it can use the existing channel naming convention (`nova:secrets:invalidate`); the implementation patterns are siblings.
 
@@ -318,6 +321,34 @@ Follows the established pattern in `dashboard/src/pages/settings/`:
 **v1**: every write endpoint requires `X-Admin-Secret`. Read endpoints (`/registry`, list, detail, audit) also require admin secret — there's no "public" tier in v1.
 
 **Phase 2** (deferred): introduce a per-flag `criticality` field (`info | warn | critical`) and gate writes via `RoleDep(min_role=Admin)` for `info`, `RoleDep(min_role=Owner)` for `critical`. This lands when RBAC matures (the existing 5-role system is partly built; some areas still use admin-secret only).
+
+### Critical-Flag Confirmation (v1)
+
+Until Phase 2 RBAC + per-flag criticality lands, a hardcoded denylist of catastrophic flag keys requires a `confirm: <flag-key>` field in the PATCH body. Initial set:
+
+- `kill.engram.ingestion`
+- `kill.consolidation.cycle`
+- `kill.cortex.thinking_loop`
+- `pipeline.guardrail_strict_mode`
+- `pipeline.web_fetch_strict_sanitize`
+
+Behavior:
+
+- The admin API rejects PATCH with HTTP 400 (`{"detail": "confirm required"}`) if the body's `confirm` field is missing or doesn't match the URL key.
+- The dashboard surfaces a second-modal confirmation dialog when the operator targets one of these keys.
+- The denylist is a constant in code (`orchestrator/app/feature_flags_router.py`), not a per-flag DB column. Phase 2 RBAC criticality replaces this when role-gated writes land.
+- New flags are added to the denylist in code review; the audit found 5 high-blast-radius flags worth gating today (more may be added as v1 ships).
+
+This is intentionally weaker than full RBAC — a single human with the admin secret can still flip these flags. The confirmation prevents accidental flips (typo in URL, wrong tab, misclick), not malicious ones.
+
+### Security-sensitive toggles NOT migrated to v1
+
+Two toggles are intentionally **NOT** in the v1 flag system because they grant agents host-write capability:
+
+- **`SELFMOD_ENABLED`** (`.env`, gates GitHub PR creation by agents)
+- **`SHELL_SANDBOX` home/root tier** (gates `$HOME` and `/` filesystem mounts to pipeline tasks)
+
+Both retain their existing `.env` boot-time gating and **block migration** to the flag system until **Phase 2 RBAC + per-write confirmation tokens** land. Rationale: v1's admin-secret-only auth is too weak — a single shared secret can grant ambient host-write to every running pipeline task with one PATCH and no second factor.
 
 ---
 
@@ -419,6 +450,26 @@ When SaaS multi-tenancy ships:
 - The `.value(tenant_id=..., user_id=...)` API already accepts these args; v1 ignores them. No call-site changes needed when targeting lands.
 
 This is also the natural point to add a predicate-rule layer (à la LaunchDarkly) if needed — but that's a substantial Phase 3+ design in its own right.
+
+### Multi-tenant isolation invariants
+
+When tenant scoping lands, these are hard guarantees the migration **must** preserve:
+
+1. **Cross-tenant reads return HTTP 404, not 403.** Don't leak existence. Tenant A asking for tenant B's flag value gets the same response as asking for a flag that doesn't exist.
+2. **`GET /registry` is global.** It returns declared flags + types + descriptions — no tenant data. Descriptions must not contain tenant-specific examples.
+3. **Sensitive flag values are masked on read.** Add `is_sensitive BOOLEAN DEFAULT false` to `feature_flags`. Values flagged sensitive return `***` from list endpoints; full value requires the owning tenant's id and a `?reveal=true` query param. Audit that reveal access.
+4. **Audit log slices by tenant.** `actor_id` resolves to a tenant-scoped user. Cross-tenant audit reads return only the requesting tenant's slice; admin (super-tenant) reads include a structured warning row marking the cross-tenant access.
+
+### Phase 3+ schema migration shape
+
+Adding `environment` (and/or `tenant_id`) to `feature_flags` is **not a column add** — the primary key changes from `(key)` to `(key, environment, tenant_id)`. Plan for a coordinated migration window:
+
+1. New schema migration adds the columns (nullable initially) and writes both old `(key)` and new `(key, environment, tenant_id)` rows on PATCH.
+2. Backfill: every existing row gets `environment='prod'` (or whatever the operator declares as the default) and `tenant_id=NULL` (global).
+3. New release cycles read from the new key; old reads still work via the nullable columns.
+4. Final migration: drop the old PK, set the new PK, mark `environment` NOT NULL.
+
+Estimated effort: **1-2 days for the migration itself**, separate from the SaaS feature work that drives it. Surface this estimate during SaaS-launch planning so it doesn't land under deadline pressure.
 
 ---
 
