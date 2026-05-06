@@ -11,9 +11,12 @@ per-test schema cost.
 from __future__ import annotations
 
 import os
+import uuid
+from typing import Any
 
 import pytest_asyncio
 import redis.asyncio as aioredis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -79,3 +82,99 @@ async def redis_test():
         yield client
     finally:
         await client.aclose()
+
+
+def _to_pg_vector_str(vec: list[float]) -> str:
+    """halfvec literal: '[0.1,0.2,...]'."""
+    return "[" + ",".join(f"{v:.6f}" for v in vec) + "]"
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def engram_factory(db_session):
+    """Insert an engram with sensible defaults.
+
+    Returns the inserted engram's UUID.
+    """
+
+    async def _make(
+        *,
+        content: str,
+        type: str = "fact",  # noqa: A002 (shadowing builtin is intentional — matches column name)
+        source_type: str = "chat",
+        importance: float = 0.5,
+        activation: float = 1.0,
+        confidence: float = 0.8,
+        tenant_id: str = "00000000-0000-0000-0000-000000000001",
+        embedding: list[float] | None = None,
+        superseded: bool = False,
+    ) -> uuid.UUID:
+        eid = uuid.uuid4()
+        params: dict[str, Any] = {
+            "id": str(eid),
+            "type": type,
+            "content": content,
+            "source_type": source_type,
+            "importance": importance,
+            "activation": activation,
+            "confidence": confidence,
+            "tenant_id": tenant_id,
+            "superseded": superseded,
+        }
+        if embedding is not None:
+            assert len(embedding) == 768, "engrams.embedding is halfvec(768)"
+            params["embedding"] = _to_pg_vector_str(embedding)
+            sql = text(
+                "INSERT INTO engrams (id, type, content, source_type, importance, "
+                "activation, confidence, tenant_id, superseded, embedding) "
+                "VALUES (CAST(:id AS uuid), :type, :content, :source_type, :importance, "
+                ":activation, :confidence, CAST(:tenant_id AS uuid), :superseded, "
+                "CAST(:embedding AS halfvec))"
+            )
+        else:
+            sql = text(
+                "INSERT INTO engrams (id, type, content, source_type, importance, "
+                "activation, confidence, tenant_id, superseded) "
+                "VALUES (CAST(:id AS uuid), :type, :content, :source_type, :importance, "
+                ":activation, :confidence, CAST(:tenant_id AS uuid), :superseded)"
+            )
+        await db_session.execute(sql, params)
+        await db_session.flush()
+        return eid
+
+    return _make
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def edge_factory(db_session):
+    """Insert an engram_edge.
+
+    Returns the inserted edge's UUID.
+    """
+
+    async def _make(
+        *,
+        source: uuid.UUID,
+        target: uuid.UUID,
+        relation: str = "related_to",
+        weight: float = 0.5,
+        co_activations: int = 1,
+    ) -> uuid.UUID:
+        eid = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO engram_edges (id, source_id, target_id, relation, weight, co_activations) "
+                "VALUES (CAST(:id AS uuid), CAST(:src AS uuid), CAST(:tgt AS uuid), :rel, :w, :coa)"
+            ),
+            {
+                "id": str(eid),
+                "src": str(source),
+                "tgt": str(target),
+                "rel": relation,
+                "w": weight,
+                "coa": co_activations,
+            },
+        )
+        await db_session.flush()
+        return eid
+
+    return _make
