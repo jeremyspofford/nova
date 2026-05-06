@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -5,6 +6,11 @@ import react from '@vitejs/plugin-react'
 // cross-origin requests. In production Docker, nginx does the same job.
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'happy-dom',
+    globals: true,
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+  },
   server: {
     host: true,
     port: 5173,

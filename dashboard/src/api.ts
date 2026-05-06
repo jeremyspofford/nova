@@ -63,29 +63,45 @@ async function tryRefreshToken(): Promise<boolean> {
   }
 }
 
-export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const doFetch = async () => {
-    const resp = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders(),
-        ...(options.headers ?? {}),
-      },
-    })
-    return resp
-  }
+/**
+ * Fetch with auth headers and one-shot JWT refresh-and-retry on 401/403.
+ *
+ * Shared between apiFetch (orchestrator/etc.) and recoveryFetch. Without this,
+ * any call made just after a JWT expires fails permanently — the auth-store's
+ * scheduled refresh runs at +14m, but a 15m token can age past that if the tab
+ * was throttled or the laptop slept. On 401/403 we try the refresh endpoint
+ * once; if that succeeds, getAuthHeaders() picks up the new token from
+ * localStorage on the retry.
+ *
+ * Refresh failures fall through — the caller sees the original failure, just
+ * as it would today without retry. That keeps the contract simple and lets
+ * the auth-store's own validation cycle eventually clear dead tokens.
+ */
+export async function fetchWithAuthRetry(url: string, options: RequestInit = {}): Promise<Response> {
+  const buildRequest = () => fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+      ...(options.headers ?? {}),
+    },
+  })
 
-  let resp = await doFetch()
+  let resp = await buildRequest()
 
-  // On 401/403 with JWT, try to refresh and retry once
   // 401 = UserDep auth failure, 403 = AdminDep auth failure (expired JWT)
   if ((resp.status === 401 || resp.status === 403) && getAccessToken()) {
     const refreshed = await tryRefreshToken()
     if (refreshed) {
-      resp = await doFetch()
+      resp = await buildRequest()
     }
   }
+
+  return resp
+}
+
+export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const resp = await fetchWithAuthRetry(url, options)
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText)

@@ -5,19 +5,12 @@
  * even when other Nova services are down.
  */
 
-import { getAuthHeaders } from './api'
+import { fetchWithAuthRetry } from './api'
 
 const BASE = '/recovery-api'
 
 export async function recoveryFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-      ...(options.headers ?? {}),
-    },
-  })
+  const resp = await fetchWithAuthRetry(`${BASE}${path}`, options)
   if (!resp.ok) {
     let msg = resp.statusText
     try {
