@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fontsource-variable/geist-mono": "^5.2.7",
@@ -38,9 +40,11 @@
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
+    "happy-dom": "^15.11.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "typescript": "^5.4.5",
-    "vite": "^5.2.10"
+    "vite": "^5.2.10",
+    "vitest": "^2.1.0"
   }
 }
