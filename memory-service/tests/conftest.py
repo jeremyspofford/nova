@@ -1,10 +1,11 @@
 """Real-Postgres-with-pgvector fixtures for memory-service unit tests.
 
-Pattern: a function-scoped `db_session` wraps each test in an outer BEGIN; teardown
-ROLLBACKs everything. Each test gets a fresh AsyncEngine (lightweight, pooled).
+Pattern: a session-scoped `db_engine` connects to nova_test (already
+populated by `memory-service/scripts/setup_test_db.py`). A function-scoped `db_session`
+wraps each test in an outer BEGIN; teardown ROLLBACKs everything.
 
 This gives full pgvector / HNSW / recursive-CTE fidelity with zero
-per-test schema cost and zero event loop conflicts.
+per-test schema cost.
 """
 
 from __future__ import annotations
@@ -25,16 +26,28 @@ def _test_database_url() -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db}"
 
 
-@pytest_asyncio.fixture
-async def db_session():
-    """Per-test AsyncSession wrapped in BEGIN…ROLLBACK.
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def db_engine():
+    """One async engine per pytest session.
 
-    Creates a fresh engine with connection pooling, then wraps the first
-    connection in a transaction. Inserts/updates inside the test do not
-    persist. Tests are fully isolated from each other.
+    `loop_scope="session"` keeps the engine bound to a single event loop
+    that lives for the whole session, sidestepping pytest-asyncio's default
+    function-scoped event loop (which would invalidate session-scoped async
+    objects). Requires pytest-asyncio>=0.23.
     """
     engine = create_async_engine(_test_database_url(), pool_pre_ping=True)
-    connection = await engine.connect()
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def db_session(db_engine):
+    """Per-test AsyncSession wrapped in BEGIN…ROLLBACK.
+
+    Inserts/updates inside the test do not persist. Tests are fully
+    isolated from each other.
+    """
+    connection = await db_engine.connect()
     transaction = await connection.begin()
     factory = async_sessionmaker(
         bind=connection,
@@ -48,4 +61,3 @@ async def db_session():
         await session.close()
         await transaction.rollback()
         await connection.close()
-        await engine.dispose()
