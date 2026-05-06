@@ -254,3 +254,57 @@ def fake_llm_factory():
 def fake_llm(fake_llm_factory):
     """Default fake_llm with no extra normalizers."""
     return fake_llm_factory()
+
+
+class _GraphBuilder:
+    """Builds named graph topologies on top of engram_factory + edge_factory.
+
+    Tests use these for activation contract tests where the topology is
+    the contract (e.g., 'a hub with 200 spokes only spreads to 50').
+    """
+
+    def __init__(self, engram_factory, edge_factory):
+        self._engram = engram_factory
+        self._edge = edge_factory
+
+    async def chain(self, *, n: int, **kw):
+        """N engrams in a chain: e0 → e1 → e2 → ... → e(n-1)."""
+        nodes = []
+        for i in range(n):
+            eid = await self._engram(content=f"chain-node-{i}", **kw)
+            nodes.append(eid)
+            if i > 0:
+                await self._edge(source=nodes[i - 1], target=nodes[i], weight=0.8)
+        return nodes
+
+    async def hub_and_spoke(self, *, k: int, **kw):
+        """One hub node with k spoke nodes connected to it."""
+        hub = await self._engram(content="hub", **kw)
+        spokes = []
+        for i in range(k):
+            spoke = await self._engram(content=f"spoke-{i}", **kw)
+            spokes.append(spoke)
+            await self._edge(source=hub, target=spoke, weight=0.5)
+        return hub, spokes
+
+    async def two_tenant_split(self, *, per_tenant: int):
+        """Two disjoint subgraphs in separate tenants."""
+        tenant_a_id = "00000000-0000-0000-0000-00000000000a"
+        tenant_b_id = "00000000-0000-0000-0000-00000000000b"
+        nodes_a = []
+        nodes_b = []
+        for i in range(per_tenant):
+            a = await self._engram(content=f"a-{i}", tenant_id=tenant_a_id)
+            b = await self._engram(content=f"b-{i}", tenant_id=tenant_b_id)
+            nodes_a.append(a)
+            nodes_b.append(b)
+            if i > 0:
+                await self._edge(source=nodes_a[i - 1], target=a, weight=0.8)
+                await self._edge(source=nodes_b[i - 1], target=b, weight=0.8)
+        return nodes_a, nodes_b
+
+
+@pytest.fixture
+def graph_builder(engram_factory, edge_factory):
+    """Graph topology builder for activation contract tests."""
+    return _GraphBuilder(engram_factory, edge_factory)
