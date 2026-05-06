@@ -1,124 +1,98 @@
-"""Tests for batch embedding cache hit/miss/write-through."""
+"""Tests for batch embedding cache hit/miss/write-through.
+
+Migrated from mock-session/mock-redis pattern to real fixtures (MEM-001 Task 5.7).
+We monkeypatch get_http_client() (the singleton injected in Sprint P3) rather
+than the removed httpx.AsyncClient import.
+"""
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from .conftest_legacy import (  # noqa: F401  (fixtures used as args)
-    mock_redis,
-    mock_session,
-)
+import pytest
 
-FAKE_EMBEDDING = [0.1, 0.2, 0.3]
-FAKE_EMBEDDING_2 = [0.4, 0.5, 0.6]
+# embedding_cache schema requires halfvec(768) — use full-dimension vectors
+FAKE_EMBEDDING = [0.1] * 768
+FAKE_EMBEDDING_2 = [0.4] * 768
 
 
-async def test_batch_all_cached_in_redis(mock_redis, mock_session):
+def _make_http_response(embeddings: list) -> MagicMock:
+    """Build a fake httpx Response-like object."""
+    resp = MagicMock()
+    resp.json.return_value = {"embeddings": embeddings}
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_batch_all_cached_in_redis(db_session, redis_test, monkeypatch):
     """When all texts are cached in Redis, no gateway call is made."""
-    mock_redis.get = AsyncMock(return_value=json.dumps(FAKE_EMBEDDING).encode())
+    from app import embedding as emb_mod
 
-    with (
-        patch("app.embedding.get_redis", return_value=mock_redis),
-        patch("app.embedding.settings") as mock_settings,
-    ):
-        mock_settings.embedding_model = "test-model"
-        mock_settings.llm_gateway_url = "http://fake:8001"
-        mock_settings.redis_embedding_cache_ttl = 86400
+    # Pre-populate redis_test (db15) with fake embeddings for both texts
+    for t in ["hello", "world"]:
+        h = emb_mod._hash_text(t, "nomic-embed-text")
+        key = emb_mod._cache_key(h)
+        await redis_test.set(key, json.dumps(FAKE_EMBEDDING).encode())
 
-        from app.embedding import get_embeddings_batch
+    # Point the module at the test Redis instance
+    monkeypatch.setattr(emb_mod, "get_redis", lambda: redis_test)
 
-        result = await get_embeddings_batch(["hello", "world"], mock_session)
+    result = await emb_mod.get_embeddings_batch(["hello", "world"], db_session)
 
     assert len(result) == 2
     assert result[0] == FAKE_EMBEDDING
     assert result[1] == FAKE_EMBEDDING
 
 
-async def test_batch_miss_calls_gateway(mock_redis, mock_session):
+@pytest.mark.asyncio
+async def test_batch_miss_calls_gateway(db_session, redis_test, monkeypatch):
     """Cache miss triggers gateway call and writes through to both caches."""
-    mock_redis.get = AsyncMock(return_value=None)
+    from app import embedding as emb_mod
 
-    # Mock PostgreSQL cache miss
-    mock_result = MagicMock()
-    mock_result.fetchone.return_value = None
-    mock_session.execute = AsyncMock(return_value=mock_result)
+    # No cache entries — all misses
+    monkeypatch.setattr(emb_mod, "get_redis", lambda: redis_test)
 
-    # Mock httpx response
-    mock_httpx_resp = AsyncMock()
-    mock_httpx_resp.json.return_value = {
-        "embeddings": [FAKE_EMBEDDING, FAKE_EMBEDDING_2]
-    }
-    mock_httpx_resp.raise_for_status = MagicMock()
+    # Mock the HTTP client post
+    mock_resp = _make_http_response([FAKE_EMBEDDING, FAKE_EMBEDDING_2])
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    monkeypatch.setattr(emb_mod, "get_http_client", lambda: mock_client)
 
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=mock_httpx_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with (
-        patch("app.embedding.get_redis", return_value=mock_redis),
-        patch("app.embedding.httpx.AsyncClient", return_value=mock_client),
-        patch("app.embedding.settings") as mock_settings,
-    ):
-        mock_settings.embedding_model = "test-model"
-        mock_settings.llm_gateway_url = "http://fake:8001"
-        mock_settings.redis_embedding_cache_ttl = 86400
-
-        from app.embedding import get_embeddings_batch
-
-        result = await get_embeddings_batch(["hello", "world"], mock_session)
+    result = await emb_mod.get_embeddings_batch(["hello", "world"], db_session)
 
     assert result == [FAKE_EMBEDDING, FAKE_EMBEDDING_2]
     # Verify write-through to Redis (setex called for each miss)
-    assert mock_redis.setex.call_count == 2
+    for t in ["hello", "world"]:
+        h = emb_mod._hash_text(t, "nomic-embed-text")
+        key = emb_mod._cache_key(h)
+        cached = await redis_test.get(key)
+        assert cached is not None, f"Expected Redis write-through for '{t}'"
 
 
-async def test_batch_partial_cache_hit(mock_redis, mock_session):
+@pytest.mark.asyncio
+async def test_batch_partial_cache_hit(db_session, redis_test, monkeypatch):
     """Mixed hits/misses: only misses go to gateway."""
-    # First text cached, second not
-    call_count = 0
+    from app import embedding as emb_mod
 
-    async def redis_get(key):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return json.dumps(FAKE_EMBEDDING).encode()
-        return None
+    # Pre-populate only "hello"
+    h = emb_mod._hash_text("hello", "nomic-embed-text")
+    await redis_test.set(emb_mod._cache_key(h), json.dumps(FAKE_EMBEDDING).encode())
 
-    mock_redis.get = redis_get
+    monkeypatch.setattr(emb_mod, "get_redis", lambda: redis_test)
 
-    # Mock PostgreSQL cache miss for second text
-    mock_result = MagicMock()
-    mock_result.fetchone.return_value = None
-    mock_session.execute = AsyncMock(return_value=mock_result)
+    # Mock gateway — should only be called with "world" (1 text)
+    mock_resp = _make_http_response([FAKE_EMBEDDING_2])
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    monkeypatch.setattr(emb_mod, "get_http_client", lambda: mock_client)
 
-    # Mock httpx — should only be called with 1 text (the miss)
-    mock_httpx_resp = AsyncMock()
-    mock_httpx_resp.json.return_value = {"embeddings": [FAKE_EMBEDDING_2]}
-    mock_httpx_resp.raise_for_status = MagicMock()
-
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=mock_httpx_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with (
-        patch("app.embedding.get_redis", return_value=mock_redis),
-        patch("app.embedding.httpx.AsyncClient", return_value=mock_client),
-        patch("app.embedding.settings") as mock_settings,
-    ):
-        mock_settings.embedding_model = "test-model"
-        mock_settings.llm_gateway_url = "http://fake:8001"
-        mock_settings.redis_embedding_cache_ttl = 86400
-
-        from app.embedding import get_embeddings_batch
-
-        result = await get_embeddings_batch(["hello", "world"], mock_session)
+    result = await emb_mod.get_embeddings_batch(["hello", "world"], db_session)
 
     assert result[0] == FAKE_EMBEDDING  # from cache
     assert result[1] == FAKE_EMBEDDING_2  # from gateway
-    # Gateway called with only 1 text
+    # Gateway called with only 1 text (the miss)
     mock_client.post.assert_called_once()
-    call_args = mock_client.post.call_args
-    assert len(call_args[1]["json"]["texts"]) == 1
+    call_kwargs = mock_client.post.call_args[1]
+    assert len(call_kwargs["json"]["texts"]) == 1

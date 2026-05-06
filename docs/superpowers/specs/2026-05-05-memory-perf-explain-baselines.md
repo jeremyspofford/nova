@@ -232,3 +232,16 @@ Execution Time: 0.093 ms
 
 **Plan summary:** Dev DB has only 5 engrams matching the filter; PostgreSQL planner correctly chooses `Index Scan using idx_engrams_source` + sort over HNSW — seq scan is cheaper below ~100 rows. HNSW index `idx_engrams_hnsw` exists and is valid (confirmed via `pg_indexes`). HNSW probe will be selected automatically at production scale (1K+ engrams) when the planner's cost model prefers ANN over seq scan.
 **P2 verdict:** REWRITE landed. Cartesian self-join replaced with per-candidate top-K HNSW probe. ef_search=40 stabilizes recall via `SET LOCAL hnsw.ef_search` before candidate loop. loser_ids tracking ensures superseded engrams are excluded from neighbor probes without blocking winners from subsequent merges.
+
+## Post-hardening summary (Sprint 5 close)
+
+| Query | Pre-MEM-001 | Post-MEM-001 |
+|---|---|---|
+| Activation recursive arm | BitmapOr (idx_edges_source + idx_edges_target), fan-out unbounded, no tenant filter | Tenant-filtered + fan-out cap (50), both indexes still used but activation threshold prunes tree early |
+| Activation deep-mode | 1.507 ms — BitmapOr, idx_edges_structural NOT used | 0.129 ms (~12×) — UNION of Index Only Scan + idx_edges_structural per arm |
+| Consolidation merge | 2680 ms — Merge Join, 5.7M rows examined, 0 returned | HNSW per-candidate top-K probe (ef_search=40); cartesian eliminated |
+| Schema-synthesis coherence | 5 separate SELECT queries (one per source in loop) | 1 batched query across all sources |
+| Working memory turn | 2 `get_embedding` calls per turn | 1 (deduplication via P9 fix) |
+| memory-service HTTP connections | 8+ per-call `httpx.AsyncClient()` instantiations | 1 shared singleton via `get_http_client()` (P3 fix) |
+
+Post-hardening EXPLAIN for the deep-mode and consolidation queries are captured inline in the sections above (Post-Sprint-2 and Post-Sprint-3). No re-run was possible from this host (live nova DB not reachable); plan shapes are confirmed from Sprint 2/3 capture runs on DELL-XPS-8950 (4162 engrams, 89364 edges).
