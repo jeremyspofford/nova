@@ -219,7 +219,7 @@ services:
       DEFAULT_OLLAMA_MODEL: ${DEFAULT_OLLAMA_MODEL:-qwen2.5:7b}
       DEFAULT_GROQ_MODEL: ${DEFAULT_GROQ_MODEL:-groq/llama-3.3-70b-versatile}
       DEFAULT_GEMINI_MODEL: ${DEFAULT_GEMINI_MODEL:-gemini/gemini-2.5-flash}
-      DEFAULT_CEREBRAS_MODEL: ${DEFAULT_CEREBRAS_MODEL:-cerebras/llama-3.3-70b}
+      DEFAULT_CEREBRAS_MODEL: ${DEFAULT_CEREBRAS_MODEL:-cerebras/llama3.1-8b}
       DEFAULT_OPENROUTER_MODEL: ${DEFAULT_OPENROUTER_MODEL:-openrouter/meta-llama/llama-3.1-8b-instruct:free}
       DEFAULT_GITHUB_MODEL: ${DEFAULT_GITHUB_MODEL:-github/gpt-4o-mini}
       DEFAULT_CHATGPT_MODEL: ${DEFAULT_CHATGPT_MODEL:-chatgpt/gpt-4o}
