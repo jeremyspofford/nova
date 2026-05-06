@@ -191,3 +191,27 @@ Execution Time: 2680.689 ms
 
 - Cross-tenant edges in live data: 0
 - Verdict: NO cleanup migration needed. Activation tenant-filter fix is safe to ship in Sprint 2.
+
+### Post-Sprint-2 — Deep-mode follow-up (after rewrite)
+
+```
+Unique  (cost=30.84..30.87 rows=1 width=188) (actual time=0.063..0.064 rows=0 loops=1)
+  ->  Sort  (cost=30.84..30.85 rows=1 width=188) (actual time=0.062..0.063 rows=0 loops=1)
+        Sort Key: ((e.id)::text), e.type, e.content, e.importance, e.confidence, e.access_count, e.last_accessed, e.created_at, ((e.fragments)::text), e.source_type
+        Sort Method: quicksort  Memory: 25kB
+        ->  Hash Join  (cost=17.53..30.83 rows=1 width=188) (actual time=0.036..0.037 rows=0 loops=1)
+              Hash Cond: (e.id = ee.target_id)
+              ->  Seq Scan on engrams e  (cost=0.00..12.89 rows=104 width=172) (actual time=0.006..0.006 rows=1 loops=1)
+                    Filter: ((NOT superseded) AND (id <> ALL (...)))
+              ->  Hash  (cost=17.51..17.51 rows=2 width=16) (actual time=0.020..0.021 rows=0 loops=1)
+                    ->  Append  (cost=0.15..17.51 rows=2 width=16) (actual time=0.020..0.020 rows=0 loops=1)
+                          ->  Index Only Scan using engram_edges_source_id_target_id_relation_key on engram_edges ee  (cost=0.15..9.09 rows=1 width=16)
+                                Index Cond: ((source_id = ANY (...)) AND (relation = ANY ('{instance_of,part_of}'::text[])))
+                                Heap Fetches: 0
+                          ->  Index Scan using idx_edges_structural on engram_edges ee_1  (cost=0.12..8.41 rows=1 width=16)
+                                Index Cond: (target_id = ANY (...))
+Planning Time: 0.582 ms
+Execution Time: 0.129 ms
+```
+
+**Plan summary:** Branch 1 (source→target) uses `Index Only Scan using engram_edges_source_id_target_id_relation_key` with relation filter inlined; Branch 2 (target→source) uses `Index Scan using idx_edges_structural`. No BitmapOr. Total execution time 0.129 ms.

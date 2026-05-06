@@ -269,18 +269,25 @@ async def spreading_activation(
         activated_ids = {a.id for a in activated}
         structural_result = await session.execute(
             text("""
+                -- Deep mode: follow instance_of / part_of edges from activated nodes.
+                -- UNION ALL of two single-direction scans so each branch hits
+                -- idx_edges_structural cleanly (no BitmapOr).
                 SELECT DISTINCT e.id::text, e.type, e.content, e.importance,
                        e.confidence, e.access_count, e.last_accessed, e.created_at,
                        e.fragments::text, e.source_type
-                FROM engram_edges ee
-                JOIN engrams e ON e.id = CASE
-                    WHEN ee.source_id = ANY(CAST(:ids AS uuid[])) THEN ee.target_id
-                    ELSE ee.source_id
-                END
-                WHERE (ee.source_id = ANY(CAST(:ids AS uuid[]))
-                    OR ee.target_id = ANY(CAST(:ids AS uuid[])))
-                  AND ee.relation IN ('instance_of', 'part_of')
-                  AND NOT e.superseded
+                FROM (
+                    SELECT ee.target_id AS neighbor_id
+                    FROM engram_edges ee
+                    WHERE ee.source_id = ANY(CAST(:ids AS uuid[]))
+                      AND ee.relation IN ('instance_of', 'part_of')
+                    UNION ALL
+                    SELECT ee.source_id AS neighbor_id
+                    FROM engram_edges ee
+                    WHERE ee.target_id = ANY(CAST(:ids AS uuid[]))
+                      AND ee.relation IN ('instance_of', 'part_of')
+                ) edges
+                JOIN engrams e ON e.id = edges.neighbor_id
+                WHERE NOT e.superseded
                   AND e.id != ALL(CAST(:ids AS uuid[]))
             """),
             {"ids": list(activated_ids)},
