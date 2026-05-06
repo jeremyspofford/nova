@@ -1,8 +1,8 @@
 # Memory Subsystem Hardening — Design Spec
 
 **Date:** 2026-05-05
-**Status:** DRAFT — pending user approval
-**Branch:** TBD (suggested: `mem-001-hardening`, fresh worktree off `origin/main` matching the SEC-006a pattern)
+**Status:** IMPLEMENTED — closed 2026-05-06 in PR #4
+**Branch:** `mem-001-hardening` (worktree at `.worktrees/mem-001-hardening`, off `origin/main`, matching the SEC-006a pattern)
 **Builds on:** [`2026-05-05-nova-audit-findings.md`](./2026-05-05-nova-audit-findings.md) — Tier 1 priority
 **Related (orthogonal):** [`docs/designs/2026-04-18-pluggable-memory-and-benchmarks.md`](../../designs/2026-04-18-pluggable-memory-and-benchmarks.md) (FC-011, DRAFT) — strategic question of whether engram earns its complexity. This spec is **scope-orthogonal**: we are hardening what exists, not committing to engram's long-term retention. If FC-011 later concludes engram should be replaced, the test contracts written here document the memory semantics the next backend must preserve.
 
