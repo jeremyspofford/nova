@@ -366,39 +366,35 @@ async def _extract_patterns(session) -> int:
         embedding = await get_embedding(schema_content, session)
 
         # Gate 4: Embedding coherence — schema must be similar to at least half its sources
-        source_embeddings = []
-        for r in related_items:
-            emb_row = await session.execute(
-                text(
-                    "SELECT embedding FROM engrams WHERE id = CAST(:id AS uuid) AND embedding IS NOT NULL"
-                ),
-                {"id": str(r.id)},
-            )
-            row = emb_row.fetchone()
-            if row and row.embedding:
-                source_embeddings.append((str(r.id), row.embedding))
-
-        if source_embeddings:
+        # Single batched query: fetch all source embeddings + similarity to schema in one round-trip (P4 fix)
+        if related_items:
             schema_vec_str = to_pg_vector(embedding)
-            coherent_count = 0
-            for src_id, _ in source_embeddings:
-                sim_row = await session.execute(
-                    text("""
-                        SELECT 1 - (CAST(:schema_emb AS halfvec) <=> e.embedding) AS sim
-                        FROM engrams e WHERE e.id = CAST(:src_id AS uuid)
-                    """),
-                    {"schema_emb": schema_vec_str, "src_id": src_id},
-                )
-                sim = sim_row.scalar()
-                if sim and sim > settings.engram_schema_coherence_threshold:
-                    coherent_count += 1
+            sim_results = await session.execute(
+                text("""
+                    SELECT e.id::text AS id,
+                           1 - (CAST(:schema_emb AS halfvec) <=> e.embedding) AS sim
+                    FROM engrams e
+                    WHERE e.id = ANY(CAST(:source_ids AS uuid[]))
+                      AND e.embedding IS NOT NULL
+                """),
+                {
+                    "schema_emb": schema_vec_str,
+                    "source_ids": [str(r.id) for r in related_items],
+                },
+            )
+            sims = list(sim_results)
+            coherent_count = sum(
+                1
+                for s in sims
+                if s.sim and s.sim > settings.engram_schema_coherence_threshold
+            )
 
-            if coherent_count < len(source_embeddings) / 2:
+            if coherent_count < len(sims) / 2:
                 log.warning(
                     "Schema for entity=%s failed coherence gate (%d/%d sources above %.2f)",
                     entity_name,
                     coherent_count,
-                    len(source_embeddings),
+                    len(sims),
                     settings.engram_schema_coherence_threshold,
                 )
                 continue
