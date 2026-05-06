@@ -599,3 +599,142 @@ def _read_cache_dict_for_test():
     """Test helper: peek at the SDK's in-memory cache directly."""
     from nova_contracts.feature_flags import _cache
     return dict(_cache)
+
+
+# ----------------------------------------------------------------------------
+# B3c: HTTP-based bulk pre-warm — populates the in-process cache from
+# orchestrator's GET /api/v1/feature-flags/ at FastAPI lifespan startup.
+# ----------------------------------------------------------------------------
+
+import httpx
+
+from nova_contracts.feature_flags_http import warm_cache_from_http
+
+
+def _stub_transport(response_factory):
+    """Build a MockTransport that calls response_factory(request) -> Response."""
+    return httpx.MockTransport(response_factory)
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_populates_from_orchestrator_response():
+    """Happy path: GET /api/v1/feature-flags/ returns current values; the
+    SDK's cache mirrors what the orchestrator currently believes is live."""
+
+    captured_request: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_request["url"] = str(request.url)
+        captured_request["method"] = request.method
+        return httpx.Response(
+            200,
+            json=[
+                {"key": "kill.intel_worker.poll", "current_value": True, "is_override": True},
+                {"key": "memory.retrieval_mode", "current_value": "tools", "is_override": True},
+                {"key": "pipeline.guardrail_strict_mode", "current_value": False, "is_override": False},
+            ],
+        )
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    assert captured_request["method"] == "GET"
+    assert "/api/v1/feature-flags/" in captured_request["url"]
+
+    cache = _read_cache_dict_for_test()
+    assert cache == {
+        "kill.intel_worker.poll": True,
+        "memory.retrieval_mode": "tools",
+        "pipeline.guardrail_strict_mode": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_logs_warning_on_connection_failure(caplog):
+    """B2: orchestrator unreachable at startup is non-fatal. Service starts
+    with whatever the cache file (B3d) gave it; in-code defaults if no file."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        with caplog.at_level("WARNING", logger="nova_contracts.feature_flags_http"):
+            # Must NOT raise — service startup proceeds.
+            await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "flag_cache_warm_failed" in r.message]
+    assert warns, (
+        f"connection failure must WARN; got {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_logs_warning_on_5xx_response(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="service unavailable")
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        with caplog.at_level("WARNING", logger="nova_contracts.feature_flags_http"):
+            await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "flag_cache_warm_failed" in r.message]
+    assert warns
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_logs_warning_on_malformed_json(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json at all")
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        with caplog.at_level("WARNING", logger="nova_contracts.feature_flags_http"):
+            await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    warns = [r for r in caplog.records if r.levelname == "WARNING"
+             and r.message and "flag_cache_warm_failed" in r.message]
+    assert warns
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_persists_to_file_when_configured(tmp_path):
+    """The cache-file fallback (B3d) writes after every populate_cache.
+    Verify the warm path triggers the same persistence."""
+
+    cache_path = tmp_path / "warm.json"
+    init_cache_file(cache_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"key": "warm.k", "current_value": True}],
+        )
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    assert cache_path.exists()
+    on_disk = json.loads(cache_path.read_text())
+    assert on_disk == {"warm.k": True}
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_includes_admin_secret_when_set(monkeypatch):
+    """Per spec: all admin endpoints require X-Admin-Secret. The SDK reads
+    NOVA_ADMIN_SECRET and includes it in warm requests so the call succeeds
+    even when REQUIRE_AUTH is true."""
+
+    monkeypatch.setenv("NOVA_ADMIN_SECRET", "test-secret-abc")
+
+    captured_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        for k, v in request.headers.items():
+            captured_headers[k.lower()] = v
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(transport=_stub_transport(handler)) as client:
+        await warm_cache_from_http(client, "http://orchestrator:8000")
+
+    assert captured_headers.get("x-admin-secret") == "test-secret-abc"
