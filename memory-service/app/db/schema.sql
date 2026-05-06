@@ -117,6 +117,10 @@ CREATE INDEX IF NOT EXISTS idx_engrams_tenant ON engrams(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_engrams_source ON engrams(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_engrams_occurred ON engrams(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_engrams_content_tsv ON engrams USING GIN (to_tsvector('english', content));
+-- Used by consolidation.py HNSW shortlist (P2 fix: per-candidate top-K probe replaces
+-- cartesian self-join). Also used by activation.py seed query for cosine ANN at
+-- production scale (planner switches from Seq Scan to HNSW above ~100 rows).
+-- ef_construction=128 balances index build time vs recall quality.
 CREATE INDEX IF NOT EXISTS idx_engrams_hnsw ON engrams
     USING hnsw (embedding halfvec_cosine_ops) WITH (m = 24, ef_construction = 128);
 
@@ -165,8 +169,16 @@ CREATE TABLE IF NOT EXISTS engram_edges (
     UNIQUE(source_id, target_id, relation)
 );
 
+-- Used by activation.py recursive arm (LATERAL UNION ALL of source-side / target-side
+-- edge scans, MEM-001 Sprint 2 P1 fix). Without this index the OR-on-(source_id, target_id)
+-- predicate falls back to BitmapOr and the recursive CTE blows up at production scale.
 CREATE INDEX IF NOT EXISTS idx_edges_source ON engram_edges(source_id);
+
+-- Mirrors idx_edges_source for the target-side arm of the same recursive CTE.
+-- Both indexes must exist for the planner to emit the efficient UNION strategy
+-- instead of a single BitmapOr scan.
 CREATE INDEX IF NOT EXISTS idx_edges_target ON engram_edges(target_id);
+
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON engram_edges(relation);
 CREATE INDEX IF NOT EXISTS idx_edges_weight ON engram_edges(weight);
 
@@ -252,7 +264,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_engrams_type_topic
     ON engrams(type) WHERE type = 'topic' AND NOT superseded;
 
--- Index for structural edge queries (part_of, instance_of lookups)
+-- Used by activation.py deep-mode follow-up (target→source arm of UNION rewrite, MEM-001
+-- Sprint 2 P1). Partial index on (relation, target_id) filters 'part_of'/'instance_of'
+-- edges at index scan time. Without this, the target-side arm falls back to BitmapOr.
 CREATE INDEX IF NOT EXISTS idx_edges_structural
     ON engram_edges(relation, target_id) WHERE relation IN ('part_of', 'instance_of');
 

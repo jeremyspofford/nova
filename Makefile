@@ -114,3 +114,7 @@ prune-all: ## Backup DB, then prune everything including model cache volumes
 	@for v in ollama-data nova-vllm-cache nova-sglang-cache tailscale-state; do \
 	  docker volume rm "nova_$$v" 2>/dev/null && echo "  Removed $$v" || true; \
 	done
+
+refresh-llm-fixtures: ## Re-record all LLM fixtures (clears existing, records from llm-gateway)
+	rm -rf memory-service/tests/fixtures/llm/*.json
+	cd memory-service && RECORD_LLM_FIXTURES=1 uv run pytest tests/ -v

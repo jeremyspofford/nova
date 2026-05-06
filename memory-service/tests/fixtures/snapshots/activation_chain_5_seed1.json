@@ -1,0 +1,47 @@
+[
+  {
+    "activation": 1.2,
+    "content": "chain-node-1",
+    "convergence_paths": 1,
+    "final_score": 0.48,
+    "importance": 0.5,
+    "source_type": "chat",
+    "type": "fact"
+  },
+  {
+    "activation": 0.576,
+    "content": "chain-node-0",
+    "convergence_paths": 1,
+    "final_score": 0.2304,
+    "importance": 0.5,
+    "source_type": "chat",
+    "type": "fact"
+  },
+  {
+    "activation": 0.576,
+    "content": "chain-node-2",
+    "convergence_paths": 1,
+    "final_score": 0.2304,
+    "importance": 0.5,
+    "source_type": "chat",
+    "type": "fact"
+  },
+  {
+    "activation": 0.2765,
+    "content": "chain-node-3",
+    "convergence_paths": 1,
+    "final_score": 0.1106,
+    "importance": 0.5,
+    "source_type": "chat",
+    "type": "fact"
+  },
+  {
+    "activation": 0.1327,
+    "content": "chain-node-4",
+    "convergence_paths": 1,
+    "final_score": 0.0531,
+    "importance": 0.5,
+    "source_type": "chat",
+    "type": "fact"
+  }
+]

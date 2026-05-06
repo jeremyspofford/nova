@@ -11,6 +11,7 @@ This data is the training set for the Neural Router. The NN training
 container listens for train signals on Redis db6 and trains when
 enough labeled observations accumulate.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,9 +38,7 @@ async def _get_train_redis() -> aioredis.Redis:
     if _train_redis is None:
         # Parse base URL and force db6
         base = settings.redis_url.rsplit("/", 1)[0]
-        _train_redis = aioredis.from_url(
-            f"{base}/6", decode_responses=True
-        )
+        _train_redis = aioredis.from_url(f"{base}/6", decode_responses=True)
     return _train_redis
 
 
@@ -189,7 +188,8 @@ async def _maybe_emit_train_signal(
             await r.set(last_key, labeled)
             log.info(
                 "Emitted train signal for tenant %s (%d labeled observations)",
-                tenant_id, labeled,
+                tenant_id,
+                labeled,
             )
     except Exception:
         log.debug("Failed to emit train signal", exc_info=True)

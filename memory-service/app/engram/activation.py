@@ -5,6 +5,7 @@ Replaces cosine similarity search with graph-based associative retrieval.
 Activation flows from seed engrams through weighted edges, with convergent
 amplification boosting engrams reached by multiple independent paths.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ActivatedEngram:
     """An engram with its computed activation score."""
+
     id: str
     type: str
     content: str
@@ -131,23 +133,37 @@ async def spreading_activation(
 
                 UNION ALL
 
-                -- Spread through edges (both directions — bidirectional graph)
+                -- Spread through edges (both directions, fan-out capped per hop)
+                -- Uses two index-friendly branches inside LATERAL to avoid BitmapOr
+                -- on the OR predicate, then re-joins engrams for the neighbor row.
                 SELECT
                     neighbor.id,
                     LEAST(1.0, spread.activation * edge.weight * :decay_factor)::real AS activation,
                     spread.hop + 1,
                     spread.path || neighbor.id
                 FROM activation_spread spread
-                JOIN engram_edges edge ON (edge.source_id = spread.id OR edge.target_id = spread.id)
-                JOIN engrams neighbor ON neighbor.id = CASE
-                    WHEN edge.source_id = spread.id THEN edge.target_id
-                    ELSE edge.source_id
-                END
+                JOIN LATERAL (
+                    -- Source-side: idx_edges_source
+                    SELECT e.target_id AS neighbor_id, e.weight
+                    FROM engram_edges e
+                    WHERE e.source_id = spread.id
+                      AND e.relation != 'contradicts'
+                      AND (spread.activation * e.weight * :decay_factor) > :threshold
+                    UNION ALL
+                    -- Target-side: idx_edges_target
+                    SELECT e.source_id AS neighbor_id, e.weight
+                    FROM engram_edges e
+                    WHERE e.target_id = spread.id
+                      AND e.relation != 'contradicts'
+                      AND (spread.activation * e.weight * :decay_factor) > :threshold
+                    ORDER BY weight DESC
+                    LIMIT :max_fanout
+                ) edge ON TRUE
+                JOIN engrams neighbor ON neighbor.id = edge.neighbor_id
                 WHERE spread.hop < :max_hops
                   AND NOT neighbor.superseded
-                  AND edge.relation != 'contradicts'
+                  AND neighbor.tenant_id = CAST(:tenant_id AS uuid)
                   AND NOT (neighbor.id = ANY(spread.path))
-                  AND (spread.activation * edge.weight * :decay_factor) > :threshold
             )
             SELECT
                 a.id,
@@ -183,6 +199,7 @@ async def spreading_activation(
             "threshold": activation_threshold,
             "max_results": max_results,
             "activation_floor": settings.engram_prune_activation_floor,
+            "max_fanout": settings.engram_max_fanout_per_hop,
         },
     )
 
@@ -202,9 +219,16 @@ async def spreading_activation(
         convergence_bonus = 1.0 + 0.2 * max(0, row.convergence_paths - 1)
 
         confidence = row.confidence if row.confidence else 0.5
-        final_score = row.activation * row.importance * confidence * recency_boost * convergence_bonus
+        final_score = (
+            row.activation
+            * row.importance
+            * confidence
+            * recency_boost
+            * convergence_bonus
+        )
 
         import json as _json
+
         fragments = None
         if row.fragments:
             try:
@@ -212,21 +236,23 @@ async def spreading_activation(
             except Exception:
                 pass
 
-        activated.append(ActivatedEngram(
-            id=str(row.id),
-            type=row.type,
-            content=row.content,
-            activation=row.activation,
-            importance=row.importance,
-            confidence=row.confidence,
-            convergence_paths=row.convergence_paths,
-            final_score=final_score,
-            access_count=row.access_count,
-            last_accessed=row.last_accessed,
-            created_at=row.created_at,
-            fragments=fragments,
-            source_type=row.source_type,
-        ))
+        activated.append(
+            ActivatedEngram(
+                id=str(row.id),
+                type=row.type,
+                content=row.content,
+                activation=row.activation,
+                importance=row.importance,
+                confidence=row.confidence,
+                convergence_paths=row.convergence_paths,
+                final_score=final_score,
+                access_count=row.access_count,
+                last_accessed=row.last_accessed,
+                created_at=row.created_at,
+                fragments=fragments,
+                source_type=row.source_type,
+            )
+        )
 
     # Shallow mode: only return topic and schema engrams
     if depth == "shallow":
@@ -243,18 +269,25 @@ async def spreading_activation(
         activated_ids = {a.id for a in activated}
         structural_result = await session.execute(
             text("""
+                -- Deep mode: follow instance_of / part_of edges from activated nodes.
+                -- UNION ALL of two single-direction scans so each branch hits
+                -- idx_edges_structural cleanly (no BitmapOr).
                 SELECT DISTINCT e.id::text, e.type, e.content, e.importance,
                        e.confidence, e.access_count, e.last_accessed, e.created_at,
                        e.fragments::text, e.source_type
-                FROM engram_edges ee
-                JOIN engrams e ON e.id = CASE
-                    WHEN ee.source_id = ANY(CAST(:ids AS uuid[])) THEN ee.target_id
-                    ELSE ee.source_id
-                END
-                WHERE (ee.source_id = ANY(CAST(:ids AS uuid[]))
-                    OR ee.target_id = ANY(CAST(:ids AS uuid[])))
-                  AND ee.relation IN ('instance_of', 'part_of')
-                  AND NOT e.superseded
+                FROM (
+                    SELECT ee.target_id AS neighbor_id
+                    FROM engram_edges ee
+                    WHERE ee.source_id = ANY(CAST(:ids AS uuid[]))
+                      AND ee.relation IN ('instance_of', 'part_of')
+                    UNION ALL
+                    SELECT ee.source_id AS neighbor_id
+                    FROM engram_edges ee
+                    WHERE ee.target_id = ANY(CAST(:ids AS uuid[]))
+                      AND ee.relation IN ('instance_of', 'part_of')
+                ) edges
+                JOIN engrams e ON e.id = edges.neighbor_id
+                WHERE NOT e.superseded
                   AND e.id != ALL(CAST(:ids AS uuid[]))
             """),
             {"ids": list(activated_ids)},
@@ -263,6 +296,7 @@ async def spreading_activation(
         for row in structural_result:
             if str(row.id) not in activated_ids:
                 import json as _json
+
                 fragments = None
                 if row.fragments:
                     try:
@@ -270,21 +304,23 @@ async def spreading_activation(
                     except Exception:
                         pass
 
-                activated.append(ActivatedEngram(
-                    id=str(row.id),
-                    type=row.type,
-                    content=row.content,
-                    activation=0.5,
-                    importance=row.importance,
-                    confidence=row.confidence,
-                    convergence_paths=1,
-                    final_score=0.5 * row.importance,
-                    access_count=row.access_count,
-                    last_accessed=row.last_accessed,
-                    created_at=row.created_at,
-                    fragments=fragments,
-                    source_type=row.source_type,
-                ))
+                activated.append(
+                    ActivatedEngram(
+                        id=str(row.id),
+                        type=row.type,
+                        content=row.content,
+                        activation=0.5,
+                        importance=row.importance,
+                        confidence=row.confidence,
+                        convergence_paths=1,
+                        final_score=0.5 * row.importance,
+                        access_count=row.access_count,
+                        last_accessed=row.last_accessed,
+                        created_at=row.created_at,
+                        fragments=fragments,
+                        source_type=row.source_type,
+                    )
+                )
                 activated_ids.add(str(row.id))
 
         # Touch the newly added structural neighbors

@@ -4,13 +4,14 @@ Engram decomposition pipeline — extracts structured engrams from raw text.
 Uses a Haiku-class model with structured output to decompose conversation
 turns into atomic memory nodes (engrams) with typed relationships.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 
-import httpx
 from app.config import settings
+from app.http_client import get_http_client
 from nova_contracts.engram import DecompositionResult
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ async def resolve_model(model: str) -> str:
 
         import redis.asyncio as aioredis
         from app.config import settings as _settings
+
         config_redis_url = _settings.redis_url.rsplit("/", 1)[0] + "/1"
         r = aioredis.from_url(config_redis_url, decode_responses=True)
         try:
@@ -66,29 +68,40 @@ async def resolve_model(model: str) -> str:
 
     # Try the gateway's model resolution endpoint
     try:
-        async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=5.0) as c:
-            r = await c.get("/v1/models/resolve")
-            if r.status_code == 200:
-                _resolved_model = r.json().get("model", "")
-                if _resolved_model:
-                    log.info("Auto-resolved decomposition model: %s", _resolved_model)
-                    return _resolved_model
+        c = get_http_client()
+        r = await c.get(f"{settings.llm_gateway_url}/v1/models/resolve", timeout=5.0)
+        if r.status_code == 200:
+            _resolved_model = r.json().get("model", "")
+            if _resolved_model:
+                log.info("Auto-resolved decomposition model: %s", _resolved_model)
+                return _resolved_model
     except Exception:
         pass
 
     # Fallback: probe common local models (ordered by structured output quality)
-    for candidate in ["qwen2.5:7b", "qwen2.5", "qwen3:8b", "mistral", "llama3.2", "llama3.1:8b"]:
+    for candidate in [
+        "qwen2.5:7b",
+        "qwen2.5",
+        "qwen3:8b",
+        "mistral",
+        "llama3.2",
+        "llama3.1:8b",
+    ]:
         try:
-            async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=10.0) as c:
-                r = await c.post("/complete", json={
+            c = get_http_client()
+            r = await c.post(
+                f"{settings.llm_gateway_url}/complete",
+                json={
                     "model": candidate,
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 1,
-                })
-                if r.status_code == 200:
-                    _resolved_model = candidate
-                    log.info("Auto-resolved decomposition model via probe: %s", candidate)
-                    return _resolved_model
+                },
+                timeout=10.0,
+            )
+            if r.status_code == 200:
+                _resolved_model = candidate
+                log.info("Auto-resolved decomposition model via probe: %s", candidate)
+                return _resolved_model
         except Exception:
             continue
 
@@ -190,8 +203,14 @@ Content to summarize:
 
 # Valid enum values from nova-contracts EdgeRelation
 _VALID_RELATIONS = {
-    "caused_by", "related_to", "contradicts", "preceded",
-    "enables", "part_of", "instance_of", "analogous_to",
+    "caused_by",
+    "related_to",
+    "contradicts",
+    "preceded",
+    "enables",
+    "part_of",
+    "instance_of",
+    "analogous_to",
 }
 
 
@@ -259,21 +278,27 @@ async def decompose(raw_text: str, source_type: str = "chat") -> DecompositionRe
 
         system_prompt = _get_system_prompt(source_type)
 
-        async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=60.0) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": DECOMPOSITION_USER_TEMPLATE.format(raw_text=raw_text)},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 4000,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": DECOMPOSITION_USER_TEMPLATE.format(
+                            raw_text=raw_text
+                        ),
+                    },
+                ],
+                "temperature": 0.1,
+                "max_tokens": 4000,
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         content = data.get("content", "")
         if isinstance(content, list):
@@ -283,7 +308,9 @@ async def decompose(raw_text: str, source_type: str = "chat") -> DecompositionRe
         # Strip markdown code fences if present
         if content.startswith("```"):
             lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            content = "\n".join(
+                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+            )
 
         parsed = json.loads(content)
         _sanitize_decomposition(parsed)

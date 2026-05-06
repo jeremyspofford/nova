@@ -1012,7 +1012,7 @@ Phase 8: SaaS Readiness ──────────────────�
 
 ## Migration Strategy
 
-### For existing single-user deployments (Jeremy's Beelink)
+### For existing single-user deployments
 
 1. **Phase 1** applies immediately — `setup.sh` regenerates secrets, enables auth
 2. **Phase 2** migration runs automatically — existing data gets default tenant_id

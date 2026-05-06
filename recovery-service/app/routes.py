@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .backup import (
@@ -112,18 +112,30 @@ def _verify_admin_jwt(token: str, secret: str) -> bool:
 
 
 async def _check_admin(
+    request: Request,
     authorization: str = Header(default=""),
     x_admin_secret: str = Header(default=""),
 ):
-    """Validate admin access. Accepts JWT Bearer or X-Admin-Secret."""
-    # Check admin secret (Redis-backed for runtime rotation, env fallback).
+    """Validate admin access. Accepts trusted network, JWT Bearer, or X-Admin-Secret.
+
+    The trusted-network bypass is symmetric with the orchestrator and the other
+    internal services (memory, cortex, llm-gateway). It's required so that
+    dashboard sessions opened via the orchestrator's trusted-network bypass —
+    which never mint a JWT — can still reach recovery's admin endpoints from
+    loopback / Docker bridge / LAN / Tailscale.
+    """
+    # Trusted network bypass — set by TrustedNetworkMiddleware in main.py
+    if getattr(request.state, "is_trusted_network", False):
+        return
+
+    # Admin secret (Redis-backed for runtime rotation, env fallback).
     # Constant-time comparison defeats timing attacks on the secret.
     if x_admin_secret:
         expected = await _get_admin_secret()
         if expected and hmac.compare_digest(x_admin_secret, expected):
             return
 
-    # Check JWT Bearer token
+    # JWT Bearer token (issued by orchestrator on real login)
     if authorization and authorization.startswith("Bearer "):
         secret = await _get_jwt_secret()
         if secret and _verify_admin_jwt(authorization[7:], secret):

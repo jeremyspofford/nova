@@ -59,7 +59,7 @@ Recommendation: option 2 — better long-term posture, mirrors production behavi
 
 ## Inference backend cluster — environment gate, not a fix
 
-13 inference-backend tests fail because this dev env (Beelink Mini S13 Pro) has no GPU, no vLLM/SGLang running. The tests aren't broken — they're asserting capabilities that don't exist on this host. Mark with `pytest.mark.skipif(not has_gpu)` or split into a `--gpu-tests` opt-in marker.
+13 inference-backend tests fail because this dev env has no vLLM/SGLang running. The tests aren't broken — they're asserting capabilities that don't exist on this host. Mark with `pytest.mark.skipif(not has_inference_backend)` or split into a `--gpu-tests` opt-in marker.
 
 ## Files changed in this session
 

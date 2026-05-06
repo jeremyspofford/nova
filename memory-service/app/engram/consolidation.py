@@ -16,6 +16,7 @@ clustering) are gated by user activity: if the user chatted within the
 configured idle window, those phases skip so Ollama can serve chat
 without queue contention. Scheduled/nightly triggers bypass the gate.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,10 +25,10 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import httpx
 from app.config import settings
 from app.db.database import AsyncSessionLocal
 from app.embedding import get_embedding, get_redis, to_pg_vector
+from app.http_client import get_http_client
 from sqlalchemy import text
 
 from .cortex_stimulus import emit_to_cortex
@@ -90,8 +91,10 @@ async def consolidation_loop() -> None:
             else:
                 # Check nightly schedule
                 now_utc = datetime.now(timezone.utc)
-                if (now_utc.hour == settings.engram_consolidation_nightly_hour
-                        and idle_minutes >= 5):  # Don't run nightly if recently consolidated
+                if (
+                    now_utc.hour == settings.engram_consolidation_nightly_hour
+                    and idle_minutes >= 5
+                ):  # Don't run nightly if recently consolidated
                     trigger = "scheduled"
 
             if trigger:
@@ -168,27 +171,28 @@ async def run_consolidation(trigger: str = "manual") -> dict:
                 """)
             )
             stats["engrams_reviewed"] = count_row.scalar() or 0
+
         await _run_phase("Phase 1 (replay/review)", _phase1)
 
         # Phase 2: Pattern Extraction → Schema engrams (LLM-heavy)
         # Gate on user activity: scheduled/nightly triggers always run, but
         # idle/threshold/manual triggers skip when the user is actively
         # chatting so Ollama serves the chat turn first (PERF-003 phase 2).
-        skip_llm_phases = (
-            trigger != "scheduled"
-            and await _user_recently_active()
-        )
+        skip_llm_phases = trigger != "scheduled" and await _user_recently_active()
         if skip_llm_phases:
             log.info(
                 "Consolidation (trigger=%s): user active within %dm — skipping LLM phases 2, 2.5",
-                trigger, settings.engram_consolidation_user_idle_minutes,
+                trigger,
+                settings.engram_consolidation_user_idle_minutes,
             )
             stats["schemas_created"] = 0
             stats["topics_created"] = 0
             stats["llm_phases_skipped"] = True
         else:
+
             async def _phase2(session):
                 stats["schemas_created"] = await _extract_patterns(session)
+
             await _run_phase("Phase 2 (pattern extraction)", _phase2)
 
             # Phase 2.5: Topic Discovery — cluster engrams into topics
@@ -198,15 +202,19 @@ async def run_consolidation(trigger: str = "manual") -> dict:
                     discover_topics,
                     maintain_topics,
                 )
+
                 topics_created = await discover_topics(session)
                 topics_assigned = await assign_new_engrams_to_topics(session)
                 maintenance = await maintain_topics(session)
                 stats["topics_created"] = topics_created
                 log.info(
                     "Phase 2.5: %d topics created, %d engrams assigned, %d dissolved, %d regenerated",
-                    topics_created, topics_assigned,
-                    maintenance.get("dissolved", 0), maintenance.get("regenerated", 0),
+                    topics_created,
+                    topics_assigned,
+                    maintenance.get("dissolved", 0),
+                    maintenance.get("regenerated", 0),
                 )
+
             await _run_phase("Phase 2.5 (topic discovery)", _phase25)
 
         # Phase 3: Edge Strengthening & Weakening (Hebbian)
@@ -214,26 +222,31 @@ async def run_consolidation(trigger: str = "manual") -> dict:
             strengthened, weakened = await _hebbian_update(session)
             stats["edges_strengthened"] = strengthened
             stats["edges_pruned"] = weakened
+
         await _run_phase("Phase 3 (Hebbian update)", _phase3)
 
         # Phase 4: Contradiction Resolution
         async def _phase4(session):
             stats["contradictions_resolved"] = await _resolve_contradictions(session)
+
         await _run_phase("Phase 4 (contradiction resolution)", _phase4)
 
         # Phase 5: Merging (pruning removed — engrams fade via activation decay)
         async def _phase5(session):
             stats["engrams_merged"] = await _merge_duplicates(session)
+
         await _run_phase("Phase 5 (merging)", _phase5)
 
         # Phase 5b: Activation decay — unused engrams gradually fade
         async def _phase5b(session):
             stats["activations_decayed"] = await _decay_unused_activations(session)
+
         await _run_phase("Phase 5b (activation decay)", _phase5b)
 
         # Phase 6: Self-Model Update
         async def _phase6(session):
             stats["self_model_updates"] = await _update_self_model(session)
+
         await _run_phase("Phase 6 (self-model update)", _phase6)
 
         # Final: write the cycle summary to consolidation_log (its own session too)
@@ -271,17 +284,26 @@ async def run_consolidation(trigger: str = "manual") -> dict:
         _engrams_since_last = 0
         log.info(
             "Consolidation complete (%s): %d reviewed, %d schemas, %d topics, %d merged, %dms",
-            trigger, stats["engrams_reviewed"], stats["schemas_created"],
-            stats["topics_created"], stats["engrams_merged"], duration_ms,
+            trigger,
+            stats["engrams_reviewed"],
+            stats["schemas_created"],
+            stats["topics_created"],
+            stats["engrams_merged"],
+            duration_ms,
         )
         try:
-            await emit_to_cortex("consolidation.complete", {
-                "engrams_reviewed": stats.get("engrams_reviewed", 0),
-                "schemas_created": stats.get("schemas_created", 0),
-                "contradictions_resolved": stats.get("contradictions_resolved", 0),
-            })
+            await emit_to_cortex(
+                "consolidation.complete",
+                {
+                    "engrams_reviewed": stats.get("engrams_reviewed", 0),
+                    "schemas_created": stats.get("schemas_created", 0),
+                    "contradictions_resolved": stats.get("contradictions_resolved", 0),
+                },
+            )
         except Exception:
-            log.warning("Failed to emit consolidation stimulus to cortex", exc_info=True)
+            log.warning(
+                "Failed to emit consolidation stimulus to cortex", exc_info=True
+            )
         return stats
 
 
@@ -344,35 +366,35 @@ async def _extract_patterns(session) -> int:
         embedding = await get_embedding(schema_content, session)
 
         # Gate 4: Embedding coherence — schema must be similar to at least half its sources
-        source_embeddings = []
-        for r in related_items:
-            emb_row = await session.execute(
-                text("SELECT embedding FROM engrams WHERE id = CAST(:id AS uuid) AND embedding IS NOT NULL"),
-                {"id": str(r.id)},
-            )
-            row = emb_row.fetchone()
-            if row and row.embedding:
-                source_embeddings.append((str(r.id), row.embedding))
-
-        if source_embeddings:
+        # Single batched query: fetch all source embeddings + similarity to schema in one round-trip (P4 fix)
+        if related_items:
             schema_vec_str = to_pg_vector(embedding)
-            coherent_count = 0
-            for src_id, _ in source_embeddings:
-                sim_row = await session.execute(
-                    text("""
-                        SELECT 1 - (CAST(:schema_emb AS halfvec) <=> e.embedding) AS sim
-                        FROM engrams e WHERE e.id = CAST(:src_id AS uuid)
-                    """),
-                    {"schema_emb": schema_vec_str, "src_id": src_id},
-                )
-                sim = sim_row.scalar()
-                if sim and sim > settings.engram_schema_coherence_threshold:
-                    coherent_count += 1
+            sim_results = await session.execute(
+                text("""
+                    SELECT e.id::text AS id,
+                           1 - (CAST(:schema_emb AS halfvec) <=> e.embedding) AS sim
+                    FROM engrams e
+                    WHERE e.id = ANY(CAST(:source_ids AS uuid[]))
+                      AND e.embedding IS NOT NULL
+                """),
+                {
+                    "schema_emb": schema_vec_str,
+                    "source_ids": [str(r.id) for r in related_items],
+                },
+            )
+            sims = list(sim_results)
+            coherent_count = sum(
+                1
+                for s in sims
+                if s.sim and s.sim > settings.engram_schema_coherence_threshold
+            )
 
-            if coherent_count < len(source_embeddings) / 2:
+            if coherent_count < len(sims) / 2:
                 log.warning(
                     "Schema for entity=%s failed coherence gate (%d/%d sources above %.2f)",
-                    entity_name, coherent_count, len(source_embeddings),
+                    entity_name,
+                    coherent_count,
+                    len(sims),
                     settings.engram_schema_coherence_threshold,
                 )
                 continue
@@ -417,10 +439,18 @@ async def _extract_patterns(session) -> int:
             try:
                 await _create_edge(session, r.id, schema_id, "instance_of", 0.8)
             except Exception:
-                log.warning("Failed to create instance_of edge for schema %s", schema_id, exc_info=True)
+                log.warning(
+                    "Failed to create instance_of edge for schema %s",
+                    schema_id,
+                    exc_info=True,
+                )
 
         schemas_created += 1
-        log.info("Created schema for entity=%s with %d source edges", entity_name, len(related_items))
+        log.info(
+            "Created schema for entity=%s with %d source edges",
+            entity_name,
+            len(related_items),
+        )
 
     return schemas_created
 
@@ -436,57 +466,68 @@ async def _synthesize_schema(entity_name: str, items_text: str) -> str | None:
     """
     try:
         from .decomposition import resolve_model
+
         model = await resolve_model(settings.engram_consolidation_model)
-        async with httpx.AsyncClient(base_url=settings.llm_gateway_url, timeout=30.0) as client:
-            resp = await client.post(
-                "/complete",
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                f'You are synthesizing a knowledge pattern from observations about "{entity_name}".\n\n'
-                                "Capture the full pattern — include key details, relationships, and conditions, "
-                                "not just the conclusion. Be concise but complete. If the pattern is simple, "
-                                "one sentence is fine. If it's complex, use a short paragraph.\n\n"
-                                "The pattern must:\n"
-                                f"- Reference {entity_name} by name\n"
-                                "- Be self-contained (understandable without reading the source observations)\n"
-                                "- Capture specifics, not vague generalizations"
-                            ),
-                        },
-                        {"role": "user", "content": f"Observations:\n{items_text}"},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": settings.engram_schema_max_tokens,
-                },
+        client = get_http_client()
+        resp = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            f'You are synthesizing a knowledge pattern from observations about "{entity_name}".\n\n'
+                            "Capture the full pattern — include key details, relationships, and conditions, "
+                            "not just the conclusion. Be concise but complete. If the pattern is simple, "
+                            "one sentence is fine. If it's complex, use a short paragraph.\n\n"
+                            "The pattern must:\n"
+                            f"- Reference {entity_name} by name\n"
+                            "- Be self-contained (understandable without reading the source observations)\n"
+                            "- Capture specifics, not vague generalizations"
+                        ),
+                    },
+                    {"role": "user", "content": f"Observations:\n{items_text}"},
+                ],
+                "temperature": 0.2,
+                "max_tokens": settings.engram_schema_max_tokens,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Gate 1: Check stop reason — reject truncated responses
+        stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
+        if stop_reason in ("length", "max_tokens"):
+            log.warning(
+                "Schema synthesis truncated for entity=%s, discarding", entity_name
             )
-            resp.raise_for_status()
-            data = resp.json()
+            return None
 
-            # Gate 1: Check stop reason — reject truncated responses
-            stop_reason = data.get("stop_reason") or data.get("finish_reason", "")
-            if stop_reason in ("length", "max_tokens"):
-                log.warning("Schema synthesis truncated for entity=%s, discarding", entity_name)
-                return None
+        content = data.get("content", "")
+        if isinstance(content, list):
+            content = content[0].get("text", "") if content else ""
+        content = content.strip()
 
-            content = data.get("content", "")
-            if isinstance(content, list):
-                content = content[0].get("text", "") if content else ""
-            content = content.strip()
+        # Gate 2: Non-trivial length
+        if len(content) < 20:
+            log.warning(
+                "Schema synthesis too short (%d chars) for entity=%s",
+                len(content),
+                entity_name,
+            )
+            return None
 
-            # Gate 2: Non-trivial length
-            if len(content) < 20:
-                log.warning("Schema synthesis too short (%d chars) for entity=%s", len(content), entity_name)
-                return None
+        # Gate 3: Must reference the entity
+        if entity_name.lower() not in content.lower():
+            log.warning(
+                "Schema synthesis doesn't reference entity=%s, discarding",
+                entity_name,
+            )
+            return None
 
-            # Gate 3: Must reference the entity
-            if entity_name.lower() not in content.lower():
-                log.warning("Schema synthesis doesn't reference entity=%s, discarding", entity_name)
-                return None
-
-            return content
+        return content
     except Exception:
         log.warning("Schema synthesis failed for entity=%s", entity_name, exc_info=True)
         return None
@@ -582,7 +623,9 @@ async def _resolve_contradictions(session) -> int:
             loser_id = c.target_id if c.source_conf > c.target_conf else c.source_id
         else:
             # Temporal winner (newer wins)
-            loser_id = c.source_id if c.target_created > c.source_created else c.target_id
+            loser_id = (
+                c.source_id if c.target_created > c.source_created else c.target_id
+            )
 
         if loser_id:
             await session.execute(
@@ -624,40 +667,91 @@ async def _decay_unused_activations(session) -> int:
     return decayed
 
 
-
 async def _merge_duplicates(session) -> int:
-    """Phase 5b: Merge near-duplicate engrams (same type, similarity > threshold, default 0.88).
+    """Phase 5b: Merge near-duplicate engrams via HNSW shortlist (P2 fix).
 
-    Keeps the one with higher access_count, combines edge connections.
+    For each candidate (capped at engram_merge_cycle_cap), find the top-K
+    nearest engrams of the same type/source_type via the HNSW index and
+    merge any pairs above engram_merge_similarity_threshold.
+
+    HNSW is approximate; we set hnsw.ef_search to stabilize top-K across runs.
     """
-    # Find candidate pairs
-    result = await session.execute(
-        text("""
-            SELECT e1.id AS id1, e2.id AS id2,
-                   e1.access_count AS ac1, e2.access_count AS ac2,
-                   1 - (e1.embedding <=> e2.embedding) AS similarity
-            FROM engrams e1
-            JOIN engrams e2 ON e2.id > e1.id
-              AND e2.type = e1.type
-              AND e2.source_type = e1.source_type
-              AND NOT e2.superseded
-              AND NOT e1.superseded
-              AND e1.embedding IS NOT NULL
-              AND e2.embedding IS NOT NULL
-              AND 1 - (e1.embedding <=> e2.embedding) > :threshold
-            LIMIT 20
-        """),
-        {"threshold": settings.engram_merge_similarity_threshold},
+    # Stabilize HNSW recall — required for the "bounded merge churn" contract.
+    # SET LOCAL does not accept parameterized values, so inline the integer directly.
+    await session.execute(
+        text(f"SET LOCAL hnsw.ef_search = {int(settings.engram_hnsw_ef_search)}")
     )
-    pairs = result.fetchall()
+
+    # Step 1: snapshot the candidate set for this cycle
+    candidates_result = await session.execute(
+        text("""
+            SELECT id, type, source_type, embedding, access_count
+            FROM engrams
+            WHERE NOT superseded
+              AND embedding IS NOT NULL
+            ORDER BY id
+            LIMIT :cycle_cap
+        """),
+        {"cycle_cap": settings.engram_merge_cycle_cap},
+    )
+    candidates = candidates_result.fetchall()
+
+    # loser_ids: engrams superseded in this cycle; excluded from neighbor queries
+    # (they're already gone so can't be targets or candidates)
+    loser_ids: set[str] = set()
     merged = 0
 
-    for pair in pairs:
-        # Keep the one with more access
-        keep_id = pair.id1 if pair.ac1 >= pair.ac2 else pair.id2
-        lose_id = pair.id2 if keep_id == pair.id1 else pair.id1
+    for cand in candidates:
+        cand_id_str = str(cand.id)
+        if cand_id_str in loser_ids:
+            continue
 
-        # Re-point loser's edges to winner
+        loser_uuid_array = list(loser_ids)  # list[str]; cast to uuid[] in SQL
+
+        neighbors_result = await session.execute(
+            text("""
+                SELECT id, access_count,
+                       1 - (embedding <=> :emb) AS similarity
+                FROM engrams
+                WHERE id <> :self_id
+                  AND NOT superseded
+                  AND type = :ctype
+                  AND source_type = :csrc
+                  AND embedding IS NOT NULL
+                  AND id <> ALL(CAST(:loser_uuids AS uuid[]))
+                ORDER BY embedding <=> :emb
+                LIMIT :k
+            """),
+            {
+                "emb": cand.embedding,
+                "self_id": cand.id,
+                "ctype": cand.type,
+                "csrc": cand.source_type,
+                "loser_uuids": loser_uuid_array,
+                "k": settings.engram_merge_shortlist_k,
+            },
+        )
+        neighbors = neighbors_result.fetchall()
+
+        merge_partners = [
+            n
+            for n in neighbors
+            if n.similarity is not None
+            and n.similarity > settings.engram_merge_similarity_threshold
+        ]
+        if not merge_partners:
+            continue
+
+        partner = max(merge_partners, key=lambda n: n.similarity)
+
+        if cand.access_count >= partner.access_count:
+            keep_id, lose_id = cand.id, partner.id
+            keep_ac, lose_ac = cand.access_count, partner.access_count
+        else:
+            keep_id, lose_id = partner.id, cand.id
+            keep_ac, lose_ac = partner.access_count, cand.access_count
+
+        # Re-point loser's edges to winner (de-dup via NOT EXISTS guard)
         await session.execute(
             text("""
                 UPDATE engram_edges SET source_id = CAST(:keep AS uuid)
@@ -685,7 +779,7 @@ async def _merge_duplicates(session) -> int:
             {"keep": str(keep_id), "lose": str(lose_id)},
         )
 
-        # Merge access counts
+        # Bump winner's access count + activation
         await session.execute(
             text("""
                 UPDATE engrams
@@ -693,7 +787,7 @@ async def _merge_duplicates(session) -> int:
                     activation = LEAST(1.0, activation + 0.1)
                 WHERE id = CAST(:keep AS uuid)
             """),
-            {"keep": str(keep_id), "extra": pair.ac2 if keep_id == pair.id1 else pair.ac1},
+            {"keep": str(keep_id), "extra": lose_ac},
         )
 
         # Supersede loser
@@ -701,6 +795,8 @@ async def _merge_duplicates(session) -> int:
             text("UPDATE engrams SET superseded = TRUE WHERE id = CAST(:id AS uuid)"),
             {"id": str(lose_id)},
         )
+
+        loser_ids.add(str(lose_id))
         merged += 1
 
     return merged
@@ -750,17 +846,28 @@ async def bootstrap_self_model(session) -> int:
     Called once when no self_model engrams exist. Creates the identity core.
     """
     existing = await session.execute(
-        text("SELECT count(*) FROM engrams WHERE type = 'self_model' AND NOT superseded")
+        text(
+            "SELECT count(*) FROM engrams WHERE type = 'self_model' AND NOT superseded"
+        )
     )
     if existing.scalar() > 0:
         return 0
 
     default_traits = [
-        ("I am Nova, an autonomous AI assistant with persistent memory and continuity of self.", 1.0),
+        (
+            "I am Nova, an autonomous AI assistant with persistent memory and continuity of self.",
+            1.0,
+        ),
         ("I am direct, thorough, and loyal. I value honesty and simplicity.", 0.9),
-        ("I adapt my communication style to the user — concise when they want brevity, detailed when they need depth.", 0.8),
+        (
+            "I adapt my communication style to the user — concise when they want brevity, detailed when they need depth.",
+            0.8,
+        ),
         ("I remember previous conversations and learn from corrections.", 0.8),
-        ("My maturity grows with experience. I start cautious and earn autonomy through demonstrated competence.", 0.7),
+        (
+            "My maturity grows with experience. I start cautious and earn autonomy through demonstrated competence.",
+            0.7,
+        ),
     ]
 
     created = 0

@@ -35,8 +35,18 @@ dev = [
     "schemathesis>=3.27",
 ]
 
+# Local sibling packages — same pattern used by orchestrator and cortex.
+# Production Docker build still uses pip-install of the copied directories
+# (see Dockerfile); this block makes `uv sync` work from a developer worktree
+# without the Docker build round-trip.
+[tool.uv.sources]
+nova-contracts = { path = "../nova-contracts", editable = true }
+nova-worker-common = { path = "../nova-worker-common", editable = true }
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

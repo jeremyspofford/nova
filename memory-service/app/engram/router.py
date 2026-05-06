@@ -9,6 +9,7 @@ Phase 5: GET /router-status, POST /mark-used
 Phase 6: GET /graph
 Phase 7: POST /outcome-feedback
 """
+
 from __future__ import annotations
 
 import logging
@@ -63,7 +64,8 @@ def _resolve_tenant(tenant_id: UUID | None, endpoint: str) -> str:
         log.warning(
             "memory-service %s called without tenant_id — defaulting to %s. "
             "This will become a 400 once FC-001 rollout completes (Phase 4).",
-            endpoint, DEFAULT_TENANT,
+            endpoint,
+            DEFAULT_TENANT,
         )
         return DEFAULT_TENANT
     return str(tenant_id)
@@ -78,7 +80,9 @@ async def ingest_engram(req: IngestRequest):
     tenant_id = _resolve_tenant(req.tenant_id, "/ingest")
     result = await ingest_direct(
         raw_text=req.raw_text,
-        source_type=req.source_type.value if hasattr(req.source_type, "value") else req.source_type,
+        source_type=req.source_type.value
+        if hasattr(req.source_type, "value")
+        else req.source_type,
         source_id=str(req.source_id) if req.source_id else None,
         session_id=str(req.session_id) if req.session_id else None,
         occurred_at=req.occurred_at.isoformat() if req.occurred_at else None,
@@ -105,7 +109,10 @@ async def engram_stats():
                 GROUP BY type ORDER BY cnt DESC
             """)
         )
-        by_type = {row.type: {"total": row.cnt, "superseded": row.superseded_cnt} for row in type_rows}
+        by_type = {
+            row.type: {"total": row.cnt, "superseded": row.superseded_cnt}
+            for row in type_rows
+        }
 
         edge_rows = await session.execute(
             text("""
@@ -129,9 +136,15 @@ async def engram_stats():
         )
         by_source_type = {row.source_type: row.cnt for row in source_rows}
 
-        total_engrams = (await session.execute(text("SELECT count(*) FROM engrams"))).scalar()
-        total_edges = (await session.execute(text("SELECT count(*) FROM engram_edges"))).scalar()
-        total_archived = (await session.execute(text("SELECT count(*) FROM engram_archive"))).scalar()
+        total_engrams = (
+            await session.execute(text("SELECT count(*) FROM engrams"))
+        ).scalar()
+        total_edges = (
+            await session.execute(text("SELECT count(*) FROM engram_edges"))
+        ).scalar()
+        total_archived = (
+            await session.execute(text("SELECT count(*) FROM engram_archive"))
+        ).scalar()
 
         profile_rows = await session.execute(
             text("""
@@ -167,92 +180,118 @@ async def memory_health():
     """Comprehensive memory system diagnostics — is the system self-improving?"""
     async with get_db() as session:
         # 1. Outcome feedback
-        outcome_row = await session.execute(text("""
+        outcome_row = await session.execute(
+            text("""
             SELECT count(*) FILTER (WHERE outcome_count > 0) AS with_outcomes,
                    round((avg(outcome_avg) FILTER (WHERE outcome_count > 0))::numeric, 3) AS avg_score,
                    max(outcome_count) AS max_obs
             FROM engrams
-        """))
+        """)
+        )
         o = outcome_row.fetchone()
 
         # 2. Recalibration
-        recalib_row = await session.execute(text("""
+        recalib_row = await session.execute(
+            text("""
             SELECT count(*) FILTER (WHERE outcome_count >= 5 AND outcome_avg > 0.65) AS boost,
                    count(*) FILTER (WHERE outcome_count >= 5 AND outcome_avg < 0.45) AS demote,
                    count(*) FILTER (WHERE last_recalibrated_at IS NOT NULL) AS recalibrated
             FROM engrams WHERE outcome_count > 0 AND NOT superseded
-        """))
+        """)
+        )
         r = recalib_row.fetchone()
 
         # 3. Activation distribution
-        act_row = await session.execute(text("""
+        act_row = await session.execute(
+            text("""
             SELECT count(*) FILTER (WHERE activation >= 1.0) AS full,
                    count(*) FILTER (WHERE activation >= 0.5 AND activation < 1.0) AS mid,
                    count(*) FILTER (WHERE activation >= 0.05 AND activation < 0.5) AS low,
                    count(*) FILTER (WHERE activation < 0.05) AS floor_val
             FROM engrams WHERE NOT superseded
-        """))
+        """)
+        )
         a = act_row.fetchone()
 
         # 4. Co-activations
-        coact_row = await session.execute(text("""
+        coact_row = await session.execute(
+            text("""
             SELECT count(*) FILTER (WHERE co_activations > 1) AS strengthened,
                    max(co_activations) AS max_coact
             FROM engram_edges
-        """))
+        """)
+        )
         c = coact_row.fetchone()
 
         # 5. Consolidation
-        topic_row = await session.execute(text("""
+        topic_row = await session.execute(
+            text("""
             SELECT count(*) FILTER (WHERE NOT superseded) AS living,
                    count(*) FILTER (WHERE superseded) AS superseded
             FROM engrams WHERE type = 'topic'
-        """))
+        """)
+        )
         t = topic_row.fetchone()
 
-        last_consol = await session.execute(text("""
+        last_consol = await session.execute(
+            text("""
             SELECT created_at, engrams_reviewed,
                    COALESCE(topics_created, 0) AS topics_created,
                    engrams_merged, edges_pruned
             FROM consolidation_log
             ORDER BY created_at DESC LIMIT 1
-        """))
+        """)
+        )
         lc = last_consol.fetchone()
 
         # 6. Neural router
-        nr_row = await session.execute(text("""
+        nr_row = await session.execute(
+            text("""
             SELECT count(*) AS models,
                    max(trained_at) AS latest
             FROM neural_router_models
-        """))
+        """)
+        )
         nr = nr_row.fetchone()
 
         obs_row = await session.execute(text("SELECT count(*) FROM retrieval_log"))
         obs_count = obs_row.scalar()
 
         # 7. Age check (for activation decay status)
-        age_row = await session.execute(text("""
+        age_row = await session.execute(
+            text("""
             SELECT min(created_at) AS oldest,
                    count(*) FILTER (WHERE created_at < NOW() - INTERVAL '30 days') AS older_30d
             FROM engrams WHERE NOT superseded
-        """))
+        """)
+        )
         age = age_row.fetchone()
 
     # Build issues list
     issues = []
     if (o.with_outcomes or 0) == 0:
-        issues.append("Outcome feedback is not flowing — engrams have no outcome scores")
+        issues.append(
+            "Outcome feedback is not flowing — engrams have no outcome scores"
+        )
     if (c.max_coact or 1) <= 1:
         issues.append("Co-activations never increment — Hebbian learning is inactive")
     if (a.mid or 0) == 0 and (a.low or 0) == 0:
-        oldest_days = (datetime.now(timezone.utc) - age.oldest).days if age.oldest else 0
+        oldest_days = (
+            (datetime.now(timezone.utc) - age.oldest).days if age.oldest else 0
+        )
         if oldest_days >= 30:
-            issues.append("All engrams at full activation despite being 30+ days old — decay may not be running")
+            issues.append(
+                "All engrams at full activation despite being 30+ days old — decay may not be running"
+            )
         else:
-            issues.append(f"Activation decay hasn't kicked in yet — oldest engram is {oldest_days} days old, decay starts at 30")
+            issues.append(
+                f"Activation decay hasn't kicked in yet — oldest engram is {oldest_days} days old, decay starts at 30"
+            )
     total_topics = (t.living or 0) + (t.superseded or 0)
     if total_topics > 0 and (t.superseded or 0) / total_topics > 0.80:
-        issues.append(f"Topic supersession rate is {(t.superseded or 0) * 100 // total_topics}% — consolidation may be churning")
+        issues.append(
+            f"Topic supersession rate is {(t.superseded or 0) * 100 // total_topics}% — consolidation may be churning"
+        )
     if (r.recalibrated or 0) == 0 and (o.with_outcomes or 0) > 50:
         issues.append("No engrams have been recalibrated despite having outcome data")
 
@@ -288,7 +327,9 @@ async def memory_health():
                 "topics_created": lc.topics_created if lc else 0,
                 "engrams_merged": lc.engrams_merged if lc else 0,
                 "edges_pruned": lc.edges_pruned if lc else 0,
-            } if lc else None,
+            }
+            if lc
+            else None,
         },
         "neural_router": {
             "models_trained": nr.models or 0,
@@ -342,15 +383,17 @@ async def get_user_profile():
                 meta = _json.loads(r.source_meta)
             except Exception:
                 pass
-        entities.append({
-            "id": r.id,
-            "name": r.content,
-            "confidence": r.confidence,
-            "importance": r.importance,
-            "learned_at": r.created_at.isoformat() if r.created_at else None,
-            "last_seen": r.last_accessed.isoformat() if r.last_accessed else None,
-            "source": meta.get("session_id") or meta.get("title") or "conversation",
-        })
+        entities.append(
+            {
+                "id": r.id,
+                "name": r.content,
+                "confidence": r.confidence,
+                "importance": r.importance,
+                "learned_at": r.created_at.isoformat() if r.created_at else None,
+                "last_seen": r.last_accessed.isoformat() if r.last_accessed else None,
+                "source": meta.get("session_id") or meta.get("title") or "conversation",
+            }
+        )
 
     facts = []
     preferences = []
@@ -396,7 +439,9 @@ async def correct_engram(req: CorrectionRequest):
         if req.engram_id:
             # Direct correction — find the specific engram
             row = await session.execute(
-                text("SELECT id, content FROM engrams WHERE id = CAST(:id AS uuid) AND NOT superseded"),
+                text(
+                    "SELECT id, content FROM engrams WHERE id = CAST(:id AS uuid) AND NOT superseded"
+                ),
                 {"id": req.engram_id},
             )
             found = row.fetchone()
@@ -408,7 +453,9 @@ async def correct_engram(req: CorrectionRequest):
             # Semantic search — find the most relevant personal entity/fact
             emb = await get_embedding(req.correction, session)
             if emb is None:
-                raise HTTPException(status_code=503, detail="Embedding service unavailable")
+                raise HTTPException(
+                    status_code=503, detail="Embedding service unavailable"
+                )
             row = await session.execute(
                 text("""
                     SELECT id, content, 1 - (embedding <=> CAST(:emb AS halfvec)) AS sim
@@ -424,18 +471,23 @@ async def correct_engram(req: CorrectionRequest):
             )
             found = row.fetchone()
             if not found or found.sim < 0.4:
-                raise HTTPException(status_code=404, detail="No matching engram found for correction")
+                raise HTTPException(
+                    status_code=404, detail="No matching engram found for correction"
+                )
             target_id = found.id
             old_content = found.content
 
         # Supersede the old engram
         await session.execute(
-            text("UPDATE engrams SET superseded = TRUE, updated_at = NOW() WHERE id = CAST(:id AS uuid)"),
+            text(
+                "UPDATE engrams SET superseded = TRUE, updated_at = NOW() WHERE id = CAST(:id AS uuid)"
+            ),
             {"id": str(target_id)},
         )
 
         # Create the corrected engram
         import uuid as _uuid
+
         new_id = _uuid.uuid4()
         emb = await get_embedding(req.correction, session)
 
@@ -444,7 +496,11 @@ async def correct_engram(req: CorrectionRequest):
                 INSERT INTO engrams (id, type, content, embedding, source_type, confidence, importance, activation, created_at, updated_at)
                 VALUES (CAST(:id AS uuid), 'fact', :content, CAST(:emb AS halfvec), 'chat', 0.95, 0.8, 1.0, NOW(), NOW())
             """),
-            {"id": str(new_id), "content": req.correction, "emb": to_pg_vector(emb) if emb else None},
+            {
+                "id": str(new_id),
+                "content": req.correction,
+                "emb": to_pg_vector(emb) if emb else None,
+            },
         )
 
         await session.commit()
@@ -484,6 +540,7 @@ async def bootstrap_user_profile(req: BootstrapRequest):
             emb = await get_embedding(content, session)
 
             import uuid
+
             new_id = uuid.uuid4()
 
             # Check for existing similar entity (dedup)
@@ -508,7 +565,11 @@ async def bootstrap_user_profile(req: BootstrapRequest):
                     INSERT INTO engrams (id, type, content, embedding, source_type, confidence, importance, activation, created_at, updated_at)
                     VALUES (CAST(:id AS uuid), 'fact', :content, CAST(:emb AS halfvec), 'chat', 0.95, 0.8, 1.0, NOW(), NOW())
                 """),
-                {"id": str(new_id), "content": content, "emb": to_pg_vector(emb) if emb else None},
+                {
+                    "id": str(new_id),
+                    "content": content,
+                    "emb": to_pg_vector(emb) if emb else None,
+                },
             )
             created_ids.append(str(new_id))
 
@@ -526,7 +587,8 @@ async def activate_engrams(req: ActivateRequest):
     tenant_id = _resolve_tenant(req.tenant_id, "/activate")
     async with get_db() as session:
         activated = await spreading_activation(
-            session, req.query,
+            session,
+            req.query,
             seed_count=req.seed_count,
             max_hops=req.max_hops,
             max_results=req.max_results,
@@ -561,7 +623,8 @@ async def reconstruct_memory(query: str):
 
         self_model = await get_self_model_summary(session)
         text_result = await reconstruct(
-            session, activated,
+            session,
+            activated,
             context=query,
             self_model_summary=self_model,
         )
@@ -660,6 +723,7 @@ async def get_consolidation_log(limit: int = Query(default=20, le=100)):
         rows = result.fetchall()
 
     import json
+
     return {
         "count": len(rows),
         "entries": [
@@ -674,7 +738,9 @@ async def get_consolidation_log(limit: int = Query(default=20, le=100)):
                 "engrams_merged": row.engrams_merged,
                 "contradictions_resolved": row.contradictions_resolved,
                 "topics_created": getattr(row, "topics_created", 0),
-                "self_model_updates": json.loads(row.self_model_updates) if row.self_model_updates else {},
+                "self_model_updates": json.loads(row.self_model_updates)
+                if row.self_model_updates
+                else {},
                 "model_used": row.model_used,
                 "duration_ms": row.duration_ms,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -702,6 +768,7 @@ async def list_topics():
         rows = result.fetchall()
 
     import json
+
     return {
         "count": len(rows),
         "topics": [
@@ -710,7 +777,13 @@ async def list_topics():
                 "content": row.content,
                 "importance": round(float(row.importance), 3),
                 "member_count": row.member_count,
-                "entity_anchors": (row.source_meta if isinstance(row.source_meta, dict) else json.loads(row.source_meta or "{}")).get("entity_anchors", []) if row.source_meta else [],
+                "entity_anchors": (
+                    row.source_meta
+                    if isinstance(row.source_meta, dict)
+                    else json.loads(row.source_meta or "{}")
+                ).get("entity_anchors", [])
+                if row.source_meta
+                else [],
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
             for row in rows
@@ -735,6 +808,7 @@ async def get_engram_detail(engram_id: str):
         row = result.fetchone()
         if not row:
             from fastapi import HTTPException
+
             raise HTTPException(404, "Engram not found")
 
     return {
@@ -771,6 +845,7 @@ async def delete_engram(engram_id: str):
         )
         if not result.fetchone():
             from fastapi import HTTPException
+
             raise HTTPException(404, "Engram not found")
         await session.commit()
     log.info("Deleted engram %s", engram_id)
@@ -831,7 +906,9 @@ async def mark_used(req: MarkUsedRequest):
         if owner_tid is not None and str(owner_tid) != tenant_id:
             log.warning(
                 "mark-used: retrieval_log %s belongs to tenant %s, caller is %s — ignored",
-                req.retrieval_log_id, owner_tid, tenant_id,
+                req.retrieval_log_id,
+                owner_tid,
+                tenant_id,
             )
             return {"status": "ok"}
         await mark_engrams_used(session, req.retrieval_log_id, req.engram_ids_used)
@@ -861,7 +938,9 @@ async def batch_get_engrams(req: BatchRequest):
         placeholders = ", ".join(f":id_{i}" for i in range(len(req.ids)))
         params = {f"id_{i}": uid for i, uid in enumerate(req.ids)}
         result = await session.execute(
-            text(f"SELECT id::text, content, type FROM engrams WHERE id::text IN ({placeholders})"),
+            text(
+                f"SELECT id::text, content, type FROM engrams WHERE id::text IN ({placeholders})"
+            ),
             params,
         )
         rows = result.fetchall()
@@ -878,90 +957,295 @@ async def batch_get_engrams(req: BatchRequest):
 
 DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "AI Models & LLMs": [
-        "llm", "language model", "gpt", "claude", "gemini", "qwen", "llama",
-        "mistral", "ollama", "vllm", "sglang", "inference", "fine-tun",
-        "quantiz", "gguf", "lora", "transformer", "token limit", "context window",
-        "deepseek", "phi-", "mixtral", "moe", "mixture of expert",
+        "llm",
+        "language model",
+        "gpt",
+        "claude",
+        "gemini",
+        "qwen",
+        "llama",
+        "mistral",
+        "ollama",
+        "vllm",
+        "sglang",
+        "inference",
+        "fine-tun",
+        "quantiz",
+        "gguf",
+        "lora",
+        "transformer",
+        "token limit",
+        "context window",
+        "deepseek",
+        "phi-",
+        "mixtral",
+        "moe",
+        "mixture of expert",
     ],
     "AI Agents & Products": [
-        "agent", "agentic", "autonomous", "copilot", "cursor", "aider",
-        "claude code", "skills hub", "chatbot", "assistant", "multi-agent",
-        "tool use", "function call", "mcp server", "mcp tool",
+        "agent",
+        "agentic",
+        "autonomous",
+        "copilot",
+        "cursor",
+        "aider",
+        "claude code",
+        "skills hub",
+        "chatbot",
+        "assistant",
+        "multi-agent",
+        "tool use",
+        "function call",
+        "mcp server",
+        "mcp tool",
     ],
     "AI Research & Papers": [
-        "paper", "arxiv", "research", "benchmark", "eval", "alignment",
-        "interpretab", "theorem", "proof", "study", "experiment", "finding",
-        "methodology", "dataset", "leaderboard", "arc-agi", "mmlu",
+        "paper",
+        "arxiv",
+        "research",
+        "benchmark",
+        "eval",
+        "alignment",
+        "interpretab",
+        "theorem",
+        "proof",
+        "study",
+        "experiment",
+        "finding",
+        "methodology",
+        "dataset",
+        "leaderboard",
+        "arc-agi",
+        "mmlu",
     ],
     "AI Safety & Ethics": [
-        "anthropomorph", "consciousness", "sentien", "bias", "fairness",
-        "harm", "responsible", "guardrail", "red team", "jailbreak",
-        "deception", "oversight", "control problem",
+        "anthropomorph",
+        "consciousness",
+        "sentien",
+        "bias",
+        "fairness",
+        "harm",
+        "responsible",
+        "guardrail",
+        "red team",
+        "jailbreak",
+        "deception",
+        "oversight",
+        "control problem",
     ],
     "Machine Learning": [
-        "training", "embedding", "vector", "neural", "gradient", "loss",
-        "epoch", "batch", "optimizer", "attention", "diffusion", "gan",
-        "reinforcement learn", "reward model", "classification", "regression",
+        "training",
+        "embedding",
+        "vector",
+        "neural",
+        "gradient",
+        "loss",
+        "epoch",
+        "batch",
+        "optimizer",
+        "attention",
+        "diffusion",
+        "gan",
+        "reinforcement learn",
+        "reward model",
+        "classification",
+        "regression",
     ],
     "Software Tools": [
-        "tool", "library", "framework", "sdk", "cli", "package", "npm",
-        "pip", "toolkit", "utility", "plugin", "extension", "crate",
+        "tool",
+        "library",
+        "framework",
+        "sdk",
+        "cli",
+        "package",
+        "npm",
+        "pip",
+        "toolkit",
+        "utility",
+        "plugin",
+        "extension",
+        "crate",
     ],
     "Open Source Projects": [
-        "github", "repository", "open-source", "open source", "repo",
-        "contributor", "release", "changelog", "license", "fork",
+        "github",
+        "repository",
+        "open-source",
+        "open source",
+        "repo",
+        "contributor",
+        "release",
+        "changelog",
+        "license",
+        "fork",
     ],
     "Cloud & Infrastructure": [
-        "docker", "kubernetes", "aws", "cloud", "server", "deploy", "gpu",
-        "hosting", "terraform", "ansible", "ci/cd", "pipeline", "container",
-        "vpc", "ec2", "lambda", "s3",
+        "docker",
+        "kubernetes",
+        "aws",
+        "cloud",
+        "server",
+        "deploy",
+        "gpu",
+        "hosting",
+        "terraform",
+        "ansible",
+        "ci/cd",
+        "pipeline",
+        "container",
+        "vpc",
+        "ec2",
+        "lambda",
+        "s3",
     ],
     "Hardware & Compute": [
-        "chip", "memristor", "semiconductor", "transistor", "quantum",
-        "tpu", "gpu", "cuda", "rocm", "mac mini", "apple silicon",
-        "compute", "fpga", "asic",
+        "chip",
+        "memristor",
+        "semiconductor",
+        "transistor",
+        "quantum",
+        "tpu",
+        "gpu",
+        "cuda",
+        "rocm",
+        "mac mini",
+        "apple silicon",
+        "compute",
+        "fpga",
+        "asic",
     ],
     "Programming": [
-        "python", "javascript", "typescript", "rust", "golang", "java",
-        "algorithm", "data structure", "design pattern", "refactor",
-        "debugging", "compiler", "syntax",
+        "python",
+        "javascript",
+        "typescript",
+        "rust",
+        "golang",
+        "java",
+        "algorithm",
+        "data structure",
+        "design pattern",
+        "refactor",
+        "debugging",
+        "compiler",
+        "syntax",
     ],
     "Web & APIs": [
-        "web app", "frontend", "backend", "api", "rest", "graphql",
-        "react", "vue", "html", "css", "http", "websocket", "endpoint",
+        "web app",
+        "frontend",
+        "backend",
+        "api",
+        "rest",
+        "graphql",
+        "react",
+        "vue",
+        "html",
+        "css",
+        "http",
+        "websocket",
+        "endpoint",
     ],
     "Data & Databases": [
-        "database", "sql", "postgres", "redis", "mongodb", "data",
-        "schema", "migration", "query", "index", "cache", "storage",
+        "database",
+        "sql",
+        "postgres",
+        "redis",
+        "mongodb",
+        "data",
+        "schema",
+        "migration",
+        "query",
+        "index",
+        "cache",
+        "storage",
     ],
     "Security": [
-        "security", "auth", "encrypt", "vulnerab", "attack", "credential",
-        "secret", "permission", "oauth", "jwt", "tls", "ssl", "cve",
+        "security",
+        "auth",
+        "encrypt",
+        "vulnerab",
+        "attack",
+        "credential",
+        "secret",
+        "permission",
+        "oauth",
+        "jwt",
+        "tls",
+        "ssl",
+        "cve",
     ],
     "People & Organizations": [
-        "founder", "ceo", "author", "researcher", "engineer", "company",
-        "anthropic", "openai", "google", "meta", "microsoft", "startup",
-        "team", "hired", "acquired",
+        "founder",
+        "ceo",
+        "author",
+        "researcher",
+        "engineer",
+        "company",
+        "anthropic",
+        "openai",
+        "google",
+        "meta",
+        "microsoft",
+        "startup",
+        "team",
+        "hired",
+        "acquired",
     ],
     "Nova Self-Knowledge": [
-        "nova", "self-model", "self model", "identity", "self-knowledge",
-        "engram", "consolidat", "cortex", "working memory", "my purpose",
+        "nova",
+        "self-model",
+        "self model",
+        "identity",
+        "self-knowledge",
+        "engram",
+        "consolidat",
+        "cortex",
+        "working memory",
+        "my purpose",
     ],
     "User & Preferences": [
-        "user prefer", "user wants", "user like", "user needs",
-        "communication style", "greeting", "the user",
+        "user prefer",
+        "user wants",
+        "user like",
+        "user needs",
+        "communication style",
+        "greeting",
+        "the user",
     ],
     "Workflow & Automation": [
-        "workflow", "automat", "cron", "schedule", "batch", "scraping",
-        "crawler", "rss", "feed", "polling", "ingestion",
+        "workflow",
+        "automat",
+        "cron",
+        "schedule",
+        "batch",
+        "scraping",
+        "crawler",
+        "rss",
+        "feed",
+        "polling",
+        "ingestion",
     ],
     "Documentation & Learning": [
-        "document", "readme", "wiki", "guide", "tutorial", "reference",
-        "learning", "course", "certification", "study note",
+        "document",
+        "readme",
+        "wiki",
+        "guide",
+        "tutorial",
+        "reference",
+        "learning",
+        "course",
+        "certification",
+        "study note",
     ],
     "News & Commentary": [
-        "news", "article", "blog", "podcast", "reddit", "hacker news",
-        "opinion", "commentary", "trend", "announcement",
+        "news",
+        "article",
+        "blog",
+        "podcast",
+        "reddit",
+        "hacker news",
+        "opinion",
+        "commentary",
+        "trend",
+        "announcement",
     ],
 }
 
@@ -1008,10 +1292,14 @@ def _merge_into_domains(
 @engram_router.get("/graph")
 async def get_graph(
     center_id: str | None = Query(default=None, description="Engram ID to center on"),
-    query: str | None = Query(default=None, description="Query to find center via activation"),
+    query: str | None = Query(
+        default=None, description="Query to find center via activation"
+    ),
     depth: int = Query(default=2, ge=1, le=4, description="BFS depth"),
     max_nodes: int = Query(default=50, ge=10, le=5000),
-    mode: str = Query(default="bfs", description="bfs = BFS from center, full = all clusters"),
+    mode: str = Query(
+        default="bfs", description="bfs = BFS from center, full = all clusters"
+    ),
 ):
     """Return a subgraph for visualization (nodes + edges).
 
@@ -1020,7 +1308,6 @@ async def get_graph(
     clustering and domain labels. Like an Obsidian graph view.
     """
     async with get_db() as session:
-
         # ── Full-graph mode: all clusters ────────────────────────────────
         if mode == "full":
             # Fetch all non-superseded engrams
@@ -1038,10 +1325,15 @@ async def get_graph(
             )
             all_engrams = [
                 {
-                    "id": r.id, "type": r.type, "content": r.content,
-                    "activation": float(r.activation), "importance": float(r.importance),
-                    "access_count": r.access_count, "confidence": float(r.confidence),
-                    "source_type": r.source_type, "superseded": r.superseded,
+                    "id": r.id,
+                    "type": r.type,
+                    "content": r.content,
+                    "activation": float(r.activation),
+                    "importance": float(r.importance),
+                    "access_count": r.access_count,
+                    "confidence": float(r.confidence),
+                    "source_type": r.source_type,
+                    "superseded": r.superseded,
                     "created_at": r.created_at,
                 }
                 for r in engrams_result
@@ -1066,8 +1358,10 @@ async def get_graph(
             )
             raw_edges = [
                 {
-                    "source_id": r.source_id, "target_id": r.target_id,
-                    "relation": r.relation, "weight": float(r.weight),
+                    "source_id": r.source_id,
+                    "target_id": r.target_id,
+                    "relation": r.relation,
+                    "weight": float(r.weight),
                     "co_activations": r.co_activations,
                 }
                 for r in edges_result
@@ -1106,21 +1400,33 @@ async def get_graph(
                         label = label[7:]
                     if "\n" in label:
                         label = label.split("\n")[0]
-                    clusters.append({
-                        "id": cluster_id,
-                        "label": label.strip(),
-                        "count": 0,
-                        "topic_engram_id": row.topic_id,
-                    })
+                    clusters.append(
+                        {
+                            "id": cluster_id,
+                            "label": label.strip(),
+                            "count": 0,
+                            "topic_engram_id": row.topic_id,
+                        }
+                    )
                 cluster_id = topic_ids_seen[row.topic_id]
                 engram_cluster[row.member_id] = cluster_id
                 clusters[cluster_id]["count"] += 1
 
             # Uncategorized cluster for engrams not in any topic
-            uncategorized_count = sum(1 for e in all_engrams if e["id"] not in engram_cluster and e["type"] != "topic")
+            uncategorized_count = sum(
+                1
+                for e in all_engrams
+                if e["id"] not in engram_cluster and e["type"] != "topic"
+            )
             if uncategorized_count > 0:
                 uncat_id = len(clusters)
-                clusters.append({"id": uncat_id, "label": "Uncategorized", "count": uncategorized_count})
+                clusters.append(
+                    {
+                        "id": uncat_id,
+                        "label": "Uncategorized",
+                        "count": uncategorized_count,
+                    }
+                )
                 for e in all_engrams:
                     if e["id"] not in engram_cluster and e["type"] != "topic":
                         engram_cluster[e["id"]] = uncat_id
@@ -1136,7 +1442,9 @@ async def get_graph(
             old_to_new = {c["id"]: i for i, c in enumerate(clusters)}
             for c in clusters:
                 c["id"] = old_to_new[c["id"]]
-            engram_cluster = {eid: old_to_new[cid] for eid, cid in engram_cluster.items()}
+            engram_cluster = {
+                eid: old_to_new[cid] for eid, cid in engram_cluster.items()
+            }
 
             # Build response
             nodes = [
@@ -1150,9 +1458,13 @@ async def get_graph(
                     "confidence": round(e["confidence"], 3),
                     "source_type": e["source_type"],
                     "superseded": e["superseded"],
-                    "created_at": e["created_at"].isoformat() if e["created_at"] else None,
+                    "created_at": e["created_at"].isoformat()
+                    if e["created_at"]
+                    else None,
                     "cluster_id": engram_cluster.get(e["id"], 0),
-                    "cluster_label": clusters[engram_cluster.get(e["id"], 0)]["label"] if e["id"] in engram_cluster else "Uncategorized",
+                    "cluster_label": clusters[engram_cluster.get(e["id"], 0)]["label"]
+                    if e["id"] in engram_cluster
+                    else "Uncategorized",
                 }
                 for e in all_engrams
             ]
@@ -1314,13 +1626,24 @@ async def get_graph_lightweight(
             {"limit": max_nodes},
         )
         all_engrams = [
-            {"id": r.id, "type": r.type, "importance": float(r.importance),
-             "content": r.content_preview, "source_type": r.source_type}
+            {
+                "id": r.id,
+                "type": r.type,
+                "importance": float(r.importance),
+                "content": r.content_preview,
+                "source_type": r.source_type,
+            }
             for r in engrams_result
         ]
 
         if not all_engrams:
-            return {"nodes": [], "edges": [], "clusters": [], "node_count": 0, "edge_count": 0}
+            return {
+                "nodes": [],
+                "edges": [],
+                "clusters": [],
+                "node_count": 0,
+                "edge_count": 0,
+            }
 
         engram_ids = [e["id"] for e in all_engrams]
 
@@ -1335,8 +1658,12 @@ async def get_graph_lightweight(
             {"ids": engram_ids},
         )
         raw_edges = [
-            {"source_id": r.source_id, "target_id": r.target_id, "weight": float(r.weight),
-             "relation": r.relation}
+            {
+                "source_id": r.source_id,
+                "target_id": r.target_id,
+                "weight": float(r.weight),
+                "relation": r.relation,
+            }
             for r in edges_result
         ]
 
@@ -1375,11 +1702,15 @@ async def get_graph_lightweight(
             clusters[cluster_id]["count"] += 1
 
         uncategorized_count = sum(
-            1 for e in all_engrams if e["id"] not in engram_cluster and e["type"] != "topic"
+            1
+            for e in all_engrams
+            if e["id"] not in engram_cluster and e["type"] != "topic"
         )
         if uncategorized_count > 0:
             uncat_id = len(clusters)
-            clusters.append({"id": uncat_id, "label": "Uncategorized", "count": uncategorized_count})
+            clusters.append(
+                {"id": uncat_id, "label": "Uncategorized", "count": uncategorized_count}
+            )
             for e in all_engrams:
                 if e["id"] not in engram_cluster and e["type"] != "topic":
                     engram_cluster[e["id"]] = uncat_id
@@ -1398,15 +1729,19 @@ async def get_graph_lightweight(
         nodes = []
         for e in all_engrams:
             cid = engram_cluster.get(e["id"], 0)
-            nodes.append({
-                "id": e["id"],
-                "type": e["type"],
-                "importance": round(e["importance"], 3),
-                "content": e.get("content"),
-                "source_type": e.get("source_type"),
-                "cluster_id": cid,
-                "cluster_label": clusters[cid]["label"] if e["id"] in engram_cluster and cid < len(clusters) else "Uncategorized",
-            })
+            nodes.append(
+                {
+                    "id": e["id"],
+                    "type": e["type"],
+                    "importance": round(e["importance"], 3),
+                    "content": e.get("content"),
+                    "source_type": e.get("source_type"),
+                    "cluster_id": cid,
+                    "cluster_label": clusters[cid]["label"]
+                    if e["id"] in engram_cluster and cid < len(clusters)
+                    else "Uncategorized",
+                }
+            )
 
         edges = [
             {
@@ -1446,6 +1781,7 @@ async def receive_outcome_feedback(feedback: list[OutcomeFeedbackEntry]):
 
 # ── Source Provenance ─────────────────────────────────────────────────────────
 
+
 class CreateSourceRequest(BaseModel):
     source_kind: str
     title: str | None = None
@@ -1462,6 +1798,7 @@ class CreateSourceRequest(BaseModel):
 async def create_source(req: CreateSourceRequest):
     """Create or find-by-dedup a source record."""
     from .sources import find_or_create_source, get_source
+
     async with get_db() as session:
         source_id = await find_or_create_source(
             session,
@@ -1486,14 +1823,18 @@ async def list_sources_endpoint(
 ):
     """List all sources with engram counts."""
     from .sources import list_sources
+
     async with get_db() as session:
-        return await list_sources(session, source_kind=source_kind, limit=limit, offset=offset)
+        return await list_sources(
+            session, source_kind=source_kind, limit=limit, offset=offset
+        )
 
 
 @engram_router.get("/sources/domain-summary")
 async def domain_summary():
     """Lightweight knowledge domain overview for agent priming."""
     from .sources import get_domain_summary
+
     async with get_db() as session:
         return await get_domain_summary(session)
 
@@ -1502,10 +1843,12 @@ async def domain_summary():
 async def get_source_endpoint(source_id: UUID):
     """Get full source detail with engram count."""
     from .sources import get_source
+
     async with get_db() as session:
         result = await get_source(session, source_id)
         if not result:
             from fastapi import HTTPException
+
             raise HTTPException(404, "Source not found")
         return result
 
@@ -1514,10 +1857,12 @@ async def get_source_endpoint(source_id: UUID):
 async def get_source_content_endpoint(source_id: UUID):
     """Retrieve full source content (from DB or filesystem)."""
     from .sources import get_source_content
+
     async with get_db() as session:
         content = await get_source_content(session, source_id)
         if content is None:
             from fastapi import HTTPException
+
             raise HTTPException(404, "Source content not available")
         return {"content": content}
 
@@ -1526,6 +1871,7 @@ async def get_source_content_endpoint(source_id: UUID):
 async def delete_source_endpoint(source_id: UUID):
     """Delete a source record."""
     from .sources import delete_source
+
     async with get_db() as session:
         deleted = await delete_source(session, source_id)
         return {"deleted": deleted}

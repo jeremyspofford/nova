@@ -941,7 +941,7 @@ When implementation begins, build in this order. Each phase is independently use
 ### Jeremy's setup (design target for Option 3)
 
 **Always-on (N95 mini PC):**
-- Beelink N95: Intel 12th gen, 4 cores @ 3.4GHz, 8GB DDR4, 256GB SSD
+- Always-on host: Intel 12th gen N95-class CPU, 4 cores @ 3.4GHz, 8GB DDR4, 256GB SSD
 - Runs: Gateway Tier + Brain Tier (Core resource profile)
 - WoL capable
 

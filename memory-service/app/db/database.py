@@ -2,6 +2,7 @@
 Database connection pool and session management.
 Uses asyncpg via SQLAlchemy async engine for connection pooling.
 """
+
 from __future__ import annotations
 
 import logging
@@ -50,10 +51,14 @@ async def run_schema_migrations(*, max_retries: int = 10, delay: float = 2.0) ->
     sql_stripped = re.sub(r"--[^\n]*", "", sql)
     # Extract DO $$ ... $$; blocks before splitting on ';' — they contain internal semicolons
     do_blocks: list[str] = []
+
     def _replace_do(m: re.Match) -> str:
         do_blocks.append(m.group(0))
         return f"__DO_BLOCK_{len(do_blocks) - 1}__"
-    sql_safe = re.sub(r"DO\s+\$\$.*?\$\$\s*;", _replace_do, sql_stripped, flags=re.DOTALL)
+
+    sql_safe = re.sub(
+        r"DO\s+\$\$.*?\$\$\s*;", _replace_do, sql_stripped, flags=re.DOTALL
+    )
 
     import asyncio
 
@@ -73,7 +78,17 @@ async def run_schema_migrations(*, max_retries: int = 10, delay: float = 2.0) ->
             return
         except Exception as exc:
             if attempt == max_retries:
-                log.error("Failed to connect to database after %d attempts: %s", max_retries, exc)
+                log.error(
+                    "Failed to connect to database after %d attempts: %s",
+                    max_retries,
+                    exc,
+                )
                 raise
-            log.warning("Database not ready (attempt %d/%d): %s — retrying in %.0fs", attempt, max_retries, exc, delay)
+            log.warning(
+                "Database not ready (attempt %d/%d): %s — retrying in %.0fs",
+                attempt,
+                max_retries,
+                exc,
+                delay,
+            )
             await asyncio.sleep(delay)
