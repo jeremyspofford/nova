@@ -188,13 +188,27 @@ async def edge_factory(db_session):
 _DEFAULT_LLM_FIXTURE_DIR = _Path(__file__).parent / "fixtures" / "llm"
 
 
+async def _real_llm_call(*, prompt: str, model: str, **kwargs) -> str:
+    """Hit the real gateway. Stub-overridden in tests; in CI/dev, calls llm-gateway."""
+    import httpx
+
+    base = os.environ.get("LLM_GATEWAY_URL", "http://llm-gateway:8001")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            f"{base}/complete",
+            json={"prompt": prompt, "model": model, **kwargs},
+        )
+        r.raise_for_status()
+        return r.json().get("response", "")
+
+
 @pytest.fixture
 def fake_llm_factory():
     """Returns a callable that constructs a fake_llm async function.
 
     The factory pattern lets tests override extra_normalizers.
-    Default mode: replay from LLM_FIXTURE_DIR.
-    Set RECORD_LLM_FIXTURES=1 to record (separate task).
+    Replay-first: if a fixture file exists, use it (regardless of record mode).
+    Set RECORD_LLM_FIXTURES=1 to record on cache-miss.
     """
 
     def _factory(*, extra_normalizers=()):
@@ -203,18 +217,33 @@ def fake_llm_factory():
         async def _fake_llm(*, prompt: str, model: str, **kwargs) -> str:
             key = _hash_prompt(prompt, extra_normalizers=extra_normalizers)
             path = fixture_dir / f"{key}.json"
-            if not path.exists():
-                if os.environ.get("RECORD_LLM_FIXTURES") == "1":
-                    raise NotImplementedError(
-                        "Record mode not yet implemented (Task 1.9)"
+            recording = os.environ.get("RECORD_LLM_FIXTURES") == "1"
+
+            if path.exists():
+                # Replay (regardless of recording mode — once recorded, replay)
+                data = _json.loads(path.read_text())
+                return data["response"]
+
+            if recording:
+                response = await _real_llm_call(prompt=prompt, model=model, **kwargs)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    _json.dumps(
+                        {
+                            "raw_prompt": prompt,
+                            "model": model,
+                            "response": response,
+                        },
+                        indent=2,
                     )
-                raise FileNotFoundError(
-                    f"No LLM fixture for prompt key={key} at {path}. "
-                    f"Run with RECORD_LLM_FIXTURES=1 to record. Prompt prefix: "
-                    f"{prompt[:80]!r}"
                 )
-            data = _json.loads(path.read_text())
-            return data["response"]
+                return response
+
+            raise FileNotFoundError(
+                f"No LLM fixture for prompt key={key} at {path}. "
+                f"Run with RECORD_LLM_FIXTURES=1 to record. Prompt prefix: "
+                f"{prompt[:80]!r}"
+            )
 
         return _fake_llm
 
