@@ -67,15 +67,46 @@ async def stop() -> None:
     log.info("Thinking loop stopped")
 
 
+from nova_contracts.feature_flags import register_flag
+
+# B-Task 9: kill switch — pauses autonomous thinking. Distinct from
+# the runtime features.brain_enabled toggle: that's "is the brain
+# turned on for this install at all?" (config); this is "stop now,
+# ignore queued stimuli, no restart" (operational kill switch).
+KILL_THINKING = register_flag(
+    key="kill.cortex.thinking_loop",
+    type="bool",
+    default=False,
+    description="Pause autonomous cortex thinking loop without container restart.",
+)
+
+
 async def _loop() -> None:
     """Main loop — BRPOP for stimuli, run cycle, adapt timeout."""
     # Initial delay: let other services finish starting
     await asyncio.sleep(15)
 
     timeout = settings.cycle_interval_seconds  # Start with configured interval
+    _last_kill_state = False
 
     while True:
         try:
+            # Operational kill-switch (B9): runs ahead of brain-enabled
+            # check so an operator can shut down even a misbehaving
+            # brain that's failing the enable check itself.
+            if KILL_THINKING.value():
+                if not _last_kill_state:
+                    log.warning(
+                        "kill.cortex.thinking_loop=True — pausing thinking loop "
+                        "(no cycles will fire until flag cleared)"
+                    )
+                    _last_kill_state = True
+                await asyncio.sleep(timeout)
+                continue
+            elif _last_kill_state:
+                log.info("kill.cortex.thinking_loop cleared — resuming thinking loop")
+                _last_kill_state = False
+
             # Check the runtime UI toggle (features.brain_enabled). Default off
             # so a fresh install / unconfigured Nova doesn't burn LLM cycles
             # before the operator opts in via /settings#brain.
