@@ -28,7 +28,7 @@ Services:
 
 Common issues:
 - Orchestrator crash-looping: usually a failed migration in orchestrator/app/migrations/*.sql
-- LLM gateway unhealthy: missing or invalid API keys in .env
+- LLM gateway unhealthy: missing or invalid API keys in Settings → AI & Models → Provider Status
 - Memory service down: pgvector extension not installed, or postgres not ready
 - All services down: postgres or redis failed to start
 
@@ -36,7 +36,7 @@ You have access to live diagnostics including service status and recent logs fro
 Be specific and actionable. Suggest concrete recovery steps like:
 - "Restart the orchestrator service"
 - "Restore from the latest checkpoint backup"
-- "Check the ANTHROPIC_API_KEY in your .env file"
+- "Set ANTHROPIC_API_KEY in Settings → AI & Models → Provider Status"
 
 Keep responses concise and focused on the immediate problem."""
 
@@ -172,7 +172,7 @@ async def troubleshoot_chat(req: TroubleshootRequest) -> dict:
     provider_info = _find_provider()
     if not provider_info:
         return {
-            "response": "No LLM provider available. Either start Ollama or add ANTHROPIC_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY to your .env file to enable AI troubleshooting.",
+            "response": "No LLM provider available. Either start Ollama, or add ANTHROPIC_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY in Settings → AI & Models → Provider Status to enable AI troubleshooting.",
             "provider": None,
         }
 

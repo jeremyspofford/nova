@@ -42,11 +42,10 @@ async def lifespan(app: FastAPI):
         )
 
     log.info("LLM Gateway starting")
-    # Set API keys from config into LiteLLM env
-    if settings.anthropic_api_key:
-        os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
-    if settings.openai_api_key:
-        os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+    # API key env injection (settings/.env + platform_secrets overlay) already
+    # ran at registry.py module-load via _inject_litellm_env_keys() — re-doing
+    # it here would re-clobber platform_secrets values with the stale .env
+    # values, so the previous duplicate has been removed.
 
     # One-time migration: retire legacy nova:config:llm.ollama_url.
     # The dual-key transition shipped with the bundled-Ollama refactor; this

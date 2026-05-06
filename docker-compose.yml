@@ -189,6 +189,7 @@ services:
           path: ./llm-gateway/pyproject.toml
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      ORCHESTRATOR_URL: http://orchestrator:8000
       REDIS_URL: redis://redis:6379/1
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
       DEFAULT_CHAT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
@@ -371,6 +372,25 @@ services:
       NOVA_GITHUB_EMAIL: ${NOVA_GITHUB_EMAIL:-}
       SELFMOD_RATE_LIMIT_PER_HOUR: ${SELFMOD_RATE_LIMIT_PER_HOUR:-5}
       SELFMOD_ENABLED: ${SELFMOD_ENABLED:-false}
+      # ── SEC-006a: secret-bearing env vars passed in solely so the
+      #    orchestrator's first-boot bootstrap can mirror them into
+      #    platform_secrets. Once the bootstrap has run, these env vars
+      #    can be cleared from .env — platform_secrets becomes the
+      #    source of truth and the .env mount drops to :ro. The bootstrap
+      #    is idempotent and never overwrites a value the user has
+      #    already rotated through the dashboard.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      CHATGPT_ACCESS_TOKEN: ${CHATGPT_ACCESS_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     # Mount the host workspace at /workspace so agents can read/write files.
     # Set NOVA_WORKSPACE in .env to point at any directory.
     # Default: ~/.nova/workspace (created by setup.sh)

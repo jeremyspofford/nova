@@ -221,12 +221,42 @@ pipeline.web_fetch_strict_sanitize
 
 ## Key Configuration
 
-- `.env` — DB password, admin secret, API keys for providers, `DEFAULT_CHAT_MODEL`, `NOVA_WORKSPACE`, `LOG_LEVEL`, `REQUIRE_AUTH`
+- `.env` — DB password, admin secret, infra-only knobs (`COMPOSE_PROFILES`, `OLLAMA_BASE_URL`, `NOVA_INFERENCE_MODE`, `VLLM_MODEL`, etc.), `NOVA_WORKSPACE`, `LOG_LEVEL`, `REQUIRE_AUTH`
 - `OLLAMA_BASE_URL` — Set to `auto` (probes host, falls back to Docker), `host` (always use host machine), or explicit URL
 - `POSTGRES_DATA_DIR` / `REDIS_DATA_DIR` — Host bind-mount paths for critical data (default: `./data/postgres`, `./data/redis`). Immune to `docker volume prune`.
 - `models.yaml` — Ollama models to auto-pull on startup
 - Context budgets in orchestrator config: system=10%, tools=15%, memory=40%, history=20%, working=15%
 - Voice: `STT_PROVIDER`, `TTS_PROVIDER`, `TTS_VOICE`, `TTS_MODEL` — voice settings (runtime-configurable via dashboard Settings or Redis `nova:config:voice.*`)
+
+## Platform Secrets (SEC-006a)
+
+Long-lived instance-level credentials live encrypted at rest in the
+`platform_secrets` Postgres table — never plaintext in `.env`. Covers LLM
+provider keys (Anthropic, OpenAI, Groq, Gemini, Cerebras, OpenRouter,
+GitHub, ChatGPT subscription), chat-bridge tokens (Telegram, Slack), the
+Google OAuth client secret, and the GitHub PAT used for self-modification.
+
+- **Encryption:** AES-256-GCM, envelope-encrypted under an HKDF subkey
+  derived from `CREDENTIAL_MASTER_KEY` with tenant id `"platform"`. Same
+  primitive that backs per-tenant `capability_credentials`.
+- **API:** `GET /api/v1/admin/secrets` (list, no values), `PATCH` (upsert),
+  `DELETE /{key}` (revoke), `POST /resolve` (plaintext for service
+  consumers — admin-gated). Defined in `orchestrator/app/secrets_router.py`.
+- **Boot-time consumers:** `llm-gateway` and `chat-bridge` call
+  `nova_worker_common.platform_secrets.fetch_platform_secrets_sync` at
+  module load to override settings/env. Sync because providers/adapters
+  capture tokens at construction. The orchestrator itself uses
+  `app.secrets_store` directly to avoid a self-HTTP loop.
+- **First-boot import:** `_bootstrap_platform_secrets_from_env` in
+  `orchestrator/app/main.py` mirrors `.env` values into `platform_secrets`
+  on every startup if (and only if) the entry is missing. Idempotent —
+  user-rotated values are never overwritten.
+- **Rotation UX:** Settings → AI & Models → Provider Status (writes via
+  `patchPlatformSecrets`). Service restart is required for now —
+  hot-reload is FU-009.
+- **Caveat:** the `.env` mount stays `:rw` until FU-010 migrates infra-only
+  keys to `platform_config`; the security boundary is enforced today by
+  the recovery whitelist refusing any secret-bearing keys.
 
 ## Debugging
 

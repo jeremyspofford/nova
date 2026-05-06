@@ -1,8 +1,13 @@
 import { useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Eye, EyeOff, Save, AlertTriangle } from 'lucide-react'
-import { getProviderStatus, testProvider } from '../../api'
-import { getEnvVars, patchEnv } from '../../api-recovery'
+import { Activity, Eye, EyeOff, Save, AlertTriangle, Trash2 } from 'lucide-react'
+import {
+  getProviderStatus,
+  testProvider,
+  listPlatformSecrets,
+  patchPlatformSecrets,
+  deletePlatformSecret,
+} from '../../api'
 import { Section, Badge, Button, StatusDot, Card } from '../../components/ui'
 
 const TYPE_BADGE_COLOR: Record<string, 'accent' | 'success' | 'warning' | 'info'> = {
@@ -19,8 +24,12 @@ const TYPE_BADGE_LABEL: Record<string, string> = {
   local:        'Local',
 }
 
-/** Maps provider slug to .env key for its API credential */
-const PROVIDER_ENV_KEY: Record<string, string> = {
+/**
+ * Maps provider slug to the platform_secrets key for its API credential.
+ * SEC-006a: keys live in the encrypted platform_secrets store via the
+ * orchestrator's /api/v1/admin/secrets endpoints — never in writable .env.
+ */
+const PROVIDER_SECRET_KEY: Record<string, string> = {
   anthropic:    'ANTHROPIC_API_KEY',
   openai:       'OPENAI_API_KEY',
   groq:         'GROQ_API_KEY',
@@ -41,11 +50,12 @@ export function ProviderStatusSection() {
     staleTime: 30_000,
   })
 
-  const { data: envVars } = useQuery({
-    queryKey: ['env-vars'],
-    queryFn: getEnvVars,
+  const { data: secretList } = useQuery({
+    queryKey: ['platform-secrets'],
+    queryFn: listPlatformSecrets,
     staleTime: 30_000,
   })
+  const configuredKeys = new Set((secretList?.keys ?? []).map(e => e.key))
 
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; latency_ms: number; error?: string }>>({})
@@ -69,24 +79,48 @@ export function ProviderStatusSection() {
   }, [])
 
   const handleSaveKey = useCallback(async (slug: string) => {
-    const envKey = PROVIDER_ENV_KEY[slug]
+    const secretKey = PROVIDER_SECRET_KEY[slug]
     const value = drafts[slug]
-    if (!envKey || value === undefined) return
+    if (!secretKey || value === undefined) return
 
     setSaving(slug)
     setSaveError(null)
     try {
-      await patchEnv({ [envKey]: value })
+      await patchPlatformSecrets({ [secretKey]: value })
       setEditing(null)
       setDrafts(prev => { const n = { ...prev }; delete n[slug]; return n })
       setRestartHint(true)
-      queryClient.invalidateQueries({ queryKey: ['env-vars'] })
+      queryClient.invalidateQueries({ queryKey: ['platform-secrets'] })
+      queryClient.invalidateQueries({ queryKey: ['provider-status'] })
     } catch (e) {
       setSaveError(`Failed to save ${slug} key: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSaving(null)
     }
   }, [drafts, queryClient])
+
+  const handleDeleteKey = useCallback(async (slug: string) => {
+    const secretKey = PROVIDER_SECRET_KEY[slug]
+    if (!secretKey) return
+    if (!window.confirm(
+      `Remove the ${secretKey} secret? The provider will stop working until ` +
+      `you set a new value. (Restart of services may be required for the ` +
+      `removal to take effect.)`
+    )) return
+
+    setSaving(slug)
+    setSaveError(null)
+    try {
+      await deletePlatformSecret(secretKey)
+      setRestartHint(true)
+      queryClient.invalidateQueries({ queryKey: ['platform-secrets'] })
+      queryClient.invalidateQueries({ queryKey: ['provider-status'] })
+    } catch (e) {
+      setSaveError(`Failed to remove ${slug} key: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSaving(null)
+    }
+  }, [queryClient])
 
   return (
     <Section
@@ -115,10 +149,9 @@ export function ProviderStatusSection() {
             const badgeColor = TYPE_BADGE_COLOR[p.type] ?? 'neutral'
             const badgeLabel = TYPE_BADGE_LABEL[p.type] ?? p.type
             const result = testResults[p.slug]
-            const envKey = PROVIDER_ENV_KEY[p.slug]
-            const currentMasked = envKey && envVars ? envVars[envKey] ?? '' : ''
+            const secretKey = PROVIDER_SECRET_KEY[p.slug]
             const isEditing = editing === p.slug
-            const hasKey = !!currentMasked && currentMasked !== '****'
+            const hasKey = !!secretKey && configuredKeys.has(secretKey)
             const isLocal = p.type === 'local'
 
             return (
@@ -129,7 +162,7 @@ export function ProviderStatusSection() {
                     <span className="text-compact font-medium text-content-primary">{p.name}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {!isLocal && envKey && (
+                    {!isLocal && secretKey && (
                       <Badge color={hasKey ? 'success' : 'neutral'} size="sm">
                         {hasKey ? 'Connected' : 'Not configured'}
                       </Badge>
@@ -144,7 +177,7 @@ export function ProviderStatusSection() {
                 </div>
 
                 {/* API key input */}
-                {envKey && !isLocal && (
+                {secretKey && !isLocal && (
                   <div className="space-y-1.5">
                     {isEditing ? (
                       <div className="flex items-center gap-1.5">
@@ -153,7 +186,7 @@ export function ProviderStatusSection() {
                             type={showKey[p.slug] ? 'text' : 'password'}
                             value={drafts[p.slug] ?? ''}
                             onChange={e => setDrafts(prev => ({ ...prev, [p.slug]: e.target.value }))}
-                            placeholder={`Paste ${envKey}`}
+                            placeholder={`Paste ${secretKey}`}
                             className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 pr-7 text-compact text-content-primary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40"
                           />
                           <button
@@ -181,11 +214,19 @@ export function ProviderStatusSection() {
                         </Button>
                       </div>
                     ) : (
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-end gap-1.5">
                         {hasKey && (
-                          <span className="text-caption font-mono text-content-tertiary">{currentMasked}</span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteKey(p.slug)}
+                            loading={saving === p.slug}
+                            icon={<Trash2 size={12} />}
+                          >
+                            Remove
+                          </Button>
                         )}
-                        <Button variant="ghost" size="sm" onClick={() => setEditing(p.slug)} className="ml-auto">
+                        <Button variant="ghost" size="sm" onClick={() => setEditing(p.slug)}>
                           {hasKey ? 'Change key' : 'Add key'}
                         </Button>
                       </div>

@@ -64,6 +64,34 @@ async def _get_admin_secret() -> str:
     _admin_secret_cache["ts"] = now
     return value
 
+def _apply_platform_secrets_to_settings() -> None:
+    """SEC-006a — let platform_secrets override .env adapter tokens at boot.
+
+    Adapters read ``settings.<token>`` directly at construction (line below),
+    so we mutate ``settings`` here rather than ``os.environ``. If the
+    orchestrator is unreachable the helper returns ``{}`` and the .env
+    values supplied via pydantic-settings stay in place.
+    """
+    from nova_worker_common.platform_secrets import fetch_platform_secrets_sync
+    resolved = fetch_platform_secrets_sync(
+        orchestrator_url=settings.orchestrator_url,
+        admin_secret=settings.nova_admin_secret,
+        keys=["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+    )
+    if "TELEGRAM_BOT_TOKEN" in resolved:
+        settings.telegram_bot_token = resolved["TELEGRAM_BOT_TOKEN"]
+    if "SLACK_BOT_TOKEN" in resolved:
+        settings.slack_bot_token = resolved["SLACK_BOT_TOKEN"]
+    if "SLACK_APP_TOKEN" in resolved:
+        settings.slack_app_token = resolved["SLACK_APP_TOKEN"]
+    if resolved:
+        log.info("platform_secrets: applied %d key(s) at startup: %s",
+                 len(resolved), sorted(resolved.keys()))
+
+
+_apply_platform_secrets_to_settings()
+
+
 # Registry of all platform adapters
 ADAPTERS: list[PlatformAdapter] = [
     TelegramAdapter(),
