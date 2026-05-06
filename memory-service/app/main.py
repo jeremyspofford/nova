@@ -61,6 +61,43 @@ async def lifespan(app: FastAPI):
     _neural_router_task = asyncio.create_task(
         _neural_router_refresh(), name="neural-router-refresh"
     )
+
+    # Feature-flags SDK wiring (Phase B7b). Cold-boot fallback file lives in
+    # /app/data/flag-cache (ephemeral across image rebuilds; preserved across
+    # restarts; SR3 partition behavior holds within a single deployed image
+    # version). Host bind-mount for cross-rebuild persistence is a follow-up.
+    from pathlib import Path as _Path
+
+    import httpx as _httpx
+    from nova_contracts.feature_flags import init_cache_file
+    from nova_contracts.feature_flags_http import warm_cache_from_http
+    from nova_contracts.feature_flags_pubsub import PubsubSubscriber
+
+    _flag_cache_path = _Path("/app/data/flag-cache/memory-service.json")
+    init_cache_file(_flag_cache_path)
+    log.info("Feature-flags cache file initialized: %s", _flag_cache_path)
+
+    _flag_http_client = _httpx.AsyncClient(timeout=5.0)
+    _flag_orch_url = settings.orchestrator_url.rstrip("/")
+    try:
+        await warm_cache_from_http(_flag_http_client, _flag_orch_url)
+    except Exception:
+        # warm_cache_from_http already logs WARNING on failure; the fallback
+        # is whatever was on disk + in-code defaults. Memory-service starts
+        # regardless so a partition can't pin it down.
+        log.warning(
+            "Feature-flags warm at startup hit an unexpected error",
+            exc_info=True,
+        )
+
+    _flag_subscriber = PubsubSubscriber(
+        redis_url=settings.redis_url,
+        http_client=_flag_http_client,
+        base_url=_flag_orch_url,
+    )
+    await _flag_subscriber.start()
+    log.info("Feature-flags pubsub subscriber started")
+
     log.info("Memory Service ready")
 
     yield
@@ -68,6 +105,18 @@ async def lifespan(app: FastAPI):
     log.info(
         "Memory Service shutting down — waiting up to 15s for active work to finish"
     )
+
+    # Feature-flags shutdown (B7b). Stop subscriber first so it won't try
+    # to refetch during teardown; then close the HTTP client.
+    try:
+        await _flag_subscriber.stop()
+    except Exception:
+        log.warning("Feature-flags subscriber stop failed", exc_info=True)
+    try:
+        await _flag_http_client.aclose()
+    except Exception:
+        log.warning("Feature-flags HTTP client aclose failed", exc_info=True)
+
     # Give tasks a grace period to complete current work before cancelling
     _ingestion_task.cancel()
     _consolidation_task.cancel()

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     redis_embedding_cache_ttl: int = 86400  # 24h embedding cache
 
+    # Orchestrator (used by feature-flags SDK to warm cache + receive
+    # pubsub-driven invalidations; not on the engram hot path).
+    orchestrator_url: str = "http://orchestrator:8000"
+
     # LLM Gateway (for embedding generation)
     llm_gateway_url: str = "http://llm-gateway:8001"
     embedding_model: str = "nomic-embed-text"  # Ollama default
