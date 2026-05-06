@@ -272,6 +272,8 @@ app.include_router(health_router)
 app.include_router(router)
 app.include_router(auth_router)
 app.include_router(pipeline_router)
+from app.feature_flags_router import router as feature_flags_router  # noqa: E402
+app.include_router(feature_flags_router)
 app.include_router(friction_router)
 app.include_router(goals_router)
 app.include_router(intel_router)

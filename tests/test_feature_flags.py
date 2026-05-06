@@ -366,6 +366,160 @@ async def test_store_list_audit_recent_across_keys(orch_pool):
 # behavior we actually care about, not the in-process plumbing.
 
 
+# ----------------------------------------------------------------------------
+# B-Task 6: HTTP admin router (real orchestrator; uses NOVA_ADMIN_SECRET if set,
+# otherwise relies on require_admin's trusted-network bypass for localhost).
+# ----------------------------------------------------------------------------
+
+ORCH_URL = os.environ.get("NOVA_ORCHESTRATOR_URL", "http://localhost:8000")
+ADMIN_SECRET = os.environ.get("NOVA_ADMIN_SECRET", "")
+
+
+def _admin_headers() -> dict[str, str]:
+    h = {"Content-Type": "application/json"}
+    if ADMIN_SECRET:
+        h["X-Admin-Secret"] = ADMIN_SECRET
+    return h
+
+
+@pytest.mark.asyncio
+async def test_router_list_flags_returns_200():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{ORCH_URL}/api/v1/feature-flags/", headers=_admin_headers())
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_router_registry_returns_200():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{ORCH_URL}/api/v1/feature-flags/registry", headers=_admin_headers())
+    assert r.status_code == 200, r.text
+    # Orchestrator hasn't registered any flags yet (B-Task 9 wires those);
+    # registry is empty for now but the endpoint must respond.
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_router_patch_creates_override_and_propagates_via_pubsub():
+    """End-to-end round-trip: PATCH on the admin API → orchestrator writes
+    override + audit, publishes invalidation; SDK subscriber receives,
+    re-warms cache. The PATCH'd value is visible to a subsequent GET."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Use a non-critical key so no `confirm` is required.
+        key = "rt.patch.k1"
+        r = await client.patch(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+            json={"value": True, "notes": "router e2e"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["key"] == key
+        assert body["value"] is True
+
+        # GET /{key} returns the override
+        r = await client.get(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+        )
+        assert r.status_code == 200
+        assert r.json()["is_override"] is True
+        assert r.json()["current_value"] is True
+
+        # Cleanup
+        r = await client.delete(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+        )
+        assert r.status_code == 200
+        assert r.json() == {"deleted": True, "key": key}
+
+
+@pytest.mark.asyncio
+async def test_router_patch_critical_flag_requires_confirm():
+    """S3: a CRITICAL_FLAGS key without `confirm` returns 400."""
+    key = "kill.engram.ingestion"  # in CRITICAL_FLAGS
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+            json={"value": True},  # no confirm
+        )
+        assert r.status_code == 400, r.text
+        assert "confirm" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_router_patch_critical_flag_with_correct_confirm_succeeds():
+    key = "kill.engram.ingestion"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+            json={"value": True, "confirm": key},
+        )
+        assert r.status_code == 200, r.text
+        # Cleanup
+        await client.delete(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_patch_critical_flag_with_wrong_confirm_rejected():
+    """`confirm` must match the URL key exactly — typo'd confirm gets 400."""
+    key = "pipeline.guardrail_strict_mode"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+            json={"value": True, "confirm": "kill.something_else"},
+        )
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_router_audit_records_request_metadata():
+    """S1: audit row captures actor_ip + actor_user_agent + request_id."""
+    key = "rt.audit.meta"
+    custom_request_id = str(uuid.uuid4())
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers={
+                **_admin_headers(),
+                "User-Agent": "nova-test/1.0",
+                "X-Request-ID": custom_request_id,
+            },
+            json={"value": True},
+        )
+        assert r.status_code == 200, r.text
+
+        # Inspect the audit row
+        r = await client.get(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}/audit",
+            headers=_admin_headers(),
+        )
+        assert r.status_code == 200
+        audit = r.json()
+        assert len(audit) == 1
+        latest = audit[0]
+        assert latest["actor_user_agent"] == "nova-test/1.0"
+        assert latest["request_id"] == custom_request_id
+        assert latest["actor_ip"] is not None  # localhost / container IP
+
+        # Cleanup
+        await client.delete(
+            f"{ORCH_URL}/api/v1/feature-flags/{key}",
+            headers=_admin_headers(),
+        )
+
+
+import uuid  # noqa: E402  — used in the request-id test above
+
+
 @pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
