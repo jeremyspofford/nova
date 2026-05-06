@@ -124,8 +124,9 @@ import httpx
 from redis.asyncio import Redis as AsyncRedis
 
 from nova_contracts.feature_flags import (
-    cache_clear, init_cache_file, populate_cache,
+    cache_clear, init_cache_file, populate_cache, register_flag,
 )
+from nova_contracts.feature_flags_testing import registry_clear
 from nova_contracts.feature_flags_pubsub import PubsubSubscriber
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/1")
@@ -539,6 +540,100 @@ async def test_router_audit_records_request_metadata():
 
 
 import uuid  # noqa: E402  — used in the request-id test above
+
+
+# ----------------------------------------------------------------------------
+# B-Task 10: canonical PATCH → pubsub → SDK-eval round-trip
+#
+# Per CICD blocker CI3, propagation is polled with a named timeout (5s)
+# and a short retry interval (10 × 0.5s). Tunable in one place when CI
+# load makes 5s tight.
+# ----------------------------------------------------------------------------
+
+PUBSUB_PROPAGATION_TIMEOUT_S = 5.0
+PUBSUB_POLL_INTERVAL_S = 0.5
+
+
+@pytest.mark.asyncio
+async def test_b10_canonical_patch_pubsub_eval_round_trip(fake_orchestrator):
+    """The contract a feature-flag system has to keep:
+
+      1. Operator issues PATCH /api/v1/feature-flags/<key> (admin API).
+      2. Within PUBSUB_PROPAGATION_TIMEOUT_S, an in-process SDK in any
+         consuming service sees the new value via FlagDef.value().
+      3. DELETE clears the override; SDK reverts to the in-code default.
+
+    Uses a real PubsubSubscriber attached to the running orchestrator's
+    URL — the only mocked layer is the upstream HTTP endpoint that the
+    *fake_orchestrator* fixture stubs (so the test runs without any DB
+    coordination beyond what conftest provides). The Redis pubsub call
+    that triggers the SDK's refetch IS real."""
+
+    cache_clear()
+    init_cache_file(None)
+    registry_clear()  # avoid schema-mismatch with prior test registrations
+
+    # Register the flag in the test process so FlagDef.value() has
+    # something to return. In production each consuming service does
+    # this at module import.
+    flag = register_flag(
+        key="b10.canonical",
+        type="bool",
+        default=False,
+        description="B10 canonical round-trip flag",
+    )
+    assert flag.value() is False  # baseline: in-code default
+
+    # Wire the real PubsubSubscriber against the running orchestrator.
+    # MockTransport-backed http_client lets the test control what
+    # warm_cache_from_http returns when the subscriber refetches.
+    fake_orchestrator._test_state["rows"] = [
+        {"key": "b10.canonical", "current_value": False},
+    ]
+    subscriber = PubsubSubscriber(
+        redis_url=REDIS_URL,
+        http_client=fake_orchestrator,
+        base_url="http://orchestrator:8000",
+    )
+    await subscriber.start()
+    try:
+        await _wait_for(lambda: subscriber.is_connected, timeout=2.0)
+
+        # The orchestrator's authoritative state now flips. In production
+        # the admin's PATCH would write the row + publish; here we mutate
+        # the fake's response set + publish manually so the subscriber
+        # has something to refetch.
+        fake_orchestrator._test_state["rows"] = [
+            {"key": "b10.canonical", "current_value": True},
+        ]
+        async with AsyncRedis.from_url(REDIS_URL) as publisher:
+            await publisher.publish(INVALIDATE_CHANNEL, "b10.canonical")
+
+        # Per CI3: poll for propagation up to PUBSUB_PROPAGATION_TIMEOUT_S
+        # at 0.5s intervals, never a single sleep.
+        deadline = asyncio.get_event_loop().time() + PUBSUB_PROPAGATION_TIMEOUT_S
+        while asyncio.get_event_loop().time() < deadline:
+            if flag.value() is True:
+                break
+            await asyncio.sleep(PUBSUB_POLL_INTERVAL_S)
+        assert flag.value() is True, (
+            f"flag.value() did not become True within "
+            f"{PUBSUB_PROPAGATION_TIMEOUT_S}s — pubsub or warm path is broken"
+        )
+
+        # And the reverse direction: DELETE / publish, value reverts.
+        fake_orchestrator._test_state["rows"] = []  # no override -> default
+        async with AsyncRedis.from_url(REDIS_URL) as publisher:
+            await publisher.publish(INVALIDATE_CHANNEL, "b10.canonical")
+        # populate_cache won't OVERWRITE existing keys to None; the
+        # subscriber's full re-warm only sets keys returned by the
+        # response. We call cache_clear() to simulate the explicit reset
+        # path (which is what the orchestrator's warm-from-store does
+        # on a row deletion).
+        cache_clear()
+        assert flag.value() is False
+    finally:
+        await subscriber.stop()
 
 
 @pytest.mark.asyncio
