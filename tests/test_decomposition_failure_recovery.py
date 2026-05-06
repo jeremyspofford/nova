@@ -28,8 +28,9 @@ seeing flakes, check ``docker compose logs cortex`` for cycle frequency and
 """
 import asyncio
 import os
-import pytest
+
 import httpx
+import pytest
 
 ORCH = os.getenv("NOVA_ORCH_URL", "http://localhost:8000")
 ADMIN = os.getenv("NOVA_ADMIN_SECRET", "")

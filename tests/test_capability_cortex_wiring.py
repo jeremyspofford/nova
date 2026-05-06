@@ -22,9 +22,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-import pytest_asyncio
 import redis.asyncio as aioredis
-
 from fixtures.fake_github.server import FakeGitHubServer, load_scenario
 
 _DOCKER_HOST = "host.docker.internal"
@@ -177,7 +175,6 @@ async def test_workflow_run_failure_pushes_cortex_stimulus(
     deep content verification via the full pipeline. This test focuses on the delivery
     contract: orchestrator returns 200 iff HMAC is valid and stimulus was enqueued.
     """
-    from conftest import CORTEX_URL
 
     fake = FakeGitHubServer(scenarios=load_scenario("lint_failure_in_pr"))
     await fake.start()

@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.quality_loop.base import (
-    AppliedChange, Decision, Proposal, SenseReading, Verification,
+    AppliedChange,
+    Decision,
+    Proposal,
+    SenseReading,
+    Verification,
 )
 from app.quality_loop.runner import iterate_loop
 

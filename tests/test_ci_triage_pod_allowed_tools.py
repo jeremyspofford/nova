@@ -10,6 +10,7 @@ Real DB, no mocks: the test fetches the live row via the orchestrator's
 ALL_TOOLS registry.
 """
 from __future__ import annotations
+
 import sys
 
 sys.path.insert(0, "/home/jeremy/workspace/nova/orchestrator")
@@ -18,7 +19,6 @@ sys.path.insert(0, "/home/jeremy/workspace/nova/nova-worker-common")
 
 import httpx
 import pytest
-
 
 PHANTOM_NAMES = {"get_run_details", "get_check_runs"}
 EXPECTED_REPLACEMENTS = {"get_workflow_run", "get_run_logs"}

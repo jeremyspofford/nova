@@ -8,8 +8,8 @@ from __future__ import annotations
 import pytest
 from app.quality_loop.score import (
     score_memory_usage,
-    score_tool_accuracy,
     score_safety_compliance,
+    score_tool_accuracy,
 )
 
 

@@ -1,9 +1,9 @@
 """GitHub external provider — READ + PROPOSE + MUTATE tier tools against fake-github."""
 from __future__ import annotations
+
 import importlib.util
 import json
 import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -34,7 +34,6 @@ TENANT = UUID("00000000-0000-0000-0000-000000000001")
 USER = UUID("00000000-0000-0000-0000-000000000001")
 
 import pytest
-
 from fixtures.fake_github.server import FakeGitHubServer, load_scenario
 
 

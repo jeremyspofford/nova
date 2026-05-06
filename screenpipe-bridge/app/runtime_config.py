@@ -9,7 +9,6 @@ round-trip on the session-ingestion hot path.
 import asyncio
 import json
 import logging
-from typing import Any
 
 import redis.asyncio as redis_async
 

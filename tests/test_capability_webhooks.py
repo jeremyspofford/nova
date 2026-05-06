@@ -20,7 +20,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
 from fixtures.fake_github.server import FakeGitHubServer, load_scenario
 
 # The orchestrator container reaches the test host via host.docker.internal.

@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from uuid import UUID, uuid4
 
@@ -46,7 +45,7 @@ import redis.asyncio as aioredis
 
 # Make the orchestrator's audit helpers importable for direct use
 sys.path.insert(0, "/home/jeremy/workspace/nova/orchestrator")
-from app.capabilities.audit import write_audit_event, verify_chain  # noqa: E402
+from app.capabilities.audit import verify_chain, write_audit_event  # noqa: E402
 
 CORTEX_URL = "http://localhost:8100"
 CORTEX_REDIS_URL = "redis://localhost:6379/5"

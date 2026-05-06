@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-
 from app.screenpipe_client import ScreenpipeClient
 from fixtures.fake_screenpipe import FakeScreenpipe
 

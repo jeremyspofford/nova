@@ -7,7 +7,6 @@ rules in migration 069. This test file just exercises the read surface.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
 
 import httpx
 import pytest

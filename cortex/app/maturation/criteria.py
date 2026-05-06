@@ -11,6 +11,7 @@ Each criterion is one of:
 from __future__ import annotations
 
 import logging
+
 from ..clients import get_llm
 
 log = logging.getLogger(__name__)

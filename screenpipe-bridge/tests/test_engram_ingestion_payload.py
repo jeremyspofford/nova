@@ -3,11 +3,9 @@ from datetime import datetime, timezone
 
 import pytest
 import redis.asyncio as redis_async
-
 from app.engram_producer import EngramProducer
 from app.session_aggregator import FocusSession
 from app.tenant import DEFAULT_TENANT
-
 
 _TEST_QUEUE = "engram:ingestion:queue:test"
 

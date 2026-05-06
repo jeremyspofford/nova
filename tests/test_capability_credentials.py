@@ -6,7 +6,6 @@ from uuid import UUID
 
 import httpx
 import pytest
-
 from fixtures.fake_github import FakeGitHubServer
 
 

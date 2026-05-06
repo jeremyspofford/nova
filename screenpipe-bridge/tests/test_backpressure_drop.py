@@ -1,9 +1,7 @@
-import asyncio
 from datetime import datetime, timezone
 
 import pytest
 import redis.asyncio as redis_async
-
 from app.main import BridgePipeline
 from app.session_aggregator import FocusSession
 

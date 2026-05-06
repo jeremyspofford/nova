@@ -1,5 +1,9 @@
 """At depth=max_depth-1, complex children get flat-task-materialized regardless of complexity claim."""
-import asyncio, json, os, pytest, httpx
+import asyncio
+import os
+
+import httpx
+import pytest
 
 ORCH = os.getenv("NOVA_ORCH_URL", "http://localhost:8000")
 ADMIN = os.getenv("NOVA_ADMIN_SECRET", "")

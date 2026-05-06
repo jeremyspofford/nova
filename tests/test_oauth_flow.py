@@ -17,7 +17,6 @@ import os
 import httpx
 import pytest
 
-
 ORCHESTRATOR_URL = os.getenv("NOVA_ORCHESTRATOR_URL", "http://localhost:8000")
 
 

@@ -1,8 +1,6 @@
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from app.session_aggregator import SessionAggregator
 
 

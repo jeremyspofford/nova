@@ -10,9 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import asyncpg
-
 from app.capabilities.redactor import redact_dict
-
 
 logger = logging.getLogger(__name__)
 GENESIS_HASH = b'\x00' * 32

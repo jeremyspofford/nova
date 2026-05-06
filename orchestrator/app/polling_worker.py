@@ -113,7 +113,9 @@ class GitHubPoller:
 
         _pool: optional asyncpg pool override (for tests). Production uses get_pool().
         """
-        from app.capabilities import credentials as cred_db  # lazy — avoids crypto import at module load
+        from app.capabilities import (
+            credentials as cred_db,  # lazy — avoids crypto import at module load
+        )
         from app.config import settings
         from app.db import get_pool
         pool = _pool if _pool is not None else get_pool()

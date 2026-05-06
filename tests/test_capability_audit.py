@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import sys
+
 sys.path.insert(0, '/home/jeremy/workspace/nova/orchestrator')
 
-from uuid import UUID, uuid4
+from uuid import UUID
+
 import pytest
-
-from app.capabilities.audit import write_audit_event, verify_chain
-
+from app.capabilities.audit import verify_chain, write_audit_event
 
 TENANT = UUID("00000000-0000-0000-0000-000000000001")
 

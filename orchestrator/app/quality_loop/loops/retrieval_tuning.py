@@ -14,10 +14,13 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import redis.asyncio as aioredis
-
 from app.quality_loop.base import (
-    AppliedChange, Decision, Proposal, QualityLoop, SenseReading,
-    Verification, decide_default,
+    AppliedChange,
+    Decision,
+    Proposal,
+    SenseReading,
+    Verification,
+    decide_default,
 )
 from app.quality_loop.snapshot import capture_snapshot
 
@@ -56,7 +59,7 @@ def propose_step(current: dict[str, Any], reading: SenseReading) -> Proposal | N
             return Proposal(
                 description=f"Lower retrieval.threshold {cur_t:.2f} -> {new_t:.2f}",
                 changes={"retrieval.threshold": {"from": cur_t, "to": new_t}},
-                rationale=f"top_k at max; lower threshold to admit more candidates",
+                rationale="top_k at max; lower threshold to admit more candidates",
             )
         return None
 
@@ -83,8 +86,8 @@ async def _run_benchmark_synchronously() -> tuple[str, float, dict[str, float]]:
     Used by sense() and verify(). Reuses the same code path as the HTTP
     endpoint but awaits completion.
     """
-    from app.quality_router import _run_benchmark_v2
     from app.db import get_pool
+    from app.quality_router import _run_benchmark_v2
     pool = get_pool()
     snapshot_id, _ = await capture_snapshot("loop_session")
     async with pool.acquire() as conn:

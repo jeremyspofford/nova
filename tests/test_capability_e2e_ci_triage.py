@@ -72,7 +72,6 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-
 from fixtures.github_e2e import (
     close_pr,
     delete_branch,
@@ -82,7 +81,6 @@ from fixtures.github_e2e import (
     preflight_pat_scopes,
     push_breaking_commit,
 )
-
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
