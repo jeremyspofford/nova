@@ -503,6 +503,42 @@ services:
           "import urllib.request; urllib.request.urlopen('http://localhost:8090/health/live', timeout=3)",
         ]
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SEC-006b: Docker socket proxy — gates the recovery service's Docker SDK
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The recovery container's SDK path (docker_client.py) talks to this proxy
+  # instead of the raw socket.  Only CONTAINERS=1 (list/inspect/logs) and
+  # POST=1 (restart) are exposed; everything else (exec, volumes, images,
+  # network create/destroy, build, etc.) is rejected at the proxy.
+  #
+  # The compose CLI subprocess (compose_client.py) keeps using the raw
+  # socket directly because compose ops require unrestricted Docker API
+  # access — that split is the explicit half of the trust boundary.
+  #
+  # The proxy lives on its own internal network (recovery-socket) so only
+  # the recovery container can reach it, preserving the original isolation
+  # of the bind-mount-only setup.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      POST: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - recovery-socket
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 32M
+
   recovery:
     <<: *nova-common
     build:
@@ -520,8 +556,16 @@ services:
       NOVA_ENV_FILE: /project/.env
       COMPOSE_PROJECT_DIR: /project
       REDIS_URL: redis://redis:6379/7
+      # SEC-006b: route the Docker SDK through the proxy (allowlisted API
+      # surface).  The compose CLI subprocess keeps using /var/run/docker.sock.
+      DOCKER_SDK_HOST: tcp://docker-socket-proxy:2375
+    networks:
+      - nova-internal
+      - recovery-socket
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups:rw
+      # SEC-006b: kept for the compose CLI subprocess (compose_client.py).
+      # SDK calls go through docker-socket-proxy via DOCKER_SDK_HOST above.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./.env:/project/.env:rw
       - ./docker-compose.yml:/project/docker-compose.yml:ro
@@ -540,6 +584,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     healthcheck:
       <<: *nova-healthcheck
       test:
@@ -1066,6 +1112,14 @@ networks:
   nova-internal:
     driver: bridge
     # Phase 2 will add: nova-sandbox (internal: true) for PII Guardian enforcement
+
+  # SEC-006b: dedicated network for the docker-socket-proxy ↔ recovery channel.
+  # internal: true means the proxy has no outbound internet path — it only
+  # reaches the host docker daemon via the unix socket bind-mount.  Recovery
+  # joins both nova-internal (its normal traffic) and this one (proxy access).
+  recovery-socket:
+    driver: bridge
+    internal: true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Volumes
