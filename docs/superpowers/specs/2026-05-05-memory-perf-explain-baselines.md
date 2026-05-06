@@ -186,3 +186,8 @@ Execution Time: 2680.689 ms
 - P1 deep mode: REWRITE
 - P2 cartesian: REWRITE
 - P6 composite index: DISMISS (Seq Scan filter elimination 60.7%, total time 5ms baseline acceptable)
+
+## Cross-tenant edge audit (Task 1.12)
+
+- Cross-tenant edges in live data: 0
+- Verdict: NO cleanup migration needed. Activation tenant-filter fix is safe to ship in Sprint 2.
