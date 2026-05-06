@@ -38,8 +38,43 @@ async def lifespan(app: FastAPI):
     from app.poller import run_polling_loop
     _poller_task = asyncio.create_task(run_polling_loop())
     _poller_healthy = True
+
+    # Feature-flags SDK wiring (B7e).
+    from pathlib import Path as _Path
+    import httpx as _httpx
+    from nova_contracts.feature_flags import init_cache_file
+    from nova_contracts.feature_flags_http import warm_cache_from_http
+    from nova_contracts.feature_flags_pubsub import PubsubSubscriber
+
+    init_cache_file(_Path("/app/data/flag-cache/intel-worker.json"))
+    _flag_http_client = _httpx.AsyncClient(timeout=5.0)
+    _flag_orch_url = settings.orchestrator_url.rstrip("/")
+    try:
+        await warm_cache_from_http(_flag_http_client, _flag_orch_url)
+    except Exception:
+        log.warning("Feature-flags warm at startup hit an unexpected error",
+                    exc_info=True)
+    _flag_subscriber = PubsubSubscriber(
+        redis_url=settings.redis_url,
+        http_client=_flag_http_client,
+        base_url=_flag_orch_url,
+    )
+    await _flag_subscriber.start()
+    log.info("Feature-flags pubsub subscriber started")
+
     log.info("Intel worker started — polling loop active")
     yield
+
+    # Feature-flags shutdown (B7e)
+    try:
+        await _flag_subscriber.stop()
+    except Exception:
+        log.warning("Feature-flags subscriber stop failed", exc_info=True)
+    try:
+        await _flag_http_client.aclose()
+    except Exception:
+        log.warning("Feature-flags HTTP client aclose failed", exc_info=True)
+
     if _poller_task:
         _poller_task.cancel()
     await close_queues()

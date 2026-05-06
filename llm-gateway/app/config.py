@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/1"
     response_cache_ttl: int = 300  # 5 minutes for identical requests
 
+    # Orchestrator URL — used by feature-flags SDK to warm cache from
+    # /api/v1/feature-flags/ at startup and to refetch on pubsub invalidate.
+    orchestrator_url: str = "http://orchestrator:8000"
+
     # Ollama
     ollama_base_url: str = "http://ollama:11434"
 
