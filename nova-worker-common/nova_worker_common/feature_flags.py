@@ -6,15 +6,21 @@ in-code defaults apply (useful for unit tests).
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Iterator, Literal, Sequence
 
 logger = logging.getLogger(__name__)
 
 FlagType = Literal["bool", "enum"]
 
 _NO_OVERRIDE = object()  # sentinel: no override exists
+
+_overrides: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "feature_flag_overrides", default=None
+)
 
 
 @dataclass(frozen=True)
@@ -29,8 +35,38 @@ class FlagDef:
 
     def value(self, *, tenant_id: str | None = None,
                        user_id: str | None = None) -> Any:
-        """Evaluate the flag, falling back to in-code default."""
+        """Evaluate the flag, falling back to in-code default.
+
+        Resolution order (v1):
+          1. flag_override(...) context manager (process-local, contextvars-scoped)
+          2. in-code default
+
+        Cache + env-var + DB resolution land in subsequent SDK tasks.
+        """
+        overrides = _overrides.get()
+        if overrides is not None and self.key in overrides:
+            return overrides[self.key]
         return self.default
+
+
+@contextlib.contextmanager
+def flag_override(key: str, value: Any) -> Iterator[None]:
+    """Override a flag's value within the context.
+
+    Process-local and async-safe via contextvars: concurrent asyncio tasks
+    each see their own override stack. Restored on exit, including on
+    exception.
+
+    Intended for tests only — the highest-priority resolution layer in
+    FlagDef.value(). Production code should never call this.
+    """
+    current = _overrides.get() or {}
+    new_overrides = {**current, key: value}
+    token = _overrides.set(new_overrides)
+    try:
+        yield
+    finally:
+        _overrides.reset(token)
 
 
 _registry: dict[str, FlagDef] = {}

@@ -1,6 +1,13 @@
 """Unit tests for the feature_flags SDK resolution order."""
+import asyncio
+
 import pytest
-from nova_worker_common.feature_flags import FlagDef, register_flag, _registry_clear
+from nova_worker_common.feature_flags import (
+    FlagDef,
+    flag_override,
+    register_flag,
+    _registry_clear,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -63,3 +70,82 @@ def test_register_flag_rejects_bool_with_non_bool_default():
             default="true",  # string, not bool
             description="x",
         )
+
+
+def test_flag_override_returns_overridden_value():
+    flag = register_flag(
+        key="test.override_basic",
+        type="bool",
+        default=False,
+        description="override basic",
+    )
+    assert flag.value() is False
+    with flag_override("test.override_basic", True):
+        assert flag.value() is True
+    assert flag.value() is False  # cleared on context exit
+
+
+def test_flag_override_nested_overrides_innermost_wins():
+    flag = register_flag(
+        key="test.override_nested",
+        type="enum",
+        variants=["a", "b", "c"],
+        default="a",
+        description="nested overrides",
+    )
+    with flag_override("test.override_nested", "b"):
+        assert flag.value() == "b"
+        with flag_override("test.override_nested", "c"):
+            assert flag.value() == "c"
+        assert flag.value() == "b"  # inner restored
+    assert flag.value() == "a"  # default restored
+
+
+def test_flag_override_only_affects_named_key():
+    a = register_flag(key="test.scope_a", type="bool", default=False, description="")
+    b = register_flag(key="test.scope_b", type="bool", default=False, description="")
+    with flag_override("test.scope_a", True):
+        assert a.value() is True
+        assert b.value() is False  # untouched
+
+
+def test_flag_override_is_contextvar_safe_across_async_tasks():
+    """Two concurrent async tasks must see independent override stacks."""
+    flag = register_flag(
+        key="test.override_async",
+        type="bool",
+        default=False,
+        description="async-safe override",
+    )
+
+    async def in_override() -> bool:
+        with flag_override("test.override_async", True):
+            await asyncio.sleep(0)  # yield to scheduler
+            return flag.value()
+
+    async def outside_override() -> bool:
+        await asyncio.sleep(0)
+        return flag.value()
+
+    async def main() -> tuple[bool, bool]:
+        async with asyncio.TaskGroup() as tg:
+            inside = tg.create_task(in_override())
+            outside = tg.create_task(outside_override())
+        return inside.result(), outside.result()
+
+    inside_val, outside_val = asyncio.run(main())
+    assert inside_val is True
+    assert outside_val is False
+
+
+def test_flag_override_clears_even_on_exception():
+    flag = register_flag(
+        key="test.override_cleanup",
+        type="bool",
+        default=False,
+        description="cleanup on raise",
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        with flag_override("test.override_cleanup", True):
+            raise RuntimeError("boom")
+    assert flag.value() is False  # override removed despite exception
