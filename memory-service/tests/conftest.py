@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 import pytest_asyncio
+import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -61,3 +62,20 @@ async def db_session(db_engine):
         await session.close()
         await transaction.rollback()
         await connection.close()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def redis_test():
+    """Per-test isolated Redis client on db15.
+
+    FLUSHDB at setup (not teardown) so a previous failed test
+    doesn't leave keys around.
+    """
+    host = os.environ.get("REDIS_HOST", "localhost")
+    port = int(os.environ.get("REDIS_PORT", "6379"))
+    client = aioredis.from_url(f"redis://{host}:{port}/15")
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.aclose()

@@ -37,3 +37,17 @@ async def test_db_session_rollback_persisted(db_session):
         text("SELECT count(*) FROM engrams WHERE content = 'smoke-test-content'")
     )
     assert count.scalar() == 0
+
+
+@pytest.mark.asyncio
+async def test_redis_test_set_get_roundtrip(redis_test):
+    await redis_test.set("smoke:k", "v")
+    val = await redis_test.get("smoke:k")
+    assert val == b"v" or val == "v"
+
+
+@pytest.mark.asyncio
+async def test_redis_test_isolated_per_test(redis_test):
+    """Second test sees an empty db15."""
+    keys = await redis_test.keys("smoke:*")
+    assert keys == []
