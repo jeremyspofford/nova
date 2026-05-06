@@ -72,11 +72,6 @@ def flag_override(key: str, value: Any) -> Iterator[None]:
 _registry: dict[str, FlagDef] = {}
 
 
-def _registry_clear():
-    """Test helper. NOT for production use."""
-    _registry.clear()
-
-
 def register_flag(
     *,
     key: str,
