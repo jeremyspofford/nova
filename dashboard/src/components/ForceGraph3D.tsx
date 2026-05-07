@@ -1453,21 +1453,14 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
       if (isLargeGraph) {
         const cfg = layoutRef.current
         graph.d3Force('charge')?.strength(cfg.charge).distanceMax(250)
-        // Weight-proportional: strong edges pull firmly (short distance),
-        // weak edges barely pull (long distance + low strength).
-        // This is the key to preventing clumping without losing edges.
-        graph.d3Force('link')
-          ?.distance((link: any) => {
-            const w = link.weight ?? 0.3
-            return cfg.linkDist + (1 - w) * cfg.linkDistSpread
-          })
-          .strength((link: any) => {
-            const w = link.weight ?? 0.3
-            return 0.02 + w * 0.3  // weak=0.02, strong=0.32
-          })
+        // Link force disabled — user feedback: orbs visibly clump together as
+        // related ones get pulled in. Charge alone gives a spread-out layout
+        // without sacrificing the meaningful position of focus-zoomed selections.
+        graph.d3Force('link')?.strength(0)
         graph.d3Force('center')?.strength(0.008)
       } else {
-        graph.d3Force('link')?.distance((link: any) => 30 + (1 - (link.weight ?? 0.5)) * 60)
+        // Link force disabled — see large-graph branch.
+        graph.d3Force('link')?.strength(0)
         graph.d3Force('charge')?.strength(-80)
       }
     } catch { /* force config may fail silently */ }
@@ -1548,6 +1541,13 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
       // Re-enable interaction and links now that the graph is stable
       graph.enablePointerInteraction(true)
       linksVisibleRef.current = true
+      // Re-fit camera now that the layout is settled — initial fit happened
+      // when the bounding box was barely-formed (mostly at origin), leaving
+      // user zoomed in.  Skip if the user already moved the camera (camera cache
+      // is populated only by user pan/zoom interaction or by re-mount).
+      if (!_cameraCache) {
+        try { graph.zoomToFit(800, 80) } catch { /* ok */ }
+      }
     })
 
     // ── Bloom post-processing ──────────────────────────────────────────
