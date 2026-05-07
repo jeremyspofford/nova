@@ -249,22 +249,6 @@ function RoutedContent() {
   const isMobile = useIsMobile()
   const isBrainRoute = location.pathname === '/brain'
   const brainEnabled = useBrainEnabled()
-  const [brainMounted, setBrainMounted] = useState(false)
-
-  // Deferred Brain mount — background init after browser idle. Skipped when
-  // brain is disabled to avoid the heavy WebGL canvas + graph fetch.
-  useEffect(() => {
-    if (isMobile || !brainEnabled) return
-    const ric = window.requestIdleCallback ?? ((cb: IdleRequestCallback) => window.setTimeout(cb, 2000))
-    const cic = window.cancelIdleCallback ?? clearTimeout
-    const id = ric(() => setBrainMounted(true), { timeout: 5000 })
-    return () => cic(id)
-  }, [isMobile, brainEnabled])
-
-  // If user navigates to /brain before idle fires, mount immediately
-  useEffect(() => {
-    if (isBrainRoute && !brainMounted && !isMobile && brainEnabled) setBrainMounted(true)
-  }, [isBrainRoute, brainMounted, isMobile, brainEnabled])
 
   return (
     <>
@@ -322,19 +306,17 @@ function RoutedContent() {
         <Route path="/benchmarks" element={<Navigate to="/ai-quality" replace />} />
       </Routes>
 
-      {/* Brain keep-alive — mounted after idle, rendered with fixed positioning.
-          When active: z-[5] covers the null route content.
-          When hidden: invisible + pointer-events-none, paused to save GPU. */}
-      {brainMounted && (
-        <div
-          className={isBrainRoute
-            ? 'fixed inset-0 z-[5]'
-            : 'fixed inset-0 invisible pointer-events-none -z-10'}
-          aria-hidden={!isBrainRoute}
-        >
+      {/* Brain canvas — lazy-mount only when on /brain route. Avoids holding a
+          1665×1949 WebGL context resident on every dashboard page. Trade-off: first
+          /brain visit pays the full mount cost (~6s headless / 30–60s on real GPU
+          via WSL2 + 2000-node graph). Default node count was reduced to 500 in
+          Brain.tsx — the existing selector lets users opt up.
+          See docs/perf/2026-05-07-startup-performance-findings.md */}
+      {isBrainRoute && brainEnabled && !isMobile && (
+        <div className="fixed inset-0 z-[5]">
           <AppLayout fullWidth>
             <ErrorBoundary>
-              <Brain hidden={!isBrainRoute} />
+              <Brain hidden={false} />
             </ErrorBoundary>
           </AppLayout>
         </div>
