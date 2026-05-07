@@ -57,8 +57,12 @@ build: ## Rebuild all Docker images (run before up after code changes)
 down: ## Stop and remove all containers (all profiles + orphans)
 	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
 
+restart: ## Stop and start all services without rebuilding (preserves cached images)
+	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
+	$(COMPOSE) up -d
+
 # ── Develop ──────────────────────────────────────────────────────────────────
-dev: ## Start all services detached + Vite dashboard with hot-reload  [1-line dev]
+dev: ## Start all services + Vite dashboard (Python hot-reload via --reload + compose watch; Vite HMR — no `make build` needed for daily edits)
 	$(COMPOSE) --profile website up -d --remove-orphans
 	cd $(DASHBOARD) && npm run dev
 
