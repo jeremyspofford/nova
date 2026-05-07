@@ -224,19 +224,26 @@ await asyncio.gather(
 
 - [ ] **Step 2.4: Add the `/api/v1/admin/startup-tasks` endpoint**
 
-In `orchestrator/app/router.py` (or wherever admin endpoints live — verify with `grep -rn "admin/secrets\|@router" orchestrator/app/router.py | head -3`), add:
+The canonical admin-dependency pattern in this codebase uses the `AdminDep` alias
+(`orchestrator/app/auth.py:460`, used throughout `router.py`, e.g. `:212, :235, :598`).
+In `orchestrator/app/router.py`, add the new endpoint near other admin routes:
 
 ```python
+from fastapi import Request  # already imported at file top in most routers
+from app.auth import AdminDep  # already imported on router.py:14
+
 @router.get("/api/v1/admin/startup-tasks")
-async def get_startup_tasks(request: Request, _admin: bool = Depends(require_admin)):
-    """Background-task status for observability. Used by tests + dashboard."""
+async def get_startup_tasks(request: Request, _admin: AdminDep):
+    """Background-task status for observability. Used by tests + dashboard.
+    Status values: in_progress | complete | failed | unknown."""
     state = request.app.state
     return {
         "mcp_load": getattr(state, "mcp_load_status", {"status": "unknown"}),
     }
 ```
 
-(Adapt the import + dependency wiring to match the existing admin-endpoint pattern in that file. If `require_admin` isn't the actual dependency name, use whatever the existing `/api/v1/admin/secrets` route uses.)
+Reference for the canonical admin-route pattern: `orchestrator/app/router.py:1496` (or any
+of the other `_admin: AdminDep` routes).
 
 - [ ] **Step 2.5: Run the test to verify it passes**
 
@@ -274,7 +281,7 @@ docker compose logs orchestrator -f --since 1m | grep -E "Orchestrator starting|
 
 Expected timeline:
 - "Orchestrator starting" appears
-- "Application startup complete" appears within ~1s of "Orchestrator starting" (down from 21s)
+- "Application startup complete" appears within ≤5s of "Orchestrator starting" (down from 21s — there's still ~30 lines of post-MCP lifespan work for queue/reaper/poller/quality loops/feature-flags warm; matches spec §Fix #1 acceptance criterion)
 - "MCP servers loaded: 2 connected" appears 20–25s after "Orchestrator starting" (background)
 
 Time `/health/ready` directly:
@@ -330,11 +337,9 @@ Run via `dashboard && npm run dev` (or `make dev`) + a one-shot Playwright invoc
 
 - [ ] **Step 3.1: Read the current `App.tsx` Brain mount path**
 
-```bash
-sed -n '246,345p' dashboard/src/App.tsx
-```
-
-Confirm the structure: `useState`/`useEffect` for `brainMounted`, the `requestIdleCallback` deferred mount, and the `{brainMounted && (...)}` JSX block at lines 328-341.
+Use the `Read` tool on `dashboard/src/App.tsx` lines 246–345. Confirm the structure:
+`useState`/`useEffect` for `brainMounted`, the `requestIdleCallback` deferred mount, and
+the `{brainMounted && (...)}` JSX block at lines 328-341.
 
 - [ ] **Step 3.2: Edit `App.tsx` to lazy-mount Brain conditionally**
 
@@ -430,32 +435,39 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 4: Fix #4 — Default `/brain` to 500 nodes (selector already exists)
+## Task 4: Fix #4 — Default `/brain` to 500 nodes + add 500 and 1k buttons to selector
 
 **Owner role:** frontend
 **Why last:** depends on the Brain mount being clean (Task 3); easiest fix in the set.
 
 **Files:**
-- Modify: `dashboard/src/pages/Brain.tsx:151` (default nodeLimit) and `:754` (move "Recommended" marker)
+- Modify: `dashboard/src/pages/Brain.tsx:151` (default nodeLimit), `:737-742` (selector array), `:754` (move "Recommended" marker)
 
 ### TDD shape
 
-The progressive selector (500 / 1k / 2k / 5k / All) already exists in `Brain.tsx` at lines 736–758, persisted via `useLocalStorage('brain.nodeLimit', 2000)`. Fix #4 is a one-liner default change plus moving the "Recommended" indicator. Test: visual verification on first /brain visit + assertion that the default applied.
+A node-limit selector already exists in `Brain.tsx` at lines 736–758, persisted via
+`useLocalStorage('brain.nodeLimit', 2000)`. **However**, the actual selector array is
+`[1, 200, 2000, 5000, All]` — there is no `500` button to default to. Fix #4 must:
+1. Add `500` and `1k` (1000) entries to the selector array.
+2. Change the `useLocalStorage` default from 2000 → 500.
+3. Move the "Recommended" teal-dot marker from `value === 2000` to `value === 500`.
+
+Test: visual verification on first /brain visit (cleared localStorage) — selector shows
+the new buttons, 500 is the default and marked Recommended.
 
 - [ ] **Step 4.1: Read existing nodeLimit usage**
 
-```bash
-sed -n '149,155p' dashboard/src/pages/Brain.tsx
-sed -n '736,760p' dashboard/src/pages/Brain.tsx
-```
+Use the `Read` tool on `dashboard/src/pages/Brain.tsx` lines 149–155 and 736–760.
+Confirm: line 151 has `useLocalStorage('brain.nodeLimit', 2000)`; the selector array at
+lines 737–742 contains `{ label: '1', value: 1 }, { label: '200', value: 200 },
+{ label: '2k', value: 2000 }, { label: '5k', value: 5000 }, { label: 'All', value: ... }`;
+and around line 754 there's a `value === 2000 && (...)` for the "Recommended" indicator.
 
-Confirm: line 151 has `useLocalStorage('brain.nodeLimit', 2000)` and around line 754 there's a `value === 2000 && (...)` for the "Recommended" indicator dot.
-
-- [ ] **Step 4.2: Change default nodeLimit and move "Recommended" marker**
+- [ ] **Step 4.2: Change default, expand selector array, move "Recommended" marker**
 
 Edit `dashboard/src/pages/Brain.tsx`.
 
-Line 151:
+**Line 151** — change the default:
 ```tsx
 // BEFORE
 const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 2000)
@@ -463,7 +475,31 @@ const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 2000)
 const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 500)
 ```
 
-Around line 754, in the selector buttons:
+**Lines 737–742** — add `500` and `1k` entries to the selector array (preserve `1` and
+`200` for power-user / debug use):
+```tsx
+// BEFORE
+{[
+  { label: '1', value: 1 },
+  { label: '200', value: 200 },
+  { label: '2k', value: 2000 },
+  { label: '5k', value: 5000 },
+  { label: 'All', value: engramStats?.total_engrams ?? 99999 },
+].map(({ label, value }) => (
+
+// AFTER
+{[
+  { label: '1', value: 1 },
+  { label: '200', value: 200 },
+  { label: '500', value: 500 },
+  { label: '1k', value: 1000 },
+  { label: '2k', value: 2000 },
+  { label: '5k', value: 5000 },
+  { label: 'All', value: engramStats?.total_engrams ?? 99999 },
+].map(({ label, value }) => (
+```
+
+**Around line 754** — move the "Recommended" marker:
 ```tsx
 // BEFORE
 {value === 2000 && (
@@ -488,7 +524,7 @@ Expected: build succeeds, no TS errors.
 In a real browser at `http://localhost:5173` (or :3000 after image rebuild):
 1. DevTools → Application → Local Storage → `http://localhost:5173` → delete the `brain.nodeLimit` key (simulates a new user).
 2. Hard reload, navigate to /brain.
-3. The "500" button in the node-limit selector should have the teal "Recommended" dot. The graph should render with up to 500 nodes.
+3. The selector should now show buttons `1 / 200 / 500 / 1k / 2k / 5k / All` (7 buttons in flex-wrap). The "500" button should have the teal "Recommended" dot and be selected. The graph should render with up to 500 nodes.
 4. Click "1k" — graph refetches and re-renders with 1000 nodes.
 5. Hard reload — selector should remember "1k" (localStorage persistence).
 
