@@ -202,7 +202,7 @@ function useBrainEnabled(): boolean {
 
 /** Prefetch Brain graph data so it's cached before user navigates to /brain.
  *  Skipped entirely when brain is disabled — the engram graph query is one of
- *  the heavier reads in the dashboard (up to 2,000 nodes). */
+ *  the heavier reads in the dashboard (up to 500 nodes by default). */
 function BrainPrefetcher() {
   const enabled = useBrainEnabled()
   useEffect(() => {
@@ -213,8 +213,8 @@ function BrainPrefetcher() {
       staleTime: 30_000,
     })
     queryClient.prefetchQuery({
-      queryKey: ['brain-graph', 2000, false],
-      queryFn: () => apiFetch('/mem/api/v1/engrams/graph/lightweight?max_nodes=2000'),
+      queryKey: ['brain-graph', 500, false],
+      queryFn: () => apiFetch('/mem/api/v1/engrams/graph/lightweight?max_nodes=500'),
       staleTime: 30_000,
     })
   }, [enabled])
