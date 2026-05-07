@@ -1525,3 +1525,15 @@ async def rotate_admin_secret(request: Request, _admin: AdminDep):
     log.warning("Admin secret rotated (ip=%s)", client_ip)
 
     return {"secret": new_secret}
+
+
+# ── Startup-task observability ────────────────────────────────────────────────
+
+@router.get("/api/v1/admin/startup-tasks")
+async def get_startup_tasks(request: Request, _admin: AdminDep):
+    """Background-task status for observability. Used by tests + dashboard.
+    Status values: in_progress | complete | failed | unknown."""
+    state = request.app.state
+    return {
+        "mcp_load": getattr(state, "mcp_load_status", {"status": "unknown"}),
+    }

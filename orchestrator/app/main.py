@@ -229,10 +229,25 @@ async def lifespan(app: FastAPI):
     from pathlib import Path
     Path("/nova/workspace").mkdir(parents=True, exist_ok=True)
 
-    # Load MCP servers from DB and connect to enabled ones
+    # Defer MCP server load past lifespan yield — load_mcp_servers can take
+    # 20+ seconds because MCP child processes (puppeteer, firecrawl) spawn npm
+    # and discover tools. Blocking the lifespan on it kept /health/ready from
+    # returning 200 until MCP was fully connected. See:
+    # docs/perf/2026-05-07-startup-performance-findings.md
     from app.pipeline.tools import load_mcp_servers
-    mcp_count = await load_mcp_servers()
-    log.info("MCP servers loaded: %d connected", mcp_count)
+
+    app.state.mcp_load_status = {"status": "in_progress", "count": None, "error": None}
+
+    async def _load_mcp_background() -> None:
+        try:
+            count = await load_mcp_servers()
+            app.state.mcp_load_status = {"status": "complete", "count": count, "error": None}
+            log.info("MCP servers loaded: %d connected", count)
+        except Exception as exc:  # noqa: BLE001
+            app.state.mcp_load_status = {"status": "failed", "count": 0, "error": str(exc)}
+            log.exception("MCP server load failed (background task)")
+
+    _mcp_load_task = asyncio.create_task(_load_mcp_background(), name="mcp-load")
 
     # Force-fail any tasks still in *_running state from a previous crashed process
     await cleanup_stale_running_on_startup()
@@ -323,12 +338,14 @@ async def lifespan(app: FastAPI):
     _chat_scorer_task.cancel()
     _auto_friction_task.cancel()
     _approval_worker_task.cancel()
+    _mcp_load_task.cancel()
     await _poller.stop()
     _poll_task.cancel()
     # Wait briefly for graceful shutdown
     await asyncio.gather(
         _queue_task, _reaper_task, _effectiveness_task, _chat_scorer_task,
         _auto_friction_task, _poll_task, _approval_worker_task,
+        _mcp_load_task,
         return_exceptions=True,
     )
 

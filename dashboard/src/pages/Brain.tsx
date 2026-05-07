@@ -148,7 +148,7 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
   const [topicsOpen, setTopicsOpen] = useState(false)
   const [rawBloom, setBloomStrength] = useLocalStorage('brain.bloomStrength', 0.2)
   const bloomStrength = Math.min(rawBloom, 1.0)
-  const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 2000)
+  const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 500)
 
   const { data: engramStats } = useQuery<{
     total_engrams: number
@@ -737,6 +737,8 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
                 {[
                   { label: '1', value: 1 },
                   { label: '200', value: 200 },
+                  { label: '500', value: 500 },
+                  { label: '1k', value: 1000 },
                   { label: '2k', value: 2000 },
                   { label: '5k', value: 5000 },
                   { label: 'All', value: engramStats?.total_engrams ?? 99999 },
@@ -751,7 +753,7 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
                     }`}
                   >
                     {label}
-                    {value === 2000 && (
+                    {value === 500 && (
                       <span className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-teal-400" title="Recommended" />
                     )}
                   </button>
