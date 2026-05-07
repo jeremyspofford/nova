@@ -1446,8 +1446,8 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
       // naturally. No artificial sphere positioning.
       .d3AlphaDecay(0.04)
       .d3VelocityDecay(0.4)
-      .warmupTicks(500)
-      .cooldownTicks(0)
+      .warmupTicks(0)
+      .cooldownTicks(500)
 
     try {
       if (isLargeGraph) {
@@ -1531,7 +1531,7 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
       }
     })
 
-    // Disable pointer interaction during warmup — raycasting all scene objects
+    // Disable pointer interaction during layout settling — raycasting all scene objects
     // every 50ms is wasted work while the graph is still moving
     graph.enablePointerInteraction(false)
 
@@ -1949,12 +1949,6 @@ function updateGraphData(graph: any, nodes: GraphNode[], edges: GraphEdge[], use
   }
 
   graph.graphData({ nodes: graphNodes, links: graphLinks })
-
-  // Save positions after synchronous warmup — enables instant re-mount
-  // even if the cooling phase is interrupted (e.g., keep-alive pause)
-  if (!hasCachedLayout) {
-    requestAnimationFrame(() => savePositionCache(graph.graphData()))
-  }
 
   // Cached layout: zoom immediately. Fresh layout: wait for simulation to settle.
   const settleMs = hasCachedLayout ? 100 : (nodes.length > 500 ? 3000 : 1200)
