@@ -12,7 +12,7 @@
 
 Three interlocking problems in `memory-service/app/engram/`:
 
-1. **Two production-cliff queries.** Spreading activation's recursive CTE has unbounded fan-out (worst-case ~`O(seed × degree^max_hops)` × 2 directions, with an `OR`-join that defeats the existing single-column edge indexes). Consolidation's duplicate-merge phase does an `O(N²)` cartesian self-join over engram embeddings with no candidate prefilter. Both will degrade smoothly until they cliff on Nova's no-GPU Beelink production target as the engram count grows past ~10k.
+1. **Two scaling-cliff queries.** Spreading activation's recursive CTE has unbounded fan-out (worst-case ~`O(seed × degree^max_hops)` × 2 directions, with an `OR`-join that defeats the existing single-column edge indexes). Consolidation's duplicate-merge phase does an `O(N²)` cartesian self-join over engram embeddings with no candidate prefilter. Both degrade smoothly until they cliff as the engram count grows past ~10k.
 
 2. **The most algorithmically complex code in Nova has near-zero unit-test coverage.** `consolidation.py` (32k), `activation.py` (13k), `working_memory.py` (13k), `decomposition.py` (13k), `ingestion.py` (23k), `clustering.py` (23k), `entity_resolution.py` (7k), `reconstruction.py` (12k), `neural_router/` are exercised only by black-box log-shape assertions in `tests/test_consolidation.py`. Regressions to scoring formulas, traversal correctness, slot-eviction logic, contradiction resolution, or self-model updates cannot be detected by current tests.
 
