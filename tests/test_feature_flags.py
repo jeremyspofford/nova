@@ -641,6 +641,83 @@ async def test_b10_canonical_patch_pubsub_eval_round_trip(fake_orchestrator):
 
 
 @pytest.mark.asyncio
+async def test_ui_surface_preset_flag_is_registered():
+    """The ui.surface_preset flag must be in the registry and exposed via
+    the joined list response, including its enum variants so the dashboard
+    can render an editor."""
+    async with httpx.AsyncClient(base_url=ORCH_URL, timeout=10.0) as client:
+        # Registry endpoint — confirms flag is declared
+        r = await client.get(
+            "/api/v1/feature-flags/registry",
+            headers=_admin_headers(),
+        )
+        assert r.status_code == 200
+        flags = {f["key"]: f for f in r.json()}
+        assert "ui.surface_preset" in flags
+        flag = flags["ui.surface_preset"]
+        assert flag["type"] == "enum"
+        assert flag["default"] == "chat_only"
+        assert set(flag["variants"]) == {"chat_only", "standard", "advanced"}
+
+        # Joined list endpoint — must also carry variants for the editor UI
+        r = await client.get(
+            "/api/v1/feature-flags/",
+            headers=_admin_headers(),
+        )
+        assert r.status_code == 200
+        rows = {row["key"]: row for row in r.json()}
+        assert "ui.surface_preset" in rows
+        assert set(rows["ui.surface_preset"]["variants"]) == {
+            "chat_only", "standard", "advanced",
+        }
+
+
+@pytest.mark.asyncio
+async def test_public_flags_endpoint_returns_allowlisted_flags():
+    """The public endpoint accepts no auth and returns the allowlisted
+    subset of flags as a flat key->value map. ui.surface_preset must be
+    present (it's the first allowlisted flag)."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")  # no auth header
+        assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body, dict)
+        assert body.get("ui.surface_preset") == "chat_only"  # in-code default
+
+
+@pytest.mark.asyncio
+async def test_public_flags_endpoint_does_not_leak_kill_switches():
+    """Critical / kill-switch flags MUST NOT appear in /public regardless
+    of their override state. This test is the first line of defense for
+    the allowlist."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")
+        assert r.status_code == 200
+        body = r.json()
+        # Every CRITICAL_FLAGS member must be absent
+        forbidden = {
+            "kill.engram.ingestion",
+            "kill.consolidation.cycle",
+            "kill.cortex.thinking_loop",
+            "pipeline.guardrail_strict_mode",
+            "pipeline.web_fetch_strict_sanitize",
+        }
+        leaked = forbidden & set(body.keys())
+        assert not leaked, f"public endpoint leaked critical flags: {leaked}"
+
+
+@pytest.mark.asyncio
+async def test_brain_enabled_flag_is_public():
+    """brain.enabled is migrated from localStorage to a server flag and
+    must be readable via the public endpoint with default True."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("brain.enabled") is True
+
+
+@pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
 

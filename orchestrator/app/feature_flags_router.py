@@ -38,7 +38,7 @@ from app.feature_flags_store import (
     upsert_override,
 )
 from fastapi import APIRouter, HTTPException, Request
-from nova_contracts.feature_flags import declared_flags
+from nova_contracts.feature_flags import declared_flags, register_flag
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,58 @@ CRITICAL_FLAGS: frozenset[str] = frozenset({
     "pipeline.guardrail_strict_mode",
     "pipeline.web_fetch_strict_sanitize",
 })
+
+
+# ---------------------------------------------------------------------------
+# Public flags allowlist
+#
+# Flags safe to expose to unauthenticated browser clients. Fail-closed:
+# anything not in this set is invisible to the public endpoint regardless
+# of override state. Kept tiny on purpose — adding here is a security
+# decision, not a feature decision.
+# ---------------------------------------------------------------------------
+
+PUBLIC_FLAGS: frozenset[str] = frozenset({
+    "ui.surface_preset",
+    "brain.enabled",
+})
+
+
+# ---------------------------------------------------------------------------
+# UI surface preset (capability gate, not a kill-switch)
+#
+# The dashboard reads this via GET /public to decide which nav items to show.
+# Default chat_only collapses Nova to a chat-first product surface; admins
+# can flip to standard or advanced from Settings → System → Feature Flags.
+# ---------------------------------------------------------------------------
+
+UI_SURFACE_PRESET = register_flag(
+    key="ui.surface_preset",
+    type="enum",
+    variants=("chat_only", "standard", "advanced"),
+    default="chat_only",
+    description=(
+        "Coarse-grained dashboard surface visibility. chat_only shows just "
+        "the chat-first surface; standard adds knowledge and tasks; advanced "
+        "exposes everything including admin internals (Pods, AI Quality, "
+        "Audit Log)."
+    ),
+)
+
+
+BRAIN_ENABLED = register_flag(
+    key="brain.enabled",
+    type="bool",
+    default=True,
+    description=(
+        "Whether the Brain nav item is shown in the dashboard sidebar and "
+        "mobile nav. NAV-VISIBILITY ONLY — does NOT control whether the 3D "
+        "scene mounts. The scene-mount gate is a separate platform_config "
+        "key 'features.brain_enabled' (see App.tsx:useBrainEnabled), which "
+        "this flag intentionally does NOT replace. Migrated from per-browser "
+        "localStorage to server truth in 2026-05."
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +212,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": flag.key,
                 "type": flag.type,
+                "variants": list(flag.variants) if flag.variants else None,
                 "default": flag.default,
                 "current_value": override["value"],
                 "is_override": True,
@@ -171,6 +224,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": flag.key,
                 "type": flag.type,
+                "variants": list(flag.variants) if flag.variants else None,
                 "default": flag.default,
                 "current_value": flag.default,
                 "is_override": False,
@@ -189,6 +243,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": override["key"],
                 "type": None,
+                "variants": None,
                 "default": None,
                 "current_value": override["value"],
                 "is_override": True,
@@ -209,6 +264,25 @@ async def get_audit_recent(
     pool = get_pool()
     rows = await list_audit(pool, limit=min(max(limit, 1), 500))
     return [_serialize_row(r) for r in rows]
+
+
+@router.get("/public")
+async def get_public_flags() -> dict[str, Any]:
+    """Return the current values of allowlisted flags. No auth.
+
+    Used by the dashboard to decide UI surface visibility. The browser
+    cannot pass admin credentials safely, so this endpoint exposes a
+    deliberately tiny, audited subset.
+    """
+    pool = get_pool()
+    overrides = await list_overrides(pool)
+    by_key = {o["key"]: o["value"] for o in overrides}
+    out: dict[str, Any] = {}
+    for flag in declared_flags():
+        if flag.key not in PUBLIC_FLAGS:
+            continue
+        out[flag.key] = by_key.get(flag.key, flag.default)
+    return out
 
 
 @router.get("/{key}")

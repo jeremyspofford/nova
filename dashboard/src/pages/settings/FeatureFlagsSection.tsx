@@ -9,7 +9,7 @@ import {
   type FeatureFlagRow,
   type FeatureFlagAuditRow,
 } from '../../api'
-import { Section, Button, Toggle, Badge } from '../../components/ui'
+import { Section, Button, Toggle, Badge, Select } from '../../components/ui'
 
 // ── CRITICAL_FLAGS — must match orchestrator/app/feature_flags_router.py ─────
 //
@@ -265,7 +265,17 @@ function FlagRow({
             onChange={v => onPatch(row.key, v)}
             disabled={saving}
           />
+        ) : row.type === 'enum' && row.variants && row.variants.length > 0 ? (
+          <Select
+            value={String(row.current_value)}
+            onChange={(e) => onPatch(row.key, e.target.value)}
+            disabled={saving}
+            items={row.variants.map(v => ({ value: String(v), label: String(v) }))}
+          />
         ) : (
+          // Orphan rows (type === null) and non-bool/non-enum primitives intentionally
+          // fall through to read-only display — the admin can still see the value but
+          // can't edit until the flag is properly declared in code.
           <span className="font-mono text-caption text-content-secondary">
             {String(row.current_value)}
           </span>
