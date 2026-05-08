@@ -76,6 +76,7 @@ CRITICAL_FLAGS: frozenset[str] = frozenset({
 
 PUBLIC_FLAGS: frozenset[str] = frozenset({
     "ui.surface_preset",
+    "brain.enabled",
 })
 
 
@@ -97,6 +98,21 @@ UI_SURFACE_PRESET = register_flag(
         "the chat-first surface; standard adds knowledge and tasks; advanced "
         "exposes everything including admin internals (Pods, AI Quality, "
         "Audit Log)."
+    ),
+)
+
+
+BRAIN_ENABLED = register_flag(
+    key="brain.enabled",
+    type="bool",
+    default=True,
+    description=(
+        "Whether the Brain nav item is shown in the dashboard sidebar and "
+        "mobile nav. NAV-VISIBILITY ONLY — does NOT control whether the 3D "
+        "scene mounts. The scene-mount gate is a separate platform_config "
+        "key 'features.brain_enabled' (see App.tsx:useBrainEnabled), which "
+        "this flag intentionally does NOT replace. Migrated from per-browser "
+        "localStorage to server truth in 2026-05."
     ),
 )
 

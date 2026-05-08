@@ -21,7 +21,6 @@ import {
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
-import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useMobileNav } from '../../hooks/useMobileNav'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useFeatureFlag } from '../../hooks/useFeatureFlag'
@@ -74,7 +73,7 @@ export function MobileNav() {
   const location = useLocation()
   const { user, authConfig } = useAuth()
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
-  const [brainEnabled] = useLocalStorage('brain.enabled', true)
+  const brainEnabled = useFeatureFlag<boolean>('brain.enabled', true)
   const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const { hidden } = useMobileNav()
 

@@ -30,7 +30,6 @@ import { useDebug } from '../../stores/debug-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useAttentionCount } from '../../hooks/useAttentionCount'
 import { useApprovalsCount } from '../../hooks/useApprovalsCount'
-import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useFeatureFlag } from '../../hooks/useFeatureFlag'
 
@@ -112,7 +111,7 @@ export function Sidebar({
   const { data: attentionCount = 0 } = useAttentionCount()
   const { data: approvalsCount = 0 } = useApprovalsCount()
   const { isDebug } = useDebug()
-  const [brainEnabled] = useLocalStorage('brain.enabled', true)
+  const brainEnabled = useFeatureFlag<boolean>('brain.enabled', true)
   const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const isActive = (to: string) => {
     return location.pathname === to

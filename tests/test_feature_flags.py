@@ -707,6 +707,17 @@ async def test_public_flags_endpoint_does_not_leak_kill_switches():
 
 
 @pytest.mark.asyncio
+async def test_brain_enabled_flag_is_public():
+    """brain.enabled is migrated from localStorage to a server flag and
+    must be readable via the public endpoint with default True."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("brain.enabled") is True
+
+
+@pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
 
