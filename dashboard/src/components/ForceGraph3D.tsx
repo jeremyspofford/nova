@@ -1161,7 +1161,7 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
   showMilkyWay = true,
   showAsteroids = true,
   showSolarSystems = true,
-  clusterSeparation = 0.3,
+  clusterSeparation = 0,
   colorBy = 'type',
   onReady,
 }: ForceGraph3DProps, ref) {
@@ -1470,10 +1470,14 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
     // between the emergent centroid (organic) and a Fibonacci sphere home
     // position (structured), controlled by clusterSeparation (0-1).
     graph.onEngineTick(() => {
+      const sep = clusterSeparationRef.current
+      // No clustering — let charge force alone shape the layout. Skips the
+      // O(N) per-tick centroid math entirely. User can enable via clusterSeparation prop.
+      if (sep <= 0) return
+
       const data = graph.graphData()
       if (!data?.nodes?.length) return
 
-      const sep = clusterSeparationRef.current
       const homeWeight = sep * 0.6
       const strength = 0.003 + sep * 0.005
 
