@@ -1,5 +1,8 @@
 # Kill-Switch Runbook
 
+> **Naming context:** kill-switches are one of four flag namespaces — see
+> [docs/runbooks/feature-flags.md](feature-flags.md) for the full taxonomy.
+
 > Operational reference for Nova's `kill.*` feature flags. One section per
 > flag. SRE acceptance criterion **SR5** from the prod-readiness memo.
 

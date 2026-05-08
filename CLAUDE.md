@@ -188,6 +188,19 @@ Nova ships a code-first feature-flag system separate from `nova:config:*` runtim
 - `feature_flags_pubsub.py` — `PubsubSubscriber` lifecycle (start/stop, `is_connected` health signal).
 - `feature_flags_testing.py` — `registry_clear()` for unit-test cleanup. Production code MUST NOT import this.
 
+**Public read endpoint:** `GET /api/v1/feature-flags/public` (no auth)
+returns the allowlisted subset for browser consumption. Allowlist lives
+in `orchestrator/app/feature_flags_router.py:PUBLIC_FLAGS` — adding to
+it is a security decision (kill switches MUST stay out).
+
+**Dashboard pattern:** `useFeatureFlag<T>(key, default)` in
+`dashboard/src/hooks/useFeatureFlag.ts`. Backed by TanStack Query;
+returns `default` on missing key, error, or in-flight.
+
+**Naming taxonomy:** see `docs/runbooks/feature-flags.md`. TL;DR:
+`kill.*` (emergency), `<system>.<behavior>` (toggle), `feature.*.enabled`
+(capability gate, temporary), `ui.*` (UX preset/preference).
+
 **Resolution order** in `FlagDef.value()`:
 
 1. `flag_override(...)` context manager (test scope, contextvars-safe)
