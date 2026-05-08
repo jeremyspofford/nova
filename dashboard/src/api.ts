@@ -1650,6 +1650,7 @@ export type FeatureFlagRow = {
   set_by: string | null
   set_at: string | null
   notes: string | null
+  variants?: unknown[] | null
 }
 
 export type FeatureFlagAuditRow = {
@@ -1689,4 +1690,14 @@ export const getFeatureFlagAudit = (key?: string, limit = 50) => {
     ? `/api/v1/feature-flags/${encodeURIComponent(key)}/audit?limit=${limit}`
     : `/api/v1/feature-flags/audit?limit=${limit}`
   return apiFetch<FeatureFlagAuditRow[]>(path)
+}
+
+/**
+ * Fetch the public-readable flag values. No auth — the endpoint is
+ * deliberately small and allowlisted server-side.
+ */
+export async function getPublicFlags(): Promise<Record<string, unknown>> {
+  const res = await fetch('/api/v1/feature-flags/public')
+  if (!res.ok) throw new Error(`getPublicFlags ${res.status}`)
+  return res.json()
 }
