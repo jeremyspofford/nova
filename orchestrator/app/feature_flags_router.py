@@ -66,6 +66,20 @@ CRITICAL_FLAGS: frozenset[str] = frozenset({
 
 
 # ---------------------------------------------------------------------------
+# Public flags allowlist
+#
+# Flags safe to expose to unauthenticated browser clients. Fail-closed:
+# anything not in this set is invisible to the public endpoint regardless
+# of override state. Kept tiny on purpose — adding here is a security
+# decision, not a feature decision.
+# ---------------------------------------------------------------------------
+
+PUBLIC_FLAGS: frozenset[str] = frozenset({
+    "ui.surface_preset",
+})
+
+
+# ---------------------------------------------------------------------------
 # UI surface preset (capability gate, not a kill-switch)
 #
 # The dashboard reads this via GET /public to decide which nav items to show.
@@ -234,6 +248,25 @@ async def get_audit_recent(
     pool = get_pool()
     rows = await list_audit(pool, limit=min(max(limit, 1), 500))
     return [_serialize_row(r) for r in rows]
+
+
+@router.get("/public")
+async def get_public_flags() -> dict[str, Any]:
+    """Return the current values of allowlisted flags. No auth.
+
+    Used by the dashboard to decide UI surface visibility. The browser
+    cannot pass admin credentials safely, so this endpoint exposes a
+    deliberately tiny, audited subset.
+    """
+    pool = get_pool()
+    overrides = await list_overrides(pool)
+    by_key = {o["key"]: o["value"] for o in overrides}
+    out: dict[str, Any] = {}
+    for flag in declared_flags():
+        if flag.key not in PUBLIC_FLAGS:
+            continue
+        out[flag.key] = by_key.get(flag.key, flag.default)
+    return out
 
 
 @router.get("/{key}")

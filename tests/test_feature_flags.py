@@ -673,6 +673,40 @@ async def test_ui_surface_preset_flag_is_registered():
 
 
 @pytest.mark.asyncio
+async def test_public_flags_endpoint_returns_allowlisted_flags():
+    """The public endpoint accepts no auth and returns the allowlisted
+    subset of flags as a flat key->value map. ui.surface_preset must be
+    present (it's the first allowlisted flag)."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")  # no auth header
+        assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body, dict)
+        assert body.get("ui.surface_preset") == "chat_only"  # in-code default
+
+
+@pytest.mark.asyncio
+async def test_public_flags_endpoint_does_not_leak_kill_switches():
+    """Critical / kill-switch flags MUST NOT appear in /public regardless
+    of their override state. This test is the first line of defense for
+    the allowlist."""
+    async with httpx.AsyncClient(base_url=ORCH_URL) as client:
+        r = await client.get("/api/v1/feature-flags/public")
+        assert r.status_code == 200
+        body = r.json()
+        # Every CRITICAL_FLAGS member must be absent
+        forbidden = {
+            "kill.engram.ingestion",
+            "kill.consolidation.cycle",
+            "kill.cortex.thinking_loop",
+            "pipeline.guardrail_strict_mode",
+            "pipeline.web_fetch_strict_sanitize",
+        }
+        leaked = forbidden & set(body.keys())
+        assert not leaked, f"public endpoint leaked critical flags: {leaked}"
+
+
+@pytest.mark.asyncio
 async def test_flag_audit_has_request_metadata_columns():
     """A4 (Security blocker S1): every audit row must capture request metadata.
 
