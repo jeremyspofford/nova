@@ -38,7 +38,7 @@ from app.feature_flags_store import (
     upsert_override,
 )
 from fastapi import APIRouter, HTTPException, Request
-from nova_contracts.feature_flags import declared_flags
+from nova_contracts.feature_flags import declared_flags, register_flag
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,28 @@ CRITICAL_FLAGS: frozenset[str] = frozenset({
     "pipeline.guardrail_strict_mode",
     "pipeline.web_fetch_strict_sanitize",
 })
+
+
+# ---------------------------------------------------------------------------
+# UI surface preset (capability gate, not a kill-switch)
+#
+# The dashboard reads this via GET /public to decide which nav items to show.
+# Default chat_only collapses Nova to a chat-first product surface; admins
+# can flip to standard or advanced from Settings → System → Feature Flags.
+# ---------------------------------------------------------------------------
+
+UI_SURFACE_PRESET = register_flag(
+    key="ui.surface_preset",
+    type="enum",
+    variants=("chat_only", "standard", "advanced"),
+    default="chat_only",
+    description=(
+        "Coarse-grained dashboard surface visibility. chat_only shows just "
+        "the chat-first surface; standard adds knowledge and tasks; advanced "
+        "exposes everything including admin internals (Pods, AI Quality, "
+        "Audit Log)."
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +182,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": flag.key,
                 "type": flag.type,
+                "variants": list(flag.variants) if flag.variants else None,
                 "default": flag.default,
                 "current_value": override["value"],
                 "is_override": True,
@@ -171,6 +194,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": flag.key,
                 "type": flag.type,
+                "variants": list(flag.variants) if flag.variants else None,
                 "default": flag.default,
                 "current_value": flag.default,
                 "is_override": False,
@@ -189,6 +213,7 @@ async def list_flags(_: AdminDep) -> list[dict[str, Any]]:
             out.append({
                 "key": override["key"],
                 "type": None,
+                "variants": None,
                 "default": None,
                 "current_value": override["value"],
                 "is_override": True,
