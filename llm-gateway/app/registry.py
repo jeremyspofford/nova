@@ -475,8 +475,8 @@ MODEL_REGISTRY: dict[str, ModelProvider] = {
     # ── Cerebras — 1M tokens/day free ─────────────────────────────────────────
     # As of 2026, only llama3.1-8b is confirmed active on free tier.
     # llama3.3-70b and llama3.1-70b have been retired from Cerebras Cloud.
+    # Cerebras Cloud and LiteLLM both use the no-dash form (`llama3.1-8b`).
     "cerebras/llama3.1-8b":              _cerebras,
-    "cerebras/llama-3.1-8b":            _cerebras,   # alias for LiteLLM model name
 
     # ── OpenRouter — free models available ────────────────────────────────────
     "openrouter/meta-llama/llama-3.1-8b-instruct:free": _openrouter,

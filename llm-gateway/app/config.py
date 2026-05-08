@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # ── Per-provider default models — override in .env to swap models ──────────
     # These control which model a provider uses when no explicit model is given.
-    # e.g. set DEFAULT_CEREBRAS_MODEL=cerebras/llama-3.1-8b for a faster/cheaper model
+    # e.g. set DEFAULT_GROQ_MODEL=groq/llama-3.1-8b-instant for a faster/cheaper Groq model.
     default_ollama_model: str = "qwen2.5:7b"
     default_groq_model: str = "groq/llama-3.3-70b-versatile"
     default_gemini_model: str = "gemini/gemini-2.5-flash"
