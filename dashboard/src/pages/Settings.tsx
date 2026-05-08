@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useLocalStorage } from '../hooks/useLocalStorage'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bot, Wrench, Palette, Users, Bug, Database, Lock, Code,
@@ -388,8 +387,6 @@ export function Settings() {
   const voiceTtsModel = useConfigValue(entries, 'voice.tts_model', 'tts-1')
 
   const { avatarUrl, isDefaultAvatar, setAvatar } = useNovaIdentity()
-  const [brainEnabled, setBrainEnabled] = useLocalStorage('brain.enabled', true)
-
   // Legacy deep-link: scroll to a specific section within the active tab.
   // e.g. #llm-routing → activate "ai" tab, then scroll to the llm-routing element.
   useEffect(() => {
@@ -536,25 +533,6 @@ export function Settings() {
         {show('appearance') && (
           <div id="appearance">
             <AppearanceSection />
-            <div className="mt-4 px-4 py-3 rounded-md border border-border-subtle bg-surface-card">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-compact font-medium text-content-primary">Brain Visualization</div>
-                  <div className="text-caption text-content-tertiary mt-0.5">3D memory graph on home page (uses GPU)</div>
-                </div>
-                <button
-                  onClick={() => setBrainEnabled(v => !v)}
-                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${
-                    brainEnabled ? 'bg-teal-500' : 'bg-stone-700'
-                  }`}
-                  aria-label={brainEnabled ? 'Disable Brain visualization' : 'Enable Brain visualization'}
-                >
-                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    brainEnabled ? 'translate-x-5' : ''
-                  }`} />
-                </button>
-              </div>
-            </div>
           </div>
         )}
 
