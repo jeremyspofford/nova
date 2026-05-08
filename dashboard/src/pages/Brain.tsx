@@ -136,9 +136,9 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
   const [focusNode, setFocusNode] = useState<{ id: string; ts: number } | null>(null)
   const [showBgStars, setShowBgStars] = useLocalStorage('brain.showBgStars', true)
   const [showNebulae, setShowNebulae] = useLocalStorage('brain.showNebulae', true)
-  const [showEdges, setShowEdges] = useLocalStorage('brain.showEdges', true)
+  const [showEdges, setShowEdges] = useLocalStorage('brain.showEdges', false)
   const [showCelestialObjects, setShowCelestialObjects] = useLocalStorage('brain.showCelestialObjects', true)
-  const [showClusterGalaxies, setShowClusterGalaxies] = useLocalStorage('brain.showClusterGalaxies', true)
+  const [showClusterGalaxies, setShowClusterGalaxies] = useLocalStorage('brain.showClusterGalaxies', false)
   const [showMilkyWay, setShowMilkyWay] = useLocalStorage('brain.showMilkyWay', true)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [colorBy, setColorBy] = useState<'type' | 'source'>(() => {
