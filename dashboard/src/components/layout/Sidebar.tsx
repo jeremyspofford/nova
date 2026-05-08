@@ -31,6 +31,8 @@ import { hasMinRole, type Role } from '../../lib/roles'
 import { useAttentionCount } from '../../hooks/useAttentionCount'
 import { useApprovalsCount } from '../../hooks/useApprovalsCount'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
+import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+import { useFeatureFlag } from '../../hooks/useFeatureFlag'
 
 export type NavItem = {
   to: string
@@ -39,6 +41,7 @@ export type NavItem = {
   icon: typeof MessageSquare
   minRole: Role
   badge?: number
+  presetVisibility?: SurfacePreset[]
 }
 
 export type NavSection = {
@@ -51,38 +54,38 @@ export const navSections: NavSection[] = [
     // Core — no label, always visible
     items: [
       { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
-      { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member' },
-      { to: '/goals', label: 'Goals', icon: Target, minRole: 'member' },
-      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin' },
-      { to: '/friction', label: 'Friction', icon: AlertTriangle, minRole: 'member', debugOnly: true },
+      { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+      { to: '/goals', label: 'Goals', icon: Target, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin', presetVisibility: ['advanced'] },
+      { to: '/friction', label: 'Friction', icon: AlertTriangle, minRole: 'member', debugOnly: true, presetVisibility: ['advanced'] },
     ],
   },
   {
     label: 'Knowledge',
     items: [
-      { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest' },
-      { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member' },
-      { to: '/capture', label: 'Capture', icon: Camera, minRole: 'member' },
+      { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest', presetVisibility: ['standard', 'advanced'] },
+      { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+      { to: '/capture', label: 'Capture', icon: Camera, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
       { to: '/profile', label: 'Profile', icon: User, minRole: 'guest' },
     ],
   },
   {
     label: 'Infrastructure',
     items: [
-      { to: '/pods', label: 'Pods', icon: Boxes, minRole: 'admin' },
+      { to: '/pods', label: 'Pods', icon: Boxes, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/models', label: 'Models', icon: Monitor, minRole: 'member' },
-      { to: '/editor', label: 'Editor', icon: Code, minRole: 'member' },
-      { to: '/ide-connections', label: 'IDE Connections', icon: Cable, minRole: 'member' },
-      { to: '/integrations', label: 'Integrations', icon: Plug, minRole: 'admin' },
+      { to: '/editor', label: 'Editor', icon: Code, minRole: 'member', presetVisibility: ['advanced'] },
+      { to: '/ide-connections', label: 'IDE Connections', icon: Cable, minRole: 'member', presetVisibility: ['advanced'] },
+      { to: '/integrations', label: 'Integrations', icon: Plug, minRole: 'admin', presetVisibility: ['advanced'] },
     ],
   },
   {
     label: 'System',
     items: [
-      { to: '/usage', label: 'Usage', icon: BarChart3, minRole: 'member' },
-      { to: '/ai-quality', label: 'AI Quality', icon: FlaskConical, minRole: 'admin' },
+      { to: '/usage', label: 'Usage', icon: BarChart3, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+      { to: '/ai-quality', label: 'AI Quality', icon: FlaskConical, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/users', label: 'Users', icon: Users, minRole: 'admin' },
-      { to: '/audit-log', label: 'Audit Log', icon: ScrollText, minRole: 'admin' },
+      { to: '/audit-log', label: 'Audit Log', icon: ScrollText, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },
@@ -110,6 +113,7 @@ export function Sidebar({
   const { data: approvalsCount = 0 } = useApprovalsCount()
   const { isDebug } = useDebug()
   const [brainEnabled] = useLocalStorage('brain.enabled', true)
+  const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const isActive = (to: string) => {
     return location.pathname === to
   }
@@ -132,11 +136,12 @@ export function Sidebar({
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-2 space-y-4">
         {navSections.map((section, sIdx) => {
-          const visibleItems = section.items.filter(item =>
-            hasMinRole(userRole, item.minRole) &&
-            (!item.debugOnly || isDebug) &&
-            (item.to !== '/brain' || brainEnabled)
-          )
+          const visibleItems = filterNavItemsByPreset(section.items, preset)
+            .filter(item =>
+              hasMinRole(userRole, item.minRole) &&
+              (!item.debugOnly || isDebug) &&
+              (item.to !== '/brain' || brainEnabled)
+            )
           if (visibleItems.length === 0) return null
           return (
             <div key={sIdx}>

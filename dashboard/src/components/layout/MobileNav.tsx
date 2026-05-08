@@ -23,42 +23,45 @@ import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useMobileNav } from '../../hooks/useMobileNav'
+import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+import { useFeatureFlag } from '../../hooks/useFeatureFlag'
 
 type NavItem = {
   to: string
   label: string
   icon: typeof MessageSquare
   minRole: Role
+  presetVisibility?: SurfacePreset[]
 }
 
 const primaryTabs: NavItem[] = [
   { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
-  { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member' },
-  { to: '/goals', label: 'Goals', icon: Target, minRole: 'member' },
-  { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest' },
+  { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+  { to: '/goals', label: 'Goals', icon: Target, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+  { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest', presetVisibility: ['standard', 'advanced'] },
 ]
 
 const moreItems: { label?: string; items: NavItem[] }[] = [
   {
     label: 'Knowledge',
     items: [
-      { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member' },
+      { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
     ],
   },
   {
     label: 'Infrastructure',
     items: [
-      { to: '/pods', label: 'Pods', icon: Boxes, minRole: 'admin' },
+      { to: '/pods', label: 'Pods', icon: Boxes, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/models', label: 'Models', icon: Monitor, minRole: 'member' },
-      { to: '/editors', label: 'Editors', icon: Code, minRole: 'member' },
-      { to: '/integrations', label: 'Integrations', icon: Plug, minRole: 'admin' },
+      { to: '/editors', label: 'Editors', icon: Code, minRole: 'member', presetVisibility: ['advanced'] },
+      { to: '/integrations', label: 'Integrations', icon: Plug, minRole: 'admin', presetVisibility: ['advanced'] },
     ],
   },
   {
     label: 'System',
     items: [
-      { to: '/usage', label: 'Usage', icon: BarChart3, minRole: 'member' },
-      { to: '/ai-quality', label: 'AI Quality', icon: FlaskConical, minRole: 'admin' },
+      { to: '/usage', label: 'Usage', icon: BarChart3, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
+      { to: '/ai-quality', label: 'AI Quality', icon: FlaskConical, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/users', label: 'Users', icon: Users, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
       { to: '/recovery', label: 'Recovery', icon: HeartPulse, minRole: 'admin' },
@@ -72,6 +75,7 @@ export function MobileNav() {
   const { user, authConfig } = useAuth()
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
   const [brainEnabled] = useLocalStorage('brain.enabled', true)
+  const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const { hidden } = useMobileNav()
 
   const isActive = (to: string) => {
@@ -83,9 +87,10 @@ export function MobileNav() {
     section.items.some(item => isActive(item.to)),
   )
 
-  const visibleTabs = primaryTabs.filter(tab =>
-    hasMinRole(userRole, tab.minRole) && (tab.to !== '/brain' || brainEnabled)
-  )
+  const visibleTabs = filterNavItemsByPreset(primaryTabs, preset)
+    .filter(tab =>
+      hasMinRole(userRole, tab.minRole) && (tab.to !== '/brain' || brainEnabled)
+    )
 
   return (
     <>
@@ -139,7 +144,8 @@ export function MobileNav() {
           </div>
           <div className="overflow-y-auto p-4 space-y-6" style={{ maxHeight: 'calc(100vh - 56px)' }}>
             {moreItems.map((section, sIdx) => {
-              const visibleItems = section.items.filter(item => hasMinRole(userRole, item.minRole))
+              const visibleItems = filterNavItemsByPreset(section.items, preset)
+                .filter(item => hasMinRole(userRole, item.minRole))
               if (visibleItems.length === 0) return null
               return (
                 <div key={sIdx}>
