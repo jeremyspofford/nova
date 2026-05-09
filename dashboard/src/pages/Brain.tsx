@@ -146,7 +146,9 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [topicsOpen, setTopicsOpen] = useState(false)
-  const [rawBloom, setBloomStrength] = useLocalStorage('brain.bloomStrength', 0.2)
+  // Bloom defaults OFF — strength of 0 disables the post-processing entirely.
+  // Heavy GPU cost on lower-spec machines; user can opt in via the slider.
+  const [rawBloom, setBloomStrength] = useLocalStorage('brain.bloomStrength', 0)
   const bloomStrength = Math.min(rawBloom, 1.0)
   const [nodeLimit, setNodeLimit] = useLocalStorage('brain.nodeLimit', 500)
 
@@ -180,25 +182,16 @@ export default function Brain({ hidden = false }: { hidden?: boolean }) {
 
   const activeGraph = searchActive && searchGraph ? searchGraph : graph
 
-  // Progressive enhancement — cap expensive effects at high node counts
+  // Progressive enhancement — cap expensive effects at high node counts.
+  // Particles default OFF at all sizes: they animate along (potentially hidden)
+  // edges and looked like glowing "connections" even with showEdges=false.
+  // User can re-enable via showEdges (no separate particles toggle today).
   const nodeCount = activeGraph?.nodes.length ?? 0
-  const perf = useMemo(() => {
-    if (nodeCount > 1000) return {
-      showEdges,
-      bloomStrength: Math.min(bloomStrength, 1.0),
-      particlesAlways: false,
-    }
-    if (nodeCount > 500) return {
-      showEdges,
-      bloomStrength: Math.min(bloomStrength, 1.0),
-      particlesAlways: false,
-    }
-    return {
-      showEdges,
-      bloomStrength,
-      particlesAlways: true,
-    }
-  }, [nodeCount, showEdges, bloomStrength])
+  const perf = useMemo(() => ({
+    showEdges,
+    bloomStrength: Math.min(bloomStrength, 1.0),
+    particlesAlways: false,
+  }), [showEdges, bloomStrength])
 
   // Keyboard shortcuts
   useEffect(() => {

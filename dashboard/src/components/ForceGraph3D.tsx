@@ -1555,18 +1555,24 @@ export const ForceGraph3D = forwardRef<ForceGraph3DHandle, ForceGraph3DProps>(fu
     })
 
     // ── Bloom post-processing ──────────────────────────────────────────
+    // Only attach the bloom pass when strength > 0. UnrealBloomPass allocates
+    // ping-pong render targets and triggers per-frame readPixels for program-
+    // status checks, so attaching at strength 0 is not free. Skipping it
+    // entirely keeps the render path lean for users who turned bloom off.
     try {
-      const bloomStrength = neuralModeRef.current?.enabled
-        ? (neuralModeRef.current.bloomStrength ?? 0.2)
-        : 0.2
-      const bloomPass = new UnrealBloomPass(
-        new Vector2(Math.floor(width / 2), Math.floor(height / 2)),
-        bloomStrength,   // strength
-        0.6,   // radius — wider halo for star glow
-        0.15,  // threshold — catch dimmer star cores
-      )
-      bloomPassRef.current = bloomPass
-      graph.postProcessingComposer().addPass(bloomPass)
+      const requestedStrength = neuralModeRef.current?.enabled
+        ? (neuralModeRef.current.bloomStrength ?? 0)
+        : 0
+      if (requestedStrength > 0) {
+        const bloomPass = new UnrealBloomPass(
+          new Vector2(Math.floor(width / 2), Math.floor(height / 2)),
+          requestedStrength,   // strength
+          0.6,   // radius — wider halo for star glow
+          0.15,  // threshold — catch dimmer star cores
+        )
+        bloomPassRef.current = bloomPass
+        graph.postProcessingComposer().addPass(bloomPass)
+      }
     } catch (e) {
       console.warn('Bloom pass failed, continuing without glow:', e)
     }
