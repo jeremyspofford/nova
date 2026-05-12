@@ -61,3 +61,13 @@ class HealthStatus(BaseModel):
     service: str
     version: str = "2.0.0"
     checks: dict[str, bool] = Field(default_factory=dict)
+
+
+class SecretInfo(BaseModel):
+    """Public view of a secret — no ciphertext or plaintext value."""
+    name: str
+    purpose: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_used: datetime | None = None
+    used_count: int = 0

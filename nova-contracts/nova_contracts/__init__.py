@@ -7,9 +7,11 @@ from .models import (
     Message,
     ToolCallRequest,
     HealthStatus,
+    SecretInfo,
 )
 
 __all__ = [
     "Tier", "TaskStatus", "Task", "TaskEvent",
     "Message", "ToolCallRequest", "HealthStatus",
+    "SecretInfo",
 ]

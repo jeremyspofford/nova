@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379"
     credential_master_key: str = ""
+    admin_secret: str = "nova-dev-secret"
     log_level: str = "INFO"
     nova_workspace: str = "/workspace"
 
