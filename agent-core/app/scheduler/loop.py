@@ -59,6 +59,13 @@ async def _poll_once(pool, dispatch_fn: Callable) -> None:
                 )
                 if running_task is not None:
                     logger.debug("Skipping schedule %s — previous run still active", schedule_id[:8])
+                    # Advance next_fire only so we don't re-trigger on the next poll cycle.
+                    # Do NOT touch last_fired or fire_count — no task was actually dispatched.
+                    skip_next_fire = compute_next_fire(trigger) if trigger.get("type") not in ("once",) else next_fire
+                    await conn.execute(
+                        "UPDATE schedules SET next_fire = $1 WHERE id = $2",
+                        skip_next_fire, row["id"],
+                    )
                     continue
 
                 # Missed-schedule note.
@@ -201,14 +208,23 @@ async def fire_webhook_schedule(
     """Called by the webhook endpoint after auth; dispatches the schedule's task."""
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT prompt FROM schedules WHERE id = $1 AND enabled = true",
+            "SELECT prompt, trigger FROM schedules WHERE id = $1 AND enabled = true",
             schedule_id,
         )
     if row is None:
         logger.warning("Webhook fire for unknown/disabled schedule %s", schedule_id[:8])
         return
 
-    prompt = resolve_placeholders(row["prompt"], payload)
+    schedule_trigger = row["trigger"]
+    if isinstance(schedule_trigger, str):
+        import json as _json
+        schedule_trigger = _json.loads(schedule_trigger)
+
+    # Only pass keys explicitly declared in the trigger config — prevents prompt injection
+    # from attacker-controlled webhook payloads.
+    allowed_keys = schedule_trigger.get("payload_keys", []) if isinstance(schedule_trigger, dict) else []
+    ctx = {k: str(payload[k]) for k in allowed_keys if k in payload}
+    prompt = resolve_placeholders(row["prompt"], ctx)
     try:
         task_id = await dispatch_fn(prompt, f"schedule:{schedule_id}", schedule_id)
         logger.info("Webhook schedule %s dispatched task %s", schedule_id[:8], str(task_id)[:8])

@@ -169,7 +169,7 @@ async def update_schedule(
         if next_fire_clause:
             updated = await conn.fetchrow(
                 f"""UPDATE schedules
-                    SET name = $2, prompt = $3, trigger = $4, enabled = $5{next_fire_clause}
+                    SET name = $2, prompt = $3, trigger = $4::jsonb, enabled = $5{next_fire_clause}
                     WHERE id = $1::uuid
                     RETURNING id, name, prompt, trigger, enabled, created_by, created_at,
                               last_fired, next_fire, fire_count""",
@@ -178,7 +178,7 @@ async def update_schedule(
         else:
             updated = await conn.fetchrow(
                 """UPDATE schedules
-                   SET name = $2, prompt = $3, trigger = $4, enabled = $5
+                   SET name = $2, prompt = $3, trigger = $4::jsonb, enabled = $5
                    WHERE id = $1::uuid
                    RETURNING id, name, prompt, trigger, enabled, created_by, created_at,
                              last_fired, next_fire, fire_count""",
