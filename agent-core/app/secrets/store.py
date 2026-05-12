@@ -31,6 +31,12 @@ async def get_secret(pool: asyncpg.Pool, name: str, master_key_hex: str) -> str 
     return decrypt(bytes(row["ciphertext"]), bytes(row["nonce"]), name, master_key_hex)
 
 
+async def secret_exists(pool: asyncpg.Pool, name: str) -> bool:
+    """Check if a secret exists by name (no decryption)."""
+    row = await pool.fetchrow("SELECT 1 FROM secrets WHERE name = $1", name)
+    return row is not None
+
+
 async def set_secret(
     pool: asyncpg.Pool,
     name: str,

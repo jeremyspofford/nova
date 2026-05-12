@@ -87,3 +87,9 @@ def test_requires_admin_secret():
 def test_wrong_admin_secret_rejected():
     r = httpx.get(f"{BASE}/api/v1/secrets", headers={"X-Admin-Secret": "wrong-secret"})
     assert r.status_code == 403
+
+
+def test_patch_empty_body_returns_422():
+    httpx.post(f"{BASE}/api/v1/secrets", json={"name": "nova_test_secret_a", "value": "x"}, headers=HEADERS)
+    r = httpx.patch(f"{BASE}/api/v1/secrets/nova_test_secret_a", json={}, headers=HEADERS)
+    assert r.status_code == 422

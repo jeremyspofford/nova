@@ -54,11 +54,11 @@ async def create_secret(body: SecretCreate, _: None = Depends(_require_admin)):
 
 @router.patch("/{name}")
 async def update_secret(name: str, body: SecretUpdate, _: None = Depends(_require_admin)):
+    if body.value is None and body.purpose is None:
+        raise HTTPException(status_code=422, detail="At least one of 'value' or 'purpose' must be provided")
     pool = await get_pool()
     if body.value is not None:
-        rows = await store.list_secrets(pool)
-        existing = next((r for r in rows if r["name"] == name), None)
-        if not existing:
+        if not await store.secret_exists(pool, name):
             raise HTTPException(status_code=404, detail="Secret not found")
         await store.set_secret(pool, name, body.value, body.purpose, settings.credential_master_key)
     elif body.purpose is not None:

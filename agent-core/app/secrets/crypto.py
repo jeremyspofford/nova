@@ -1,4 +1,5 @@
 # agent-core/app/secrets/crypto.py
+import functools
 import os
 
 from cryptography.hazmat.primitives import hashes
@@ -6,13 +7,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
+@functools.lru_cache(maxsize=4)
 def derive_key(master_key_hex: str) -> bytes:
     """Derive a 32-byte AES key from the hex-encoded master key via HKDF-SHA256."""
     master_bytes = bytes.fromhex(master_key_hex)
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"",
+        salt=b"nova-secrets-v1",
         info=b"nova/secrets",
     ).derive(master_bytes)
 
