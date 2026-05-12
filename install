@@ -16,20 +16,22 @@ if [ ! -f .env ]; then
 
   # Generate master key
   MASTER_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/CREDENTIAL_MASTER_KEY=/CREDENTIAL_MASTER_KEY=${MASTER_KEY}/" .env
-  else
-    sed -i "s/CREDENTIAL_MASTER_KEY=/CREDENTIAL_MASTER_KEY=${MASTER_KEY}/" .env
-  fi
+  python3 -c "
+import pathlib, sys
+p = pathlib.Path('.env')
+content = p.read_text()
+p.write_text(content.replace('CREDENTIAL_MASTER_KEY=', 'CREDENTIAL_MASTER_KEY=' + sys.argv[1], 1))
+" "$MASTER_KEY"
 
   # Prompt for postgres password
   read -rsp "Set a Postgres password: " PG_PASS
   echo
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/POSTGRES_PASSWORD=changeme/POSTGRES_PASSWORD=${PG_PASS}/" .env
-  else
-    sed -i "s/POSTGRES_PASSWORD=changeme/POSTGRES_PASSWORD=${PG_PASS}/" .env
-  fi
+  python3 -c "
+import pathlib, sys
+p = pathlib.Path('.env')
+content = p.read_text()
+p.write_text(content.replace('POSTGRES_PASSWORD=changeme', 'POSTGRES_PASSWORD=' + sys.argv[1], 1))
+" "$PG_PASS"
 fi
 
 # Create data dirs

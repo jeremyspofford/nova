@@ -1,4 +1,5 @@
 # agent-core/app/config.py
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -8,6 +9,13 @@ class Settings(BaseSettings):
     credential_master_key: str = ""
     log_level: str = "INFO"
     nova_workspace: str = "/workspace"
+
+    @field_validator("credential_master_key")
+    @classmethod
+    def key_must_not_be_empty_if_set(cls, v: str) -> str:
+        if v and len(v) < 32:
+            raise ValueError("CREDENTIAL_MASTER_KEY must be at least 32 characters")
+        return v
 
     class Config:
         env_file = ".env"

@@ -28,8 +28,9 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
         for f in sql_files:
             if f.name not in applied:
                 logger.info(f"Running migration: {f.name}")
-                await conn.execute(f.read_text())
-                await conn.execute("INSERT INTO schema_migrations (filename) VALUES ($1)", f.name)
+                async with conn.transaction():
+                    await conn.execute(f.read_text())
+                    await conn.execute("INSERT INTO schema_migrations (filename) VALUES ($1)", f.name)
 
 
 @asynccontextmanager
@@ -57,7 +58,8 @@ async def health_ready():
         async with pool.acquire() as conn:
             await conn.fetchval("SELECT 1")
         db_ok = True
-    except Exception:
+    except Exception as exc:
+        logger.warning("DB health check failed: %s", exc)
         db_ok = False
     status = "ok" if db_ok else "error"
     return HealthStatus(status=status, service="agent-core", checks={"db": db_ok})

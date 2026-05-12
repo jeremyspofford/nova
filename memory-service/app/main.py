@@ -1,9 +1,12 @@
 # memory-service/app/main.py
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from nova_contracts import HealthStatus
 from .config import settings
 from .db import close_pool, get_pool
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -28,6 +31,7 @@ async def ready():
         async with pool.acquire() as conn:
             await conn.fetchval("SELECT 1")
         db_ok = True
-    except Exception:
+    except Exception as exc:
+        logger.warning("DB health check failed: %s", exc)
         db_ok = False
     return HealthStatus(status="ok" if db_ok else "error", service="memory-service", checks={"db": db_ok})
