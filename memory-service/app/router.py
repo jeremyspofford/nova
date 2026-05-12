@@ -62,10 +62,12 @@ async def get_memory(memory_id: str):
 @router.delete("/{memory_id}", status_code=204)
 async def delete_memory(memory_id: str):
     pool = await get_pool()
-    await pool.execute(
+    tag = await pool.execute(
         "DELETE FROM memories WHERE id = $1::uuid",
         memory_id,
     )
+    if tag == "DELETE 0":
+        raise HTTPException(status_code=404, detail="Memory not found")
 
 
 @router.post("/search")

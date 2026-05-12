@@ -19,7 +19,7 @@ _worker_task: asyncio.Task | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from .worker import embed_worker, recover_unembedded
+    from .worker import embed_worker, recover_unembedded, close_http as close_worker_http
 
     pool = await get_pool()
     await probe_and_lock(pool)
@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
 
     await close_pool()
     await close_embed()
+    await close_worker_http()
     logger.info("memory-service stopped")
 
 

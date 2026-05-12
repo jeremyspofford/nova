@@ -15,34 +15,50 @@ logger = logging.getLogger(__name__)
 MAX_FAILURES = 5
 _failure_counts: dict[str, int] = {}
 
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http
+    if _http is None:
+        _http = httpx.AsyncClient(timeout=30.0)
+    return _http
+
+
+async def close_http() -> None:
+    global _http
+    if _http:
+        await _http.aclose()
+        _http = None
+
 
 async def _get_tags(content: str) -> list[str]:
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"{settings.llm_gateway_url}/complete",
-                json={
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are classifying a memory fragment for a personal AI assistant. "
-                                "Output 3-8 short lowercase tags (underscore_separated, no spaces). "
-                                "Capture topics, entities, intent, and temporal context. "
-                                "Reply with a JSON array of strings only."
-                            ),
-                        },
-                        {"role": "user", "content": content[:2000]},
-                    ],
-                    "model": "auto",
-                    "max_tokens": 100,
-                },
-            )
-            r.raise_for_status()
-            raw = r.json().get("content", "[]").strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            return json.loads(raw)
+        client = _get_http_client()
+        r = await client.post(
+            f"{settings.llm_gateway_url}/complete",
+            json={
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are classifying a memory fragment for a personal AI assistant. "
+                            "Output 3-8 short lowercase tags (underscore_separated, no spaces). "
+                            "Capture topics, entities, intent, and temporal context. "
+                            "Reply with a JSON array of strings only."
+                        ),
+                    },
+                    {"role": "user", "content": content[:2000]},
+                ],
+                "model": "auto",
+                "max_tokens": 100,
+            },
+        )
+        r.raise_for_status()
+        raw = r.json().get("content", "[]").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        return json.loads(raw)
     except Exception as exc:
         logger.warning("Tag generation failed: %s", exc)
         return []

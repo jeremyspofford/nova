@@ -101,6 +101,10 @@ async def _semantic_search(
         params.append(tags)
         filters.append(f"tags @> ${len(params)}")
 
+    if min_similarity is not None:
+        params.append(min_similarity)
+        filters.append(f"1 - (embedding <=> $1) >= ${len(params)}")
+
     where = " AND ".join(filters)
     sql = f"""
         SELECT
@@ -113,10 +117,7 @@ async def _semantic_search(
         LIMIT $2
     """
     rows = await pool.fetch(sql, *params)
-    results = [dict(r) for r in rows]
-    if min_similarity is not None:
-        results = [r for r in results if (r.get("similarity") or 0) >= min_similarity]
-    return results
+    return [dict(r) for r in rows]
 
 
 async def _keyword_search(
