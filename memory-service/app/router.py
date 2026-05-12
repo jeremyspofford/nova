@@ -5,6 +5,7 @@ from typing import Optional
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from nova_contracts import MemorySearchRequest
 
 from .config import settings
 from .db import get_pool
@@ -27,14 +28,6 @@ class MemoryWriteRequest(BaseModel):
     content: str
     source_kind: str
     source_uri: Optional[str] = None
-
-
-class MemorySearchRequest(BaseModel):
-    query: str
-    limit: int = 10
-    source_kinds: Optional[list[str]] = None
-    tags: Optional[list[str]] = None
-    min_similarity: Optional[float] = None
 
 
 # IMPORTANT: /stats must be defined BEFORE /{memory_id} to avoid "stats" matching as an ID
@@ -64,6 +57,15 @@ async def get_memory(memory_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
     return row
+
+
+@router.delete("/{memory_id}", status_code=204)
+async def delete_memory(memory_id: str):
+    pool = await get_pool()
+    await pool.execute(
+        "DELETE FROM memories WHERE id = $1::uuid",
+        memory_id,
+    )
 
 
 @router.post("/search")
