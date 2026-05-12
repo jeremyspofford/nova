@@ -1,11 +1,26 @@
 -- agent-core/app/migrations/004_tasks_audit.sql
 -- Idempotent: all statements guarded with IF NOT EXISTS or ADD COLUMN IF NOT EXISTS.
 
--- Extend tasks table (Plan 0 created minimal columns)
+-- Extend tasks table (Plan 0 created minimal columns).
+-- `prompt` is also added defensively: legacy v1 deployments that pre-date Plan 0
+-- have a `user_input` column instead, so the Plan 0 CREATE TABLE was skipped
+-- and the v2 `prompt` column never landed. We also need to relax the legacy
+-- `user_input NOT NULL` constraint when present so v2 inserts (which only set
+-- `prompt`+`goal`) succeed.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS prompt TEXT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal TEXT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS result TEXT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tasks' AND column_name = 'user_input' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE tasks ALTER COLUMN user_input DROP NOT NULL;
+    END IF;
+END $$;
 
 -- Extend task_events for v2 audit chain (old columns kept for compat)
 ALTER TABLE task_events ADD COLUMN IF NOT EXISTS event_type TEXT DEFAULT '';

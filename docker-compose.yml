@@ -35,7 +35,7 @@ services:
       dockerfile: agent-core/Dockerfile
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
       REDIS_URL: redis://redis:6379
       DOCKER_SOCKET_PROXY_URL: http://docker-socket-proxy:2375
       NOVA_WORKSPACE: ${NOVA_WORKSPACE:-/workspace}
@@ -77,7 +77,7 @@ services:
       dockerfile: memory-service/Dockerfile
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
       REDIS_URL: redis://redis:6379
     ports:
       - "8002:8002"
@@ -131,7 +131,7 @@ services:
       dockerfile: recovery/Dockerfile
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data:/data:ro
