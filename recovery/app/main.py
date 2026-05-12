@@ -1,4 +1,5 @@
-# memory-service/app/main.py
+# recovery/app/main.py
+import asyncpg
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from nova_contracts import HealthStatus
@@ -13,7 +14,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="memory-service", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="recovery", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/health/live")
@@ -30,4 +31,4 @@ async def ready():
         db_ok = True
     except Exception:
         db_ok = False
-    return HealthStatus(status="ok" if db_ok else "error", service="memory-service", checks={"db": db_ok})
+    return HealthStatus(status="ok" if db_ok else "error", service="recovery", checks={"db": db_ok})

@@ -1,4 +1,4 @@
-# llm-gateway/app/config.py
+# voice-gateway/app/config.py
 from pydantic_settings import BaseSettings
 
 
