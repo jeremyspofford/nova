@@ -8,10 +8,14 @@ from .models import (
     ToolCallRequest,
     HealthStatus,
     SecretInfo,
+    MemoryRecord,
+    MemorySearchRequest,
+    MemoryStats,
 )
 
 __all__ = [
     "Tier", "TaskStatus", "Task", "TaskEvent",
     "Message", "ToolCallRequest", "HealthStatus",
     "SecretInfo",
+    "MemoryRecord", "MemorySearchRequest", "MemoryStats",
 ]

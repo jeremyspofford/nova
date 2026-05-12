@@ -71,3 +71,31 @@ class SecretInfo(BaseModel):
     updated_at: datetime
     last_used: datetime | None = None
     used_count: int = 0
+
+
+class MemoryRecord(BaseModel):
+    """A single memory row, as returned by GET /memories/{id} and search results."""
+    id: str
+    content: str
+    source_kind: str
+    source_uri: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime
+    used_count: int = 0
+    last_used: datetime | None = None
+    similarity: float | None = None  # only present in search results
+
+
+class MemorySearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+    source_kinds: list[str] | None = None
+    tags: list[str] | None = None
+    min_similarity: float | None = None
+
+
+class MemoryStats(BaseModel):
+    total_rows: int
+    table_size_bytes: int
+    embedding_coverage_pct: float
+    degraded: bool  # True when no embedding model is reachable
