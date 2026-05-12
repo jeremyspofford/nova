@@ -17,6 +17,12 @@ from .models import (
     LLMStreamChunk,
     EmbedRequest,
     EmbedResponse,
+    ToolCallModel,
+    TaskCreateRequest,
+    TaskStatusResponse,
+    TaskEventResponse,
+    ApprovalRequestModel,
+    ApprovalDecision,
 )
 
 __all__ = [
@@ -26,4 +32,7 @@ __all__ = [
     "MemoryRecord", "MemorySearchRequest", "MemoryStats",
     "LLMMessage", "LLMRequest", "LLMResponse", "LLMStreamChunk",
     "EmbedRequest", "EmbedResponse",
+    "ToolCallModel", "TaskCreateRequest",
+    "TaskStatusResponse", "TaskEventResponse",
+    "ApprovalRequestModel", "ApprovalDecision",
 ]

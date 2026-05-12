@@ -111,6 +111,7 @@ class LLMRequest(BaseModel):
     model: str = "auto"
     max_tokens: int = 2000
     temperature: float = 0.7
+    tools: list[dict[str, Any]] | None = None  # OpenAI function-call tool definitions
 
 
 class LLMResponse(BaseModel):
@@ -134,3 +135,54 @@ class EmbedResponse(BaseModel):
     embedding: list[float]
     model: str
     dim: int
+
+
+class ToolCallModel(BaseModel):
+    """An LLM-issued tool call (function-call envelope)."""
+    id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskCreateRequest(BaseModel):
+    """Request body for POST /api/v1/tasks."""
+    goal: str
+
+
+class TaskStatusResponse(BaseModel):
+    """Response shape for GET /api/v1/tasks/{id}."""
+    id: str
+    goal: str
+    status: str
+    result: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class TaskEventResponse(BaseModel):
+    """Response shape for GET /api/v1/tasks/{id}/events entries."""
+    id: str
+    task_id: str
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: str
+    chain_hash: str
+
+
+class ApprovalRequestModel(BaseModel):
+    """Response shape for GET /api/v1/approvals entries."""
+    id: str
+    task_id: str
+    tool_name: str
+    scope: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    tier: str
+    status: str
+    created_at: str
+
+
+class ApprovalDecision(BaseModel):
+    """Request body for POST /api/v1/approvals/{id}/grant."""
+    remember: bool = False
+    remember_ttl: int = 3600
