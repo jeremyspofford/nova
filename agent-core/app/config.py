@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     admin_secret: str = "nova-dev-secret"
     log_level: str = "INFO"
     nova_workspace: str = "/workspace"
+    memory_service_url: str = "http://memory-service:8002"
 
     @field_validator("credential_master_key")
     @classmethod
