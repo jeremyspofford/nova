@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import close_pool, get_pool
+from .secrets.router import router as secrets_router
 from nova_contracts import HealthStatus
 
 logging.basicConfig(level=settings.log_level)
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
+app.include_router(secrets_router)
 
 
 @app.get("/health/live")
