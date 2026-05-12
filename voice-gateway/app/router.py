@@ -34,10 +34,12 @@ async def list_providers():
 async def stt_stream(request: Request):
     """Buffer incoming audio bytes, transcribe, return SSE.
 
-    Always returns 200 + SSE — errors are surfaced as SSE events so callers
-    handle them uniformly.
+    Returns 400 for empty body. For non-empty bodies always returns 200 + SSE
+    — errors are surfaced as SSE events so callers handle them uniformly.
     """
     audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="Empty audio body")
 
     async def generate():
         try:
