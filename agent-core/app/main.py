@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import close_pool, get_pool
+from .loop.main import close_llm_client
 from .secrets.router import router as secrets_router
 from .tasks_router import router as tasks_router
 from .approvals_router import router as approvals_router
@@ -16,6 +17,7 @@ from nova_contracts import HealthStatus
 # Importing tools_builtin triggers @tool self-registration as a side effect.
 from .tools import tools_builtin  # noqa: F401
 from .tools.mcp.registry import boot_mcp_servers
+from .tools.tools_builtin.memory import close_mem_client
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -50,6 +52,8 @@ async def lifespan(app: FastAPI):
         logger.warning("MCP boot failed (continuing): %s", exc)
     logger.info("agent-core started")
     yield
+    await close_llm_client()
+    await close_mem_client()
     await close_pool()
     logger.info("agent-core stopped")
 

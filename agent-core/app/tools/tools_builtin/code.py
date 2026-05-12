@@ -1,4 +1,7 @@
-"""Sandboxed code execution: python | javascript | bash."""
+"""code.execute — run Python / JavaScript / Bash inside the sandbox."""
+import base64
+import shlex
+
 from ..registry import tool, Tier
 from ..context import ToolContext
 from ..sandbox.manager import run_in_sandbox
@@ -13,6 +16,7 @@ async def code_execute(language: str, code: str, *, ctx: ToolContext) -> dict:
         return {"error": f"Unsupported language {language!r}. Use: python, javascript, bash"}
     runner = _RUNNERS[language]
     tmp = f"/tmp/nova_{ctx.idempotency_key[:8]}.script"
-    write_cmd = f"cat > {tmp} << 'NOVA_SCRIPT_EOF'\n{code}\nNOVA_SCRIPT_EOF"
-    run_cmd = f"{runner} {tmp}"
-    return await run_in_sandbox(str(ctx.task_id), f"{write_cmd} && {run_cmd}", "code")
+    encoded = base64.b64encode(code.encode()).decode()
+    # Use base64 to avoid heredoc injection — no delimiter can appear in encoded content
+    run_cmd = f"echo {shlex.quote(encoded)} | base64 -d > {tmp} && {runner} {tmp}"
+    return await run_in_sandbox(str(ctx.task_id), run_cmd, "code")

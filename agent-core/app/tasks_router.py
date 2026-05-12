@@ -34,7 +34,12 @@ async def create_task(body: TaskCreateRequest, _: None = Depends(_require_admin)
             task_id, body.goal,
         )
     # Fire and forget — the loop owns the lifecycle.
-    asyncio.create_task(run_task(task_id, body.goal, pool))
+    def _on_done(fut: asyncio.Future) -> None:
+        if not fut.cancelled() and fut.exception():
+            logger.error("run_task %s unhandled exception: %s", task_id[:8], fut.exception())
+
+    t = asyncio.create_task(run_task(task_id, body.goal, pool))
+    t.add_done_callback(_on_done)
     return {"id": task_id, "goal": body.goal, "status": "pending"}
 
 

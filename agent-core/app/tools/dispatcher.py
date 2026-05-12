@@ -27,8 +27,7 @@ async def dispatch(
     tool_def = lookup(name)
     call_id = str(uuid.uuid4())
 
-    if task_id not in _task_sems:
-        _task_sems[task_id] = asyncio.Semaphore(5)
+    _task_sems.setdefault(task_id, asyncio.Semaphore(5))
 
     async with _global_sem, _task_sems[task_id]:
         await audit.write_event(pool, task_id, "tool_call_proposed", {

@@ -57,11 +57,12 @@ async def run_in_sandbox(task_id: str, command: str, kind: str) -> dict:
             "AttachStdout": True,
             "AttachStderr": True,
             "User": "sandbox",
+            "Tty": True,   # disables 8-byte stream-framing headers, returns raw bytes
         })
         r.raise_for_status()
         exec_id: str = r.json()["Id"]
 
-        r = await client.post(f"/exec/{exec_id}/start", json={"Detach": False, "Tty": False})
+        r = await client.post(f"/exec/{exec_id}/start", json={"Detach": False, "Tty": True})
         output = r.content.decode(errors="replace")
 
         r = await client.get(f"/exec/{exec_id}/json")

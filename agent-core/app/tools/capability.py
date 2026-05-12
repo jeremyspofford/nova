@@ -51,6 +51,10 @@ def _resolve_scope(template: str, args: dict) -> str:
 async def _request_approval(tool_def, scope: str, args: dict, task_id: str, call_id: str, pool) -> bool:
     approval_id = str(uuid.uuid4())
 
+    # Register event BEFORE DB insert so any concurrent resolve() always finds it
+    event = asyncio.Event()
+    _approval_events[approval_id] = event
+
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -63,9 +67,6 @@ async def _request_approval(tool_def, scope: str, args: dict, task_id: str, call
         )
 
     logger.info("approval_requested id=%s tool=%s scope=%s", approval_id[:8], tool_def.name, scope)
-
-    event = asyncio.Event()
-    _approval_events[approval_id] = event
 
     try:
         await asyncio.wait_for(event.wait(), timeout=APPROVAL_TIMEOUT_S)

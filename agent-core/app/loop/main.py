@@ -20,6 +20,22 @@ from ..tools.sandbox.manager import stop_sandbox
 
 logger = logging.getLogger(__name__)
 
+_llm_client: httpx.AsyncClient | None = None
+
+
+def get_llm_client() -> httpx.AsyncClient:
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = httpx.AsyncClient(timeout=120.0)
+    return _llm_client
+
+
+async def close_llm_client() -> None:
+    global _llm_client
+    if _llm_client:
+        await _llm_client.aclose()
+        _llm_client = None
+
 MAX_ITERATIONS = 20
 ALL_CAPS = ["*"]
 
@@ -162,10 +178,9 @@ async def _llm_complete(messages: list[dict], tools: list[dict]) -> dict | None:
     if tools:
         body["tools"] = tools
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
-            r.raise_for_status()
-            return r.json()
+        r = await get_llm_client().post(f"{settings.llm_gateway_url}/complete", json=body)
+        r.raise_for_status()
+        return r.json()
     except Exception as exc:
         logger.warning("llm gateway /complete failed: %s", exc)
         return None

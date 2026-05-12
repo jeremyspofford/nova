@@ -96,7 +96,15 @@ class StdioMCPClient:
             if rid is not None and rid in self._pending:
                 fut = self._pending.pop(rid)
                 if not fut.done():
-                    fut.set_result(msg)
+                    if "error" in msg:
+                        fut.set_exception(RuntimeError(str(msg["error"])))
+                    else:
+                        fut.set_result(msg.get("result"))
+        # Subprocess exited — reject all waiting callers immediately
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_exception(RuntimeError("MCP subprocess exited"))
+        self._pending.clear()
 
 
 # Module-level registry of active clients keyed by server_id
