@@ -8,7 +8,7 @@ run_subagent(): SPECIAL-tier dispatched sub-agent. Depth limit = 1.
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 import httpx
 
@@ -21,6 +21,27 @@ from ..tools.sandbox.manager import stop_sandbox
 logger = logging.getLogger(__name__)
 
 _llm_client: httpx.AsyncClient | None = None
+
+# Optional dispatch callback set by main.py lifespan.
+# When set, task completions/failures trigger task_complete schedule checks.
+_task_complete_dispatch_fn: Callable | None = None
+
+
+def set_task_complete_dispatch_fn(fn: Callable) -> None:
+    """Register the scheduler's dispatch function. Called from main.py lifespan."""
+    global _task_complete_dispatch_fn
+    _task_complete_dispatch_fn = fn
+
+
+async def _notify_task_complete(pool, task_id: str, final_status: str) -> None:
+    """Fire task_complete schedules if a dispatch_fn is registered."""
+    if _task_complete_dispatch_fn is None:
+        return
+    try:
+        from ..scheduler import fire_task_complete_schedules
+        await fire_task_complete_schedules(pool, task_id, final_status, _task_complete_dispatch_fn)
+    except Exception as exc:
+        logger.warning("task_complete schedule hook failed for task %s: %s", task_id[:8], exc)
 
 
 def get_llm_client() -> httpx.AsyncClient:
@@ -66,6 +87,7 @@ async def run_task(task_id: str, goal: str, pool) -> dict:
                 task_id, result.get("final", ""),
             )
         await audit.write_event(pool, task_id, "task_completed", result)
+        await _notify_task_complete(pool, task_id, "completed")
         return result
     except Exception as exc:
         logger.warning("task %s failed: %s", task_id[:8], exc)
@@ -75,6 +97,7 @@ async def run_task(task_id: str, goal: str, pool) -> dict:
                 task_id, str(exc),
             )
         await audit.write_event(pool, task_id, "task_failed", {"error": str(exc)})
+        await _notify_task_complete(pool, task_id, "failed")
         return {"error": str(exc)}
     finally:
         cleanup_task(task_id)
