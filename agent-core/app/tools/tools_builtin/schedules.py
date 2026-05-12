@@ -87,7 +87,7 @@ async def schedule_disable(
     return {"schedule_id": schedule_id, "enabled": False}
 
 
-@tool(tier=Tier.DESTRUCT, timeout_s=10, name="schedule_delete")
+@tool(tier=Tier.DESTRUCT, reversible=False, timeout_s=10, name="schedule_delete")
 async def schedule_delete(
     schedule_id: str,
     *,

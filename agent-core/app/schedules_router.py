@@ -214,7 +214,7 @@ async def delete_schedule(
 _PAYLOAD_LIMIT = 64 * 1024  # 64 KB
 
 
-@router.post("/api/v1/webhooks/{schedule_id}", status_code=200)
+@router.post("/api/v1/webhooks/{schedule_id}", status_code=202)
 async def webhook_trigger(
     schedule_id: str,
     request: Request,

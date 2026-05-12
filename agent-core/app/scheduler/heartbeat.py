@@ -55,19 +55,16 @@ def build_daily_briefing_prompt(
     return "\n".join(lines)
 
 
-async def send_alert(
-    condition_key: str,
-    detail: str,
-    *,
-    chat_client=None,
-) -> None:
+async def send_alert(chat_client, condition: str, context: dict) -> None:
     """Dispatch an alert for the given condition. Catches all exceptions gracefully."""
-    description = ALERT_CONDITIONS.get(condition_key, condition_key)
-    message = f"[Nova Alert] {description}\n{detail}"
-    logger.warning("Alert(%s): %s", condition_key, detail)
+    description = ALERT_CONDITIONS.get(condition, condition)
+    detail = context.get("detail", "")
+    message = f"[Nova Alert] {description}\n{detail}" if detail else f"[Nova Alert] {description}"
+    logger.warning("Alert(%s): %s", condition, context)
     if chat_client is None:
+        logger.warning("send_alert: chat_client is None, alert not dispatched (condition=%s)", condition)
         return
     try:
-        await chat_client.send(message)
+        await chat_client.post_system_message(message)
     except Exception as exc:
         logger.warning("Alert dispatch failed (chat client unavailable): %s", exc)

@@ -10,7 +10,7 @@ from ..watchers.handler import _fire_queue
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 30
 MISSED_THRESHOLD_S = 90  # append note to prompt if we're this late
 
 
