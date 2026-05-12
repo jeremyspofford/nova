@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     nova_workspace: str = "/workspace"
     memory_service_url: str = "http://memory-service:8002"
     llm_gateway_url: str = "http://llm-gateway:8001"
+    docker_socket_proxy_url: str = "http://docker-socket-proxy:2375"
 
     @field_validator("credential_master_key")
     @classmethod

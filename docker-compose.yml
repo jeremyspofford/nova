@@ -37,6 +37,8 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
       REDIS_URL: redis://redis:6379
+      DOCKER_SOCKET_PROXY_URL: http://docker-socket-proxy:2375
+      NOVA_WORKSPACE: ${NOVA_WORKSPACE:-/workspace}
     ports:
       - "8000:8000"
     depends_on:
@@ -44,11 +46,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      DELETE: 1
+      NETWORKS: 0
+      VOLUMES: 0
+      SWARM: 0
+      CONFIGS: 0
+      SECRETS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
 
   memory-service:
     build:
