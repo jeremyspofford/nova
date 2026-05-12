@@ -5,4 +5,4 @@ pydantic-settings==2.4.0
 redis[asyncio]==5.0.8
 httpx==0.27.2
 pgvector==0.3.0
-nova-contracts @ file://../nova-contracts
+nova-contracts @ file:///nova-contracts

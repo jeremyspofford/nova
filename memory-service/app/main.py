@@ -1,37 +1,73 @@
 # memory-service/app/main.py
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from nova_contracts import HealthStatus
+
 from .config import settings
 from .db import close_pool, get_pool
+from .embed import close as close_embed, probe_and_lock
+from .router import router
+from nova_contracts import HealthStatus
 
+logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
+
+_worker_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()
+    from .worker import embed_worker, recover_unembedded
+
+    pool = await get_pool()
+    await probe_and_lock(pool)
+
+    global _worker_task
+    _worker_task = asyncio.create_task(embed_worker())
+
+    await recover_unembedded(pool)
+
+    logger.info("memory-service started")
     yield
+
+    if _worker_task:
+        _worker_task.cancel()
+        try:
+            await _worker_task
+        except asyncio.CancelledError:
+            pass
+
     await close_pool()
+    await close_embed()
+    logger.info("memory-service stopped")
 
 
-app = FastAPI(title="memory-service", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="nova-memory-service", version="2.0.0", lifespan=lifespan)
+app.include_router(router)
 
 
 @app.get("/health/live")
-async def live():
-    return {"status": "ok"}
+async def health_live():
+    return HealthStatus(status="ok", service="memory-service")
 
 
 @app.get("/health/ready")
-async def ready():
+async def health_ready():
+    from .embed import is_degraded
+
+    pool = await get_pool()
     try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
+        await pool.fetchval("SELECT 1")
         db_ok = True
     except Exception as exc:
         logger.warning("DB health check failed: %s", exc)
         db_ok = False
-    return HealthStatus(status="ok" if db_ok else "error", service="memory-service", checks={"db": db_ok})
+
+    status = "ok" if db_ok else "error"
+    return HealthStatus(
+        status=status,
+        service="memory-service",
+        checks={"db": db_ok, "embedding": not is_degraded()},
+    )
