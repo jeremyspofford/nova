@@ -1,15 +1,31 @@
-# llm-gateway/app/main.py
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from .config import settings
+from .router import router
 from nova_contracts import HealthStatus
 
-app = FastAPI(title="llm-gateway", version="2.0.0")
+logging.basicConfig(level=settings.log_level)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.getLogger(__name__).info("llm-gateway started (strategy=%s)", settings.routing_strategy)
+    yield
+    logging.getLogger(__name__).info("llm-gateway stopped")
+
+
+app = FastAPI(title="nova-llm-gateway", version="2.0.0", lifespan=lifespan)
+app.include_router(router)
 
 
 @app.get("/health/live")
-async def live():
-    return {"status": "ok"}
+async def health_live():
+    return HealthStatus(status="ok", service="llm-gateway")
 
 
 @app.get("/health/ready")
-async def ready():
-    return HealthStatus(status="ok", service="llm-gateway")
+async def health_ready():
+    return HealthStatus(status="ok", service="llm-gateway", checks={"router": True})

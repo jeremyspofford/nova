@@ -1,224 +1,182 @@
-"""
-LLM Gateway FastAPI router.
-Exposes /complete, /stream, /embed endpoints backed by ModelProvider abstraction.
-"""
-from __future__ import annotations
-
 import json
 import logging
-import time as _time
-from collections import deque
-from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator
+from typing import Any
 
-from app.rate_limiter import check_rate_limit
-from app.registry import get_embed_provider, get_provider
-from app.response_cache import get_cached, set_cached
-from app.tier_resolver import BudgetExhaustedError, resolve_model
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from nova_contracts import (
-    CompleteRequest,
-    CompleteResponse,
-    EmbedRequest,
-    EmbedResponse,
-    ModelInfo,
-)
+import litellm
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
-log = logging.getLogger(__name__)
+from . import secrets_client, selector
+
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["llm"])
 
-_local_inflight = 0
-_inference_metrics: deque = deque(maxlen=1000)
+litellm.suppress_debug_info = True
 
 
-def get_local_inflight() -> int:
-    return _local_inflight
+class CompletionRequest(BaseModel):
+    messages: list[dict[str, str]]
+    model: str = "auto"
+    max_tokens: int = 2000
+    temperature: float = 0.7
 
 
-def record_inference_metric(tokens: int, duration_s: float, ttft_ms: float):
-    """Record a completed inference request metric."""
-    _inference_metrics.append({
-        "ts": _time.time(),
-        "tokens_per_sec": tokens / duration_s if duration_s > 0 else 0,
-        "ttft_ms": ttft_ms,
-    })
+class EmbedRequest(BaseModel):
+    input: str
+    model: str = "auto"
 
 
-async def _enforce_rate_limit(model: str) -> None:
-    allowed, prefix, remaining = await check_rate_limit(model)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily quota exhausted for provider '{prefix}'. Try a different provider or wait until the quota resets.",
-        )
+_cloud_cache: set[str] | None = None
 
 
-async def _resolve_request_model(request: CompleteRequest, raw_request: Request) -> CompleteRequest:
-    """Resolve model via tier system if not explicitly set. Mutates request.model."""
-    caller = raw_request.headers.get("x-caller")
-    resolved = await resolve_model(
-        model=request.model,
-        tier=request.tier,
-        task_type=request.task_type,
-        request=request,
-        caller=caller,
+async def _available_cloud() -> set[str]:
+    global _cloud_cache
+    if _cloud_cache is None:
+        _cloud_cache = set()
+        if await secrets_client.resolve("anthropic_api_key"):
+            _cloud_cache.add("anthropic")
+        if await secrets_client.resolve("openai_api_key"):
+            _cloud_cache.add("openai")
+    return _cloud_cache
+
+
+async def _api_key_for(model: str) -> str | None:
+    if model.startswith("claude") or "anthropic" in model:
+        return await secrets_client.resolve("anthropic_api_key")
+    if model.startswith(("gpt", "text-embedding")):
+        return await secrets_client.resolve("openai_api_key")
+    return None
+
+
+async def _try_complete(
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+    stream: bool = False,
+) -> tuple[Any, str]:
+    cloud = await _available_cloud()
+    candidates = selector.completion_candidates(cloud)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No LLM providers configured")
+
+    last_exc: Exception | None = None
+    for model, extra_kwargs in candidates:
+        kwargs: dict[str, Any] = {**extra_kwargs}
+        api_key = await _api_key_for(model)
+        if api_key:
+            kwargs["api_key"] = api_key
+        try:
+            resp = await litellm.acompletion(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=stream,
+                **kwargs,
+            )
+            return resp, model
+        except Exception as exc:
+            logger.warning("Provider %s failed: %s", model, exc)
+            last_exc = exc
+
+    raise HTTPException(status_code=503, detail=f"All LLM providers failed: {last_exc}")
+
+
+@router.get("/providers")
+async def list_providers():
+    cloud = await _available_cloud()
+    from .config import settings
+
+    providers = [
+        {
+            "name": "ollama",
+            "model": settings.ollama_completion_model,
+            "available": True,
+            "local": True,
+            "supports_embed": True,
+        }
+    ]
+    if "anthropic" in cloud:
+        providers.append({
+            "name": "anthropic",
+            "model": "claude-haiku-4-5-20251001",
+            "available": True,
+            "local": False,
+            "supports_embed": False,
+        })
+    if "openai" in cloud:
+        providers.append({
+            "name": "openai",
+            "model": "gpt-4o-mini",
+            "available": True,
+            "local": False,
+            "supports_embed": True,
+        })
+    return {"providers": providers, "routing_strategy": settings.routing_strategy}
+
+
+@router.post("/complete")
+async def complete(body: CompletionRequest):
+    resp, model_used = await _try_complete(
+        messages=body.messages,
+        max_tokens=body.max_tokens,
+        temperature=body.temperature,
     )
-    request.model = resolved
-    return request
-
-
-@router.post("/complete", response_model=CompleteResponse)
-async def complete(request: CompleteRequest, raw_request: Request):
-    """Non-streaming LLM completion."""
-    try:
-        request = await _resolve_request_model(request, raw_request)
-    except BudgetExhaustedError:
-        tomorrow = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        return JSONResponse(status_code=429, content={"error": "budget_exhausted", "detail": "Daily budget exceeded", "resets_at": tomorrow.isoformat()})
-    except ValueError as e:
-        return JSONResponse(status_code=503, content={"error": str(e)})
-
-    await _enforce_rate_limit(request.model)
-
-    # Check cache (only for temperature=0 deterministic requests)
-    cache_body = None
-    if request.temperature == 0:
-        cache_body = request.model_dump(exclude={"metadata", "stream"})
-        cached = await get_cached("complete", cache_body)
-        if cached:
-            return CompleteResponse(**cached)
-
-    provider = await get_provider(request.model)
-    is_local = provider.is_local
-
-    global _local_inflight
-    if is_local:
-        _local_inflight += 1
-    try:
-        response = await provider.complete(request)
-    finally:
-        if is_local:
-            _local_inflight -= 1
-
-    log.info(
-        "complete model=%s in=%d out=%d cost=$%.4f",
-        response.model, response.input_tokens, response.output_tokens, response.cost_usd or 0,
-    )
-
-    if cache_body is not None:
-        await set_cached("complete", cache_body, response.model_dump())
-
-    return response
+    content = resp.choices[0].message.content or ""
+    usage = {}
+    if resp.usage:
+        usage = {
+            "prompt_tokens": resp.usage.prompt_tokens,
+            "completion_tokens": resp.usage.completion_tokens,
+        }
+    return {"content": content, "model": model_used, "usage": usage}
 
 
 @router.post("/stream")
-async def stream(request: CompleteRequest, raw_request: Request):
-    """
-    Server-Sent Events streaming completion.
-    Each chunk is a JSON line; the final chunk has finish_reason set.
-    """
-    try:
-        request = await _resolve_request_model(request, raw_request)
-    except BudgetExhaustedError:
-        tomorrow = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        return JSONResponse(status_code=429, content={"error": "budget_exhausted", "detail": "Daily budget exceeded", "resets_at": tomorrow.isoformat()})
-    except ValueError as e:
-        return JSONResponse(status_code=503, content={"error": str(e)})
+async def stream_complete(body: CompletionRequest):
+    resp_stream, model_used = await _try_complete(
+        messages=body.messages,
+        max_tokens=body.max_tokens,
+        temperature=body.temperature,
+        stream=True,
+    )
 
-    await _enforce_rate_limit(request.model)
-    provider = await get_provider(request.model)
-    is_local = provider.is_local
-
-    async def generate() -> AsyncIterator[bytes]:
-        global _local_inflight
-        if is_local:
-            _local_inflight += 1
+    async def generate():
         try:
-            async for chunk in provider.stream(request):
-                yield f"data: {chunk.model_dump_json()}\n\n".encode()
-            yield b"data: [DONE]\n\n"
-        except Exception as e:
-            log.error("Stream error from %s (model=%s): %s", provider.name, request.model, e)
-            # Nova internal SSE format — intentionally different from the OpenAI-compat
-            # endpoint (/v1/chat/completions) which uses {"error": {"message": ..., "type": ...}}.
-            error_payload = json.dumps({"error": str(e), "provider": provider.name})
-            yield f"data: {error_payload}\n\n".encode()
-            yield b"data: [DONE]\n\n"
-        finally:
-            if is_local:
-                _local_inflight -= 1
+            async for chunk in resp_stream:
+                delta = chunk.choices[0].delta.content or ""
+                done = chunk.choices[0].finish_reason is not None
+                payload = {"chunk": delta, "done": done}
+                if done:
+                    payload["model"] = model_used
+                yield f"data: {json.dumps(payload)}\n\n"
+        except Exception as exc:
+            logger.warning("Stream error: %s", exc)
+            yield f"data: {json.dumps({'chunk': '', 'done': True, 'error': str(exc)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@router.post("/embed", response_model=EmbedResponse)
-async def embed(request: EmbedRequest):
-    """Generate embeddings for a list of texts."""
-    await _enforce_rate_limit(request.model)
+@router.post("/embed")
+async def embed(body: EmbedRequest):
+    cloud = await _available_cloud()
+    candidates = selector.embed_candidates(cloud)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No embedding providers configured")
 
-    # Embeddings are always deterministic — cache unconditionally
-    cache_body = request.model_dump()
-    cached = await get_cached("embed", cache_body)
-    if cached:
-        return EmbedResponse(**cached)
+    last_exc: Exception | None = None
+    for model, extra_kwargs in candidates:
+        kwargs: dict[str, Any] = {**extra_kwargs}
+        api_key = await _api_key_for(model)
+        if api_key:
+            kwargs["api_key"] = api_key
+        try:
+            resp = await litellm.aembedding(model=model, input=body.input, **kwargs)
+            embedding = resp.data[0]["embedding"]
+            return {"embedding": embedding, "model": model, "dim": len(embedding)}
+        except Exception as exc:
+            logger.warning("Embed provider %s failed: %s", model, exc)
+            last_exc = exc
 
-    # Embeddings bypass chat routing strategy — direct provider lookup.
-    # The routing strategy (local-only/cloud-only/etc.) governs chat completions,
-    # not infrastructure like embeddings that the memory system depends on.
-    provider = await get_embed_provider(request.model)
-    is_local = provider.is_local
-
-    global _local_inflight
-    if is_local:
-        _local_inflight += 1
-    try:
-        response = await provider.embed(request)
-    finally:
-        if is_local:
-            _local_inflight -= 1
-
-    await set_cached("embed", cache_body, response.model_dump())
-    return response
-
-
-@router.get("/v1/inference/stats")
-async def get_inference_stats():
-    """Return rolling inference performance metrics."""
-    cutoff = _time.time() - 300
-    recent = [m for m in _inference_metrics if m["ts"] > cutoff]
-
-    if not recent:
-        return {
-            "requests_5m": 0,
-            "avg_tokens_per_sec": 0,
-            "avg_ttft_ms": 0,
-            "error_rate_pct": 0,
-        }
-
-    avg_tps = sum(m["tokens_per_sec"] for m in recent) / len(recent)
-    avg_ttft = sum(m["ttft_ms"] for m in recent) / len(recent)
-
-    return {
-        "requests_5m": len(recent),
-        "avg_tokens_per_sec": round(avg_tps, 1),
-        "avg_ttft_ms": round(avg_ttft, 0),
-        "error_rate_pct": 0,
-    }
-
-
-@router.get("/models", response_model=list[ModelInfo])
-async def list_models():
-    """List available models and their capabilities."""
-    from app.registry import MODEL_REGISTRY, get_model_spec
-    results = []
-    for model_id, provider in MODEL_REGISTRY.items():
-        ctx_window, max_out = get_model_spec(model_id)
-        results.append(ModelInfo(
-            id=model_id,
-            provider=provider.name,
-            capabilities=list(provider.capabilities),
-            context_window=ctx_window,
-            max_output_tokens=max_out,
-        ))
-    return results
+    raise HTTPException(status_code=503, detail=f"All embed providers failed: {last_exc}")
