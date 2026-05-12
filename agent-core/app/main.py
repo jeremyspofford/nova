@@ -9,7 +9,13 @@ from fastapi import FastAPI
 from .config import settings
 from .db import close_pool, get_pool
 from .secrets.router import router as secrets_router
+from .tasks_router import router as tasks_router
+from .approvals_router import router as approvals_router
 from nova_contracts import HealthStatus
+
+# Importing tools_builtin triggers @tool self-registration as a side effect.
+from .tools import tools_builtin  # noqa: F401
+from .tools.mcp.registry import boot_mcp_servers
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -38,6 +44,10 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
 async def lifespan(app: FastAPI):
     pool = await get_pool()
     await run_migrations(pool)
+    try:
+        await boot_mcp_servers(pool)
+    except Exception as exc:
+        logger.warning("MCP boot failed (continuing): %s", exc)
     logger.info("agent-core started")
     yield
     await close_pool()
@@ -46,6 +56,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
 app.include_router(secrets_router)
+app.include_router(tasks_router)
+app.include_router(approvals_router)
 
 
 @app.get("/health/live")
