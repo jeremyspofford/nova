@@ -57,6 +57,10 @@ async def tts_stream(body: TTSRequest):
     """Stream TTS audio chunks with 4-byte big-endian sequence-number prefix per chunk."""
     from .secrets_client import resolve
 
+    # Pre-flight: validate text
+    if not body.text or not body.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+
     # Pre-flight: validate voice
     if body.voice not in tts.VALID_VOICES:
         raise HTTPException(
