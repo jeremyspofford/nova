@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Any
 
 import litellm
@@ -16,16 +17,21 @@ litellm.suppress_debug_info = True
 
 
 _cloud_cache: set[str] | None = None
+_cloud_cache_time: float = 0.0
+_CLOUD_CACHE_TTL = 60.0  # seconds
 
 
 async def _available_cloud() -> set[str]:
-    global _cloud_cache
-    if _cloud_cache is None:
-        _cloud_cache = set()
+    global _cloud_cache, _cloud_cache_time
+    now = time.monotonic()
+    if _cloud_cache is None or (now - _cloud_cache_time) > _CLOUD_CACHE_TTL:
+        probed: set[str] = set()
         if await secrets_client.resolve("anthropic_api_key"):
-            _cloud_cache.add("anthropic")
+            probed.add("anthropic")
         if await secrets_client.resolve("openai_api_key"):
-            _cloud_cache.add("openai")
+            probed.add("openai")
+        _cloud_cache = probed
+        _cloud_cache_time = now
     return _cloud_cache
 
 

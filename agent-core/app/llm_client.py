@@ -40,11 +40,22 @@ async def stream(
     model: str = "auto",
     max_tokens: int = 2000,
     temperature: float = 0.7,
-) -> AsyncIterator[str]:
-    """Streaming completion. Yields text chunks as they arrive."""
+) -> "AsyncIterator[str] | None":
+    """Streaming completion. Returns None on connection failure; yields text chunks otherwise.
+
+    Usage::
+
+        it = await llm_client.stream(messages)
+        if it is None:
+            # gateway unreachable
+        else:
+            async for chunk in it:
+                ...
+    """
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
+        client = httpx.AsyncClient(timeout=120.0)
+        response = await client.send(
+            client.build_request(
                 "POST",
                 f"{settings.llm_gateway_url}/stream",
                 json={
@@ -53,18 +64,34 @@ async def stream(
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                 },
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        if data.get("chunk"):
-                            yield data["chunk"]
-                        if data.get("done"):
-                            return
+            ),
+            stream=True,
+        )
+        response.raise_for_status()
     except Exception as exc:
         logger.warning("llm_client.stream failed: %s", exc)
-        return
+        return None
+
+    return _stream_lines(response, client)
+
+
+async def _stream_lines(
+    response: httpx.Response, client: httpx.AsyncClient
+) -> AsyncIterator[str]:
+    """Iterate SSE lines from an already-open streaming response."""
+    try:
+        async for line in response.aiter_lines():
+            if line.startswith("data: "):
+                data = json.loads(line[6:])
+                if data.get("chunk"):
+                    yield data["chunk"]
+                if data.get("done"):
+                    return
+    except Exception as exc:
+        logger.warning("llm_client.stream error during iteration: %s", exc)
+    finally:
+        await response.aclose()
+        await client.aclose()
 
 
 async def embed(text: str, model: str = "auto") -> list[float] | None:

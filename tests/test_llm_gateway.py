@@ -68,6 +68,10 @@ def test_stream_returns_sse_chunks():
 
     assert len(chunks) > 0
     assert chunks[-1]["done"] is True
+    assert "error" not in chunks[-1], f"Stream ended with error: {chunks[-1].get('error')}"
+    # At least one chunk should have non-empty content
+    text_chunks = [c for c in chunks if c.get("chunk")]
+    assert len(text_chunks) > 0
 
 
 def test_embed_requires_input():

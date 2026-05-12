@@ -68,3 +68,16 @@ def test_tts_stream_rejects_invalid_voice():
         timeout=5.0,
     )
     assert r.status_code == 400
+
+
+def test_tts_stream_503_when_no_key():
+    """503 before streaming starts when openai_api_key is not configured."""
+    if _has_openai_key():
+        pytest.skip("openai_api_key is configured — 503 path not reachable")
+
+    r = httpx.post(
+        f"{BASE}/tts/stream",
+        json={"text": "Hello.", "voice": "nova"},
+        timeout=5.0,
+    )
+    assert r.status_code == 503

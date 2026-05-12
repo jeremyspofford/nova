@@ -66,11 +66,18 @@ async def stt_stream(request: Request):
 @router.post("/tts/stream")
 async def tts_stream(body: TTSRequest):
     """Stream TTS audio chunks with 4-byte big-endian sequence-number prefix per chunk."""
+    from .secrets_client import resolve
+
+    # Pre-flight: validate voice
     if body.voice not in tts.VALID_VOICES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid voice '{body.voice}'. Valid: {sorted(tts.VALID_VOICES)}",
         )
+
+    # Pre-flight: verify key is available before starting stream
+    if not await resolve("openai_api_key"):
+        raise HTTPException(status_code=503, detail="openai_api_key not configured — TTS unavailable")
 
     seq = 0
 
