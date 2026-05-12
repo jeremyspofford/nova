@@ -48,6 +48,7 @@ async def _try_complete(
     max_tokens: int,
     temperature: float,
     stream: bool = False,
+    extra_kwargs: dict | None = None,
 ) -> tuple[Any, str]:
     cloud = await _available_cloud()
     candidates = selector.completion_candidates(cloud)
@@ -55,8 +56,10 @@ async def _try_complete(
         raise HTTPException(status_code=503, detail="No LLM providers configured")
 
     last_exc: Exception | None = None
-    for model, extra_kwargs in candidates:
-        kwargs: dict[str, Any] = {**extra_kwargs}
+    for model, model_extra in candidates:
+        kwargs: dict[str, Any] = {**model_extra}
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
         api_key = await _api_key_for(model)
         if api_key:
             kwargs["api_key"] = api_key
@@ -112,19 +115,38 @@ async def list_providers():
 
 @router.post("/complete")
 async def complete(body: LLMRequest):
+    extra: dict[str, Any] = {}
+    if body.tools:
+        extra["tools"] = body.tools
+        extra["tool_choice"] = "auto"
+
     resp, model_used = await _try_complete(
         messages=[m.model_dump() for m in body.messages],
         max_tokens=body.max_tokens,
         temperature=body.temperature,
+        extra_kwargs=extra or None,
     )
     content = resp.choices[0].message.content or ""
+
+    tool_calls = None
+    raw_tc = getattr(resp.choices[0].message, "tool_calls", None)
+    if raw_tc:
+        tool_calls = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            }
+            for tc in raw_tc
+        ]
+
     usage = {}
     if resp.usage:
         usage = {
             "prompt_tokens": resp.usage.prompt_tokens,
             "completion_tokens": resp.usage.completion_tokens,
         }
-    return {"content": content, "model": model_used, "usage": usage}
+    return {"content": content, "model": model_used, "usage": usage, "tool_calls": tool_calls}
 
 
 @router.post("/stream")
