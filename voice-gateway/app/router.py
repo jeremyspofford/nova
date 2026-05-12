@@ -23,24 +23,11 @@ async def list_providers():
     from .secrets_client import resolve
 
     has_openai = bool(await resolve("openai_api_key"))
-    return {
-        "stt": [
-            {
-                "name": "openai-whisper",
-                "available": has_openai,
-                "streaming": False,
-                "note": "buffers audio then transcribes; true streaming via Deepgram is post-MVP",
-            }
-        ],
-        "tts": [
-            {
-                "name": "openai-tts",
-                "available": has_openai,
-                "streaming": True,
-                "voices": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
-            }
-        ],
-    }
+    status = "available" if has_openai else "unconfigured"
+    return [
+        {"name": "openai-whisper", "type": "stt", "status": status},
+        {"name": "openai-tts", "type": "tts", "status": status},
+    ]
 
 
 @router.post("/stt/stream")
