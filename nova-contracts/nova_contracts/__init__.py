@@ -11,6 +11,12 @@ from .models import (
     MemoryRecord,
     MemorySearchRequest,
     MemoryStats,
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMStreamChunk,
+    EmbedRequest,
+    EmbedResponse,
 )
 
 __all__ = [
@@ -18,4 +24,6 @@ __all__ = [
     "Message", "ToolCallRequest", "HealthStatus",
     "SecretInfo",
     "MemoryRecord", "MemorySearchRequest", "MemoryStats",
+    "LLMMessage", "LLMRequest", "LLMResponse", "LLMStreamChunk",
+    "EmbedRequest", "EmbedResponse",
 ]

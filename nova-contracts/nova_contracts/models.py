@@ -99,3 +99,38 @@ class MemoryStats(BaseModel):
     table_size_bytes: int
     embedding_coverage_pct: float
     degraded: bool  # True when no embedding model is reachable
+
+
+class LLMMessage(BaseModel):
+    role: str  # "user" | "assistant" | "system"
+    content: str
+
+
+class LLMRequest(BaseModel):
+    messages: list[LLMMessage]
+    model: str = "auto"
+    max_tokens: int = 2000
+    temperature: float = 0.7
+
+
+class LLMResponse(BaseModel):
+    content: str
+    model: str
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMStreamChunk(BaseModel):
+    chunk: str
+    done: bool
+    model: str | None = None
+
+
+class EmbedRequest(BaseModel):
+    input: str
+    model: str = "auto"
+
+
+class EmbedResponse(BaseModel):
+    embedding: list[float]
+    model: str
+    dim: int
