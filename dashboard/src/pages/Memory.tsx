@@ -4,7 +4,7 @@ import { apiFetch } from "../api";
 
 interface Memory {
   id: string;
-  content_preview: string;
+  content: string;
   source_kind: string;
   tags: string[];
   created_at: string;
@@ -27,9 +27,14 @@ export function Memory() {
   const { data: memories = [] } = useQuery<Memory[]>({
     queryKey: ["memories", sourceFilter],
     queryFn: () =>
-      apiFetch(
-        `/api/v1/memories?source_kind=${sourceFilter === "all" ? "" : sourceFilter}&limit=50`
-      ),
+      apiFetch("/api/v1/memories/search", {
+        method: "POST",
+        body: JSON.stringify({
+          query: "",
+          source_kind: sourceFilter === "all" ? undefined : sourceFilter,
+          limit: 50,
+        }),
+      }),
   });
 
   const formatSize = (b?: number) =>
@@ -63,7 +68,7 @@ export function Memory() {
         <div className="space-y-2">
           {memories.map((m) => (
             <div key={m.id} className="bg-stone-800/50 rounded-xl p-4 text-sm">
-              <p className="text-stone-200 line-clamp-2">{m.content_preview}</p>
+              <p className="text-stone-200 line-clamp-2">{m.content}</p>
               <div className="flex items-center gap-3 mt-2 text-xs text-stone-500">
                 <span>{m.source_kind}</span>
                 {m.tags.slice(0, 3).map((t) => (

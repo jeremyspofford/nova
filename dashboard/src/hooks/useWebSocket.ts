@@ -15,6 +15,11 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
   const queryClient = useQueryClient();
   const retryDelay = useRef(1000);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Store latest callback in ref so it never needs to be a dep of connect
+  const onTaskCompleteRef = useRef(onTaskComplete);
+  useEffect(() => { onTaskCompleteRef.current = onTaskComplete; });
+
+  const connectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
     const socket = new WebSocket(WS_URL);
@@ -66,7 +71,7 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
             taskId: msg.task_id as string,
           });
           if (msg.status === "completed") {
-            onTaskComplete?.();
+            onTaskCompleteRef.current?.();
           }
         }
       }
@@ -76,9 +81,13 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
       // Exponential backoff reconnect; store handle so cleanup can cancel it
       const delay = retryDelay.current;
       retryDelay.current = Math.min(delay * 2, 30_000);
-      retryTimer.current = setTimeout(connect, delay);
+      // Use connectRef so we always call the current connect, not a stale closure
+      retryTimer.current = setTimeout(() => connectRef.current(), delay);
     };
-  }, [dispatch, taskId, queryClient, onTaskComplete]);
+  }, [dispatch, taskId, queryClient]);   // onTaskComplete removed from deps
+
+  // Keep connectRef in sync with the latest connect
+  useEffect(() => { connectRef.current = connect; }, [connect]);
 
   useEffect(() => {
     connect();

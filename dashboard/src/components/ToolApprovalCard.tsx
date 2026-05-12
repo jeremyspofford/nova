@@ -16,10 +16,19 @@ const TIER_STYLES: Record<string, string> = {
 };
 
 export function ToolApprovalCard({ toolCallId, name, tier, args, diff, onResolved }: ApprovalProps) {
-  async function resolve(action: string, scope?: string) {
-    await apiFetch(`/api/v1/approvals/${toolCallId}/resolve`, {
+  async function grant(scope: "once" | "task") {
+    const remember = scope === "task";
+    await apiFetch(`/api/v1/approvals/${toolCallId}/grant`, {
       method: "POST",
-      body: JSON.stringify({ action, scope }),
+      body: JSON.stringify({ remember, remember_ttl: 3600 }),
+    });
+    onResolved(toolCallId);
+  }
+
+  async function deny() {
+    await apiFetch(`/api/v1/approvals/${toolCallId}/deny`, {
+      method: "POST",
+      body: JSON.stringify({}),
     });
     onResolved(toolCallId);
   }
@@ -57,21 +66,21 @@ export function ToolApprovalCard({ toolCallId, name, tier, args, diff, onResolve
 
       <div className="flex gap-2 flex-wrap">
         <button
-          onClick={() => resolve("grant", "once")}
+          onClick={() => grant("once")}
           className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-sm text-white"
         >
           <Check size={14} /> Approve once
         </button>
         {!isDestruct && (
           <button
-            onClick={() => resolve("grant", "task")}
+            onClick={() => grant("task")}
             className="px-3 py-1.5 rounded-lg bg-stone-700 hover:bg-stone-600 text-sm"
           >
             Approve for task
           </button>
         )}
         <button
-          onClick={() => resolve("deny")}
+          onClick={() => deny()}
           className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-red-900/40 text-sm text-stone-400 hover:text-red-300"
         >
           <X size={14} /> Deny
