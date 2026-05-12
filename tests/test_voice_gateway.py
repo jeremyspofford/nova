@@ -59,3 +59,12 @@ def test_tts_stream_returns_audio_when_key_configured():
     )
     assert r.status_code == 200
     assert len(r.content) > 0
+
+
+def test_tts_stream_rejects_invalid_voice():
+    r = httpx.post(
+        f"{BASE}/tts/stream",
+        json={"text": "Hello.", "voice": "not-a-real-voice"},
+        timeout=5.0,
+    )
+    assert r.status_code == 400

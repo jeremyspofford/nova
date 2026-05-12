@@ -23,7 +23,8 @@ async def synthesize_stream(text: str, voice: str = "nova") -> AsyncIterator[byt
     if not api_key:
         raise RuntimeError("openai_api_key not configured — TTS unavailable")
 
-    safe_voice = voice if voice in VALID_VOICES else "nova"
+    if voice not in VALID_VOICES:
+        raise ValueError(f"Invalid voice '{voice}'. Valid voices: {sorted(VALID_VOICES)}")
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream(
@@ -33,7 +34,7 @@ async def synthesize_stream(text: str, voice: str = "nova") -> AsyncIterator[byt
             json={
                 "model": "tts-1",
                 "input": text,
-                "voice": safe_voice,
+                "voice": voice,
                 "response_format": "opus",
             },
         ) as response:

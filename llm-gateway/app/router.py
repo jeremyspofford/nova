@@ -5,7 +5,7 @@ from typing import Any
 import litellm
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from nova_contracts import EmbedRequest, LLMRequest
 
 from . import secrets_client, selector
 
@@ -13,18 +13,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["llm"])
 
 litellm.suppress_debug_info = True
-
-
-class CompletionRequest(BaseModel):
-    messages: list[dict[str, str]]
-    model: str = "auto"
-    max_tokens: int = 2000
-    temperature: float = 0.7
-
-
-class EmbedRequest(BaseModel):
-    input: str
-    model: str = "auto"
 
 
 _cloud_cache: set[str] | None = None
@@ -117,9 +105,9 @@ async def list_providers():
 
 
 @router.post("/complete")
-async def complete(body: CompletionRequest):
+async def complete(body: LLMRequest):
     resp, model_used = await _try_complete(
-        messages=body.messages,
+        messages=[m.model_dump() for m in body.messages],
         max_tokens=body.max_tokens,
         temperature=body.temperature,
     )
@@ -134,9 +122,9 @@ async def complete(body: CompletionRequest):
 
 
 @router.post("/stream")
-async def stream_complete(body: CompletionRequest):
+async def stream_complete(body: LLMRequest):
     resp_stream, model_used = await _try_complete(
-        messages=body.messages,
+        messages=[m.model_dump() for m in body.messages],
         max_tokens=body.max_tokens,
         temperature=body.temperature,
         stream=True,

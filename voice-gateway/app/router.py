@@ -66,6 +66,12 @@ async def stt_stream(request: Request):
 @router.post("/tts/stream")
 async def tts_stream(body: TTSRequest):
     """Stream TTS audio chunks with 4-byte big-endian sequence-number prefix per chunk."""
+    if body.voice not in tts.VALID_VOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid voice '{body.voice}'. Valid: {sorted(tts.VALID_VOICES)}",
+        )
+
     seq = 0
 
     async def generate():
