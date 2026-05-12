@@ -1701,3 +1701,45 @@ export async function getPublicFlags(): Promise<Record<string, unknown>> {
   if (!res.ok) throw new Error(`getPublicFlags ${res.status}`)
   return res.json()
 }
+
+// ── Secrets (v2 agent-core) ────────────────────────────────────────────────
+
+export interface SecretInfo {
+  name: string
+  purpose: string | null
+  created_at: string
+  updated_at: string
+  last_used: string | null
+  used_count: number
+}
+
+export async function listSecrets(): Promise<SecretInfo[]> {
+  return apiFetch<SecretInfo[]>('/api/v1/secrets')
+}
+
+export async function createSecret(data: {
+  name: string
+  value: string
+  purpose?: string
+}): Promise<void> {
+  await apiFetch<unknown>('/api/v1/secrets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateSecret(
+  name: string,
+  data: { value?: string; purpose?: string }
+): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/secrets/${name}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteSecret(name: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/secrets/${name}`, { method: 'DELETE' })
+}
