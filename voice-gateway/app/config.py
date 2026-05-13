@@ -1,9 +1,13 @@
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     agent_core_url: str = "http://agent-core:8000"
-    admin_secret: str = "nova-dev-secret"
+    admin_secret: str = Field(
+        default="nova-dev-secret",
+        validation_alias=AliasChoices("NOVA_ADMIN_SECRET", "ADMIN_SECRET", "admin_secret"),
+    )
     stt_provider: str = "openai-whisper"
     tts_provider: str = "openai-tts"
     tts_default_voice: str = "nova"
