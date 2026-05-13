@@ -1,4 +1,3 @@
-# Stub — replaced in Task 5
 from __future__ import annotations
 import logging
 from .session import WebSocketSession
