@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { Dispatch } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
+import { Copy, Check } from "lucide-react";
 import type { Message, Action } from "../hooks/useConversation";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 
@@ -11,6 +12,40 @@ interface Props {
   thinking: boolean;
   dispatch: Dispatch<Action>;
 }
+
+function CopyableCodeBlock({ children }: { children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const handleCopy = useCallback(() => {
+    const text = preRef.current?.textContent ?? "";
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, []);
+
+  return (
+    <div className="relative group not-prose my-3">
+      <pre ref={preRef} className="rounded-lg overflow-x-auto text-xs leading-relaxed">
+        {children}
+      </pre>
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 p-1.5 rounded-md bg-stone-700/80 text-stone-400 opacity-0 group-hover:opacity-100 hover:text-stone-100 hover:bg-stone-600 transition-all"
+        aria-label="Copy code"
+      >
+        {copied ? <Check size={13} strokeWidth={2.5} /> : <Copy size={13} strokeWidth={2} />}
+      </button>
+    </div>
+  );
+}
+
+const MD_COMPONENTS = {
+  pre: ({ children }: { children?: React.ReactNode }) => (
+    <CopyableCodeBlock>{children}</CopyableCodeBlock>
+  ),
+};
 
 export function ConversationView({ messages, thinking, dispatch }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -49,7 +84,10 @@ export function ConversationView({ messages, thinking, dispatch }: Props) {
                 msg.text
               ) : (
                 <>
-                  <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
+                  <ReactMarkdown
+                    rehypePlugins={[rehypeHighlight]}
+                    components={MD_COMPONENTS}
+                  >
                     {msg.text}
                   </ReactMarkdown>
                   {msg.streaming && (
