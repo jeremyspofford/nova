@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { ExtensionsSection } from "./settings/ExtensionsSection";
 import { SecretsSection } from "./settings/SecretsSection";
 
-const TABS = ["AI & Models", "Secrets", "Voice", "Scheduler", "System", "Recovery"] as const;
+const TABS = ["AI & Models", "Secrets", "Extensions", "Voice", "Scheduler", "System", "Recovery"] as const;
 type Tab = (typeof TABS)[number];
 
 export function Settings() {
@@ -45,6 +46,8 @@ function SettingsTab({ tab }: { tab: Tab }) {
       );
     case "Secrets":
       return <SecretsSection />;
+    case "Extensions":
+      return <ExtensionsSection />;
     case "Recovery":
       return (
         <a href="/recovery" className="text-teal-400 underline text-sm">
