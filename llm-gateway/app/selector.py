@@ -1,6 +1,19 @@
 """Provider routing: given a strategy, return ordered (litellm_model, extra_kwargs) candidates."""
 from .config import settings
 
+_routing_strategy_override: str | None = None
+
+VALID_STRATEGIES = frozenset({"local-first", "local-only", "cloud-first", "cloud-only"})
+
+
+def get_routing_strategy() -> str:
+    return _routing_strategy_override or settings.routing_strategy
+
+
+def set_routing_strategy(strategy: str | None) -> None:
+    global _routing_strategy_override
+    _routing_strategy_override = strategy
+
 
 def _local_candidate() -> tuple[str, dict] | None:
     """Return (litellm_model, extra_kwargs) for the active local backend, or None."""
@@ -44,7 +57,7 @@ def completion_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
     if "groq" in available_cloud:
         cloud.append(("groq/llama3-8b-8192", {}))
 
-    strategy = settings.routing_strategy
+    strategy = get_routing_strategy()
     if strategy == "local-only":
         return [local] if local else []
     if strategy == "cloud-only":
@@ -62,7 +75,7 @@ def embed_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
         ("text-embedding-3-small", {}) if "openai" in available_cloud else None
     )
 
-    strategy = settings.routing_strategy
+    strategy = get_routing_strategy()
     if strategy == "local-only":
         return [local] if local else []
     if strategy == "cloud-only":

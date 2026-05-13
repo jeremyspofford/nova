@@ -6,7 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 import httpx
 
 import os
@@ -228,6 +228,30 @@ async def llm_providers(_: None = Depends(_require_admin)):
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(f"{settings.llm_gateway_url}/providers")
         return r.json()
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
+@app.patch("/api/v1/llm/config")
+async def llm_config_patch(request: Request, _: None = Depends(_require_admin)):
+    """Proxy to llm-gateway PATCH /config."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.patch(
+                f"{settings.llm_gateway_url}/config",
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("llm-gateway unreachable: %s", exc)
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")

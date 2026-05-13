@@ -156,3 +156,20 @@ export interface LLMProvidersResponse {
 export async function getLLMProviders(): Promise<LLMProvidersResponse> {
   return apiFetch<LLMProvidersResponse>("/api/v1/llm/providers");
 }
+
+export async function patchLLMConfig(body: { routing_strategy?: string }): Promise<{ routing_strategy: string; local_backend: string }> {
+  return apiFetch("/api/v1/llm/config", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface VoiceProvider {
+  name: string;
+  type: "stt" | "tts";
+  status: "available" | "unconfigured";
+}
+
+export async function getVoiceProviders(): Promise<VoiceProvider[]> {
+  return apiFetch<VoiceProvider[]>("/voice-api/providers");
+}

@@ -1,19 +1,27 @@
-import { useQuery } from "@tanstack/react-query";
-import { getLLMProviders } from "../../api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { getLLMProviders, patchLLMConfig } from "../../api";
 
 const STRATEGY_LABELS: Record<string, string> = {
-  "local-first": "Local-first (uses local AI, falls back to cloud)",
+  "local-first": "Local-first (local AI, falls back to cloud)",
   "local-only": "Local only",
-  "cloud-first": "Cloud-first (uses cloud, falls back to local)",
+  "cloud-first": "Cloud-first (cloud, falls back to local)",
   "cloud-only": "Cloud only",
 };
 
+const STRATEGIES = ["local-first", "local-only", "cloud-first", "cloud-only"] as const;
+
 export function AIModelsSection() {
+  const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["llm-providers"],
     queryFn: getLLMProviders,
     staleTime: 30_000,
     retry: 1,
+  });
+
+  const strategyMut = useMutation({
+    mutationFn: (strategy: string) => patchLLMConfig({ routing_strategy: strategy }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["llm-providers"] }),
   });
 
   if (isLoading) {
@@ -33,17 +41,34 @@ export function AIModelsSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-sm font-medium text-stone-300 mb-1">Routing Strategy</h2>
-        <p className="text-sm text-stone-100">
-          {STRATEGY_LABELS[data.routing_strategy] ?? data.routing_strategy}
-        </p>
+        <h2 className="text-sm font-medium text-stone-300 mb-2">Routing Strategy</h2>
+        <div className="flex flex-wrap gap-2">
+          {STRATEGIES.map((s) => (
+            <button
+              key={s}
+              onClick={() => strategyMut.mutate(s)}
+              disabled={strategyMut.isPending}
+              className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                data.routing_strategy === s
+                  ? "bg-teal-700 text-teal-100 font-medium"
+                  : "bg-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-700"
+              }`}
+            >
+              {STRATEGY_LABELS[s]}
+            </button>
+          ))}
+        </div>
+        {strategyMut.isError && (
+          <p className="mt-2 text-xs text-red-400">{(strategyMut.error as Error).message}</p>
+        )}
       </div>
 
       <div>
         <h2 className="text-sm font-medium text-stone-300 mb-3">Available Providers</h2>
         {activeProviders.length === 0 ? (
           <p className="text-sm text-stone-500 italic">
-            No providers available. Configure an API key in Secrets, or ensure local inference is running.
+            No providers available. Configure an API key in Secrets, or ensure local inference is
+            running.
           </p>
         ) : (
           <div className="space-y-2">
@@ -59,12 +84,8 @@ export function AIModelsSection() {
                         p.local ? "bg-teal-400" : "bg-blue-400"
                       }`}
                     />
-                    <span className="text-sm font-medium text-stone-100 capitalize">
-                      {p.name}
-                    </span>
-                    <span className="text-xs text-stone-500">
-                      {p.local ? "local" : "cloud"}
-                    </span>
+                    <span className="text-sm font-medium text-stone-100 capitalize">{p.name}</span>
+                    <span className="text-xs text-stone-500">{p.local ? "local" : "cloud"}</span>
                   </div>
                   <p className="mt-0.5 ml-4 text-xs font-mono text-stone-400">{p.model}</p>
                 </div>
@@ -78,14 +99,6 @@ export function AIModelsSection() {
           </div>
         )}
       </div>
-
-      <p className="text-xs text-stone-500">
-        To change models or routing, go to{" "}
-        <a href="/recovery" className="text-teal-400 hover:underline">
-          Settings → System
-        </a>{" "}
-        or configure API keys in the Secrets tab.
-      </p>
     </div>
   );
 }

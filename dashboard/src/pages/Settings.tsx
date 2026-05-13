@@ -3,6 +3,8 @@ import { AIModelsSection } from "./settings/AIModelsSection";
 import { ExtensionsSection } from "./settings/ExtensionsSection";
 import { SecretsSection } from "./settings/SecretsSection";
 import { SystemSection } from "./settings/SystemSection";
+import { VoiceSection } from "./settings/VoiceSection";
+import { SchedulerSection } from "./settings/SchedulerSection";
 
 const TABS = ["AI & Models", "Secrets", "Extensions", "Voice", "Scheduler", "System", "Recovery"] as const;
 type Tab = (typeof TABS)[number];
@@ -50,6 +52,10 @@ function SettingsTab({ tab }: { tab: Tab }) {
       return <SecretsSection />;
     case "Extensions":
       return <ExtensionsSection />;
+    case "Voice":
+      return <VoiceSection />;
+    case "Scheduler":
+      return <SchedulerSection />;
     case "System":
       return <SystemSection />;
     case "Recovery":

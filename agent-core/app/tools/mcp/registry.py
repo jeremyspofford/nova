@@ -1,7 +1,7 @@
 """Boot all enabled stdio MCP servers from the DB at agent-core startup."""
 import logging
 
-from .lifecycle import start_server
+from . import mcp_manager
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +15,18 @@ async def boot_mcp_servers(pool) -> None:
         )
     for row in rows:
         server_id = str(row["id"])
+        server_name = row["name"]
+        mcp_manager.register_server_meta(
+            server_name, server_id,
+            command=row["command"],
+            args=list(row["args"] or []),
+            raw_env=dict(row["env"] or {}),
+            cwd=row["working_dir"],
+        )
         try:
-            await start_server(
-                server_id=server_id,
-                command=row["command"],
-                args=list(row["args"] or []),
-                env=dict(row["env"] or {}),
-                working_dir=row["working_dir"],
-            )
+            await mcp_manager.ensure_running(server_id, server_name)
         except Exception as exc:
-            logger.warning("MCP server %s (%s) failed to start: %s", row["name"], server_id[:8], exc)
+            logger.warning("MCP server %s (%s) failed to start: %s", server_name, server_id[:8], exc)
             async with pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE mcp_servers SET last_error = $1 WHERE id = $2",

@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 
 from . import secrets_client, selector
+from .selector import VALID_STRATEGIES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["llm"])
@@ -138,9 +139,28 @@ async def list_providers():
         })
     return {
         "providers": providers,
-        "routing_strategy": settings.routing_strategy,
+        "routing_strategy": selector.get_routing_strategy(),
         "local_backend": settings.nova_inference_backend,
         "local_inference_url": settings.local_inference_url,
+    }
+
+
+class LLMConfigUpdate(BaseModel):
+    routing_strategy: str | None = None
+
+
+@router.patch("/config")
+async def update_config(body: LLMConfigUpdate):
+    if body.routing_strategy is not None:
+        if body.routing_strategy not in VALID_STRATEGIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid routing_strategy. Must be one of: {sorted(VALID_STRATEGIES)}",
+            )
+        selector.set_routing_strategy(body.routing_strategy)
+    return {
+        "routing_strategy": selector.get_routing_strategy(),
+        "local_backend": settings.nova_inference_backend,
     }
 
 
