@@ -12,7 +12,7 @@ interface Task { id: string; status: string }
 
 export function Chat() {
   const [input, setInput] = useState("");
-  const { messages, dispatch } = useConversation();
+  const { messages, thinking, dispatch } = useConversation();
 
   const [wizardDismissed, setWizardDismissed] = useState(
     () => localStorage.getItem("wizard-dismissed") === "true"
@@ -67,6 +67,7 @@ export function Chat() {
         type: "ADD_MESSAGE",
         message: { id: Date.now().toString(), role: "user", text },
       });
+      dispatch({ type: "SET_THINKING", thinking: true });
       sendMessage("message", { text });
     },
     [dispatch, sendMessage]
@@ -79,6 +80,7 @@ export function Chat() {
       type: "ADD_MESSAGE",
       message: { id: Date.now().toString(), role: "user", text },
     });
+    dispatch({ type: "SET_THINKING", thinking: true });
     sendMessage("message", { text });
     setInput("");
   }
@@ -111,7 +113,7 @@ export function Chat() {
         />
       )}
 
-      <ConversationView messages={messages} dispatch={dispatch} />
+      <ConversationView messages={messages} thinking={thinking} dispatch={dispatch} />
 
       <div className="border-t border-stone-800 p-3 flex gap-2">
         <button className="text-stone-500 hover:text-stone-300 p-2 rounded-lg transition-colors">

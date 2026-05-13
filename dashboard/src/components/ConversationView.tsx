@@ -5,15 +5,16 @@ import { ToolApprovalCard } from "./ToolApprovalCard";
 
 interface Props {
   messages: Message[];
+  thinking: boolean;
   dispatch: Dispatch<Action>;
 }
 
-export function ConversationView({ messages, dispatch }: Props) {
+export function ConversationView({ messages, thinking, dispatch }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+  }, [messages.length, thinking]);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -49,6 +50,15 @@ export function ConversationView({ messages, dispatch }: Props) {
           </div>
         );
       })}
+      {thinking && (
+        <div className="flex justify-start">
+          <div className="bg-stone-800 rounded-2xl rounded-bl-sm px-4 py-3 flex gap-1 items-center">
+            <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+            <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+            <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" />
+          </div>
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   );
