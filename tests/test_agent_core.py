@@ -132,6 +132,15 @@ def test_auth_providers_returns_trusted_network():
     assert "registration_mode" in data
 
 
+def test_auth_providers_includes_admin_secret():
+    """GET /api/v1/auth/providers includes admin_secret so the dashboard can auto-configure."""
+    r = httpx.get(f"{BASE}/api/v1/auth/providers", timeout=5.0)
+    assert r.status_code == 200
+    data = r.json()
+    assert "admin_secret" in data
+    assert data["admin_secret"], "admin_secret should be non-empty"
+
+
 def test_tasks_list_requires_auth():
     """GET /api/v1/tasks without a secret should be 401."""
     r = httpx.get(f"{BASE}/api/v1/tasks", timeout=5.0)

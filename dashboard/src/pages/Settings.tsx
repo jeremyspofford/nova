@@ -7,7 +7,11 @@ const TABS = ["AI & Models", "Secrets", "Extensions", "Voice", "Scheduler", "Sys
 type Tab = (typeof TABS)[number];
 
 export function Settings() {
-  const [tab, setTab] = useState<Tab>("AI & Models");
+  const [tab, setTab] = useState<Tab>(() => {
+    const p = new URLSearchParams(window.location.search).get("tab");
+    const match = TABS.find((t) => t.toLowerCase() === p?.toLowerCase());
+    return match ?? "AI & Models";
+  });
 
   return (
     <div className="flex flex-col h-full">

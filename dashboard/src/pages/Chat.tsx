@@ -93,7 +93,7 @@ export function Chat() {
           {noSecret ? (
             <>
               Not connected — set your admin secret in{" "}
-              <Link to="/settings" className="underline hover:text-amber-200">
+              <Link to="/settings" search={{ tab: "system" }} className="underline hover:text-amber-200">
                 Settings → System
               </Link>
               , then reload.

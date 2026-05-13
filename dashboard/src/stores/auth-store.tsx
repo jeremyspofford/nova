@@ -192,7 +192,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const resp = await fetch('/api/v1/auth/providers')
         if (resp.ok && !cancelled) {
-          setAuthConfig(await resp.json())
+          const data = await resp.json()
+          setAuthConfig(data)
+          // Trusted-network installs return the admin_secret so the browser
+          // can auto-configure without any manual user input.
+          if (data.trusted_network && data.admin_secret) {
+            localStorage.setItem('adminSecret', data.admin_secret)
+          }
         } else if (!cancelled) {
           // Non-ok response — assume auth required (fail-closed)
           setAuthConfig({ google: false, registration_mode: 'open', has_users: true, trusted_network: false })

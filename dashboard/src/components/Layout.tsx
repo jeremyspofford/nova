@@ -1,6 +1,20 @@
+import { useEffect } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { MessageSquare, ListTodo, Brain, CalendarClock, Settings, ShieldAlert } from "lucide-react";
 import { ServiceStatusDot } from "./ServiceStatusDot";
+
+function useBootstrap() {
+  useEffect(() => {
+    fetch("/api/v1/auth/providers")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.trusted_network && data?.admin_secret) {
+          localStorage.setItem("adminSecret", data.admin_secret);
+        }
+      })
+      .catch(() => {});
+  }, []);
+}
 
 const NAV = [
   { to: "/",          icon: MessageSquare, label: "Chat" },
@@ -11,6 +25,7 @@ const NAV = [
 ] as const;
 
 export function Layout() {
+  useBootstrap();
   return (
     <div className="flex h-screen bg-stone-950 text-stone-100">
       {/* Sidebar — hidden on mobile */}

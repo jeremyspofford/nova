@@ -176,12 +176,15 @@ app.include_router(approvals_router)
 
 @app.get("/api/v1/auth/providers")
 async def auth_providers():
-    """Public endpoint — tells the dashboard how auth works on this instance."""
+    """Public endpoint — tells the dashboard how auth works on this instance.
+    Includes admin_secret on trusted-network installs so the browser can
+    auto-configure without manual user input."""
     return {
         "trusted_network": True,
         "google": False,
         "registration_mode": "open",
         "has_users": False,
+        "admin_secret": settings.admin_secret,
     }
 
 
