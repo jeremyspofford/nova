@@ -13,7 +13,6 @@ from .config import settings
 from .db import get_pool
 from .tools.mcp import mcp_manager
 from .tools.mcp.discovery import discover_tools
-from .tools.mcp.lifecycle import stop_server
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["mcp"])
@@ -231,15 +230,7 @@ async def delete_server(
         raise HTTPException(status_code=404, detail="MCP server not found")
 
     server_name = row["name"]
-
-    # Stop the running subprocess and clean up manager state.
-    mcp_manager._processes.pop(server_name, None)
-    mcp_manager._server_ids.pop(server_name, None)
-    mcp_manager._server_meta.pop(server_name, None)
-    try:
-        await stop_server(server_id)
-    except Exception as e:
-        logger.warning("Error stopping MCP server %r during delete: %s", server_name, e)
+    await mcp_manager.remove_server(server_name)
 
 
 # ---------------------------------------------------------------------------

@@ -258,6 +258,18 @@ class MCPManager:
         self._processes[server_name] = proc
         return proc
 
+    async def remove_server(self, server_name: str) -> None:
+        """Stop a running server and remove all tracking state for it."""
+        server_id = self._server_ids.get(server_name)
+        self._processes.pop(server_name, None)
+        self._server_ids.pop(server_name, None)
+        self._server_meta.pop(server_name, None)
+        if server_id:
+            try:
+                await stop_server(server_id)
+            except Exception as exc:
+                logger.warning("Error stopping MCP server %r during remove: %s", server_name, exc)
+
     async def shutdown_all(self) -> None:
         """Gracefully stop all running MCP servers."""
         names = list(self._processes.keys())
