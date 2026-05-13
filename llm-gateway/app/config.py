@@ -3,14 +3,6 @@ from pydantic_settings import BaseSettings
 
 _OLLAMA_HOST_URL = "http://host.docker.internal:11434"
 
-_BACKEND_DEFAULT_URLS = {
-    "ollama-host": _OLLAMA_HOST_URL,
-    "ollama": "http://nova-ollama:11434",
-    "llamacpp": "http://nova-llamacpp:8080",
-    "vllm": "http://nova-vllm:8000",
-    "sglang": "http://nova-sglang:30000",
-}
-
 VALID_BACKENDS = frozenset(
     {"ollama-host", "ollama", "llamacpp", "vllm", "sglang", "lmstudio", "none"}
 )
