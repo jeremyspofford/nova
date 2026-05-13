@@ -100,3 +100,15 @@ def test_embed_returns_vector():
     assert len(data["embedding"]) > 0
     assert "dim" in data
     assert data["dim"] == len(data["embedding"])
+
+
+def test_providers_shows_active_local_backend():
+    """Gateway /providers must describe the configured local backend."""
+    r = httpx.get(f"{BASE}/providers", timeout=5.0)
+    assert r.status_code == 200
+    data = r.json()
+    assert "local_backend" in data
+    assert "local_inference_url" in data
+    assert data["local_backend"] in (
+        "ollama-host", "ollama", "llamacpp", "vllm", "sglang", "lmstudio", "none"
+    )
