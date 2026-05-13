@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from .config import settings
 from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
+from .mcp_router import router as mcp_router
 from .schedules_router import router as schedules_router
 from .secrets.router import router as secrets_router
 from .tasks_router import router as tasks_router
@@ -19,6 +20,7 @@ from nova_contracts import HealthStatus
 
 # Importing tools_builtin triggers @tool self-registration as a side effect.
 from .tools import tools_builtin  # noqa: F401
+from .tools.mcp import mcp_manager
 from .tools.mcp.registry import boot_mcp_servers
 from .tools.tools_builtin.memory import close_mem_client
 from .scheduler import scheduler_loop, fire_task_complete_schedules
@@ -77,6 +79,7 @@ async def lifespan(app: FastAPI):
 
     pool = await get_pool()
     await run_migrations(pool)
+    mcp_manager.set_pool(pool)
     try:
         await boot_mcp_servers(pool)
     except Exception as exc:
@@ -129,6 +132,7 @@ async def lifespan(app: FastAPI):
     if _watcher_manager:
         _watcher_manager.stop_all()
 
+    await mcp_manager.shutdown_all()
     await close_llm_client()
     await close_mem_client()
     await close_pool()
@@ -136,6 +140,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
+app.include_router(mcp_router)
 app.include_router(schedules_router)
 app.include_router(secrets_router)
 app.include_router(tasks_router)
