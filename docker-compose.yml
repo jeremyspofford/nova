@@ -148,3 +148,91 @@ services:
       - "3000:3000"
     depends_on:
       - agent-core
+
+  # ── Local inference engines (optional — started by ./install based on choice) ──
+
+  nova-ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-ollama"]
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  nova-llamacpp:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    profiles: ["local-llamacpp"]
+    volumes:
+      - llamacpp-models:/models
+    environment:
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_CTX_SIZE: "4096"
+      LLAMA_ARG_THREADS: "4"
+    ports:
+      - "11435:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  nova-vllm:
+    image: vllm/vllm-openai:latest
+    profiles: ["local-vllm"]
+    volumes:
+      - vllm-cache:/root/.cache/huggingface
+    environment:
+      VLLM_MODEL: ${VLLM_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+    command: >
+      --model ${VLLM_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      --host 0.0.0.0
+      --port 8000
+    ports:
+      - "11436:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  nova-sglang:
+    image: lmsysorg/sglang:latest
+    profiles: ["local-sglang"]
+    volumes:
+      - sglang-cache:/root/.cache/huggingface
+    environment:
+      SGLANG_MODEL: ${SGLANG_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+    command: >
+      python -m sglang.launch_server
+      --model-path ${SGLANG_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+      --host 0.0.0.0
+      --port 30000
+    ports:
+      - "11437:30000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
+volumes:
+  ollama-data:
+  llamacpp-models:
+  vllm-cache:
+  sglang-cache:
