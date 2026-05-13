@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Mic, Send, WifiOff } from "lucide-react";
+import { Mic, MicOff, Loader2, Send, WifiOff } from "lucide-react";
 import { apiFetch } from "../api";
 import { useConversationContext } from "../contexts/ConversationContext";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { useVoiceInput } from "../hooks/useVoiceInput";
 import { ConversationView } from "../components/ConversationView";
 import { SetupCards } from "../components/SetupCards";
 
@@ -41,6 +42,10 @@ export function Chat() {
     taskId: taskId ?? undefined,
     onConnected: setTaskId,
     onTaskComplete: handleTaskComplete,
+  });
+
+  const { state: voiceState, toggle: toggleVoice } = useVoiceInput({
+    onTranscript: (text) => setInput((prev) => (prev ? prev + " " + text : text)),
   });
 
   // Detect first run: no tasks yet
@@ -121,8 +126,27 @@ export function Chat() {
       <ConversationView messages={messages} thinking={thinking} dispatch={dispatch} />
 
       <div className="border-t border-stone-800 p-3 flex gap-2">
-        <button className="text-stone-500 hover:text-stone-300 p-2 rounded-lg transition-colors">
-          <Mic size={18} />
+        <button
+          onClick={toggleVoice}
+          disabled={voiceState === "processing"}
+          title={voiceState === "recording" ? "Stop recording" : "Voice input"}
+          className={`p-2 rounded-lg transition-colors ${
+            voiceState === "recording"
+              ? "text-red-400 hover:text-red-300 animate-pulse"
+              : voiceState === "processing"
+              ? "text-stone-600 cursor-not-allowed"
+              : voiceState === "error"
+              ? "text-amber-400"
+              : "text-stone-500 hover:text-stone-300"
+          }`}
+        >
+          {voiceState === "processing" ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : voiceState === "recording" ? (
+            <MicOff size={18} />
+          ) : (
+            <Mic size={18} />
+          )}
         </button>
         <input
           value={input}
