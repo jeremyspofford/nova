@@ -78,18 +78,48 @@ def _is_serialized_tool_call(content: str) -> bool:
         return False
 
 
+def _sanitize_tool_name(name: str) -> str:
+    """OpenAI requires tool names to match ^[a-zA-Z0-9_-]+$. Replace dots."""
+    return name.replace(".", "_")
+
+
+def _sanitize_tools_for_openai(tools: list[dict]) -> tuple[list[dict], dict[str, str]]:
+    """Return (sanitized_tools, {safe_name → original_name}) for round-trip."""
+    sanitized = []
+    mapping: dict[str, str] = {}
+    for t in tools:
+        orig_name = t["function"]["name"]
+        safe_name = _sanitize_tool_name(orig_name)
+        mapping[safe_name] = orig_name
+        sanitized.append({
+            **t,
+            "function": {**t["function"], "name": safe_name},
+        })
+    return sanitized, mapping
+
+
 async def _llm_complete_chat(messages: list[dict], tools: list[dict]) -> dict | None:
+    safe_tools, name_map = _sanitize_tools_for_openai(tools)
     body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
-    if tools:
-        body["tools"] = tools
+    if safe_tools:
+        body["tools"] = safe_tools
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
             r.raise_for_status()
-            return r.json()
+            resp = r.json()
     except Exception as exc:
         logger.warning("llm /complete failed: %s", exc)
         return None
+
+    # Restore original tool names in any tool_calls the LLM returned
+    if resp.get("tool_calls") and name_map:
+        for tc in resp["tool_calls"]:
+            fn = tc.get("function") or {}
+            safe = fn.get("name", "")
+            if safe in name_map:
+                fn["name"] = name_map[safe]
+    return resp
 
 
 MAX_CHAT_ITERATIONS = 10
