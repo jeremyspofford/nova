@@ -21,17 +21,9 @@ endif
 
 EDITOR_PROFILE := $(if $(filter vscode,$(EDITOR_FLAVOR)),--profile editor-vscode,$(if $(filter neovim,$(EDITOR_FLAVOR)),--profile editor-neovim,))
 
-# Include the local-ollama profile in compose commands when NOVA_INFERENCE_MODE
-# is hybrid or local-only. setup.sh writes this to .env; we read it here so
-# `make dev` / `make up` activate the bundled Ollama service automatically.
-NOVA_INFERENCE_MODE ?= $(shell grep -E '^NOVA_INFERENCE_MODE=' .env 2>/dev/null | cut -d= -f2-)
-INFERENCE_PROFILE := $(if $(filter hybrid local-only,$(NOVA_INFERENCE_MODE)),--profile local-ollama,)
-
-COMPOSE      = docker compose -f docker-compose.yml $(GPU_OVERLAY) --profile voice $(EDITOR_PROFILE) $(INFERENCE_PROFILE)
-ALL_PROFILES = --profile voice --profile website --profile bridges --profile knowledge \
-               --profile local-ollama --profile local-vllm --profile local-sglang \
-               --profile cloudflare-tunnel --profile tailscale \
-               --profile editor-vscode --profile editor-neovim
+# Profiles are driven by COMPOSE_PROFILES in .env (set by ./install).
+# Docker Compose reads COMPOSE_PROFILES automatically from .env — no --profile flags needed.
+COMPOSE      = docker compose -f docker-compose.yml $(GPU_OVERLAY) $(EDITOR_PROFILE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 help: ## Show available commands
@@ -55,10 +47,10 @@ build: ## Rebuild all Docker images (run before up after code changes)
 	$(COMPOSE) build
 
 down: ## Stop and remove all containers (all profiles + orphans)
-	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
+	docker compose -f docker-compose.yml $(GPU_OVERLAY) down --remove-orphans
 
 restart: ## Stop and start all services without rebuilding (preserves cached images)
-	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
+	docker compose -f docker-compose.yml $(GPU_OVERLAY) down --remove-orphans
 	$(COMPOSE) up -d
 
 # ── Develop ──────────────────────────────────────────────────────────────────
