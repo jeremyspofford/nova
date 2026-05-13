@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AIModelsSection } from "./settings/AIModelsSection";
 import { ExtensionsSection } from "./settings/ExtensionsSection";
 import { SecretsSection } from "./settings/SecretsSection";
 import { SystemSection } from "./settings/SystemSection";
@@ -44,11 +45,7 @@ export function Settings() {
 function SettingsTab({ tab }: { tab: Tab }) {
   switch (tab) {
     case "AI & Models":
-      return (
-        <div className="text-stone-400 text-sm">
-          AI &amp; Models settings — coming soon
-        </div>
-      );
+      return <AIModelsSection />;
     case "Secrets":
       return <SecretsSection />;
     case "Extensions":

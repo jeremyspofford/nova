@@ -33,6 +33,10 @@
     "src/pages/Memory.tsx",
     "src/pages/Schedules.tsx",
     "src/pages/Settings.tsx",
-    "src/pages/settings/SecretsSection.tsx"
+    "src/pages/settings/AIModelsSection.tsx",
+    "src/pages/settings/ExtensionsSection.tsx",
+    "src/pages/settings/SecretsSection.tsx",
+    "src/pages/settings/SystemSection.tsx",
+    "src/contexts/ConversationContext.tsx"
   ]
 }

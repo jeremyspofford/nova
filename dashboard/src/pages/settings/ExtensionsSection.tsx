@@ -15,11 +15,6 @@ import {
   type MCPTool,
 } from '../../api'
 
-const ADMIN_SECRET =
-  typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('adminSecret') ?? '')
-    : ''
-
 const TIERS = ['READ', 'MUTATE', 'DESTRUCT'] as const
 type Tier = (typeof TIERS)[number]
 
@@ -60,7 +55,7 @@ function ToolRow({
 
   const overrideMut = useMutation({
     mutationFn: (tier: string | null) =>
-      setToolTierOverride(serverId, tool.name, tier, ADMIN_SECRET),
+      setToolTierOverride(serverId, tool.name, tier),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-tools', serverId] })
       setEditing(false)
@@ -148,14 +143,14 @@ function ServerRow({
 
   const { data: tools, isFetching: toolsFetching } = useQuery({
     queryKey: ['mcp-tools', server.id],
-    queryFn: () => listMCPTools(server.id, ADMIN_SECRET),
+    queryFn: () => listMCPTools(server.id),
     enabled: expanded,
     staleTime: 10_000,
     retry: 1,
   })
 
   const restartMut = useMutation({
-    mutationFn: () => restartMCPServer(server.id, ADMIN_SECRET),
+    mutationFn: () => restartMCPServer(server.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-servers'] })
       setError(null)
@@ -164,7 +159,7 @@ function ServerRow({
   })
 
   const toggleMut = useMutation({
-    mutationFn: (enabled: boolean) => toggleMCPServer(server.id, enabled, ADMIN_SECRET),
+    mutationFn: (enabled: boolean) => toggleMCPServer(server.id, enabled),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-servers'] })
       setError(null)
@@ -273,7 +268,7 @@ export function ExtensionsSection() {
 
   const { data: servers = [], isLoading } = useQuery({
     queryKey: ['mcp-servers'],
-    queryFn: () => listMCPServers(ADMIN_SECRET),
+    queryFn: () => listMCPServers(),
     staleTime: 5_000,
     retry: 1,
   })
@@ -281,7 +276,7 @@ export function ExtensionsSection() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['mcp-servers'] })
 
   const createMut = useMutation({
-    mutationFn: (body: MCPServerCreate) => createMCPServer(body, ADMIN_SECRET),
+    mutationFn: (body: MCPServerCreate) => createMCPServer(body),
     onSuccess: () => {
       invalidate()
       setShowAdd(false)
@@ -292,7 +287,7 @@ export function ExtensionsSection() {
   })
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteMCPServer(id, ADMIN_SECRET),
+    mutationFn: (id: string) => deleteMCPServer(id),
     onSuccess: () => {
       invalidate()
       setDeleteTarget(null)

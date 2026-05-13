@@ -5,10 +5,16 @@ export async function apiFetch<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    ...init,
-  });
+  const secret = localStorage.getItem("adminSecret");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (secret) headers["X-Admin-Secret"] = secret;
+  if (init?.headers) {
+    for (const [k, v] of Object.entries(init.headers as Record<string, string>)) {
+      headers[k] = v;
+    }
+  }
+  const { headers: _h, ...restInit } = init ?? {};
+  const res = await fetch(`${API_BASE}${path}`, { headers, ...restInit });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -88,73 +94,65 @@ export interface MCPServerCreate {
   transport?: string;
 }
 
-export async function listMCPServers(adminSecret: string): Promise<MCPServer[]> {
-  return apiFetch<MCPServer[]>("/api/v1/mcp/servers", {
-    headers: { "X-Admin-Secret": adminSecret },
-  });
+export async function listMCPServers(): Promise<MCPServer[]> {
+  return apiFetch<MCPServer[]>("/api/v1/mcp/servers");
 }
 
-export async function createMCPServer(
-  body: MCPServerCreate,
-  adminSecret: string
-): Promise<MCPServer> {
+export async function createMCPServer(body: MCPServerCreate): Promise<MCPServer> {
   return apiFetch<MCPServer>("/api/v1/mcp/servers", {
     method: "POST",
-    headers: { "X-Admin-Secret": adminSecret },
     body: JSON.stringify(body),
   });
 }
 
-export async function deleteMCPServer(
-  id: string,
-  adminSecret: string
-): Promise<void> {
-  await apiFetch(`/api/v1/mcp/servers/${id}`, {
-    method: "DELETE",
-    headers: { "X-Admin-Secret": adminSecret },
-  });
+export async function deleteMCPServer(id: string): Promise<void> {
+  await apiFetch(`/api/v1/mcp/servers/${id}`, { method: "DELETE" });
 }
 
-export async function listMCPTools(
-  serverId: string,
-  adminSecret: string
-): Promise<MCPTool[]> {
-  return apiFetch<MCPTool[]>(`/api/v1/mcp/servers/${serverId}/tools`, {
-    headers: { "X-Admin-Secret": adminSecret },
-  });
+export async function listMCPTools(serverId: string): Promise<MCPTool[]> {
+  return apiFetch<MCPTool[]>(`/api/v1/mcp/servers/${serverId}/tools`);
 }
 
 export async function setToolTierOverride(
   serverId: string,
   toolName: string,
-  tierOverride: string | null,
-  adminSecret: string
+  tierOverride: string | null
 ): Promise<{ server_id: string; tool_name: string; tier_override: string | null }> {
   return apiFetch(`/api/v1/mcp/servers/${serverId}/tools/${toolName}`, {
     method: "PATCH",
-    headers: { "X-Admin-Secret": adminSecret },
     body: JSON.stringify({ tier_override: tierOverride }),
   });
 }
 
 export async function restartMCPServer(
-  serverId: string,
-  adminSecret: string
+  serverId: string
 ): Promise<{ started: boolean; server_id: string }> {
-  return apiFetch(`/api/v1/mcp/servers/${serverId}/restart`, {
-    method: "POST",
-    headers: { "X-Admin-Secret": adminSecret },
+  return apiFetch(`/api/v1/mcp/servers/${serverId}/restart`, { method: "POST" });
+}
+
+export async function toggleMCPServer(serverId: string, enabled: boolean): Promise<MCPServer> {
+  return apiFetch<MCPServer>(`/api/v1/mcp/servers/${serverId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
   });
 }
 
-export async function toggleMCPServer(
-  serverId: string,
-  enabled: boolean,
-  adminSecret: string
-): Promise<MCPServer> {
-  return apiFetch<MCPServer>(`/api/v1/mcp/servers/${serverId}`, {
-    method: "PATCH",
-    headers: { "X-Admin-Secret": adminSecret },
-    body: JSON.stringify({ enabled }),
-  });
+export interface LLMProvider {
+  name: string;
+  model: string;
+  available: boolean;
+  local: boolean;
+  supports_embed: boolean;
+  url?: string;
+}
+
+export interface LLMProvidersResponse {
+  providers: LLMProvider[];
+  routing_strategy: string;
+  local_backend: string;
+  local_inference_url: string;
+}
+
+export async function getLLMProviders(): Promise<LLMProvidersResponse> {
+  return apiFetch<LLMProvidersResponse>("/api/v1/llm/providers");
 }
