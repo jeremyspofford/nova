@@ -12,13 +12,24 @@ from .buffer import buffer_event, replay_buffer
 from .session import WebSocketSession
 from ..voice.barge_in import handle_barge_in
 from ..voice.pipeline import run_voice_turn
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _log_task_exc(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception():
+        logger.error("background task failed: %s", task.exception())
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, request: Request):
+    # Auth check before accepting — must be done before ws.accept()
+    secret = ws.headers.get("x-admin-secret") or ws.query_params.get("secret")
+    if settings.admin_secret and secret != settings.admin_secret:
+        await ws.close(code=1008, reason="Unauthorized")
+        return
     await ws.accept()
     session_id = str(uuid.uuid4())
     session = WebSocketSession(ws=ws, session_id=session_id)
@@ -59,9 +70,10 @@ async def websocket_endpoint(ws: WebSocket, request: Request):
                     event = {"type": "message", "text": text_input}
                     await buffer_event(redis, task_id, event)
                     await sessions.broadcast_to_task(task_id, event)
-                    asyncio.create_task(
+                    t = asyncio.create_task(
                         _dispatch_text_turn(session, task_id, text_input, http_agent, redis, sessions)
                     )
+                    t.add_done_callback(_log_task_exc)
 
             elif msg_type == "voice_turn_start":
                 task_id = msg.get("task_id") or session.task_id
@@ -79,7 +91,8 @@ async def websocket_endpoint(ws: WebSocket, request: Request):
                 if audio_buffer and session.task_id:
                     combined = b"".join(audio_buffer)
                     audio_buffer.clear()
-                    asyncio.create_task(run_voice_turn(session, combined, http_agent, http_voice))
+                    t = asyncio.create_task(run_voice_turn(session, combined, http_agent, http_voice))
+                    t.add_done_callback(_log_task_exc)
 
             elif msg_type == "barge_in":
                 task_id = msg.get("task_id") or session.task_id

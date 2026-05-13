@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     agent_core_url: str = "http://agent-core:8000"
     voice_gateway_url: str = "http://voice-gateway:8003"
     redis_url: str = "redis://redis:6379/3"
+    admin_secret: str = ""
     log_level: str = "INFO"
 
     class Config:

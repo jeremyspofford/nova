@@ -74,9 +74,13 @@ async def run_voice_turn(
     # Phase 2: LLM
     response_text = ""
     async for chunk in _llm_stream(transcript, http_agent, task_id):
+        if session.tts_cancelled:
+            break  # stop accumulating; skip response_final
         response_text += chunk
         await session.send_json({"type": "response_chunk", "text": chunk, "task_id": task_id})
-    await session.send_json({"type": "response_final", "text": response_text, "task_id": task_id})
+
+    if response_text and not session.tts_cancelled:
+        await session.send_json({"type": "response_final", "text": response_text, "task_id": task_id})
 
     # Phase 3: TTS (skip on barge-in or non-audio-owner)
     if session.tts_cancelled or not session.is_audio_owner:
