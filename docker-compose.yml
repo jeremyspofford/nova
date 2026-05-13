@@ -1,604 +1,46 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared configuration anchor — maps directly to Helm library chart _helpers.tpl
-# ─────────────────────────────────────────────────────────────────────────────
-x-nova-common: &nova-common
-  restart: unless-stopped
-  networks:
-    - nova-internal
-  logging:
-    driver: json-file
-    options:
-      max-size: "50m"
-      max-file: "3"
+# docker-compose.yml
+version: "3.9"
 
-x-nova-healthcheck: &nova-healthcheck
-  interval: 5s
-  timeout: 5s
-  retries: 3
-  start_period: 15s
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Infrastructure
-# ─────────────────────────────────────────────────────────────────────────────
 services:
   postgres:
-    <<: *nova-common
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: nova
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_dev_password}
-      POSTGRES_DB: nova
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-nova}
     volumes:
       - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nova -d nova"]
-      interval: 3s
-      timeout: 3s
-      retries: 15
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 2G
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
-    <<: *nova-common
     image: redis:7-alpine
-    command: >
-      redis-server
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --save 60 1
     volumes:
       - ${REDIS_DATA_DIR:-./data/redis}:/data
     ports:
-      - "127.0.0.1:6379:6379"
+      - "6379:6379"
     healthcheck:
-      <<: *nova-healthcheck
       test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      start_period: 5s
-
-  # Ollama for local model serving. Activated by the `local-ollama` profile,
-  # which the setup wizard adds to COMPOSE_PROFILES in .env when the user picks
-  # `hybrid` or `local-only` mode (the default). Cloud-only mode leaves the
-  # profile out, so this service is not pulled or started.
-  # To point Nova at an external Ollama/vLLM instance, set OLLAMA_BASE_URL in
-  # .env to a literal URL (e.g. http://192.168.12.10:11434). A runtime UI for
-  # swapping the inference target without a restart is coming soon.
-  ollama:
-    <<: *nova-common
-    profiles: ["local-ollama"]
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      # Keep loaded models resident — default 5m evicts between Cortex/intel cycles,
-      # forcing a 1-2s runner reload each call. -1 holds forever.
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
-    healthcheck:
-      <<: *nova-healthcheck
-      # ollama/ollama image does not include curl — use the ollama binary itself.
-      # `ollama list` connects to the running server and exits 0 when ready.
-      test: ["CMD", "ollama", "list"]
-      start_period: 60s # give more time on first run (model downloads may be pending)
-    deploy:
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: 8G
-    # On Apple Silicon, Ollama uses Metal automatically — no GPU flags needed
-
-  nova-vllm:
-    <<: *nova-common
-    image: vllm/vllm-openai:v0.8.5
-    container_name: nova-vllm
-    profiles: ["local-vllm"]
-    volumes:
-      - nova-vllm-cache:/root/.cache/huggingface
-    environment:
-      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
-      - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
-      - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:---enforce-eager}
-      - HF_TOKEN=${HF_TOKEN:-}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        python3 -m vllm.entrypoints.openai.api_server
-        --model "$$VLLM_MODEL"
-        --gpu-memory-utilization "$$VLLM_GPU_MEMORY_UTILIZATION"
-        --max-model-len "$$VLLM_MAX_MODEL_LEN"
-        $$VLLM_EXTRA_ARGS
-        --host 0.0.0.0
-        --port 8000
-    deploy:
-      resources:
-        limits:
-          cpus: "8"
-          memory: 16G
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
-      start_period: 120s
 
-  nova-sglang:
-    <<: *nova-common
-    image: lmsysorg/sglang:latest
-    container_name: nova-sglang
-    profiles: ["local-sglang"]
-    volumes:
-      - nova-sglang-cache:/root/.cache/huggingface
-    environment:
-      - SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        python3 -m sglang.launch_server
-        --model-path "$$SGLANG_MODEL"
-        --host 0.0.0.0
-        --port 8000
-    deploy:
-      resources:
-        limits:
-          cpus: "8.0"
-          memory: 16G
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 120s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Nova Platform Services
-  # ─────────────────────────────────────────────────────────────────────────────
-  llm-gateway:
-    <<: *nova-common
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+  agent-core:
     build:
       context: .
-      dockerfile: llm-gateway/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8001",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./llm-gateway/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-        - action: rebuild
-          path: ./llm-gateway/pyproject.toml
+      dockerfile: agent-core/Dockerfile
+    env_file: .env
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      REDIS_URL: redis://redis:6379/1
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
-      DEFAULT_CHAT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
-      DEFAULT_EMBED_MODEL: nomic-embed-text
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-}
-      TRUSTED_NETWORK_CIDRS: ${TRUSTED_NETWORK_CIDRS:-}
-      # ── Remote Ollama + WoL + routing ────────────────────────────────────────
-      WOL_MAC_ADDRESS: ${WOL_MAC_ADDRESS:-}
-      WOL_BROADCAST_IP: ${WOL_BROADCAST_IP:-255.255.255.255}
-      OLLAMA_CLOUD_FALLBACK_MODEL: ${OLLAMA_CLOUD_FALLBACK_MODEL:-groq/llama-3.3-70b-versatile}
-      OLLAMA_CLOUD_FALLBACK_EMBED_MODEL: ${OLLAMA_CLOUD_FALLBACK_EMBED_MODEL:-text-embedding-004}
-      LLM_ROUTING_STRATEGY: ${LLM_ROUTING_STRATEGY:-local-first}
-      # ── Subscription auth (quota from existing subscriptions, no API billing) ──
-      CHATGPT_ACCESS_TOKEN: ${CHATGPT_ACCESS_TOKEN:-}
-      CHATGPT_TOKEN_DIR: ${CHATGPT_TOKEN_DIR:-}
-      # ── Free-tier providers (set keys in .env to activate) ────────────────────
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_USE_ADC: ${GEMINI_USE_ADC:-false}
-      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      # ── Paid API keys ─────────────────────────────────────────────────────────
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # ── Per-provider default models (override in .env to swap model variants) ─
-      DEFAULT_OLLAMA_MODEL: ${DEFAULT_OLLAMA_MODEL:-qwen2.5:7b}
-      DEFAULT_GROQ_MODEL: ${DEFAULT_GROQ_MODEL:-groq/llama-3.3-70b-versatile}
-      DEFAULT_GEMINI_MODEL: ${DEFAULT_GEMINI_MODEL:-gemini/gemini-2.5-flash}
-      DEFAULT_CEREBRAS_MODEL: ${DEFAULT_CEREBRAS_MODEL:-cerebras/llama3.1-8b}
-      DEFAULT_OPENROUTER_MODEL: ${DEFAULT_OPENROUTER_MODEL:-openrouter/meta-llama/llama-3.1-8b-instruct:free}
-      DEFAULT_GITHUB_MODEL: ${DEFAULT_GITHUB_MODEL:-github/gpt-4o-mini}
-      DEFAULT_CHATGPT_MODEL: ${DEFAULT_CHATGPT_MODEL:-chatgpt/gpt-4o}
-    # ── Volume mounts for credential auto-discovery ───────────────────────────
-    # Uncomment whichever auth methods you use:
-    #
-    # ChatGPT Plus/Pro (codex auth.json auto-discovery):
-    # volumes:
-    #   - ${HOME}/.codex:/root/.codex:ro
-    #
-    # Gemini ADC (gcloud auth application-default login):
-    # volumes:
-    #   - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
-    #
-    # Both at once:
-    # volumes:
-    #   - ${HOME}/.codex:/root/.codex:ro
-    #   - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
-    ports:
-      # Loopback-only by default (SEC-003). External access goes through
-      # the dashboard proxy or the orchestrator; IDE plugins on this host
-      # still reach it via localhost:8001. Override with LLM_GATEWAY_BIND
-      # to "0.0.0.0:" if you need direct LAN/Tailscale access.
-      - "${LLM_GATEWAY_BIND:-127.0.0.1:}8001:8001"
-    depends_on:
-      redis:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-        required: false  # cloud-only mode (no local-ollama profile) skips this dep
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live', timeout=3)",
-        ]
-
-  memory-service:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: memory-service/Dockerfile
-    environment:
-      DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
-      REDIS_URL: redis://redis:6379/0
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      EMBEDDING_MODEL: nomic-embed-text
-      EMBEDDING_DIMENSIONS: "768"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-}
-      TRUSTED_NETWORK_CIDRS: ${TRUSTED_NETWORK_CIDRS:-}
-    volumes:
-      - ./data/sources:/data/sources
-    ports:
-      # Loopback-only by default (SEC-004). Dashboard/orchestrator reach it
-      # via Docker DNS. Override with MEMORY_SERVICE_BIND to expose externally.
-      - "${MEMORY_SERVICE_BIND:-127.0.0.1:}8002:8002"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      llm-gateway:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live', timeout=3)",
-        ]
-
-  neural-router-trainer:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: memory-service/Dockerfile
-    command: python -m app.engram.neural_router.train
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
-      REDIS_URL: redis://redis:6379/6
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
-
-  orchestrator:
-    <<: *nova-common
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    build:
-      context: .
-      dockerfile: orchestrator/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./orchestrator/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-        - action: rebuild
-          path: ./orchestrator/pyproject.toml
-    environment:
-      REDIS_URL: redis://redis:6379/2
-      MEMORY_SERVICE_URL: http://memory-service:8002
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Phase 2: auth + cost tracking
-      DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
-      # Phase 3: workspace + self-modification paths inside the container
-      WORKSPACE_ROOT: /workspace
-      NOVA_ROOT: /nova
-      SHELL_TIMEOUT_SECONDS: ${SHELL_TIMEOUT_SECONDS:-30}
-      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-}
-      BRIDGE_SERVICE_SECRET: ${BRIDGE_SERVICE_SECRET:-}
-      HOST_HOME: ${HOME}
-      NOVA_GITHUB_PAT: ${NOVA_GITHUB_PAT:-}
-      NOVA_GITHUB_REPO: ${NOVA_GITHUB_REPO:-}
-      NOVA_GITHUB_USER: ${NOVA_GITHUB_USER:-}
-      NOVA_GITHUB_EMAIL: ${NOVA_GITHUB_EMAIL:-}
-      SELFMOD_RATE_LIMIT_PER_HOUR: ${SELFMOD_RATE_LIMIT_PER_HOUR:-5}
-      SELFMOD_ENABLED: ${SELFMOD_ENABLED:-false}
-      # ── SEC-006a: secret-bearing env vars passed in solely so the
-      #    orchestrator's first-boot bootstrap can mirror them into
-      #    platform_secrets. Once the bootstrap has run, these env vars
-      #    can be cleared from .env — platform_secrets becomes the
-      #    source of truth and the .env mount drops to :ro. The bootstrap
-      #    is idempotent and never overwrites a value the user has
-      #    already rotated through the dashboard.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      CHATGPT_ACCESS_TOKEN: ${CHATGPT_ACCESS_TOKEN:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-    # Mount the host workspace at /workspace so agents can read/write files.
-    # Set NOVA_WORKSPACE in .env to point at any directory.
-    # Default: ~/.nova/workspace (created by setup.sh)
-    # Nova's own source is mounted at /nova for self-modification (nova sandbox tier).
-    volumes:
-      - ${NOVA_WORKSPACE:-${HOME}/.nova/workspace}:/workspace:rw
-      - .:/nova:rw
-      # home tier is admin-opt-in (sandbox.home_enabled in platform_config).
-      # Dropped 2026-04-17 / SEC-001: the /:/host-root:rw mount (the
-      # `root` sandbox tier was RCE-by-design against any prompt injection).
-      # Override with NOVA_HOME_MOUNT=ro if you want to lock home tier to
-      # read-only at the mount layer (defence-in-depth on top of the UI toggle).
-      - ${HOME}:${HOME}:${NOVA_HOME_MOUNT:-rw}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+      REDIS_URL: redis://redis:6379
+      DOCKER_SOCKET_PROXY_URL: http://docker-socket-proxy:2375
+      NOVA_WORKSPACE: ${NOVA_WORKSPACE:-/workspace}
     ports:
       - "8000:8000"
-    depends_on:
-      memory-service:
-        condition: service_healthy
-      llm-gateway:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=3)",
-        ]
-      start_period: 60s
-
-  chat-api:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: chat-api/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8080",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./chat-api/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      REDIS_URL: redis://redis:6379/3
-      DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
-    ports:
-      - "8080:8080"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/live', timeout=3)",
-        ]
-
-  chat-bridge:
-    <<: *nova-common
-    profiles: ["bridges"]
-    build:
-      context: .
-      dockerfile: chat-bridge/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8090",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./chat-bridge/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      REDIS_URL: redis://redis:6379/4
-      NOVA_API_KEY: ${NOVA_API_KEY:-}
-      DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-auto}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
-      BRIDGE_SERVICE_SECRET: ${BRIDGE_SERVICE_SECRET:-}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-changeme}
-    ports:
-      - "8090:8090"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8090/health/live', timeout=3)",
-        ]
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # SEC-006b: Docker socket proxy — gates the recovery service's Docker SDK
-  # ─────────────────────────────────────────────────────────────────────────────
-  # The recovery container's SDK path (docker_client.py) talks to this proxy
-  # instead of the raw socket.  Only CONTAINERS=1 (list/inspect/logs) and
-  # POST=1 (restart) are exposed; everything else (exec, volumes, images,
-  # network create/destroy, build, etc.) is rejected at the proxy.
-  #
-  # The compose CLI subprocess (compose_client.py) keeps using the raw
-  # socket directly because compose ops require unrestricted Docker API
-  # access — that split is the explicit half of the trust boundary.
-  #
-  # The proxy lives on its own internal network (recovery-socket) so only
-  # the recovery container can reach it, preserving the original isolation
-  # of the bind-mount-only setup.
-  docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
-    restart: unless-stopped
-    environment:
-      CONTAINERS: "1"
-      POST: "1"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - recovery-socket
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "2"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 32M
-
-  recovery:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: recovery-service/Dockerfile
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_USER: nova
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_dev_password}
-      POSTGRES_DB: nova
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      BACKUP_DIR: /backups
-      BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-30}
-      NOVA_ENV_FILE: /project/.env
-      COMPOSE_PROJECT_DIR: /project
-      REDIS_URL: redis://redis:6379/7
-      # SEC-006b: route the Docker SDK through the proxy (allowlisted API
-      # surface).  The compose CLI subprocess keeps using /var/run/docker.sock.
-      DOCKER_SDK_HOST: tcp://docker-socket-proxy:2375
-    networks:
-      - nova-internal
-      - recovery-socket
-    volumes:
-      - ${BACKUP_DIR:-./backups}:/backups:rw
-      # SEC-006b: kept for the compose CLI subprocess (compose_client.py).
-      # SDK calls go through docker-socket-proxy via DOCKER_SDK_HOST above.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./.env:/project/.env:rw
-      - ./docker-compose.yml:/project/docker-compose.yml:ro
-      - ./docker-compose.gpu.yml:/project/docker-compose.gpu.yml:ro
-      - ./docker-compose.rocm.yml:/project/docker-compose.rocm.yml:ro
-      - ./data:/app/data:ro
-      # Sources filesystem blobs need rw for restore (overlays the :ro parent mount above).
-      # Scoped to just data/sources rather than widening the whole /app/data mount.
-      - ./data/sources:/app/data/sources:rw
-      # Friction-log screenshots need rw so factory reset can clear them (PRIV-003).
-      - ./data/friction-screenshots:/app/data/friction-screenshots:rw
-    ports:
-      - "8888:8888"
     depends_on:
       postgres:
         condition: service_healthy
@@ -607,549 +49,102 @@ services:
       docker-socket-proxy:
         condition: service_started
     healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8888/health/live', timeout=3)",
-        ]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
-  cortex:
-    <<: *nova-common
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      DELETE: 1
+      NETWORKS: 0
+      VOLUMES: 0
+      SWARM: 0
+      CONFIGS: 0
+      SECRETS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  memory-service:
     build:
       context: .
-      dockerfile: cortex/Dockerfile
+      dockerfile: memory-service/Dockerfile
+    env_file: .env
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_USER: nova
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_dev_password}
-      POSTGRES_DB: nova
-      REDIS_URL: redis://redis:6379/5
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      MEMORY_SERVICE_URL: http://memory-service:8002
-      RECOVERY_URL: http://recovery:8888
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      TRUSTED_NETWORK_CIDRS: ${TRUSTED_NETWORK_CIDRS:-}
-      CORTEX_ENABLED: ${CORTEX_ENABLED:-true}
-      CORTEX_CYCLE_INTERVAL: ${CORTEX_CYCLE_INTERVAL:-300}
-      CORTEX_DAILY_BUDGET_USD: ${CORTEX_DAILY_BUDGET_USD:-5.00}
-      CORTEX_MAX_IDLE_INTERVAL: ${CORTEX_MAX_IDLE_INTERVAL:-1800}
-      CORTEX_ACTIVE_INTERVAL: ${CORTEX_ACTIVE_INTERVAL:-30}
-      CORTEX_MEMORY_ENABLED: ${CORTEX_MEMORY_ENABLED:-true}
-      CORTEX_REFLECT_TO_ENGRAMS: ${CORTEX_REFLECT_TO_ENGRAMS:-true}
-      CORTEX_IDLE_CONSOLIDATION: ${CORTEX_IDLE_CONSOLIDATION:-true}
-      CORTEX_TEST_MODE: ${CORTEX_TEST_MODE:-false}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+      REDIS_URL: redis://redis:6379
     ports:
-      # Loopback-only by default (SEC-004). Override with CORTEX_BIND if needed.
-      - "${CORTEX_BIND:-127.0.0.1:}8100:8100"
+      - "8002:8002"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8100/health/live', timeout=3)",
-        ]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-
-  # ── Intel Worker ──────────────────────────────────────────────────────────────
-  intel-worker:
-    <<: *nova-common
-    container_name: nova-intel-worker
-    build:
-      context: .
-      dockerfile: intel-worker/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8110",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./intel-worker/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      REDIS_URL: redis://redis:6379/6
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      # Loopback-only — intel-worker only serves a health endpoint.
-      - "${INTEL_WORKER_BIND:-127.0.0.1:}8110:8110"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8110/health/live', timeout=3)",
-        ]
-
-  # ── Knowledge Worker ────────────────────────────────────────────────────────
-  knowledge-worker:
-    <<: *nova-common
-    container_name: nova-knowledge-worker
-    profiles: ["knowledge"]
-    build:
-      context: .
-      dockerfile: knowledge-worker/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8120",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./knowledge-worker/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      REDIS_URL: redis://redis:6379/8
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET}
-      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-50}
-      MAX_LLM_CALLS_PER_CRAWL: ${MAX_LLM_CALLS_PER_CRAWL:-60}
-    ports:
-      # Loopback-only — knowledge-worker only serves a health endpoint.
-      - "${KNOWLEDGE_WORKER_BIND:-127.0.0.1:}8120:8120"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8120/health/live', timeout=3)",
-        ]
-
-  # ── Voice Service ───────────────────────────────────────────────────────────
-  voice-service:
-    <<: *nova-common
-    profiles: ["voice"]
-    build:
-      context: .
-      dockerfile: voice-service/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8130",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./voice-service/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-        - action: rebuild
-          path: ./voice-service/pyproject.toml
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-      REDIS_URL: redis://redis:6379/9
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173}
-    ports:
-      # Loopback-only — dashboard proxies voice via nginx → docker-net DNS.
-      - "${VOICE_SERVICE_BIND:-127.0.0.1:}8130:8130"
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8130/health/live', timeout=3)",
-        ]
-
-  # ── Screenpipe Bridge ───────────────────────────────────────────────────────
-  screenpipe-bridge:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: screenpipe-bridge/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8140",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./screenpipe-bridge/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-        - action: rebuild
-          path: ./screenpipe-bridge/pyproject.toml
-    environment:
-      REDIS_URL: redis://redis:6379/10
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173}
-    ports:
-      - "${SCREENPIPE_BRIDGE_BIND:-127.0.0.1:}8140:8140"
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8140/health/live', timeout=3)",
-        ]
-
-  # ── Vaultwarden (optional secrets manager) ──────────────────────────────────
-  vaultwarden:
-    image: vaultwarden/server:latest
-    container_name: nova-vaultwarden
-    profiles: ["secrets"]
-    restart: unless-stopped
-    environment:
-      - DOMAIN=http://localhost:8222
-      - SIGNUPS_ALLOWED=true
-      - ADMIN_TOKEN=${VAULTWARDEN_ADMIN_TOKEN:-}
-      - LOG_LEVEL=warn
-    volumes:
-      - vaultwarden-data:/data
-    ports:
-      - "127.0.0.1:8222:80"
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:80/alive"]
-      interval: 15s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health/ready || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - nova-internal
+      retries: 6
 
-  # ── Embedded Editors (optional, one active at a time) ────────────────────────
-  # code-server: localhost-only host port (can't do subpath proxy — it
-  # generates absolute asset URLs at /). Dashboard iframe loads directly.
-  # Neovim/ttyd: internal-only via nginx (supports --base-path natively).
-  editor-vscode:
-    image: codercom/code-server:latest
-    container_name: nova-editor-vscode
-    profiles: ["editor-vscode"]
-    restart: unless-stopped
-    command:
-      - --bind-addr=0.0.0.0:8443
-      - --auth=none
-      - --disable-telemetry
-      - /workspace
-    ports:
-      - "127.0.0.1:8443:8443"
-    volumes:
-      - ${EDITOR_WORKSPACE:-${NOVA_WORKSPACE:-${HOME}/.nova/workspace}}:/workspace:rw
-      - ${VSCODE_CONFIG_PATH:-./data/editor-config/vscode}:/home/coder/.local/share/code-server:rw
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8443/healthz"]
-      <<: *nova-healthcheck
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
-    networks:
-      - nova-internal
-
-  editor-neovim:
+  llm-gateway:
     build:
       context: .
-      dockerfile: editor-neovim/Dockerfile
-    container_name: nova-editor-neovim
-    profiles: ["editor-neovim"]
-    restart: unless-stopped
-    environment:
-      - EDITOR_DOTFILES_REPO=${EDITOR_DOTFILES_REPO:-}
-      - NVIM_CONFIG_DIR=/root/.config/nvim
-    volumes:
-      - ${EDITOR_WORKSPACE:-${NOVA_WORKSPACE:-${HOME}/.nova/workspace}}:/workspace:rw
-      - ${NEOVIM_CONFIG_PATH:-./data/editor-config/neovim}:/root/.config/nvim:rw
+      dockerfile: llm-gateway/Dockerfile
+    env_file: .env
+    ports:
+      - "8001:8001"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:7681/editor-neovim/"]
-      <<: *nova-healthcheck
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
-    networks:
-      - nova-internal
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  voice-gateway:
+    build:
+      context: .
+      dockerfile: voice-gateway/Dockerfile
+    env_file: .env
+    ports:
+      - "8003:8003"
+    profiles: ["voice"]
+
+  chat-surface:
+    build:
+      context: .
+      dockerfile: chat-surface/Dockerfile
+    env_file: .env
+    environment:
+      AGENT_CORE_URL: http://agent-core:8000
+    ports:
+      - "8004:8004"
+    depends_on:
+      agent-core:
+        condition: service_healthy
+
+  recovery:
+    build:
+      context: .
+      dockerfile: recovery/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-nova}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data:/data:ro
+      - ./backups:/backups
+    ports:
+      - "8888:8888"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   dashboard:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: dashboard/Dockerfile
+    build: ./dashboard
     ports:
       - "3000:3000"
     depends_on:
-      recovery:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
-
-  website:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: website/Dockerfile
-    ports:
-      - "4000:4000"
-    healthcheck:
-      <<: *nova-healthcheck
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000"]
-    profiles:
-      - website
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Remote Access Sidecars (optional — enable via COMPOSE_PROFILES)
-  # ─────────────────────────────────────────────────────────────────────────────
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      - dashboard
-    restart: unless-stopped
-    networks:
-      - nova-internal
-    profiles:
-      - cloudflare-tunnel
-
-  tailscale:
-    image: tailscale/tailscale:latest
-    hostname: nova
-    environment:
-      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_EXTRA_ARGS: --advertise-tags=tag:nova
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    restart: unless-stopped
-    network_mode: host
-    profiles:
-      - tailscale
-
-  # ── Benchmark Baselines ──────────────────────────────────────────────────────
-  baseline-pgvector:
-    <<: *nova-common
-    profiles: ["benchmark"]
-    build:
-      context: .
-      dockerfile: baseline-pgvector/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8003",
-      ]
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-nova}:${POSTGRES_PASSWORD:-nova}@postgres:5432/${POSTGRES_DB:-nova}
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      PORT: "8003"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "${BASELINE_PGVECTOR_PORT:-8003}:8003"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      llm-gateway:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8003/health/live', timeout=3)",
-        ]
-
-  baseline-mem0:
-    <<: *nova-common
-    profiles: ["benchmark"]
-    build:
-      context: .
-      dockerfile: baseline-mem0/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8004",
-      ]
-    environment:
-      OLLAMA_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      MEM0_DATA_DIR: /data/mem0
-      PORT: "8004"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "${BASELINE_MEM0_PORT:-8004}:8004"
-    volumes:
-      - mem0-data:/data/mem0
-    depends_on:
-      llm-gateway:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live', timeout=3)",
-        ]
-
-  baseline-markdown:
-    <<: *nova-common
-    profiles: ["benchmark"]
-    build:
-      context: .
-      dockerfile: baseline-markdown/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8005",
-      ]
-    environment:
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      MARKDOWN_DIR: /data/markdown
-      PORT: "8005"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "${BASELINE_MARKDOWN_PORT:-8005}:8005"
-    volumes:
-      - ./data/markdown:/data/markdown:ro
-    depends_on:
-      llm-gateway:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8005/health/live', timeout=3)",
-        ]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Networks
-# ─────────────────────────────────────────────────────────────────────────────
-networks:
-  nova-internal:
-    driver: bridge
-    # Phase 2 will add: nova-sandbox (internal: true) for PII Guardian enforcement
-
-  # SEC-006b: dedicated network for the docker-socket-proxy ↔ recovery channel.
-  # internal: true means the proxy has no outbound internet path — it only
-  # reaches the host docker daemon via the unix socket bind-mount.  Recovery
-  # joins both nova-internal (its normal traffic) and this one (proxy access).
-  recovery-socket:
-    driver: bridge
-    internal: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Volumes
-# ─────────────────────────────────────────────────────────────────────────────
-volumes:
-  # Critical data (postgres, redis) uses host bind mounts in ./data/ — immune to docker volume prune.
-  # Only re-downloadable caches remain as named volumes:
-  ollama-data:
-  nova-vllm-cache:
-  nova-sglang-cache:
-  tailscale-state:
-  vaultwarden-data:
-  mem0-data:
+      - agent-core
