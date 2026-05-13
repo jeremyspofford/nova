@@ -1,56 +1,215 @@
 #!/usr/bin/env bash
-# install — Nova v2 first-time setup
+# install — Nova setup wizard
 set -euo pipefail
 
-echo "Nova v2 — Install"
-echo "=================="
+BOLD=$'\033[1m'
+GREEN=$'\033[0;32m'
+CYAN=$'\033[0;36m'
+RESET=$'\033[0m'
 
-# Check requirements
+echo ""
+echo "${BOLD}Nova — Setup Wizard${RESET}"
+echo "===================="
+echo ""
+
+# ── Prerequisites ─────────────────────────────────────────────────────────────
 command -v docker >/dev/null 2>&1 || { echo "Error: docker is required"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "Error: docker compose v2 is required"; exit 1; }
 
-# Generate .env if missing
+# ── Create .env if missing ────────────────────────────────────────────────────
 if [ ! -f .env ]; then
   echo "Creating .env from .env.example..."
   cp .env.example .env
 
-  # Generate master key
   MASTER_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   python3 -c "
 import pathlib, sys
 p = pathlib.Path('.env')
-content = p.read_text()
-p.write_text(content.replace('CREDENTIAL_MASTER_KEY=', 'CREDENTIAL_MASTER_KEY=' + sys.argv[1], 1))
+p.write_text(p.read_text().replace('CREDENTIAL_MASTER_KEY=', 'CREDENTIAL_MASTER_KEY=' + sys.argv[1], 1))
 " "$MASTER_KEY"
 
-  # Prompt for postgres password
-  read -rsp "Set a Postgres password: " PG_PASS
+  read -rsp "${BOLD}Set a Postgres password:${RESET} " PG_PASS
   echo
   python3 -c "
 import pathlib, sys
 p = pathlib.Path('.env')
-content = p.read_text()
-p.write_text(content.replace('POSTGRES_PASSWORD=changeme', 'POSTGRES_PASSWORD=' + sys.argv[1], 1))
+p.write_text(p.read_text().replace('POSTGRES_PASSWORD=changeme', 'POSTGRES_PASSWORD=' + sys.argv[1], 1))
 " "$PG_PASS"
 fi
 
-# Create data dirs
+# ── Inference mode ────────────────────────────────────────────────────────────
+echo ""
+echo "${BOLD}Inference mode${RESET}"
+echo "  1) cloud-only   — use cloud AI providers (Anthropic, OpenAI, Gemini…)"
+echo "  2) hybrid       — local inference first, cloud fallback  ${CYAN}[recommended]${RESET}"
+echo "  3) local-only   — no cloud providers"
+echo ""
+read -rp "Choice [1-3, default: 2]: " MODE_CHOICE
+case "${MODE_CHOICE:-2}" in
+  1) ROUTING="cloud-only";  LOCAL_BACKEND="none" ;;
+  3) ROUTING="local-only";  LOCAL_BACKEND="" ;;
+  *) ROUTING="local-first"; LOCAL_BACKEND="" ;;
+esac
+
+# ── Engine selection (if local inference wanted) ───────────────────────────────
+COMPOSE_PROFILES="voice"
+LOCAL_URL=""
+LOCAL_MODEL=""
+LOCAL_EMBED="nomic-embed-text"
+
+if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
+  # Detect host Ollama
+  HOST_OLLAMA_URL="http://host.docker.internal:11434"
+  HOST_OLLAMA_AVAILABLE=false
+  if curl -sf --max-time 2 "${HOST_OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
+    HOST_OLLAMA_AVAILABLE=true
+  fi
+
+  echo ""
+  echo "${BOLD}Local inference engine${RESET}"
+  if [ "$HOST_OLLAMA_AVAILABLE" = "true" ]; then
+    echo "  ${GREEN}✓ Ollama detected on this machine${RESET}"
+    echo "  1) ollama-host  — use the Ollama already running here  ${CYAN}[recommended]${RESET}"
+  else
+    echo "  1) ollama-host  — use Ollama on this machine (start Ollama first)"
+  fi
+  echo "  2) ollama       — run Ollama in Docker"
+  echo "  3) llamacpp     — llama.cpp server in Docker (CPU-friendly)"
+  echo "  4) vllm         — vLLM in Docker (GPU required)"
+  echo "  5) sglang       — sglang in Docker (GPU required)"
+  echo "  6) lmstudio     — LM Studio on this machine (start LM Studio first)"
+  echo ""
+  read -rp "Choice [1-6, default: 1]: " ENGINE_CHOICE
+
+  case "${ENGINE_CHOICE:-1}" in
+    2)
+      LOCAL_BACKEND="ollama"
+      LOCAL_URL="http://nova-ollama:11434"
+      COMPOSE_PROFILES="voice,local-ollama"
+      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
+      echo "  → Will pull ${LOCAL_MODEL} after start"
+      ;;
+    3)
+      LOCAL_BACKEND="llamacpp"
+      LOCAL_URL="http://nova-llamacpp:8080"
+      COMPOSE_PROFILES="voice,local-llamacpp"
+      read -rp "Model filename in /models volume [default: llama-3.2-3b-q4.gguf]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-llama-3.2-3b-q4.gguf}"
+      LOCAL_EMBED=""
+      ;;
+    4)
+      LOCAL_BACKEND="vllm"
+      LOCAL_URL="http://nova-vllm:8000"
+      COMPOSE_PROFILES="voice,local-vllm"
+      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-meta-llama/Llama-3.2-3B-Instruct}"
+      LOCAL_EMBED=""
+      ;;
+    5)
+      LOCAL_BACKEND="sglang"
+      LOCAL_URL="http://nova-sglang:30000"
+      COMPOSE_PROFILES="voice,local-sglang"
+      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-meta-llama/Llama-3.2-3B-Instruct}"
+      LOCAL_EMBED=""
+      ;;
+    6)
+      LOCAL_BACKEND="lmstudio"
+      read -rp "LM Studio URL [default: http://host.docker.internal:1234]: " LOCAL_URL
+      LOCAL_URL="${LOCAL_URL:-http://host.docker.internal:1234}"
+      read -rp "Model name as shown in LM Studio [default: local-model]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-local-model}"
+      LOCAL_EMBED=""
+      ;;
+    *)
+      LOCAL_BACKEND="ollama-host"
+      LOCAL_URL="$HOST_OLLAMA_URL"
+      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL
+      LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
+      ;;
+  esac
+else
+  # cloud-only
+  LOCAL_BACKEND="none"
+  LOCAL_URL=""
+  LOCAL_MODEL=""
+  LOCAL_EMBED=""
+  ROUTING="cloud-only"
+fi
+
+# ── Write inference settings to .env ──────────────────────────────────────────
+# Line-by-line replacement to handle values with special characters (/, $, etc.)
+_set_env() {
+  local key="$1" val="$2"
+  python3 - "$key" "$val" <<'PYEOF'
+import sys, pathlib
+key, val = sys.argv[1], sys.argv[2]
+p = pathlib.Path('.env')
+lines = p.read_text().splitlines(keepends=True)
+found = False
+new_lines = []
+for line in lines:
+    if line.startswith(key + '='):
+        new_lines.append(f'{key}={val}\n')
+        found = True
+    else:
+        new_lines.append(line)
+if not found:
+    new_lines.append(f'{key}={val}\n')
+p.write_text(''.join(new_lines))
+PYEOF
+}
+
+_set_env "NOVA_INFERENCE_BACKEND" "$LOCAL_BACKEND"
+_set_env "LOCAL_INFERENCE_URL" "$LOCAL_URL"
+_set_env "LOCAL_COMPLETION_MODEL" "$LOCAL_MODEL"
+_set_env "LOCAL_EMBED_MODEL" "${LOCAL_EMBED:-nomic-embed-text}"
+_set_env "LLM_ROUTING_STRATEGY" "$ROUTING"
+_set_env "COMPOSE_PROFILES" "$COMPOSE_PROFILES"
+
+echo ""
+echo "${GREEN}✓${RESET} Inference: backend=${BOLD}${LOCAL_BACKEND}${RESET} routing=${BOLD}${ROUTING}${RESET} profiles=${BOLD}${COMPOSE_PROFILES}${RESET}"
+
+# ── Build and start ────────────────────────────────────────────────────────────
 mkdir -p data/postgres data/redis backups
 
-# Build and start
-echo "Building services..."
+echo ""
+echo "${BOLD}Building services...${RESET}"
 docker compose build
 
-echo "Starting services..."
+echo "${BOLD}Starting services...${RESET}"
 docker compose up -d
 
-# Wait for health
-echo "Waiting for services to be healthy..."
-TIMEOUT=120
+# ── Pull model for Ollama backends ─────────────────────────────────────────────
+if [ "$LOCAL_BACKEND" = "ollama-host" ] && [ -n "$LOCAL_MODEL" ]; then
+  echo "${BOLD}Pulling model ${LOCAL_MODEL} via host Ollama...${RESET}"
+  ollama pull "$LOCAL_MODEL" 2>/dev/null || \
+    echo "  Note: 'ollama pull ${LOCAL_MODEL}' failed — pull it manually if Ollama isn't in PATH"
+elif [ "$LOCAL_BACKEND" = "ollama" ] && [ -n "$LOCAL_MODEL" ]; then
+  echo "${BOLD}Waiting for Ollama container to be ready...${RESET}"
+  for i in $(seq 1 12); do
+    if docker compose exec nova-ollama ollama list >/dev/null 2>&1; then
+      docker compose exec nova-ollama ollama pull "$LOCAL_MODEL"
+      break
+    fi
+    sleep 5
+  done
+fi
+
+# ── Wait for health ────────────────────────────────────────────────────────────
+echo "${BOLD}Waiting for services to be healthy...${RESET}"
+TIMEOUT=180
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
   if curl -sf http://localhost:8000/health/ready >/dev/null 2>&1; then
-    echo "Nova is ready. Open http://localhost:3000"
+    echo ""
+    echo "${GREEN}${BOLD}✓ Nova is running.${RESET}"
+    echo ""
+    echo "  ${BOLD}Dashboard:${RESET}  http://localhost:3000"
+    echo "  ${BOLD}Chat UI:${RESET}    http://localhost:8004"
+    echo "  ${BOLD}API docs:${RESET}   http://localhost:8000/docs"
+    echo ""
     exit 0
   fi
   sleep 5
