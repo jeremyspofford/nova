@@ -40,6 +40,11 @@ async def _api_key_for(model: str) -> str | None:
         return await secrets_client.resolve("anthropic_api_key")
     if model.startswith(("gpt", "text-embedding")):
         return await secrets_client.resolve("openai_api_key")
+    if "gemini" in model:
+        return await secrets_client.resolve("gemini_api_key")
+    if model.startswith("groq/"):
+        return await secrets_client.resolve("groq_api_key")
+    # Local backends (ollama_chat/, openai/ with local api_base): no API key needed
     return None
 
 
@@ -87,11 +92,12 @@ async def list_providers():
 
     providers = [
         {
-            "name": "ollama",
-            "model": settings.ollama_completion_model,
-            "available": True,
+            "name": settings.nova_inference_backend,
+            "model": settings.local_completion_model,
+            "available": settings.nova_inference_backend != "none",
             "local": True,
-            "supports_embed": True,
+            "supports_embed": settings.nova_inference_backend in ("ollama-host", "ollama"),
+            "url": settings.local_inference_url,
         }
     ]
     if "anthropic" in cloud:
@@ -110,7 +116,28 @@ async def list_providers():
             "local": False,
             "supports_embed": True,
         })
-    return {"providers": providers, "routing_strategy": settings.routing_strategy}
+    if "gemini" in cloud:
+        providers.append({
+            "name": "gemini",
+            "model": "gemini/gemini-1.5-flash",
+            "available": True,
+            "local": False,
+            "supports_embed": False,
+        })
+    if "groq" in cloud:
+        providers.append({
+            "name": "groq",
+            "model": "groq/llama3-8b-8192",
+            "available": True,
+            "local": False,
+            "supports_embed": False,
+        })
+    return {
+        "providers": providers,
+        "routing_strategy": settings.routing_strategy,
+        "local_backend": settings.nova_inference_backend,
+        "local_inference_url": settings.local_inference_url,
+    }
 
 
 @router.post("/complete")

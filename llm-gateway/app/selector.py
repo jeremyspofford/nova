@@ -2,41 +2,68 @@
 from .config import settings
 
 
+def _local_candidate() -> tuple[str, dict] | None:
+    """Return (litellm_model, extra_kwargs) for the active local backend, or None."""
+    backend = settings.nova_inference_backend
+    url = settings.local_inference_url
+    model = settings.local_completion_model
+
+    if backend == "none":
+        return None
+    if backend in ("ollama-host", "ollama"):
+        return (f"ollama_chat/{model}", {"api_base": url})
+    if backend in ("llamacpp", "vllm", "sglang", "lmstudio"):
+        # All other backends speak the OpenAI-compatible API
+        return (f"openai/{model}", {"api_base": url, "api_key": "none"})
+    return None
+
+
+def _local_embed_candidate() -> tuple[str, dict] | None:
+    backend = settings.nova_inference_backend
+    url = settings.local_inference_url
+    model = settings.local_embed_model
+
+    if backend == "none":
+        return None
+    if backend in ("ollama-host", "ollama"):
+        return (f"ollama/{model}", {"api_base": url})
+    # Other backends: no embedding support (use cloud fallback)
+    return None
+
+
 def completion_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
-    local = (
-        f"ollama_chat/{settings.ollama_completion_model}",
-        {"api_base": settings.ollama_base_url},
-    )
+    local = _local_candidate()
     cloud: list[tuple[str, dict]] = []
     if "anthropic" in available_cloud:
         cloud.append(("claude-haiku-4-5-20251001", {}))
     if "openai" in available_cloud:
         cloud.append(("gpt-4o-mini", {}))
+    if "gemini" in available_cloud:
+        cloud.append(("gemini/gemini-1.5-flash", {}))
+    if "groq" in available_cloud:
+        cloud.append(("groq/llama3-8b-8192", {}))
 
     strategy = settings.routing_strategy
     if strategy == "local-only":
-        return [local]
+        return [local] if local else []
     if strategy == "cloud-only":
         return cloud
     if strategy == "local-first":
-        return [local] + cloud
+        return ([local] if local else []) + cloud
     if strategy == "cloud-first":
-        return cloud + [local]
-    return [local] + cloud
+        return cloud + ([local] if local else [])
+    return ([local] if local else []) + cloud
 
 
 def embed_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
-    local = (
-        f"ollama/{settings.ollama_embed_model}",
-        {"api_base": settings.ollama_base_url},
-    )
+    local = _local_embed_candidate()
     cloud_openai: tuple[str, dict] | None = (
         ("text-embedding-3-small", {}) if "openai" in available_cloud else None
     )
 
     strategy = settings.routing_strategy
     if strategy == "local-only":
-        return [local]
+        return [local] if local else []
     if strategy == "cloud-only":
         return [cloud_openai] if cloud_openai else []
     if strategy == "local-first":
