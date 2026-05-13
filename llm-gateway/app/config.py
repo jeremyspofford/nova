@@ -9,6 +9,7 @@ _BACKEND_DEFAULT_URLS: dict[str, str] = {
     "llamacpp": "http://nova-llamacpp:8080",
     "vllm": "http://nova-vllm:8000",
     "sglang": "http://nova-sglang:30000",
+    "lmstudio": "http://host.docker.internal:1234",
 }
 
 VALID_BACKENDS = frozenset(
