@@ -36,35 +36,42 @@ def _make_proc(client, restart_count=0, window_offset_s=0):
 
 class TestClassifyRestart:
     def test_allows_first_crash(self):
-        from app.tools.mcp.manager import _classify_restart, MCPProcess
-        proc = _make_proc(_dead_client(), restart_count=0)
-        ok, _ = _classify_restart(proc)
-        assert ok is True
+        from app.tools.mcp.manager import _classify_restart
+        now = datetime.now(timezone.utc)
+        result = _classify_restart(restart_count=0, window_start=now, now=now)
+        assert result == "restart"
 
     def test_allows_up_to_max_restarts(self):
         from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW
-        proc = _make_proc(_dead_client(), restart_count=_MAX_RESTARTS_IN_WINDOW - 1)
-        ok, _ = _classify_restart(proc)
-        assert ok is True
+        now = datetime.now(timezone.utc)
+        result = _classify_restart(
+            restart_count=_MAX_RESTARTS_IN_WINDOW - 1,
+            window_start=now,
+            now=now,
+        )
+        assert result == "restart"
 
     def test_disables_on_4th_crash(self):
         from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW
-        proc = _make_proc(_dead_client(), restart_count=_MAX_RESTARTS_IN_WINDOW)
-        ok, reason = _classify_restart(proc)
-        assert ok is False
-        assert "too_many_restarts" in reason
+        now = datetime.now(timezone.utc)
+        result = _classify_restart(
+            restart_count=_MAX_RESTARTS_IN_WINDOW,
+            window_start=now,
+            now=now,
+        )
+        assert result == "disable"
 
     def test_allows_restart_after_window_expires(self):
         from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW, _RESTART_WINDOW_SECONDS
-        # restart_count is at max but window has expired
-        proc = _make_proc(
-            _dead_client(),
+        now = datetime.now(timezone.utc)
+        # window_start is far in the past — window has expired
+        old_start = now - timedelta(seconds=_RESTART_WINDOW_SECONDS + 1)
+        result = _classify_restart(
             restart_count=_MAX_RESTARTS_IN_WINDOW,
-            window_offset_s=_RESTART_WINDOW_SECONDS + 1,
+            window_start=old_start,
+            now=now,
         )
-        ok, reason = _classify_restart(proc)
-        assert ok is True
-        assert "window_expired" in reason
+        assert result == "restart"
 
 
 # ── MCPManager.ensure_running ──────────────────────────────────────────────────
@@ -109,7 +116,7 @@ async def test_ensure_running_returns_alive_without_respawn():
 
     with patch("app.tools.mcp.manager.start_server", new=AsyncMock()) as mock_start2, \
          patch("app.tools.mcp.manager.mcp_client.get_client", return_value=alive):
-        proc = await manager.ensure_running("my-server")
+        proc = await manager.ensure_running("srv-1", "my-server")
 
     mock_start2.assert_not_awaited()
     assert proc.is_alive()
@@ -132,15 +139,50 @@ async def test_ensure_running_respawns_dead_server():
     with patch("app.tools.mcp.manager.start_server", new=AsyncMock()) as mock_restart, \
          patch("app.tools.mcp.manager.mcp_client.get_client", return_value=alive), \
          patch("app.tools.mcp.manager.resolve_env", new=AsyncMock(return_value={})):
-        proc = await manager.ensure_running("my-server")
+        proc = await manager.ensure_running("srv-1", "my-server")
 
     mock_restart.assert_awaited_once()
     assert proc.client is alive
 
 
 @pytest.mark.asyncio
-async def test_ensure_running_raises_after_too_many_crashes():
-    from app.tools.mcp.manager import MCPManager, MCPProcess, _MAX_RESTARTS_IN_WINDOW
+async def test_ensure_running_raises_for_unknown_server():
+    from app.tools.mcp.manager import MCPManager
+
+    manager = MCPManager()
+    with pytest.raises(RuntimeError, match="unknown server"):
+        await manager.ensure_running("srv-99", "does-not-exist")
+
+
+# ── MCPManager.handle_crash ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_handle_crash_returns_true_and_respawns():
+    """First crash within window: handle_crash returns True and spawns new proc."""
+    from app.tools.mcp.manager import MCPManager
+
+    manager = MCPManager()
+    dead = _dead_client()
+    alive = _alive_client()
+
+    with patch("app.tools.mcp.manager.start_server", new=AsyncMock()), \
+         patch("app.tools.mcp.manager.mcp_client.get_client", return_value=dead), \
+         patch("app.tools.mcp.manager.resolve_env", new=AsyncMock(return_value={})):
+        await manager.register_server("srv-1", "my-server", "node", [], {}, None)
+
+    with patch("app.tools.mcp.manager.start_server", new=AsyncMock()), \
+         patch("app.tools.mcp.manager.mcp_client.get_client", return_value=alive), \
+         patch("app.tools.mcp.manager.resolve_env", new=AsyncMock(return_value={})):
+        result = await manager.handle_crash("srv-1", "my-server", "process exited with code 1")
+
+    assert result is True
+    assert manager._processes["my-server"].client is alive
+
+
+@pytest.mark.asyncio
+async def test_handle_crash_returns_false_after_too_many_crashes():
+    """After exceeding restart limit, handle_crash returns False."""
+    from app.tools.mcp.manager import MCPManager, _MAX_RESTARTS_IN_WINDOW
 
     manager = MCPManager()
     dead = _dead_client()
@@ -151,18 +193,36 @@ async def test_ensure_running_raises_after_too_many_crashes():
     manager._server_ids["my-server"] = "srv-1"
     manager._server_meta["my-server"] = {"command": "node", "args": [], "env": {}, "cwd": None}
 
-    with pytest.raises(RuntimeError, match="disabled after repeated crashes"):
-        await manager.ensure_running("my-server")
+    result = await manager.handle_crash("srv-1", "my-server", "crashed again")
+    assert result is False
 
 
 @pytest.mark.asyncio
-async def test_ensure_running_raises_for_unknown_server():
-    from app.tools.mcp.manager import MCPManager
+async def test_handle_crash_resets_counter_after_window_expires():
+    """A crash outside the window resets the counter and returns True."""
+    from app.tools.mcp.manager import MCPManager, _MAX_RESTARTS_IN_WINDOW, _RESTART_WINDOW_SECONDS
 
     manager = MCPManager()
-    with pytest.raises(RuntimeError, match="unknown server"):
-        await manager.ensure_running("does-not-exist")
+    dead = _dead_client()
+    alive = _alive_client()
 
+    # Pre-populate with a dead proc that is at the limit but window is expired.
+    proc = _make_proc(dead, restart_count=_MAX_RESTARTS_IN_WINDOW, window_offset_s=_RESTART_WINDOW_SECONDS + 1)
+    manager._processes["my-server"] = proc
+    manager._server_ids["my-server"] = "srv-1"
+    manager._server_meta["my-server"] = {"command": "node", "args": [], "env": {}, "cwd": None}
+
+    with patch("app.tools.mcp.manager.start_server", new=AsyncMock()), \
+         patch("app.tools.mcp.manager.mcp_client.get_client", return_value=alive), \
+         patch("app.tools.mcp.manager.resolve_env", new=AsyncMock(return_value={})):
+        result = await manager.handle_crash("srv-1", "my-server", "crash after window")
+
+    assert result is True
+    # Counter should have been reset to 0, then incremented to 1.
+    assert manager._processes["my-server"].restart_count == 1
+
+
+# ── MCPManager.shutdown_all ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_shutdown_all_stops_all_servers():

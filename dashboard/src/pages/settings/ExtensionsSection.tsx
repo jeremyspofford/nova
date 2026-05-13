@@ -1,14 +1,15 @@
 // dashboard/src/pages/settings/ExtensionsSection.tsx
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Play, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Play, Plus, Power, Trash2 } from 'lucide-react'
 import {
   createMCPServer,
   deleteMCPServer,
   listMCPServers,
   listMCPTools,
+  restartMCPServer,
   setToolTierOverride,
-  startMCPServer,
+  toggleMCPServer,
   type MCPServer,
   type MCPServerCreate,
   type MCPTool,
@@ -33,7 +34,7 @@ interface AddServerForm {
   command: string
   args: string       // space-separated
   working_dir: string
-  env_raw: string    // KEY=VALUE lines
+  env_raw: string    // JSON object
 }
 
 const EMPTY_FORM: AddServerForm = {
@@ -42,18 +43,6 @@ const EMPTY_FORM: AddServerForm = {
   args: '',
   working_dir: '',
   env_raw: '',
-}
-
-function parseEnv(raw: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eq = trimmed.indexOf('=')
-    if (eq === -1) continue
-    result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
-  }
-  return result
 }
 
 // ── Tool row ─────────────────────────────────────────────────────────────────
@@ -67,7 +56,7 @@ function ToolRow({
 }) {
   const qc = useQueryClient()
   const [editing, setEditing] = useState(false)
-  const [selected, setSelected] = useState<string>(tool.tier)
+  const [selected, setSelected] = useState<string>(tool.effective_tier)
 
   const overrideMut = useMutation({
     mutationFn: (tier: string | null) =>
@@ -77,6 +66,8 @@ function ToolRow({
       setEditing(false)
     },
   })
+
+  const isOverride = tool.effective_tier !== tool.auto_tier
 
   return (
     <tr className="border-t border-stone-800 hover:bg-stone-800/30">
@@ -125,13 +116,13 @@ function ToolRow({
         ) : (
           <button
             onClick={() => {
-              setSelected(tool.tier)
+              setSelected(tool.effective_tier)
               setEditing(true)
             }}
-            className={`font-semibold ${TIER_COLORS[tool.tier] ?? 'text-stone-400'} hover:underline`}
+            className={`font-semibold ${TIER_COLORS[tool.effective_tier] ?? 'text-stone-400'} hover:underline`}
           >
-            {tool.tier}
-            {tool.tier_source === 'override' && (
+            {tool.effective_tier}
+            {isOverride && (
               <span className="ml-1 text-stone-500 font-normal">(override)</span>
             )}
           </button>
@@ -163,8 +154,17 @@ function ServerRow({
     retry: 1,
   })
 
-  const startMut = useMutation({
-    mutationFn: () => startMCPServer(server.id, ADMIN_SECRET),
+  const restartMut = useMutation({
+    mutationFn: () => restartMCPServer(server.id, ADMIN_SECRET),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mcp-servers'] })
+      setError(null)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const toggleMut = useMutation({
+    mutationFn: (enabled: boolean) => toggleMCPServer(server.id, enabled, ADMIN_SECRET),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-servers'] })
       setError(null)
@@ -197,9 +197,17 @@ function ServerRow({
           {server.enabled ? 'enabled' : 'disabled'}
         </span>
         <button
-          onClick={() => startMut.mutate()}
-          disabled={startMut.isPending || !server.enabled}
-          title="Start server"
+          onClick={() => toggleMut.mutate(!server.enabled)}
+          disabled={toggleMut.isPending}
+          title={server.enabled ? 'Disable' : 'Enable'}
+          className={`p-1.5 rounded ${server.enabled ? 'text-teal-400 hover:text-teal-300' : 'text-stone-600 hover:text-stone-400'}`}
+        >
+          <Power size={14} />
+        </button>
+        <button
+          onClick={() => restartMut.mutate()}
+          disabled={restartMut.isPending || !server.enabled}
+          title="Restart server"
           className="text-stone-500 hover:text-teal-400 disabled:opacity-40"
         >
           <Play size={14} />
@@ -297,7 +305,17 @@ export function ExtensionsSection() {
       return
     }
     const args = form.args.trim() ? form.args.trim().split(/\s+/) : []
-    const env = form.env_raw.trim() ? parseEnv(form.env_raw) : {}
+
+    let env: Record<string, string> = {}
+    if (form.env_raw.trim()) {
+      try {
+        env = JSON.parse(form.env_raw)
+      } catch {
+        setFormError('Env must be valid JSON')
+        return
+      }
+    }
+
     createMut.mutate({
       name: form.name.trim(),
       command: form.command.trim(),
@@ -377,12 +395,12 @@ export function ExtensionsSection() {
           </div>
           <div>
             <label className="block text-xs text-stone-400 mb-1">
-              Environment variables (KEY=VALUE, one per line)
+              {'Env vars (JSON — use "${secret:name}" for secrets)'}
             </label>
             <textarea
               rows={3}
               className="w-full rounded bg-stone-900 border border-stone-700 px-3 py-1.5 text-sm text-stone-100 font-mono placeholder:text-stone-600 focus:outline-none focus:ring-1 focus:ring-teal-500 resize-none"
-              placeholder={'API_KEY=${secret:my_key}\nPORT=9000'}
+              placeholder={'{"API_KEY": "${secret:my_key}", "PORT": "9000"}'}
               value={form.env_raw}
               onChange={(e) => setForm((f) => ({ ...f, env_raw: e.target.value }))}
             />

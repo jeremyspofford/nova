@@ -30,7 +30,7 @@ async def discover_tools(
     """Call list_tools on the client, apply tier heuristic + DB overrides.
 
     Returns a list of dicts with keys:
-        name, description, input_schema, tier, tier_source
+        name, description, input_schema, auto_tier, effective_tier
     """
     raw_tools = await client.list_tools()
 
@@ -55,17 +55,15 @@ async def discover_tools(
         if not name:
             continue
 
-        auto_tier = classify_tier(name)
-        override = overrides.get(name)
-        effective_tier = override if override else auto_tier.value
-        tier_source = "override" if override else "heuristic"
+        auto_tier = classify_tier(name).value
+        effective_tier = overrides.get(name, auto_tier)
 
         result.append({
             "name": name,
             "description": t.get("description", ""),
             "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
-            "tier": effective_tier,
-            "tier_source": tier_source,
+            "auto_tier": auto_tier,
+            "effective_tier": effective_tier,
         })
 
     return result

@@ -74,8 +74,8 @@ export interface MCPTool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
-  tier: string;
-  tier_source: string;
+  auto_tier: string;
+  effective_tier: string;
 }
 
 export interface MCPServerCreate {
@@ -130,19 +130,31 @@ export async function setToolTierOverride(
   tierOverride: string | null,
   adminSecret: string
 ): Promise<{ server_id: string; tool_name: string; tier_override: string | null }> {
-  return apiFetch(`/api/v1/mcp/servers/${serverId}/tools/${toolName}/tier`, {
-    method: "PUT",
+  return apiFetch(`/api/v1/mcp/servers/${serverId}/tools/${toolName}`, {
+    method: "PATCH",
     headers: { "X-Admin-Secret": adminSecret },
     body: JSON.stringify({ tier_override: tierOverride }),
   });
 }
 
-export async function startMCPServer(
+export async function restartMCPServer(
   serverId: string,
   adminSecret: string
 ): Promise<{ started: boolean; server_id: string }> {
-  return apiFetch(`/api/v1/mcp/servers/${serverId}/start`, {
+  return apiFetch(`/api/v1/mcp/servers/${serverId}/restart`, {
     method: "POST",
     headers: { "X-Admin-Secret": adminSecret },
+  });
+}
+
+export async function toggleMCPServer(
+  serverId: string,
+  enabled: boolean,
+  adminSecret: string
+): Promise<MCPServer> {
+  return apiFetch<MCPServer>(`/api/v1/mcp/servers/${serverId}`, {
+    method: "PATCH",
+    headers: { "X-Admin-Secret": adminSecret },
+    body: JSON.stringify({ enabled }),
   });
 }

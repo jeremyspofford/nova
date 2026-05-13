@@ -53,7 +53,7 @@ class MCPServerUpdate(BaseModel):
 
 
 class TierOverrideBody(BaseModel):
-    tier_override: str | None = None  # None removes the override
+    tier_override: str | None = None  # None clears the override
 
 
 def _row_to_dict(row) -> dict:
@@ -118,7 +118,27 @@ async def create_server(
             )
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail=f"MCP server {body.name!r} already exists")
-    return _row_to_dict(row)
+
+    result = _row_to_dict(row)
+
+    # Best-effort: register, spawn, and discover tools after insert.
+    discovered: list[dict] = []
+    if body.enabled:
+        mcp_manager._server_ids[body.name] = server_id
+        mcp_manager._server_meta[body.name] = {
+            "command": body.command,
+            "args": body.args,
+            "env": body.env,
+            "cwd": body.working_dir,
+        }
+        try:
+            mcp = await mcp_manager.ensure_running(server_id, body.name)
+            discovered = await discover_tools(mcp.client, server_id, pool)
+        except Exception as e:
+            logger.warning("Initial discovery failed for %r: %s", body.name, e)
+
+    result["tools"] = discovered
+    return result
 
 
 @router.get("/api/v1/mcp/servers/{server_id}")
@@ -136,7 +156,19 @@ async def get_server(
         )
     if row is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    return _row_to_dict(row)
+
+    result = _row_to_dict(row)
+
+    # Inline tools from the running process (best-effort).
+    tools: list[dict] = []
+    try:
+        mcp = mcp_manager._processes.get(row["name"])
+        if mcp and mcp.is_alive():
+            tools = await discover_tools(mcp.client, server_id, pool)
+    except Exception:
+        pass
+    result["tools"] = tools
+    return result
 
 
 @router.patch("/api/v1/mcp/servers/{server_id}")
@@ -221,7 +253,7 @@ async def list_server_tools(
 
     server_name = row["name"]
     try:
-        proc = await mcp_manager.ensure_running(server_name)
+        proc = await mcp_manager.ensure_running(server_id, server_name)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -234,7 +266,25 @@ async def list_server_tools(
     return tools
 
 
-@router.put("/api/v1/mcp/servers/{server_id}/tools/{tool_name}/tier")
+@router.post("/api/v1/mcp/servers/{server_id}/discover")
+async def refresh_tools(
+    server_id: str,
+    _: None = Depends(_require_admin),
+) -> dict:
+    """Force re-discovery of tools for a running MCP server."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT name FROM mcp_servers WHERE id = $1::uuid AND enabled = true",
+        server_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Server not found or disabled")
+    mcp = await mcp_manager.ensure_running(server_id, row["name"])
+    tools = await discover_tools(mcp.client, server_id, pool)
+    return {"tools": tools}
+
+
+@router.patch("/api/v1/mcp/servers/{server_id}/tools/{tool_name}")
 async def set_tool_tier_override(
     server_id: str,
     tool_name: str,
@@ -242,6 +292,13 @@ async def set_tool_tier_override(
     _: None = Depends(_require_admin),
 ) -> dict:
     """Set or clear a tier override for a specific MCP tool."""
+    # Validate tier value.
+    if body.tier_override is not None and body.tier_override not in ("READ", "MUTATE", "DESTRUCT"):
+        raise HTTPException(
+            status_code=400,
+            detail="tier_override must be READ, MUTATE, or DESTRUCT",
+        )
+
     pool = await get_pool()
 
     # Verify server exists.
@@ -277,12 +334,12 @@ async def set_tool_tier_override(
     }
 
 
-@router.post("/api/v1/mcp/servers/{server_id}/start", status_code=202)
-async def start_server_endpoint(
+@router.post("/api/v1/mcp/servers/{server_id}/restart", status_code=202)
+async def restart_server_endpoint(
     server_id: str,
     _: None = Depends(_require_admin),
 ) -> dict:
-    """Manually trigger ensure_running for a server (for UI start buttons)."""
+    """Manually trigger ensure_running for a server (for UI restart buttons)."""
     pool = await get_pool()
 
     async with pool.acquire() as conn:
@@ -313,7 +370,7 @@ async def start_server_endpoint(
         }
 
     try:
-        await mcp_manager.ensure_running(server_name)
+        await mcp_manager.ensure_running(server_id, server_name)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

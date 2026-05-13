@@ -28,6 +28,7 @@ async def call_mcp_tool(
 
     Writes tool_call_start and tool_call_result (or tool_call_error) events to
     the audit chain.  Ensures the MCP server process is alive before calling.
+    On crash: calls handle_crash(); if restarted, retries once.
 
     Args:
         server_id:      UUID string of the mcp_servers row.
@@ -47,15 +48,31 @@ async def call_mcp_tool(
     })
 
     try:
-        proc = await mcp_manager.ensure_running(server_name)
-        result = await proc.client.call_tool(tool_name, args)
-    except Exception as exc:
-        await write_event(pool, task_id, "tool_call_error", {
-            "server_id": server_id,
-            "tool_name": tool_name,
-            "error": str(exc),
-        })
-        raise
+        mcp = await mcp_manager.ensure_running(server_id, server_name)
+        result = await mcp.client.call_tool(tool_name, args)
+    except Exception as first_err:
+        restarted = await mcp_manager.handle_crash(server_id, server_name, str(first_err))
+        if restarted:
+            try:
+                mcp = await mcp_manager.ensure_running(server_id, server_name)
+                result = await mcp.client.call_tool(tool_name, args)
+            except Exception as retry_err:
+                await write_event(pool, task_id, "tool_call_error", {
+                    "server_id": server_id,
+                    "tool_name": f"{server_name}/{tool_name}",
+                    "error": str(retry_err),
+                })
+                raise
+        else:
+            await write_event(pool, task_id, "tool_call_error", {
+                "server_id": server_id,
+                "tool_name": f"{server_name}/{tool_name}",
+                "error": str(first_err),
+                "server_disabled": True,
+            })
+            raise RuntimeError(
+                f"MCP server {server_name!r} disabled after repeated crashes"
+            ) from first_err
 
     await write_event(pool, task_id, "tool_call_result", {
         "server_id": server_id,

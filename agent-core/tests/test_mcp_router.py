@@ -43,10 +43,13 @@ async def test_create_and_get_server(client, admin_headers):
     assert created["name"] == "test-mcp-server"
     assert created["transport"] == "stdio"
     assert "id" in created
+    assert "tools" in created  # POST returns tools list (may be empty)
 
     get_resp = await client.get(f"/api/v1/mcp/servers/{created['id']}", headers=admin_headers)
     assert get_resp.status_code == 200
-    assert get_resp.json()["id"] == created["id"]
+    data = get_resp.json()
+    assert data["id"] == created["id"]
+    assert "tools" in data  # GET detail also includes tools
 
 
 @pytest.mark.asyncio
@@ -128,7 +131,15 @@ async def test_list_server_tools(client, admin_headers):
     srv_id = create_resp.json()["id"]
 
     fake_proc = MagicMock()
-    fake_tools = [{"name": "get_user", "tier": "READ", "tier_source": "heuristic"}]
+    fake_tools = [
+        {
+            "name": "get_user",
+            "description": "",
+            "input_schema": {},
+            "auto_tier": "READ",
+            "effective_tier": "READ",
+        }
+    ]
 
     with patch("app.mcp_router.mcp_manager.ensure_running", new=AsyncMock(return_value=fake_proc)), \
          patch("app.mcp_router.discover_tools", new=AsyncMock(return_value=fake_tools)):
@@ -142,7 +153,7 @@ async def test_list_server_tools(client, admin_headers):
 
 
 # ---------------------------------------------------------------------------
-# Tier override
+# Tier override — PATCH /servers/{id}/tools/{name}
 # ---------------------------------------------------------------------------
 
 
@@ -152,8 +163,8 @@ async def test_set_tier_override(client, admin_headers):
     create_resp = await client.post("/api/v1/mcp/servers", json=body, headers=admin_headers)
     srv_id = create_resp.json()["id"]
 
-    resp = await client.put(
-        f"/api/v1/mcp/servers/{srv_id}/tools/run_command/tier",
+    resp = await client.patch(
+        f"/api/v1/mcp/servers/{srv_id}/tools/run_command",
         json={"tier_override": "READ"},
         headers=admin_headers,
     )
@@ -168,15 +179,63 @@ async def test_clear_tier_override(client, admin_headers):
     srv_id = create_resp.json()["id"]
 
     # Set then clear.
-    await client.put(
-        f"/api/v1/mcp/servers/{srv_id}/tools/run_command/tier",
+    await client.patch(
+        f"/api/v1/mcp/servers/{srv_id}/tools/run_command",
         json={"tier_override": "READ"},
         headers=admin_headers,
     )
-    clear_resp = await client.put(
-        f"/api/v1/mcp/servers/{srv_id}/tools/run_command/tier",
+    clear_resp = await client.patch(
+        f"/api/v1/mcp/servers/{srv_id}/tools/run_command",
         json={"tier_override": None},
         headers=admin_headers,
     )
     assert clear_resp.status_code == 200
     assert clear_resp.json()["tier_override"] is None
+
+
+@pytest.mark.asyncio
+async def test_tier_override_invalid_value_400(client, admin_headers):
+    body = {"name": "tier-invalid-server", "command": "node", "args": []}
+    create_resp = await client.post("/api/v1/mcp/servers", json=body, headers=admin_headers)
+    srv_id = create_resp.json()["id"]
+
+    resp = await client.patch(
+        f"/api/v1/mcp/servers/{srv_id}/tools/some_tool",
+        json={"tier_override": "INVALID"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Restart endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_restart_server(client, admin_headers):
+    body = {"name": "restart-server", "command": "node", "args": []}
+    create_resp = await client.post("/api/v1/mcp/servers", json=body, headers=admin_headers)
+    srv_id = create_resp.json()["id"]
+
+    with patch("app.mcp_router.mcp_manager.ensure_running", new=AsyncMock(return_value=MagicMock())):
+        resp = await client.post(
+            f"/api/v1/mcp/servers/{srv_id}/restart",
+            headers=admin_headers,
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["started"] is True
+
+
+@pytest.mark.asyncio
+async def test_restart_disabled_server_404(client, admin_headers):
+    body = {"name": "disabled-restart-server", "command": "node", "args": [], "enabled": False}
+    create_resp = await client.post("/api/v1/mcp/servers", json=body, headers=admin_headers)
+    srv_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/mcp/servers/{srv_id}/restart",
+        headers=admin_headers,
+    )
+    assert resp.status_code == 404

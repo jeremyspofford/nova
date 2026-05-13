@@ -85,10 +85,11 @@ async def test_discover_tools_applies_heuristic():
 
     assert len(tools) == 3
     by_name = {t["name"]: t for t in tools}
-    assert by_name["get_user"]["tier"] == "READ"
-    assert by_name["get_user"]["tier_source"] == "heuristic"
-    assert by_name["delete_record"]["tier"] == "DESTRUCT"
-    assert by_name["create_item"]["tier"] == "MUTATE"
+    # auto_tier and effective_tier both reflect heuristic (no overrides)
+    assert by_name["get_user"]["auto_tier"] == "READ"
+    assert by_name["get_user"]["effective_tier"] == "READ"
+    assert by_name["delete_record"]["auto_tier"] == "DESTRUCT"
+    assert by_name["create_item"]["auto_tier"] == "MUTATE"
 
 
 @pytest.mark.asyncio
@@ -111,8 +112,9 @@ async def test_discover_tools_applies_db_override():
     pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
 
     tools = await discover_tools(client, "srv-abc123", pool)
-    assert tools[0]["tier"] == "READ"
-    assert tools[0]["tier_source"] == "override"
+    # run_command auto-tier is MUTATE; DB override sets effective_tier to READ
+    assert tools[0]["auto_tier"] == "MUTATE"
+    assert tools[0]["effective_tier"] == "READ"
 
 
 @pytest.mark.asyncio

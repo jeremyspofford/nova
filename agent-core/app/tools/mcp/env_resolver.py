@@ -1,4 +1,5 @@
 """Resolve MCP server env dicts: expand ${secret:name} refs, block sensitive keys."""
+import os
 import re
 import logging
 
@@ -43,4 +44,13 @@ async def resolve_env(raw_env: dict, pool) -> dict:
                 resolved[key] = plaintext
                 continue
         resolved[key] = value
+
+    # Always inject basic process-level env vars so subprocesses can find
+    # executables (PATH), home directory (HOME), and temp storage (TMPDIR/TMP/TEMP).
+    _ALWAYS_PASS = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP")
+    for var in _ALWAYS_PASS:
+        val = os.environ.get(var)
+        if val is not None:
+            resolved[var] = val
+
     return resolved

@@ -30,24 +30,23 @@ class MCPProcess:
         return self.client.process.returncode is None
 
 
-def _classify_restart(proc: MCPProcess) -> tuple[bool, str]:
-    """Return (should_restart, reason).
+def _classify_restart(restart_count: int, window_start: datetime, now: datetime) -> str:
+    """Return 'restart' or 'disable'.
 
-    Allow up to _MAX_RESTARTS_IN_WINDOW restarts in the window; disable on the
-    4th crash within the same window.  A crash outside the window resets the
-    counter and always restarts.
+    Allow up to _MAX_RESTARTS_IN_WINDOW restarts within the window; return
+    'disable' on the 4th crash in the same window.  A crash outside the
+    window always returns 'restart' (counter resets in handle_crash).
     """
-    now = datetime.now(timezone.utc)
-    elapsed = (now - proc.restart_window_start).total_seconds()
+    elapsed = (now - window_start).total_seconds()
 
     if elapsed > _RESTART_WINDOW_SECONDS:
-        # Window has expired — reset and allow.
-        return True, "window_expired"
+        # Window has expired — allow restart (caller will reset counter).
+        return "restart"
 
-    if proc.restart_count >= _MAX_RESTARTS_IN_WINDOW:
-        return False, f"too_many_restarts ({proc.restart_count} in window)"
+    if restart_count >= _MAX_RESTARTS_IN_WINDOW:
+        return "disable"
 
-    return True, "within_limit"
+    return "restart"
 
 
 class MCPManager:
@@ -66,38 +65,22 @@ class MCPManager:
     # Public API
     # ------------------------------------------------------------------
 
-    async def ensure_running(self, server_name: str) -> MCPProcess:
-        """Return the MCPProcess for *server_name*, spawning/restarting as needed."""
+    async def ensure_running(self, server_id: str, server_name: str) -> MCPProcess:
+        """Return the MCPProcess for *server_name*, spawning if not already alive.
+
+        This method does NOT contain crash-recovery logic — call handle_crash()
+        first when recovering from an error, then call ensure_running() again.
+        """
         proc = self._processes.get(server_name)
         if proc is not None and proc.is_alive():
             return proc
 
-        meta = self._server_meta.get(server_name)
-        if meta is None:
-            raise RuntimeError(f"MCPManager: unknown server {server_name!r}")
+        # Register meta from DB lookup if not already known (best-effort).
+        if server_name not in self._server_meta:
+            raise RuntimeError(f"MCPManager: unknown server {server_name!r} (id={server_id})")
 
-        server_id = self._server_ids[server_name]
-
-        if proc is not None:
-            # Process exists but is dead — check restart policy.
-            should, reason = _classify_restart(proc)
-            if not should:
-                raise RuntimeError(
-                    f"MCP server {server_name!r} disabled after repeated crashes: {reason}"
-                )
-            # Increment counter; reset window if needed.
-            now = datetime.now(timezone.utc)
-            elapsed = (now - proc.restart_window_start).total_seconds()
-            if elapsed > _RESTART_WINDOW_SECONDS:
-                proc.restart_count = 0
-                proc.restart_window_start = now
-            proc.restart_count += 1
-
-            logger.warning(
-                "MCP server %r crashed (restart %d/%d), respawning",
-                server_name, proc.restart_count, _MAX_RESTARTS_IN_WINDOW,
-            )
-
+        # Spawn a fresh process.
+        meta = self._server_meta[server_name]
         new_proc = await self._spawn(
             server_id=server_id,
             command=meta["command"],
@@ -107,12 +90,118 @@ class MCPManager:
         )
 
         if proc is not None:
-            # Preserve restart accounting from the old MCPProcess.
+            # Preserve restart accounting from the dead MCPProcess.
             new_proc.restart_count = proc.restart_count
             new_proc.restart_window_start = proc.restart_window_start
 
         self._processes[server_name] = new_proc
+
+        # Update last_started in DB if we have a pool.
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE mcp_servers SET last_started = now(), last_error = NULL "
+                        "WHERE id = $1::uuid",
+                        server_id,
+                    )
+            except Exception as exc:
+                logger.warning("ensure_running: could not update last_started for %s: %s", server_id[:8], exc)
+
         return new_proc
+
+    async def handle_crash(self, server_id: str, server_name: str, error: str) -> bool:
+        """Record a crash and decide whether to restart or disable the server.
+
+        Returns True if the server was restarted (caller should retry the
+        operation), False if the server has been disabled (caller should raise).
+
+        Side effects:
+          - Updates last_error in DB.
+          - If restarting: updates last_started, increments restart_count on proc.
+          - If disabling: sets enabled=false in DB.
+        """
+        proc = self._processes.get(server_name)
+        now = datetime.now(timezone.utc)
+
+        # Record the error in DB (best-effort).
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE mcp_servers SET last_error = $2 WHERE id = $1::uuid",
+                        server_id, error,
+                    )
+            except Exception as exc:
+                logger.warning("handle_crash: could not write last_error for %s: %s", server_id[:8], exc)
+
+        if proc is None:
+            # No tracked process — treat as first crash, attempt restart.
+            logger.warning("MCP server %r crashed (no tracked proc): %s", server_name, error)
+            return True
+
+        # Determine current accounting, resetting window if expired.
+        elapsed = (now - proc.restart_window_start).total_seconds()
+        if elapsed > _RESTART_WINDOW_SECONDS:
+            proc.restart_count = 0
+            proc.restart_window_start = now
+
+        action = _classify_restart(proc.restart_count, proc.restart_window_start, now)
+
+        if action == "disable":
+            logger.error(
+                "MCP server %r disabled after %d crashes in window — error: %s",
+                server_name, proc.restart_count, error,
+            )
+            if self._pool is not None:
+                try:
+                    async with self._pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE mcp_servers SET enabled = false WHERE id = $1::uuid",
+                            server_id,
+                        )
+                except Exception as exc:
+                    logger.warning("handle_crash: could not disable server %s: %s", server_id[:8], exc)
+            return False
+
+        # Increment restart counter and attempt respawn.
+        proc.restart_count += 1
+        logger.warning(
+            "MCP server %r crashed (restart %d/%d): %s — respawning",
+            server_name, proc.restart_count, _MAX_RESTARTS_IN_WINDOW, error,
+        )
+
+        meta = self._server_meta.get(server_name)
+        if meta is None:
+            logger.error("handle_crash: no meta for %r, cannot restart", server_name)
+            return False
+
+        try:
+            new_proc = await self._spawn(
+                server_id=server_id,
+                command=meta["command"],
+                args=meta["args"],
+                raw_env=meta["env"],
+                cwd=meta.get("cwd"),
+            )
+            new_proc.restart_count = proc.restart_count
+            new_proc.restart_window_start = proc.restart_window_start
+            self._processes[server_name] = new_proc
+        except Exception as spawn_exc:
+            logger.error("handle_crash: respawn of %r failed: %s", server_name, spawn_exc)
+            return False
+
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE mcp_servers SET last_started = now() WHERE id = $1::uuid",
+                        server_id,
+                    )
+            except Exception as exc:
+                logger.warning("handle_crash: could not update last_started for %s: %s", server_id[:8], exc)
+
+        return True
 
     async def register_server(
         self,
