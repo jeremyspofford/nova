@@ -137,13 +137,20 @@ async def _dispatch_text_turn(session, task_id, text, http_agent, redis, session
                     chunk = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                event = {
-                    "type": "response_chunk",
-                    "text": chunk.get("text", ""),
-                    "task_id": task_id,
-                }
-                await buffer_event(redis, task_id, event)
-                await sessions.broadcast_to_task(task_id, event)
+
+                chunk_type = chunk.get("type")
+                if chunk_type:
+                    # Typed event (tool_approval_request, tool_result, etc.)
+                    # Forward directly to connected clients — don't buffer these
+                    # since their lifecycle is managed by the approval flow.
+                    await sessions.broadcast_to_task(task_id, {**chunk, "task_id": task_id})
+                else:
+                    text_content = chunk.get("text", "")
+                    if text_content:
+                        event = {"type": "response_chunk", "text": text_content, "task_id": task_id}
+                        await buffer_event(redis, task_id, event)
+                        await sessions.broadcast_to_task(task_id, event)
+
         final = {"type": "response_final", "task_id": task_id}
         await buffer_event(redis, task_id, final)
         await sessions.broadcast_to_task(task_id, final)

@@ -13,6 +13,19 @@ _consent_cache: dict[tuple[str, str], dict] = {}
 _approval_events: dict[str, asyncio.Event] = {}
 _approval_results: dict[str, bool] = {}
 
+# Per-task queues that receive approval-request dicts before the approval blocks.
+# Registered by streaming endpoints (e.g. post_message) so they can forward
+# approval events to the client while dispatch() is suspended.
+_approval_notifiers: dict[str, asyncio.Queue] = {}
+
+
+def register_approval_notifier(task_id: str, queue: asyncio.Queue) -> None:
+    _approval_notifiers[task_id] = queue
+
+
+def deregister_approval_notifier(task_id: str) -> None:
+    _approval_notifiers.pop(task_id, None)
+
 APPROVAL_TIMEOUT_S = 300
 
 
@@ -67,6 +80,18 @@ async def _request_approval(tool_def, scope: str, args: dict, task_id: str, call
         )
 
     logger.info("approval_requested id=%s tool=%s scope=%s", approval_id[:8], tool_def.name, scope)
+
+    # Notify any streaming endpoint watching this task so it can forward the
+    # approval request to the client before we block on the event below.
+    notifier = _approval_notifiers.get(task_id)
+    if notifier is not None:
+        notifier.put_nowait({
+            "type": "tool_approval_request",
+            "tool_call_id": approval_id,
+            "name": tool_def.name,
+            "tier": tool_def.tier.value,
+            "args": args,
+        })
 
     try:
         await asyncio.wait_for(event.wait(), timeout=APPROVAL_TIMEOUT_S)

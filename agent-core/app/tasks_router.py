@@ -14,6 +14,9 @@ from nova_contracts import TaskCreateRequest
 from .config import settings
 from .db import get_pool
 from .loop.main import run_task
+from .tools import capability
+from .tools.dispatcher import dispatch
+from .tools.registry import to_openai_tools
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
@@ -60,6 +63,45 @@ def _build_system_prompt(memories: list[dict]) -> str:
     for m in memories:
         lines.append(f"- {m['content']}")
     return "\n".join(lines)
+
+
+def _is_serialized_tool_call(content: str) -> bool:
+    """True when a model returned a tool call as JSON text instead of tool_calls.
+    Happens with small local models (llama3.2) when given 2+ tools."""
+    stripped = content.strip()
+    if not stripped.startswith("{"):
+        return False
+    try:
+        obj = json.loads(stripped)
+        return isinstance(obj, dict) and "name" in obj and "arguments" in obj
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
+async def _llm_complete_chat(messages: list[dict], tools: list[dict]) -> dict | None:
+    body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
+    if tools:
+        body["tools"] = tools
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        logger.warning("llm /complete failed: %s", exc)
+        return None
+
+
+MAX_CHAT_ITERATIONS = 10
+
+# Limit tools exposed in conversational chat — small local models (llama3.2 etc.)
+# fail to produce structured tool_calls when given the full 14-tool list.
+# These cover recall, web lookup, and code help which are the common chat actions.
+_CHAT_TOOL_NAMES = frozenset({
+    "memory.search", "memory.write",
+    "web.search", "web.fetch",
+    "fs.read", "code.execute",
+})
 
 
 def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
@@ -182,7 +224,7 @@ class MessageRequest(BaseModel):
 
 @router.post("/{task_id}/message")
 async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
-    """Conversational turn — streams JSON lines {"text": "..."} back to caller."""
+    """Conversational turn with tool use — streams JSON lines back to caller."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval("SELECT 1 FROM tasks WHERE id = $1::uuid", task_id)
@@ -193,13 +235,11 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 task_id, body.text[:500],
             )
 
-        # Load existing history for this task
         history_rows = await conn.fetch(
             "SELECT role, content FROM task_messages "
             "WHERE task_id = $1::uuid ORDER BY created_at",
             task_id,
         )
-        # Persist the new user turn immediately so it's in history even on error
         await conn.execute(
             "INSERT INTO task_messages (task_id, role, content) VALUES ($1::uuid, 'user', $2)",
             task_id, body.text,
@@ -208,50 +248,130 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
     memories = await _search_memory(body.text)
     system_prompt = _build_system_prompt(memories)
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
-    messages.append({"role": "user", "content": body.text})
+    base_messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    base_messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
+    base_messages.append({"role": "user", "content": body.text})
 
     async def generate():
-        assistant_chunks: list[str] = []
+        approval_queue: asyncio.Queue = asyncio.Queue()
+        capability.register_approval_notifier(task_id, approval_queue)
+        messages = list(base_messages)
+        all_tools = to_openai_tools()
+        tools = [t for t in all_tools if t["function"]["name"] in _CHAT_TOOL_NAMES]
+        final_text = ""
+
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream(
-                    "POST",
-                    f"{settings.llm_gateway_url}/stream",
-                    json={"messages": messages, "max_tokens": 2000, "temperature": 0.7},
-                ) as resp:
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        try:
-                            data = json.loads(line[6:])
-                        except json.JSONDecodeError:
-                            continue
-                        chunk = data.get("chunk", "")
-                        if chunk:
-                            assistant_chunks.append(chunk)
-                            yield json.dumps({"text": chunk}) + "\n"
-        except Exception as exc:
-            logger.error("message stream failed task=%s: %s", task_id, exc)
-            yield json.dumps({"text": "", "error": str(exc)}) + "\n"
-            return
+            for _ in range(MAX_CHAT_ITERATIONS):
+                resp = await _llm_complete_chat(messages, tools)
+                if resp is None:
+                    yield json.dumps({"error": "LLM gateway unreachable"}) + "\n"
+                    return
 
-        # Persist the full assistant response once streaming is done
-        if assistant_chunks:
-            full_response = "".join(assistant_chunks)
-            try:
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO task_messages (task_id, role, content) "
-                        "VALUES ($1::uuid, 'assistant', $2)",
-                        task_id, full_response,
+                tool_calls = resp.get("tool_calls") or []
+                content = resp.get("content") or ""
+
+                if not tool_calls:
+                    # If the model serialized a tool call as text (small-model
+                    # anti-pattern), fall back to a no-tools streaming response.
+                    if _is_serialized_tool_call(content):
+                        async with httpx.AsyncClient(timeout=120.0) as client:
+                            async with client.stream(
+                                "POST",
+                                f"{settings.llm_gateway_url}/stream",
+                                json={"messages": messages, "max_tokens": 2000, "temperature": 0.7},
+                            ) as resp_s:
+                                async for line in resp_s.aiter_lines():
+                                    if not line.startswith("data: "):
+                                        continue
+                                    try:
+                                        data = json.loads(line[6:])
+                                    except json.JSONDecodeError:
+                                        continue
+                                    chunk = data.get("chunk", "")
+                                    if chunk:
+                                        final_text += chunk
+                                        yield json.dumps({"text": chunk}) + "\n"
+                    else:
+                        final_text = content
+                        yield json.dumps({"text": content}) + "\n"
+                    break
+
+                messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls,
+                })
+
+                for tc in tool_calls:
+                    fn = tc.get("function") or {}
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}") or "{}")
+                    except Exception:
+                        args = {}
+
+                    # Run dispatch as a background task so we can concurrently
+                    # drain approval events while it may be blocked waiting.
+                    dispatch_task = asyncio.create_task(
+                        dispatch(
+                            name=name, args=args, task_id=task_id,
+                            caller_role="chat", caller_caps=["*"], pool=pool,
+                        )
                     )
-            except Exception as exc:
-                logger.warning("failed to persist assistant message task=%s: %s", task_id, exc)
 
-            # Ingest the exchange into long-term memory (fire-and-forget)
-            exchange = f"User: {body.text}\nNova: {full_response}"
-            asyncio.create_task(_ingest_memory(exchange))
+                    while not dispatch_task.done():
+                        get_task = asyncio.create_task(approval_queue.get())
+                        done, _ = await asyncio.wait(
+                            {dispatch_task, get_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if get_task in done:
+                            yield json.dumps(get_task.result()) + "\n"
+                        else:
+                            if not get_task.done():
+                                get_task.cancel()
+                                try:
+                                    await get_task
+                                except asyncio.CancelledError:
+                                    pass
+                            break
+
+                    # Drain any events queued after dispatch finished
+                    while not approval_queue.empty():
+                        yield json.dumps(approval_queue.get_nowait()) + "\n"
+
+                    try:
+                        result = await dispatch_task
+                    except PermissionError as exc:
+                        result = {"error": str(exc)}
+                    except Exception as exc:
+                        result = {"error": str(exc)}
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": json.dumps(result) if not isinstance(result, str) else result,
+                    })
+            else:
+                final_text = "I've reached the maximum number of steps for this turn."
+                yield json.dumps({"text": final_text}) + "\n"
+
+            if final_text:
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            "INSERT INTO task_messages (task_id, role, content) "
+                            "VALUES ($1::uuid, 'assistant', $2)",
+                            task_id, final_text,
+                        )
+                except Exception as exc:
+                    logger.warning("failed to persist assistant message task=%s: %s", task_id, exc)
+                asyncio.create_task(_ingest_memory(f"User: {body.text}\nNova: {final_text}"))
+
+        except Exception as exc:
+            logger.error("message turn failed task=%s: %s", task_id, exc)
+            yield json.dumps({"error": str(exc)}) + "\n"
+        finally:
+            capability.deregister_approval_notifier(task_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
