@@ -18,6 +18,11 @@ from .loop.main import run_task
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
+SYSTEM_PROMPT = (
+    "You are Nova, a helpful AI assistant. "
+    "Answer concisely and remember context from earlier in the conversation."
+)
+
 
 def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
     if not x_admin_secret:
@@ -50,12 +55,11 @@ async def create_task(body: TaskCreateRequest, _: None = Depends(_require_admin)
     task_id = str(uuid.uuid4())
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # `prompt` is NOT NULL in v1 schema; mirror goal into it for v2.
         await conn.execute(
             "INSERT INTO tasks (id, prompt, goal, status, created_at) VALUES ($1, $2, $2, 'pending', now())",
             task_id, body.goal,
         )
-    # Fire and forget — the loop owns the lifecycle.
+
     def _on_done(fut: asyncio.Future) -> None:
         if not fut.cancelled() and fut.exception():
             logger.error("run_task %s unhandled exception: %s", task_id[:8], fut.exception())
@@ -114,6 +118,26 @@ async def list_events(task_id: str, _: None = Depends(_require_admin)) -> dict:
     return {"events": events}
 
 
+@router.get("/{task_id}/messages")
+async def get_messages(task_id: str, _: None = Depends(_require_admin)) -> list:
+    """Return the full conversation history for a chat task."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT role, content, created_at FROM task_messages "
+            "WHERE task_id = $1::uuid ORDER BY created_at",
+            task_id,
+        )
+    return [
+        {
+            "role": r["role"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
+
+
 class MessageRequest(BaseModel):
     text: str
 
@@ -123,9 +147,7 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
     """Conversational turn — streams JSON lines {"text": "..."} back to caller."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT 1 FROM tasks WHERE id = $1::uuid", task_id
-        )
+        exists = await conn.fetchval("SELECT 1 FROM tasks WHERE id = $1::uuid", task_id)
         if not exists:
             await conn.execute(
                 "INSERT INTO tasks (id, prompt, goal, status, created_at) "
@@ -133,12 +155,24 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 task_id, body.text[:500],
             )
 
-    messages = [
-        {"role": "system", "content": "You are Nova, a helpful AI assistant. Respond concisely."},
-        {"role": "user", "content": body.text},
-    ]
+        # Load existing history for this task
+        history_rows = await conn.fetch(
+            "SELECT role, content FROM task_messages "
+            "WHERE task_id = $1::uuid ORDER BY created_at",
+            task_id,
+        )
+        # Persist the new user turn immediately so it's in history even on error
+        await conn.execute(
+            "INSERT INTO task_messages (task_id, role, content) VALUES ($1::uuid, 'user', $2)",
+            task_id, body.text,
+        )
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
+    messages.append({"role": "user", "content": body.text})
 
     async def generate():
+        assistant_chunks: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
@@ -155,9 +189,24 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                             continue
                         chunk = data.get("chunk", "")
                         if chunk:
+                            assistant_chunks.append(chunk)
                             yield json.dumps({"text": chunk}) + "\n"
         except Exception as exc:
             logger.error("message stream failed task=%s: %s", task_id, exc)
             yield json.dumps({"text": "", "error": str(exc)}) + "\n"
+            return
+
+        # Persist the full assistant response once streaming is done
+        if assistant_chunks:
+            full_response = "".join(assistant_chunks)
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO task_messages (task_id, role, content) "
+                        "VALUES ($1::uuid, 'assistant', $2)",
+                        task_id, full_response,
+                    )
+            except Exception as exc:
+                logger.warning("failed to persist assistant message task=%s: %s", task_id, exc)
 
     return StreamingResponse(generate(), media_type="text/plain")

@@ -6,7 +6,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+import httpx
 
 import os
 
@@ -188,6 +189,13 @@ async def auth_providers():
     }
 
 
+def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
+    if not x_admin_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing admin secret")
+    if x_admin_secret != settings.admin_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin secret")
+
+
 @app.get("/health/live")
 async def health_live():
     return {"status": "ok"}
@@ -205,3 +213,21 @@ async def health_ready():
         db_ok = False
     status = "ok" if db_ok else "error"
     return HealthStatus(status=status, service="agent-core", checks={"db": db_ok})
+
+
+@app.get("/api/health/ready")
+async def api_health_ready():
+    """Nginx-proxied alias — browsers call /api/health/ready through the dashboard."""
+    return await health_ready()
+
+
+@app.get("/api/v1/llm/providers")
+async def llm_providers(_: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /providers — browser-accessible through /api/ nginx block."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.llm_gateway_url}/providers")
+        return r.json()
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")

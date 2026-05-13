@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Mic, Send, WifiOff } from "lucide-react";
 import { apiFetch } from "../api";
-import { useConversation } from "../hooks/useConversation";
+import { useConversationContext } from "../contexts/ConversationContext";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ConversationView } from "../components/ConversationView";
 import { SetupCards } from "../components/SetupCards";
@@ -12,7 +12,7 @@ interface Task { id: string; status: string }
 
 export function Chat() {
   const [input, setInput] = useState("");
-  const { messages, thinking, dispatch } = useConversation();
+  const { messages, thinking, dispatch, taskId, setTaskId } = useConversationContext();
 
   const [wizardDismissed, setWizardDismissed] = useState(
     () => localStorage.getItem("wizard-dismissed") === "true"
@@ -36,7 +36,12 @@ export function Chat() {
     }
   }, []);
 
-  const { sendMessage, connected } = useWebSocket({ dispatch, onTaskComplete: handleTaskComplete });
+  const { sendMessage, connected } = useWebSocket({
+    dispatch,
+    taskId: taskId ?? undefined,
+    onConnected: setTaskId,
+    onTaskComplete: handleTaskComplete,
+  });
 
   // Detect first run: no tasks yet
   const { data: recentTasks } = useQuery<Task[]>({

@@ -19,8 +19,10 @@ export interface Message {
 
 export type Action =
   | { type: "ADD_MESSAGE"; message: Message }
+  | { type: "SET_MESSAGES"; messages: Message[] }
   | { type: "APPEND_CHUNK"; taskId: string; text: string }
   | { type: "FINALIZE_STREAM"; taskId: string }
+  | { type: "CLEAR_STREAMING" }
   | { type: "ADD_APPROVAL_REQUEST"; payload: NonNullable<Message["toolApproval"]> & { taskId: string } }
   | { type: "RESOLVE_APPROVAL"; toolCallId: string }
   | { type: "SET_THINKING"; thinking: boolean };
@@ -28,14 +30,25 @@ export type Action =
 interface ConversationState {
   messages: Message[];
   thinking: boolean;
+  // True after SET_MESSAGES (history loaded from DB); reset to false on the
+  // next user ADD_MESSAGE so live streaming is accepted again.
+  historySealed: boolean;
 }
 
-const INITIAL: ConversationState = { messages: [], thinking: false };
+const INITIAL: ConversationState = { messages: [], thinking: false, historySealed: false };
 
 function reducer(state: ConversationState, action: Action): ConversationState {
   switch (action.type) {
     case "ADD_MESSAGE":
-      return { ...state, messages: [...state.messages, action.message] };
+      return {
+        ...state,
+        messages: [...state.messages, action.message],
+        // User sending a new message means we're live — accept streaming chunks again
+        historySealed: action.message.role === "user" ? false : state.historySealed,
+      };
+
+    case "SET_MESSAGES":
+      return { ...state, messages: action.messages, historySealed: true };
 
     case "SET_THINKING":
       return { ...state, thinking: action.thinking };
@@ -45,6 +58,9 @@ function reducer(state: ConversationState, action: Action): ConversationState {
       const idx = msgs.findLastIndex(
         (m) => m.taskId === action.taskId && m.streaming
       );
+      // If history is sealed and there's no existing streaming slot, this is
+      // a buffer replay of a past response — discard it.
+      if (idx === -1 && state.historySealed) return state;
       const updated =
         idx === -1
           ? [
@@ -60,7 +76,7 @@ function reducer(state: ConversationState, action: Action): ConversationState {
           : msgs.map((m, i) =>
               i === idx ? { ...m, text: m.text + action.text } : m
             );
-      return { messages: updated, thinking: false };
+      return { ...state, messages: updated, thinking: false };
     }
 
     case "FINALIZE_STREAM":
@@ -69,6 +85,17 @@ function reducer(state: ConversationState, action: Action): ConversationState {
         messages: state.messages.map((m) =>
           m.taskId === action.taskId && m.streaming ? { ...m, streaming: false } : m
         ),
+        thinking: false,
+        // Seal after any completed response so WS reconnect replays are ignored
+        historySealed: true,
+      };
+
+    case "CLEAR_STREAMING":
+      // Called on every WS (re)connect — wipes in-progress streaming messages so
+      // a mid-stream reconnect lets the buffer replay rebuild them cleanly
+      return {
+        ...state,
+        messages: state.messages.filter((m) => !m.streaming),
       };
 
     case "ADD_APPROVAL_REQUEST":

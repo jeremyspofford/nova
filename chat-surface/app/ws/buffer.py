@@ -14,9 +14,18 @@ async def buffer_event(redis, task_id: str, event: dict) -> None:
     await redis.expire(key, _BUFFER_TTL)
 
 
+# Streaming events are persisted to DB and restored via history load — replaying
+# them causes doubled text when the buffer grows across multiple exchanges.
+_REPLAY_SKIP_TYPES = {"response_chunk", "response_final"}
+
+
 async def replay_buffer(redis, task_id: str, session) -> int:
     key = f"chat:task:{task_id}:buffer"
     events = await redis.lrange(key, 0, -1)
+    count = 0
     for raw in events:
-        await session.send_json(json.loads(raw))
-    return len(events)
+        event = json.loads(raw)
+        if event.get("type") not in _REPLAY_SKIP_TYPES:
+            await session.send_json(event)
+            count += 1
+    return count

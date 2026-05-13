@@ -8,17 +8,25 @@ interface UseWebSocketOptions {
   dispatch: Dispatch<Action>;
   taskId?: string;
   onTaskComplete?: () => void;
+  onConnected?: (taskId: string) => void;
 }
 
-export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketOptions) {
+export function useWebSocket({ dispatch, taskId, onTaskComplete, onConnected }: UseWebSocketOptions) {
   const ws = useRef<WebSocket | null>(null);
   const queryClient = useQueryClient();
   const retryDelay = useRef(1000);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connected, setConnected] = useState(false);
-  // Store latest callback in ref so it never needs to be a dep of connect
+  // Store latest callbacks in refs so they never need to be deps of connect
   const onTaskCompleteRef = useRef(onTaskComplete);
   useEffect(() => { onTaskCompleteRef.current = onTaskComplete; });
+  const onConnectedRef = useRef(onConnected);
+  useEffect(() => { onConnectedRef.current = onConnected; });
+
+  // Keep taskId in a ref so onopen always reads the latest value without
+  // needing it as a useCallback dep (which would cause reconnect on first assignment)
+  const taskIdRef = useRef(taskId);
+  useEffect(() => { taskIdRef.current = taskId; });
 
   const connectRef = useRef<() => void>(() => {});
 
@@ -32,7 +40,7 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
       retryDelay.current = 1000;
       setConnected(true);
       socket.send(
-        JSON.stringify({ type: "connect", resume_task_id: taskId ?? null })
+        JSON.stringify({ type: "connect", resume_task_id: taskIdRef.current ?? null })
       );
     };
 
@@ -46,7 +54,13 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
 
       const t = msg.type as string;
 
-      if (t === "response_chunk") {
+      if (t === "connected") {
+        const tid = msg.task_id as string;
+        if (tid) onConnectedRef.current?.(tid);
+        // Wipe any in-progress streaming message from before the (re)connect so
+        // the buffer replay can rebuild it without doubling
+        dispatch({ type: "CLEAR_STREAMING" });
+      } else if (t === "response_chunk") {
         dispatch({
           type: "APPEND_CHUNK",
           taskId: msg.task_id as string,
@@ -89,7 +103,7 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
       // Use connectRef so we always call the current connect, not a stale closure
       retryTimer.current = setTimeout(() => connectRef.current(), delay);
     };
-  }, [dispatch, taskId, queryClient]);   // onTaskComplete removed from deps
+  }, [dispatch, queryClient]);   // taskId/onTaskComplete/onConnected kept in refs, not deps
 
   // Keep connectRef in sync with the latest connect
   useEffect(() => { connectRef.current = connect; }, [connect]);
