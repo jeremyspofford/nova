@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from nova_contracts import MemorySearchRequest
 
@@ -60,7 +60,7 @@ async def get_memory(memory_id: str):
 
 
 @router.delete("/{memory_id}", status_code=204)
-async def delete_memory(memory_id: str):
+async def delete_memory(memory_id: str) -> Response:
     pool = await get_pool()
     tag = await pool.execute(
         "DELETE FROM memories WHERE id = $1::uuid",
@@ -68,6 +68,7 @@ async def delete_memory(memory_id: str):
     )
     if tag == "DELETE 0":
         raise HTTPException(status_code=404, detail="Memory not found")
+    return Response(status_code=204)
 
 
 @router.post("/search")
@@ -87,6 +88,7 @@ async def search_memories(body: MemorySearchRequest):
 
 
 @router.patch("/{memory_id}/used", status_code=204)
-async def mark_used(memory_id: str):
+async def mark_used(memory_id: str) -> Response:
     pool = await get_pool()
     await store.mark_used(pool, memory_id)
+    return Response(status_code=204)

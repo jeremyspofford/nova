@@ -8,9 +8,12 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+import os
+
 from .config import settings
 from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
+from .secrets import store as secrets_store
 from .mcp_router import router as mcp_router
 from .schedules_router import router as schedules_router
 from .secrets.router import router as secrets_router
@@ -31,6 +34,29 @@ logger = logging.getLogger(__name__)
 
 _watcher_manager: WatcherManager | None = None
 _scheduler_task: asyncio.Task | None = None
+
+
+_ENV_SECRET_MAP = {
+    "ANTHROPIC_API_KEY": ("anthropic_api_key", "Anthropic API key"),
+    "OPENAI_API_KEY": ("openai_api_key", "OpenAI API key"),
+    "GROQ_API_KEY": ("groq_api_key", "Groq API key"),
+    "GEMINI_API_KEY": ("gemini_api_key", "Gemini API key"),
+}
+
+
+async def _bootstrap_secrets_from_env(pool: asyncpg.Pool) -> None:
+    """Seed the secrets table from .env on first boot. Idempotent — never overwrites."""
+    if not settings.credential_master_key:
+        logger.warning("CREDENTIAL_MASTER_KEY not set — skipping secret bootstrap")
+        return
+    for env_var, (secret_name, purpose) in _ENV_SECRET_MAP.items():
+        value = os.environ.get(env_var)
+        if not value:
+            continue
+        if await secrets_store.secret_exists(pool, secret_name):
+            continue
+        await secrets_store.set_secret(pool, secret_name, value, purpose, settings.credential_master_key)
+        logger.info("Bootstrapped secret from env: %s", secret_name)
 
 
 async def run_migrations(pool: asyncpg.Pool) -> None:
@@ -79,6 +105,7 @@ async def lifespan(app: FastAPI):
 
     pool = await get_pool()
     await run_migrations(pool)
+    await _bootstrap_secrets_from_env(pool)
     mcp_manager.set_pool(pool)
     try:
         await boot_mcp_servers(pool)
@@ -145,6 +172,17 @@ app.include_router(schedules_router)
 app.include_router(secrets_router)
 app.include_router(tasks_router)
 app.include_router(approvals_router)
+
+
+@app.get("/api/v1/auth/providers")
+async def auth_providers():
+    """Public endpoint — tells the dashboard how auth works on this instance."""
+    return {
+        "trusted_network": True,
+        "google": False,
+        "registration_mode": "open",
+        "has_users": False,
+    }
 
 
 @app.get("/health/live")

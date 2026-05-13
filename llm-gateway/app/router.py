@@ -30,6 +30,10 @@ async def _available_cloud() -> set[str]:
             probed.add("anthropic")
         if await secrets_client.resolve("openai_api_key"):
             probed.add("openai")
+        if await secrets_client.resolve("gemini_api_key"):
+            probed.add("gemini")
+        if await secrets_client.resolve("groq_api_key"):
+            probed.add("groq")
         _cloud_cache = probed
         _cloud_cache_time = now
     return _cloud_cache

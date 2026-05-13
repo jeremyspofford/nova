@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .buffer import buffer_event, replay_buffer
 from .session import WebSocketSession
@@ -24,7 +24,7 @@ def _log_task_exc(task: asyncio.Task) -> None:
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, request: Request):
+async def websocket_endpoint(ws: WebSocket):
     # Auth check before accepting — must be done before ws.accept()
     secret = ws.headers.get("x-admin-secret") or ws.query_params.get("secret")
     if settings.admin_secret and secret != settings.admin_secret:
@@ -33,10 +33,10 @@ async def websocket_endpoint(ws: WebSocket, request: Request):
     await ws.accept()
     session_id = str(uuid.uuid4())
     session = WebSocketSession(ws=ws, session_id=session_id)
-    sessions = request.app.state.sessions
-    redis = request.app.state.redis
-    http_agent = request.app.state.http_agent
-    http_voice = request.app.state.http_voice
+    sessions = ws.app.state.sessions
+    redis = ws.app.state.redis
+    http_agent = ws.app.state.http_agent
+    http_voice = ws.app.state.http_voice
     sessions.add(session)
     audio_buffer: list[bytes] = []
 

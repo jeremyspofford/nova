@@ -6,7 +6,7 @@ import logging
 import uuid
 
 import asyncpg
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel
 
 from .config import settings
@@ -219,7 +219,7 @@ async def update_server(
 async def delete_server(
     server_id: str,
     _: None = Depends(_require_admin),
-) -> None:
+) -> Response:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -231,6 +231,7 @@ async def delete_server(
 
     server_name = row["name"]
     await mcp_manager.remove_server(server_name)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------

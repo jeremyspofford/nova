@@ -2,13 +2,17 @@
 LLM-dependent tests skip if no provider is configured.
 """
 import json
+import os
 import time
 
 import httpx
 import pytest
+from dotenv import dotenv_values
 
 BASE = "http://localhost:8000"
-ADMIN = {"X-Admin-Secret": "nova-dev-secret"}
+_env = dotenv_values(os.path.join(os.path.dirname(__file__), "..", ".env"))
+_secret = _env.get("NOVA_ADMIN_SECRET") or os.getenv("NOVA_ADMIN_SECRET", "nova-dev-secret")
+ADMIN = {"X-Admin-Secret": _secret}
 
 
 def _llm_available() -> bool:
@@ -115,3 +119,28 @@ def test_deny_unknown_approval_is_404():
         headers=ADMIN,
     )
     assert r.status_code == 404
+
+
+def test_auth_providers_returns_trusted_network():
+    """GET /api/v1/auth/providers is public and signals trusted-network auth model."""
+    r = httpx.get(f"{BASE}/api/v1/auth/providers", timeout=5.0)
+    assert r.status_code == 200
+    data = r.json()
+    assert "trusted_network" in data
+    assert data["trusted_network"] is True
+    assert "google" in data
+    assert "registration_mode" in data
+
+
+def test_tasks_list_requires_auth():
+    """GET /api/v1/tasks without a secret should be 401."""
+    r = httpx.get(f"{BASE}/api/v1/tasks", timeout=5.0)
+    assert r.status_code == 401
+
+
+def test_tasks_list_returns_array():
+    """GET /api/v1/tasks with admin secret returns a JSON array."""
+    r = httpx.get(f"{BASE}/api/v1/tasks", headers=ADMIN, timeout=5.0)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)

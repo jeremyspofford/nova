@@ -2,7 +2,7 @@
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
 from ..config import settings
@@ -69,11 +69,12 @@ async def update_secret(name: str, body: SecretUpdate, _: None = Depends(_requir
 
 
 @router.delete("/{name}", status_code=204)
-async def delete_secret(name: str, _: None = Depends(_require_admin)):
+async def delete_secret(name: str, _: None = Depends(_require_admin)) -> Response:
     pool = await get_pool()
     deleted = await store.delete_secret(pool, name)
     if not deleted:
         raise HTTPException(status_code=404, detail="Secret not found")
+    return Response(status_code=204)
 
 
 @router.post("/resolve")

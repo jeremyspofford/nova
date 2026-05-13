@@ -4,7 +4,10 @@ import json
 import logging
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from nova_contracts import TaskCreateRequest
 
@@ -21,6 +24,25 @@ def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing admin secret")
     if x_admin_secret != settings.admin_secret:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin secret")
+
+
+@router.get("")
+async def list_tasks(limit: int = 20, _: None = Depends(_require_admin)) -> list:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, goal, status, created_at FROM tasks ORDER BY created_at DESC LIMIT $1",
+            limit,
+        )
+    return [
+        {
+            "id": str(r["id"]),
+            "goal": r["goal"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
 
 
 @router.post("")
@@ -90,3 +112,52 @@ async def list_events(task_id: str, _: None = Depends(_require_admin)) -> dict:
             "chain_hash": row["chain_hash"],
         })
     return {"events": events}
+
+
+class MessageRequest(BaseModel):
+    text: str
+
+
+@router.post("/{task_id}/message")
+async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
+    """Conversational turn — streams JSON lines {"text": "..."} back to caller."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM tasks WHERE id = $1::uuid", task_id
+        )
+        if not exists:
+            await conn.execute(
+                "INSERT INTO tasks (id, prompt, goal, status, created_at) "
+                "VALUES ($1, $2, $2, 'running', now())",
+                task_id, body.text[:500],
+            )
+
+    messages = [
+        {"role": "system", "content": "You are Nova, a helpful AI assistant. Respond concisely."},
+        {"role": "user", "content": body.text},
+    ]
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.llm_gateway_url}/stream",
+                    json={"messages": messages, "max_tokens": 2000, "temperature": 0.7},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        try:
+                            data = json.loads(line[6:])
+                        except json.JSONDecodeError:
+                            continue
+                        chunk = data.get("chunk", "")
+                        if chunk:
+                            yield json.dumps({"text": chunk}) + "\n"
+        except Exception as exc:
+            logger.error("message stream failed task=%s: %s", task_id, exc)
+            yield json.dumps({"text": "", "error": str(exc)}) + "\n"
+
+    return StreamingResponse(generate(), media_type="text/plain")

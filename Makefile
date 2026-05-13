@@ -1,9 +1,11 @@
-.PHONY: help install start up dev build down logs ps watch migrate backup restore website test test-quick benchmark-quality prune prune-all uninstall
+.PHONY: help install start up dev build down logs ps watch migrate backup restore test test-quick prune prune-all uninstall
 
 DASHBOARD    = dashboard
 
 # ── GPU auto-detection ────────────────────────────────────────────────────────
-# Override with NOVA_GPU=cpu|nvidia|rocm in .env or environment
+# Override with NOVA_GPU=cpu|nvidia|rocm in .env or environment.
+# v2 uses the host's Ollama for local inference — the GPU overlay is empty but
+# kept for forward-compatibility when a containerised inference backend is added.
 NOVA_GPU     ?= auto
 GPU_OVERLAY  :=
 ifeq ($(NOVA_GPU),nvidia)
@@ -54,15 +56,12 @@ restart: ## Stop and start all services without rebuilding (preserves cached ima
 	$(COMPOSE) up -d
 
 # ── Develop ──────────────────────────────────────────────────────────────────
-dev: ## Start all services + Vite dashboard (Python hot-reload via --reload + compose watch; Vite HMR — no `make build` needed for daily edits)
-	$(COMPOSE) --profile website up -d --remove-orphans
+dev: ## Start all services + Vite dashboard (hot-reload; no `make build` needed for daily edits)
+	$(COMPOSE) up -d --remove-orphans
 	cd $(DASHBOARD) && npm run dev
 
 watch: ## Sync Python source into running containers for backend hot-reload
 	$(COMPOSE) watch
-
-website: ## Build and start the Nova website at http://localhost:4000
-	$(COMPOSE) --profile website up -d --build website
 
 # ── Observe ──────────────────────────────────────────────────────────────────
 logs: ## Tail logs for all services
@@ -72,11 +71,10 @@ ps: ## Show container status
 	$(COMPOSE) ps
 
 # ── Database ─────────────────────────────────────────────────────────────────
-migrate: ## Apply pending SQL migrations (runs inside orchestrator container)
-	$(COMPOSE) exec orchestrator python -c \
+migrate: ## Apply pending SQL migrations (runs inside agent-core container)
+	$(COMPOSE) exec agent-core python -c \
 	  "import asyncio; from app.db import init_db; asyncio.run(init_db())"
 
-# ── Backup / Restore ─────────────────────────────────────────────────────────
 # ── Testing ──────────────────────────────────────────────────────────────────
 test: ## Run integration tests against running services
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
@@ -85,9 +83,6 @@ test: ## Run integration tests against running services
 test-quick: ## Smoke test (health endpoints only)
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
 	  pytest -v --tb=short -k "health"
-
-benchmark-quality: ## Run AI quality benchmark suite
-	python -m benchmarks.quality.runner
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)
@@ -99,10 +94,10 @@ restore: ## List or restore backups (emergency — normally use the Recovery UI)
 # ── Cleanup ────────────────────────────────────────────────────────────────
 prune: ## Remove stopped containers, dangling images, build cache (preserves ALL volumes)
 	docker system prune -f
-	@echo "\n  Volumes untouched. Use 'make prune-all' to also clean model caches."
+	@echo "\n  Volumes untouched. Use 'make prune-all' to also clean data volumes."
 
-prune-all: ## Backup DB, then prune everything including model cache volumes
-	@echo "This will remove Ollama/vLLM/SGLang model caches (re-downloadable)."
+prune-all: ## Backup DB, then prune everything
+	@echo "This will remove build caches and dangling volumes."
 	@echo "Postgres and Redis data are safe (bind-mounted to ./data/)."
 	@read -p "Continue? [y/N] " yn; [ "$$yn" = "y" ] || exit 1
 	@./scripts/backup.sh

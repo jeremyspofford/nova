@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Dispatch } from "react";
 import type { Action } from "./useConversation";
@@ -15,6 +15,7 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
   const queryClient = useQueryClient();
   const retryDelay = useRef(1000);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connected, setConnected] = useState(false);
   // Store latest callback in ref so it never needs to be a dep of connect
   const onTaskCompleteRef = useRef(onTaskComplete);
   useEffect(() => { onTaskCompleteRef.current = onTaskComplete; });
@@ -22,11 +23,14 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
   const connectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
-    const socket = new WebSocket(WS_URL);
+    const secret = localStorage.getItem("adminSecret");
+    const url = secret ? `${WS_URL}?secret=${encodeURIComponent(secret)}` : WS_URL;
+    const socket = new WebSocket(url);
     ws.current = socket;
 
     socket.onopen = () => {
       retryDelay.current = 1000;
+      setConnected(true);
       socket.send(
         JSON.stringify({ type: "connect", resume_task_id: taskId ?? null })
       );
@@ -78,6 +82,7 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
     };
 
     socket.onclose = () => {
+      setConnected(false);
       // Exponential backoff reconnect; store handle so cleanup can cancel it
       const delay = retryDelay.current;
       retryDelay.current = Math.min(delay * 2, 30_000);
@@ -103,5 +108,5 @@ export function useWebSocket({ dispatch, taskId, onTaskComplete }: UseWebSocketO
     }
   }, []);
 
-  return { sendMessage };
+  return { sendMessage, connected };
 }

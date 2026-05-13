@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Mic, Send } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Mic, Send, WifiOff } from "lucide-react";
 import { apiFetch } from "../api";
 import { useConversation } from "../hooks/useConversation";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -35,7 +36,7 @@ export function Chat() {
     }
   }, []);
 
-  const { sendMessage } = useWebSocket({ dispatch, onTaskComplete: handleTaskComplete });
+  const { sendMessage, connected } = useWebSocket({ dispatch, onTaskComplete: handleTaskComplete });
 
   // Detect first run: no tasks yet
   const { data: recentTasks } = useQuery<Task[]>({
@@ -82,8 +83,26 @@ export function Chat() {
     setInput("");
   }
 
+  const noSecret = !localStorage.getItem("adminSecret");
+
   return (
     <div className="flex flex-col h-full">
+      {!connected && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-900/40 border-b border-amber-800/60 text-amber-300 text-xs">
+          <WifiOff size={13} />
+          {noSecret ? (
+            <>
+              Not connected — set your admin secret in{" "}
+              <Link to="/settings" className="underline hover:text-amber-200">
+                Settings → System
+              </Link>
+              , then reload.
+            </>
+          ) : (
+            "Connecting to Nova…"
+          )}
+        </div>
+      )}
       {showWizard && (
         <SetupCards
           completed={wizardCompleted}

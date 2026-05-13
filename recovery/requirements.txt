@@ -3,4 +3,4 @@ uvicorn[standard]==0.30.6
 asyncpg==0.29.0
 pydantic-settings==2.4.0
 docker==7.1.0
-nova-contracts @ file://../nova-contracts
+nova-contracts @ file:///nova-contracts

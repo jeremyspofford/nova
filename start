@@ -94,7 +94,7 @@ fi
 
 # ── Start ────────────────────────────────────────────────────────────────────
 step "Starting services..."
-# `make up` honors GPU overlay + voice profile + INFERENCE_PROFILE from .env
+# `make up` honors GPU overlay + voice profile
 make up 2>&1 | tail -15 || {
   fail "make up failed"
   echo "    Check ${BOLD}make logs${RESET} for details."
@@ -127,7 +127,7 @@ echo
 echo "${GREEN}${BOLD}✓ Nova is running.${RESET}"
 echo
 echo "  ${BOLD}Dashboard:${RESET}  http://localhost:3000"
-echo "  ${BOLD}Chat UI:${RESET}    http://localhost:8080"
+echo "  ${BOLD}Chat UI:${RESET}    http://localhost:8004"
 echo "  ${BOLD}API docs:${RESET}   http://localhost:8000/docs (orchestrator)"
 echo
 echo "  ${DIM}Logs:       make logs${RESET}"

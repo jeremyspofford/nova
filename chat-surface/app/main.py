@@ -14,7 +14,10 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         logging.basicConfig(level=settings.log_level)
         app.state.redis = await aioredis.from_url(settings.redis_url, decode_responses=False)
-        app.state.http_agent = httpx.AsyncClient(base_url=settings.agent_core_url, timeout=120.0)
+        agent_headers = {"x-admin-secret": settings.admin_secret} if settings.admin_secret else {}
+        app.state.http_agent = httpx.AsyncClient(
+            base_url=settings.agent_core_url, timeout=120.0, headers=agent_headers
+        )
         app.state.http_voice = httpx.AsyncClient(base_url=settings.voice_gateway_url, timeout=60.0)
         from .ws.manager import SessionManager
         app.state.sessions = SessionManager()

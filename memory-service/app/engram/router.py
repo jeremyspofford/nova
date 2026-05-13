@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.db.database import get_db
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from nova_contracts.engram import (
     ActivateRequest,
     ContextRequest,
@@ -849,7 +849,7 @@ async def delete_engram(engram_id: str):
             raise HTTPException(404, "Engram not found")
         await session.commit()
     log.info("Deleted engram %s", engram_id)
-    return None
+    return Response(status_code=204)
 
 
 # ── Phase 5: Neural Router Status & Mark-Used ─────────────────────────

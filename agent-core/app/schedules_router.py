@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from .config import settings
@@ -191,7 +191,7 @@ async def update_schedule(
 async def delete_schedule(
     schedule_id: str,
     _: None = Depends(_require_admin),
-) -> None:
+) -> Response:
     pool = await get_pool()
     async with pool.acquire() as conn:
         # Unlink tasks before deletion.
@@ -205,6 +205,7 @@ async def delete_schedule(
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Schedule not found")
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
