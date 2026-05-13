@@ -25,7 +25,7 @@ async def close_mem_client() -> None:
 async def memory_search(query: str, limit: int = 10, *, ctx: ToolContext) -> dict:
     """Semantic + keyword search across stored memories."""
     r = await get_mem_client().post(
-        f"{settings.memory_service_url}/api/v1/memories/search",
+        f"{settings.memory_service_url}/memories/search",
         json={"query": query, "limit": limit, "mode": "hybrid"},
     )
     r.raise_for_status()
@@ -36,7 +36,7 @@ async def memory_search(query: str, limit: int = 10, *, ctx: ToolContext) -> dic
 async def memory_write(content: str, source_kind: str = "task_output", *, ctx: ToolContext) -> dict:
     """Store a piece of knowledge in the memory service."""
     r = await get_mem_client().post(
-        f"{settings.memory_service_url}/api/v1/memories",
+        f"{settings.memory_service_url}/memories",
         json={"content": content, "source_kind": source_kind},
     )
     r.raise_for_status()
