@@ -107,7 +107,7 @@ prune-all: ## Backup DB, then prune everything including model cache volumes
 	@read -p "Continue? [y/N] " yn; [ "$$yn" = "y" ] || exit 1
 	@./scripts/backup.sh
 	docker system prune -f
-	@for v in ollama-data nova-vllm-cache nova-sglang-cache tailscale-state; do \
+	@for v in ollama-data llamacpp-models vllm-cache sglang-cache tailscale-state; do \
 	  docker volume rm "nova_$$v" 2>/dev/null && echo "  Removed $$v" || true; \
 	done
 
