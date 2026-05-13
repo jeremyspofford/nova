@@ -45,12 +45,16 @@ async def resolve_env(raw_env: dict, pool) -> dict:
                 continue
         resolved[key] = value
 
-    # Always inject basic process-level env vars so subprocesses can find
-    # executables (PATH), home directory (HOME), and temp storage (TMPDIR/TMP/TEMP).
+    # Inject basic process-level env vars so subprocesses can find executables
+    # (PATH), home directory (HOME), and temp storage (TMPDIR/TMP/TEMP).
+    # Only inject if the user has NOT already configured the var — user-supplied
+    # values take precedence so that e.g. a custom PATH in the server config is
+    # honoured rather than silently overwritten by the host's PATH.
     _ALWAYS_PASS = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP")
     for var in _ALWAYS_PASS:
-        val = os.environ.get(var)
-        if val is not None:
-            resolved[var] = val
+        if var not in resolved:
+            val = os.environ.get(var)
+            if val is not None:
+                resolved[var] = val
 
     return resolved

@@ -57,6 +57,7 @@ class MCPManager:
         self._server_ids: dict[str, str] = {}          # server_name -> server_id
         self._server_meta: dict[str, dict] = {}         # server_name -> {command,args,env,cwd}
         self._pool = None
+        self._lock = asyncio.Lock()  # serializes ensure_running / handle_crash
 
     def set_pool(self, pool) -> None:
         self._pool = pool
@@ -70,45 +71,49 @@ class MCPManager:
 
         This method does NOT contain crash-recovery logic — call handle_crash()
         first when recovering from an error, then call ensure_running() again.
+
+        Serialized through self._lock so two concurrent callers cannot both
+        observe a dead process and both spawn a new subprocess.
         """
-        proc = self._processes.get(server_name)
-        if proc is not None and proc.is_alive():
-            return proc
+        async with self._lock:
+            proc = self._processes.get(server_name)
+            if proc is not None and proc.is_alive():
+                return proc
 
-        # Register meta from DB lookup if not already known (best-effort).
-        if server_name not in self._server_meta:
-            raise RuntimeError(f"MCPManager: unknown server {server_name!r} (id={server_id})")
+            # Register meta from DB lookup if not already known (best-effort).
+            if server_name not in self._server_meta:
+                raise RuntimeError(f"MCPManager: unknown server {server_name!r} (id={server_id})")
 
-        # Spawn a fresh process.
-        meta = self._server_meta[server_name]
-        new_proc = await self._spawn(
-            server_id=server_id,
-            command=meta["command"],
-            args=meta["args"],
-            raw_env=meta["env"],
-            cwd=meta.get("cwd"),
-        )
+            # Spawn a fresh process.
+            meta = self._server_meta[server_name]
+            new_proc = await self._spawn(
+                server_id=server_id,
+                command=meta["command"],
+                args=meta["args"],
+                raw_env=meta["env"],
+                cwd=meta.get("cwd"),
+            )
 
-        if proc is not None:
-            # Preserve restart accounting from the dead MCPProcess.
-            new_proc.restart_count = proc.restart_count
-            new_proc.restart_window_start = proc.restart_window_start
+            if proc is not None:
+                # Preserve restart accounting from the dead MCPProcess.
+                new_proc.restart_count = proc.restart_count
+                new_proc.restart_window_start = proc.restart_window_start
 
-        self._processes[server_name] = new_proc
+            self._processes[server_name] = new_proc
 
-        # Update last_started in DB if we have a pool.
-        if self._pool is not None:
-            try:
-                async with self._pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE mcp_servers SET last_started = now(), last_error = NULL "
-                        "WHERE id = $1::uuid",
-                        server_id,
-                    )
-            except Exception as exc:
-                logger.warning("ensure_running: could not update last_started for %s: %s", server_id[:8], exc)
+            # Update last_started in DB if we have a pool.
+            if self._pool is not None:
+                try:
+                    async with self._pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE mcp_servers SET last_started = now(), last_error = NULL "
+                            "WHERE id = $1::uuid",
+                            server_id,
+                        )
+                except Exception as exc:
+                    logger.warning("ensure_running: could not update last_started for %s: %s", server_id[:8], exc)
 
-        return new_proc
+            return new_proc
 
     async def handle_crash(self, server_id: str, server_name: str, error: str) -> bool:
         """Record a crash and decide whether to restart or disable the server.
@@ -120,7 +125,15 @@ class MCPManager:
           - Updates last_error in DB.
           - If restarting: updates last_started, increments restart_count on proc.
           - If disabling: sets enabled=false in DB.
+
+        Serialized through self._lock to prevent concurrent callers from both
+        deciding to restart and spawning duplicate subprocesses.
         """
+        async with self._lock:
+            return await self._handle_crash_locked(server_id, server_name, error)
+
+    async def _handle_crash_locked(self, server_id: str, server_name: str, error: str) -> bool:
+        """Inner implementation of handle_crash; must be called under self._lock."""
         proc = self._processes.get(server_name)
         now = datetime.now(timezone.utc)
 
@@ -203,6 +216,33 @@ class MCPManager:
 
         return True
 
+    def get_process(self, server_name: str) -> "MCPProcess | None":
+        """Return the tracked MCPProcess for *server_name*, or None if unknown."""
+        return self._processes.get(server_name)
+
+    def register_server_meta(
+        self,
+        server_name: str,
+        server_id: str,
+        command: str,
+        args: list[str],
+        raw_env: dict,
+        cwd: str | None,
+    ) -> None:
+        """Register server metadata so ensure_running can look it up without a DB call.
+
+        Call this whenever a new server is created or restarted from the router,
+        before calling ensure_running.  Keeps router code from reaching into
+        private dicts directly.
+        """
+        self._server_ids[server_name] = server_id
+        self._server_meta[server_name] = {
+            "command": command,
+            "args": args,
+            "env": raw_env,
+            "cwd": cwd,
+        }
+
     async def register_server(
         self,
         server_id: str,
@@ -213,13 +253,7 @@ class MCPManager:
         cwd: str | None,
     ) -> MCPProcess:
         """Register metadata and immediately spawn the server."""
-        self._server_ids[server_name] = server_id
-        self._server_meta[server_name] = {
-            "command": command,
-            "args": args,
-            "env": raw_env,
-            "cwd": cwd,
-        }
+        self.register_server_meta(server_name, server_id, command, args, raw_env, cwd)
         proc = await self._spawn(server_id, command, args, raw_env, cwd)
         self._processes[server_name] = proc
         return proc

@@ -13,6 +13,7 @@ from .config import settings
 from .db import get_pool
 from .tools.mcp import mcp_manager
 from .tools.mcp.discovery import discover_tools
+from .tools.mcp.lifecycle import stop_server
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["mcp"])
@@ -124,13 +125,13 @@ async def create_server(
     # Best-effort: register, spawn, and discover tools after insert.
     discovered: list[dict] = []
     if body.enabled:
-        mcp_manager._server_ids[body.name] = server_id
-        mcp_manager._server_meta[body.name] = {
-            "command": body.command,
-            "args": body.args,
-            "env": body.env,
-            "cwd": body.working_dir,
-        }
+        mcp_manager.register_server_meta(
+            body.name, server_id,
+            command=body.command,
+            args=body.args,
+            raw_env=body.env,
+            cwd=body.working_dir,
+        )
         try:
             mcp = await mcp_manager.ensure_running(server_id, body.name)
             discovered = await discover_tools(mcp.client, server_id, pool)
@@ -162,7 +163,7 @@ async def get_server(
     # Inline tools from the running process (best-effort).
     tools: list[dict] = []
     try:
-        mcp = mcp_manager._processes.get(row["name"])
+        mcp = mcp_manager.get_process(row["name"])
         if mcp and mcp.is_alive():
             tools = await discover_tools(mcp.client, server_id, pool)
     except Exception:
@@ -222,12 +223,23 @@ async def delete_server(
 ) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM mcp_servers WHERE id = $1::uuid",
+        row = await conn.fetchrow(
+            "DELETE FROM mcp_servers WHERE id = $1::uuid RETURNING name",
             server_id,
         )
-    if result == "DELETE 0":
+    if row is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
+
+    server_name = row["name"]
+
+    # Stop the running subprocess and clean up manager state.
+    mcp_manager._processes.pop(server_name, None)
+    mcp_manager._server_ids.pop(server_name, None)
+    mcp_manager._server_meta.pop(server_name, None)
+    try:
+        await stop_server(server_id)
+    except Exception as e:
+        logger.warning("Error stopping MCP server %r during delete: %s", server_name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -361,13 +373,13 @@ async def restart_server_endpoint(
                 env = json.loads(env)
             except Exception:
                 env = {}
-        mcp_manager._server_ids[server_name] = server_id
-        mcp_manager._server_meta[server_name] = {
-            "command": row["command"],
-            "args": list(row["args"] or []),
-            "env": dict(env or {}),
-            "cwd": row["working_dir"],
-        }
+        mcp_manager.register_server_meta(
+            server_name, server_id,
+            command=row["command"],
+            args=list(row["args"] or []),
+            raw_env=dict(env or {}),
+            cwd=row["working_dir"],
+        )
 
     try:
         await mcp_manager.ensure_running(server_id, server_name)

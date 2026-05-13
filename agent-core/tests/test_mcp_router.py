@@ -119,6 +119,18 @@ async def test_list_servers_wrong_secret_401(client):
     assert resp.status_code == 401
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/v1/mcp/servers"),
+    ("delete", "/api/v1/mcp/servers/00000000-0000-0000-0000-000000000001"),
+    ("post", "/api/v1/mcp/servers/00000000-0000-0000-0000-000000000001/restart"),
+])
+async def test_mutation_endpoints_require_auth(client, method, path):
+    """Mutation endpoints must reject requests without a valid admin secret."""
+    resp = await getattr(client, method)(path)  # no auth header
+    assert resp.status_code == 401
+
+
 # ---------------------------------------------------------------------------
 # Tool discovery (patched — no real process)
 # ---------------------------------------------------------------------------

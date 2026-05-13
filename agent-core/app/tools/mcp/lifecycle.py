@@ -4,7 +4,6 @@ Uses asyncio.create_subprocess_exec — argv passed as a list, no shell parsing.
 """
 import asyncio
 import logging
-import os
 
 from ..registry import Tier, register_mcp, unregister_mcp
 from . import client as mcp_client
@@ -35,15 +34,20 @@ async def start_server(
     env: dict[str, str],
     working_dir: str | None = None,
 ) -> None:
-    """Spawn an MCP server subprocess and register its tools."""
-    full_env = {**os.environ, **(env or {})}
+    """Spawn an MCP server subprocess and register its tools.
+
+    ``env`` must already be resolved by the caller (via env_resolver.resolve_env),
+    which strips blocked keys and injects PATH/HOME/TMPDIR.  We never merge
+    os.environ here — doing so would re-inject CREDENTIAL_MASTER_KEY and other
+    secrets that resolve_env deliberately stripped.
+    """
     # create_subprocess_exec: argv passed as separate args; no shell interpretation
     proc = await asyncio.create_subprocess_exec(
         command, *(args or []),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=full_env,
+        env=env if env else None,  # None = inherit full env only when caller passes nothing
         cwd=working_dir,
     )
     client = mcp_client.StdioMCPClient(proc)

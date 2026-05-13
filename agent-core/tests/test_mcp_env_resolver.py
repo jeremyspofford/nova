@@ -99,19 +99,21 @@ async def test_always_pass_vars_injected(pool):
 
 
 @pytest.mark.asyncio
-async def test_always_pass_vars_not_overridden_by_raw_env(pool):
-    """An explicit PATH in raw_env should still be present; the injected value
-    wins only for keys absent from raw_env.  Since _ALWAYS_PASS runs last,
-    it overwrites — document that known behaviour here."""
+async def test_user_supplied_path_not_overwritten(pool):
+    """A user-configured PATH in raw_env must NOT be overwritten by the host PATH.
+
+    The _ALWAYS_PASS injection is a safety net for when PATH is absent from the
+    user config, not an override of intentionally-set values.
+    """
     import os
     from app.tools.mcp.env_resolver import resolve_env
 
     with patch.dict(os.environ, {"PATH": "/injected/path"}, clear=False):
         result = await resolve_env({"PATH": "/custom/path"}, pool)
 
-    # The injected value overwrites the raw value — intentional (subprocess
-    # must always have a usable PATH from the host).
-    assert result["PATH"] == "/injected/path"
+    # The user-supplied value must be preserved; the host PATH is NOT injected
+    # when the user has already configured PATH.
+    assert result["PATH"] == "/custom/path"
 
 
 @pytest.mark.asyncio
