@@ -14,6 +14,7 @@ def _local_candidate() -> tuple[str, dict] | None:
         return (f"ollama_chat/{model}", {"api_base": url})
     if backend in ("llamacpp", "vllm", "sglang", "lmstudio"):
         # All other backends speak the OpenAI-compatible API
+        # LiteLLM requires a non-empty api_key for openai/ routes; "none" is a safe sentinel
         return (f"openai/{model}", {"api_base": url, "api_key": "none"})
     return None
 
