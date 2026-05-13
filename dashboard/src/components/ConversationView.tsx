@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { Dispatch } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 import type { Message, Action } from "../hooks/useConversation";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 
@@ -36,15 +39,23 @@ export function ConversationView({ messages, thinking, dispatch }: Props) {
             className={`flex ${isUser ? "justify-end" : "justify-start"}`}
           >
             <div
-              className={`max-w-xl rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+              className={`max-w-xl rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                 isUser
-                  ? "bg-teal-700 text-white rounded-br-sm"
-                  : "bg-stone-800 text-stone-100 rounded-bl-sm"
+                  ? "bg-teal-700 text-white rounded-br-sm whitespace-pre-wrap"
+                  : "bg-stone-800 text-stone-100 rounded-bl-sm prose prose-sm prose-invert prose-stone max-w-none"
               }`}
             >
-              {msg.text}
-              {msg.streaming && (
-                <span className="ml-1 inline-block w-1.5 h-4 bg-teal-400 animate-pulse align-middle" />
+              {isUser ? (
+                msg.text
+              ) : (
+                <>
+                  <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
+                    {msg.text}
+                  </ReactMarkdown>
+                  {msg.streaming && (
+                    <span className="inline-block w-1.5 h-4 bg-teal-400 animate-pulse align-middle" />
+                  )}
+                </>
               )}
             </div>
           </div>
