@@ -20,8 +20,46 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
 SYSTEM_PROMPT = (
     "You are Nova, a helpful AI assistant. "
-    "Answer concisely and remember context from earlier in the conversation."
+    "Answer concisely and remember context from earlier in the conversation. "
+    "When memory context is provided, use it naturally — don't announce that you're "
+    "recalling a memory, just incorporate what you know."
 )
+
+
+async def _search_memory(query: str, limit: int = 5) -> list[dict]:
+    """Return top-k memories relevant to query. Returns [] on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{settings.memory_service_url}/memories/search",
+                json={"query": query, "limit": limit, "min_similarity": 0.3},
+            )
+            if r.status_code == 200:
+                return r.json().get("results", [])
+    except Exception as exc:
+        logger.warning("memory search failed: %s", exc)
+    return []
+
+
+async def _ingest_memory(content: str) -> None:
+    """Push a completed exchange into the memory store. Fire-and-forget."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{settings.memory_service_url}/memories",
+                json={"content": content, "source_kind": "chat"},
+            )
+    except Exception as exc:
+        logger.warning("memory ingest failed: %s", exc)
+
+
+def _build_system_prompt(memories: list[dict]) -> str:
+    if not memories:
+        return SYSTEM_PROMPT
+    lines = [SYSTEM_PROMPT, "", "## What Nova remembers"]
+    for m in memories:
+        lines.append(f"- {m['content']}")
+    return "\n".join(lines)
 
 
 def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
@@ -167,7 +205,10 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
             task_id, body.text,
         )
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    memories = await _search_memory(body.text)
+    system_prompt = _build_system_prompt(memories)
+
+    messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
     messages.append({"role": "user", "content": body.text})
 
@@ -208,5 +249,9 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                     )
             except Exception as exc:
                 logger.warning("failed to persist assistant message task=%s: %s", task_id, exc)
+
+            # Ingest the exchange into long-term memory (fire-and-forget)
+            exchange = f"User: {body.text}\nNova: {full_response}"
+            asyncio.create_task(_ingest_memory(exchange))
 
     return StreamingResponse(generate(), media_type="text/plain")
