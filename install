@@ -28,7 +28,7 @@ p = pathlib.Path('.env')
 p.write_text(p.read_text().replace('CREDENTIAL_MASTER_KEY=', 'CREDENTIAL_MASTER_KEY=' + sys.argv[1], 1))
 " "$MASTER_KEY"
 
-  read -rsp "${BOLD}Set a Postgres password:${RESET} " PG_PASS
+  read -rsp "${BOLD}Set a Postgres password:${RESET} " PG_PASS || true
   echo
   python3 -c "
 import pathlib, sys
@@ -44,7 +44,7 @@ echo "  1) cloud-only   — use cloud AI providers (Anthropic, OpenAI, Gemini…
 echo "  2) hybrid       — local inference first, cloud fallback  ${CYAN}[recommended]${RESET}"
 echo "  3) local-only   — no cloud providers"
 echo ""
-read -rp "Choice [1-3, default: 2]: " MODE_CHOICE
+read -rp "Choice [1-3, default: 2]: " MODE_CHOICE || true
 case "${MODE_CHOICE:-2}" in
   1) ROUTING="cloud-only";  LOCAL_BACKEND="none" ;;
   3) ROUTING="local-only";  LOCAL_BACKEND="" ;;
@@ -79,14 +79,14 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
   echo "  5) sglang       — sglang in Docker (GPU required)"
   echo "  6) lmstudio     — LM Studio on this machine (start LM Studio first)"
   echo ""
-  read -rp "Choice [1-6, default: 1]: " ENGINE_CHOICE
+  read -rp "Choice [1-6, default: 1]: " ENGINE_CHOICE || true
 
   case "${ENGINE_CHOICE:-1}" in
     2)
       LOCAL_BACKEND="ollama"
       LOCAL_URL="http://nova-ollama:11434"
       COMPOSE_PROFILES="voice,local-ollama"
-      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL
+      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
       echo "  → Will pull ${LOCAL_MODEL} after start"
       ;;
@@ -94,7 +94,7 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
       LOCAL_BACKEND="llamacpp"
       LOCAL_URL="http://nova-llamacpp:8080"
       COMPOSE_PROFILES="voice,local-llamacpp"
-      read -rp "Model filename in /models volume [default: llama-3.2-3b-q4.gguf]: " LOCAL_MODEL
+      read -rp "Model filename in /models volume [default: llama-3.2-3b-q4.gguf]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-llama-3.2-3b-q4.gguf}"
       LOCAL_EMBED=""
       ;;
@@ -102,7 +102,7 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
       LOCAL_BACKEND="vllm"
       LOCAL_URL="http://nova-vllm:8000"
       COMPOSE_PROFILES="voice,local-vllm"
-      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL
+      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-meta-llama/Llama-3.2-3B-Instruct}"
       LOCAL_EMBED=""
       ;;
@@ -110,22 +110,22 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
       LOCAL_BACKEND="sglang"
       LOCAL_URL="http://nova-sglang:30000"
       COMPOSE_PROFILES="voice,local-sglang"
-      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL
+      read -rp "HuggingFace model ID [default: meta-llama/Llama-3.2-3B-Instruct]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-meta-llama/Llama-3.2-3B-Instruct}"
       LOCAL_EMBED=""
       ;;
     6)
       LOCAL_BACKEND="lmstudio"
-      read -rp "LM Studio URL [default: http://host.docker.internal:1234]: " LOCAL_URL
+      read -rp "LM Studio URL [default: http://host.docker.internal:1234]: " LOCAL_URL || true
       LOCAL_URL="${LOCAL_URL:-http://host.docker.internal:1234}"
-      read -rp "Model name as shown in LM Studio [default: local-model]: " LOCAL_MODEL
+      read -rp "Model name as shown in LM Studio [default: local-model]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-local-model}"
       LOCAL_EMBED=""
       ;;
     *)
       LOCAL_BACKEND="ollama-host"
       LOCAL_URL="$HOST_OLLAMA_URL"
-      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL
+      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL || true
       LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
       ;;
   esac
@@ -188,13 +188,20 @@ if [ "$LOCAL_BACKEND" = "ollama-host" ] && [ -n "$LOCAL_MODEL" ]; then
     echo "  Note: 'ollama pull ${LOCAL_MODEL}' failed — pull it manually if Ollama isn't in PATH"
 elif [ "$LOCAL_BACKEND" = "ollama" ] && [ -n "$LOCAL_MODEL" ]; then
   echo "${BOLD}Waiting for Ollama container to be ready...${RESET}"
-  for i in $(seq 1 12); do
+  PULLED=false
+  for i in $(seq 1 24); do
     if docker compose exec nova-ollama ollama list >/dev/null 2>&1; then
       docker compose exec nova-ollama ollama pull "$LOCAL_MODEL"
+      PULLED=true
       break
     fi
+    echo "  ...waiting for Ollama (${i}/24)"
     sleep 5
   done
+  if [ "$PULLED" = "false" ]; then
+    echo "  Warning: Ollama container not ready after 120s — run this manually once it starts:"
+    echo "    docker compose exec nova-ollama ollama pull ${LOCAL_MODEL}"
+  fi
 fi
 
 # ── Wait for health ────────────────────────────────────────────────────────────
