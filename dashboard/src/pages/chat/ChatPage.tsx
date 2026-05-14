@@ -165,6 +165,16 @@ export function Chat() {
   // Auto-activate voice mode when voiceAvailable resolves (async) if user set it as default.
   // voiceDefaultApplied ref ensures this fires at most once per mount.
   const voiceDefaultApplied = useRef(false)
+  const [voiceExiting, setVoiceExiting] = useState(false)
+
+  function handleEndVoice() {
+    setVoiceExiting(true)
+  }
+  function handleExitComplete() {
+    setConversationMode(false)
+    setVoiceExiting(false)
+  }
+
   useEffect(() => {
     if (voiceDefaultApplied.current) return
     if (voiceAvailable && localStorage.getItem('nova_voice_mode_default') === 'true') {
@@ -595,14 +605,16 @@ export function Chat() {
           </>
         )}
 
-        {conversationMode && (
+        {(conversationMode || voiceExiting) && (
           <VoiceModeOverlay
             orbState={orbState}
             caption={overlayCaption}
             muted={muted}
             voiceAvailable={!!voiceAvailable}
             onToggleMute={() => setMuted(!muted)}
-            onEnd={() => setConversationMode(false)}
+            onEnd={handleEndVoice}
+            exiting={voiceExiting}
+            onExitComplete={handleExitComplete}
           />
         )}
 

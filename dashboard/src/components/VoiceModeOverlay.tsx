@@ -3,12 +3,14 @@ import { Mic, MicOff, PhoneOff } from 'lucide-react'
 import { VoiceOrb, type OrbState } from './VoiceOrb'
 
 interface VoiceModeOverlayProps {
-  orbState:       OrbState
-  caption:        string
-  muted:          boolean
-  voiceAvailable: boolean
-  onToggleMute:   () => void
-  onEnd:          () => void
+  orbState:         OrbState
+  caption:          string
+  muted:            boolean
+  voiceAvailable:   boolean
+  onToggleMute:     () => void
+  onEnd:            () => void
+  exiting?:         boolean
+  onExitComplete?:  () => void
 }
 
 export function VoiceModeOverlay({
@@ -18,12 +20,16 @@ export function VoiceModeOverlay({
   voiceAvailable,
   onToggleMute,
   onEnd,
+  exiting,
+  onExitComplete,
 }: VoiceModeOverlayProps) {
   return (
     // Intentionally opaque bg-[#030712] — matches VoiceOrb canvas fill exactly.
     // Cannot use glass-overlay here: the orb's starfield bleeds to the edge and
     // requires a clean dark backdrop with no tint or blur. See Brain HUD pattern.
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#030712]">
+    <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#030712] ${exiting ? 'animate-slide-out-to-bottom' : 'animate-slide-in-from-bottom'}`}
+      onAnimationEnd={exiting ? onExitComplete : undefined}
+    >
       {/* Orb */}
       <div className="flex-1 flex items-center justify-center">
         <VoiceOrb state={orbState} size={240} />
