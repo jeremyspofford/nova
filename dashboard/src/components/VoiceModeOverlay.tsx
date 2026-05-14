@@ -20,9 +20,9 @@ export function VoiceModeOverlay({
   onEnd,
 }: VoiceModeOverlayProps) {
   return (
-    {/* Intentionally opaque bg-[#030712] — matches VoiceOrb canvas fill exactly.
-        Cannot use glass-overlay here: the orb's starfield bleeds to the edge and
-        requires a clean dark backdrop with no tint or blur. See Brain HUD pattern. */}
+    // Intentionally opaque bg-[#030712] — matches VoiceOrb canvas fill exactly.
+    // Cannot use glass-overlay here: the orb's starfield bleeds to the edge and
+    // requires a clean dark backdrop with no tint or blur. See Brain HUD pattern.
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#030712]">
       {/* Orb */}
       <div className="flex-1 flex items-center justify-center">

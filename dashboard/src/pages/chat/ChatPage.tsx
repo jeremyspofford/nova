@@ -128,7 +128,6 @@ export function Chat() {
   const orbState: OrbState =
     conversationState === 'speaking'   ? 'speak' :
     conversationState === 'processing' ? 'think' :
-    conversationState === 'idle'       ? 'think' :
     'listen'
 
   // overlayCaption reads lastTranscriptRef (not reactive) — safe because
