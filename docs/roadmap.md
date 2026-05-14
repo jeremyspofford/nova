@@ -289,8 +289,10 @@ Push-to-talk voice interaction for the Brain page.
 - **Node highlighting during retrieval** — infrastructure exists (orchestrator emits `engram_ids` in memory activity step, Brain.tsx calls `highlightNodes`), but highlighting not visually confirmed. Likely a timing issue (nodes may not match graph data IDs) or the Three.js opacity/scale boost in the tick loop isn't visible enough. Needs debugging.
 - Redis sliding window rate limiting for TTS requests
 - Cost tracking (per-request STT/TTS cost to Redis, dashboard display)
+- **Full-panel voice mode UI** — Layered Core orb overlay, per-session toggle, bidirectional STT+TTS conversation from main chat view. Spec: `docs/superpowers/specs/2026-05-14-voice-mode-full-panel-design.md`
 - Speaker identification via voiceprint enrollment (v2)
-- Always-listening with voice activity detection and wake word (v3)
+- **Wake word / ambient always-listening (v2)** — "Hey Nova" activation, always-on VAD, continuous mic permission model
+- **Voice mode on mobile (v2)** — mobile-optimised orb layout, overlay z-index handling with mobile browser chrome
 
 ### Pipeline Performance
 
