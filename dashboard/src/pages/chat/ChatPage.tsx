@@ -5,6 +5,8 @@ import { useChatStore, type Message } from '../../stores/chat-store'
 import { cleanToolArtifacts } from '../../utils/cleanToolArtifacts'
 import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import { useVoiceChat } from '../../hooks/useVoiceChat'
+import { VoiceModeOverlay } from '../../components/VoiceModeOverlay'
+import type { OrbState } from '../../components/VoiceOrb'
 import { ModelManagerModal, getHiddenModels } from '../../components/ModelManagerModal'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
@@ -88,12 +90,14 @@ export function Chat() {
   const silenceTimeoutMs = Number(localStorage.getItem('nova_voice_silence_timeout')) || 2000
   const bargeInThreshold = Number(localStorage.getItem('nova_voice_bargein_threshold')) || 0.15
   const pendingTranscriptRef = useRef<string | null>(null)
+  const lastTranscriptRef = useRef('')
   const isStreamingRef = useRef(false)
   isStreamingRef.current = isStreaming
   const feedTextRef = useRef<(delta: string) => void>(() => {})
   const flushBufferRef = useRef<() => void>(() => {})
 
   const handleVoiceTranscript = useCallback((text: string) => {
+    lastTranscriptRef.current = text   // keep for overlay caption
     if (isStreamingRef.current) {
       pendingTranscriptRef.current = text
     } else {
@@ -120,6 +124,21 @@ export function Chat() {
 
   feedTextRef.current = feedText
   flushBufferRef.current = flushBuffer
+
+  const orbState: OrbState =
+    conversationState === 'speaking'   ? 'speak' :
+    conversationState === 'processing' ? 'think' :
+    conversationState === 'idle'       ? 'think' :
+    'listen'
+
+  // overlayCaption reads lastTranscriptRef (not reactive) — safe because
+  // conversationState re-renders us whenever this value should change.
+  const overlayCaption =
+    muted                                    ? 'Muted' :
+    conversationState === 'listening'        ? 'Listening…' :
+    conversationState === 'processing' ||
+    conversationState === 'speaking'         ? lastTranscriptRef.current :
+    ''
 
   useEffect(() => {
     if (conversationId !== lastConversationId.current) {
@@ -491,7 +510,7 @@ export function Chat() {
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* Chat Area */}
-      <div ref={containerRef} className="flex-1 flex flex-col min-w-0 overflow-hidden bg-surface-root dark:bg-transparent">
+      <div ref={containerRef} className="relative flex-1 flex flex-col min-w-0 overflow-hidden bg-surface-root dark:bg-transparent">
         {messages.length === 0 ? (
           /* Empty state: greeting centered, input pinned to bottom */
           <>
@@ -564,6 +583,17 @@ export function Chat() {
               </div>
             </div>
           </>
+        )}
+
+        {conversationMode && (
+          <VoiceModeOverlay
+            orbState={orbState}
+            caption={overlayCaption}
+            muted={muted}
+            voiceAvailable={!!voiceAvailable}
+            onToggleMute={() => setMuted(!muted)}
+            onEnd={() => setConversationMode(false)}
+          />
         )}
 
         <ModelManagerModal
