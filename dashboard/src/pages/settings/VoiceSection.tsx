@@ -1,9 +1,27 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getVoiceProviders } from "../../api";
 
 const VOICE_OPTIONS = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"] as const;
+const STORAGE_KEY = 'nova_voice_mode_default'
+
+const getStorage = (key: string): string | null => {
+  try { return localStorage.getItem(key) } catch { return null }
+}
+const setStorage = (key: string, value: string): void => {
+  try { localStorage.setItem(key, value) } catch { /* ignore */ }
+}
 
 export function VoiceSection() {
+  const [defaultVoiceMode, setDefaultVoiceMode] = useState(
+    () => getStorage(STORAGE_KEY) === 'true'
+  )
+
+  function toggleDefault(checked: boolean) {
+    setDefaultVoiceMode(checked)
+    setStorage(STORAGE_KEY, String(checked))
+  }
+
   const { data: providers = [], isLoading, error } = useQuery({
     queryKey: ["voice-providers"],
     queryFn: getVoiceProviders,
@@ -17,6 +35,37 @@ export function VoiceSection() {
 
   return (
     <div className="space-y-6">
+      {/* Default voice mode toggle */}
+      <div className="flex items-center justify-between rounded-lg border border-stone-700 bg-stone-900/50 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-stone-200">Default to voice mode</p>
+          <p className="text-xs text-stone-500 mt-0.5">
+            Activate voice conversation automatically when opening chat
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={defaultVoiceMode}
+          onClick={() => toggleDefault(!defaultVoiceMode)}
+          onKeyDown={(e) => {
+            if (e.key === ' ') {
+              e.preventDefault()
+              toggleDefault(!defaultVoiceMode)
+            }
+          }}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+            defaultVoiceMode ? 'bg-teal-600' : 'bg-stone-700'
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+              defaultVoiceMode ? 'translate-x-4' : 'translate-x-0'
+            }`}
+          />
+        </button>
+      </div>
+
       <div>
         <h2 className="text-sm font-medium text-stone-300 mb-3">Provider Status</h2>
         {isLoading && <p className="text-sm text-stone-400">Loading...</p>}

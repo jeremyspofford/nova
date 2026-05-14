@@ -163,6 +163,17 @@ export function Chat() {
     }
   }, [messages])
 
+  // Auto-activate voice mode when voiceAvailable resolves (async) if user set it as default.
+  // voiceDefaultApplied ref ensures this fires at most once per mount.
+  const voiceDefaultApplied = useRef(false)
+  useEffect(() => {
+    if (voiceDefaultApplied.current) return
+    if (voiceAvailable && localStorage.getItem('nova_voice_mode_default') === 'true') {
+      voiceDefaultApplied.current = true
+      setConversationMode(true)
+    }
+  }, [voiceAvailable, setConversationMode])
+
   // Auto-load the active conversation on mount for authenticated users.
   // If a conversationId is already known, load messages for it.
   // Otherwise fetch/create the most recent conversation and load that.
