@@ -26,11 +26,19 @@ async def boot_mcp_servers(pool) -> None:
     for row in rows:
         server_id = str(row["id"])
         server_name = row["name"]
+        parsed_args = _parse_jsonb(row["args"], [])
+        if not isinstance(parsed_args, list):
+            logger.warning("MCP server %s: args must be a JSON array, got %s — skipping", server_name, type(parsed_args))
+            continue
+        parsed_env = _parse_jsonb(row["env"], {})
+        if not isinstance(parsed_env, dict):
+            logger.warning("MCP server %s: env must be a JSON object, got %s — skipping", server_name, type(parsed_env))
+            continue
         mcp_manager.register_server_meta(
             server_name, server_id,
             command=row["command"],
-            args=list(_parse_jsonb(row["args"], [])),
-            raw_env=dict(_parse_jsonb(row["env"], {})),
+            args=parsed_args,
+            raw_env=parsed_env,
             cwd=row["working_dir"],
         )
         try:

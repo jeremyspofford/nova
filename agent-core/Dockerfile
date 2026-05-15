@@ -9,10 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Playwright MCP globally so it's available as a stdio server
-RUN npm install -g @playwright/mcp@latest
+RUN npm install -g @playwright/mcp@0.0.75
 
-# Install Playwright's Chromium browser + its OS dependencies
-RUN npx playwright install chromium --with-deps
+# Install Playwright's Chromium browser into a fixed path so it's found
+# regardless of which user runs the process (avoids $HOME/.cache ambiguity)
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN PLAYWRIGHT_BROWSERS_PATH=/ms-playwright npx playwright install chromium --with-deps
 
 WORKDIR /app
 
