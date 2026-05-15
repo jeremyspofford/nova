@@ -246,45 +246,95 @@ export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep
 
 export async function* streamChat(
   messages: ChatMessage[],
-  model?: string,
+  _model?: string,
   sessionId?: string,
-  options?: StreamChatOptions,
+  _options?: StreamChatOptions,
 ): AsyncGenerator<StreamEvent, void, unknown> {
-  const resp = await fetch('/api/v1/chat/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ messages, model, session_id: sessionId, ...options }),
-  })
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText)
-    throw new Error(`${resp.status}: ${text}`)
+  // Extract the latest user message — agent-core maintains conversation history
+  // per task_id, so we only send the new turn, not the full history.
+  let text = ''
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'user') {
+      text = typeof m.content === 'string'
+        ? m.content
+        : (m.content as ContentBlock[]).find(b => b.type === 'text')?.text ?? ''
+      break
+    }
   }
-  const reader = resp.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const events = buffer.split('\n\n')
-    buffer = events.pop() ?? ''
-    for (const event of events) {
-      const line = event.trim()
-      if (!line.startsWith('data: ')) continue
-      const data = line.slice(6)
-      if (data === '[DONE]') return
-      if (data.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(data) as Record<string, unknown>
-          if (parsed.error) throw new Error(String(parsed.error))
-          if (parsed.t !== undefined) { yield parsed.t as string; continue }
-          if (parsed.status) { yield { status: parsed.status as ActivityStep }; continue }
-          if (parsed.meta) { yield { meta: parsed.meta as StreamMeta }; continue }
-        } catch { if (data) yield data }
-      } else if (data) {
-        yield data
+  if (!text) return
+
+  const adminSecret = getAdminSecret()
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const qs = adminSecret ? `?secret=${encodeURIComponent(adminSecret)}` : ''
+  const ws = new WebSocket(`${proto}://${location.host}/ws${qs}`)
+
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve()
+    ws.onerror = () => reject(new Error('WebSocket connection failed'))
+  })
+
+  ws.send(JSON.stringify({ type: 'connect', ...(sessionId ? { resume_task_id: sessionId } : {}) }))
+
+  const taskId = await new Promise<string>((resolve, reject) => {
+    const h = (e: MessageEvent) => {
+      try {
+        const msg = JSON.parse(e.data as string) as Record<string, unknown>
+        if (msg.type === 'connected') {
+          ws.removeEventListener('message', h)
+          resolve(msg.task_id as string)
+        }
+      } catch {
+        ws.removeEventListener('message', h)
+        reject(new Error('Unexpected WS message during connect'))
       }
     }
+    ws.addEventListener('message', h)
+    ws.addEventListener('error', () => reject(new Error('WS error during connect')), { once: true })
+  })
+
+  ws.send(JSON.stringify({ type: 'message', text, task_id: taskId }))
+
+  const queue: Array<string | null> = []
+  let finished = false
+  let notify: (() => void) | null = null
+
+  const onMsg = (e: MessageEvent) => {
+    try {
+      const msg = JSON.parse(e.data as string) as Record<string, unknown>
+      if (msg.type === 'response_chunk' && msg.text) {
+        queue.push(msg.text as string)
+      } else if (msg.type === 'response_final') {
+        finished = true
+      } else if (msg.type === 'task_status' && msg.status === 'error') {
+        queue.push(null)
+        finished = true
+      }
+    } catch { /* ignore malformed frames */ }
+    const n = notify; notify = null; n?.()
+  }
+  const onClose = () => { finished = true; const n = notify; notify = null; n?.() }
+
+  ws.addEventListener('message', onMsg)
+  ws.addEventListener('close', onClose)
+
+  try {
+    while (!finished || queue.length > 0) {
+      if (queue.length > 0) {
+        const chunk = queue.shift()!
+        if (chunk === null) throw new Error('Agent returned an error')
+        yield chunk
+      } else {
+        await new Promise<void>(r => {
+          if (finished) { r(); return }
+          notify = r
+        })
+      }
+    }
+  } finally {
+    ws.removeEventListener('message', onMsg)
+    ws.removeEventListener('close', onClose)
+    if (ws.readyState < WebSocket.CLOSING) ws.close()
   }
 }
 
