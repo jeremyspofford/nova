@@ -127,16 +127,24 @@ async def _llm_complete_chat(messages: list[dict], tools: list[dict], model: str
     return resp
 
 
-MAX_CHAT_ITERATIONS = 10
+MAX_CHAT_ITERATIONS = 25
 
-# Limit tools exposed in conversational chat — small local models (llama3.2 etc.)
-# fail to produce structured tool_calls when given the full 14-tool list.
-# These cover recall, web lookup, and code help which are the common chat actions.
+# Tools available to Nova in conversational turns.
+# Exact names for built-ins; prefix patterns cover MCP tool families
+# (e.g. browser_* from Playwright) without enumerating every name.
 _CHAT_TOOL_NAMES = frozenset({
     "memory.search", "memory.write",
     "web.search", "web.fetch",
-    "fs.read", "code.execute",
+    "fs.read", "fs.write", "fs.delete",
+    "shell.exec",
+    "code.execute",
+    "nova.secrets.write", "nova.secrets.read",
 })
+_CHAT_TOOL_PREFIXES = ("browser_",)
+
+
+def _is_chat_tool(name: str) -> bool:
+    return name in _CHAT_TOOL_NAMES or any(name.startswith(p) for p in _CHAT_TOOL_PREFIXES)
 
 
 def _require_admin(x_admin_secret: str | None = Header(default=None)) -> None:
@@ -293,7 +301,7 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         capability.register_approval_notifier(task_id, approval_queue)
         messages = list(base_messages)
         all_tools = to_openai_tools()
-        tools = [t for t in all_tools if t["function"]["name"] in _CHAT_TOOL_NAMES]
+        tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"])]
         final_text = ""
         meta_emitted = False
 
