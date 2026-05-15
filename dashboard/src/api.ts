@@ -246,19 +246,24 @@ export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep
 
 export async function* streamChat(
   messages: ChatMessage[],
-  _model?: string,
+  model?: string,
   sessionId?: string,
-  _options?: StreamChatOptions,
+  options?: StreamChatOptions,
 ): AsyncGenerator<StreamEvent, void, unknown> {
   // Extract the latest user message — agent-core maintains conversation history
   // per task_id, so we only send the new turn, not the full history.
   let text = ''
+  let contentBlocks: ContentBlock[] | null = null
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.role === 'user') {
-      text = typeof m.content === 'string'
-        ? m.content
-        : (m.content as ContentBlock[]).find(b => b.type === 'text')?.text ?? ''
+      if (typeof m.content === 'string') {
+        text = m.content
+      } else {
+        const blocks = m.content as ContentBlock[]
+        text = blocks.find(b => b.type === 'text')?.text ?? ''
+        if (blocks.length > 1) contentBlocks = blocks  // multimodal: include non-text blocks
+      }
       break
     }
   }
@@ -293,7 +298,17 @@ export async function* streamChat(
     ws.addEventListener('error', () => reject(new Error('WS error during connect')), { once: true })
   })
 
-  ws.send(JSON.stringify({ type: 'message', text, task_id: taskId, ...(_model ? { model: _model } : {}) }))
+  ws.send(JSON.stringify({
+    type: 'message',
+    text,
+    task_id: taskId,
+    ...(model ? { model } : {}),
+    ...(contentBlocks ? { content: contentBlocks } : {}),
+    ...(options?.web_search ? { web_search: true } : {}),
+    ...(options?.deep_research ? { deep_research: true } : {}),
+    ...(options?.output_style ? { output_style: options.output_style } : {}),
+    ...(options?.custom_instructions ? { custom_instructions: options.custom_instructions } : {}),
+  }))
 
   const queue: Array<StreamEvent | null> = []
   let finished = false

@@ -104,7 +104,7 @@ class MemoryStats(BaseModel):
 class LLMMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
     role: str
-    content: str | None = ""
+    content: str | list | None = ""  # str for normal, list for multimodal blocks, None for tool-only
 
 
 class LLMRequest(BaseModel):

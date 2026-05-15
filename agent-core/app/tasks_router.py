@@ -70,10 +70,35 @@ async def _ingest_memory(content: str) -> None:
         logger.warning("memory ingest failed: %s", exc)
 
 
-def _build_system_prompt(memories: list[dict], model: str | None = None) -> str:
+_OUTPUT_STYLE_HINTS: dict[str, str] = {
+    "concise": "Respond concisely. Prioritize brevity — omit preamble, summaries, and filler.",
+    "detailed": "Provide detailed, comprehensive responses with full context and examples.",
+    "technical": "Use precise technical language. Include implementation specifics and edge cases.",
+    "creative": "Be expressive and imaginative. Vary sentence structure; avoid formulaic phrasing.",
+    "eli5": "Explain simply, as if to someone with no background in the subject.",
+}
+
+
+def _build_system_prompt(
+    memories: list[dict],
+    model: str | None = None,
+    output_style: str | None = None,
+    custom_instructions: str | None = None,
+    web_search: bool = False,
+    deep_research: bool = False,
+) -> str:
     base = SYSTEM_PROMPT
     if model:
         base += f"\nYour language model is: {model}"
+    if output_style:
+        hint = _OUTPUT_STYLE_HINTS.get(output_style, f"Output style: {output_style}.")
+        base += f"\n\nResponse style: {hint}"
+    if custom_instructions:
+        base += f"\n\nUser instructions: {custom_instructions}"
+    if web_search:
+        base += "\n\nWhen the user's question may benefit from current information, proactively use web.search and web.fetch."
+    if deep_research:
+        base += "\n\nConduct thorough multi-step research: search broadly, cross-reference multiple sources, and synthesize findings before responding."
     if not memories:
         return base
     lines = [base, "", "## What Nova remembers"]
@@ -148,16 +173,18 @@ MAX_CHAT_ITERATIONS = 25
 # (e.g. browser_* from Playwright) without enumerating every name.
 _CHAT_TOOL_NAMES = frozenset({
     "memory.search", "memory.write",
-    "web.search", "web.fetch",
     "fs.read", "fs.write", "fs.delete",
     "shell.exec",
     "code.execute",
     "nova.secrets.write", "nova.secrets.read",
 })
+_WEB_TOOL_NAMES = frozenset({"web.search", "web.fetch"})
 _CHAT_TOOL_PREFIXES = ("browser_",)
 
 
-def _is_chat_tool(name: str) -> bool:
+def _is_chat_tool(name: str, include_web: bool = True) -> bool:
+    if name in _WEB_TOOL_NAMES:
+        return include_web
     return name in _CHAT_TOOL_NAMES or any(name.startswith(p) for p in _CHAT_TOOL_PREFIXES)
 
 
@@ -277,7 +304,12 @@ async def get_messages(task_id: str, _: None = Depends(_require_admin)) -> list:
 
 class MessageRequest(BaseModel):
     text: str
+    content: list[dict] | None = None  # multimodal content blocks (text/image_url)
     model: str | None = None
+    web_search: bool = False
+    deep_research: bool = False
+    output_style: str | None = None
+    custom_instructions: str | None = None
 
 
 @router.post("/{task_id}/message")
@@ -304,18 +336,28 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         )
 
     memories = await _search_memory(body.text)
-    system_prompt = _build_system_prompt(memories, model=body.model)
+    system_prompt = _build_system_prompt(
+        memories,
+        model=body.model,
+        output_style=body.output_style,
+        custom_instructions=body.custom_instructions,
+        web_search=body.web_search,
+        deep_research=body.deep_research,
+    )
+
+    # Use multimodal content blocks if provided (e.g. images, file text); else plain text
+    user_content: list[dict] | str = body.content if body.content else body.text
 
     base_messages: list[dict] = [{"role": "system", "content": system_prompt}]
     base_messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
-    base_messages.append({"role": "user", "content": body.text})
+    base_messages.append({"role": "user", "content": user_content})
 
     async def generate():
         approval_queue: asyncio.Queue = asyncio.Queue()
         capability.register_approval_notifier(task_id, approval_queue)
         messages = list(base_messages)
         all_tools = to_openai_tools()
-        tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"])]
+        tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"], include_web=body.web_search)]
         final_text = ""
         meta_emitted = False
 

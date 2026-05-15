@@ -67,12 +67,22 @@ async def websocket_endpoint(ws: WebSocket):
                 task_id = msg.get("task_id") or session.task_id
                 text_input = msg.get("text", "")
                 model = msg.get("model") or None
+                content = msg.get("content") or None
+                web_search = bool(msg.get("web_search", False))
+                deep_research = bool(msg.get("deep_research", False))
+                output_style = msg.get("output_style") or None
+                custom_instructions = msg.get("custom_instructions") or None
                 if task_id and text_input:
                     event = {"type": "message", "text": text_input}
                     await buffer_event(redis, task_id, event)
                     await sessions.broadcast_to_task(task_id, event)
                     t = asyncio.create_task(
-                        _dispatch_text_turn(session, task_id, text_input, http_agent, redis, sessions, model=model)
+                        _dispatch_text_turn(
+                            session, task_id, text_input, http_agent, redis, sessions,
+                            model=model, content=content, web_search=web_search,
+                            deep_research=deep_research, output_style=output_style,
+                            custom_instructions=custom_instructions,
+                        )
                     )
                     t.add_done_callback(_log_task_exc)
 
@@ -123,10 +133,24 @@ async def websocket_endpoint(ws: WebSocket):
         sessions.remove(session_id)
 
 
-async def _dispatch_text_turn(session, task_id, text, http_agent, redis, sessions, model=None):
-    body = {"text": text}
+async def _dispatch_text_turn(
+    session, task_id, text, http_agent, redis, sessions,
+    model=None, content=None, web_search=False, deep_research=False,
+    output_style=None, custom_instructions=None,
+):
+    body: dict = {"text": text}
     if model:
         body["model"] = model
+    if content is not None:
+        body["content"] = content
+    if web_search:
+        body["web_search"] = True
+    if deep_research:
+        body["deep_research"] = True
+    if output_style:
+        body["output_style"] = output_style
+    if custom_instructions:
+        body["custom_instructions"] = custom_instructions
     try:
         async with http_agent.stream(
             "POST",
