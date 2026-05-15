@@ -1,9 +1,19 @@
 """Boot all enabled stdio MCP servers from the DB at agent-core startup."""
+import json
 import logging
 
 from . import mcp_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_jsonb(value, default):
+    """Deserialize an asyncpg JSONB value that may arrive as a string or native Python object."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
 
 
 async def boot_mcp_servers(pool) -> None:
@@ -19,8 +29,8 @@ async def boot_mcp_servers(pool) -> None:
         mcp_manager.register_server_meta(
             server_name, server_id,
             command=row["command"],
-            args=list(row["args"] or []),
-            raw_env=dict(row["env"] or {}),
+            args=list(_parse_jsonb(row["args"], [])),
+            raw_env=dict(_parse_jsonb(row["env"], {})),
             cwd=row["working_dir"],
         )
         try:

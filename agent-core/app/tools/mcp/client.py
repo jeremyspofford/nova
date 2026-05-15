@@ -20,14 +20,16 @@ class StdioMCPClient:
     async def start(self) -> None:
         """Initialize the JSON-RPC channel and reader task."""
         self._reader_task = asyncio.create_task(self._read_loop())
-        # Initialize handshake (per MCP spec). Best-effort — if server doesn't
-        # implement, list_tools will still work for compliant servers.
+        # Full MCP handshake: initialize request → initialized notification.
+        # Servers that follow the spec strictly (e.g. @playwright/mcp) won't
+        # serve tools/list until the initialized notification is received.
         try:
             await self._call("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "nova-agent-core", "version": "2.0.0"},
             })
+            await self._notify("notifications/initialized", {})
         except Exception as exc:
             logger.warning("MCP initialize failed (continuing): %s", exc)
 
@@ -39,6 +41,14 @@ class StdioMCPClient:
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:
         """Invoke a tool on the remote server."""
         return await self._call("tools/call", {"name": tool_name, "arguments": arguments})
+
+    async def _notify(self, method: str, params: dict) -> None:
+        """Send a JSON-RPC notification (no id, no response expected)."""
+        notification = {"jsonrpc": "2.0", "method": method, "params": params}
+        if self.process.stdin is None:
+            return
+        self.process.stdin.write((json.dumps(notification) + "\n").encode())
+        await self.process.stdin.drain()
 
     async def close(self) -> None:
         if self._reader_task and not self._reader_task.done():
@@ -72,10 +82,10 @@ class StdioMCPClient:
             self._pending.pop(req_id, None)
             raise
 
-        if "error" in result:
-            err = result["error"]
-            raise RuntimeError(f"MCP error: {err.get('message', err)}")
-        return result.get("result", {})
+        # result is already the extracted "result" field from the JSON-RPC response
+        # (set by _read_loop via fut.set_result(msg.get("result"))).
+        # Errors are raised as exceptions by _read_loop, so we just return here.
+        return result if result is not None else {}
 
     async def _read_loop(self) -> None:
         if self.process.stdout is None:
