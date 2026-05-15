@@ -5,6 +5,7 @@ from typing import Any
 
 import litellm
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 
