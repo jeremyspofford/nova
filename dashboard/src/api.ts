@@ -293,9 +293,9 @@ export async function* streamChat(
     ws.addEventListener('error', () => reject(new Error('WS error during connect')), { once: true })
   })
 
-  ws.send(JSON.stringify({ type: 'message', text, task_id: taskId }))
+  ws.send(JSON.stringify({ type: 'message', text, task_id: taskId, ...(_model ? { model: _model } : {}) }))
 
-  const queue: Array<string | null> = []
+  const queue: Array<StreamEvent | null> = []
   let finished = false
   let notify: (() => void) | null = null
 
@@ -306,6 +306,8 @@ export async function* streamChat(
         queue.push(msg.text as string)
       } else if (msg.type === 'response_final') {
         finished = true
+      } else if (msg.type === 'meta') {
+        queue.push({ meta: { model: msg.model as string | undefined, category: msg.category as string | undefined } })
       } else if (msg.type === 'task_status' && msg.status === 'error') {
         queue.push(null)
         finished = true
@@ -323,7 +325,7 @@ export async function* streamChat(
       if (queue.length > 0) {
         const chunk = queue.shift()!
         if (chunk === null) throw new Error('Agent returned an error')
-        yield chunk
+        yield chunk as StreamEvent
       } else {
         await new Promise<void>(r => {
           if (finished) { r(); return }

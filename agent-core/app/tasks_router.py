@@ -56,10 +56,13 @@ async def _ingest_memory(content: str) -> None:
         logger.warning("memory ingest failed: %s", exc)
 
 
-def _build_system_prompt(memories: list[dict]) -> str:
+def _build_system_prompt(memories: list[dict], model: str | None = None) -> str:
+    base = SYSTEM_PROMPT
+    if model:
+        base += f"\nYour language model is: {model}"
     if not memories:
-        return SYSTEM_PROMPT
-    lines = [SYSTEM_PROMPT, "", "## What Nova remembers"]
+        return base
+    lines = [base, "", "## What Nova remembers"]
     for m in memories:
         lines.append(f"- {m['content']}")
     return "\n".join(lines)
@@ -98,11 +101,13 @@ def _sanitize_tools_for_openai(tools: list[dict]) -> tuple[list[dict], dict[str,
     return sanitized, mapping
 
 
-async def _llm_complete_chat(messages: list[dict], tools: list[dict]) -> dict | None:
+async def _llm_complete_chat(messages: list[dict], tools: list[dict], model: str | None = None) -> dict | None:
     safe_tools, name_map = _sanitize_tools_for_openai(tools)
     body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
     if safe_tools:
         body["tools"] = safe_tools
+    if model:
+        body["model"] = model
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
@@ -250,6 +255,7 @@ async def get_messages(task_id: str, _: None = Depends(_require_admin)) -> list:
 
 class MessageRequest(BaseModel):
     text: str
+    model: str | None = None
 
 
 @router.post("/{task_id}/message")
@@ -276,7 +282,7 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         )
 
     memories = await _search_memory(body.text)
-    system_prompt = _build_system_prompt(memories)
+    system_prompt = _build_system_prompt(memories, model=body.model)
 
     base_messages: list[dict] = [{"role": "system", "content": system_prompt}]
     base_messages += [{"role": r["role"], "content": r["content"]} for r in history_rows]
@@ -289,10 +295,11 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         all_tools = to_openai_tools()
         tools = [t for t in all_tools if t["function"]["name"] in _CHAT_TOOL_NAMES]
         final_text = ""
+        meta_emitted = False
 
         try:
             for _ in range(MAX_CHAT_ITERATIONS):
-                resp = await _llm_complete_chat(messages, tools)
+                resp = await _llm_complete_chat(messages, tools, model=body.model)
                 if resp is None:
                     yield json.dumps({"error": "LLM gateway unreachable"}) + "\n"
                     return
@@ -301,14 +308,23 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 content = resp.get("content") or ""
 
                 if not tool_calls:
+                    # Emit meta event once so the client knows which model responded
+                    if not meta_emitted:
+                        actual_model = resp.get("model") or body.model
+                        if actual_model:
+                            yield json.dumps({"type": "meta", "model": actual_model}) + "\n"
+                        meta_emitted = True
                     # If the model serialized a tool call as text (small-model
                     # anti-pattern), fall back to a no-tools streaming response.
                     if _is_serialized_tool_call(content):
+                        stream_body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
+                        if body.model:
+                            stream_body["model"] = body.model
                         async with httpx.AsyncClient(timeout=120.0) as client:
                             async with client.stream(
                                 "POST",
                                 f"{settings.llm_gateway_url}/stream",
-                                json={"messages": messages, "max_tokens": 2000, "temperature": 0.7},
+                                json=stream_body,
                             ) as resp_s:
                                 async for line in resp_s.aiter_lines():
                                     if not line.startswith("data: "):

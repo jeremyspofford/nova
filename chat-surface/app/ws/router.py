@@ -66,12 +66,13 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg_type == "message":
                 task_id = msg.get("task_id") or session.task_id
                 text_input = msg.get("text", "")
+                model = msg.get("model") or None
                 if task_id and text_input:
                     event = {"type": "message", "text": text_input}
                     await buffer_event(redis, task_id, event)
                     await sessions.broadcast_to_task(task_id, event)
                     t = asyncio.create_task(
-                        _dispatch_text_turn(session, task_id, text_input, http_agent, redis, sessions)
+                        _dispatch_text_turn(session, task_id, text_input, http_agent, redis, sessions, model=model)
                     )
                     t.add_done_callback(_log_task_exc)
 
@@ -122,12 +123,15 @@ async def websocket_endpoint(ws: WebSocket):
         sessions.remove(session_id)
 
 
-async def _dispatch_text_turn(session, task_id, text, http_agent, redis, sessions):
+async def _dispatch_text_turn(session, task_id, text, http_agent, redis, sessions, model=None):
+    body = {"text": text}
+    if model:
+        body["model"] = model
     try:
         async with http_agent.stream(
             "POST",
             f"/api/v1/tasks/{task_id}/message",
-            json={"text": text},
+            json=body,
         ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():

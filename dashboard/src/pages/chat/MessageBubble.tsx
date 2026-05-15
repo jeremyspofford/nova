@@ -67,9 +67,7 @@ export const MessageBubble = memo(function MessageBubble({
         <div className={isMobile ? 'max-w-[85%]' : 'max-w-[75%] md:max-w-prose'}>
           <div className={clsx(
             textClass,
-            isMobile
-              ? 'bg-stone-800 text-content-primary whitespace-pre-wrap rounded-2xl px-4 py-3'
-              : 'glass-card text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3',
+            'bg-stone-800 text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3',
           )}>
             {message.attachments && message.attachments.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-2">
