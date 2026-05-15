@@ -507,6 +507,7 @@ export function Chat() {
   const streamingStatus = isStreaming ? (() => {
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
     if (!lastAssistant) return 'thinking\u2026'
+    if (lastAssistant.pendingApprovals?.length) return 'waiting for your approval\u2026'
     if (lastAssistant.content) return 'typing\u2026'
     const steps = lastAssistant.activitySteps ?? []
     const running = steps.find(s => s.state === 'running')
@@ -559,6 +560,9 @@ export function Chat() {
             activeId={conversationId}
             onSelect={loadConversation}
             onNew={newConversation}
+            onDeleted={(id) => {
+              if (id === conversationId) newConversation()
+            }}
           />
         )}
       </div>

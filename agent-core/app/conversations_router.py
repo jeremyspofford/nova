@@ -48,6 +48,22 @@ async def list_conversations(limit: int = 50, _: None = Depends(_require_admin))
     ]
 
 
+@router.delete("/{conv_id}")
+async def delete_conversation(conv_id: str, _: None = Depends(_require_admin)) -> dict:
+    """Delete a chat conversation and its messages (CASCADE)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Only delete tasks that are actual chat conversations (have messages)
+        has_messages = await conn.fetchval(
+            "SELECT 1 FROM task_messages WHERE task_id = $1::uuid LIMIT 1",
+            conv_id,
+        )
+        if not has_messages:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        await conn.execute("DELETE FROM tasks WHERE id = $1::uuid", conv_id)
+    return {"deleted": conv_id}
+
+
 @router.post("")
 async def create_conversation(_: None = Depends(_require_admin)) -> dict:
     """Pre-create a conversation task so the client has a stable ID before the first message."""

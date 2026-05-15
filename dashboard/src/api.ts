@@ -204,6 +204,10 @@ export async function listConversations(): Promise<Conversation[]> {
   return apiFetch<Conversation[]>('/api/v1/conversations')
 }
 
+export async function deleteConversation(id: string): Promise<void> {
+  await apiFetch(`/api/v1/conversations/${id}`, { method: 'DELETE' })
+}
+
 export async function getOrCreateActiveConversation(): Promise<string> {
   const conversations = await apiFetch<{ id: string }[]>('/api/v1/conversations')
   if (conversations.length > 0) return conversations[0].id
