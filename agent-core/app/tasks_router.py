@@ -364,10 +364,22 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                         yield json.dumps({"text": content}) + "\n"
                     break
 
+                # History must use sanitized names — OpenAI rejects dotted names like
+                # "memory.search" in tool_calls history.  We use originals only for dispatch.
+                history_tool_calls = [
+                    {
+                        **tc,
+                        "function": {
+                            **tc.get("function", {}),
+                            "name": _sanitize_tool_name(tc.get("function", {}).get("name", "")),
+                        },
+                    }
+                    for tc in tool_calls
+                ]
                 messages.append({
                     "role": "assistant",
-                    "content": content,
-                    "tool_calls": tool_calls,
+                    "content": content or None,
+                    "tool_calls": history_tool_calls,
                 })
 
                 for tc in tool_calls:

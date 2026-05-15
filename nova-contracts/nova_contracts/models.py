@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 import uuid
 
 
@@ -102,8 +102,9 @@ class MemoryStats(BaseModel):
 
 
 class LLMMessage(BaseModel):
-    role: str  # "user" | "assistant" | "system"
-    content: str
+    model_config = ConfigDict(extra="allow")
+    role: str
+    content: str | None = ""
 
 
 class LLMRequest(BaseModel):

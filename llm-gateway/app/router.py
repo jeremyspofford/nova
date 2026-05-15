@@ -58,17 +58,13 @@ async def _try_complete(
     messages: list[dict],
     max_tokens: int,
     temperature: float,
+    model: str = "auto",
     stream: bool = False,
     extra_kwargs: dict | None = None,
 ) -> tuple[Any, str]:
-    cloud = await _available_cloud()
-    candidates = selector.completion_candidates(cloud)
-    if not candidates:
-        raise HTTPException(status_code=503, detail="No LLM providers configured")
-
-    last_exc: Exception | None = None
-    for model, model_extra in candidates:
-        kwargs: dict[str, Any] = {**model_extra}
+    # When an explicit model is requested, use only that model — no fallback chain.
+    if model != "auto":
+        kwargs: dict[str, Any] = {}
         if extra_kwargs:
             kwargs.update(extra_kwargs)
         api_key = await _api_key_for(model)
@@ -85,7 +81,34 @@ async def _try_complete(
             )
             return resp, model
         except Exception as exc:
-            logger.warning("Provider %s failed: %s", model, exc)
+            logger.warning("Requested model %s failed: %s", model, exc)
+            raise HTTPException(status_code=503, detail=f"Model {model} unavailable: {exc}")
+
+    cloud = await _available_cloud()
+    candidates = selector.completion_candidates(cloud)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No LLM providers configured")
+
+    last_exc: Exception | None = None
+    for cand_model, model_extra in candidates:
+        kwargs = {**model_extra}
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+        api_key = await _api_key_for(cand_model)
+        if api_key:
+            kwargs["api_key"] = api_key
+        try:
+            resp = await litellm.acompletion(
+                model=cand_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=stream,
+                **kwargs,
+            )
+            return resp, cand_model
+        except Exception as exc:
+            logger.warning("Provider %s failed: %s", cand_model, exc)
             last_exc = exc
 
     raise HTTPException(status_code=503, detail=f"All LLM providers failed: {last_exc}")
@@ -176,6 +199,7 @@ async def complete(body: LLMRequest):
         messages=[m.model_dump() for m in body.messages],
         max_tokens=body.max_tokens,
         temperature=body.temperature,
+        model=body.model,
         extra_kwargs=extra or None,
     )
     content = resp.choices[0].message.content or ""
@@ -207,6 +231,7 @@ async def stream_complete(body: LLMRequest):
         messages=[m.model_dump() for m in body.messages],
         max_tokens=body.max_tokens,
         temperature=body.temperature,
+        model=body.model,
         stream=True,
     )
 
