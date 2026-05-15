@@ -109,6 +109,13 @@ export function Chat() {
     setError(err)
   }, [setError])
 
+  const resolveApproval = useCallback((toolCallId: string) => {
+    setMessages(prev => prev.map(m => ({
+      ...m,
+      pendingApprovals: m.pendingApprovals?.filter(a => a.tool_call_id !== toolCallId),
+    })))
+  }, [setMessages])
+
   const {
     isRecording, isTranscribing, isSpeaking, recordingDuration,
     toggleRecording, voiceAvailable, mediaStream,
@@ -409,6 +416,14 @@ export function Chat() {
           )
           continue
         }
+        if (typeof event === 'object' && 'approval' in event) {
+          setMessages(prev => prev.map(m =>
+            m.id === assistantMsgId
+              ? { ...m, pendingApprovals: [...(m.pendingApprovals ?? []), event.approval] }
+              : m
+          ))
+          continue
+        }
         // Text delta — collapse activity feed on first token
         if (firstTextDelta) {
           firstTextDelta = false
@@ -575,7 +590,7 @@ export function Chat() {
                         <div className="w-[3px] h-[3px] rounded-full bg-teal-500/20" />
                       </div>
                     )}
-                    <MessageBubble message={msg} conversationMode={conversationMode} />
+                    <MessageBubble message={msg} conversationMode={conversationMode} onApprovalResolved={resolveApproval} />
                   </div>
                 ))}
 

@@ -242,7 +242,14 @@ export interface ActivityStep {
   engram_summaries?: EngramSummary[]
 }
 
-export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep }
+export interface ToolApprovalRequest {
+  tool_call_id: string
+  name: string
+  tier: string
+  args: Record<string, unknown>
+}
+
+export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep } | { approval: ToolApprovalRequest }
 
 export async function* streamChat(
   messages: ChatMessage[],
@@ -323,6 +330,13 @@ export async function* streamChat(
         finished = true
       } else if (msg.type === 'meta') {
         queue.push({ meta: { model: msg.model as string | undefined, category: msg.category as string | undefined } })
+      } else if (msg.type === 'tool_approval_request') {
+        queue.push({ approval: {
+          tool_call_id: msg.tool_call_id as string,
+          name: msg.name as string,
+          tier: msg.tier as string,
+          args: (msg.args ?? {}) as Record<string, unknown>,
+        }})
       } else if (msg.type === 'task_status' && msg.status === 'error') {
         queue.push(null)
         finished = true

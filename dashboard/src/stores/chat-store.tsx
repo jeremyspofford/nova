@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { apiFetch } from '../api'
+import { apiFetch, type ToolApprovalRequest } from '../api'
 
 export interface EngramSummary {
   id: string
@@ -38,6 +38,7 @@ export interface Message {
   activitySteps?: ActivityStep[]
   activityCollapsed?: boolean
   attachments?: AttachedFile[]
+  pendingApprovals?: ToolApprovalRequest[]
   metadata?: Record<string, unknown>
 }
 

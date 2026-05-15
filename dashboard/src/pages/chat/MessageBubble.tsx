@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import clsx from 'clsx'
 import { ActivityFeed } from '../../components/ActivityFeed'
+import { ToolApprovalCard } from '../../components/ToolApprovalCard'
 import { cleanToolArtifacts } from '../../utils/cleanToolArtifacts'
 import type { Message } from '../../stores/chat-store'
 
@@ -39,9 +40,11 @@ function LoadingDots({ thinking }: { thinking: boolean }) {
 export const MessageBubble = memo(function MessageBubble({
   message,
   conversationMode = false,
+  onApprovalResolved,
 }: {
   message: Message
   conversationMode?: boolean
+  onApprovalResolved?: (toolCallId: string) => void
 }) {
   const { avatarUrl, isDefaultAvatar } = useNovaIdentity()
   const isMobile = useIsMobile()
@@ -139,6 +142,21 @@ export const MessageBubble = memo(function MessageBubble({
             <LoadingDots thinking={isThinking} />
           ) : '\u2014'}
         </div>
+
+        {message.pendingApprovals && message.pendingApprovals.length > 0 && onApprovalResolved && (
+          <div className="mt-2">
+            {message.pendingApprovals.map(approval => (
+              <ToolApprovalCard
+                key={approval.tool_call_id}
+                toolCallId={approval.tool_call_id}
+                name={approval.name}
+                tier={approval.tier}
+                args={approval.args}
+                onResolved={onApprovalResolved}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Footer — visible on hover only */}
         <p className="mt-2 font-mono text-[10px] text-content-tertiary/60 opacity-0 group-hover:opacity-100 transition-opacity duration-fast">
