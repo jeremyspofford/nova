@@ -334,6 +334,12 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
             "INSERT INTO task_messages (task_id, role, content) VALUES ($1::uuid, 'user', $2)",
             task_id, body.text,
         )
+        # Set title from first user message when task was pre-created with empty goal
+        await conn.execute(
+            "UPDATE tasks SET goal = $1, prompt = $1 "
+            "WHERE id = $2::uuid AND (goal IS NULL OR goal = '')",
+            body.text[:200], task_id,
+        )
 
     memories = await _search_memory(body.text)
     system_prompt = _build_system_prompt(

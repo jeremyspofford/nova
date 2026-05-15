@@ -193,6 +193,17 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 // Conversations
+export interface Conversation {
+  id: string
+  title: string
+  created_at: string
+  last_message_at: string | null
+}
+
+export async function listConversations(): Promise<Conversation[]> {
+  return apiFetch<Conversation[]>('/api/v1/conversations')
+}
+
 export async function getOrCreateActiveConversation(): Promise<string> {
   const conversations = await apiFetch<{ id: string }[]>('/api/v1/conversations')
   if (conversations.length > 0) return conversations[0].id

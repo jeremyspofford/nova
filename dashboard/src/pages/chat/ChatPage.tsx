@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import clsx from 'clsx'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { streamChat, discoverModels, resolveModel, apiFetch, getOrCreateActiveConversation, readCachedModelCatalog, type ChatMessage, type ContentBlock, type StreamEvent, type ProviderModelList } from '../../api'
 import { useChatStore, type Message } from '../../stores/chat-store'
@@ -10,8 +11,10 @@ import type { OrbState } from '../../components/VoiceOrb'
 import { ModelManagerModal, getHiddenModels } from '../../components/ModelManagerModal'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
+import { ConversationList } from './ConversationList'
 import { useMobileNav } from '../../hooks/useMobileNav'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -31,12 +34,14 @@ export function Chat() {
     error, setError,
     resetConversation,
     loadConversation,
+    newConversation,
     pendingFiles, setPendingFiles,
     outputStyle,
     customInstructions,
     webSearchEnabled,
     deepResearchEnabled,
     setDraftInput,
+    sidebarCollapsed, setSidebarCollapsed,
   } = useChatStore()
   const queryClient = useQueryClient()
 
@@ -544,8 +549,36 @@ export function Chat() {
 
   return (
     <div className="flex h-full w-full overflow-hidden">
+      {/* Conversation history sidebar */}
+      <div className={clsx(
+        'hidden md:flex flex-col shrink-0 border-r border-border-subtle bg-surface transition-[width] duration-200 ease-in-out overflow-hidden',
+        sidebarCollapsed ? 'w-0' : 'w-[220px]',
+      )}>
+        {!sidebarCollapsed && (
+          <ConversationList
+            activeId={conversationId}
+            onSelect={loadConversation}
+            onNew={newConversation}
+          />
+        )}
+      </div>
+
       {/* Chat Area */}
       <div ref={containerRef} className="relative flex-1 flex flex-col min-w-0 overflow-hidden bg-surface-root dark:bg-transparent">
+        {/* Sidebar toggle — desktop only */}
+        <div className="hidden md:flex absolute top-2 left-2 z-10">
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors"
+            title={sidebarCollapsed ? 'Show chat history' : 'Hide chat history'}
+          >
+            {sidebarCollapsed
+              ? <PanelLeftOpen size={16} />
+              : <PanelLeftClose size={16} />
+            }
+          </button>
+        </div>
+
         {messages.length === 0 ? (
           /* Empty state: greeting centered, input pinned to bottom */
           <>
