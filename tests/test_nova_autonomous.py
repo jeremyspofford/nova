@@ -64,14 +64,9 @@ def test_secrets_write_read_roundtrip():
 
 
 def test_nova_secrets_tool_registered():
-    """Smoke test that the agent service is up."""
-    r = httpx.post(
-        f"{BASE}/api/v1/approvals/nonexistent/grant",
-        json={"remember": False, "remember_ttl": 0},
-        headers=ADMIN,
-        timeout=5.0,
-    )
-    assert r.status_code in (200, 404)
+    """Smoke test that the agent service is up and responding."""
+    r = httpx.get(f"{BASE}/health/ready", timeout=5.0)
+    assert r.status_code == 200
 
 
 def test_playwright_mcp_server_registered():
