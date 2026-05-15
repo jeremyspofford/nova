@@ -172,10 +172,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const loadConversation = useCallback(async (id: string) => {
     try {
       const msgs = await apiFetch<Array<{
-        id: string; role: string; content: string; model_used?: string; metadata?: Record<string, unknown>; created_at: string
-      }>>(`/api/v1/conversations/${id}/messages?limit=200`)
+        id?: string; role: string; content: string; model_used?: string; metadata?: Record<string, unknown>; created_at: string
+      }>>(`/api/v1/tasks/${id}/messages`)
       setMessages(msgs.map(m => ({
-        id: m.id,
+        id: m.id ?? crypto.randomUUID(),
         role: m.role as 'user' | 'assistant',
         content: m.content,
         timestamp: new Date(m.created_at),

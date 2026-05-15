@@ -175,6 +175,17 @@ app.include_router(tasks_router)
 app.include_router(approvals_router)
 
 
+@app.get("/api/v1/identity")
+async def get_identity():
+    """Nova's display identity — name, greeting, avatar defaults."""
+    return {
+        "name": "Nova",
+        "greeting": "Hello! I'm Nova, your autonomous AI assistant. How can I help you today?",
+        "avatarUrl": None,
+        "isDefaultAvatar": True,
+    }
+
+
 @app.get("/api/v1/auth/providers")
 async def auth_providers():
     """Public endpoint — tells the dashboard how auth works on this instance.

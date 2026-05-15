@@ -181,14 +181,10 @@ export function useVoiceChat({
       setIsTranscribing(true)
 
       try {
-        const formData = new FormData()
-        formData.append('file', blob, `recording.${mimeTypeRef.current.split('/')[1].split(';')[0]}`)
-        formData.append('format', mimeTypeRef.current.split('/')[1].split(';')[0])
-
-        const resp = await fetch('/voice-api/api/v1/voice/transcribe', {
+        const resp = await fetch('/voice-api/stt/stream', {
           method: 'POST',
-          headers: getAuthHeaders(),
-          body: formData,
+          headers: { 'Content-Type': 'application/octet-stream', ...getAuthHeaders() },
+          body: blob,
         })
 
         if (!resp.ok) {
@@ -196,7 +192,12 @@ export function useVoiceChat({
           throw new Error(err.detail || `HTTP ${resp.status}`)
         }
 
-        const result = await resp.json()
+        // STT returns SSE: `data: {"text": "...", "is_final": true}\n\n`
+        const body = await resp.text()
+        const result = body.split('\n').reduce<{ text?: string }>((acc, line) => {
+          if (!line.startsWith('data: ')) return acc
+          try { return JSON.parse(line.slice(6)) } catch { return acc }
+        }, {})
         if (result.text) {
           silentTurnsRef.current = 0  // Reset silent turn counter on successful transcript
           onTranscript?.(result.text)
@@ -518,7 +519,7 @@ export function useVoiceChat({
     audioQueueRef.current.push(entry)
 
     try {
-      const resp = await fetch('/voice-api/api/v1/voice/synthesize', {
+      const resp = await fetch('/voice-api/tts/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ text, voice: 'nova', model: 'tts-1' }),

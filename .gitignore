@@ -46,6 +46,7 @@ data/
 
 # Screenshots
 *.png
+!dashboard/public/icons/*.png
 
 # Website
 website/node_modules/

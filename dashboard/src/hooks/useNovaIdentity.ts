@@ -22,8 +22,9 @@ export function useNovaIdentity() {
   const { data } = useQuery({
     queryKey: ['nova-identity'],
     queryFn: getNovaIdentity,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    retry: 0,
   })
 
   const avatarUrl = useSyncExternalStore(subscribeAvatar, getAvatarSnapshot)
