@@ -31,7 +31,15 @@ def create_app() -> FastAPI:
 
     @new_app.get("/health/ready")
     async def health_ready():
-        return HealthStatus(status="ok", service="voice-gateway", checks={"router": True})
+        return HealthStatus(
+            status="ok",
+            service="voice-gateway",
+            checks={
+                "router": True,
+                "stt_available": settings.stt_provider not in ("none", ""),
+                "tts_available": settings.tts_provider not in ("none", ""),
+            },
+        )
 
     return new_app
 

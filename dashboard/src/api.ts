@@ -173,3 +173,166 @@ export interface VoiceProvider {
 export async function getVoiceProviders(): Promise<VoiceProvider[]> {
   return apiFetch<VoiceProvider[]>("/voice-api/providers");
 }
+
+// Auth helpers
+export const getAdminSecret = () => localStorage.getItem("adminSecret") ?? ""
+export const setAdminSecret = (s: string) => localStorage.setItem("adminSecret", s)
+
+function getAccessToken(): string | null {
+  try {
+    const raw = localStorage.getItem('nova_auth_tokens')
+    if (!raw) return null
+    return JSON.parse(raw).accessToken ?? null
+  } catch { return null }
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken()
+  if (token) return { 'Authorization': `Bearer ${token}` }
+  return { 'X-Admin-Secret': getAdminSecret() }
+}
+
+// Conversations
+export async function getOrCreateActiveConversation(): Promise<string> {
+  const conversations = await apiFetch<{ id: string }[]>('/api/v1/conversations')
+  if (conversations.length > 0) return conversations[0].id
+  const newConv = await apiFetch<{ id: string }>('/api/v1/conversations', { method: 'POST' })
+  return newConv.id
+}
+
+// Chat streaming types
+export interface ContentBlock {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: { url: string }
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string | ContentBlock[]
+}
+
+export interface StreamChatOptions {
+  output_style?: string
+  custom_instructions?: string
+  web_search?: boolean
+  deep_research?: boolean
+  conversation_id?: string
+}
+
+export interface StreamMeta {
+  model?: string
+  category?: string
+}
+
+export interface EngramSummary {
+  id: string
+  type: string
+  preview: string
+  source_type?: string
+}
+
+export interface ActivityStep {
+  step: string
+  state: 'running' | 'done'
+  detail?: string
+  elapsed_ms?: number
+  model?: string
+  category?: string | null
+  engram_summaries?: EngramSummary[]
+}
+
+export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep }
+
+export async function* streamChat(
+  messages: ChatMessage[],
+  model?: string,
+  sessionId?: string,
+  options?: StreamChatOptions,
+): AsyncGenerator<StreamEvent, void, unknown> {
+  const resp = await fetch('/api/v1/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ messages, model, session_id: sessionId, ...options }),
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText)
+    throw new Error(`${resp.status}: ${text}`)
+  }
+  const reader = resp.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const event of events) {
+      const line = event.trim()
+      if (!line.startsWith('data: ')) continue
+      const data = line.slice(6)
+      if (data === '[DONE]') return
+      if (data.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(data) as Record<string, unknown>
+          if (parsed.error) throw new Error(String(parsed.error))
+          if (parsed.t !== undefined) { yield parsed.t as string; continue }
+          if (parsed.status) { yield { status: parsed.status as ActivityStep }; continue }
+          if (parsed.meta) { yield { meta: parsed.meta as StreamMeta }; continue }
+        } catch { if (data) yield data }
+      } else if (data) {
+        yield data
+      }
+    }
+  }
+}
+
+// Model discovery
+export interface DiscoveredModel {
+  id: string
+  registered: boolean
+}
+
+export interface ProviderModelList {
+  slug: string
+  name: string
+  type: 'local' | 'subscription' | 'free' | 'paid'
+  available: boolean
+  auth_methods: string[]
+  models: DiscoveredModel[]
+}
+
+export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v1'
+export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
+
+export async function discoverModels(refresh = false): Promise<ProviderModelList[]> {
+  const data = await apiFetch<ProviderModelList[]>(`/v1/models/discover${refresh ? '?refresh=true' : ''}`)
+  try { localStorage.setItem(MODEL_CATALOG_CACHE_KEY, JSON.stringify({ data, at: Date.now() })) } catch {}
+  return data
+}
+
+export function readCachedModelCatalog(): { data: ProviderModelList[]; at: number } | null {
+  try {
+    const raw = localStorage.getItem(MODEL_CATALOG_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { data: ProviderModelList[]; at: number }
+    if (!parsed.data || Date.now() - parsed.at > MODEL_CATALOG_MAX_AGE_MS) return null
+    return parsed
+  } catch { return null }
+}
+
+export interface ResolvedModel {
+  model: string
+  source: 'auto' | 'explicit'
+}
+
+export const resolveModel = () => apiFetch<ResolvedModel>('/v1/models/resolve')
+
+// Identity
+export interface NovaIdentity {
+  name: string
+  greeting: string
+}
+
+export const getNovaIdentity = () => apiFetch<NovaIdentity>('/api/v1/identity')

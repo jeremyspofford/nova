@@ -16,8 +16,9 @@ export function VoiceOrb({ state, size = 240 }: VoiceOrbProps) {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const ctxOrNull = canvas.getContext('2d')
+    if (!ctxOrNull) return
+    const ctx = ctxOrNull
     const TAU = Math.PI * 2
     const W = size, H = size, cx = W / 2, cy = H / 2
     const R = size * 0.366   // orb radius — 106px at size=290, 88px at size=240

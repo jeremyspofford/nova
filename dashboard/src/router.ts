@@ -4,7 +4,7 @@ import {
   createRootRoute,
 } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
-import { Chat } from "./pages/Chat";
+import { Chat } from "./pages/chat/ChatPage";
 import { Tasks } from "./pages/Tasks";
 import { Memory } from "./pages/Memory";
 import { Schedules } from "./pages/Schedules";

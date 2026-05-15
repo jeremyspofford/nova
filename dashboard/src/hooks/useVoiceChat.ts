@@ -94,7 +94,8 @@ export function useVoiceChat({
         const resp = await fetch('/voice-api/health/ready')
         if (resp.ok) {
           const data = await resp.json()
-          setVoiceAvailable(data.stt_available && data.tts_available)
+          const checks = data.checks ?? data
+          setVoiceAvailable(!!(checks.stt_available && checks.tts_available))
         }
       } catch {
         setVoiceAvailable(false)
