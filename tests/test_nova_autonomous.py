@@ -22,14 +22,14 @@ def _llm_available() -> bool:
 
 
 def test_shell_exec_in_chat_tools():
-    """shell.exec must be visible in the tool list exposed to conversational turns."""
+    """shell.exec must be accessible to Nova in conversational turns."""
     if not _llm_available():
         pytest.skip("no LLM provider configured")
     import uuid
     task_id = str(uuid.uuid4())
     r = httpx.post(
         f"{BASE}/api/v1/tasks/{task_id}/message",
-        json={"text": "nova-test: using code.execute python, print the string SHELL_TEST"},
+        json={"text": "nova-test: use shell.exec (not code.execute) to run: echo SHELL_TEST"},
         headers=ADMIN,
         timeout=60.0,
     )
@@ -63,8 +63,8 @@ def test_secrets_write_read_roundtrip():
     httpx.delete(f"{BASE}/api/v1/secrets/{secret_name}", headers=ADMIN, timeout=5.0)
 
 
-def test_nova_secrets_tool_registered():
-    """Smoke test that the agent service is up and responding."""
+def test_agent_service_healthy():
+    """Smoke test that agent-core is up and responding."""
     r = httpx.get(f"{BASE}/health/ready", timeout=5.0)
     assert r.status_code == 200
 

@@ -15,7 +15,7 @@ from .config import settings
 from .db import get_pool
 from .loop.main import run_task
 from .tools import capability
-from .tools.dispatcher import dispatch
+from .tools.dispatcher import cleanup_task, dispatch
 from .tools.registry import to_openai_tools
 
 logger = logging.getLogger(__name__)
@@ -427,5 +427,6 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
             yield json.dumps({"error": str(exc)}) + "\n"
         finally:
             capability.deregister_approval_notifier(task_id)
+            cleanup_task(task_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
