@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 
 from . import secrets_client, selector
+from .config import settings
+from .discovery import _cloud_providers, _local_provider_entry, discover_local_models
 from .selector import VALID_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -117,8 +119,6 @@ async def _try_complete(
 @router.get("/providers")
 async def list_providers():
     cloud = await _available_cloud()
-    from .config import settings
-
     providers = [
         {
             "name": settings.nova_inference_backend,
@@ -167,6 +167,43 @@ async def list_providers():
         "local_backend": settings.nova_inference_backend,
         "local_inference_url": settings.local_inference_url,
     }
+
+
+@router.get("/models/discover")
+async def discover_models(refresh: bool = False):
+    """Return all providers with their available models.
+
+    Local models are discovered live from the active backend (cached 5 min).
+    Cloud providers are included when their API key is configured.
+    Pass ?refresh=true to bypass the discovery cache.
+    """
+    local_models = await discover_local_models(force=refresh)
+    cloud = await _available_cloud()
+    providers = _cloud_providers(cloud)
+    if settings.nova_inference_backend != "none":
+        providers.insert(0, _local_provider_entry(local_models))
+    return providers
+
+
+def _litellm_to_display_id(litellm_model: str) -> str:
+    for prefix in ("ollama_chat/", "ollama/", "openai/"):
+        if litellm_model.startswith(prefix):
+            return litellm_model[len(prefix):]
+    return litellm_model
+
+
+@router.get("/models/resolve")
+async def resolve_best_model():
+    """Return the best model ID to use given the current routing strategy."""
+    cloud = await _available_cloud()
+    candidates = selector.completion_candidates(cloud)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No models available")
+
+    litellm_model, _ = candidates[0]
+    display_id = _litellm_to_display_id(litellm_model)
+    source = "local" if litellm_model != display_id else "cloud"
+    return {"model": display_id, "source": source}
 
 
 class LLMConfigUpdate(BaseModel):
