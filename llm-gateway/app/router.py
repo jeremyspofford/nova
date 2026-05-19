@@ -56,6 +56,25 @@ async def _api_key_for(model: str) -> str | None:
     return None
 
 
+async def _resolve_explicit_model(model_id: str) -> tuple[str, dict]:
+    """Return (litellm_model, extra_kwargs) for a user-supplied model ID.
+
+    If the ID matches a discovered local model, wraps it in the correct
+    LiteLLM format (ollama_chat/ or openai/ with api_base). Otherwise
+    returns the ID unchanged for cloud routing.
+    """
+    backend = settings.nova_inference_backend
+    if backend != "none":
+        local_models = await discover_local_models()
+        if any(m["id"] == model_id for m in local_models):
+            url = settings.local_inference_url
+            if backend in ("ollama-host", "ollama"):
+                return f"ollama_chat/{model_id}", {"api_base": url}
+            else:
+                return f"openai/{model_id}", {"api_base": url, "api_key": "none"}
+    return model_id, {}
+
+
 async def _try_complete(
     messages: list[dict],
     max_tokens: int,
@@ -66,15 +85,16 @@ async def _try_complete(
 ) -> tuple[Any, str]:
     # When an explicit model is requested, use only that model — no fallback chain.
     if model != "auto":
-        kwargs: dict[str, Any] = {}
+        litellm_model, model_kwargs = await _resolve_explicit_model(model)
+        kwargs: dict[str, Any] = {**model_kwargs}
         if extra_kwargs:
             kwargs.update(extra_kwargs)
-        api_key = await _api_key_for(model)
+        api_key = await _api_key_for(litellm_model)
         if api_key:
             kwargs["api_key"] = api_key
         try:
             resp = await litellm.acompletion(
-                model=model,
+                model=litellm_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
