@@ -50,6 +50,7 @@ export function Chat() {
   const [messageQueue, setMessageQueue] = useState<string[]>([])
   const [modelManagerOpen, setModelManagerOpen] = useState(false)
   const [hiddenModels, setHiddenModels] = useState<Set<string>>(() => getHiddenModels())
+  const [textSize, setTextSize] = useState(() => localStorage.getItem('nova_text_size') || 'medium')
   const { setHidden: setNavHidden } = useMobileNav()
   const isMobile = useIsMobile()
   const keyboardOpenRef = useRef(false)
@@ -529,7 +530,11 @@ export function Chat() {
     onModelChange: setModelId,
     resolvedModel: resolved?.model,
     hasMessages: messages.length > 0,
-    onManageModels: () => setModelManagerOpen(true),
+    onManageModels: () => {
+      queryClient.invalidateQueries({ queryKey: ['model-catalog'] })
+      setModelManagerOpen(true)
+    },
+    onTextSizeChange: setTextSize,
     voice: voiceAvailable ? {
       available: true as const,
       isRecording,
@@ -594,7 +599,7 @@ export function Chat() {
                     role: 'assistant',
                     content: greeting,
                     timestamp: new Date(),
-                  }} />
+                  }} textSize={textSize as 'small' | 'medium' | 'large'} />
                 )}
               </div>
             </div>
@@ -615,7 +620,7 @@ export function Chat() {
                     role: 'assistant',
                     content: greeting,
                     timestamp: new Date(),
-                  }} />
+                  }} textSize={textSize as 'small' | 'medium' | 'large'} />
                 )}
                 {messages.map((msg, idx) => (
                   <div key={msg.id}>
@@ -627,7 +632,7 @@ export function Chat() {
                         <div className="w-[3px] h-[3px] rounded-full bg-teal-500/20" />
                       </div>
                     )}
-                    <MessageBubble message={msg} conversationMode={conversationMode} onApprovalResolved={resolveApproval} />
+                    <MessageBubble message={msg} conversationMode={conversationMode} onApprovalResolved={resolveApproval} textSize={textSize as 'small' | 'medium' | 'large'} />
                   </div>
                 ))}
 

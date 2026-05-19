@@ -40,10 +40,11 @@ interface Props {
   resolvedModel?: string
   hasMessages: boolean
   onManageModels: () => void
+  onTextSizeChange?: (size: string) => void
   voice?: VoiceControls
 }
 
-export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onModelChange, resolvedModel, hasMessages, onManageModels, voice }: Props) {
+export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onModelChange, resolvedModel, hasMessages, onManageModels, onTextSizeChange, voice }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -71,9 +72,10 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
       const idx = TEXT_SIZES.indexOf(prev as typeof TEXT_SIZES[number])
       const next = TEXT_SIZES[(idx + 1) % TEXT_SIZES.length]
       localStorage.setItem('nova_text_size', next)
+      onTextSizeChange?.(next)
       return next
     })
-  }, [])
+  }, [onTextSizeChange])
 
   const audioLevel = useAudioLevel(voice?.mediaStream ?? null)
   const { isListening: sttListening, transcript: liveTranscript, start: sttStart, stop: sttStop, isSupported: sttSupported } = useSpeechToText()

@@ -14,7 +14,7 @@ export async function apiFetch<T>(
     }
   }
   const { headers: _h, ...restInit } = init ?? {};
-  const res = await fetch(`${API_BASE}${path}`, { headers, ...restInit });
+  const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers, ...restInit });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -399,7 +399,7 @@ export interface ProviderModelList {
   models: DiscoveredModel[]
 }
 
-export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v1'
+export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v2'
 export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
 
 export async function discoverModels(refresh = false): Promise<ProviderModelList[]> {
