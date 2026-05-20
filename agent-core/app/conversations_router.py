@@ -64,6 +64,33 @@ async def delete_conversation(conv_id: str, _: None = Depends(_require_admin)) -
     return {"deleted": conv_id}
 
 
+@router.delete("")
+async def delete_all_conversations(_: None = Depends(_require_admin)) -> dict:
+    """Delete all chat conversations and their messages."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch("SELECT DISTINCT task_id FROM task_messages")
+            if not rows:
+                return {"deleted": 0}
+            task_ids = [r["task_id"] for r in rows]
+            # Clear self-referential parent links and task_events (both NO ACTION — no cascade)
+            await conn.execute(
+                "UPDATE tasks SET parent_task_id = NULL WHERE parent_task_id = ANY($1::uuid[])",
+                task_ids,
+            )
+            await conn.execute(
+                "DELETE FROM task_events WHERE task_id = ANY($1::uuid[])",
+                task_ids,
+            )
+            result = await conn.execute(
+                "DELETE FROM tasks WHERE id = ANY($1::uuid[])",
+                task_ids,
+            )
+    deleted = int(result.split()[-1]) if result else 0
+    return {"deleted": deleted}
+
+
 @router.post("")
 async def create_conversation(_: None = Depends(_require_admin)) -> dict:
     """Pre-create a conversation task so the client has a stable ID before the first message."""

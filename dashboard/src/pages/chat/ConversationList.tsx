@@ -3,18 +3,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Plus, MessageSquare, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
-import { listConversations, deleteConversation } from '../../api'
+import { listConversations, deleteConversation, deleteAllConversations } from '../../api'
 
 interface ConversationListProps {
   activeId: string | null
   onSelect: (id: string) => void
   onNew: () => void
   onDeleted: (id: string) => void
+  onClearedAll?: () => void
 }
 
-export function ConversationList({ activeId, onSelect, onNew, onDeleted }: ConversationListProps) {
+export function ConversationList({ activeId, onSelect, onNew, onDeleted, onClearedAll }: ConversationListProps) {
   const queryClient = useQueryClient()
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [confirmClearAll, setConfirmClearAll] = useState(false)
 
   const { data: conversations = [] } = useQuery({
     queryKey: ['conversations'],
@@ -33,18 +35,59 @@ export function ConversationList({ activeId, onSelect, onNew, onDeleted }: Conve
     }
   }
 
+  async function handleClearAll() {
+    try {
+      await deleteAllConversations()
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      onClearedAll?.()
+    } finally {
+      setConfirmClearAll(false)
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border-subtle shrink-0">
-        <span className="text-compact font-medium text-content-secondary">Chats</span>
-        <button
-          onClick={onNew}
-          className="flex items-center gap-1 px-2 py-1 rounded-md text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors"
-          title="New conversation"
-        >
-          <Plus size={13} />
-          New
-        </button>
+        {confirmClearAll ? (
+          <div className="flex items-center gap-1 w-full">
+            <span className="text-micro text-content-secondary flex-1">Clear all chats?</span>
+            <button
+              onClick={handleClearAll}
+              className="px-1.5 py-0.5 rounded text-micro text-danger hover:bg-danger/10 transition-colors"
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setConfirmClearAll(false)}
+              className="px-1.5 py-0.5 rounded text-micro text-content-tertiary hover:text-content-primary transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <>
+            <span className="text-compact font-medium text-content-secondary">Chats</span>
+            <div className="flex items-center gap-0.5">
+              {conversations.length > 0 && (
+                <button
+                  onClick={() => { setConfirmId(null); setConfirmClearAll(true) }}
+                  className="p-1 rounded text-content-tertiary hover:text-danger transition-colors"
+                  title="Clear all conversations"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+              <button
+                onClick={onNew}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors"
+                title="New conversation"
+              >
+                <Plus size={13} />
+                New
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar py-1">

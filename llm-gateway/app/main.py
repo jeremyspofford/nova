@@ -8,6 +8,10 @@ from .router import router
 from nova_contracts import HealthStatus
 
 logging.basicConfig(level=settings.log_level)
+# Suppress httpx request logging — it includes full URLs with embedded API keys
+# (e.g. Gemini passes the key as ?key= query parameter).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

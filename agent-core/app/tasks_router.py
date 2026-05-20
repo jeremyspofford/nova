@@ -108,14 +108,19 @@ def _build_system_prompt(
 
 
 def _is_serialized_tool_call(content: str) -> bool:
-    """True when a model returned a tool call as JSON text instead of tool_calls.
-    Happens with small local models (llama3.2) when given 2+ tools."""
+    """True when a small model returned a garbled or JSON-encoded tool call.
+
+    Small local models (llama3.2) often output raw JSON in the content field
+    when given many tools, instead of using the proper tool_calls mechanism.
+    Any bare JSON object in this context is almost certainly a confused tool
+    response — fall back to streaming without tools.
+    """
     stripped = content.strip()
-    if not stripped.startswith("{"):
+    if not stripped or not stripped.startswith("{"):
         return False
     try:
         obj = json.loads(stripped)
-        return isinstance(obj, dict) and "name" in obj and "arguments" in obj
+        return isinstance(obj, dict)
     except (json.JSONDecodeError, ValueError):
         return False
 
@@ -148,13 +153,16 @@ async def _llm_complete_chat(messages: list[dict], tools: list[dict], model: str
     if model:
         body["model"] = model
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
             r.raise_for_status()
             resp = r.json()
+    except httpx.ReadTimeout:
+        logger.warning("llm /complete timed out (model=%s)", model)
+        return {"_error": "The model took too long to respond. Local models can be slow with many tools — try a cloud model or send a simpler message."}
     except Exception as exc:
-        logger.warning("llm /complete failed: %s", exc)
-        return None
+        logger.warning("llm /complete failed: %r", exc)
+        return {"_error": "LLM gateway unreachable"}
 
     # Restore original tool names in any tool_calls the LLM returned
     if resp.get("tool_calls") and name_map:
@@ -370,8 +378,9 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         try:
             for _ in range(MAX_CHAT_ITERATIONS):
                 resp = await _llm_complete_chat(messages, tools, model=body.model)
-                if resp is None:
-                    yield json.dumps({"error": "LLM gateway unreachable"}) + "\n"
+                if resp is None or "_error" in resp:
+                    err_msg = (resp or {}).get("_error", "LLM gateway unreachable")
+                    yield json.dumps({"text": err_msg}) + "\n"
                     return
 
                 tool_calls = resp.get("tool_calls") or []

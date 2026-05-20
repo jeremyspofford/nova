@@ -173,7 +173,7 @@ async def _dispatch_text_turn(
                     # since their lifecycle is managed by the approval flow.
                     await sessions.broadcast_to_task(task_id, {**chunk, "task_id": task_id})
                 else:
-                    text_content = chunk.get("text", "")
+                    text_content = chunk.get("text", "") or chunk.get("error", "")
                     if text_content:
                         event = {"type": "response_chunk", "text": text_content, "task_id": task_id}
                         await buffer_event(redis, task_id, event)
