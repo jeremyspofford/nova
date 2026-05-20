@@ -225,16 +225,8 @@ code.
 
 ---
 
-## Known Issues (as of 2026-05-19)
+## Known Issues (as of 2026-05-20)
 
-- **Brain page is dead v1 code:** not routed in v2 router. `Brain.tsx`, `ForceGraph3D.tsx`,
-  and `dashboard/src/components/brain/` should be deleted when convenient. The v2 Memory
-  view (`/memory`) is the replacement — a simple list/filter over the `memories` table.
-- **Voice TTS not wired:** `Chat.tsx` has STT (mic → text) but no TTS (Nova speaks back).
-  `useVoiceChat` hook with TTS exists but is disconnected. `VoiceModeOverlay` exists but
-  is not rendered in `Chat.tsx`.
-- **voice-gateway not in default stack:** Behind `voice` profile. STT mic button in
-  Chat.tsx will fail unless `COMPOSE_PROFILES=voice` is set.
 - **Dead letter queue:** 285 stale entries from pre-v2. Not growing. Flush with:
   `docker compose exec redis redis-cli -n 2 DEL nova:queue:dead_letter`
 
