@@ -92,7 +92,7 @@ export function Chat() {
 
   // ── Voice chat integration ──
   const silenceTimeoutMs = Number(localStorage.getItem('nova_voice_silence_timeout')) || 2000
-  const bargeInThreshold = Number(localStorage.getItem('nova_voice_bargein_threshold')) || 0.15
+  const bargeInThreshold = Number(localStorage.getItem('nova_voice_bargein_threshold')) || 0.06
   const pendingTranscriptRef = useRef<string | null>(null)
   const lastTranscriptRef = useRef('')
   const isStreamingRef = useRef(false)

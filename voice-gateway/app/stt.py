@@ -27,7 +27,7 @@ async def transcribe(audio_bytes: bytes) -> str:
             OPENAI_TRANSCRIBE_URL,
             headers={"Authorization": f"Bearer {api_key}"},
             files={"file": ("audio.webm", audio_bytes, "audio/webm")},
-            data={"model": "whisper-1"},
+            data={"model": "whisper-1", "language": "en"},
         )
         r.raise_for_status()
         return r.json()["text"]

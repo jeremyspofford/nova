@@ -8,9 +8,9 @@ interface UseVoiceChatOptions {
   minDurationMs?: number
   /** Silence duration before auto-stop in conversation mode (ms) */
   silenceTimeoutMs?: number
-  /** Audio level threshold to trigger barge-in (0–1) */
+  /** RMS amplitude threshold to trigger barge-in (0–1); speech ≈ 0.1–0.4 */
   bargeInThreshold?: number
-  /** Audio level below which counts as silence (0–1) */
+  /** RMS amplitude below which counts as silence (0–1); quiet room ≈ 0.005–0.02 */
   silenceThreshold?: number
   /** How long voice must be sustained to trigger barge-in (ms) */
   bargeInDurationMs?: number
@@ -31,8 +31,8 @@ export function useVoiceChat({
   maxDurationMs = 60_000,
   minDurationMs = 500,
   silenceTimeoutMs = 2000,
-  bargeInThreshold = 0.15,
-  silenceThreshold = 0.05,
+  bargeInThreshold = 0.06,
+  silenceThreshold = 0.02,
   bargeInDurationMs = 300,
 }: UseVoiceChatOptions = {}) {
   const [isRecording, setIsRecording] = useState(false)
@@ -339,16 +339,22 @@ export function useVoiceChat({
         warmAnalyserRef.current = analyser
 
         // Start audio level polling (50ms = 20fps, works in background tabs)
-        const buf = new Uint8Array(analyser.frequencyBinCount)
+        // Time-domain RMS: measures actual waveform amplitude, not frequency energy.
+        // Frequency-domain data maps even ambient room noise to high values; time-domain
+        // gives silence ≈ 0.005–0.02 and speech ≈ 0.1–0.5, making the threshold meaningful.
+        const buf = new Uint8Array(analyser.fftSize)
         levelPollRef.current = setInterval(() => {
-          analyser.getByteFrequencyData(buf)
+          analyser.getByteTimeDomainData(buf)
           let sum = 0
-          for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
-          const rms = Math.sqrt(sum / buf.length) / 255
-          currentLevelRef.current = Math.min(1, rms * 2.5)
+          for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128
+            sum += v * v
+          }
+          const rms = Math.sqrt(sum / buf.length)
+          currentLevelRef.current = Math.min(1, rms * 6) // scaled 0–1 for UI bars
 
           const now = Date.now()
-          const level = currentLevelRef.current
+          const level = rms // raw amplitude — thresholds are calibrated to this scale
           const speaking = isSpeakingRef.current
           const recording = isRecordingRef.current
           const convMode = conversationModeRef.current
