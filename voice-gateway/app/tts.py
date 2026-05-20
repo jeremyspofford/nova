@@ -17,8 +17,10 @@ OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
 VALID_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 
 
-async def synthesize_stream(text: str, voice: str = "nova") -> AsyncIterator[bytes]:
-    """Yield audio chunks from OpenAI TTS (response_format=opus)."""
+async def synthesize_stream(
+    text: str, voice: str = "nova", response_format: str = "opus"
+) -> AsyncIterator[bytes]:
+    """Yield audio chunks from OpenAI TTS."""
     api_key = await resolve("openai_api_key")
     if not api_key:
         raise RuntimeError("openai_api_key not configured — TTS unavailable")
@@ -32,7 +34,7 @@ async def synthesize_stream(text: str, voice: str = "nova") -> AsyncIterator[byt
                 "model": "tts-1",
                 "input": text,
                 "voice": voice,
-                "response_format": "opus",
+                "response_format": response_format,
             },
         ) as response:
             response.raise_for_status()

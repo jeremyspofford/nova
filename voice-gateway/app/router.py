@@ -16,6 +16,7 @@ router = APIRouter(tags=["voice"])
 class TTSRequest(BaseModel):
     text: str
     voice: str = "nova"
+    raw: bool = False  # True = plain mp3, no seq-number prefix (dashboard use)
 
 
 @router.get("/providers")
@@ -72,12 +73,24 @@ async def tts_stream(body: TTSRequest):
     if not await resolve("openai_api_key"):
         raise HTTPException(status_code=503, detail="openai_api_key not configured — TTS unavailable")
 
+    if body.raw:
+        # Dashboard path: clean MP3 stream, no sequence prefix, browser-playable
+        async def generate_raw():
+            try:
+                async for chunk in tts.synthesize_stream(body.text, body.voice, "mp3"):
+                    yield chunk
+            except Exception as exc:
+                logger.warning("TTS failed: %s", exc)
+
+        return StreamingResponse(generate_raw(), media_type="audio/mpeg")
+
+    # WebSocket bridge path: Opus with 4-byte big-endian sequence prefix per chunk
     seq = 0
 
     async def generate():
         nonlocal seq
         try:
-            async for chunk in tts.synthesize_stream(body.text, body.voice):
+            async for chunk in tts.synthesize_stream(body.text, body.voice, "opus"):
                 prefix = struct.pack(">I", seq)
                 seq += 1
                 yield prefix + chunk

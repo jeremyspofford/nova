@@ -528,7 +528,7 @@ export function useVoiceChat({
       const resp = await fetch('/voice-api/tts/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ text, voice: 'nova', model: 'tts-1' }),
+        body: JSON.stringify({ text, voice: 'nova', raw: true }),
       })
       if (!resp.ok) throw new Error(`TTS failed: ${resp.status}`)
 
