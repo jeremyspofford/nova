@@ -101,11 +101,15 @@ export function Chat() {
   isStreamingRef.current = isStreaming
   const feedTextRef = useRef<(delta: string) => void>(() => {})
   const flushBufferRef = useRef<() => void>(() => {})
+  const handleSubmitRef = useRef<(text: string) => void>(() => {})
+  const conversationModeRef = useRef(false)
 
   const handleVoiceTranscript = useCallback((text: string) => {
     lastTranscriptRef.current = text   // keep for overlay caption
     if (isStreamingRef.current) {
       pendingTranscriptRef.current = text
+    } else if (conversationModeRef.current) {
+      handleSubmitRef.current(text)
     } else {
       setDraftInput(text)
     }
@@ -137,6 +141,7 @@ export function Chat() {
 
   feedTextRef.current = feedText
   flushBufferRef.current = flushBuffer
+  conversationModeRef.current = conversationMode
 
   const orbState: OrbState =
     conversationState === 'speaking'   ? 'speak' :
@@ -473,6 +478,7 @@ export function Chat() {
       }
     }
   }, [sessionId, conversationId, modelId, isStreaming, pendingFiles, outputStyle, customInstructions, webSearchEnabled, deepResearchEnabled, queryClient])
+  handleSubmitRef.current = handleSubmit
 
   // Process queued messages sequentially when streaming completes
   useEffect(() => {
@@ -488,7 +494,11 @@ export function Chat() {
     if (!isStreaming && pendingTranscriptRef.current) {
       const text = pendingTranscriptRef.current
       pendingTranscriptRef.current = null
-      setDraftInput(text)
+      if (conversationModeRef.current) {
+        handleSubmitRef.current(text)
+      } else {
+        setDraftInput(text)
+      }
     }
   }, [isStreaming, setDraftInput])
 
