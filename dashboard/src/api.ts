@@ -406,18 +406,10 @@ export interface ProviderModelList {
 export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v2'
 export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
 
-export async function discoverModels(_refresh = false): Promise<ProviderModelList[]> {
-  const resp = await apiFetch<LLMProvidersResponse>('/api/v1/llm/providers')
-  const data: ProviderModelList[] = resp.providers
-    .filter(p => p.available)
-    .map(p => ({
-      slug: p.name,
-      name: p.name,
-      type: p.local ? 'local' as const : 'free' as const,
-      available: p.available,
-      auth_methods: [],
-      models: [{ id: p.model, registered: true }],
-    }))
+export async function discoverModels(refresh = false): Promise<ProviderModelList[]> {
+  const data = await apiFetch<ProviderModelList[]>(
+    `/api/v1/llm/models${refresh ? '?refresh=true' : ''}`
+  )
   try { localStorage.setItem(MODEL_CATALOG_CACHE_KEY, JSON.stringify({ data, at: Date.now() })) } catch {}
   return data
 }
@@ -438,9 +430,14 @@ export interface ResolvedModel {
 }
 
 export async function resolveModel(): Promise<ResolvedModel> {
-  const resp = await apiFetch<LLMProvidersResponse>('/api/v1/llm/providers')
-  const first = resp.providers.find(p => p.available)
-  return { model: first?.model ?? 'gpt-4o', source: 'auto' }
+  try {
+    return await apiFetch<ResolvedModel>('/api/v1/llm/resolve')
+  } catch {
+    // Fallback: pick first available model from providers
+    const resp = await apiFetch<LLMProvidersResponse>('/api/v1/llm/providers')
+    const first = resp.providers.find(p => p.available)
+    return { model: first?.model ?? 'gpt-4o', source: 'auto' }
+  }
 }
 
 // Identity

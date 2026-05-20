@@ -246,6 +246,37 @@ async def llm_providers(_: None = Depends(_require_admin)):
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
+@app.get("/api/v1/llm/models")
+async def llm_models(refresh: bool = False, _: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /models/discover — returns ALL available models per provider."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{settings.llm_gateway_url}/models/discover",
+                params={"refresh": "true" if refresh else "false"},
+            )
+        return r.json()
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
+@app.get("/api/v1/llm/resolve")
+async def llm_resolve(_: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /models/resolve — returns the best model for current strategy."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.llm_gateway_url}/models/resolve")
+        if r.status_code == 503:
+            raise HTTPException(status_code=503, detail="No models available")
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
 @app.patch("/api/v1/llm/config")
 async def llm_config_patch(request: Request, _: None = Depends(_require_admin)):
     """Proxy to llm-gateway PATCH /config."""

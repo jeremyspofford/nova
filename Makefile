@@ -1,4 +1,4 @@
-.PHONY: help install start up dev build down logs ps watch migrate backup restore test test-quick prune prune-all uninstall
+.PHONY: help install start up dev build down logs ps watch migrate backup restore test test-quick test-v2 prune prune-all uninstall
 
 DASHBOARD    = dashboard
 
@@ -83,6 +83,18 @@ test: ## Run integration tests against running services
 test-quick: ## Smoke test (health endpoints only)
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
 	  pytest -v --tb=short -k "health"
+
+test-v2: ## Run only v2-service integration tests (fast, no v1 noise) — run before and after any change
+	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with asyncpg \
+	  pytest -v --tb=short \
+	  test_agent_core.py \
+	  test_llm_gateway.py \
+	  test_llm_models_proxy.py \
+	  test_model_discovery.py \
+	  test_secrets.py \
+	  test_voice_gateway.py \
+	  test_health.py \
+	  test_memory.py
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)

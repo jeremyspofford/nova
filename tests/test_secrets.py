@@ -3,8 +3,25 @@ import os
 import pytest
 import httpx
 
+import pathlib
+
 BASE = os.environ.get("AGENT_CORE_URL", "http://localhost:8000")
-HEADERS = {"X-Admin-Secret": "nova-dev-secret"}
+
+
+def _get_secret() -> str:
+    if val := os.environ.get("NOVA_ADMIN_SECRET"):
+        return val
+    env_file = pathlib.Path(__file__).parent.parent / ".env"
+    try:
+        for line in env_file.read_text().splitlines():
+            if line.startswith("NOVA_ADMIN_SECRET="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return "nova-dev-secret"
+
+
+HEADERS = {"X-Admin-Secret": _get_secret()}
 
 TEST_NAMES = ["nova_test_secret_a", "nova_test_secret_b"]
 

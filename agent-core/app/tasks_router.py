@@ -208,14 +208,16 @@ async def list_tasks(limit: int = 20, _: None = Depends(_require_admin)) -> list
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, goal, status, created_at FROM tasks ORDER BY created_at DESC LIMIT $1",
+            "SELECT id, prompt, goal, status, source, created_at FROM tasks ORDER BY created_at DESC LIMIT $1",
             limit,
         )
     return [
         {
             "id": str(r["id"]),
+            "prompt": r["prompt"] or r["goal"],
             "goal": r["goal"],
             "status": r["status"],
+            "source": r["source"] or "",
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
         for r in rows

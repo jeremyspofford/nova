@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     )
     nova_inference_backend: str = "ollama-host"
     local_inference_url: str = _OLLAMA_HOST_URL
-    local_completion_model: str = "llama3.2"
+    local_completion_model: str = Field(
+        default="llama3.2",
+        validation_alias=AliasChoices("LOCAL_COMPLETION_MODEL", "DEFAULT_OLLAMA_MODEL", "local_completion_model"),
+    )
     local_embed_model: str = "nomic-embed-text"
     routing_strategy: str = Field(
         default="local-first",

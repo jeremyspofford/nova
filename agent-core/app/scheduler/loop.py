@@ -1,6 +1,7 @@
 """Scheduler loop: polls the schedules table, dispatches due tasks."""
 from __future__ import annotations
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Awaitable
@@ -50,6 +51,8 @@ async def _poll_once(pool, dispatch_fn: Callable) -> None:
                 schedule_id = str(row["id"])
                 prompt = row["prompt"]
                 trigger = row["trigger"]
+                if isinstance(trigger, str):
+                    trigger = json.loads(trigger)
                 next_fire = row["next_fire"]
 
                 # Concurrency guard: skip if a running task for this schedule exists.

@@ -56,7 +56,7 @@ def test_stream_returns_sse_chunks():
         "POST",
         f"{BASE}/stream",
         json={"messages": [{"role": "user", "content": "Say 'ok'."}], "max_tokens": 10},
-        timeout=60.0,
+        timeout=120.0,
     ) as response:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")

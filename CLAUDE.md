@@ -232,22 +232,46 @@ code.
 
 ---
 
-## Verification Gate — Non-Negotiable
+## Regression Gate — Non-Negotiable
 
-Before reporting any frontend, voice, or API change as done:
+### Before touching any code
+
+Run `make test-v2` and record which tests pass. This is your baseline. If tests are
+already failing before you start, note them — you are not responsible for pre-existing
+failures, but you must not add new ones.
+
+### After any backend change (agent-core, llm-gateway, any service)
+
+Run `make test-v2` again. Every test that passed before must still pass. If a new
+failure appears, fix it before continuing. Do not ship a change that breaks a passing test.
+
+### After any frontend change
 
 1. **Rebuild and redeploy** the affected service(s).
 2. **Open the app with Playwright** (`browser_navigate` to `http://localhost:3000`).
 3. **Exercise the specific behavior** that was changed — not just "the build passes."
 4. **Confirm the observable outcome**: element visible, network request returns expected
-   response, audio plays, state changes, etc.
+   response, state changes correctly, etc.
 5. Only then report done.
 
-"The code looks correct" is not a test result. A passing TypeScript build is not a test
-result. Playwright evidence is a test result.
+### Tests to run: `make test-v2`
 
-This rule exists because repeated "from now on I'll test" promises without enforcement
-are lies. The rule is structural so it cannot be forgotten.
+This runs only the v2-service test files. `make test` runs the full suite including
+many v1 tests that will always fail — do not use it to judge regressions.
+
+```
+test_agent_core.py      — task execution, approvals, auth, LLM proxy
+test_llm_gateway.py     — completion, streaming, embedding, providers
+test_llm_models_proxy.py — all Ollama models visible (not just one default)
+test_model_discovery.py — /models/discover full catalog
+test_secrets.py         — secrets CRUD
+test_voice_gateway.py   — STT/TTS providers
+test_health.py          — service health endpoints
+test_memory.py          — memory store and search
+```
+
+"The code looks correct" is not a test result. A green `make test-v2` + Playwright
+evidence is a test result. Nothing else counts.
 
 ---
 

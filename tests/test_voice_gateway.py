@@ -11,10 +11,11 @@ BASE = "http://localhost:8003"
 def _has_openai_key() -> bool:
     try:
         r = httpx.get(f"{BASE}/providers", timeout=5.0)
-        data = r.json()
+        providers = r.json()
+        # Flat list: [{name, type, status}, ...]
         return any(
-            p.get("available") and p.get("name") == "openai-whisper"
-            for p in data.get("stt", [])
+            p.get("name") == "openai-whisper" and p.get("status") == "available"
+            for p in providers
         )
     except Exception:
         return False
@@ -24,23 +25,22 @@ def test_providers_endpoint():
     r = httpx.get(f"{BASE}/providers")
     assert r.status_code == 200
     data = r.json()
-    assert "stt" in data
-    assert "tts" in data
-    assert isinstance(data["stt"], list)
-    assert isinstance(data["tts"], list)
+    # v2: flat list of provider objects
+    assert isinstance(data, list)
+    types = {p["type"] for p in data}
+    assert "stt" in types
+    assert "tts" in types
 
 
-def test_stt_stream_empty_audio_returns_sse_error():
-    """Empty audio should return a valid SSE response with an error event, not a 500."""
+def test_stt_stream_empty_audio_returns_400():
+    """Empty audio body is a client error — gateway returns 400, not 500."""
     r = httpx.post(
         f"{BASE}/stt/stream",
         content=b"",
         headers={"Content-Type": "audio/webm"},
         timeout=10.0,
     )
-    assert r.status_code == 200
-    assert "text/event-stream" in r.headers.get("content-type", "")
-    assert "data:" in r.text
+    assert r.status_code == 400
 
 
 def test_tts_stream_requires_text():
