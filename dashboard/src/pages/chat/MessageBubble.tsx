@@ -41,16 +41,18 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   conversationMode = false,
   onApprovalResolved,
+  textSize: textSizeProp,
 }: {
   message: Message
   conversationMode?: boolean
   onApprovalResolved?: (toolCallId: string) => void
+  textSize?: TextSize
 }) {
   const { avatarUrl, isDefaultAvatar } = useNovaIdentity()
   const isMobile = useIsMobile()
   const isUser = message.role === 'user'
   const isThinking = !isUser && !!message.isStreaming && !message.content
-  const textSize = (localStorage.getItem('nova_text_size') as TextSize) || 'medium'
+  const textSize = textSizeProp ?? ((localStorage.getItem('nova_text_size') as TextSize) || 'medium')
   const isVoiceActive = conversationMode && message.isStreaming && !isUser
   const cleanedContent = useMemo(
     () => !isUser && message.content ? cleanToolArtifacts(message.content) : message.content,

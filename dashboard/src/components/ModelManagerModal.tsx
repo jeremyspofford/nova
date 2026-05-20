@@ -29,11 +29,16 @@ type Props = {
 }
 
 export function ModelManagerModal({ open, onClose, onSave }: Props) {
-  const { data: providers } = useQuery({
+  const { data: providers, refetch } = useQuery({
     queryKey: ['model-catalog'],
     queryFn: () => discoverModels(),
     staleTime: 60_000,
   })
+
+  // Always fetch fresh data when the modal opens
+  useEffect(() => {
+    if (open) refetch()
+  }, [open, refetch])
 
   const availableProviders = useMemo(
     () => (providers ?? []).filter(p => p.available && p.models.length > 0),

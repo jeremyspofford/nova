@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 
 from . import secrets_client, selector
+from .config import settings
+from .discovery import _cloud_providers, _local_provider_entry, discover_local_models
 from .selector import VALID_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,25 @@ async def _api_key_for(model: str) -> str | None:
     return None
 
 
+async def _resolve_explicit_model(model_id: str) -> tuple[str, dict]:
+    """Return (litellm_model, extra_kwargs) for a user-supplied model ID.
+
+    If the ID matches a discovered local model, wraps it in the correct
+    LiteLLM format (ollama_chat/ or openai/ with api_base). Otherwise
+    returns the ID unchanged for cloud routing.
+    """
+    backend = settings.nova_inference_backend
+    if backend != "none":
+        local_models = await discover_local_models()
+        if any(m["id"] == model_id for m in local_models):
+            url = settings.local_inference_url
+            if backend in ("ollama-host", "ollama"):
+                return f"ollama_chat/{model_id}", {"api_base": url}
+            else:
+                return f"openai/{model_id}", {"api_base": url, "api_key": "none"}
+    return model_id, {}
+
+
 async def _try_complete(
     messages: list[dict],
     max_tokens: int,
@@ -64,15 +85,16 @@ async def _try_complete(
 ) -> tuple[Any, str]:
     # When an explicit model is requested, use only that model — no fallback chain.
     if model != "auto":
-        kwargs: dict[str, Any] = {}
+        litellm_model, model_kwargs = await _resolve_explicit_model(model)
+        kwargs: dict[str, Any] = {**model_kwargs}
         if extra_kwargs:
             kwargs.update(extra_kwargs)
-        api_key = await _api_key_for(model)
+        api_key = await _api_key_for(litellm_model)
         if api_key:
             kwargs["api_key"] = api_key
         try:
             resp = await litellm.acompletion(
-                model=model,
+                model=litellm_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -117,8 +139,6 @@ async def _try_complete(
 @router.get("/providers")
 async def list_providers():
     cloud = await _available_cloud()
-    from .config import settings
-
     providers = [
         {
             "name": settings.nova_inference_backend,
@@ -167,6 +187,43 @@ async def list_providers():
         "local_backend": settings.nova_inference_backend,
         "local_inference_url": settings.local_inference_url,
     }
+
+
+@router.get("/models/discover")
+async def discover_models(refresh: bool = False):
+    """Return all providers with their available models.
+
+    Local models are discovered live from the active backend (cached 5 min).
+    Cloud providers are included when their API key is configured.
+    Pass ?refresh=true to bypass the discovery cache.
+    """
+    local_models = await discover_local_models(force=refresh)
+    cloud = await _available_cloud()
+    providers = _cloud_providers(cloud)
+    if settings.nova_inference_backend != "none":
+        providers.insert(0, _local_provider_entry(local_models))
+    return providers
+
+
+def _litellm_to_display_id(litellm_model: str) -> str:
+    for prefix in ("ollama_chat/", "ollama/", "openai/"):
+        if litellm_model.startswith(prefix):
+            return litellm_model[len(prefix):]
+    return litellm_model
+
+
+@router.get("/models/resolve")
+async def resolve_best_model():
+    """Return the best model ID to use given the current routing strategy."""
+    cloud = await _available_cloud()
+    candidates = selector.completion_candidates(cloud)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No models available")
+
+    litellm_model, _ = candidates[0]
+    display_id = _litellm_to_display_id(litellm_model)
+    source = "local" if litellm_model != display_id else "cloud"
+    return {"model": display_id, "source": source}
 
 
 class LLMConfigUpdate(BaseModel):
