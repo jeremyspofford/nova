@@ -60,7 +60,7 @@ export function Memory() {
           onChange={(e) => setSourceFilter(e.target.value)}
           className="mb-4 text-sm bg-stone-800 border border-stone-700 rounded-lg px-3 py-1.5"
         >
-          {["all", "chat", "task_output", "knowledge_crawl", "intel_feed"].map((k) => (
+          {["all", "chat", "task_output"].map((k) => (
             <option key={k} value={k}>{k}</option>
           ))}
         </select>
