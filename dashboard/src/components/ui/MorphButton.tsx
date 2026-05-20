@@ -75,7 +75,7 @@ export function MorphButton(props: MorphButtonProps) {
 
   const tooltipContent =
     insecureContext && !props.hasText && !voiceAvailable ? 'Voice requires HTTPS' :
-    state === 'mic' && voiceAvailable ? 'Tap to talk, hold for conversation' :
+    state === 'mic' && voiceAvailable ? 'Start voice conversation' :
     state === 'send' ? 'Send' :
     state === 'stop-recording' ? 'Stop recording' :
     state === 'stop-conversation' ? 'End conversation' :

@@ -6,8 +6,6 @@ import { useChatStore, type Message } from '../../stores/chat-store'
 import { cleanToolArtifacts } from '../../utils/cleanToolArtifacts'
 import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import { useVoiceChat } from '../../hooks/useVoiceChat'
-import { VoiceModeOverlay } from '../../components/VoiceModeOverlay'
-import type { OrbState } from '../../components/VoiceOrb'
 import { ModelManagerModal, getHiddenModels } from '../../components/ModelManagerModal'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
@@ -129,7 +127,7 @@ export function Chat() {
   const {
     isRecording, isTranscribing, isSpeaking, recordingDuration,
     toggleRecording, voiceAvailable, mediaStream,
-    feedText, flushBuffer, stopAllPlayback,
+    feedText, flushBuffer,
     muted, setMuted,
     conversationMode, setConversationMode, conversationState, silenceCountdown,
   } = useVoiceChat({
@@ -142,20 +140,6 @@ export function Chat() {
   feedTextRef.current = feedText
   flushBufferRef.current = flushBuffer
   conversationModeRef.current = conversationMode
-
-  const orbState: OrbState =
-    conversationState === 'speaking'   ? 'speak' :
-    conversationState === 'processing' ? 'think' :
-    'listen'
-
-  // overlayCaption reads lastTranscriptRef (not reactive) — safe because
-  // conversationState re-renders us whenever this value should change.
-  const overlayCaption =
-    muted                                    ? 'Muted' :
-    conversationState === 'listening'        ? 'Listening…' :
-    conversationState === 'processing' ||
-    conversationState === 'speaking'         ? lastTranscriptRef.current :
-    ''
 
   useEffect(() => {
     if (conversationId !== lastConversationId.current) {
@@ -172,34 +156,11 @@ export function Chat() {
       needsInstantScroll.current = false
       return
     }
-    // Only auto-scroll if user is near the bottom (within 150px).
-    // This avoids hijacking scroll when the user is reading earlier messages.
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     if (distanceFromBottom < 150) {
       el.scrollTop = el.scrollHeight
     }
   }, [messages])
-
-  // Auto-activate voice mode when voiceAvailable resolves (async) if user set it as default.
-  // voiceDefaultApplied ref ensures this fires at most once per mount.
-  const voiceDefaultApplied = useRef(false)
-  const [voiceExiting, setVoiceExiting] = useState(false)
-
-  function handleEndVoice() {
-    setVoiceExiting(true)
-  }
-  function handleExitComplete() {
-    setConversationMode(false)
-    setVoiceExiting(false)
-  }
-
-  useEffect(() => {
-    if (voiceDefaultApplied.current) return
-    if (voiceAvailable && localStorage.getItem('nova_voice_mode_default') === 'true') {
-      voiceDefaultApplied.current = true
-      setConversationMode(true)
-    }
-  }, [voiceAvailable, setConversationMode])
 
   // Auto-load the active conversation on mount for authenticated users.
   // If a conversationId is already known, load messages for it.
@@ -671,19 +632,6 @@ export function Chat() {
               </div>
             </div>
           </>
-        )}
-
-        {(conversationMode || voiceExiting) && (
-          <VoiceModeOverlay
-            orbState={orbState}
-            caption={overlayCaption}
-            muted={muted}
-            voiceAvailable={!!voiceAvailable}
-            onToggleMute={() => setMuted(!muted)}
-            onEnd={handleEndVoice}
-            exiting={voiceExiting}
-            onExitComplete={handleExitComplete}
-          />
         )}
 
         <ModelManagerModal
