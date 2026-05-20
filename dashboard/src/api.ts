@@ -208,6 +208,10 @@ export async function deleteConversation(id: string): Promise<void> {
   await apiFetch(`/api/v1/conversations/${id}`, { method: 'DELETE' })
 }
 
+export async function deleteAllConversations(): Promise<void> {
+  await apiFetch('/api/v1/conversations', { method: 'DELETE' })
+}
+
 export async function getOrCreateActiveConversation(): Promise<string> {
   const conversations = await apiFetch<{ id: string }[]>('/api/v1/conversations')
   if (conversations.length > 0) return conversations[0].id
@@ -402,8 +406,18 @@ export interface ProviderModelList {
 export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v2'
 export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
 
-export async function discoverModels(refresh = false): Promise<ProviderModelList[]> {
-  const data = await apiFetch<ProviderModelList[]>(`/v1/models/discover${refresh ? '?refresh=true' : ''}`)
+export async function discoverModels(_refresh = false): Promise<ProviderModelList[]> {
+  const resp = await apiFetch<LLMProvidersResponse>('/api/v1/llm/providers')
+  const data: ProviderModelList[] = resp.providers
+    .filter(p => p.available)
+    .map(p => ({
+      slug: p.name,
+      name: p.name,
+      type: p.local ? 'local' as const : 'free' as const,
+      available: p.available,
+      auth_methods: [],
+      models: [{ id: p.model, registered: true }],
+    }))
   try { localStorage.setItem(MODEL_CATALOG_CACHE_KEY, JSON.stringify({ data, at: Date.now() })) } catch {}
   return data
 }
@@ -423,7 +437,11 @@ export interface ResolvedModel {
   source: 'auto' | 'explicit'
 }
 
-export const resolveModel = () => apiFetch<ResolvedModel>('/v1/models/resolve')
+export async function resolveModel(): Promise<ResolvedModel> {
+  const resp = await apiFetch<LLMProvidersResponse>('/api/v1/llm/providers')
+  const first = resp.providers.find(p => p.available)
+  return { model: first?.model ?? 'gpt-4o', source: 'auto' }
+}
 
 // Identity
 export interface NovaIdentity {

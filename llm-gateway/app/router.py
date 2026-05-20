@@ -19,6 +19,42 @@ router = APIRouter(tags=["llm"])
 
 litellm.suppress_debug_info = True
 
+# JSON Schema keywords unsupported by Gemini's function declaration format.
+_GEMINI_UNSUPPORTED_SCHEMA_KEYS = frozenset({
+    "propertyNames", "additionalProperties", "unevaluatedProperties",
+    "patternProperties", "$schema", "$id", "$ref", "if", "then", "else",
+    "allOf", "anyOf", "oneOf", "not",
+})
+
+
+def _sanitize_schema(schema: Any) -> Any:
+    """Recursively strip JSON Schema keywords Gemini doesn't accept."""
+    if isinstance(schema, dict):
+        return {
+            k: _sanitize_schema(v)
+            for k, v in schema.items()
+            if k not in _GEMINI_UNSUPPORTED_SCHEMA_KEYS
+        }
+    if isinstance(schema, list):
+        return [_sanitize_schema(item) for item in schema]
+    return schema
+
+
+def _sanitize_tools_for_gemini(tools: list) -> list:
+    sanitized = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            sanitized.append(tool)
+            continue
+        t = dict(tool)
+        if "function" in t and isinstance(t["function"], dict):
+            fn = dict(t["function"])
+            if "parameters" in fn:
+                fn["parameters"] = _sanitize_schema(fn["parameters"])
+            t["function"] = fn
+        sanitized.append(t)
+    return sanitized
+
 
 _cloud_cache: set[str] | None = None
 _cloud_cache_time: float = 0.0
@@ -249,7 +285,7 @@ async def update_config(body: LLMConfigUpdate):
 async def complete(body: LLMRequest):
     extra: dict[str, Any] = {}
     if body.tools:
-        extra["tools"] = body.tools
+        extra["tools"] = _sanitize_tools_for_gemini(body.tools)
         extra["tool_choice"] = "auto"
 
     resp, model_used = await _try_complete(

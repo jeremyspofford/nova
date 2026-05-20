@@ -568,6 +568,7 @@ export function Chat() {
             onDeleted={(id) => {
               if (id === conversationId) newConversation()
             }}
+            onClearedAll={newConversation}
           />
         )}
       </div>
