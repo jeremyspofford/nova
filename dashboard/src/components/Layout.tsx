@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { MessageSquare, ListTodo, Brain, CalendarClock, Settings, ShieldAlert } from "lucide-react";
+import { MessageSquare, ListTodo, Brain, CalendarClock, Settings } from "lucide-react";
 import { ServiceStatusDot } from "./ServiceStatusDot";
 
 function useBootstrap() {
@@ -46,14 +46,6 @@ export function Layout() {
             {label}
           </Link>
         ))}
-        {/* Recovery is a separate FastAPI service — plain anchor, not a router Link */}
-        <a
-          href="/recovery"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors text-stone-400 hover:text-stone-200 hover:bg-stone-800/60 mt-auto"
-        >
-          <ShieldAlert size={16} />
-          Recovery
-        </a>
       </nav>
 
       {/* Main content */}

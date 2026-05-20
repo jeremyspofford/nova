@@ -6,7 +6,7 @@ import { SystemSection } from "./settings/SystemSection";
 import { VoiceSection } from "./settings/VoiceSection";
 import { SchedulerSection } from "./settings/SchedulerSection";
 
-const TABS = ["AI & Models", "Secrets", "Extensions", "Voice", "Scheduler", "System", "Recovery"] as const;
+const TABS = ["AI & Models", "Secrets", "Extensions", "Voice", "Scheduler", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 export function Settings() {
@@ -58,12 +58,6 @@ function SettingsTab({ tab }: { tab: Tab }) {
       return <SchedulerSection />;
     case "System":
       return <SystemSection />;
-    case "Recovery":
-      return (
-        <a href="/recovery" className="text-teal-400 underline text-sm">
-          Open Recovery service UI →
-        </a>
-      );
     default:
       return <div className="text-stone-500 text-sm">{tab} — coming soon</div>;
   }

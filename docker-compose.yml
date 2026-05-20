@@ -110,7 +110,6 @@ services:
     env_file: .env
     ports:
       - "8003:8003"
-    profiles: ["voice"]
 
   chat-surface:
     build:
