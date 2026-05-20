@@ -240,6 +240,25 @@ code.
 
 ---
 
+## Verification Gate — Non-Negotiable
+
+Before reporting any frontend, voice, or API change as done:
+
+1. **Rebuild and redeploy** the affected service(s).
+2. **Open the app with Playwright** (`browser_navigate` to `http://localhost:3000`).
+3. **Exercise the specific behavior** that was changed — not just "the build passes."
+4. **Confirm the observable outcome**: element visible, network request returns expected
+   response, audio plays, state changes, etc.
+5. Only then report done.
+
+"The code looks correct" is not a test result. A passing TypeScript build is not a test
+result. Playwright evidence is a test result.
+
+This rule exists because repeated "from now on I'll test" promises without enforcement
+are lies. The rule is structural so it cannot be forgotten.
+
+---
+
 ## Design System
 
 Always read `DESIGN.md` before making any visual or UI decisions.
