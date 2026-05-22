@@ -65,7 +65,7 @@ Files to modify: `Makefile` (add target), `tests/pytest.ini` (register marker). 
 | AC-B7 | 11 | Code review (task_id created per trial) |
 | AC-Q1 | 7, 11 | Integration |
 | AC-Q2 | 3, 6 | Unit + integration |
-| AC-Q3 | 10 | Code review of probe prompts |
+| AC-Q3 | 8, 10 | Code review of probe prompts + setup mirror |
 | AC-Q4 | 11, 13 | Integration |
 | AC-Q5 | 12 | Unit (render schema) + integration |
 | AC-Q6 | 8 | Unit + integration |
@@ -165,7 +165,17 @@ from typing import Any, Literal
 
 
 class Outcome(str, Enum):
-    """Per-trial outcome. Orthogonal to the SKIPPED axis (SKIPPED is on TrialResult.skipped_reason)."""
+    """Per-trial outcome.
+
+    Two conceptual axes share this enum for simplicity:
+      - Tool-attribution axis (AC-Q2's "four levels"):
+          NOT_CALLED < CALLED_ERROR < CALLED_OK < SIDE_EFFECT_VERIFIED
+      - Infra axis (AC-B5):
+          AUDIT_INFRA_TIMEOUT — set when the audit itself failed (wall-clock,
+          setup failure, etc.). Distinct from tool-attribution outcomes.
+
+    SKIPPED is reported on a separate field of TrialResult, not in this enum.
+    """
     NOT_CALLED = "not_called"
     CALLED_ERROR = "called_error"
     CALLED_OK = "called_ok"
