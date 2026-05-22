@@ -34,6 +34,7 @@ Files to create — all under `tests/audit_tool_use/` except the pytest entry po
 | `tests/audit_tool_use/env.py` | Absolute-path `.env` resolution; `NOVA_ADMIN_SECRET` override; fail-loud on missing | ~40 |
 | `tests/audit_tool_use/constants.py` | Env-overridable wall-clock deadlines + run-id-prefix + paths | ~25 |
 | `tests/audit_tool_use/verifiers.py` | `FileExists`, `DbContains`, `ResponseContains`, `SKIP` strategies | ~80 |
+| `tests/audit_tool_use/setups.py` | `SeedFile`, `SeedMemory`, `SeedSecret`, `NoSetup` (mirror of cleanups) | ~70 |
 | `tests/audit_tool_use/cleanups.py` | `DeleteFile`, `DeleteMemory`, `DeleteSecret`, `DeleteTask`, `NoCleanup` | ~70 |
 | `tests/audit_tool_use/stream.py` | NDJSON line consumer + concurrent approval-grant orchestrator | ~120 |
 | `tests/audit_tool_use/events.py` | `GET /api/v1/tasks/{id}/events` fetch + outcome derivation | ~70 |
@@ -121,7 +122,6 @@ def test_probe_is_frozen():
         verifier=Verifier.SKIP,
         cleanup=Cleanup.NONE,
         tier="MUTATE",
-        preconditions=[],
     )
     with pytest.raises(FrozenInstanceError):
         p.id = "changed"
@@ -183,16 +183,21 @@ class Cleanup(str, Enum):
     NONE = "none"
 
 
+class Setup(str, Enum):
+    """Sentinels; concrete setup objects live in setups.py."""
+    NONE = "none"
+
+
 @dataclass(frozen=True)
 class Probe:
     id: str
     tool: str                            # original dotted name, e.g. "fs.write"
     prompt_template: str                 # uses {run_id}, {token} placeholders
-    expected_args_subset: dict[str, Any] | None
+    expected_args_subset: dict[str, Any] | None  # reserved for future arg-validation; not consumed in v1
     verifier: Any                        # Verifier.SKIP or concrete object from verifiers.py
-    cleanup: Any                         # Cleanup.NONE or concrete object from cleanups.py
-    tier: Literal["READ", "MUTATE"]
-    preconditions: list[Any] = field(default_factory=list)
+    setup: Any = None                    # Setup.NONE or concrete object from setups.py — runs BEFORE the probe
+    cleanup: Any = None                  # Cleanup.NONE or concrete object from cleanups.py
+    tier: Literal["READ", "MUTATE"] = "READ"
 
 
 @dataclass
@@ -939,17 +944,55 @@ git commit -m "feat(audit): tool availability check — builtin list + MCP disco
 
 ---
 
-### Task 8: Cleanup strategies
+### Task 8: Setup and cleanup strategies
 
 **Roles:** backend
 
 **Files:**
+- Create: `tests/audit_tool_use/setups.py` (mirror of cleanups; seeds fixtures BEFORE a probe runs)
 - Create: `tests/audit_tool_use/cleanups.py`
+- Create: `tests/audit_tool_use/test_setups.py`
 - Create: `tests/audit_tool_use/test_cleanups.py`
 
-- [ ] **Step 1: Write failing tests** (file ops are real; HTTP cleanups exercised by integration)
+**Why both in one task:** setup and cleanup are structurally identical (each is a small dataclass with an async method). Three probes (`fs-read-echo`, `memory-search-verbatim-echo`, `nova-secrets-read`) need fixtures created before they run — the model has nothing to read otherwise. Setup is the mirror of cleanup; pairing them in one task keeps the abstraction visible.
+
+- [ ] **Step 1a: Write failing setup tests**
 
 ```python
+# tests/audit_tool_use/test_setups.py
+import pytest
+from pathlib import Path
+from audit_tool_use.setups import SeedFile, NoSetup
+from audit_tool_use.types import Setup
+
+
+@pytest.mark.asyncio
+async def test_seed_file_creates_with_content(tmp_path):
+    p = tmp_path / "fixture.txt"
+    s = SeedFile(path=str(p), content="HELLO-TOKEN-abc")
+    ok, msg = await s.run(context={})
+    assert ok is True
+    assert p.read_text() == "HELLO-TOKEN-abc"
+
+
+@pytest.mark.asyncio
+async def test_seed_file_overwrites_existing(tmp_path):
+    p = tmp_path / "fixture.txt"
+    p.write_text("old")
+    s = SeedFile(path=str(p), content="new")
+    ok, _ = await s.run(context={})
+    assert ok is True
+    assert p.read_text() == "new"
+
+
+def test_no_setup_is_sentinel():
+    assert NoSetup is Setup.NONE
+```
+
+- [ ] **Step 1b: Write failing cleanup tests**
+
+```python
+# tests/audit_tool_use/test_cleanups.py
 import pytest
 from pathlib import Path
 from audit_tool_use.cleanups import DeleteFile, NoCleanup
@@ -979,7 +1022,80 @@ def test_no_cleanup_is_sentinel():
 
 - [ ] **Step 2: Run — expect FAIL**
 
-- [ ] **Step 3: Implement `tests/audit_tool_use/cleanups.py`**
+- [ ] **Step 3a: Implement `tests/audit_tool_use/setups.py`**
+
+```python
+"""Setup strategies — create fixtures BEFORE a probe runs. Mirror of cleanups."""
+from __future__ import annotations
+from dataclasses import dataclass
+from pathlib import Path
+import httpx
+from audit_tool_use.types import Setup
+
+NoSetup = Setup.NONE
+
+
+@dataclass(frozen=True)
+class SeedFile:
+    """Write a file to disk so a fs.read-style probe has something to read."""
+    path: str
+    content: str
+
+    async def run(self, context: dict) -> tuple[bool, str | None]:
+        try:
+            p = Path(self.path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(self.content)
+            return True, None
+        except OSError as e:
+            return False, f"seed file failed: {e}"
+
+
+@dataclass(frozen=True)
+class SeedMemory:
+    """POST a memory to memory-service so a memory.search-style probe finds it."""
+    memory_url: str  # e.g. http://localhost:8002
+    content: str
+    source_kind: str = "audit_fixture"
+
+    async def run(self, context: dict) -> tuple[bool, str | None]:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{self.memory_url}/memories",
+                    json={"content": self.content, "source_kind": self.source_kind, "tags": ["audit"]},
+                )
+            if r.status_code not in (200, 201):
+                return False, f"seed memory returned {r.status_code}: {r.text[:200]}"
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+
+@dataclass(frozen=True)
+class SeedSecret:
+    """POST a secret to agent-core so a nova.secrets.read-style probe can resolve it."""
+    base_url: str
+    name: str
+    value: str
+    purpose: str = "audit_fixture"
+
+    async def run(self, context: dict) -> tuple[bool, str | None]:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{self.base_url}/api/v1/secrets",
+                    json={"name": self.name, "value": self.value, "purpose": self.purpose},
+                    headers=context.get("admin_headers", {}),
+                )
+            if r.status_code not in (200, 201):
+                return False, f"seed secret returned {r.status_code}: {r.text[:200]}"
+            return True, None
+        except Exception as e:
+            return False, str(e)
+```
+
+- [ ] **Step 3b: Implement `tests/audit_tool_use/cleanups.py`**
 
 ```python
 """Cleanup strategies. All best-effort: failure → warn, not fail."""
@@ -1048,16 +1164,20 @@ class DeleteSecret:
             return False, str(e)
 ```
 
-- [ ] **Step 4: Run — expect PASS**
+- [ ] **Step 4: Run all tests — expect PASS**
+
+```bash
+uv run --with pytest --with pytest-asyncio --with httpx pytest tests/audit_tool_use/test_setups.py tests/audit_tool_use/test_cleanups.py -v
+```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/audit_tool_use/cleanups.py tests/audit_tool_use/test_cleanups.py
-git commit -m "feat(audit): cleanup strategies — DeleteFile / DeleteMemory / DeleteSecret + NoCleanup sentinel"
+git add tests/audit_tool_use/setups.py tests/audit_tool_use/cleanups.py tests/audit_tool_use/test_setups.py tests/audit_tool_use/test_cleanups.py
+git commit -m "feat(audit): setup + cleanup strategies — SeedFile/Memory/Secret + DeleteFile/Memory/Secret"
 ```
 
-**Satisfies:** AC-B4, AC-Q6.
+**Satisfies:** AC-B4, AC-Q6. Setup mirror enables AC-Q3 for fs-read / memory-search / nova-secrets-read probes (otherwise the model has nothing to read).
 
 ---
 
@@ -1196,6 +1316,7 @@ All written entities carry the nova-audit-{run_id}- prefix for filterable cleanu
 from __future__ import annotations
 from audit_tool_use.types import Probe
 from audit_tool_use.verifiers import FileExists, ResponseContains, DbContains, Skip
+from audit_tool_use.setups import SeedFile, SeedMemory, SeedSecret, NoSetup
 from audit_tool_use.cleanups import DeleteFile, DeleteMemory, DeleteSecret, NoCleanup
 
 
@@ -1224,9 +1345,12 @@ PROBES: list[Probe] = [
         ),
         expected_args_subset={"path": "/workspace/nova-audit-fixture-{run_id}.txt"},
         verifier=ResponseContains(token="{token}"),
+        setup=SeedFile(
+            path="/workspace/nova-audit-fixture-{run_id}.txt",
+            content="{token}",
+        ),
         cleanup=DeleteFile(path="/workspace/nova-audit-fixture-{run_id}.txt"),
         tier="READ",
-        # The fixture file is created by the harness BEFORE running this probe (see harness pre-hooks)
     ),
     Probe(
         id="shell-exec-echo-token",
@@ -1278,9 +1402,12 @@ PROBES: list[Probe] = [
         ),
         expected_args_subset=None,
         verifier=ResponseContains(token="{token}"),
+        setup=SeedMemory(
+            memory_url="http://localhost:8002",
+            content="nova-audit-fixture-{run_id} record contains the token {token}",
+        ),
         cleanup=DeleteMemory(memory_url="http://localhost:8002", content_match="nova-audit-fixture-{run_id}"),
         tier="READ",
-        # Harness seeds a memory containing the token before running this probe
     ),
     Probe(
         id="nova-secrets-write",
@@ -1308,6 +1435,11 @@ PROBES: list[Probe] = [
         ),
         expected_args_subset={"name": "nova-audit-fixture-{run_id}-secret"},
         verifier=ResponseContains(token="{token}"),
+        setup=SeedSecret(
+            base_url="http://localhost:8000",
+            name="nova-audit-fixture-{run_id}-secret",
+            value="{token}",
+        ),
         cleanup=DeleteSecret(base_url="http://localhost:8000", name="nova-audit-fixture-{run_id}-secret"),
         tier="READ",
     ),
@@ -1390,7 +1522,7 @@ from pathlib import Path
 from typing import Any
 import httpx
 
-from audit_tool_use.types import Outcome, Probe, TrialResult, Verifier, Cleanup
+from audit_tool_use.types import Outcome, Probe, TrialResult, Verifier, Cleanup, Setup
 from audit_tool_use.stream import consume_stream_with_approval_grant
 from audit_tool_use.events import derive_outcome, fetch_task_events
 from audit_tool_use.availability import check_tool_available
@@ -1455,6 +1587,20 @@ async def run_trial(
         )
         _save_trace(trace_dir, probe.id, model["model_id"], trial_n, trace)
         return trial
+
+    # 1b. Setup (seed fixtures the probe needs to find)
+    if probe.setup is not None and probe.setup is not Setup.NONE:
+        setup_inst = _instantiate_verifier(probe.setup, run_id, token)
+        try:
+            s_ok, s_reason = await setup_inst.run({"admin_headers": admin_headers})
+            trace["setup_result"] = {"ok": s_ok, "reason": s_reason}
+            if not s_ok:
+                return _infra_failure(probe, model, trial_n, run_id, trace_dir, trace,
+                                      f"setup failed: {s_reason}")
+        except Exception as e:
+            trace["setup_result"] = {"ok": False, "reason": str(e)}
+            return _infra_failure(probe, model, trial_n, run_id, trace_dir, trace,
+                                  f"setup raised: {e}")
 
     # 2. Create task
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1539,8 +1685,10 @@ async def run_trial(
 
 
 def _instantiate_verifier(verifier: Any, run_id: str, token: str) -> Any:
-    """Substitute {run_id}/{token} placeholders in any string fields of the verifier dataclass."""
-    if verifier is Verifier.SKIP:
+    """Substitute {run_id}/{token} placeholders in any string fields of a verifier/setup/cleanup dataclass.
+    Works for Verifier, Setup, Cleanup objects — they share the same shape (frozen dataclass with str/dict fields).
+    """
+    if verifier is Verifier.SKIP or verifier is Setup.NONE or verifier is Cleanup.NONE or verifier is None:
         return verifier
     from dataclasses import replace, fields
     new_fields = {}
@@ -1556,7 +1704,7 @@ def _instantiate_verifier(verifier: Any, run_id: str, token: str) -> Any:
 
 
 async def _run_cleanup(probe, run_id, token, admin_headers, trace) -> bool:
-    if probe.cleanup is Cleanup.NONE:
+    if probe.cleanup is None or probe.cleanup is Cleanup.NONE:
         return True
     c = _instantiate_verifier(probe.cleanup, run_id, token)  # same placeholder substitution
     try:
@@ -1763,11 +1911,13 @@ Replace the existing `tests/pytest.ini` with:
 [pytest]
 asyncio_mode = auto
 testpaths = .
-pythonpath = .. ../nova-worker-common ../nova-contracts ./audit_tool_use
+pythonpath = . .. ../nova-worker-common ../nova-contracts
 addopts = --continue-on-collection-errors
 markers =
     audit: tool-use audit (live services, ~10-30 min, run via `make audit-tool-use`)
 ```
+
+(`.` is `tests/`, which is where `audit_tool_use/` lives as a package. Adding `./audit_tool_use` directly would break imports — pythonpath needs the package's PARENT directory, not the package itself.)
 
 - [ ] **Step 2: Add the make target**
 
@@ -1777,8 +1927,10 @@ Append to `Makefile`:
 audit-tool-use: ## Tool-use audit — live services, ~10-30 min, never CI-gating
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx \
 	  --with python-dotenv \
-	  pytest -v -m audit tests/test_chat_tool_usage.py || true
+	  pytest -v -m audit test_chat_tool_usage.py || true
 ```
+
+(Note the path argument is `test_chat_tool_usage.py` without the `tests/` prefix — pytest is already running with cwd=`tests/` from the `cd tests` step. This matches the existing `test-quick` make target's pattern.)
 
 - [ ] **Step 3: Implement the pytest entry**
 
