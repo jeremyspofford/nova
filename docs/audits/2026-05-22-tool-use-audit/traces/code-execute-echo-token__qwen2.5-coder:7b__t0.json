@@ -1,0 +1,62 @@
+{
+  "probe_id": "code-execute-echo-token",
+  "tool": "code.execute",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "541c818e",
+  "token": "AUDIT-TOK-6a1c2d0be0a0",
+  "prompt": "Execute this Python: print('AUDIT-TOK-6a1c2d0be0a0'). Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "dc608a3d-a871-4172-8bdb-db47aa9824e2",
+      "task_id": "3dea9e15-cc96-4d6f-b76b-aed3d01951d1",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "code": "print('AUDIT-TOK-6a1c2d0be0a0')",
+          "language": "python"
+        },
+        "call_id": "c54b2148-aa26-43de-8db7-fb0ac8592eb2",
+        "tool_name": "code.execute",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:17:19.412072+00:00",
+      "chain_hash": "d89c5d4f099164186212db60e4874a840bfc20a44119a617252c0c043a98c4d4"
+    },
+    {
+      "id": "e6701b47-488d-4636-881e-140a4eb9a6aa",
+      "task_id": "3dea9e15-cc96-4d6f-b76b-aed3d01951d1",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "c54b2148-aa26-43de-8db7-fb0ac8592eb2"
+      },
+      "occurred_at": "2026-05-22T18:17:19.442360+00:00",
+      "chain_hash": "4877ed53614970f5b899e9950c2731185e55dd32d93b2e43a03fca6c151475e6"
+    },
+    {
+      "id": "f3634033-b40c-4bea-9280-36af4a8edfae",
+      "task_id": "3dea9e15-cc96-4d6f-b76b-aed3d01951d1",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "code",
+          "output": "AUDIT-TOK-6a1c2d0be0a0\r\n",
+          "exit_code": 0
+        },
+        "call_id": "c54b2148-aa26-43de-8db7-fb0ac8592eb2"
+      },
+      "occurred_at": "2026-05-22T18:17:19.805604+00:00",
+      "chain_hash": "4046db65366b76821a639164f46dd58ee96537530779e7eb495a37ede0e852a1"
+    }
+  ],
+  "verifier_result": {
+    "ok": false,
+    "reason": "token 'AUDIT-TOK-6a1c2d0be0a0' not echoed in final response"
+  },
+  "cleanup_result": null,
+  "task_id": "3dea9e15-cc96-4d6f-b76b-aed3d01951d1",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

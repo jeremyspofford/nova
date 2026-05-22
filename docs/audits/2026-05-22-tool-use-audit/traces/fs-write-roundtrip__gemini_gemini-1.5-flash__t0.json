@@ -1,0 +1,20 @@
+{
+  "probe_id": "fs-write-roundtrip",
+  "tool": "fs.write",
+  "model": "gemini/gemini-1.5-flash",
+  "trial_n": 0,
+  "run_id": "ab03dc01",
+  "token": "AUDIT-TOK-e51949461a15",
+  "prompt": "Write a file at /workspace/nova-audit-ab03dc01.txt containing exactly the string 'AUDIT-TOK-e51949461a15' (no other content). Then confirm the file is written.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "f3faca20-99a1-4c5b-ad0e-ab788883fd54",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

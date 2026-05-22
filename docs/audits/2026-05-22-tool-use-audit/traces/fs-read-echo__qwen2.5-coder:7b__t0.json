@@ -1,0 +1,69 @@
+{
+  "probe_id": "fs-read-echo",
+  "tool": "fs.read",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "565c29bf",
+  "token": "AUDIT-TOK-cfefbf8e50ca",
+  "prompt": "Read the file /workspace/nova-audit-fixture-565c29bf.txt and tell me the EXACT content it contains, verbatim, between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "68348962-a122-4f56-8f47-b676e95b158f",
+      "task_id": "cc67e7c3-5727-475b-bef2-6ffc827b69b1",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "path": "/workspace/nova-audit-fixture-565c29bf.txt"
+        },
+        "call_id": "68d9bada-f540-4b10-a7f5-d0ce74b10ebe",
+        "tool_name": "fs.read",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:16:55.269203+00:00",
+      "chain_hash": "9bae1447d2f56499af6afae1762d841e4a9368d0bf670b8f59fd9aca32292bcd"
+    },
+    {
+      "id": "af6abd2d-bfb0-4a01-bd97-7f095be721f7",
+      "task_id": "cc67e7c3-5727-475b-bef2-6ffc827b69b1",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "68d9bada-f540-4b10-a7f5-d0ce74b10ebe"
+      },
+      "occurred_at": "2026-05-22T18:16:55.282647+00:00",
+      "chain_hash": "354a19cadfe93efc8e55daa6700ef402a71f2aec5f4b7e3c30085c3493600d5d"
+    },
+    {
+      "id": "b360574a-fc35-4d07-b3d1-53777932be68",
+      "task_id": "cc67e7c3-5727-475b-bef2-6ffc827b69b1",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "path": "/workspace/nova-audit-fixture-565c29bf.txt",
+          "size": 22,
+          "type": "file",
+          "content": "AUDIT-TOK-cfefbf8e50ca"
+        },
+        "call_id": "68d9bada-f540-4b10-a7f5-d0ce74b10ebe"
+      },
+      "occurred_at": "2026-05-22T18:16:55.285928+00:00",
+      "chain_hash": "cf672cd732398c5e28457467942446289c15bcb390ce87b56e80ad6c35e2a0c3"
+    }
+  ],
+  "verifier_result": {
+    "ok": false,
+    "reason": "token 'AUDIT-TOK-cfefbf8e50ca' not echoed in final response"
+  },
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "setup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "cc67e7c3-5727-475b-bef2-6ffc827b69b1",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

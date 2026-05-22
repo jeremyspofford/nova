@@ -1,0 +1,65 @@
+{
+  "probe_id": "fs-write-roundtrip",
+  "tool": "fs.write",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "13f44f36",
+  "token": "AUDIT-TOK-4c99563a971d",
+  "prompt": "Write a file at /workspace/nova-audit-13f44f36.txt containing exactly the string 'AUDIT-TOK-4c99563a971d' (no other content). Then confirm the file is written.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "f360fafe-d254-4495-9cf0-456ff9bbeb62",
+      "task_id": "677cee2e-e09c-4d34-b595-714287620fdc",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "path": "/workspace/nova-audit-13f44f36.txt",
+          "content": "AUDIT-TOK-4c99563a971d"
+        },
+        "call_id": "181004b7-a077-449d-a236-d17654cca31e",
+        "tool_name": "fs.write",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:16:44.384913+00:00",
+      "chain_hash": "e8454a6892c471d9e1516dba1cf75027e3d70b28d07945aaa958c59ce62ba4ad"
+    },
+    {
+      "id": "479c54cd-d040-457b-8552-a4bf3ce3737f",
+      "task_id": "677cee2e-e09c-4d34-b595-714287620fdc",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "181004b7-a077-449d-a236-d17654cca31e"
+      },
+      "occurred_at": "2026-05-22T18:16:44.414783+00:00",
+      "chain_hash": "f06b8363d4bce78e153a915731a796b6d632420e1a4d4b64a97a569fd1bcce4c"
+    },
+    {
+      "id": "9e2ff2ab-e7a6-43af-b55f-4d1935c412a4",
+      "task_id": "677cee2e-e09c-4d34-b595-714287620fdc",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "path": "/workspace/nova-audit-13f44f36.txt",
+          "snapshot_id": null,
+          "bytes_written": 22
+        },
+        "call_id": "181004b7-a077-449d-a236-d17654cca31e"
+      },
+      "occurred_at": "2026-05-22T18:16:44.418251+00:00",
+      "chain_hash": "8f4444848194834a7776e910da2e0527fea94b557fadfa58a35ad7afeff21f8c"
+    }
+  ],
+  "verifier_result": {
+    "ok": true,
+    "reason": null
+  },
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "677cee2e-e09c-4d34-b595-714287620fdc",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

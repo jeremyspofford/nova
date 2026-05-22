@@ -1,0 +1,61 @@
+{
+  "probe_id": "web-fetch-token-page",
+  "tool": "web.fetch",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "71d94639",
+  "token": "AUDIT-TOK-3bd90c86a633",
+  "prompt": "Fetch the URL https://example.com/ (run_id=71d94639) and tell me the EXACT text of the page title between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "03c92459-332d-417d-a806-d5b74a2dc041",
+      "task_id": "99cad97e-3216-461e-a0c5-3cde4bbbb06b",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "url": "https://example.com/"
+        },
+        "call_id": "33fb39dd-6e5a-40ae-81b8-c7b0af15d7f5",
+        "tool_name": "web.fetch",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:18:47.450000+00:00",
+      "chain_hash": "c00a3bf59c017a31352e4819faa970feb61d064b160f6ef5ad8864716fdbfc50"
+    },
+    {
+      "id": "c409f86a-05a2-44cd-89e5-45545ef3fecd",
+      "task_id": "99cad97e-3216-461e-a0c5-3cde4bbbb06b",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "33fb39dd-6e5a-40ae-81b8-c7b0af15d7f5"
+      },
+      "occurred_at": "2026-05-22T18:18:47.463472+00:00",
+      "chain_hash": "fa7c7828d34c312ec0c2ae393199fc20b34f452ca70311fe27fa0e520042ba46"
+    },
+    {
+      "id": "78cabb95-eff8-4e81-bcb9-4f8bef8051bd",
+      "task_id": "99cad97e-3216-461e-a0c5-3cde4bbbb06b",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "url": "https://example.com/",
+          "status": 200,
+          "content": "<!doctype html><html lang=\"en\"><head><title>Example Domain</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style></head><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.</p><p><a href=\"https://iana.org/domains/example\">Learn more</a></p></div></body></html>\n"
+        },
+        "call_id": "33fb39dd-6e5a-40ae-81b8-c7b0af15d7f5"
+      },
+      "occurred_at": "2026-05-22T18:18:47.634630+00:00",
+      "chain_hash": "84a83f85ed79b4337367f3bd7b44c9631a31595cafcacb033b3b39bf17b0f567"
+    }
+  ],
+  "verifier_result": {
+    "ok": false,
+    "reason": "token 'Example Domain' not echoed in final response"
+  },
+  "cleanup_result": null,
+  "task_id": "99cad97e-3216-461e-a0c5-3cde4bbbb06b",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}
