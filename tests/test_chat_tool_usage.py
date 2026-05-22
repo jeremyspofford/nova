@@ -53,8 +53,16 @@ def _commit_sha(repo_root: Path) -> str:
 @pytest.mark.audit
 @pytest.mark.asyncio
 async def test_chat_tool_use_audit():
+    date = dt.date.today().isoformat()
+    # Resolve repo root early — used by BOTH the skip path and the live path so
+    # the SKIPPED report lands at the real audit directory, not pytest's cwd.
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError:
+        repo_root = Path.cwd()  # fallback for unusual invocations; report path still works
+
     if not _services_reachable():
-        out = Path("docs/audits/2026-05-22-tool-use-audit.md")
+        out = repo_root / f"docs/audits/{date}-tool-use-audit.md"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
             f"# Tool-Use Audit — SKIPPED\n\n"
@@ -63,14 +71,12 @@ async def test_chat_tool_use_audit():
         )
         pytest.skip("services unavailable")
 
-    repo_root = resolve_repo_root()
     admin_secret = load_admin_secret(repo_root=repo_root)
     admin_headers = {"X-Admin-Secret": admin_secret}
     models = await discover_models()
     if not models:
         pytest.skip("no LLM providers available")
 
-    date = dt.date.today().isoformat()
     output_dir = repo_root / OUTPUT_DIR_TEMPLATE.format(date=date)
     trace_dir = output_dir / "traces"
     output_dir.mkdir(parents=True, exist_ok=True)
