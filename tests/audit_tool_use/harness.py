@@ -86,16 +86,15 @@ async def run_trial(
             return _infra_failure(probe, model, trial_n, run_id, trace_dir, trace,
                                   f"setup raised: {e}")
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.post(
-            f"{AGENT_CORE}/api/v1/tasks",
-            json={"goal": prompt, "source": "audit", "model": model["model_id"]},
-            headers=admin_headers,
-        )
-        if r.status_code != 200:
-            return _infra_failure(probe, model, trial_n, run_id, trace_dir, trace,
-                                  f"task create {r.status_code}: {r.text[:200]}")
-        task_id = r.json()["id"]
+    # IMPORTANT: do NOT call POST /api/v1/tasks here.
+    # That endpoint fires `run_task` (loop/main.py) — a DIFFERENT autonomous
+    # code path from the conversational ReAct loop in tasks_router.generate().
+    # Earlier audit runs hit this trap and saw run_task's iterations=0 events
+    # (with hallucinated tool-call JSON as text) instead of conversational
+    # tool_call_proposed events. The audit is specifically testing the chat
+    # loop, so we generate a task_id ourselves and let post_message auto-
+    # create the task without triggering run_task.
+    task_id = str(uuid.uuid4())
     trace["task_id"] = task_id
 
     async def grant_fn(call_id: str) -> None:
@@ -106,7 +105,7 @@ async def run_trial(
             async with client.stream(
                 "POST",
                 f"{AGENT_CORE}/api/v1/tasks/{task_id}/message",
-                json={"text": prompt},
+                json={"text": prompt, "model": model["model_id"]},
                 headers=admin_headers,
             ) as resp:
                 final = await asyncio.wait_for(

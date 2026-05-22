@@ -9,29 +9,55 @@ from audit_tool_use.types import Outcome
 
 
 def derive_outcome(events: list[dict], *, expected_tool: str) -> Outcome:
-    proposed = False
+    """Derive a per-trial Outcome by walking task_events.
+
+    Live agent-core event shape (verified 2026-05-22):
+      tool_call_proposed: payload has `tool_name` + `call_id` + `args`
+      tool_call_started:  payload has `call_id` only
+      tool_call_result:   payload has `call_id` + `result` (no tool_name)
+      tool_call_error:    payload has `call_id` + `error` (no tool_name)
+      tool_call_denied:   payload has `call_id` (no tool_name)
+
+    Result/error/denied events DON'T carry the tool name — we map them back
+    to the proposed event via call_id. Tool names in payload are dot-notation
+    (original form, not the sanitized form sent to the LLM).
+    """
+    # First pass: find tool_call_proposed events for the expected tool, indexed by call_id
+    proposed_call_ids: set[str] = set()
+    for ev in events:
+        if ev.get("event_type") != "tool_call_proposed":
+            continue
+        payload = ev.get("payload") or {}
+        if payload.get("tool_name") == expected_tool:
+            cid = payload.get("call_id")
+            if cid:
+                proposed_call_ids.add(cid)
+
+    if not proposed_call_ids:
+        return Outcome.NOT_CALLED
+
+    # Second pass: among events matching our call_ids, derive success/error
     last_result: dict | None = None
     saw_error = False
     for ev in events:
         et = ev.get("event_type")
         payload = ev.get("payload") or {}
-        if payload.get("name") != expected_tool:
+        cid = payload.get("call_id")
+        if not cid or cid not in proposed_call_ids:
             continue
-        if et == "tool_call_proposed":
-            proposed = True
-        elif et == "tool_call_result":
-            last_result = payload
-            if "error" in payload and payload["error"]:
+        if et == "tool_call_result":
+            last_result = payload.get("result") or {}
+            # The dispatcher wraps tool errors as {"error": "..."} in the result
+            if isinstance(last_result, dict) and "error" in last_result and last_result["error"]:
                 saw_error = True
         elif et in {"tool_call_error", "tool_call_denied"}:
             saw_error = True
-    if not proposed:
-        return Outcome.NOT_CALLED
+
     if saw_error:
         return Outcome.CALLED_ERROR
     if last_result is not None:
         return Outcome.CALLED_OK
-    # Proposed but no result and no error yet — treat as error (truncated stream)
+    # Proposed but no result and no error — truncated stream
     return Outcome.CALLED_ERROR
 
 
