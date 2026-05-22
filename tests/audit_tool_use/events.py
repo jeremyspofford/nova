@@ -38,8 +38,15 @@ def derive_outcome(events: list[dict], *, expected_tool: str) -> Outcome:
 async def fetch_task_events(
     base_url: str, task_id: str, admin_headers: dict, timeout_s: float = 10.0,
 ) -> list[dict]:
-    """Fetch the full event log for a task. Returns events in chronological order."""
+    """Fetch the full event log for a task. Returns events in chronological order.
+
+    The live agent-core API wraps the list in {"events": [...]}. Be defensive
+    against both shapes — accept either the wrapped or unwrapped form.
+    """
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         r = await client.get(f"{base_url}/api/v1/tasks/{task_id}/events", headers=admin_headers)
         r.raise_for_status()
-    return r.json()
+    body = r.json()
+    if isinstance(body, dict) and "events" in body:
+        return body["events"]
+    return body

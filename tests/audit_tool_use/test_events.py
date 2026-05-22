@@ -38,3 +38,12 @@ def test_unrelated_tool_calls_ignored():
         {"event_type": "tool_call_result", "payload": {"name": "memory.search"}},
     ]
     assert derive_outcome(events, expected_tool="fs.write") == Outcome.NOT_CALLED
+
+
+def test_derive_outcome_requires_list_not_wrapper_dict():
+    """REGRESSION: live /api/v1/tasks/{id}/events returns {"events": [...]}.
+    fetch_task_events MUST unwrap to a list before passing to derive_outcome.
+    This test documents the failure mode if someone passes the wrapper directly."""
+    wrapper = {"events": [{"event_type": "task_started"}]}
+    with pytest.raises(AttributeError):
+        derive_outcome(wrapper, expected_tool="fs.write")  # type: ignore[arg-type]
