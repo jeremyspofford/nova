@@ -38,20 +38,33 @@ async def consume_stream_with_approval_grant(
     pending_grants: list[asyncio.Task] = []
     final: dict = {}
     saw_text = False
-    async for event in parse_ndjson_lines(line_iter):
-        if event.get("type") == "tool_approval_request":
-            call_id = event.get("tool_call_id")
-            if call_id and call_id not in granted:
-                granted.add(call_id)
-                pending_grants.append(asyncio.create_task(grant_fn(call_id)))
-        elif "text" in event:
-            final = event
-            saw_text = True
-        elif event.get("type") in {"meta", "error"} and not saw_text:
-            # Capture meta/error as fallback, but never let a trailing meta/error
-            # overwrite an assistant text we already captured — the harness reads
-            # final["text"] for response-contains verification.
-            final = event
-    if pending_grants:
-        await asyncio.gather(*pending_grants, return_exceptions=True)
+    try:
+        async for event in parse_ndjson_lines(line_iter):
+            if event.get("type") == "tool_approval_request":
+                call_id = event.get("tool_call_id")
+                if call_id and call_id not in granted:
+                    granted.add(call_id)
+                    pending_grants.append(asyncio.create_task(grant_fn(call_id)))
+            elif "text" in event:
+                final = event
+                saw_text = True
+            elif event.get("type") in {"meta", "error"} and not saw_text:
+                # Capture meta/error as fallback, but never let a trailing meta/error
+                # overwrite an assistant text we already captured — the harness reads
+                # final["text"] for response-contains verification.
+                final = event
+        # Normal completion: let pending grants finish.
+        if pending_grants:
+            await asyncio.gather(*pending_grants, return_exceptions=True)
+    except BaseException:
+        # Abnormal exit (cancellation from wall-clock, or unexpected error).
+        # Cancel any in-flight grants so they don't leak as
+        # "Task was destroyed but it is pending!" warnings; gather to wait for
+        # the cancellations to settle, then re-raise the original exception.
+        for t in pending_grants:
+            if not t.done():
+                t.cancel()
+        if pending_grants:
+            await asyncio.gather(*pending_grants, return_exceptions=True)
+        raise
     return final

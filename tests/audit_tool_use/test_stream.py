@@ -62,3 +62,36 @@ async def test_meta_or_error_only_is_returned_when_no_text():
     async def _no_grant(_): pass
     final = await consume_stream_with_approval_grant(_async_iter(raw), grant_fn=_no_grant)
     assert final.get("type") == "error"  # error came last, no text ever seen
+
+
+@pytest.mark.asyncio
+async def test_cancellation_cancels_pending_grants():
+    """When the harness wall-clock fires, asyncio.wait_for cancels the consume
+    coroutine. The finally block must cancel pending grant tasks so they don't
+    leak as 'Task was destroyed but it is pending!' warnings."""
+    grant_started = asyncio.Event()
+    grant_finished = asyncio.Event()
+
+    async def slow_grant(call_id: str) -> None:
+        grant_started.set()
+        try:
+            await asyncio.sleep(60)  # would block past any sensible wall-clock
+            grant_finished.set()
+        except asyncio.CancelledError:
+            raise
+
+    async def slow_stream():
+        # Send one approval request, then hang — caller will cancel us
+        yield b'{"type":"tool_approval_request","tool_call_id":"slow","name":"x","tier":"MUTATE","args":{}}'
+        await asyncio.sleep(60)
+
+    # Race the consume against a 0.1s timeout — emulates the harness wall-clock
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            consume_stream_with_approval_grant(slow_stream(), grant_fn=slow_grant),
+            timeout=0.1,
+        )
+
+    # The grant must have started but NOT finished (it was cancelled by the finally)
+    assert grant_started.is_set(), "grant task didn't start"
+    assert not grant_finished.is_set(), "grant should have been cancelled, not allowed to complete"
