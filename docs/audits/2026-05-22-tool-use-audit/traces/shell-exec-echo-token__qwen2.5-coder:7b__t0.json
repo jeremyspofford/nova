@@ -1,0 +1,61 @@
+{
+  "probe_id": "shell-exec-echo-token",
+  "tool": "shell.exec",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "b1ee1339",
+  "token": "AUDIT-TOK-a5d1f05084ce",
+  "prompt": "Run the shell command: echo AUDIT-TOK-a5d1f05084ce. Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "d6f6a900-afd0-4bcd-985a-7f406d0dd123",
+      "task_id": "9cad3bc0-115f-415d-9fda-219a7dad346c",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "command": "echo AUDIT-TOK-a5d1f05084ce"
+        },
+        "call_id": "335b2ae4-0516-43d7-b30f-a2cbb2e4c7c4",
+        "tool_name": "shell.exec",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:17:07.110077+00:00",
+      "chain_hash": "0ccf4e4942262f15c0862396eda52d71e82c8a33941c529f3e24dfcc1a1155d4"
+    },
+    {
+      "id": "8598d9fc-62ae-4139-a699-a0f034184789",
+      "task_id": "9cad3bc0-115f-415d-9fda-219a7dad346c",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "335b2ae4-0516-43d7-b30f-a2cbb2e4c7c4"
+      },
+      "occurred_at": "2026-05-22T18:17:07.136331+00:00",
+      "chain_hash": "1915e8b9c07ffdd964ea0c1ff9cb76aebdc616a976c35dd842f1e3f79fda4b02"
+    },
+    {
+      "id": "ec5ed957-21bb-4414-8db8-9188e48ca1d9",
+      "task_id": "9cad3bc0-115f-415d-9fda-219a7dad346c",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "shell",
+          "output": "AUDIT-TOK-a5d1f05084ce\r\n",
+          "exit_code": 0
+        },
+        "call_id": "335b2ae4-0516-43d7-b30f-a2cbb2e4c7c4"
+      },
+      "occurred_at": "2026-05-22T18:17:07.528267+00:00",
+      "chain_hash": "8b146d98b5c9571d6d451d916e9b40bbe36b280f409ba0406179c2357396fe7f"
+    }
+  ],
+  "verifier_result": {
+    "ok": false,
+    "reason": "token 'AUDIT-TOK-a5d1f05084ce' not echoed in final response"
+  },
+  "cleanup_result": null,
+  "task_id": "9cad3bc0-115f-415d-9fda-219a7dad346c",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

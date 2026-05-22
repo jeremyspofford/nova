@@ -1,0 +1,24 @@
+{
+  "probe_id": "memory-search-verbatim-echo",
+  "tool": "memory.search",
+  "model": "gemini/gemini-1.5-flash",
+  "trial_n": 0,
+  "run_id": "8e85a975",
+  "token": "AUDIT-TOK-9b7cccef63c9",
+  "prompt": "Search your memory for the token 'nova-audit-fixture-8e85a975'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "setup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "88a0d6d1-351c-4fcd-86e5-62961f2e91c0",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

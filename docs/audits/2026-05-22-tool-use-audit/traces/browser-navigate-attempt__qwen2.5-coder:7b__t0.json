@@ -1,0 +1,13 @@
+{
+  "probe_id": "browser-navigate-attempt",
+  "tool": "browser_navigate",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "ca0380af",
+  "token": "AUDIT-TOK-a1315a748e97",
+  "prompt": "Navigate the browser to https://example.com/ (run_id=ca0380af) and tell me what you see.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": null
+}

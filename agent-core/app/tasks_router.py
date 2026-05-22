@@ -7,9 +7,8 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
 from nova_contracts import TaskCreateRequest
+from pydantic import BaseModel
 
 from .config import settings
 from .db import get_pool
@@ -110,24 +109,78 @@ def _build_system_prompt(
 def _is_serialized_tool_call(content: str) -> bool:
     """True when a small model returned a garbled or JSON-encoded tool call.
 
-    Small local models (llama3.2) often output raw JSON in the content field
-    when given many tools, instead of using the proper tool_calls mechanism.
-    Any bare JSON object in this context is almost certainly a confused tool
-    response — fall back to streaming without tools.
+    Small local models (llama3.2, qwen2.5-coder, etc.) often output the
+    tool call as raw JSON in the content field, in `{"name": ..., "arguments": ...}`
+    or `{"name": ..., "parameters": ...}` shape, sometimes wrapped in a
+    markdown code fence (```python ... ``` or ```json ... ```).
+
+    Returns True when we can parse a tool-call-shaped object out of content.
+    Use `_extract_serialized_tool_call` to get the parsed call (or None).
     """
+    return _extract_serialized_tool_call(content) is not None
+
+
+def _extract_serialized_tool_call(content: str) -> dict | None:
+    """Try to parse a tool-call-shaped JSON object out of content.
+
+    Returns {"name": str, "arguments": dict} if found; else None. Tolerates:
+    - bare JSON: `{"name": "fs.write", "arguments": {...}}`
+    - parameters key (used by qwen): `{"name": "fs.write", "parameters": {...}}`
+    - code fences: `\\`\\`\\`json\\n{...}\\n\\`\\`\\`` or `\\`\\`\\`python\\n{...}\\n\\`\\`\\``
+    """
+    if not content:
+        return None
     stripped = content.strip()
-    if not stripped or not stripped.startswith("{"):
-        return False
+    # Unwrap a code fence if present
+    if stripped.startswith("```"):
+        # drop the first line (fence + optional language tag) and the trailing fence
+        lines = stripped.splitlines()
+        if len(lines) >= 2:
+            lines = lines[1:]  # drop opener
+            # drop trailing fence if present
+            while lines and lines[-1].strip() == "```":
+                lines.pop()
+            stripped = "\n".join(lines).strip()
+    if not stripped.startswith("{"):
+        return None
     try:
         obj = json.loads(stripped)
-        return isinstance(obj, dict)
     except (json.JSONDecodeError, ValueError):
-        return False
+        return None
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    # Accept either "arguments" or "parameters" — qwen and some others use parameters
+    args = obj.get("arguments")
+    if args is None:
+        args = obj.get("parameters")
+    if not isinstance(args, dict):
+        args = {}
+    return {"name": name, "arguments": args}
 
 
 def _sanitize_tool_name(name: str) -> str:
     """OpenAI requires tool names to match ^[a-zA-Z0-9_-]+$. Replace dots."""
     return name.replace(".", "_")
+
+
+def _all_known_tool_names(tools: list[dict]) -> list[str]:
+    """Original (un-sanitized) tool names from an openai-format tools list."""
+    return [t.get("function", {}).get("name", "") for t in tools]
+
+
+def _unsanitize_tool_name(sanitized: str, tools: list[dict]) -> str:
+    """Reverse _sanitize_tool_name by matching against the tools list.
+
+    If `sanitized` matches some `_sanitize_tool_name(orig)`, return `orig`.
+    Otherwise return `sanitized` unchanged.
+    """
+    for orig in _all_known_tool_names(tools):
+        if _sanitize_tool_name(orig) == sanitized:
+            return orig
+    return sanitized
 
 
 def _sanitize_tools_for_openai(tools: list[dict]) -> tuple[list[dict], dict[str, str]]:
@@ -395,33 +448,40 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                         if actual_model:
                             yield json.dumps({"type": "meta", "model": actual_model}) + "\n"
                         meta_emitted = True
-                    # If the model serialized a tool call as text (small-model
-                    # anti-pattern), fall back to a no-tools streaming response.
-                    if _is_serialized_tool_call(content):
-                        stream_body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
-                        if body.model:
-                            stream_body["model"] = body.model
-                        async with httpx.AsyncClient(timeout=120.0) as client:
-                            async with client.stream(
-                                "POST",
-                                f"{settings.llm_gateway_url}/stream",
-                                json=stream_body,
-                            ) as resp_s:
-                                async for line in resp_s.aiter_lines():
-                                    if not line.startswith("data: "):
-                                        continue
-                                    try:
-                                        data = json.loads(line[6:])
-                                    except json.JSONDecodeError:
-                                        continue
-                                    chunk = data.get("chunk", "")
-                                    if chunk:
-                                        final_text += chunk
-                                        yield json.dumps({"text": chunk}) + "\n"
+                    # Small models (qwen2.5-coder, llama3.2, etc.) often serialize
+                    # the tool call as JSON in the content field instead of using
+                    # the proper tool_calls structure. Parse it and synthesize a
+                    # tool_call so the ReAct loop can execute it — much better
+                    # than the previous behavior of falling back to no-tools.
+                    parsed = _extract_serialized_tool_call(content)
+                    if parsed is not None:
+                        synth_name = parsed["name"]
+                        # Tools were sent to the model with sanitized names
+                        # (memory_search not memory.search) — un-sanitize using
+                        # the name_map captured at call time. _llm_complete_chat
+                        # already restores names on resp["tool_calls"]; we do the
+                        # same here for parsed content.
+                        if synth_name in {_sanitize_tool_name(n) for n in _all_known_tool_names(all_tools)}:
+                            synth_name_orig = _unsanitize_tool_name(synth_name, all_tools)
+                        else:
+                            synth_name_orig = synth_name
+                        synth_tc = {
+                            "id": f"call_{uuid.uuid4().hex[:12]}",
+                            "type": "function",
+                            "function": {
+                                "name": synth_name_orig,
+                                "arguments": json.dumps(parsed["arguments"]),
+                            },
+                        }
+                        # Append assistant turn + synth tool_calls to history,
+                        # then drop into the same dispatch loop the structured
+                        # path uses below.
+                        tool_calls = [synth_tc]
+                        # fall through to the structured tool_calls dispatch
                     else:
                         final_text = content
                         yield json.dumps({"text": content}) + "\n"
-                    break
+                        break
 
                 # History must use sanitized names — OpenAI rejects dotted names like
                 # "memory.search" in tool_calls history.  We use originals only for dispatch.

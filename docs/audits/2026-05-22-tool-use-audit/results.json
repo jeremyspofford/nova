@@ -1,0 +1,253 @@
+{
+  "run_id": "13f44f36",
+  "date": "2026-05-22",
+  "commit_sha": "84ca86363c3b",
+  "models": [
+    {
+      "model_id": "qwen2.5-coder:7b",
+      "probes": [
+        {
+          "probe_id": "fs-write-roundtrip",
+          "tool": "fs.write",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "fs-read-echo",
+          "tool": "fs.read",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "shell-exec-echo-token",
+          "tool": "shell.exec",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "code-execute-echo-token",
+          "tool": "code.execute",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "memory-write-then-search",
+          "tool": "memory.write",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "memory-search-verbatim-echo",
+          "tool": "memory.search",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "nova-secrets-write",
+          "tool": "nova.secrets.write",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "nova-secrets-read",
+          "tool": "nova.secrets.read",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "web-fetch-token-page",
+          "tool": "web.fetch",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "web-search-attempt",
+          "tool": "web.search",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "browser-navigate-attempt",
+          "tool": "browser_navigate",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        }
+      ]
+    },
+    {
+      "model_id": "gpt-4o-mini",
+      "probes": [
+        {
+          "probe_id": "fs-write-roundtrip",
+          "tool": "fs.write",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "fs-read-echo",
+          "tool": "fs.read",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "shell-exec-echo-token",
+          "tool": "shell.exec",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "code-execute-echo-token",
+          "tool": "code.execute",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "memory-write-then-search",
+          "tool": "memory.write",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "memory-search-verbatim-echo",
+          "tool": "memory.search",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "nova-secrets-write",
+          "tool": "nova.secrets.write",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "nova-secrets-read",
+          "tool": "nova.secrets.read",
+          "n_attempted": 1,
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
+        },
+        {
+          "probe_id": "web-fetch-token-page",
+          "tool": "web.fetch",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "web-search-attempt",
+          "tool": "web.search",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "browser-navigate-attempt",
+          "tool": "browser_navigate",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        }
+      ]
+    },
+    {
+      "model_id": "gemini/gemini-1.5-flash",
+      "probes": [
+        {
+          "probe_id": "fs-write-roundtrip",
+          "tool": "fs.write",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "fs-read-echo",
+          "tool": "fs.read",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "shell-exec-echo-token",
+          "tool": "shell.exec",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "code-execute-echo-token",
+          "tool": "code.execute",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "memory-write-then-search",
+          "tool": "memory.write",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "memory-search-verbatim-echo",
+          "tool": "memory.search",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "nova-secrets-write",
+          "tool": "nova.secrets.write",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "nova-secrets-read",
+          "tool": "nova.secrets.read",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "web-fetch-token-page",
+          "tool": "web.fetch",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "web-search-attempt",
+          "tool": "web.search",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        },
+        {
+          "probe_id": "browser-navigate-attempt",
+          "tool": "browser_navigate",
+          "n_attempted": 1,
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
+        }
+      ]
+    }
+  ]
+}

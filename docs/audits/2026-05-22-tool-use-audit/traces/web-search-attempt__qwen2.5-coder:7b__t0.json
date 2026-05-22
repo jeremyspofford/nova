@@ -1,0 +1,57 @@
+{
+  "probe_id": "web-search-attempt",
+  "tool": "web.search",
+  "model": "qwen2.5-coder:7b",
+  "trial_n": 0,
+  "run_id": "4d378c91",
+  "token": "AUDIT-TOK-4115ceec10c2",
+  "prompt": "Search the web for the exact phrase: 'nova audit canary token AUDIT-TOK-4115ceec10c2'. Tell me how many results you got.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "8e77dec7-9c91-467c-b872-59c3232b5b49",
+      "task_id": "11e6f902-5ebf-4505-81bc-ab377e2886d3",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "query": "exact:nova audit canary token AUDIT-TOK-4115ceec10c2"
+        },
+        "call_id": "9000ce12-783c-4cae-a309-673b515b94f2",
+        "tool_name": "web.search",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:19:01.320209+00:00",
+      "chain_hash": "ee8cff08bc6ce7c60be649238a80b97b9bfc2d0f8b11cbdbc8d7cb0bab3c1b58"
+    },
+    {
+      "id": "a6006620-a7d8-4914-adc4-b82aaadd5732",
+      "task_id": "11e6f902-5ebf-4505-81bc-ab377e2886d3",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "9000ce12-783c-4cae-a309-673b515b94f2"
+      },
+      "occurred_at": "2026-05-22T18:19:01.333959+00:00",
+      "chain_hash": "b0da5566b651f41c5f2f3c6f70b735b0870b051982853452bd3f625853667bd2"
+    },
+    {
+      "id": "b342918b-0af7-4454-bc96-0fe506cbdae4",
+      "task_id": "11e6f902-5ebf-4505-81bc-ab377e2886d3",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "query": "exact:nova audit canary token AUDIT-TOK-4115ceec10c2",
+          "results": []
+        },
+        "call_id": "9000ce12-783c-4cae-a309-673b515b94f2"
+      },
+      "occurred_at": "2026-05-22T18:19:01.600235+00:00",
+      "chain_hash": "1885ba356a51848b5b2e29b498efe8f2240a85c8b678b4717a181925876be632"
+    }
+  ],
+  "verifier_result": null,
+  "cleanup_result": null,
+  "task_id": "11e6f902-5ebf-4505-81bc-ab377e2886d3",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "probe_id": "browser-navigate-attempt",
+  "tool": "browser_navigate",
+  "model": "gpt-4o-mini",
+  "trial_n": 0,
+  "run_id": "28166cf2",
+  "token": "AUDIT-TOK-0f004a9de423",
+  "prompt": "Navigate the browser to https://example.com/ (run_id=28166cf2) and tell me what you see.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": null
+}

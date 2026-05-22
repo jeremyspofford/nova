@@ -1,0 +1,69 @@
+{
+  "probe_id": "fs-read-echo",
+  "tool": "fs.read",
+  "model": "gpt-4o-mini",
+  "trial_n": 0,
+  "run_id": "8bf265c0",
+  "token": "AUDIT-TOK-50124b2a0b2c",
+  "prompt": "Read the file /workspace/nova-audit-fixture-8bf265c0.txt and tell me the EXACT content it contains, verbatim, between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "8b6edc3d-315b-475e-9c9d-757b7ba3cb66",
+      "task_id": "1dbd2eee-10d8-4b92-a499-eacb1b513662",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "path": "/workspace/nova-audit-fixture-8bf265c0.txt"
+        },
+        "call_id": "79c1ae15-121c-44b6-b765-0c6ae6932bdb",
+        "tool_name": "fs.read",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:19:17.367436+00:00",
+      "chain_hash": "e896aa5c8c87029331267f691f6fc158a0cc8a5c5e75dfd933535c72e4ebfd71"
+    },
+    {
+      "id": "80fe33cd-0c98-43cd-b681-62bb2be2c537",
+      "task_id": "1dbd2eee-10d8-4b92-a499-eacb1b513662",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "79c1ae15-121c-44b6-b765-0c6ae6932bdb"
+      },
+      "occurred_at": "2026-05-22T18:19:17.372028+00:00",
+      "chain_hash": "16cedcd2acdf6c333581074f54628783317e1c4db3fbbaf5980c551554f6b232"
+    },
+    {
+      "id": "6ddcbadf-d59b-444e-ad7d-3e618b4fd7e5",
+      "task_id": "1dbd2eee-10d8-4b92-a499-eacb1b513662",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "path": "/workspace/nova-audit-fixture-8bf265c0.txt",
+          "size": 22,
+          "type": "file",
+          "content": "AUDIT-TOK-50124b2a0b2c"
+        },
+        "call_id": "79c1ae15-121c-44b6-b765-0c6ae6932bdb"
+      },
+      "occurred_at": "2026-05-22T18:19:17.375258+00:00",
+      "chain_hash": "4f216d61ad08ee5da02831c47befcce98cce3a7e64e08a16ca5523f37d2524ed"
+    }
+  ],
+  "verifier_result": {
+    "ok": true,
+    "reason": null
+  },
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "setup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "1dbd2eee-10d8-4b92-a499-eacb1b513662",
+  "final_stream_event": {
+    "text": "The contents of /workspace/nova-audit-fixture-8bf265c0.txt are:\n\n```\nAUDIT-TOK-50124b2a0b2c\n```"
+  }
+}

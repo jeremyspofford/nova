@@ -1,0 +1,62 @@
+{
+  "probe_id": "code-execute-echo-token",
+  "tool": "code.execute",
+  "model": "gpt-4o-mini",
+  "trial_n": 0,
+  "run_id": "d89c8249",
+  "token": "AUDIT-TOK-c6fdd0a5a19d",
+  "prompt": "Execute this Python: print('AUDIT-TOK-c6fdd0a5a19d'). Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "2d0990ed-ac36-4fc1-97e9-763b78bb32f5",
+      "task_id": "1c06c9c1-d5b2-42d5-a1ba-13074efb7a5e",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "code": "print('AUDIT-TOK-c6fdd0a5a19d')",
+          "language": "python"
+        },
+        "call_id": "5156b59e-f6d5-4d2d-897c-3f42579ae7e2",
+        "tool_name": "code.execute",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:19:25.059004+00:00",
+      "chain_hash": "0206c00d5e128393313940fa301f1b846c8cc137a7b95b2e7cd0dbdb071b6d25"
+    },
+    {
+      "id": "35b575b0-e53d-411a-8d1f-da0e8fc6a024",
+      "task_id": "1c06c9c1-d5b2-42d5-a1ba-13074efb7a5e",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "5156b59e-f6d5-4d2d-897c-3f42579ae7e2"
+      },
+      "occurred_at": "2026-05-22T18:19:25.077859+00:00",
+      "chain_hash": "c9b60c254945e18658db8148ef71b16d15ef79822164538a36c9c3e26385ed93"
+    },
+    {
+      "id": "523e1990-a350-43cf-b825-21c6dfdd976e",
+      "task_id": "1c06c9c1-d5b2-42d5-a1ba-13074efb7a5e",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "code",
+          "output": "AUDIT-TOK-c6fdd0a5a19d\r\n",
+          "exit_code": 0
+        },
+        "call_id": "5156b59e-f6d5-4d2d-897c-3f42579ae7e2"
+      },
+      "occurred_at": "2026-05-22T18:19:25.447965+00:00",
+      "chain_hash": "80b436da63ddf5956911e28174bfdf1deefb64bddc2e0cad0b9567c855c33c05"
+    }
+  ],
+  "verifier_result": {
+    "ok": true,
+    "reason": null
+  },
+  "cleanup_result": null,
+  "task_id": "1c06c9c1-d5b2-42d5-a1ba-13074efb7a5e",
+  "final_stream_event": {
+    "text": "The output I observed is:\n\n```\nAUDIT-TOK-c6fdd0a5a19d\n```"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "probe_id": "shell-exec-echo-token",
+  "tool": "shell.exec",
+  "model": "gpt-4o-mini",
+  "trial_n": 0,
+  "run_id": "901ebb3f",
+  "token": "AUDIT-TOK-1ffdd9727509",
+  "prompt": "Run the shell command: echo AUDIT-TOK-1ffdd9727509. Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "2bba8d01-2202-4025-b0b6-382f151d5c41",
+      "task_id": "f07163a1-d48d-407d-85f8-aa450109dcd0",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "command": "echo AUDIT-TOK-1ffdd9727509"
+        },
+        "call_id": "9c5f2a7f-2049-43c9-8d15-817da73cdb1e",
+        "tool_name": "shell.exec",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:19:21.538379+00:00",
+      "chain_hash": "e17b01775920fb2eb60fe5b9399725579c3365d463a9f58c6f790c95a613a6ee"
+    },
+    {
+      "id": "f160f9f4-fb3b-4dee-a983-a8b609a9c0eb",
+      "task_id": "f07163a1-d48d-407d-85f8-aa450109dcd0",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "9c5f2a7f-2049-43c9-8d15-817da73cdb1e"
+      },
+      "occurred_at": "2026-05-22T18:19:21.557914+00:00",
+      "chain_hash": "dead1666e1dd207a3d7bf9efd7f46da6247a4d813144751ed6580e515cdc9ccc"
+    },
+    {
+      "id": "9dbdb581-4bcf-4fc5-8421-34e87de03c0d",
+      "task_id": "f07163a1-d48d-407d-85f8-aa450109dcd0",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "shell",
+          "output": "AUDIT-TOK-1ffdd9727509\r\n",
+          "exit_code": 0
+        },
+        "call_id": "9c5f2a7f-2049-43c9-8d15-817da73cdb1e"
+      },
+      "occurred_at": "2026-05-22T18:19:21.931885+00:00",
+      "chain_hash": "5e7f0691d25381974f94dd4284dedbc0a32400cc5a7e939ccbfbf4be5e3def11"
+    }
+  ],
+  "verifier_result": {
+    "ok": true,
+    "reason": null
+  },
+  "cleanup_result": null,
+  "task_id": "f07163a1-d48d-407d-85f8-aa450109dcd0",
+  "final_stream_event": {
+    "text": "The output is ```AUDIT-TOK-1ffdd9727509```"
+  }
+}

@@ -1,0 +1,230 @@
+{
+  "probe_id": "web-search-attempt",
+  "tool": "web.search",
+  "model": "gpt-4o-mini",
+  "trial_n": 0,
+  "run_id": "a55e21a5",
+  "token": "AUDIT-TOK-7962815ea35f",
+  "prompt": "Search the web for the exact phrase: 'nova audit canary token AUDIT-TOK-7962815ea35f'. Tell me how many results you got.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "8348c212-7ba8-4c82-9b6e-7d1d0e18f1da",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "url": "https://www.google.com"
+        },
+        "call_id": "772240a9-a5a1-4d5a-b00a-0d804296fce6",
+        "tool_name": "browser_navigate",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:20:05.367613+00:00",
+      "chain_hash": "e5856b01cc2208696c648306b6782c7fbbaab213c199f4518f638fa7601fd427"
+    },
+    {
+      "id": "287892cb-4291-4f69-ab72-ff296360f80f",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "772240a9-a5a1-4d5a-b00a-0d804296fce6"
+      },
+      "occurred_at": "2026-05-22T18:20:05.388165+00:00",
+      "chain_hash": "92cb4b5b18c1cf0fc64ec464a0c4c1c383667a0b4951fbb2be50e61f9239b773"
+    },
+    {
+      "id": "b94b8b9d-3176-49b3-9327-0b5bd1fe633f",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "content": [
+            {
+              "text": "### Error\nError: async initializeServer: Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome\nRun \"npx playwright install chrome\"",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        },
+        "call_id": "772240a9-a5a1-4d5a-b00a-0d804296fce6"
+      },
+      "occurred_at": "2026-05-22T18:20:05.422270+00:00",
+      "chain_hash": "1a06a44b14898635e85aa3c334502c53bf303f3e1e56636452cf903083e4fe9c"
+    },
+    {
+      "id": "67caa449-ae18-4379-a835-6212ef222bc3",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "text": "Google Search",
+          "time": 2
+        },
+        "call_id": "b4eeb9d2-9885-40cf-a6ba-cd1fd77443c8",
+        "tool_name": "browser_wait_for",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:20:05.426788+00:00",
+      "chain_hash": "7744359c9fcddf9139288d3bafb3fd8af916cea03c332239445d759c4db9d7b9"
+    },
+    {
+      "id": "9923b546-e9d2-4e1d-af3c-0ca987a526fe",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "b4eeb9d2-9885-40cf-a6ba-cd1fd77443c8"
+      },
+      "occurred_at": "2026-05-22T18:20:05.444153+00:00",
+      "chain_hash": "72508e8e51951eacf6eb759fba856b45ab229a0cdcc74e32e0acfac6963b89f1"
+    },
+    {
+      "id": "b4ac708b-d2f0-4fcf-a1e8-7bc2b1c30651",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "content": [
+            {
+              "text": "### Error\nError: async initializeServer: Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome\nRun \"npx playwright install chrome\"",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        },
+        "call_id": "b4eeb9d2-9885-40cf-a6ba-cd1fd77443c8"
+      },
+      "occurred_at": "2026-05-22T18:20:05.450018+00:00",
+      "chain_hash": "05f36a4a9b533ac789ae16ae3d3d4db252a4665236480e1a4ff0db199050d51a"
+    },
+    {
+      "id": "ab9958fc-1144-40a5-a946-03fde284c530",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "command": "npx playwright install chrome"
+        },
+        "call_id": "bf6aa767-e1b1-4741-9d13-c51a2e040a95",
+        "tool_name": "shell.exec",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:20:08.979626+00:00",
+      "chain_hash": "5774b210b4abf7e277838f24a4b6ca4bdaef85cb2d70df62ee797a03c7d943b2"
+    },
+    {
+      "id": "99c6de5b-bcaf-47cb-a385-c13cf89bd10c",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "bf6aa767-e1b1-4741-9d13-c51a2e040a95"
+      },
+      "occurred_at": "2026-05-22T18:20:09.000365+00:00",
+      "chain_hash": "9b01c690857ff52894c8d86eab272167b7568771c20309c0f5f0c3fb21dc339b"
+    },
+    {
+      "id": "864a5570-ec95-4a67-854b-1f68eb51efb3",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "shell",
+          "output": "\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u2834\u001b[1G\u001b[0K\u2826\u001b[1G\u001b[0K\u2827\u001b[1G\u001b[0K\u2807\u001b[1G\u001b[0K\u280f\u001b[1G\u001b[0K\u280b\u001b[1G\u001b[0K\u2819\u001b[1G\u001b[0K\u2839\u001b[1G\u001b[0K\u2838\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m \u001b[94mcode\u001b[39m EAI_AGAIN\r\n\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m \u001b[94msyscall\u001b[39m getaddrinfo\r\n\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m \u001b[94merrno\u001b[39m EAI_AGAIN\r\n\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m request to https://registry.npmjs.org/playwright failed, reason: getaddrinfo EAI_AGAIN registry.npmjs.org\r\n\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m Log files were not written due to an error writing to the directory: /home/sandbox/.npm/_logs\r\n\u001b[1mnpm\u001b[22m \u001b[31merror\u001b[39m You can rerun the command with `--loglevel=verbose` to see the logs in your terminal\r\n\u001b[1G\u001b[0K\u283c\u001b[1G\u001b[0K",
+          "exit_code": 1
+        },
+        "call_id": "bf6aa767-e1b1-4741-9d13-c51a2e040a95"
+      },
+      "occurred_at": "2026-05-22T18:21:20.238041+00:00",
+      "chain_hash": "f240ea2ff79580c5099ca009a83715896f8d721a9c2ffa730d05ba6cd6831667"
+    },
+    {
+      "id": "01a7193b-e632-42c3-a8f3-f3cc90a7128e",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "url": "https://www.bing.com"
+        },
+        "call_id": "e39e4df9-b606-4883-9ccd-887d5d228f91",
+        "tool_name": "browser_navigate",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:21:22.818097+00:00",
+      "chain_hash": "d37f63f52886b373fa6d535e43fabab541d7714f7cc982525834ebf780f4498a"
+    },
+    {
+      "id": "d125c142-87b5-466c-a040-e7011d53a51b",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "e39e4df9-b606-4883-9ccd-887d5d228f91"
+      },
+      "occurred_at": "2026-05-22T18:21:22.837128+00:00",
+      "chain_hash": "b962f1355403c76a4632f984bdba9dd8916545bef2cf738d9b2be7a345f8bca6"
+    },
+    {
+      "id": "ce23209a-3bbd-49c2-8a7c-23c38960506a",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "content": [
+            {
+              "text": "### Error\nError: async initializeServer: Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome\nRun \"npx playwright install chrome\"",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        },
+        "call_id": "e39e4df9-b606-4883-9ccd-887d5d228f91"
+      },
+      "occurred_at": "2026-05-22T18:21:22.843923+00:00",
+      "chain_hash": "9e64b6642f034316e4b33a2a508502909d4905f5e35325458ee5a50cb88dc6e6"
+    },
+    {
+      "id": "7794a3b7-7a0d-401e-b3da-96ee715a6392",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "code": "import requests\nresponse = requests.get('https://www.bing.com/search?q=nova+audit+canary+token+AUDIT-TOK-7962815ea35f')\nresults = response.text\nprint(results)",
+          "language": "python"
+        },
+        "call_id": "9a52994f-49f7-41dd-a5bc-78b462756389",
+        "tool_name": "code.execute",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T18:21:26.573184+00:00",
+      "chain_hash": "c53a59766435e59e7b33ba621bbf177920de8debefcd8489451415bfb80be5f2"
+    },
+    {
+      "id": "245b9148-9fc6-4f13-868c-3e58ad7be464",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "9a52994f-49f7-41dd-a5bc-78b462756389"
+      },
+      "occurred_at": "2026-05-22T18:21:26.600750+00:00",
+      "chain_hash": "b89a6a1c18b4ae2b13bc0552544bdb13e69778c5d5894d9d86eb0033b27b0b67"
+    },
+    {
+      "id": "f09a4677-72e8-46e3-ac72-11f4e03ce728",
+      "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "code",
+          "output": "Traceback (most recent call last):\r\n  File \"/tmp/nova_9a52994f.script\", line 1, in <module>\r\n    import requests\r\nModuleNotFoundError: No module named 'requests'\r\n",
+          "exit_code": 1
+        },
+        "call_id": "9a52994f-49f7-41dd-a5bc-78b462756389"
+      },
+      "occurred_at": "2026-05-22T18:21:26.704629+00:00",
+      "chain_hash": "003ac668dce82511a314ed67704cb57437a4b93654f38cc1a6d8c0ded0428e23"
+    }
+  ],
+  "verifier_result": null,
+  "cleanup_result": null,
+  "task_id": "139d8e0f-7585-47d9-b7b4-e2515f9f3549",
+  "wall_clock_timeout": true
+}
