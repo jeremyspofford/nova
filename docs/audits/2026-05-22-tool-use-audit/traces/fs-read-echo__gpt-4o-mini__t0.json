@@ -3,51 +3,51 @@
   "tool": "fs.read",
   "model": "gpt-4o-mini",
   "trial_n": 0,
-  "run_id": "f776917f",
-  "token": "AUDIT-TOK-d52ab35128b8",
-  "prompt": "Read the file /workspace/nova-audit-fixture-f776917f.txt and tell me the EXACT content it contains, verbatim, between triple backticks.",
+  "run_id": "26adeb97",
+  "token": "AUDIT-TOK-d6b5013c9759",
+  "prompt": "Read the file /workspace/nova-audit-fixture-26adeb97.txt and tell me the EXACT content it contains, verbatim, between triple backticks.",
   "stream_events": [],
   "task_events": [
     {
-      "id": "fb6ca59e-9ea0-42a7-86c5-7b10d5899f1b",
-      "task_id": "361512c9-b6ca-407e-b0f6-114bd46f6922",
+      "id": "703b67cf-6be0-487b-8020-088d65fea1a8",
+      "task_id": "dd4b4ad4-8f1f-4596-99d5-6be78e850d42",
       "event_type": "tool_call_proposed",
       "payload": {
         "args": {
-          "path": "/workspace/nova-audit-fixture-f776917f.txt"
+          "path": "/workspace/nova-audit-fixture-26adeb97.txt"
         },
-        "call_id": "c5edb072-29e3-45c0-8b76-9eb10c31c10a",
+        "call_id": "e4b1706a-1697-4fc2-834d-e049e64ee715",
         "tool_name": "fs.read",
         "caller_role": "chat"
       },
-      "occurred_at": "2026-05-22T19:06:57.632713+00:00",
-      "chain_hash": "106a4e0558c550517a097e12e02834566a40b5e27682653b07ffbbd21395d4be"
+      "occurred_at": "2026-05-22T19:26:49.609797+00:00",
+      "chain_hash": "535110d13d3a9096a868c81a5d179eb32393c064e0600d4a75a53b9840b7856a"
     },
     {
-      "id": "eb60df42-81d5-43a8-95b8-843042df50a1",
-      "task_id": "361512c9-b6ca-407e-b0f6-114bd46f6922",
+      "id": "878659c4-5ab0-4f02-9c17-863c342b1e4c",
+      "task_id": "dd4b4ad4-8f1f-4596-99d5-6be78e850d42",
       "event_type": "tool_call_started",
       "payload": {
-        "call_id": "c5edb072-29e3-45c0-8b76-9eb10c31c10a"
+        "call_id": "e4b1706a-1697-4fc2-834d-e049e64ee715"
       },
-      "occurred_at": "2026-05-22T19:06:57.646872+00:00",
-      "chain_hash": "29e6038ded3ac6b5e6a81b2cea445677e54850e5a38908ef1e46fcb7142f5943"
+      "occurred_at": "2026-05-22T19:26:49.624160+00:00",
+      "chain_hash": "3a51214e4359c44212069b059dcbc580fa4804eeb74fa84a853fdb505c5770fa"
     },
     {
-      "id": "ff32fbbc-47d5-4286-9c9b-df265ba89a59",
-      "task_id": "361512c9-b6ca-407e-b0f6-114bd46f6922",
+      "id": "cba542ee-ce3e-400a-9bca-98d1258c269d",
+      "task_id": "dd4b4ad4-8f1f-4596-99d5-6be78e850d42",
       "event_type": "tool_call_result",
       "payload": {
         "result": {
-          "path": "/workspace/nova-audit-fixture-f776917f.txt",
+          "path": "/workspace/nova-audit-fixture-26adeb97.txt",
           "size": 22,
           "type": "file",
-          "content": "AUDIT-TOK-d52ab35128b8"
+          "content": "AUDIT-TOK-d6b5013c9759"
         },
-        "call_id": "c5edb072-29e3-45c0-8b76-9eb10c31c10a"
+        "call_id": "e4b1706a-1697-4fc2-834d-e049e64ee715"
       },
-      "occurred_at": "2026-05-22T19:06:57.651050+00:00",
-      "chain_hash": "f763ff3d6c59aa528b54a57128176c5c5f297d6ea001ab5bb2e0ed4781dc770f"
+      "occurred_at": "2026-05-22T19:26:49.627491+00:00",
+      "chain_hash": "2d22a7251046fdf2e1f4b0b20232ff73706a4473c0c241e76b4b41aeca03c0aa"
     }
   ],
   "verifier_result": {
@@ -62,8 +62,8 @@
     "ok": true,
     "reason": null
   },
-  "task_id": "361512c9-b6ca-407e-b0f6-114bd46f6922",
+  "task_id": "dd4b4ad4-8f1f-4596-99d5-6be78e850d42",
   "final_stream_event": {
-    "text": "The contents of /workspace/nova-audit-fixture-f776917f.txt are:\n\n```\nAUDIT-TOK-d52ab35128b8\n```"
+    "text": "The contents of /workspace/nova-audit-fixture-26adeb97.txt are:\n\n```\nAUDIT-TOK-d6b5013c9759\n```"
   }
 }

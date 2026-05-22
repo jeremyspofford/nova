@@ -1,7 +1,7 @@
 {
-  "run_id": "2ad503d8",
+  "run_id": "fb134219",
   "date": "2026-05-22",
-  "commit_sha": "04ad4b8092df",
+  "commit_sha": "26e757e3b244",
   "models": [
     {
       "model_id": "qwen2.5-coder:7b",
@@ -80,7 +80,7 @@
           "probe_id": "browser-navigate-attempt",
           "tool": "browser_navigate",
           "n_attempted": 1,
-          "n_called_ok": 0,
+          "n_called_ok": 1,
           "n_side_effect_verified": 0
         }
       ]
@@ -127,7 +127,7 @@
           "probe_id": "memory-search-verbatim-echo",
           "tool": "memory.search",
           "n_attempted": 1,
-          "n_called_ok": 1,
+          "n_called_ok": 0,
           "n_side_effect_verified": 0
         },
         {
@@ -148,21 +148,21 @@
           "probe_id": "web-fetch-token-page",
           "tool": "web.fetch",
           "n_attempted": 1,
-          "n_called_ok": 0,
-          "n_side_effect_verified": 0
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
         },
         {
           "probe_id": "web-search-attempt",
           "tool": "web.search",
           "n_attempted": 1,
-          "n_called_ok": 0,
+          "n_called_ok": 1,
           "n_side_effect_verified": 0
         },
         {
           "probe_id": "browser-navigate-attempt",
           "tool": "browser_navigate",
           "n_attempted": 1,
-          "n_called_ok": 0,
+          "n_called_ok": 1,
           "n_side_effect_verified": 0
         }
       ]
@@ -174,8 +174,8 @@
           "probe_id": "fs-write-roundtrip",
           "tool": "fs.write",
           "n_attempted": 1,
-          "n_called_ok": 0,
-          "n_side_effect_verified": 0
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
         },
         {
           "probe_id": "fs-read-echo",
@@ -189,14 +189,14 @@
           "tool": "shell.exec",
           "n_attempted": 1,
           "n_called_ok": 1,
-          "n_side_effect_verified": 1
+          "n_side_effect_verified": 0
         },
         {
           "probe_id": "code-execute-echo-token",
           "tool": "code.execute",
           "n_attempted": 1,
-          "n_called_ok": 1,
-          "n_side_effect_verified": 1
+          "n_called_ok": 0,
+          "n_side_effect_verified": 0
         },
         {
           "probe_id": "memory-write-then-search",

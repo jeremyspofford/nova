@@ -106,7 +106,12 @@ async def run_trial(
             async with client.stream(
                 "POST",
                 f"{AGENT_CORE}/api/v1/tasks/{task_id}/message",
-                json={"text": prompt, "model": model["model_id"]},
+                # web_search=True opts web.fetch + web.search into the tool list
+                # offered to the LLM. Without it Nova excludes web tools, which
+                # makes the web-fetch / web-search probes a no-op — the model
+                # was never told the tools exist. The audit's purpose is to
+                # test what's available; we ask for everything.
+                json={"text": prompt, "model": model["model_id"], "web_search": True},
                 headers=admin_headers,
             ) as resp:
                 final = await asyncio.wait_for(

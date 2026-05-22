@@ -3,47 +3,47 @@
   "tool": "memory.write",
   "model": "qwen2.5-coder:7b",
   "trial_n": 0,
-  "run_id": "1b2104bb",
-  "token": "AUDIT-TOK-4cdcd0799e94",
-  "prompt": "Save a memory with the content 'nova-audit-1b2104bb record contains the token AUDIT-TOK-4cdcd0799e94'. Then confirm it's saved.",
+  "run_id": "5b0a6348",
+  "token": "AUDIT-TOK-8e0f1e7109f5",
+  "prompt": "Save a memory with the content 'nova-audit-5b0a6348 record contains the token AUDIT-TOK-8e0f1e7109f5'. Then confirm it's saved.",
   "stream_events": [],
   "task_events": [
     {
-      "id": "8f16ea87-af6c-4883-a3a4-cb7061e0a478",
-      "task_id": "1fa45396-2d7a-4f9f-a1be-bada64f66722",
+      "id": "71527b27-fc0d-4a30-8115-a0ee8321b979",
+      "task_id": "09929e1e-c27f-4b46-adaa-e1e50e0d88c6",
       "event_type": "tool_call_proposed",
       "payload": {
         "args": {
-          "key": "nova-audit-1b2104bb_token",
-          "value": "AUDIT-TOK-4cdcd0799e94"
+          "key": "nova-audit-5b0a6348_token",
+          "value": "AUDIT-TOK-8e0f1e7109f5"
         },
-        "call_id": "d6dcab49-e3c8-42d1-b858-6c74303a4422",
+        "call_id": "a4a5df81-493d-4d49-b069-abd68e3c5150",
         "tool_name": "memory.write",
         "caller_role": "chat"
       },
-      "occurred_at": "2026-05-22T19:05:12.929495+00:00",
-      "chain_hash": "81a7b62760c572d20b436db0b087220dbf756db58984e730d9864baf580550bc"
+      "occurred_at": "2026-05-22T19:25:01.412887+00:00",
+      "chain_hash": "ae6fd0bdedab6e8c1b25774aa3caa38059414ec1549ec9b6087bd6260bd9581c"
     },
     {
-      "id": "faa8010a-cf86-4c80-ab87-e34ebabbb769",
-      "task_id": "1fa45396-2d7a-4f9f-a1be-bada64f66722",
+      "id": "7fee25f4-f39b-422a-8403-a3fc84c4d737",
+      "task_id": "09929e1e-c27f-4b46-adaa-e1e50e0d88c6",
       "event_type": "tool_call_started",
       "payload": {
-        "call_id": "d6dcab49-e3c8-42d1-b858-6c74303a4422"
+        "call_id": "a4a5df81-493d-4d49-b069-abd68e3c5150"
       },
-      "occurred_at": "2026-05-22T19:05:12.948242+00:00",
-      "chain_hash": "aebb76540f18eab7b30fc911da004ded53d1dd4b68f97761c704bbd56ee63559"
+      "occurred_at": "2026-05-22T19:25:01.440038+00:00",
+      "chain_hash": "df170311aeef1356d7c3d283a2377b891f78aae4c55ab8f2106173fa2dea7b99"
     },
     {
-      "id": "3ee80c12-0f4e-4ffe-9633-3066aac950a8",
-      "task_id": "1fa45396-2d7a-4f9f-a1be-bada64f66722",
+      "id": "34adc1de-e61e-4948-b4af-a90fce845075",
+      "task_id": "09929e1e-c27f-4b46-adaa-e1e50e0d88c6",
       "event_type": "tool_call_error",
       "payload": {
         "error": "memory_write() got an unexpected keyword argument 'key'",
-        "call_id": "d6dcab49-e3c8-42d1-b858-6c74303a4422"
+        "call_id": "a4a5df81-493d-4d49-b069-abd68e3c5150"
       },
-      "occurred_at": "2026-05-22T19:05:12.951859+00:00",
-      "chain_hash": "1dd164b466a36930317ea3a403bf0ea6c95bb16eca1e3f849e38702973de3d07"
+      "occurred_at": "2026-05-22T19:25:01.443351+00:00",
+      "chain_hash": "a1393da726abd236b3aa2e45ab90a334c949d89cc646d0e7d501e38a517c2461"
     }
   ],
   "verifier_result": null,
@@ -51,7 +51,7 @@
     "ok": true,
     "reason": null
   },
-  "task_id": "1fa45396-2d7a-4f9f-a1be-bada64f66722",
+  "task_id": "09929e1e-c27f-4b46-adaa-e1e50e0d88c6",
   "final_stream_event": {
     "text": "LLM gateway unreachable"
   }

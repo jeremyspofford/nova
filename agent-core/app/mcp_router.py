@@ -63,11 +63,24 @@ def _row_to_dict(row) -> dict:
             env = json.loads(env)
         except Exception:
             env = {}
+    # args is a JSONB column. asyncpg may return it as a raw string OR as a
+    # decoded list depending on whether the jsonb codec is registered for this
+    # connection. Handle both — otherwise `list(string)` iterates characters
+    # and produces garbled args ("@playwright/mcp" becomes ['@','p','l',...])
+    # that prevent MCP servers from starting.
+    args = row["args"]
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            args = []
+    if not isinstance(args, list):
+        args = []
     return {
         "id": str(row["id"]),
         "name": row["name"],
         "command": row["command"],
-        "args": list(row["args"] or []),
+        "args": args,
         "env": env or {},
         "working_dir": row["working_dir"],
         "transport": row["transport"],
