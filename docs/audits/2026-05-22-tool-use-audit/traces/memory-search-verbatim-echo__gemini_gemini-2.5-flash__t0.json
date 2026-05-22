@@ -3,9 +3,9 @@
   "tool": "memory.search",
   "model": "gemini/gemini-2.5-flash",
   "trial_n": 0,
-  "run_id": "20066b8f",
-  "token": "AUDIT-TOK-46f3e4c88196",
-  "prompt": "Search your memory for the token 'nova-audit-fixture-20066b8f'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.",
+  "run_id": "8bf66a55",
+  "token": "AUDIT-TOK-99c692967daf",
+  "prompt": "Search your memory for the token 'nova-audit-fixture-8bf66a55'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.",
   "stream_events": [],
   "task_events": [],
   "verifier_result": null,
@@ -17,7 +17,7 @@
     "ok": true,
     "reason": null
   },
-  "task_id": "05ce8127-c9fe-4292-987d-08c194830205",
+  "task_id": "38854d58-29fd-4083-8c48-c7d6b99aad51",
   "final_stream_event": {
     "text": "LLM gateway unreachable"
   }

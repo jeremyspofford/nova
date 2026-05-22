@@ -3,60 +3,15 @@
   "tool": "code.execute",
   "model": "gemini/gemini-2.5-flash",
   "trial_n": 0,
-  "run_id": "3e2cb26b",
-  "token": "AUDIT-TOK-3bcb744ecd9e",
-  "prompt": "Execute this Python: print('AUDIT-TOK-3bcb744ecd9e'). Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "run_id": "6d348dfe",
+  "token": "AUDIT-TOK-613119655cc2",
+  "prompt": "Execute this Python: print('AUDIT-TOK-613119655cc2'). Then tell me the exact stdout you observed, verbatim between triple backticks.",
   "stream_events": [],
-  "task_events": [
-    {
-      "id": "7b824396-1caf-486b-ba19-b7b6e06e2f7e",
-      "task_id": "37c61df0-952e-4159-ab80-103a52f41976",
-      "event_type": "tool_call_proposed",
-      "payload": {
-        "args": {
-          "code": "print('AUDIT-TOK-3bcb744ecd9e')",
-          "language": "python"
-        },
-        "call_id": "25c965cd-f845-49c1-89e2-cf751ad6dcce",
-        "tool_name": "code.execute",
-        "caller_role": "chat"
-      },
-      "occurred_at": "2026-05-22T19:07:54.140405+00:00",
-      "chain_hash": "343d97e8c9074f165394c45d0c956c91ea6344f689397dc37702358e249ac30d"
-    },
-    {
-      "id": "c8cc7492-cad6-4203-9dfd-d536c598ffd4",
-      "task_id": "37c61df0-952e-4159-ab80-103a52f41976",
-      "event_type": "tool_call_started",
-      "payload": {
-        "call_id": "25c965cd-f845-49c1-89e2-cf751ad6dcce"
-      },
-      "occurred_at": "2026-05-22T19:07:54.174540+00:00",
-      "chain_hash": "c483e88dfa22c8af3ea939a9b678ae219168ac60eee2aceadd4a8aa6ddc88522"
-    },
-    {
-      "id": "36ce604c-9918-4038-9b3a-18d34d381220",
-      "task_id": "37c61df0-952e-4159-ab80-103a52f41976",
-      "event_type": "tool_call_result",
-      "payload": {
-        "result": {
-          "kind": "code",
-          "output": "AUDIT-TOK-3bcb744ecd9e\r\n",
-          "exit_code": 0
-        },
-        "call_id": "25c965cd-f845-49c1-89e2-cf751ad6dcce"
-      },
-      "occurred_at": "2026-05-22T19:07:54.756836+00:00",
-      "chain_hash": "3957766d776400d1140cfd8b2203dd8144948b37510e67c2bbeda20434564596"
-    }
-  ],
-  "verifier_result": {
-    "ok": true,
-    "reason": null
-  },
+  "task_events": [],
+  "verifier_result": null,
   "cleanup_result": null,
-  "task_id": "37c61df0-952e-4159-ab80-103a52f41976",
+  "task_id": "da719e98-56a7-4ac0-9e3c-fe127ec3572e",
   "final_stream_event": {
-    "text": "The output I observed is:\n\n```\nAUDIT-TOK-3bcb744ecd9e\n```"
+    "text": "LLM gateway unreachable"
   }
 }

@@ -20,7 +20,7 @@ from .tools.registry import to_openai_tools
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
-SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_BASE = """\
 You are Nova, an autonomous AI assistant. You can take real actions in the world using tools.
 
 When given a complex or open-ended goal:
@@ -30,16 +30,41 @@ When given a complex or open-ended goal:
 4. Use memory.write to remember important context for later in the conversation.
 5. When no specific tool exists for what you need, improvise with code.execute (python or bash).
 
-Tool selection guide:
-- web.fetch / web.search — read public web pages and search results
-- browser_navigate / browser_click / browser_type / browser_snapshot — interact with web pages that require JavaScript or form submissions
-- shell.exec / code.execute — run commands and scripts locally (NOTE: these run in an isolated sandbox with no internet access — use web or browser tools for any HTTP requests)
-- fs.read / fs.write — read and write files in the workspace
-- nova.secrets.write / nova.secrets.read — store and retrieve passwords, tokens, and account credentials
-- memory.search / memory.write — recall and record knowledge across conversations
+When answering simple questions, be concise. When executing multi-step tasks, briefly narrate what you're doing at each step."""
 
-When answering simple questions, be concise. When executing multi-step tasks, briefly narrate what you're doing at each step.
-"""
+# One-line descriptions used to build the per-request "Tool selection guide"
+# section. Keys are tool names (or prefixes ending with `_*`) that, when
+# present in the offered tool list, contribute their line to the guide.
+# Lines for tools NOT in the offered list are omitted — don't tell the model
+# about tools it can't actually call.
+_TOOL_GUIDE_LINES: list[tuple[str, str]] = [
+    ("web.fetch",           "- web.fetch / web.search — read public web pages and search results"),
+    ("browser_*",           "- browser_navigate / browser_click / browser_type / browser_snapshot — interact with web pages that require JavaScript or form submissions"),
+    ("shell.exec",          "- shell.exec / code.execute — run commands and scripts locally (NOTE: these run in an isolated sandbox with no internet access — use web or browser tools for any HTTP requests)"),
+    ("fs.write",            "- fs.read / fs.write — read and write files in the workspace"),
+    ("nova.secrets.write",  "- nova.secrets.write / nova.secrets.read — store and retrieve passwords, tokens, and account credentials"),
+    ("memory.search",       "- memory.search / memory.write — recall and record knowledge across conversations"),
+]
+
+
+def _build_tool_guide(offered_tool_names: set[str]) -> str:
+    """Build the "Tool selection guide" section from the actually-offered tools.
+
+    Each entry is keyed by a representative tool name (or `prefix_*` for MCP
+    families). The line appears only if the keyed name is in the offered set,
+    or — for prefix patterns — if any offered name matches the prefix.
+    """
+    lines: list[str] = []
+    for key, line in _TOOL_GUIDE_LINES:
+        if key.endswith("_*"):
+            prefix = key[:-1]  # "browser_*" → "browser_"
+            if any(n.startswith(prefix) for n in offered_tool_names):
+                lines.append(line)
+        elif key in offered_tool_names:
+            lines.append(line)
+    if not lines:
+        return ""
+    return "\n\nTool selection guide:\n" + "\n".join(lines)
 
 
 async def _search_memory(query: str, limit: int = 5) -> list[dict]:
@@ -80,13 +105,17 @@ _OUTPUT_STYLE_HINTS: dict[str, str] = {
 
 def _build_system_prompt(
     memories: list[dict],
+    *,
+    offered_tool_names: set[str] | None = None,
     model: str | None = None,
     output_style: str | None = None,
     custom_instructions: str | None = None,
     web_search: bool = False,
     deep_research: bool = False,
 ) -> str:
-    base = SYSTEM_PROMPT
+    base = _SYSTEM_PROMPT_BASE
+    if offered_tool_names is not None:
+        base += _build_tool_guide(offered_tool_names)
     if model:
         base += f"\nYour language model is: {model}"
     if output_style:
@@ -404,9 +433,19 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
             body.text[:200], task_id,
         )
 
+    # Build the offered tool list FIRST so the system prompt can advertise
+    # only what's actually available. Previously the prompt advertised
+    # web.fetch / web.search even when they weren't in the offered tool list
+    # (web_search=False default), confusing small models into emitting
+    # serialized tool calls for tools they couldn't actually call.
+    all_tools = to_openai_tools()
+    offered_tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"], include_web=body.web_search)]
+    offered_tool_names: set[str] = {t["function"]["name"] for t in offered_tools}
+
     memories = await _search_memory(body.text)
     system_prompt = _build_system_prompt(
         memories,
+        offered_tool_names=offered_tool_names,
         model=body.model,
         output_style=body.output_style,
         custom_instructions=body.custom_instructions,
@@ -425,8 +464,7 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         approval_queue: asyncio.Queue = asyncio.Queue()
         capability.register_approval_notifier(task_id, approval_queue)
         messages = list(base_messages)
-        all_tools = to_openai_tools()
-        tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"], include_web=body.web_search)]
+        tools = offered_tools
         final_text = ""
         meta_emitted = False
 
@@ -454,31 +492,37 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                     # tool_call so the ReAct loop can execute it — much better
                     # than the previous behavior of falling back to no-tools.
                     parsed = _extract_serialized_tool_call(content)
+                    # Only honor parsed serialized tool calls if the name maps
+                    # to a tool actually in the offered set. Without this filter
+                    # the parser could dispatch ANY tool the model hallucinates
+                    # — even ones excluded by web_search=False, or tools the
+                    # model invented entirely. Closes a latent security shape.
                     if parsed is not None:
                         synth_name = parsed["name"]
-                        # Tools were sent to the model with sanitized names
-                        # (memory_search not memory.search) — un-sanitize using
-                        # the name_map captured at call time. _llm_complete_chat
-                        # already restores names on resp["tool_calls"]; we do the
-                        # same here for parsed content.
-                        if synth_name in {_sanitize_tool_name(n) for n in _all_known_tool_names(all_tools)}:
-                            synth_name_orig = _unsanitize_tool_name(synth_name, all_tools)
-                        else:
+                        offered_sanitized = {_sanitize_tool_name(n) for n in offered_tool_names}
+                        if synth_name in offered_tool_names:
                             synth_name_orig = synth_name
-                        synth_tc = {
-                            "id": f"call_{uuid.uuid4().hex[:12]}",
-                            "type": "function",
-                            "function": {
-                                "name": synth_name_orig,
-                                "arguments": json.dumps(parsed["arguments"]),
-                            },
-                        }
-                        # Append assistant turn + synth tool_calls to history,
-                        # then drop into the same dispatch loop the structured
-                        # path uses below.
-                        tool_calls = [synth_tc]
-                        # fall through to the structured tool_calls dispatch
-                    else:
+                        elif synth_name in offered_sanitized:
+                            synth_name_orig = _unsanitize_tool_name(synth_name, offered_tools)
+                        else:
+                            # Tool isn't in the offered set — refuse to dispatch.
+                            # Treat as plain text so the loop terminates cleanly.
+                            parsed = None
+                        if parsed is not None:
+                            synth_tc = {
+                                "id": f"call_{uuid.uuid4().hex[:12]}",
+                                "type": "function",
+                                "function": {
+                                    "name": synth_name_orig,
+                                    "arguments": json.dumps(parsed["arguments"]),
+                                },
+                            }
+                            # Append assistant turn + synth tool_calls to history,
+                            # then drop into the same dispatch loop the structured
+                            # path uses below.
+                            tool_calls = [synth_tc]
+                            # fall through to the structured tool_calls dispatch
+                    if parsed is None:
                         final_text = content
                         yield json.dumps({"text": content}) + "\n"
                         break

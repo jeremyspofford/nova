@@ -3,54 +3,54 @@
   "tool": "web.search",
   "model": "qwen2.5-coder:7b",
   "trial_n": 0,
-  "run_id": "b30ef8c5",
-  "token": "AUDIT-TOK-1932ac32cccc",
-  "prompt": "Search the web for the exact phrase: 'nova audit canary token AUDIT-TOK-1932ac32cccc'. Tell me how many results you got.",
+  "run_id": "e9c91238",
+  "token": "AUDIT-TOK-f54ec45ce87d",
+  "prompt": "Search the web for the exact phrase: 'nova audit canary token AUDIT-TOK-f54ec45ce87d'. Tell me how many results you got.",
   "stream_events": [],
   "task_events": [
     {
-      "id": "9baa85c2-66ff-4beb-aee9-85e13af3cd99",
-      "task_id": "cfb3a00f-e7d2-4c17-bbf2-249bea98e4dd",
+      "id": "b76e8b4f-3756-4016-8247-9ceb3861eae9",
+      "task_id": "06e08cc1-65fe-40be-9d1f-3d102b4a6317",
       "event_type": "tool_call_proposed",
       "payload": {
         "args": {
-          "query": "exact:nova audit canary token AUDIT-TOK-1932ac32cccc"
+          "query": "exact:nova audit canary token AUDIT-TOK-f54ec45ce87d"
         },
-        "call_id": "1544a64c-427f-4688-80b3-11b1586aa5a3",
+        "call_id": "236d5c80-658b-4c37-97ee-53ac7c52ff16",
         "tool_name": "web.search",
         "caller_role": "chat"
       },
-      "occurred_at": "2026-05-22T19:06:25.378798+00:00",
-      "chain_hash": "270e21e9a7a47fe563a9cd9fad88eab42e25102ea60703a5d4b05a1e23ac02a8"
+      "occurred_at": "2026-05-22T19:26:11.897737+00:00",
+      "chain_hash": "957f00365c39749f36f98f3824b86cdb6691710f6e932728dd88acc1e418134c"
     },
     {
-      "id": "6574cee8-bbaa-434b-8e41-24a87296fdb7",
-      "task_id": "cfb3a00f-e7d2-4c17-bbf2-249bea98e4dd",
+      "id": "60d0e749-6a38-4d9e-a77e-0bcb8fd0db6d",
+      "task_id": "06e08cc1-65fe-40be-9d1f-3d102b4a6317",
       "event_type": "tool_call_started",
       "payload": {
-        "call_id": "1544a64c-427f-4688-80b3-11b1586aa5a3"
+        "call_id": "236d5c80-658b-4c37-97ee-53ac7c52ff16"
       },
-      "occurred_at": "2026-05-22T19:06:25.392790+00:00",
-      "chain_hash": "0bb858886162e29fe1b5fc3fd2a75d1b4f5b4b5355db5bbbd75ede56abea6bf9"
+      "occurred_at": "2026-05-22T19:26:11.901379+00:00",
+      "chain_hash": "b8e8b306f5b1df276dcb4b494fa1e78c164b3a007258a70e2a8882bc9bfe54c7"
     },
     {
-      "id": "abb92ded-4d9f-42e5-b526-94021451f244",
-      "task_id": "cfb3a00f-e7d2-4c17-bbf2-249bea98e4dd",
+      "id": "e8ea4c47-f61e-4457-90f0-1d81971d1e17",
+      "task_id": "06e08cc1-65fe-40be-9d1f-3d102b4a6317",
       "event_type": "tool_call_result",
       "payload": {
         "result": {
-          "query": "exact:nova audit canary token AUDIT-TOK-1932ac32cccc",
+          "query": "exact:nova audit canary token AUDIT-TOK-f54ec45ce87d",
           "results": []
         },
-        "call_id": "1544a64c-427f-4688-80b3-11b1586aa5a3"
+        "call_id": "236d5c80-658b-4c37-97ee-53ac7c52ff16"
       },
-      "occurred_at": "2026-05-22T19:06:25.708481+00:00",
-      "chain_hash": "332130e20390b2e3a89b3727ce9d178cd6422acefc7d52c422ad8ba5edade281"
+      "occurred_at": "2026-05-22T19:26:12.184091+00:00",
+      "chain_hash": "c311c91283d835a90801630bac071e06bc75ffa526435b1d41cfc350c4f3a088"
     }
   ],
   "verifier_result": null,
   "cleanup_result": null,
-  "task_id": "cfb3a00f-e7d2-4c17-bbf2-249bea98e4dd",
+  "task_id": "06e08cc1-65fe-40be-9d1f-3d102b4a6317",
   "final_stream_event": {
     "text": "LLM gateway unreachable"
   }

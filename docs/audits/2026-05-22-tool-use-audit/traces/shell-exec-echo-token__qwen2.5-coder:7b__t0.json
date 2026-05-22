@@ -3,58 +3,58 @@
   "tool": "shell.exec",
   "model": "qwen2.5-coder:7b",
   "trial_n": 0,
-  "run_id": "e00a467d",
-  "token": "AUDIT-TOK-77038292f5c3",
-  "prompt": "Run the shell command: echo AUDIT-TOK-77038292f5c3. Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "run_id": "c8f79fb0",
+  "token": "AUDIT-TOK-2fce5e9acb36",
+  "prompt": "Run the shell command: echo AUDIT-TOK-2fce5e9acb36. Then tell me the exact stdout you observed, verbatim between triple backticks.",
   "stream_events": [],
   "task_events": [
     {
-      "id": "faad6c34-7b77-4f42-9195-b83850d8a763",
-      "task_id": "93adf5e2-303f-4e28-85b5-b88c3213e1c5",
+      "id": "e1fa6688-640c-4b00-9a34-4ac55f9e0594",
+      "task_id": "b6cebecb-c420-489c-b9bb-4f684db0f724",
       "event_type": "tool_call_proposed",
       "payload": {
         "args": {
-          "command": "echo AUDIT-TOK-77038292f5c3"
+          "command": "echo AUDIT-TOK-2fce5e9acb36"
         },
-        "call_id": "55c48867-c378-45ae-aae1-e5d84a15c25d",
+        "call_id": "dcb53083-fbb4-411d-b6db-b45462159b4f",
         "tool_name": "shell.exec",
         "caller_role": "chat"
       },
-      "occurred_at": "2026-05-22T19:04:45.355761+00:00",
-      "chain_hash": "dfb3f6aa2c4255ce9320ab007e789088461b758a3a325574c6569fee5b58dfdd"
+      "occurred_at": "2026-05-22T19:24:35.695812+00:00",
+      "chain_hash": "03d1354a2e2407132dab1af77aa177d3b525aaae392fa121ead143d190b9f259"
     },
     {
-      "id": "9aee633c-9a3f-49cf-b322-787b08c14339",
-      "task_id": "93adf5e2-303f-4e28-85b5-b88c3213e1c5",
+      "id": "a12c03c9-dcdb-43a8-a69c-b32a279c9738",
+      "task_id": "b6cebecb-c420-489c-b9bb-4f684db0f724",
       "event_type": "tool_call_started",
       "payload": {
-        "call_id": "55c48867-c378-45ae-aae1-e5d84a15c25d"
+        "call_id": "dcb53083-fbb4-411d-b6db-b45462159b4f"
       },
-      "occurred_at": "2026-05-22T19:04:45.376286+00:00",
-      "chain_hash": "732b8d3014e5810e6d48ca7b0a6cf3967ccd4265e4e4e8d85dfd421c0b2e5d36"
+      "occurred_at": "2026-05-22T19:24:35.712050+00:00",
+      "chain_hash": "9a852bcb5857117e73e24a42da3faafc47dfe066371c80eb86f1fd050db5b0a9"
     },
     {
-      "id": "5f095aa9-120a-4bc9-9025-36cd4431f927",
-      "task_id": "93adf5e2-303f-4e28-85b5-b88c3213e1c5",
+      "id": "dd3adcc8-d210-4bca-8598-7c3e447c1a58",
+      "task_id": "b6cebecb-c420-489c-b9bb-4f684db0f724",
       "event_type": "tool_call_result",
       "payload": {
         "result": {
           "kind": "shell",
-          "output": "AUDIT-TOK-77038292f5c3\r\n",
+          "output": "AUDIT-TOK-2fce5e9acb36\r\n",
           "exit_code": 0
         },
-        "call_id": "55c48867-c378-45ae-aae1-e5d84a15c25d"
+        "call_id": "dcb53083-fbb4-411d-b6db-b45462159b4f"
       },
-      "occurred_at": "2026-05-22T19:04:45.742346+00:00",
-      "chain_hash": "0ed93a92b0dec78f7e9787d56c64dab72d2ab16bcb1bc08ec1d65b1e411289f8"
+      "occurred_at": "2026-05-22T19:24:36.034109+00:00",
+      "chain_hash": "9dd8e21b7bf2289cc5e05b9c20265356be1617632e67d90fd3278d6197a93c3a"
     }
   ],
   "verifier_result": {
     "ok": false,
-    "reason": "token 'AUDIT-TOK-77038292f5c3' not echoed in final response"
+    "reason": "token 'AUDIT-TOK-2fce5e9acb36' not echoed in final response"
   },
   "cleanup_result": null,
-  "task_id": "93adf5e2-303f-4e28-85b5-b88c3213e1c5",
+  "task_id": "b6cebecb-c420-489c-b9bb-4f684db0f724",
   "final_stream_event": {
     "text": "LLM gateway unreachable"
   }
