@@ -53,7 +53,7 @@ def completion_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
     if "openai" in available_cloud:
         cloud.append(("gpt-4o-mini", {}))
     if "gemini" in available_cloud:
-        cloud.append(("gemini/gemini-1.5-flash", {}))
+        cloud.append(("gemini/gemini-2.5-flash", {}))
     if "groq" in available_cloud:
         cloud.append(("groq/llama3-8b-8192", {}))
 

@@ -204,7 +204,7 @@ async def list_providers():
     if "gemini" in cloud:
         providers.append({
             "name": "gemini",
-            "model": "gemini/gemini-1.5-flash",
+            "model": "gemini/gemini-2.5-flash",
             "available": True,
             "local": False,
             "supports_embed": False,

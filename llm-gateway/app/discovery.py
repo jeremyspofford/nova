@@ -129,7 +129,7 @@ def _cloud_providers(available_cloud: set[str]) -> list[dict]:
             "auth_methods": ["GEMINI_API_KEY"],
             "models": [
                 {"id": "gemini/gemini-2.0-flash", "registered": True},
-                {"id": "gemini/gemini-1.5-flash", "registered": True},
+                {"id": "gemini/gemini-2.5-flash", "registered": True},
                 {"id": "gemini/gemini-1.5-pro", "registered": True},
             ],
         })
