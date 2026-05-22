@@ -37,13 +37,20 @@ async def consume_stream_with_approval_grant(
     granted: set[str] = set()
     pending_grants: list[asyncio.Task] = []
     final: dict = {}
+    saw_text = False
     async for event in parse_ndjson_lines(line_iter):
         if event.get("type") == "tool_approval_request":
             call_id = event.get("tool_call_id")
             if call_id and call_id not in granted:
                 granted.add(call_id)
                 pending_grants.append(asyncio.create_task(grant_fn(call_id)))
-        elif "text" in event or event.get("type") in {"meta", "error"}:
+        elif "text" in event:
+            final = event
+            saw_text = True
+        elif event.get("type") in {"meta", "error"} and not saw_text:
+            # Capture meta/error as fallback, but never let a trailing meta/error
+            # overwrite an assistant text we already captured — the harness reads
+            # final["text"] for response-contains verification.
             final = event
     if pending_grants:
         await asyncio.gather(*pending_grants, return_exceptions=True)
