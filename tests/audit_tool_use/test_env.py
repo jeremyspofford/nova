@@ -1,9 +1,6 @@
-import os
-import tempfile
-from pathlib import Path
 import pytest
 
-from audit_tool_use.env import resolve_repo_root, load_admin_secret
+from audit_tool_use.env import load_admin_secret, resolve_repo_root
 
 
 def test_resolve_repo_root_finds_dir_with_env_and_compose(tmp_path):

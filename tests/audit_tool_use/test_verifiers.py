@@ -9,6 +9,7 @@ mocks.
 they're pure logic / HTTP shape checks.
 """
 from __future__ import annotations
+
 import shutil
 import subprocess
 import uuid
@@ -16,9 +17,9 @@ from typing import Iterator
 
 import pytest
 import respx
-from audit_tool_use.verifiers import FileExists, ResponseContains, DbContains, Skip
-from audit_tool_use.types import Verifier
 
+from audit_tool_use.types import Verifier
+from audit_tool_use.verifiers import DbContains, FileExists, ResponseContains, Skip
 
 # ── FileExists (container round-trip) ────────────────────────────────────
 
@@ -113,7 +114,6 @@ async def test_db_contains_unwraps_results_wrapper_when_walking_numeric_path():
     """Live memory-service returns {"results": [...]}. DbContains must unwrap
     when the expect_field starts with a numeric index (list-like)."""
     import respx
-    import httpx as _httpx
     v = DbContains(
         endpoint="http://test-host/memories/search",
         query={"query": "x"},

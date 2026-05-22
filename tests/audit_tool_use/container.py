@@ -10,11 +10,11 @@ host-side. The one shell-using path (`sh -c "cat > ..."` for stdin-driven
 writes) uses shlex.quote on the file path.
 """
 from __future__ import annotations
+
 import os
 import shlex
 import subprocess
 from typing import Optional
-
 
 AGENT_CORE_CONTAINER = os.getenv("NOVA_AGENT_CORE_CONTAINER", "nova-agent-core-1")
 

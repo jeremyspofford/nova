@@ -1,5 +1,4 @@
-import pytest
-from audit_tool_use.availability import is_builtin_tool, find_tool_in_mcp_response
+from audit_tool_use.availability import find_tool_in_mcp_response, is_builtin_tool
 
 
 def test_builtin_tools_recognized():

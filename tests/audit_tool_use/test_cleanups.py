@@ -5,12 +5,14 @@ so its tests round-trip through `docker exec`. Tests skip if docker isn't
 available.
 """
 from __future__ import annotations
+
 import shutil
 import subprocess
 import uuid
 from typing import Iterator
 
 import pytest
+
 from audit_tool_use.cleanups import DeleteFile, NoCleanup
 from audit_tool_use.types import Cleanup
 
@@ -44,7 +46,10 @@ def container_path() -> Iterator[str]:
 @_skip_no_docker
 @pytest.mark.asyncio
 async def test_delete_file_removes_existing(container_path):
-    from audit_tool_use.container import file_exists_in_container, write_file_in_container
+    from audit_tool_use.container import (
+        file_exists_in_container,
+        write_file_in_container,
+    )
     write_file_in_container(container_path, "hi")
     assert file_exists_in_container(container_path)
     c = DeleteFile(path=container_path)

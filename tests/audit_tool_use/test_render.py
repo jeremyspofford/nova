@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+
 from audit_tool_use.render import render_report
 from audit_tool_use.types import Outcome, TrialResult
 

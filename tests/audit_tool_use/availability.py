@@ -1,5 +1,6 @@
 """Check whether an expected tool is registered in agent-core."""
 from __future__ import annotations
+
 import httpx
 
 _BUILTIN = frozenset({

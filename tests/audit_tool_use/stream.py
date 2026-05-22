@@ -5,6 +5,7 @@ MUTATE tools block 300s on capability.py:97 waiting for approval — we grant
 concurrently as soon as a tool_approval_request line appears.
 """
 from __future__ import annotations
+
 import asyncio
 import json
 from typing import AsyncIterator, Awaitable, Callable

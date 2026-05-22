@@ -1,7 +1,8 @@
 import asyncio
-import json
+
 import pytest
-from audit_tool_use.stream import parse_ndjson_lines, consume_stream_with_approval_grant
+
+from audit_tool_use.stream import consume_stream_with_approval_grant, parse_ndjson_lines
 
 
 async def _async_iter(lines):

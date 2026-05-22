@@ -7,9 +7,8 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
 from nova_contracts import TaskCreateRequest
+from pydantic import BaseModel
 
 from .config import settings
 from .db import get_pool
@@ -127,7 +126,7 @@ def _extract_serialized_tool_call(content: str) -> dict | None:
     Returns {"name": str, "arguments": dict} if found; else None. Tolerates:
     - bare JSON: `{"name": "fs.write", "arguments": {...}}`
     - parameters key (used by qwen): `{"name": "fs.write", "parameters": {...}}`
-    - code fences: `\`\`\`json\\n{...}\\n\`\`\`` or `\`\`\`python\\n{...}\\n\`\`\``
+    - code fences: `\\`\\`\\`json\\n{...}\\n\\`\\`\\`` or `\\`\\`\\`python\\n{...}\\n\\`\\`\\``
     """
     if not content:
         return None

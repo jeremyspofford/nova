@@ -1,6 +1,8 @@
-from audit_tool_use.types import Outcome, Probe, TrialResult, Verifier, Cleanup
 from dataclasses import FrozenInstanceError
+
 import pytest
+
+from audit_tool_use.types import Cleanup, Outcome, Probe, TrialResult, Verifier
 
 
 def test_outcome_has_five_levels():

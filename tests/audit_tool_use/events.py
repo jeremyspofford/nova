@@ -4,7 +4,9 @@ task_events stores tool names in dot-notation (original form), not the
 sanitized form sent to the LLM. Compare against the original tool name.
 """
 from __future__ import annotations
+
 import httpx
+
 from audit_tool_use.types import Outcome
 
 

@@ -1,8 +1,10 @@
 """Verifier strategies — three concrete classes + a SKIP sentinel."""
 from __future__ import annotations
+
 from dataclasses import dataclass
-from pathlib import Path
+
 import httpx
+
 from audit_tool_use.types import Verifier
 
 Skip = Verifier.SKIP
@@ -20,7 +22,10 @@ class FileExists:
     expect_content_contains: str
 
     async def verify(self, context: dict) -> tuple[bool, str | None]:
-        from audit_tool_use.container import file_exists_in_container, read_file_in_container
+        from audit_tool_use.container import (
+            file_exists_in_container,
+            read_file_in_container,
+        )
         if not file_exists_in_container(self.path):
             return False, f"file not found at {self.path} in agent-core container"
         ok, body = read_file_in_container(self.path)

@@ -1,8 +1,10 @@
 """Setup strategies — create fixtures BEFORE a probe runs. Mirror of cleanups."""
 from __future__ import annotations
+
 from dataclasses import dataclass
-from pathlib import Path
+
 import httpx
+
 from audit_tool_use.types import Setup
 
 NoSetup = Setup.NONE

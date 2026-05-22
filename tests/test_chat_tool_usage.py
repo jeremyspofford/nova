@@ -4,19 +4,22 @@ Discovers usable models via /providers, runs N=3 trials per (probe, model),
 extracts outcomes from task_events, runs verifiers and cleanups, renders
 the report. Skips gracefully if services are down."""
 from __future__ import annotations
-import asyncio
+
 import datetime as dt
 import hashlib
 import os
 import subprocess
 import time
 from pathlib import Path
+
 import httpx
 import pytest
-
-from audit_tool_use.constants import TRIALS_PER_PROBE, OUTPUT_DIR_TEMPLATE, OUTPUT_MD_TEMPLATE
-from audit_tool_use.env import resolve_repo_root, load_admin_secret
-from audit_tool_use.harness import run_trial, AGENT_CORE
+from audit_tool_use.constants import (
+    OUTPUT_DIR_TEMPLATE,
+    TRIALS_PER_PROBE,
+)
+from audit_tool_use.env import load_admin_secret, resolve_repo_root
+from audit_tool_use.harness import AGENT_CORE, run_trial
 from audit_tool_use.models import discover_models
 from audit_tool_use.probes import PROBES
 from audit_tool_use.render import render_report

@@ -11,6 +11,7 @@ The live /providers response shape (verified 2026-05-22 against agent-core):
 Each provider exposes ONE model (its default), not a list. The key is `name`, not `id`.
 """
 from __future__ import annotations
+
 import httpx
 
 

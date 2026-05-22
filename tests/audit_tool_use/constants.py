@@ -1,5 +1,6 @@
 """Single source of truth for audit tunables. Env-overridable."""
 from __future__ import annotations
+
 import os
 
 READ_DEADLINE_S = int(os.getenv("AUDIT_READ_DEADLINE_S", "90"))

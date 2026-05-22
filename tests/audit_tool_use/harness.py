@@ -1,6 +1,7 @@
 """The per-(probe, model, trial) run loop. Wires env + availability + stream +
 events + verifiers + cleanups. Returns a TrialResult."""
 from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -8,14 +9,14 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
 import httpx
 
-from audit_tool_use.types import Outcome, Probe, TrialResult, Verifier, Cleanup, Setup
-from audit_tool_use.stream import consume_stream_with_approval_grant
-from audit_tool_use.events import derive_outcome, fetch_task_events
 from audit_tool_use.availability import check_tool_available
-from audit_tool_use.constants import READ_DEADLINE_S, MUTATE_DEADLINE_S
-
+from audit_tool_use.constants import MUTATE_DEADLINE_S, READ_DEADLINE_S
+from audit_tool_use.events import derive_outcome, fetch_task_events
+from audit_tool_use.stream import consume_stream_with_approval_grant
+from audit_tool_use.types import Cleanup, Outcome, Probe, Setup, TrialResult, Verifier
 
 AGENT_CORE = os.getenv("NOVA_AGENT_CORE_URL", "http://localhost:8000")
 
@@ -166,7 +167,7 @@ def _instantiate_verifier(verifier: Any, run_id: str, token: str) -> Any:
     """
     if verifier is Verifier.SKIP or verifier is Setup.NONE or verifier is Cleanup.NONE or verifier is None:
         return verifier
-    from dataclasses import replace, fields
+    from dataclasses import fields, replace
     new_fields = {}
     for f in fields(verifier):
         val = getattr(verifier, f.name)

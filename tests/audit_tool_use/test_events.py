@@ -12,6 +12,7 @@ So derive_outcome must correlate result/error/denied events back to their
 proposed event via call_id — they don't carry tool_name themselves.
 """
 import pytest
+
 from audit_tool_use.events import derive_outcome
 from audit_tool_use.types import Outcome
 

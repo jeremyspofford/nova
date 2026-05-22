@@ -1,7 +1,9 @@
 """Environment resolution for the audit. Fails loud on missing config."""
 from __future__ import annotations
+
 import os
 from pathlib import Path
+
 from dotenv import dotenv_values
 
 

@@ -1,6 +1,5 @@
 """Tests use real-shape fixture data captured from a live /providers response
 on 2026-05-22 — each provider has a single `model` field, not a `models` list."""
-import pytest
 from audit_tool_use.models import filter_available_models
 
 

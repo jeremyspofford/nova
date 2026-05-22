@@ -5,13 +5,15 @@ so its tests round-trip through `docker exec`. Tests skip if docker isn't
 available.
 """
 from __future__ import annotations
+
 import shutil
 import subprocess
 import uuid
 from typing import Iterator
 
 import pytest
-from audit_tool_use.setups import SeedFile, NoSetup
+
+from audit_tool_use.setups import NoSetup, SeedFile
 from audit_tool_use.types import Setup
 
 
@@ -44,7 +46,10 @@ def container_path() -> Iterator[str]:
 @_skip_no_docker
 @pytest.mark.asyncio
 async def test_seed_file_creates_with_content(container_path):
-    from audit_tool_use.container import file_exists_in_container, read_file_in_container
+    from audit_tool_use.container import (
+        file_exists_in_container,
+        read_file_in_container,
+    )
     s = SeedFile(path=container_path, content="HELLO-TOKEN-abc")
     ok, msg = await s.run(context={})
     assert ok is True, f"seed failed: {msg}"
