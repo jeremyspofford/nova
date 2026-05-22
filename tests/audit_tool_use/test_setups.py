@@ -1,26 +1,68 @@
+"""Unit tests for setup strategies.
+
+SeedFile operates on the agent-core container filesystem (not the host),
+so its tests round-trip through `docker exec`. Tests skip if docker isn't
+available.
+"""
+from __future__ import annotations
+import shutil
+import subprocess
+import uuid
+from typing import Iterator
+
 import pytest
-from pathlib import Path
 from audit_tool_use.setups import SeedFile, NoSetup
 from audit_tool_use.types import Setup
 
 
+def _docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    try:
+        r = subprocess.run(
+            ["docker", "ps", "--filter", "name=agent-core", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=3.0, check=False,
+        )
+        return bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+_skip_no_docker = pytest.mark.skipif(
+    not _docker_available(), reason="docker / agent-core container unavailable"
+)
+
+
+@pytest.fixture
+def container_path() -> Iterator[str]:
+    from audit_tool_use.container import delete_file_in_container
+    path = f"/tmp/audit-test-{uuid.uuid4().hex[:8]}.txt"
+    yield path
+    delete_file_in_container(path)
+
+
+@_skip_no_docker
 @pytest.mark.asyncio
-async def test_seed_file_creates_with_content(tmp_path):
-    p = tmp_path / "fixture.txt"
-    s = SeedFile(path=str(p), content="HELLO-TOKEN-abc")
+async def test_seed_file_creates_with_content(container_path):
+    from audit_tool_use.container import file_exists_in_container, read_file_in_container
+    s = SeedFile(path=container_path, content="HELLO-TOKEN-abc")
     ok, msg = await s.run(context={})
-    assert ok is True
-    assert p.read_text() == "HELLO-TOKEN-abc"
+    assert ok is True, f"seed failed: {msg}"
+    assert file_exists_in_container(container_path)
+    read_ok, content = read_file_in_container(container_path)
+    assert read_ok and content == "HELLO-TOKEN-abc"
 
 
+@_skip_no_docker
 @pytest.mark.asyncio
-async def test_seed_file_overwrites_existing(tmp_path):
-    p = tmp_path / "fixture.txt"
-    p.write_text("old")
-    s = SeedFile(path=str(p), content="new")
+async def test_seed_file_overwrites_existing(container_path):
+    from audit_tool_use.container import read_file_in_container, write_file_in_container
+    write_file_in_container(container_path, "old")
+    s = SeedFile(path=container_path, content="new")
     ok, _ = await s.run(context={})
     assert ok is True
-    assert p.read_text() == "new"
+    _, content = read_file_in_container(container_path)
+    assert content == "new"
 
 
 def test_no_setup_is_sentinel():

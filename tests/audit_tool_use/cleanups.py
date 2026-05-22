@@ -10,16 +10,19 @@ NoCleanup = Cleanup.NONE
 
 @dataclass(frozen=True)
 class DeleteFile:
+    """Delete a file inside the agent-core container (idempotent — missing OK).
+
+    Mirrors SeedFile / FileExists — all three operate via `docker exec` because
+    /workspace is container-side, not host-mounted.
+    """
     path: str
 
     async def cleanup(self, context: dict) -> tuple[bool, str | None]:
-        p = Path(self.path)
-        try:
-            if p.exists():
-                p.unlink()
-            return True, None
-        except OSError as e:
-            return False, f"delete failed: {e}"
+        from audit_tool_use.container import delete_file_in_container
+        ok, err = delete_file_in_container(self.path)
+        if not ok:
+            return False, f"delete failed: {err}"
+        return True, None
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,10 @@ class DeleteMemory:
                 )
                 if r.status_code != 200:
                     return False, f"search returned {r.status_code}"
-                for m in r.json():
+                # memory-service wraps results in {"results": [...]}
+                body = r.json()
+                results = body.get("results", body) if isinstance(body, dict) else body
+                for m in results:
                     if self.content_match in (m.get("content") or ""):
                         await client.delete(f"{self.memory_url}/memories/{m['id']}")
             return True, None

@@ -10,15 +10,22 @@ Skip = Verifier.SKIP
 
 @dataclass(frozen=True)
 class FileExists:
-    """Verifies a file is on disk and contains an expected substring."""
+    """Verifies a file exists in the agent-core container with expected content.
+
+    The agent writes to /workspace inside its container; the host has no
+    /workspace mount. Verification operates via `docker exec` so we see the
+    same filesystem the agent does.
+    """
     path: str
     expect_content_contains: str
 
     async def verify(self, context: dict) -> tuple[bool, str | None]:
-        p = Path(self.path)
-        if not p.exists():
-            return False, f"file not found at {self.path}"
-        body = p.read_text(errors="replace")
+        from audit_tool_use.container import file_exists_in_container, read_file_in_container
+        if not file_exists_in_container(self.path):
+            return False, f"file not found at {self.path} in agent-core container"
+        ok, body = read_file_in_container(self.path)
+        if not ok:
+            return False, f"could not read {self.path}: {body}"
         if self.expect_content_contains not in body:
             return False, f"token {self.expect_content_contains!r} not present in file"
         return True, None
@@ -57,6 +64,14 @@ class DbContains:
         if r.status_code >= 400:
             return False, f"{self.endpoint} returned {r.status_code}: {r.text[:200]}"
         body = r.json()
+        # Memory/search endpoints often wrap the list in {"results": [...]} —
+        # auto-unwrap if expect_field starts with a numeric index but body is
+        # a dict with one of the common wrapper keys.
+        if isinstance(body, dict) and self.expect_field and self.expect_field.split(".")[0].isdigit():
+            for wrapper_key in ("results", "items", "data"):
+                if wrapper_key in body and isinstance(body[wrapper_key], list):
+                    body = body[wrapper_key]
+                    break
         # Walk the dotted path (numerics indicate list indexing)
         node = body
         for part in self.expect_field.split("."):

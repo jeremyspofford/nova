@@ -110,34 +110,34 @@ PROBES: list[Probe] = [
         id="nova-secrets-write",
         tool="nova.secrets.write",
         prompt_template=(
-            "Store a secret named 'nova-audit-{run_id}-secret' with the value "
+            "Store a secret named 'nova_audit_{run_id}_secret' with the value "
             "'{token}'. Then confirm it was stored."
         ),
-        expected_args_subset={"name": "nova-audit-{run_id}-secret"},
+        expected_args_subset={"name": "nova_audit_{run_id}_secret"},
         verifier=DbContains(
             endpoint="http://localhost:8000/api/v1/secrets/resolve",
-            query={"name": "nova-audit-{run_id}-secret"},
+            query={"name": "nova_audit_{run_id}_secret"},
             expect_field="value",
         ),
-        cleanup=DeleteSecret(base_url="http://localhost:8000", name="nova-audit-{run_id}-secret"),
+        cleanup=DeleteSecret(base_url="http://localhost:8000", name="nova_audit_{run_id}_secret"),
         tier="MUTATE",
     ),
     Probe(
         id="nova-secrets-read",
         tool="nova.secrets.read",
         prompt_template=(
-            "Read the secret named 'nova-audit-fixture-{run_id}-secret'. Then "
+            "Read the secret named 'nova_audit_fixture_{run_id}_secret'. Then "
             "quote its EXACT, VERBATIM value between triple backticks — "
             "do not paraphrase."
         ),
-        expected_args_subset={"name": "nova-audit-fixture-{run_id}-secret"},
+        expected_args_subset={"name": "nova_audit_fixture_{run_id}_secret"},
         verifier=ResponseContains(token="{token}"),
         setup=SeedSecret(
             base_url="http://localhost:8000",
-            name="nova-audit-fixture-{run_id}-secret",
+            name="nova_audit_fixture_{run_id}_secret",
             value="{token}",
         ),
-        cleanup=DeleteSecret(base_url="http://localhost:8000", name="nova-audit-fixture-{run_id}-secret"),
+        cleanup=DeleteSecret(base_url="http://localhost:8000", name="nova_audit_fixture_{run_id}_secret"),
         tier="READ",
     ),
     Probe(

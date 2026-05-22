@@ -10,18 +10,20 @@ NoSetup = Setup.NONE
 
 @dataclass(frozen=True)
 class SeedFile:
-    """Write a file to disk so a fs.read-style probe has something to read."""
+    """Seed a file inside the agent-core container so a fs.read probe finds it.
+
+    The agent's /workspace is container-side; we write through `docker exec`
+    so the path the probe references is the same filesystem the agent reads.
+    """
     path: str
     content: str
 
     async def run(self, context: dict) -> tuple[bool, str | None]:
-        try:
-            p = Path(self.path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(self.content)
-            return True, None
-        except OSError as e:
-            return False, f"seed file failed: {e}"
+        from audit_tool_use.container import write_file_in_container
+        ok, err = write_file_in_container(self.path, self.content)
+        if not ok:
+            return False, f"seed file failed: {err}"
+        return True, None
 
 
 @dataclass(frozen=True)

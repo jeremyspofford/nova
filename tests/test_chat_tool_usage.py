@@ -50,19 +50,31 @@ def _commit_sha(repo_root: Path) -> str:
         return "unknown"
 
 
+def _worktree_root() -> Path:
+    """Where the audit report should LAND (this branch's working tree).
+
+    Distinct from repo_root, which is where .env lives (always the main repo,
+    not the worktree). When run from a worktree, output should commit on the
+    worktree's branch — not pollute the main repo's docs/audits/.
+    """
+    # tests/test_chat_tool_usage.py → parents[0]=tests/, parents[1]=worktree_root
+    return Path(__file__).resolve().parents[1]
+
+
 @pytest.mark.audit
 @pytest.mark.asyncio
 async def test_chat_tool_use_audit():
     date = dt.date.today().isoformat()
-    # Resolve repo root early — used by BOTH the skip path and the live path so
-    # the SKIPPED report lands at the real audit directory, not pytest's cwd.
+    # Two distinct roots — repo_root for .env (always main repo) vs worktree_root
+    # for report output (this branch's working tree). Don't conflate them.
     try:
         repo_root = resolve_repo_root()
     except RuntimeError:
-        repo_root = Path.cwd()  # fallback for unusual invocations; report path still works
+        repo_root = Path.cwd()  # fallback for unusual invocations
+    worktree_root = _worktree_root()
 
     if not _services_reachable():
-        out = repo_root / f"docs/audits/{date}-tool-use-audit.md"
+        out = worktree_root / f"docs/audits/{date}-tool-use-audit.md"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
             f"# Tool-Use Audit — SKIPPED\n\n"
@@ -77,7 +89,7 @@ async def test_chat_tool_use_audit():
     if not models:
         pytest.skip("no LLM providers available")
 
-    output_dir = repo_root / OUTPUT_DIR_TEMPLATE.format(date=date)
+    output_dir = worktree_root / OUTPUT_DIR_TEMPLATE.format(date=date)
     trace_dir = output_dir / "traces"
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -94,7 +106,7 @@ async def test_chat_tool_use_audit():
     render_report(
         all_trials, output_dir=output_dir,
         date=date,
-        commit_sha=_commit_sha(repo_root),
+        commit_sha=_commit_sha(worktree_root),  # the engineer branch's HEAD, not main
         audit_script_sha=_audit_script_sha(),
         llm_routing_strategy=os.getenv("LLM_ROUTING_STRATEGY", "unknown"),
         run_duration_seconds=duration,
