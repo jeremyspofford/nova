@@ -1,0 +1,61 @@
+{
+  "probe_id": "shell-exec-echo-token",
+  "tool": "shell.exec",
+  "model": "gemini/gemini-2.5-flash",
+  "trial_n": 0,
+  "run_id": "b3dc73ee",
+  "token": "AUDIT-TOK-c27fc5967584",
+  "prompt": "Run the shell command: echo AUDIT-TOK-c27fc5967584. Then tell me the exact stdout you observed, verbatim between triple backticks.",
+  "stream_events": [],
+  "task_events": [
+    {
+      "id": "d80aac8f-47d9-48c1-816a-c75595cd1bf2",
+      "task_id": "48f63de4-4305-47be-86ac-dc0ccaa09895",
+      "event_type": "tool_call_proposed",
+      "payload": {
+        "args": {
+          "command": "echo AUDIT-TOK-c27fc5967584"
+        },
+        "call_id": "e2f8ffc1-d510-451a-a0d3-6c84d762dd8a",
+        "tool_name": "shell.exec",
+        "caller_role": "chat"
+      },
+      "occurred_at": "2026-05-22T19:07:51.745066+00:00",
+      "chain_hash": "c32e17c588aa8526672f3ea1f2d72305faf7e98b0c93cad23e7b7df5b5e4a04e"
+    },
+    {
+      "id": "1a092a30-d06d-4630-bf66-1dc672862552",
+      "task_id": "48f63de4-4305-47be-86ac-dc0ccaa09895",
+      "event_type": "tool_call_started",
+      "payload": {
+        "call_id": "e2f8ffc1-d510-451a-a0d3-6c84d762dd8a"
+      },
+      "occurred_at": "2026-05-22T19:07:51.775029+00:00",
+      "chain_hash": "2711ec1ed5360a487c9e0b26dbc34bfa37285e9937f0cc515918b81f965f3c05"
+    },
+    {
+      "id": "ad610765-0d00-40a0-9173-8e20036b36fc",
+      "task_id": "48f63de4-4305-47be-86ac-dc0ccaa09895",
+      "event_type": "tool_call_result",
+      "payload": {
+        "result": {
+          "kind": "shell",
+          "output": "AUDIT-TOK-c27fc5967584\r\n",
+          "exit_code": 0
+        },
+        "call_id": "e2f8ffc1-d510-451a-a0d3-6c84d762dd8a"
+      },
+      "occurred_at": "2026-05-22T19:07:52.098014+00:00",
+      "chain_hash": "d92bf1959937919b54c35f341f4bf9082482ce26a41278d8b8dcee73ef7425a5"
+    }
+  ],
+  "verifier_result": {
+    "ok": true,
+    "reason": null
+  },
+  "cleanup_result": null,
+  "task_id": "48f63de4-4305-47be-86ac-dc0ccaa09895",
+  "final_stream_event": {
+    "text": "The output is ```AUDIT-TOK-c27fc5967584\n```"
+  }
+}

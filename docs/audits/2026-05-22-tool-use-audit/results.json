@@ -1,7 +1,7 @@
 {
-  "run_id": "13f44f36",
+  "run_id": "2ad503d8",
   "date": "2026-05-22",
-  "commit_sha": "84ca86363c3b",
+  "commit_sha": "04ad4b8092df",
   "models": [
     {
       "model_id": "qwen2.5-coder:7b",
@@ -168,7 +168,7 @@
       ]
     },
     {
-      "model_id": "gemini/gemini-1.5-flash",
+      "model_id": "gemini/gemini-2.5-flash",
       "probes": [
         {
           "probe_id": "fs-write-roundtrip",
@@ -181,22 +181,22 @@
           "probe_id": "fs-read-echo",
           "tool": "fs.read",
           "n_attempted": 1,
-          "n_called_ok": 0,
-          "n_side_effect_verified": 0
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
         },
         {
           "probe_id": "shell-exec-echo-token",
           "tool": "shell.exec",
           "n_attempted": 1,
-          "n_called_ok": 0,
-          "n_side_effect_verified": 0
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
         },
         {
           "probe_id": "code-execute-echo-token",
           "tool": "code.execute",
           "n_attempted": 1,
-          "n_called_ok": 0,
-          "n_side_effect_verified": 0
+          "n_called_ok": 1,
+          "n_side_effect_verified": 1
         },
         {
           "probe_id": "memory-write-then-search",

@@ -1,0 +1,17 @@
+{
+  "probe_id": "web-search-attempt",
+  "tool": "web.search",
+  "model": "gemini/gemini-2.5-flash",
+  "trial_n": 0,
+  "run_id": "aa132e60",
+  "token": "AUDIT-TOK-dd0252cf53a7",
+  "prompt": "Search the web for the exact phrase: 'nova audit canary token AUDIT-TOK-dd0252cf53a7'. Tell me how many results you got.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": null,
+  "task_id": "85c480e6-26a5-45a4-b82f-819718f5119d",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

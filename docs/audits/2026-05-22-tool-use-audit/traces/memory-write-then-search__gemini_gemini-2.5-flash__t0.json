@@ -1,0 +1,20 @@
+{
+  "probe_id": "memory-write-then-search",
+  "tool": "memory.write",
+  "model": "gemini/gemini-2.5-flash",
+  "trial_n": 0,
+  "run_id": "9bcad4c1",
+  "token": "AUDIT-TOK-67d61efe539d",
+  "prompt": "Save a memory with the content 'nova-audit-9bcad4c1 record contains the token AUDIT-TOK-67d61efe539d'. Then confirm it's saved.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": {
+    "ok": true,
+    "reason": null
+  },
+  "task_id": "4a6b27ca-730c-4901-97d1-3c9fe443bb9c",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}

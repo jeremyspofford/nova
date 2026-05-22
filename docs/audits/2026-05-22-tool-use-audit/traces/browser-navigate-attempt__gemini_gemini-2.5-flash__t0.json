@@ -1,0 +1,13 @@
+{
+  "probe_id": "browser-navigate-attempt",
+  "tool": "browser_navigate",
+  "model": "gemini/gemini-2.5-flash",
+  "trial_n": 0,
+  "run_id": "66e88bae",
+  "token": "AUDIT-TOK-041d16382ec5",
+  "prompt": "Navigate the browser to https://example.com/ (run_id=66e88bae) and tell me what you see.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": null
+}

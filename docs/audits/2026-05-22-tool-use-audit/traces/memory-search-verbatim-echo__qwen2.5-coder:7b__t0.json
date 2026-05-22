@@ -3,54 +3,84 @@
   "tool": "memory.search",
   "model": "qwen2.5-coder:7b",
   "trial_n": 0,
-  "run_id": "97195519",
-  "token": "AUDIT-TOK-5b8ed0c5d7b9",
-  "prompt": "Search your memory for the token 'nova-audit-fixture-97195519'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.",
+  "run_id": "8ea2cdc5",
+  "token": "AUDIT-TOK-213cf58dd7e3",
+  "prompt": "Search your memory for the token 'nova-audit-fixture-8ea2cdc5'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.",
   "stream_events": [],
   "task_events": [
     {
-      "id": "6cb9de74-9bbf-4fac-a09c-d1671cf74e06",
-      "task_id": "35fa8f89-399f-4008-afe4-a8d4be7049d3",
+      "id": "f05328d8-6f27-4dab-889e-67cc737decd1",
+      "task_id": "bfcf6535-27bb-4f50-9a44-5e5f22ca5a00",
       "event_type": "tool_call_proposed",
       "payload": {
         "args": {
-          "query": "nova-audit-fixture-97195519"
+          "query": "nova-audit-fixture-8ea2cdc5"
         },
-        "call_id": "01419ce7-b9fe-4061-b99e-56530aeb801d",
+        "call_id": "de0a020e-829a-4a40-9c70-f1d7fa606586",
         "tool_name": "memory.search",
         "caller_role": "chat"
       },
-      "occurred_at": "2026-05-22T18:18:03.396805+00:00",
-      "chain_hash": "55a0aac6ddb19da29eb62c5fc56be815b8479cf9f6a3a7aeece4fefbd4f992ba"
+      "occurred_at": "2026-05-22T19:05:25.387693+00:00",
+      "chain_hash": "9067008a1359f0b560383376c2d90af0e6eb29f2b958e077d481293b1d254903"
     },
     {
-      "id": "70381679-5807-438e-bede-3ed1381e5d46",
-      "task_id": "35fa8f89-399f-4008-afe4-a8d4be7049d3",
+      "id": "46f83413-c248-46dd-b330-d21231d3d754",
+      "task_id": "bfcf6535-27bb-4f50-9a44-5e5f22ca5a00",
       "event_type": "tool_call_started",
       "payload": {
-        "call_id": "01419ce7-b9fe-4061-b99e-56530aeb801d"
+        "call_id": "de0a020e-829a-4a40-9c70-f1d7fa606586"
       },
-      "occurred_at": "2026-05-22T18:18:03.410121+00:00",
-      "chain_hash": "9f9172a54768fdc111df9ac54c9bf295a7d40031b5ee3869163aabe372f4173a"
+      "occurred_at": "2026-05-22T19:05:25.392947+00:00",
+      "chain_hash": "1d8a651eb90aafbecb3e97b7d994a43628ec9105a06b61ed4386db53959d4c28"
     },
     {
-      "id": "6349faa7-965a-4a78-bd20-0b7d2228be69",
-      "task_id": "35fa8f89-399f-4008-afe4-a8d4be7049d3",
+      "id": "38811b57-3da6-419e-a07a-857f1e4c7138",
+      "task_id": "bfcf6535-27bb-4f50-9a44-5e5f22ca5a00",
       "event_type": "tool_call_result",
       "payload": {
         "result": {
           "results": [
             {
-              "id": "4b226800-d147-46de-8399-a59191d10aaa",
+              "id": "716e2d04-d9f2-46d2-b1e5-cc4a3e15da8c",
               "tags": [
-                "nova_audit",
-                "token_record",
-                "AUDIT-TOK-5b8ed0c5d7b9"
+                "nova_audit_fixture",
+                "record_token",
+                "AUDIT-TOK-41e88d7ec52c"
               ],
-              "content": "nova-audit-fixture-97195519 record contains the token AUDIT-TOK-5b8ed0c5d7b9",
+              "content": "nova-audit-fixture-65b89d43 record contains the token AUDIT-TOK-41e88d7ec52c",
               "last_used": null,
-              "created_at": "2026-05-22T18:17:55.685485+00:00",
-              "similarity": 0.8852049581401588,
+              "created_at": "2026-05-22T18:19:31.728233+00:00",
+              "similarity": 0.8751597926116255,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "audit_fixture"
+            },
+            {
+              "id": "88c45ed1-d958-4f56-9d2e-7fae42d7910e",
+              "tags": [
+                "audit-log",
+                "authentication-token",
+                "security-record"
+              ],
+              "content": "nova-audit-fixture-8e85a975 record contains the token AUDIT-TOK-9b7cccef63c9",
+              "last_used": null,
+              "created_at": "2026-05-22T18:21:34.220218+00:00",
+              "similarity": 0.8723385029646227,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "audit_fixture"
+            },
+            {
+              "id": "7ef26ee6-4b88-4e3b-9c54-159d97be82ab",
+              "tags": [
+                "audit_record",
+                "token",
+                "authentication"
+              ],
+              "content": "nova-audit-fixture-8ea2cdc5 record contains the token AUDIT-TOK-213cf58dd7e3",
+              "last_used": null,
+              "created_at": "2026-05-22T19:05:18.908895+00:00",
+              "similarity": 0.8690518736839851,
               "source_uri": null,
               "used_count": 0,
               "source_kind": "audit_fixture"
@@ -65,18 +95,7 @@
               "content": "nova-audit-fixture-4b1b60b8 record contains the token AUDIT-TOK-95b45599a147",
               "last_used": null,
               "created_at": "2026-05-22T17:23:25.729885+00:00",
-              "similarity": 0.8818679118713212,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "audit_fixture"
-            },
-            {
-              "id": "c7c835b9-4350-4e82-905b-3aa73cc30e4f",
-              "tags": [],
-              "content": "nova-audit-fixture-d1fa49a1 record contains the token AUDIT-TOK-0642aede9643",
-              "last_used": null,
-              "created_at": "2026-05-22T17:17:29.885337+00:00",
-              "similarity": 0.8635757497603257,
+              "similarity": 0.8553290194665459,
               "source_uri": null,
               "used_count": 0,
               "source_kind": "audit_fixture"
@@ -87,10 +106,67 @@
               "content": "nova-audit-fixture-dfe0de38 record contains the token AUDIT-TOK-e7db40d5171b",
               "last_used": null,
               "created_at": "2026-05-22T17:11:29.065112+00:00",
-              "similarity": 0.8493170811708396,
+              "similarity": 0.8391245816051022,
               "source_uri": null,
               "used_count": 0,
               "source_kind": "audit_fixture"
+            },
+            {
+              "id": "ce20d2d8-a663-48e7-a9e4-61398cd9064b",
+              "tags": [
+                "security_token",
+                "audit_record",
+                "token_audit"
+              ],
+              "content": "nova-audit-fixture-caeaf056 record contains the token AUDIT-TOK-48ff653767d3",
+              "last_used": null,
+              "created_at": "2026-05-22T18:41:49.208009+00:00",
+              "similarity": 0.8376518793675818,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "audit_fixture"
+            },
+            {
+              "id": "c7c835b9-4350-4e82-905b-3aa73cc30e4f",
+              "tags": [],
+              "content": "nova-audit-fixture-d1fa49a1 record contains the token AUDIT-TOK-0642aede9643",
+              "last_used": null,
+              "created_at": "2026-05-22T17:17:29.885337+00:00",
+              "similarity": 0.8352493054566283,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "audit_fixture"
+            },
+            {
+              "id": "b4d81e4e-be69-42c9-88f9-30bb3e85987d",
+              "tags": [
+                "nova",
+                "audit_log",
+                "token",
+                "security"
+              ],
+              "content": "nova-audit-88724bab record contains the token AUDIT-TOK-4ab6d01ca69c",
+              "last_used": null,
+              "created_at": "2026-05-22T18:19:29.864548+00:00",
+              "similarity": 0.7956119051362166,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "task_output"
+            },
+            {
+              "id": "cd6c1dd5-f79b-4c50-8d65-66bb6ce53168",
+              "tags": [
+                "file_request",
+                "content_read",
+                "verbatim_response"
+              ],
+              "content": "User: Read the file /workspace/nova-audit-fixture-8bf265c0.txt and tell me the EXACT content it contains, verbatim, between triple backticks.\nNova: The contents of /workspace/nova-audit-fixture-8bf265c0.txt are:\n\n```\nAUDIT-TOK-50124b2a0b2c\n```",
+              "last_used": null,
+              "created_at": "2026-05-22T18:19:18.882278+00:00",
+              "similarity": 0.7503683269463188,
+              "source_uri": null,
+              "used_count": 0,
+              "source_kind": "chat"
             },
             {
               "id": "ac802521-3cf3-4eb6-828b-34acbc44333c",
@@ -102,81 +178,7 @@
               "content": "User: Read the file /workspace/nova-audit-fixture-5b48b801.txt and tell me the EXACT content it contains, verbatim, between triple backticks.\nNova: Sure, I'll read the file for you.\n\n```\nThe contents of /workspace/nova-audit-fixture-5b48b801.txt are:\nAUDIT-TOK-95b45599a147\n```",
               "last_used": null,
               "created_at": "2026-05-22T17:42:12.766086+00:00",
-              "similarity": 0.7518836627319323,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "chat"
-            },
-            {
-              "id": "1a2f0d6d-5059-4d3a-88fb-1e6cc7cad7e2",
-              "tags": [
-                "read_file",
-                "nova-audit-fixture-974b8a03.txt",
-                "verbatim_content"
-              ],
-              "content": "User: Read the file /workspace/nova-audit-fixture-974b8a03.txt and tell me the EXACT content it contains, verbatim, between triple backticks.\nNova: Sure, I'll read the file for you.\n\n```\nThe contents of /workspace/nova-audit-fixture-974b8a03.txt are:\nAUDIT-TOK-e1c2d3f4g5h6\n```",
-              "last_used": null,
-              "created_at": "2026-05-22T17:55:44.097573+00:00",
-              "similarity": 0.7471298804906821,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "chat"
-            },
-            {
-              "id": "8ec8fd27-36c4-4cea-b61a-45191e5fa8dd",
-              "tags": [
-                "search_token",
-                "nova-audit-fixture-ab988a3b",
-                "no_match"
-              ],
-              "content": "User: Search your memory for the token 'nova-audit-fixture-ab988a3b'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.\nNova: I'm sorry, but I don't have any information stored in my memory related to 'nova-audit-fixture-ab988a3b'.",
-              "last_used": null,
-              "created_at": "2026-05-22T17:51:32.842427+00:00",
-              "similarity": 0.7303718867565757,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "chat"
-            },
-            {
-              "id": "05d62073-393a-4146-9a10-c9b38866dc67",
-              "tags": [
-                "error",
-                "not_found",
-                "search_failure"
-              ],
-              "content": "User: Search your memory for the token 'nova-audit-fixture-4b1b60b8'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.\nNova: I'm sorry, but I don't have any information stored in my memory related to 'nova-audit-fixture-4b1b60b8'.",
-              "last_used": null,
-              "created_at": "2026-05-22T17:24:02.263347+00:00",
-              "similarity": 0.7235061463132266,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "chat"
-            },
-            {
-              "id": "030b4c58-75c3-4632-a9fe-3c62b5be06ed",
-              "tags": [
-                "file_read",
-                "nova_audit_fixture",
-                "verbatim_content"
-              ],
-              "content": "User: Read the file /workspace/nova-audit-fixture-3fc7ef9f.txt and tell me the EXACT content it contains, verbatim, between triple backticks.\nNova: Sure, I'll read the file for you.\n\n```\nThe contents of /workspace/nova-audit-fixture-3fc7ef9f.txt are:\nAUDIT-TOK-dfc0a1b2c3d4\n```",
-              "last_used": null,
-              "created_at": "2026-05-22T17:49:07.419391+00:00",
-              "similarity": 0.7231938293451543,
-              "source_uri": null,
-              "used_count": 0,
-              "source_kind": "chat"
-            },
-            {
-              "id": "e67638c6-138e-4ea2-8965-ce16ca789c99",
-              "tags": [
-                "error",
-                "not_found"
-              ],
-              "content": "User: Search your memory for the token 'nova-audit-fixture-a577f039'. Then quote the EXACT, VERBATIM content of the most relevant matching memory between triple backticks \u2014 do not paraphrase or summarize.\nNova: I'm sorry, but I don't have any information stored in my memory related to 'nova-audit-fixture-a577f039'.",
-              "last_used": null,
-              "created_at": "2026-05-22T17:44:31.775118+00:00",
-              "similarity": 0.7180479642820308,
+              "similarity": 0.7436396938015648,
               "source_uri": null,
               "used_count": 0,
               "source_kind": "chat"
@@ -184,15 +186,15 @@
           ],
           "degraded": false
         },
-        "call_id": "01419ce7-b9fe-4061-b99e-56530aeb801d"
+        "call_id": "de0a020e-829a-4a40-9c70-f1d7fa606586"
       },
-      "occurred_at": "2026-05-22T18:18:03.480094+00:00",
-      "chain_hash": "fc5bd1f05587f149107502e21f8bf85fa6d0aae9959e73829dfbc492b08696a8"
+      "occurred_at": "2026-05-22T19:05:25.469203+00:00",
+      "chain_hash": "fd78c5ee47bbdd5498a9391e5c3c549c95417433025e6770eb61acdf4e4c3bf7"
     }
   ],
   "verifier_result": {
     "ok": false,
-    "reason": "token 'AUDIT-TOK-5b8ed0c5d7b9' not echoed in final response"
+    "reason": "token 'AUDIT-TOK-213cf58dd7e3' not echoed in final response"
   },
   "cleanup_result": {
     "ok": true,
@@ -202,7 +204,7 @@
     "ok": true,
     "reason": null
   },
-  "task_id": "35fa8f89-399f-4008-afe4-a8d4be7049d3",
+  "task_id": "bfcf6535-27bb-4f50-9a44-5e5f22ca5a00",
   "final_stream_event": {
     "text": "LLM gateway unreachable"
   }

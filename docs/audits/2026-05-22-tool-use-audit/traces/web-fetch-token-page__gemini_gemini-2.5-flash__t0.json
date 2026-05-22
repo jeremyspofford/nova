@@ -1,0 +1,17 @@
+{
+  "probe_id": "web-fetch-token-page",
+  "tool": "web.fetch",
+  "model": "gemini/gemini-2.5-flash",
+  "trial_n": 0,
+  "run_id": "602fdf3f",
+  "token": "AUDIT-TOK-41cc5524398d",
+  "prompt": "Fetch the URL https://example.com/ (run_id=602fdf3f) and tell me the EXACT text of the page title between triple backticks.",
+  "stream_events": [],
+  "task_events": [],
+  "verifier_result": null,
+  "cleanup_result": null,
+  "task_id": "df41bcca-8e71-4b47-8b34-7e9b03e8f727",
+  "final_stream_event": {
+    "text": "LLM gateway unreachable"
+  }
+}
