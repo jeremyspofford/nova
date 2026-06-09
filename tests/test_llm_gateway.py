@@ -112,3 +112,47 @@ def test_providers_shows_active_local_backend():
     assert data["local_backend"] in (
         "ollama-host", "ollama", "llamacpp", "vllm", "sglang", "lmstudio", "none"
     )
+
+
+def test_local_model_with_tools_stays_conversational():
+    """LiteLLM's ollama_chat tool path forces Ollama into JSON mode: local
+    models hallucinate tool calls or wrap final answers in JSON envelopes and
+    ignore the system persona (observed live: 7B denied knowing the user while
+    the profile block sat in its prompt). Through Ollama's native OpenAI
+    endpoint, a conversational turn with tools offered must come back as
+    prose that uses the persona context."""
+    providers = _available_providers().get("providers", [])
+    if not any(p.get("local") and p.get("available") for p in providers):
+        pytest.skip("no local provider available")
+
+    r = httpx.post(f"{BASE}/complete", json={
+        "model": "qwen2.5:1.5b",
+        "max_tokens": 60,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": "You are Nova, a personal assistant.\n\n"
+             "## What Nova knows about the user\n- User's favorite color is teal"},
+            {"role": "user", "content": "Hey, what do you know about me? Answer in one sentence."},
+        ],
+        "tools": [{"type": "function", "function": {
+            "name": "web_search",
+            "description": "Search the web for current information",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}},
+                           "required": ["query"]},
+        }}],
+    }, timeout=120.0)
+    assert r.status_code == 200, r.text
+    data = r.json()
+
+    assert not data.get("tool_calls"), (
+        f"hallucinated a tool call for a conversational question: {data['tool_calls']}"
+    )
+    content = (data.get("content") or "").strip()
+    assert content, "empty reply"
+    enveloped = False
+    try:
+        enveloped = isinstance(json.loads(content), (dict, list))
+    except ValueError:
+        pass
+    assert not enveloped, f"JSON envelope instead of prose: {content[:120]}"
+    assert "teal" in content.lower(), f"persona/profile ignored: {content[:120]}"

@@ -15,8 +15,20 @@ def set_routing_strategy(strategy: str | None) -> None:
     _routing_strategy_override = strategy
 
 
+def ollama_openai_base(url: str) -> str:
+    """Ollama's OpenAI-compatible endpoint lives under /v1."""
+    return url.rstrip("/") + "/v1"
+
+
 def _local_candidate() -> tuple[str, dict] | None:
-    """Return (litellm_model, extra_kwargs) for the active local backend, or None."""
+    """Return (litellm_model, extra_kwargs) for the active local backend, or None.
+
+    Ollama completions go through its native OpenAI-compatible endpoint, NOT
+    litellm's ollama_chat provider: ollama_chat implements tool calling by
+    forcing format=json on every request, which makes models hallucinate tool
+    calls for conversational turns and wrap final answers in JSON envelopes
+    (ignoring the system persona). The /v1 endpoint uses the model's own chat
+    template for native tool calling."""
     backend = settings.nova_inference_backend
     url = settings.local_inference_url
     model = settings.local_completion_model
@@ -24,7 +36,7 @@ def _local_candidate() -> tuple[str, dict] | None:
     if backend == "none":
         return None
     if backend in ("ollama-host", "ollama"):
-        return (f"ollama_chat/{model}", {"api_base": url})
+        return (f"openai/{model}", {"api_base": ollama_openai_base(url), "api_key": "none"})
     if backend in ("llamacpp", "vllm", "sglang", "lmstudio"):
         # All other backends speak the OpenAI-compatible API
         # LiteLLM requires a non-empty api_key for openai/ routes; "none" is a safe sentinel
