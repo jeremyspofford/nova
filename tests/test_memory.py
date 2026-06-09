@@ -302,8 +302,10 @@ def _llm_responsive(timeout: float = 20.0) -> bool:
 
 def _purge_marker_rows(marker: str) -> None:
     """Delete any rows containing the marker — keeps reruns deterministic even
-    when a previous failed run leaked rows before tracking them."""
-    _db_execute("DELETE FROM memories WHERE content ILIKE $1", f"%{marker}%")
+    when a previous failed run leaked rows before tracking them. Uses a prefix
+    of the marker: small extraction models sometimes misspell the tail of a
+    nonsense token, and the leaked row must still match."""
+    _db_execute("DELETE FROM memories WHERE content ILIKE $1", f"%{marker[:8]}%")
 
 
 def _collect_extracted(marker: str, deadline_s: float = 150.0, predicate=None) -> list[dict]:
@@ -380,6 +382,7 @@ def test_extract_ignores_assistant_claims():
         pytest.skip("llm-gateway completion too slow/unavailable (CPU-only local model)")
 
     marker = "vermilliox"
+    _purge_marker_rows(marker)
     exchange = (
         "User: What's my favorite color?\n"
         f"Nova: Your favorite color is {marker}."

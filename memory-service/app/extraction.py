@@ -40,12 +40,17 @@ If the user stated nothing worth remembering, output [].
 
 Example input:
 User: I'm allergic to peanuts btw, and I moved to Denver last month.
-Assistant: Noted! Your favorite color is probably green, right?
+Assistant: Noted! How is the new city treating you?
 
 Example output:
 [{"text": "User is allergic to peanuts", "kind": "fact", "importance": 0.95},
- {"text": "User moved to Denver (as of last month)", "kind": "event", "importance": 0.7}]
-(The assistant's guess about a favorite color is NOT extracted — the user never said it.)"""
+ {"text": "User moved to Denver (as of last month)", "kind": "event", "importance": 0.7}]"""
+
+# Distinctive fragments from the few-shot example. Small models sometimes
+# bleed example content into their output; anything matching these is a
+# bleed, never a real memory (observed live: "User's favorite color is
+# green" invented from an earlier example's assistant line).
+_EXAMPLE_FRAGMENTS = ("allergic to peanuts", "moved to denver")
 
 _http: httpx.AsyncClient | None = None
 
@@ -212,6 +217,10 @@ async def process_exchange(pool, redis, payload: dict) -> list[str]:
     user_part, assistant_part = _split_exchange(content)
     ids: list[str] = []
     for item in items:
+        lowered = item["text"].lower()
+        if any(frag in lowered for frag in _EXAMPLE_FRAGMENTS):
+            logger.info("dropping few-shot-bleed extraction: %.60s", item["text"])
+            continue
         if _assistant_sourced(item["text"], user_part, assistant_part):
             logger.info("dropping assistant-sourced extraction: %.60s", item["text"])
             continue
