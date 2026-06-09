@@ -118,11 +118,12 @@ No new tables. No edges. Deletion still never happens automatically — "never f
   `/complete` (model from `EXTRACTION_MODEL` setting, default `"auto"`; `temperature 0.1`,
   strict-JSON prompt, one few-shot example, input capped at 4000 chars) and expects
   `[{"text": …, "kind": …, "importance": …}]`, max 5 items.
-- Each extracted item is written via the normal store path (so it enters the embed queue)
-  **after a dedup check**: embed the candidate text (synchronous, ~0.5 s), search top-1 at
-  similarity > 0.93; on a hit, update that row (newest text wins, `importance =
-  GREATEST(old, new)`, `used_count + 1`, `last_used = now()`) instead of inserting.
-  Growth without bloat.
+- Each extracted item is dedup-checked first: embed the candidate text (synchronous,
+  ~0.5 s), search top-1 at similarity > 0.93. On a hit, update that row (newest text
+  wins, `importance = GREATEST(old, new)`, `used_count + 1`, `last_used = now()`) and
+  re-push it onto `memory:embed:queue` so the vector tracks the new text. On a miss,
+  insert storing the already-computed embedding directly — no second trip through the
+  embed queue. Growth without bloat, nothing embedded twice.
 - **Failure fallback (no data loss):** if the LLM call fails, times out, or returns
   unparseable JSON after one retry, store the original content verbatim as a single
   memory (`kind='event'`, `importance=0.3`). The transcript layer (`task_messages`)
@@ -152,7 +153,8 @@ same blend with `ts_rank/(ts_rank+1)` standing in for similarity.
 ### Profile ("what Nova knows about you")
 
 - `GET /memories/profile?limit=12`: `kind IN ('fact','preference')` ordered by
-  `importance DESC, used_count DESC, last_used DESC NULLS LAST`.
+  `importance DESC, used_count DESC, last_used DESC NULLS LAST`. Must be registered
+  **before** `GET /{memory_id}` or FastAPI parses "profile" as a memory id.
 - agent-core injects it into **every** chat system prompt as a stable
   "What Nova knows about the user" block (60 s in-process cache), above the existing
   query-relevant memories block, which now annotates each line with its kind.
@@ -186,7 +188,9 @@ break because memory is sick.
    reinforced one ranks first; both still beat an unrelated memory.
 3. Devalue-not-bury: high-similarity old/unused memory still outranks low-similarity
    fresh one (age manipulated directly in postgres from the test).
-4. Profile endpoint: high-importance preference appears; low-importance event does not.
+4. Profile endpoint: high-importance preference appears; low-importance event is
+   excluded (kind filter); and a low-importance fact ranks below a high-importance one
+   (importance ordering, not just kind filtering).
 5. Extraction, lossless guarantee: `extract=true` → poll until ≥1 memory exists for the
    content (extracted or fallback — either proves no data loss).
 6. Extraction, quality: structured kinds appear — auto-skipped with an explicit reason
