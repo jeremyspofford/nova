@@ -247,3 +247,37 @@ def test_salience_importance_orders_equal_similarity():
     mine = [m for m in results if m["id"] in (lo, hi)]
     assert mine and all("salience" in m for m in mine)
     assert mine[0]["id"] == hi, "higher-importance memory should rank first"
+
+
+# ── continuity memory: profile (Task 3) ──────────────────────────────────────
+
+
+def test_profile_returns_facts_and_preferences_by_importance():
+    pref = _write_full({
+        "content": "Nova profile test: user prefers tabs over spaces",
+        "source_kind": "chat", "kind": "preference", "importance": 0.95,
+    })
+    hi_fact = _write_full({
+        "content": "Nova profile test: user works on the Nova platform",
+        "source_kind": "chat", "kind": "fact", "importance": 0.9,
+    })
+    lo_fact = _write_full({
+        "content": "Nova profile test: user mentioned a one-off lunch order",
+        "source_kind": "chat", "kind": "fact", "importance": 0.05,
+    })
+    event = _write_full({
+        "content": "Nova profile test: user restarted docker yesterday",
+        "source_kind": "chat", "kind": "event", "importance": 0.99,
+    })
+
+    r = httpx.get(f"{BASE}/memories/profile", params={"limit": 50})
+    assert r.status_code == 200, r.text
+    entries = r.json()["profile"]
+    ids = [e["id"] for e in entries]
+
+    assert pref in ids, "high-importance preference missing from profile"
+    assert hi_fact in ids, "high-importance fact missing from profile"
+    assert event not in ids, "event kind must never appear in profile"
+    # Importance ordering, not just kind filtering:
+    if lo_fact in ids:
+        assert ids.index(hi_fact) < ids.index(lo_fact), "profile not importance-ordered"

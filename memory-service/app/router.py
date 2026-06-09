@@ -32,12 +32,19 @@ class MemoryWriteRequest(BaseModel):
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
-# IMPORTANT: /stats must be defined BEFORE /{memory_id} to avoid "stats" matching as an ID
+# IMPORTANT: /stats and /profile must be defined BEFORE /{memory_id} so the
+# literal paths don't match as an ID
 @router.get("/stats")
 async def get_stats():
     pool = await get_pool()
     stats = await store.get_stats(pool)
     return {**stats, "degraded": embed.is_degraded()}
+
+
+@router.get("/profile")
+async def get_profile(limit: int = 12):
+    pool = await get_pool()
+    return {"profile": await store.get_profile(pool, limit)}
 
 
 @router.post("", status_code=201)

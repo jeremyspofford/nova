@@ -57,6 +57,22 @@ async def mark_used(pool: asyncpg.Pool, memory_id: str) -> None:
     )
 
 
+async def get_profile(pool: asyncpg.Pool, limit: int = 12) -> list[dict]:
+    """Stable high-value facts/preferences — the 'what Nova knows about you'
+    block injected into every conversation."""
+    rows = await pool.fetch(
+        """
+        SELECT id::text, content, kind, importance, used_count, last_used, created_at
+        FROM memories
+        WHERE kind IN ('fact', 'preference')
+        ORDER BY importance DESC, used_count DESC, last_used DESC NULLS LAST
+        LIMIT $1
+        """,
+        limit,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_stats(pool: asyncpg.Pool) -> dict:
     row = await pool.fetchrow(
         """
