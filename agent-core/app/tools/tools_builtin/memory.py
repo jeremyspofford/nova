@@ -33,11 +33,24 @@ async def memory_search(query: str, limit: int = 10, *, ctx: ToolContext) -> dic
 
 
 @tool(tier=Tier.MUTATE, reversible=True, cap_scope="memory:write", timeout_s=10, name="memory.write")
-async def memory_write(content: str, source_kind: str = "task_output", *, ctx: ToolContext) -> dict:
-    """Store a piece of knowledge in the memory service."""
+async def memory_write(
+    content: str,
+    source_kind: str = "task_output",
+    kind: str = "fact",
+    importance: float = 0.5,
+    *,
+    ctx: ToolContext,
+) -> dict:
+    """Store a piece of knowledge. kind: fact|preference|event|insight;
+    importance 0-1 weights how strongly it surfaces in future recall."""
     r = await get_mem_client().post(
         f"{settings.memory_service_url}/memories",
-        json={"content": content, "source_kind": source_kind},
+        json={
+            "content": content,
+            "source_kind": source_kind,
+            "kind": kind,
+            "importance": max(0.0, min(1.0, importance)),
+        },
     )
     r.raise_for_status()
     return r.json()

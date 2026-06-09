@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 import httpx
@@ -10,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import TaskCreateRequest
 from pydantic import BaseModel
 
+from . import memory_client
 from .config import settings
 from .db import get_pool
 from .loop.main import run_task
@@ -83,15 +85,41 @@ async def _search_memory(query: str, limit: int = 5) -> list[dict]:
 
 
 async def _ingest_memory(content: str) -> None:
-    """Push a completed exchange into the memory store. Fire-and-forget."""
+    """Push a completed exchange into the memory store for extraction.
+    Fire-and-forget; the extract worker distills it into structured memories
+    (or stores verbatim if the LLM is unavailable)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
                 f"{settings.memory_service_url}/memories",
-                json={"content": content, "source_kind": "chat"},
+                json={"content": content, "source_kind": "chat", "extract": True},
             )
     except Exception as exc:
         logger.warning("memory ingest failed: %s", exc)
+
+
+_profile_cache: dict = {"data": [], "fetched_at": 0.0}
+_PROFILE_TTL_S = 60.0
+
+
+async def _get_profile() -> list[dict]:
+    """Stable user profile injected into every conversation. Cached briefly;
+    failure degrades to no profile block — chat never breaks on sick memory."""
+    now = time.monotonic()
+    if now - _profile_cache["fetched_at"] < _PROFILE_TTL_S:
+        return _profile_cache["data"]
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                f"{settings.memory_service_url}/memories/profile",
+                params={"limit": 12},
+            )
+            if r.status_code == 200:
+                _profile_cache["data"] = r.json().get("profile", [])
+                _profile_cache["fetched_at"] = now
+    except Exception as exc:
+        logger.warning("profile fetch failed: %s", exc)
+    return _profile_cache["data"]
 
 
 _OUTPUT_STYLE_HINTS: dict[str, str] = {
@@ -106,6 +134,7 @@ _OUTPUT_STYLE_HINTS: dict[str, str] = {
 def _build_system_prompt(
     memories: list[dict],
     *,
+    profile: list[dict] | None = None,
     offered_tool_names: set[str] | None = None,
     model: str | None = None,
     output_style: str | None = None,
@@ -127,11 +156,23 @@ def _build_system_prompt(
         base += "\n\nWhen the user's question may benefit from current information, proactively use web.search and web.fetch."
     if deep_research:
         base += "\n\nConduct thorough multi-step research: search broadly, cross-reference multiple sources, and synthesize findings before responding."
-    if not memories:
-        return base
-    lines = [base, "", "## What Nova remembers"]
-    for m in memories:
-        lines.append(f"- {m['content']}")
+    lines = [base]
+    if profile:
+        lines += ["", "## What Nova knows about the user"]
+        for p in profile:
+            lines.append(f"- {p['content']}")
+    if memories:
+        lines += ["", "## Relevant memories for this message"]
+        for m in memories:
+            kind = m.get("kind") or "fact"
+            lines.append(f"- [{kind}] {m['content']}")
+    if profile or memories:
+        lines += [
+            "",
+            "You are the same Nova across all of the user's conversations and "
+            "platforms — the context above is your own memory, not something the "
+            "user just told you. Use it naturally, like a friend who remembers.",
+        ]
     return "\n".join(lines)
 
 
@@ -443,8 +484,14 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
     offered_tool_names: set[str] = {t["function"]["name"] for t in offered_tools}
 
     memories = await _search_memory(body.text)
+    profile = await _get_profile()
+    # Don't repeat profile entries in the relevant-memories block
+    profile_ids = {p["id"] for p in profile}
+    memories = [m for m in memories if m["id"] not in profile_ids]
+    injected_ids = [m["id"] for m in memories] + [p["id"] for p in profile]
     system_prompt = _build_system_prompt(
         memories,
+        profile=profile,
         offered_tool_names=offered_tool_names,
         model=body.model,
         output_style=body.output_style,
@@ -610,6 +657,9 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 except Exception as exc:
                     logger.warning("failed to persist assistant message task=%s: %s", task_id, exc)
                 asyncio.create_task(_ingest_memory(f"User: {body.text}\nNova: {final_text}"))
+                # Reinforcement: recalled-and-used memories stay warm.
+                for mid in injected_ids:
+                    asyncio.create_task(memory_client.mark_used(mid))
 
         except Exception as exc:
             logger.error("message turn failed task=%s: %s", task_id, exc)

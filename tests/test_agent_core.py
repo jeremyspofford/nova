@@ -254,3 +254,34 @@ def test_task_messages_requires_auth():
     """GET /api/v1/tasks/{id}/messages without auth is 401."""
     r = httpx.get(f"{BASE}/api/v1/tasks/00000000-0000-0000-0000-000000000000/messages")
     assert r.status_code == 401
+
+
+# ── continuity memory: memories proxy (Task 5) ───────────────────────────────
+
+
+def test_memories_proxy_stats():
+    """Dashboard reaches memory-service through agent-core — was 404 on main."""
+    r = httpx.get(f"{BASE}/api/v1/memories/stats", headers=ADMIN, timeout=10.0)
+    assert r.status_code == 200, r.text
+    assert "total_rows" in r.json()
+
+
+def test_memories_proxy_search():
+    r = httpx.post(
+        f"{BASE}/api/v1/memories/search",
+        json={"query": "anything", "limit": 3},
+        headers=ADMIN, timeout=30.0,
+    )
+    assert r.status_code == 200, r.text
+    assert "results" in r.json()
+
+
+def test_memories_proxy_profile():
+    r = httpx.get(f"{BASE}/api/v1/memories/profile", headers=ADMIN, timeout=10.0)
+    assert r.status_code == 200, r.text
+    assert "profile" in r.json()
+
+
+def test_memories_proxy_requires_auth():
+    r = httpx.get(f"{BASE}/api/v1/memories/stats")
+    assert r.status_code == 401

@@ -16,6 +16,7 @@ from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
 from .secrets import store as secrets_store
 from .conversations_router import router as conversations_router
+from .memories_proxy_router import router as memories_proxy_router
 from .mcp_router import router as mcp_router
 from .schedules_router import router as schedules_router
 from .secrets.router import router as secrets_router
@@ -170,6 +171,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
 app.include_router(conversations_router)
+app.include_router(memories_proxy_router)
 app.include_router(mcp_router)
 app.include_router(schedules_router)
 app.include_router(secrets_router)
