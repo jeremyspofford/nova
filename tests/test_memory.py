@@ -281,3 +281,91 @@ def test_profile_returns_facts_and_preferences_by_importance():
     # Importance ordering, not just kind filtering:
     if lo_fact in ids:
         assert ids.index(hi_fact) < ids.index(lo_fact), "profile not importance-ordered"
+
+
+# ── continuity memory: extraction (Task 4) ───────────────────────────────────
+
+
+def _llm_responsive(timeout: float = 20.0) -> bool:
+    """Probe llm-gateway with a tiny completion. CPU-only boxes with a 7B
+    default model fail this — extraction quality tests skip honestly there."""
+    try:
+        r = httpx.post(
+            "http://localhost:8001/complete",
+            json={"messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 5},
+            timeout=timeout,
+        )
+        return r.status_code == 200 and bool(r.json().get("content"))
+    except Exception:
+        return False
+
+
+def _purge_marker_rows(marker: str) -> None:
+    """Delete any rows containing the marker — keeps reruns deterministic even
+    when a previous failed run leaked rows before tracking them."""
+    _db_execute("DELETE FROM memories WHERE content ILIKE $1", f"%{marker}%")
+
+
+def _collect_extracted(marker: str, deadline_s: float = 150.0, predicate=None) -> list[dict]:
+    """Poll keyword search until extraction (or its fallback) lands rows
+    containing the marker token and satisfying `predicate`. Tracks ids for
+    cleanup. Keeps polling past non-matching hits — the extract worker may
+    still be mid-flight when the first row shows up."""
+    deadline = time.monotonic() + deadline_s
+    last_hits: list[dict] = []
+    while time.monotonic() < deadline:
+        r = httpx.post(f"{BASE}/memories/search", json={"query": marker, "limit": 20})
+        if r.status_code == 200:
+            hits = [m for m in r.json()["results"] if marker.lower() in m["content"].lower()]
+            for h in hits:
+                if h["id"] not in _test_ids:
+                    _test_ids.append(h["id"])
+            if hits:
+                last_hits = hits
+                if predicate is None or any(predicate(h) for h in hits):
+                    return hits
+        time.sleep(2)
+    return last_hits
+
+
+def test_extract_returns_202_and_never_loses_content():
+    marker = "flombozzle"  # nonsense token that survives extraction or fallback
+    _purge_marker_rows(marker)
+    exchange = (
+        f"User: Remember that my project codename is {marker} and I want weekly status updates.\n"
+        f"Nova: Got it — {marker} it is, weekly updates noted."
+    )
+    r = httpx.post(f"{BASE}/memories", json={
+        "content": exchange, "source_kind": "chat", "extract": True,
+    })
+    assert r.status_code == 202, r.text
+    assert r.json().get("queued") is True
+
+    hits = _collect_extracted(marker)
+    assert hits, "extraction lost the exchange — no memory row contains the marker"
+
+
+def test_extract_produces_structured_kinds():
+    if not _llm_responsive():
+        pytest.skip("llm-gateway completion too slow/unavailable (CPU-only local model)")
+
+    marker = "grimblewock"
+    _purge_marker_rows(marker)
+    exchange = (
+        f"User: My favorite editor is neovim and my dog is named {marker}.\n"
+        f"Nova: Noted — neovim fan with a dog called {marker}."
+    )
+    r = httpx.post(f"{BASE}/memories", json={
+        "content": exchange, "source_kind": "chat", "extract": True,
+    })
+    assert r.status_code == 202
+
+    valid_kinds = {"fact", "preference", "event", "insight"}
+
+    def _is_structured(m: dict) -> bool:
+        return m["kind"] in valid_kinds and "User:" not in m["content"]
+
+    hits = _collect_extracted(marker, predicate=_is_structured)
+    assert hits, "no extracted memories appeared"
+    structured = [h for h in hits if _is_structured(h)]
+    assert structured, f"no structured (non-transcript) memories among: {[h['content'][:60] for h in hits]}"

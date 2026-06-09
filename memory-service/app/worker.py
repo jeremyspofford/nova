@@ -114,6 +114,38 @@ async def embed_worker() -> None:
         await r.aclose()
 
 
+async def extract_worker() -> None:
+    """Drain memory:extract:queue — each job is a JSON exchange payload that
+    extraction distills into structured memories (or stores verbatim on LLM
+    failure — never drops)."""
+    from . import extraction
+
+    r = aioredis.from_url(settings.redis_url, decode_responses=True)
+    logger.info("Extract worker running")
+    try:
+        while True:
+            try:
+                result = await r.blpop("memory:extract:queue", timeout=0.5)
+                if result:
+                    _, raw = result
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning("Dropping malformed extract job: %.100s", raw)
+                        continue
+                    pool = await get_pool()
+                    await extraction.process_exchange(pool, r, payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Extract worker iteration error: %s", exc)
+                await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        logger.info("Extract worker shutting down")
+    finally:
+        await r.aclose()
+
+
 async def recover_unembedded(pool) -> None:
     ids = await store.get_unembedded_ids(pool, limit=50)
     if not ids:

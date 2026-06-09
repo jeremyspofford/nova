@@ -17,31 +17,41 @@ logger = logging.getLogger(__name__)
 _worker_task: asyncio.Task | None = None
 
 
+_extract_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from .worker import embed_worker, recover_unembedded, close_http as close_worker_http
+    from .worker import (
+        embed_worker, extract_worker, recover_unembedded,
+        close_http as close_worker_http,
+    )
+    from .extraction import close as close_extraction
 
     pool = await get_pool()
     await probe_and_lock(pool)
 
-    global _worker_task
+    global _worker_task, _extract_task
     _worker_task = asyncio.create_task(embed_worker())
+    _extract_task = asyncio.create_task(extract_worker())
 
     await recover_unembedded(pool)
 
     logger.info("memory-service started")
     yield
 
-    if _worker_task:
-        _worker_task.cancel()
-        try:
-            await _worker_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_worker_task, _extract_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     await close_pool()
     await close_embed()
     await close_worker_http()
+    await close_extraction()
     logger.info("memory-service stopped")
 
 
