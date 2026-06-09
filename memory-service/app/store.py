@@ -9,17 +9,26 @@ async def write_memory(
     content: str,
     source_kind: str,
     source_uri: str | None = None,
+    kind: str = "fact",
+    importance: float = 0.5,
+    tags: list[str] | None = None,
+    embedding: list[float] | None = None,
 ) -> str:
-    """Insert a memory row with embedding=NULL. Returns the UUID as a string."""
+    """Insert a memory row. embedding/tags are optional — when the caller
+    already computed them (extraction dedup path) the row skips the embed queue."""
     row = await pool.fetchrow(
         """
-        INSERT INTO memories (content, source_kind, source_uri)
-        VALUES ($1, $2, $3)
+        INSERT INTO memories (content, source_kind, source_uri, kind, importance, tags, embedding)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6::text[], '{}'::text[]), $7)
         RETURNING id::text
         """,
         content,
         source_kind,
         source_uri,
+        kind,
+        importance,
+        tags,
+        embedding,
     )
     return row["id"]
 
@@ -28,7 +37,7 @@ async def get_memory(pool: asyncpg.Pool, memory_id: str) -> dict | None:
     row = await pool.fetchrow(
         """
         SELECT id::text, content, source_kind, source_uri, tags,
-               created_at, used_count, last_used
+               created_at, used_count, last_used, kind, importance
         FROM memories
         WHERE id = $1::uuid
         """,

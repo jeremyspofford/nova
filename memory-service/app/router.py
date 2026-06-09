@@ -4,7 +4,7 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from nova_contracts import MemorySearchRequest
 
 from .config import settings
@@ -28,6 +28,8 @@ class MemoryWriteRequest(BaseModel):
     content: str
     source_kind: str
     source_uri: Optional[str] = None
+    kind: str = "fact"
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 # IMPORTANT: /stats must be defined BEFORE /{memory_id} to avoid "stats" matching as an ID
@@ -41,7 +43,10 @@ async def get_stats():
 @router.post("", status_code=201)
 async def write_memory(body: MemoryWriteRequest):
     pool = await get_pool()
-    memory_id = await store.write_memory(pool, body.content, body.source_kind, body.source_uri)
+    memory_id = await store.write_memory(
+        pool, body.content, body.source_kind, body.source_uri,
+        kind=body.kind, importance=body.importance,
+    )
     try:
         r = await _get_redis()
         await r.rpush("memory:embed:queue", memory_id)

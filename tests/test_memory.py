@@ -1,4 +1,8 @@
 """Integration tests for memory-service — requires memory-service running at localhost:8002."""
+import asyncio
+import time
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -7,11 +11,58 @@ BASE = "http://localhost:8002"
 _test_ids: list[str] = []
 
 
+def _pg_dsn() -> str:
+    """Build a DSN for direct DB pokes (aging rows, checking embeddings)."""
+    password = "changeme"
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if line.startswith("POSTGRES_PASSWORD="):
+                password = line.split("=", 1)[1].strip()
+    return f"postgresql://nova:{password}@localhost:5432/nova"
+
+
+def _db_execute(sql: str, *args):
+    """Run one statement against postgres synchronously."""
+    import asyncpg
+
+    async def _run():
+        conn = await asyncpg.connect(_pg_dsn())
+        try:
+            return await conn.fetchval(sql, *args)
+        finally:
+            await conn.close()
+
+    return asyncio.run(_run())
+
+
+def _wait_embedded(memory_id: str, timeout: float = 30.0) -> None:
+    """Block until the embed worker has vectorized the row — semantic search
+    only sees rows with embeddings, so ranking tests must wait or they race
+    the async embed queue."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _db_execute(
+            "SELECT embedding IS NOT NULL FROM memories WHERE id = $1::uuid", memory_id
+        ):
+            return
+        time.sleep(0.5)
+    pytest.fail(f"memory {memory_id} never embedded within {timeout}s")
+
+
 def _write(content: str, source_kind: str = "chat", source_uri: str | None = None) -> str:
     r = httpx.post(
         f"{BASE}/memories",
         json={"content": content, "source_kind": source_kind, "source_uri": source_uri},
     )
+    assert r.status_code == 201, r.text
+    memory_id = r.json()["id"]
+    _test_ids.append(memory_id)
+    return memory_id
+
+
+def _write_full(payload: dict) -> str:
+    r = httpx.post(f"{BASE}/memories", json=payload)
     assert r.status_code == 201, r.text
     memory_id = r.json()["id"]
     _test_ids.append(memory_id)
@@ -98,3 +149,36 @@ def test_search_source_kind_filter():
 def test_search_empty_query_returns_ok():
     r = httpx.post(f"{BASE}/memories/search", json={"query": "", "limit": 5})
     assert r.status_code == 200
+
+
+# ── continuity memory: kind + importance (Task 1) ────────────────────────────
+
+
+def test_write_kind_importance_roundtrip():
+    memory_id = _write_full({
+        "content": "Nova test kind importance roundtrip content",
+        "source_kind": "chat",
+        "kind": "preference",
+        "importance": 0.9,
+    })
+    r = httpx.get(f"{BASE}/memories/{memory_id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["kind"] == "preference"
+    assert abs(data["importance"] - 0.9) < 1e-6
+
+
+def test_write_defaults_kind_and_importance():
+    memory_id = _write("Nova test default kind importance content")
+    data = httpx.get(f"{BASE}/memories/{memory_id}").json()
+    assert data["kind"] == "fact"
+    assert abs(data["importance"] - 0.5) < 1e-6
+
+
+def test_write_importance_out_of_range_rejected():
+    r = httpx.post(f"{BASE}/memories", json={
+        "content": "Nova test bad importance",
+        "source_kind": "chat",
+        "importance": 1.5,
+    })
+    assert r.status_code == 422
