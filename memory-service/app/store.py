@@ -59,12 +59,14 @@ async def mark_used(pool: asyncpg.Pool, memory_id: str) -> None:
 
 async def get_profile(pool: asyncpg.Pool, limit: int = 12) -> list[dict]:
     """Stable high-value facts/preferences — the 'what Nova knows about you'
-    block injected into every conversation."""
+    block injected into every conversation. importance > 0.5 keeps out rows
+    sitting at the column default (e.g. pre-extraction transcript blobs the
+    migration backfilled at 0.5) — the profile is for distilled knowledge."""
     rows = await pool.fetch(
         """
         SELECT id::text, content, kind, importance, used_count, last_used, created_at
         FROM memories
-        WHERE kind IN ('fact', 'preference')
+        WHERE kind IN ('fact', 'preference') AND importance > 0.5
         ORDER BY importance DESC, used_count DESC, last_used DESC NULLS LAST
         LIMIT $1
         """,

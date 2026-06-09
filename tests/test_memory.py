@@ -278,9 +278,15 @@ def test_profile_returns_facts_and_preferences_by_importance():
     assert pref in ids, "high-importance preference missing from profile"
     assert hi_fact in ids, "high-importance fact missing from profile"
     assert event not in ids, "event kind must never appear in profile"
-    # Importance ordering, not just kind filtering:
-    if lo_fact in ids:
-        assert ids.index(hi_fact) < ids.index(lo_fact), "profile not importance-ordered"
+    # Default-importance (0.5) rows are excluded: pre-extraction transcript
+    # blobs got kind='fact', importance=0.5 from the migration defaults and
+    # must not pollute the profile.
+    assert lo_fact not in ids, "low-importance fact must not appear in profile"
+    default_fact = _write("Nova profile test: default importance transcript blob")
+    r2 = httpx.get(f"{BASE}/memories/profile", params={"limit": 50})
+    assert default_fact not in [e["id"] for e in r2.json()["profile"]], (
+        "importance-0.5 default row leaked into profile"
+    )
 
 
 # ── continuity memory: extraction (Task 4) ───────────────────────────────────
