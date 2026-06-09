@@ -27,7 +27,7 @@
 - [ ] Apply to running DB (worktree services not rebuilt yet): `docker compose -p nova exec -T postgres psql -U postgres -d nova -f -` < the migration file (or paste SQL). The file still ships so fresh installs get it at agent-core startup.
 - [ ] `store.write_memory(pool, content, source_kind, source_uri, kind="fact", importance=0.5, tags=None, embedding=None)` — extend INSERT (embedding/tags used by Task 4's direct-store path); add `kind, importance` to `get_memory`/search SELECT lists. Clamp importance to [0,1] in router (pydantic `ge=0 le=1`).
 - [ ] `MemoryWriteRequest` += `kind: str = "fact"`, `importance: float = Field(0.5, ge=0, le=1)`.
-- [ ] Restart memory-service from worktree code: `docker compose -p nova up -d --build memory-service` (first copy `.env` from main checkout into worktree root).
+- [ ] One-time worktree compose setup: copy `.env` from the main checkout, then append `POSTGRES_DATA_DIR=/home/jeremy/workspace/nova/data/postgres` and `NOVA_WORKSPACE`'s existing absolute value if relative. **Every targeted rebuild uses `--no-deps`**: `docker compose -p nova up -d --build --no-deps memory-service`. Without both guards, compose run from the worktree resolves postgres's bind mount to the worktree's empty `data/postgres` and recreates the live DB container over an empty directory.
 - [ ] Test passes → commit `feat(memory): kind + importance columns`.
 
 ### Task 2: Salience ranking
@@ -36,6 +36,7 @@
 - Modify: `memory-service/app/store.py` (`_semantic_search`, `_keyword_search`)
 - Test: `tests/test_memory.py`
 
+- [ ] Add `_wait_embedded(memory_id, timeout=30)` helper: poll GET `/memories/{id}` until... embedding isn't exposed; instead poll search until the id appears in semantic results, or poll DB via asyncpg `SELECT embedding IS NOT NULL`. Use the asyncpg variant (deterministic). All salience tests call it after writes — semantic ranking only sees embedded rows (async embed queue, race otherwise).
 - [ ] Failing tests:
   - `test_salience_reinforcement_ranks_used_first`: two near-identical-content rows, PATCH `/used` ×5 on one → it ranks first for that query; response rows include `salience`, `kind`, `importance`.
   - `test_salience_devalue_not_bury`: write `A` (unique topic), age it via direct SQL (`asyncpg` connect to `localhost:5432`, password parsed from repo `.env`, fallback `changeme`): `UPDATE memories SET created_at = now() - interval '120 days' WHERE id=$1`; write fresh `B` on a different topic. Query for A's topic → A still first (similarity dominates); both A and B searchable.
@@ -65,7 +66,7 @@
   - `test_extract_lossless`: POST `extract=true` → 202 `{"queued": true}`; poll search (90 s budget) until ≥1 row whose content relates to the input → guaranteed by fallback even when LLM is down.
   - `test_extract_structured_kinds`: probe llm-gateway with a 5-token completion (20 s); `pytest.skip("local LLM unavailable/slow")` on failure; else assert extracted rows carry kind ∈ {fact, preference, event, insight} and content is NOT the raw `User:/Nova:` transcript.
 - [ ] `extraction.py`: prompt (system: "Extract durable memories worth keeping about the user and their world… Output ONLY a JSON array, max 5 items, each {\"text\",\"kind\",\"importance\"}. kinds: fact|preference|event|insight. Empty array if nothing durable."; one few-shot example pair; input truncated 4000 chars; `temperature 0.1`, `max_tokens 500`). Parse with ```-fence stripping (same idiom as `worker._get_tags`); one retry; on failure → fallback single row (`kind='event'`, `importance=0.3`, original text).
-  Per item: sync `embed.embed_text` → if vector, top-1 search > 0.93 sim → hit: UPDATE content/importance=GREATEST/used_count+1/last_used=now + rpush embed queue (vector refresh); miss: insert with embedding + tags-from-kind (skip embed queue). No vector (degraded): plain insert (embed queue does it later, dedup skipped).
+  Per item: sync `embed.embed_text` on the candidate text → if vector, top-1 search > 0.93 sim → hit: single UPDATE setting `content`, `embedding` (the just-computed candidate vector — we already have it, so the vector tracks the new text atomically; no re-queue, no IS-NULL-guard conflict with the embed worker), `importance = GREATEST(...)`, `used_count + 1`, `last_used = now()`; miss: insert with embedding (skip embed queue). No vector (degraded): plain insert (embed queue does it later, dedup skipped).
 - [ ] `worker.py`: extraction consumer mirroring `embed_worker` on `memory:extract:queue` (BLPOP, JSON payload `{content, source_kind, source_uri}`); start/stop in `main.py` lifespan alongside the embed worker.
 - [ ] Rebuild memory-service; tests pass (structured test may skip on this box) → commit `feat(memory): LLM extraction pipeline with lossless fallback`.
 
@@ -77,7 +78,7 @@
 - Modify: `agent-core/app/tools/tools_builtin/memory.py` (memory.write gains optional kind/importance)
 - Test: `tests/test_agent_core.py` (proxy endpoints), `tests/test_memory.py` (used_count increments via proxy path)
 
-- [ ] Failing tests: `test_memories_proxy_stats/search/profile` (200 via agent-core with admin header; 401 without).
+- [ ] Failing tests: `test_memories_proxy_stats/search/profile` (200 via agent-core with admin header; `in (401, 403, 422)` without — matches `_require_admin` behavior per tests/test_secrets.py:101).
 - [ ] Implement proxy (httpx passthrough, 10 s timeout, JSON in/out; no auth header added downstream — memory-service is unauthenticated inside the network).
 - [ ] Profile block: module-level cache `{data, fetched_at}`, 60 s TTL; failure → no block. Injected as "## What Nova knows about the user"; recall block becomes "## Relevant memories for this message" with `- [kind] content` lines; add identity line: "You are the same Nova across all of the user's conversations and platforms — what you remember above is yours. Use it naturally."
 - [ ] mark_used: after `final_text` persisted, `asyncio.create_task(...)` per injected memory id (ids captured from `_search_memory` results).
@@ -88,6 +89,7 @@
 **Files:**
 - Modify: `dashboard/src/pages/Memory.tsx`
 
+- [ ] Fix the three response-shape mismatches the page has against the real API (it was written against an older shape and 404'd until now): search returns `{results, degraded}` not a bare array (`data.results`); stats fields are `total_rows`/`table_size_bytes` not `count`/`size_bytes`; filter param is `source_kinds: [..]` (plural array) not `source_kind`.
 - [ ] Profile strip at top (GET `/api/v1/memories/profile`): pill list of fact/preference contents.
 - [ ] Memory cards: kind badge (color per kind), importance bar/percent, `used_count`× recalled, salience when present. Interface fields += `kind`, `importance`, `used_count`, `salience?`.
 - [ ] Rebuild dashboard; verify in browser (Task 7 covers full Playwright pass) → commit `feat(dashboard): memory page shows kind/importance/recall + profile`.
