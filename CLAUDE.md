@@ -87,6 +87,10 @@ POST     /api/v1/mcp/servers/{id}/restart
 GET      /api/v1/schedules
 POST     /api/v1/webhooks/{schedule_id}
 GET/PUT  /api/v1/identity
+GET      /api/v1/memories/stats          # proxies memory-service for the dashboard
+GET      /api/v1/memories/profile
+POST     /api/v1/memories/search
+GET/DELETE /api/v1/memories/{id}
 ```
 
 Auth: `X-Admin-Secret` header (or `Authorization: Bearer sk-nova-<hash>` for API keys).
@@ -104,16 +108,22 @@ GET  /config       # routing strategy
 ### memory-service (8002)
 
 ```
-POST /memories              # store a memory
-GET  /memories              # list
-POST /memories/search       # semantic + keyword search
-GET  /memories/stats        # counts, embedding coverage
-GET  /memories/{id}
-POST /memories/{id}/used    # increment used_count, update last_used
+POST  /memories              # store a memory; extract:true queues LLM distillation (202)
+GET   /memories              # list
+POST  /memories/search       # salience-ranked semantic + keyword search
+GET   /memories/profile      # high-importance facts/preferences (the user profile block)
+GET   /memories/stats        # counts, embedding coverage
+GET   /memories/{id}
+PATCH /memories/{id}/used    # increment used_count, update last_used
 ```
 
 Memory is a flat `memories` table with pgvector embeddings. No graph, no engrams,
-no spreading activation. Semantic search + keyword fallback (`tsvector`) only.
+no spreading activation. Search is two-stage: vector-index candidates re-ranked by
+salience (0.60 similarity + 0.15 recency + 0.15 importance + 0.10 reinforcement);
+keyword fallback (`tsvector`) gets the same blend. Chat exchanges are distilled by
+an extraction worker (`EXTRACTION_MODEL`, default `auto`) into structured
+fact/preference/event/insight rows; LLM failure falls back to verbatim storage.
+Nothing is auto-deleted — old irrelevant memories rank lower, they don't vanish.
 
 ### voice-gateway (8003) — profile: `voice`
 
@@ -142,6 +152,7 @@ Protocol: `chat-surface` message types (defined in `nova-contracts/nova_contract
 | `LOCAL_COMPLETION_MODEL` | Default local completion model (e.g. `llama3.2`) |
 | `LOCAL_EMBED_MODEL` | Embedding model (e.g. `nomic-embed-text`) |
 | `LLM_ROUTING_STRATEGY` | `local-first`, `local-only`, `cloud-first`, `cloud-only` |
+| `EXTRACTION_MODEL` | Memory-extraction model (default `auto`; pin a small model like `qwen2.5:1.5b` on CPU-only boxes) |
 | `COMPOSE_PROFILES` | Comma-separated active profiles (e.g. `voice`) |
 | `LOG_LEVEL` | `INFO` (prod) / `DEBUG` (dev) |
 | `NOVA_WORKSPACE` | Host path agent-core can access as its workspace |

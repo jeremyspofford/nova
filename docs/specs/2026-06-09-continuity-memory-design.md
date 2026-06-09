@@ -200,6 +200,24 @@ Browser verification (Playwright, mandatory): the Paul test. Tell Nova a fact in
 conversation A; open a brand-new conversation B; ask for the fact; Nova answers from
 memory. Screenshot evidence. Memory page shows extracted memories with kinds.
 
+### Hardening found during browser verification (shipped in this increment)
+
+Three defects surfaced live and were fixed before completion:
+
+1. **Self-poisoning**: the model hallucinated "blue" for the user's favorite color;
+   extraction stored it as a 0.95-importance preference that outranked the true
+   "teal" on recency. Fix: extraction never stores the assistant's own claims —
+   prompt rule plus a deterministic token-overlap attribution filter.
+2. **Few-shot bleed**: small models bled the extraction example into storage
+   ("User's favorite color is green", invented). Fix: example rewritten with no
+   extractable false content; distinctive example fragments hard-dropped.
+3. **Profile pollution**: pre-extraction transcript blobs (backfilled at
+   importance 0.5 by the migration) qualified for the profile. Fix: profile
+   requires `importance > 0.5` — distilled memories score above the default.
+
+`EXTRACTION_MODEL` env var (default `auto`) pins extraction to a small fast model
+on CPU-only boxes; set to `qwen2.5:1.5b` on the dev machine.
+
 ### Out of scope (this increment)
 
 Task-loop memory ingestion (chat only for now), memory edges/graph, proactivity pulse,
