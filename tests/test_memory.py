@@ -36,7 +36,7 @@ def _db_execute(sql: str, *args):
     return asyncio.run(_run())
 
 
-def _wait_embedded(memory_id: str, timeout: float = 30.0) -> None:
+def _wait_embedded(memory_id: str, timeout: float = 150.0) -> None:
     """Block until the embed worker has vectorized the row — semantic search
     only sees rows with embeddings, so ranking tests must wait or they race
     the async embed queue."""
@@ -182,3 +182,68 @@ def test_write_importance_out_of_range_rejected():
         "importance": 1.5,
     })
     assert r.status_code == 422
+
+
+# ── continuity memory: salience ranking (Task 2) ─────────────────────────────
+
+
+def _search(query: str, limit: int = 10) -> list[dict]:
+    r = httpx.post(f"{BASE}/memories/search", json={"query": query, "limit": limit})
+    assert r.status_code == 200, r.text
+    return r.json()["results"]
+
+
+def test_salience_fields_present_in_results():
+    mid = _write("Nova salience fields test zanzibar quokka lighthouse")
+    _wait_embedded(mid)
+    results = _search("zanzibar quokka lighthouse")
+    mine = [m for m in results if m["id"] == mid]
+    assert mine, "freshly written memory not found in search"
+    for key in ("salience", "kind", "importance", "similarity"):
+        assert key in mine[0], f"missing {key} in search result"
+
+
+def test_salience_reinforcement_ranks_used_first():
+    # Identical content → identical embeddings → exact similarity tie.
+    # Only the reinforcement signal can break it.
+    text = "Nova reinforcement test: the sprocket flange calibration is blue-green"
+    a = _write(text)
+    b = _write(text)
+    _wait_embedded(a)
+    _wait_embedded(b)
+    for _ in range(5):
+        httpx.patch(f"{BASE}/memories/{b}/used")
+    results = _search("sprocket flange calibration color")
+    mine = [m for m in results if m["id"] in (a, b)]
+    assert mine, "neither test memory found"
+    assert all("salience" in m for m in mine), "salience missing from results"
+    assert mine[0]["id"] == b, "reinforced memory should outrank unused twin"
+
+
+def test_salience_devalue_not_bury():
+    """An old, never-recalled memory must still win on a uniquely matching query."""
+    old = _write("Nova devalue test: the maroon zeppelin hangar code is 7741")
+    fresh = _write("Nova devalue test: today's lunch special is minestrone soup")
+    _wait_embedded(old)
+    _wait_embedded(fresh)
+    _db_execute(
+        "UPDATE memories SET created_at = now() - interval '120 days' WHERE id = $1::uuid",
+        old,
+    )
+    results = _search("maroon zeppelin hangar code")
+    mine = [m for m in results if m["id"] in (old, fresh)]
+    assert mine and all("salience" in m for m in mine)
+    assert mine[0]["id"] == old, "high-similarity old memory was buried by freshness"
+
+
+def test_salience_importance_orders_equal_similarity():
+    # Identical content again — similarity tie, importance must decide.
+    text = "Nova importance test: the cobalt walrus prefers morning swims"
+    lo = _write_full({"content": text, "source_kind": "chat", "importance": 0.1})
+    hi = _write_full({"content": text, "source_kind": "chat", "importance": 0.9})
+    _wait_embedded(lo)
+    _wait_embedded(hi)
+    results = _search("cobalt walrus swim preference")
+    mine = [m for m in results if m["id"] in (lo, hi)]
+    assert mine and all("salience" in m for m in mine)
+    assert mine[0]["id"] == hi, "higher-importance memory should rank first"

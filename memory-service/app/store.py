@@ -92,6 +92,21 @@ async def search_memories(
     return await _keyword_search(pool, query, limit, source_kinds, tags)
 
 
+# Salience blend: similarity dominates; recency, importance and reinforcement
+# nudge. Additive on purpose — multiplicative decay buries old-but-relevant
+# memories, and "devalued" must never mean "buried". Half-life 30 days
+# (ln(2)/30 ≈ 0.0231); reinforcement saturates at ~100 recalls.
+_SALIENCE_EXPR = """
+    0.60 * similarity
+  + 0.15 * exp(-0.0231 * GREATEST(extract(epoch FROM (now() - COALESCE(last_used, created_at))) / 86400.0, 0))
+  + 0.15 * importance
+  + 0.10 * LEAST(ln(1 + used_count) / ln(101), 1.0)
+"""
+
+_ROW_COLS = """id::text, content, source_kind, source_uri, tags,
+            created_at, used_count, last_used, kind, importance"""
+
+
 async def _semantic_search(
     pool: asyncpg.Pool,
     embedding: list[float],
@@ -115,14 +130,22 @@ async def _semantic_search(
         filters.append(f"1 - (embedding <=> $1) >= ${len(params)}")
 
     where = " AND ".join(filters)
+    # Two stages: the inner query rides the vector index (ORDER BY distance),
+    # the outer re-ranks the candidate pool by salience. Pool is at least 50
+    # so re-ranking has real candidates even for small limits.
     sql = f"""
-        SELECT
-            id::text, content, source_kind, source_uri, tags,
-            created_at, used_count, last_used,
-            1 - (embedding <=> $1) AS similarity
-        FROM memories
-        WHERE {where}
-        ORDER BY embedding <=> $1
+        WITH candidates AS (
+            SELECT
+                {_ROW_COLS},
+                1 - (embedding <=> $1) AS similarity
+            FROM memories
+            WHERE {where}
+            ORDER BY embedding <=> $1
+            LIMIT GREATEST($2, 50)
+        )
+        SELECT *, ({_SALIENCE_EXPR}) AS salience
+        FROM candidates
+        ORDER BY salience DESC
         LIMIT $2
     """
     rows = await pool.fetch(sql, *params)
@@ -152,19 +175,34 @@ async def _keyword_search(
         filters.append(f"tags @> ${len(params)}")
 
     where = " AND ".join(filters)
+    # ts_rank is unbounded; ts_rank/(ts_rank+1) maps it into [0,1) so the
+    # same salience blend applies to the keyword fallback path.
     sql = f"""
-        SELECT
-            id::text, content, source_kind, source_uri, tags,
-            created_at, used_count, last_used,
-            ts_rank(to_tsvector('english', content),
-                    plainto_tsquery('english', $1)) AS similarity
-        FROM memories
-        WHERE {where}
-        ORDER BY similarity DESC
+        WITH candidates AS (
+            SELECT
+                {_ROW_COLS},
+                ts_rank(to_tsvector('english', content),
+                        plainto_tsquery('english', $1)) AS raw_rank
+            FROM memories
+            WHERE {where}
+            ORDER BY raw_rank DESC
+            LIMIT GREATEST($2, 50)
+        ), scored AS (
+            SELECT *, (raw_rank / (raw_rank + 1.0)) AS similarity
+            FROM candidates
+        )
+        SELECT *, ({_SALIENCE_EXPR}) AS salience
+        FROM scored
+        ORDER BY salience DESC
         LIMIT $2
     """
     rows = await pool.fetch(sql, *params)
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d.pop("raw_rank", None)
+        out.append(d)
+    return out
 
 
 async def update_embedding_and_tags(
