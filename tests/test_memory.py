@@ -369,3 +369,32 @@ def test_extract_produces_structured_kinds():
     assert hits, "no extracted memories appeared"
     structured = [h for h in hits if _is_structured(h)]
     assert structured, f"no structured (non-transcript) memories among: {[h['content'][:60] for h in hits]}"
+
+
+def test_extract_ignores_assistant_claims():
+    """Nova's own assertions must never become user facts — otherwise a
+    hallucinated answer poisons memory and outranks the truth on recency
+    (observed live: model answered 'blue', extraction stored 'Favorite color
+    is blue' at importance 0.95, burying the user's actual 'teal')."""
+    if not _llm_responsive():
+        pytest.skip("llm-gateway completion too slow/unavailable (CPU-only local model)")
+
+    marker = "vermilliox"
+    exchange = (
+        "User: What's my favorite color?\n"
+        f"Nova: Your favorite color is {marker}."
+    )
+    r = httpx.post(f"{BASE}/memories", json={
+        "content": exchange, "source_kind": "chat", "extract": True,
+    })
+    assert r.status_code == 202
+
+    hits = _collect_extracted(marker, deadline_s=60.0)
+    poisoned = [
+        h for h in hits
+        if h["kind"] in ("fact", "preference") and "User:" not in h["content"]
+    ]
+    assert not poisoned, (
+        f"assistant's claim was laundered into user facts: "
+        f"{[h['content'][:60] for h in poisoned]}"
+    )

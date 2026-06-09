@@ -26,23 +26,26 @@ DEDUP_SIMILARITY = 0.93
 _SYSTEM_PROMPT = """\
 You extract durable memories from a conversation exchange for a personal AI assistant.
 
-Extract ONLY information worth remembering long-term about the user, their world, \
-their preferences, or commitments made. Each memory must be a short, self-contained \
-statement understandable without the conversation.
+Extract ONLY information THE USER STATED about themselves, their world, their \
+preferences, or requests they made. NEVER extract claims, answers, or guesses the \
+Assistant/Nova produced — the assistant can be wrong, and storing its claims as \
+user facts poisons memory. Each memory must be a short, self-contained statement \
+understandable without the conversation.
 
 Output ONLY a JSON array, no other text. Max 5 items. Each item:
 {"text": "...", "kind": "fact|preference|event|insight", "importance": 0.0-1.0}
 
 importance: 0.9+ identity/strong preferences, 0.5-0.8 useful context, <0.5 minor.
-If nothing is worth remembering, output [].
+If the user stated nothing worth remembering, output [].
 
 Example input:
 User: I'm allergic to peanuts btw, and I moved to Denver last month.
-Assistant: Noted! How's Denver treating you?
+Assistant: Noted! Your favorite color is probably green, right?
 
 Example output:
 [{"text": "User is allergic to peanuts", "kind": "fact", "importance": 0.95},
- {"text": "User moved to Denver (as of last month)", "kind": "event", "importance": 0.7}]"""
+ {"text": "User moved to Denver (as of last month)", "kind": "event", "importance": 0.7}]
+(The assistant's guess about a favorite color is NOT extracted — the user never said it.)"""
 
 _http: httpx.AsyncClient | None = None
 
@@ -93,6 +96,35 @@ def _parse_items(raw: str) -> list[dict] | None:
         importance = min(max(importance, 0.0), 1.0)
         items.append({"text": content, "kind": kind, "importance": importance})
     return items
+
+
+def _split_exchange(content: str) -> tuple[str, str]:
+    """Split a 'User: ...\\nNova: ...' exchange into (user_part, assistant_part).
+    Content without that shape is treated as all-user."""
+    for sep in ("\nNova:", "\nAssistant:", "\nassistant:"):
+        if sep in content:
+            user_part, assistant_part = content.split(sep, 1)
+            return user_part, assistant_part
+    return content, ""
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split() if len(w) > 3}
+
+
+def _assistant_sourced(item_text: str, user_part: str, assistant_part: str) -> bool:
+    """True when an extracted claim's distinctive words trace to the assistant's
+    turn rather than the user's. Deterministic backstop for the prompt rule —
+    small models sometimes launder the assistant's answers into 'user facts'
+    (observed: hallucinated favorite color stored as a 0.95 preference)."""
+    if not assistant_part:
+        return False
+    item_words = _words(item_text)
+    if not item_words:
+        return False
+    user_overlap = len(item_words & _words(user_part))
+    assistant_overlap = len(item_words & _words(assistant_part))
+    return assistant_overlap > user_overlap
 
 
 async def _llm_extract(content: str) -> list[dict] | None:
@@ -177,8 +209,12 @@ async def process_exchange(pool, redis, payload: dict) -> list[str]:
         logger.info("extraction fell back to verbatim storage (%s)", memory_id)
         return [memory_id]
 
+    user_part, assistant_part = _split_exchange(content)
     ids: list[str] = []
     for item in items:
+        if _assistant_sourced(item["text"], user_part, assistant_part):
+            logger.info("dropping assistant-sourced extraction: %.60s", item["text"])
+            continue
         try:
             ids.append(await _store_item(pool, item, source_kind, source_uri))
         except Exception as exc:
