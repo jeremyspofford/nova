@@ -65,14 +65,13 @@ jobs:
       - run: npm run build
 
   migration-gap-check:
-    # CICD blocker CI5 (from prod-readiness-and-flag-strategy memo).
-    # Nova's migration runner sorts orchestrator/app/migrations/*.sql by
-    # filename and applies them idempotently — gaps are survivable but
-    # they hide ordering hazards across parallel feature branches. This
-    # job fails fast when migration numbers are non-contiguous so a PR
-    # that depends on a sibling branch's migration (e.g. flags-001's 083
-    # waiting on sec-006a's 082) doesn't quietly merge with the gap
-    # still open. Operates on filenames only — no untrusted input.
+    # Nova's migration runner (agent-core startup) sorts
+    # agent-core/app/migrations/*.sql by filename and applies them
+    # idempotently — gaps are survivable but they hide ordering hazards
+    # across parallel feature branches. This job fails fast when migration
+    # numbers are non-contiguous so a PR that depends on a sibling branch's
+    # migration doesn't quietly merge with the gap still open. Operates on
+    # filenames only — no untrusted input.
     name: Migration Number Gap Check
     runs-on: ubuntu-latest
     steps:
@@ -81,11 +80,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          migrations_dir=agent-core/app/migrations
+
+          shopt -s nullglob
+          files=("$migrations_dir"/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No migrations found in $migrations_dir — wrong path or layout changed?"
+            exit 1
+          fi
+
           # Numbers known to be intentionally absent (historical skips,
           # abandoned branches). Strip comments + blanks; normalize to
           # leading-zero-free integers so comparisons match the awk
           # output below ("082" -> "82").
-          allow_file=orchestrator/app/migrations/.gaps
+          allow_file="$migrations_dir/.gaps"
           allowed=""
           if [ -f "$allow_file" ]; then
             allowed=$(grep -vE '^\s*(#|$)' "$allow_file" \
@@ -95,7 +103,7 @@ jobs:
           fi
 
           gaps=$(
-            ls orchestrator/app/migrations/*.sql 2>/dev/null \
+            printf '%s\n' "${files[@]}" \
               | xargs -n1 basename \
               | awk -F'_' '{print $1+0}' \
               | sort -un \
@@ -119,9 +127,9 @@ jobs:
             echo "$unexpected" | sed 's/^/  - /'
             echo
             echo "Either:"
-            echo "  1. The depended-on branch (e.g. sec-006a, sec-006b) hasn't merged yet — wait."
+            echo "  1. The depended-on branch hasn't merged yet — wait."
             echo "  2. A migration number was skipped in error — renumber to fill the gap."
-            echo "  3. The gap is intentional — add it to orchestrator/app/migrations/.gaps"
+            echo "  3. The gap is intentional — add it to $migrations_dir/.gaps"
             echo "     with a git-history-traceable rationale, only after review."
             exit 1
           fi
@@ -133,26 +141,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each service builds from REPO ROOT context with -f pointing at its
-        # Dockerfile. The Dockerfiles expect this layout because they COPY
-        # shared packages like nova-contracts/ and nova-worker-common/ from
-        # the project root. Building from `./service` directly fails.
+        # The v2 stack as defined in docker-compose.yml. Each backend
+        # service builds from REPO ROOT context with -f pointing at its
+        # Dockerfile, because the Dockerfiles COPY the shared
+        # nova-contracts/ package from the project root. The dashboard
+        # builds from its own directory, matching compose.
         include:
-          - service: orchestrator
-            dockerfile: orchestrator/Dockerfile
+          - service: agent-core
+            dockerfile: agent-core/Dockerfile
+            context: .
           - service: llm-gateway
             dockerfile: llm-gateway/Dockerfile
+            context: .
           - service: memory-service
             dockerfile: memory-service/Dockerfile
-          - service: chat-api
-            dockerfile: chat-api/Dockerfile
-          - service: cortex
-            dockerfile: cortex/Dockerfile
+            context: .
+          - service: chat-surface
+            dockerfile: chat-surface/Dockerfile
+            context: .
+          - service: voice-gateway
+            dockerfile: voice-gateway/Dockerfile
+            context: .
           - service: recovery
-            dockerfile: recovery-service/Dockerfile
-          - service: intel-worker
-            dockerfile: intel-worker/Dockerfile
+            dockerfile: recovery/Dockerfile
+            context: .
+          - service: dashboard
+            dockerfile: dashboard/Dockerfile
+            context: ./dashboard
     steps:
       - uses: actions/checkout@v4
       - name: Build ${{ matrix.service }}
-        run: docker build -f ${{ matrix.dockerfile }} -t nova-${{ matrix.service }}:ci .
+        run: docker build -f ${{ matrix.dockerfile }} -t nova-${{ matrix.service }}:ci ${{ matrix.context }}

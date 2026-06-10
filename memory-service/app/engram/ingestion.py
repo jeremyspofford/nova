@@ -18,10 +18,11 @@ import json
 import logging
 from uuid import UUID
 
+from sqlalchemy import text
+
 from app.config import settings
 from app.db.database import AsyncSessionLocal
 from app.embedding import get_embedding, get_redis, to_pg_vector
-from sqlalchemy import text
 
 from .consolidation import notify_new_engrams
 from .cortex_stimulus import emit_to_cortex

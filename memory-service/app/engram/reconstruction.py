@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-from app.config import settings
-from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.http_client import get_http_client
 
 from .activation import ActivatedEngram
 

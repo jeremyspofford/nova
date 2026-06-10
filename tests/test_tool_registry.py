@@ -1,13 +1,15 @@
 """Unit tests for tool registry — no running services needed."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../agent-core"))
 
 import pytest
 
 
 def test_tool_decorator_registers():
-    from app.tools.registry import tool, Tier, lookup
     from app.tools.context import ToolContext
+    from app.tools.registry import Tier, lookup, tool
 
     @tool(tier=Tier.READ)
     async def my_test_read(path: str, *, ctx: ToolContext) -> dict:
@@ -29,8 +31,8 @@ def test_tool_requires_tier():
 
 
 def test_tool_custom_name():
-    from app.tools.registry import tool, Tier, lookup
     from app.tools.context import ToolContext
+    from app.tools.registry import Tier, lookup, tool
 
     @tool(tier=Tier.MUTATE, name="custom.tool")
     async def _impl(x: str, *, ctx: ToolContext) -> dict:
@@ -40,8 +42,8 @@ def test_tool_custom_name():
 
 
 def test_to_openai_tools_format():
-    from app.tools.registry import to_openai_tools, tool, Tier
     from app.tools.context import ToolContext
+    from app.tools.registry import Tier, to_openai_tools, tool
 
     @tool(tier=Tier.READ)
     async def sample_read(query: str, *, ctx: ToolContext) -> dict:

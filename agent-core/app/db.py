@@ -1,6 +1,8 @@
 # agent-core/app/db.py
 import asyncio
+
 import asyncpg
+
 from .config import settings
 
 _pool: asyncpg.Pool | None = None

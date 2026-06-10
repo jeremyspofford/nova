@@ -91,7 +91,8 @@ async def _invoke(tool_def, args: dict, ctx) -> Any:
 
 
 def _make_snapshot():
-    import os, shutil
+    import os
+    import shutil
 
     async def snapshot(resource: str) -> str:
         snap_id = str(uuid.uuid4())

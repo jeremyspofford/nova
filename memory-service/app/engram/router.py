@@ -17,7 +17,6 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from uuid import UUID
 
-from app.db.database import get_db
 from fastapi import APIRouter, HTTPException, Query, Response
 from nova_contracts.engram import (
     ActivateRequest,
@@ -28,6 +27,8 @@ from nova_contracts.engram import (
 )
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+
+from app.db.database import get_db
 
 from .activation import spreading_activation
 from .consolidation import bootstrap_self_model, run_consolidation

@@ -1,7 +1,7 @@
-import pytest
-import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from app.scheduler.loop import _poll_once, fire_task_complete_schedules
 
 

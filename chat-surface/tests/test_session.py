@@ -1,7 +1,8 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.ws.session import WebSocketSession
+
+import pytest
 from app.ws.manager import SessionManager
+from app.ws.session import WebSocketSession
 
 
 @pytest.mark.asyncio

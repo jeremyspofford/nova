@@ -1,5 +1,4 @@
-import pytest
-from app.scheduler.heartbeat import build_daily_briefing_prompt, ALERT_CONDITIONS
+from app.scheduler.heartbeat import ALERT_CONDITIONS, build_daily_briefing_prompt
 
 
 def test_nothing_to_report_when_no_activity():

@@ -16,10 +16,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.config import settings
-from app.embedding import get_embedding
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.embedding import get_embedding
 
 from .activation import ActivatedEngram, spreading_activation
 from .neural_router.serve import get_cached_model, neural_rerank

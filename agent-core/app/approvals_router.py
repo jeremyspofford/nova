@@ -3,7 +3,6 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-
 from nova_contracts import ApprovalDecision
 
 from .config import settings

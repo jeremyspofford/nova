@@ -3,8 +3,9 @@
 Uses asyncio.create_subprocess_exec (no shell) — args list prevents injection.
 """
 import asyncio
-from ..registry import tool, Tier
+
 from ..context import ToolContext
+from ..registry import Tier, tool
 
 
 async def _git(cwd: str, *args: str) -> tuple[int, str, str]:

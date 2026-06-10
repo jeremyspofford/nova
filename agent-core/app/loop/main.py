@@ -8,7 +8,7 @@ run_subagent(): SPECIAL-tier dispatched sub-agent. Depth limit = 1.
 import json
 import logging
 import uuid
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable
 
 import httpx
 

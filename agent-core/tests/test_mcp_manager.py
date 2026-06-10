@@ -1,9 +1,9 @@
 """Tests for MCPManager — restart windowing logic and spawn delegation."""
 import asyncio
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ class TestClassifyRestart:
         assert result == "restart"
 
     def test_allows_up_to_max_restarts(self):
-        from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW
+        from app.tools.mcp.manager import _MAX_RESTARTS_IN_WINDOW, _classify_restart
         now = datetime.now(timezone.utc)
         result = _classify_restart(
             restart_count=_MAX_RESTARTS_IN_WINDOW - 1,
@@ -52,7 +52,7 @@ class TestClassifyRestart:
         assert result == "restart"
 
     def test_disables_on_4th_crash(self):
-        from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW
+        from app.tools.mcp.manager import _MAX_RESTARTS_IN_WINDOW, _classify_restart
         now = datetime.now(timezone.utc)
         result = _classify_restart(
             restart_count=_MAX_RESTARTS_IN_WINDOW,
@@ -62,7 +62,11 @@ class TestClassifyRestart:
         assert result == "disable"
 
     def test_allows_restart_after_window_expires(self):
-        from app.tools.mcp.manager import _classify_restart, _MAX_RESTARTS_IN_WINDOW, _RESTART_WINDOW_SECONDS
+        from app.tools.mcp.manager import (
+            _MAX_RESTARTS_IN_WINDOW,
+            _RESTART_WINDOW_SECONDS,
+            _classify_restart,
+        )
         now = datetime.now(timezone.utc)
         # window_start is far in the past — window has expired
         old_start = now - timedelta(seconds=_RESTART_WINDOW_SECONDS + 1)
@@ -182,7 +186,7 @@ async def test_handle_crash_returns_true_and_respawns():
 @pytest.mark.asyncio
 async def test_handle_crash_returns_false_after_too_many_crashes():
     """After exceeding restart limit, handle_crash returns False."""
-    from app.tools.mcp.manager import MCPManager, _MAX_RESTARTS_IN_WINDOW
+    from app.tools.mcp.manager import _MAX_RESTARTS_IN_WINDOW, MCPManager
 
     manager = MCPManager()
     dead = _dead_client()
@@ -200,7 +204,11 @@ async def test_handle_crash_returns_false_after_too_many_crashes():
 @pytest.mark.asyncio
 async def test_handle_crash_resets_counter_after_window_expires():
     """A crash outside the window resets the counter and returns True."""
-    from app.tools.mcp.manager import MCPManager, _MAX_RESTARTS_IN_WINDOW, _RESTART_WINDOW_SECONDS
+    from app.tools.mcp.manager import (
+        _MAX_RESTARTS_IN_WINDOW,
+        _RESTART_WINDOW_SECONDS,
+        MCPManager,
+    )
 
     manager = MCPManager()
     dead = _dead_client()

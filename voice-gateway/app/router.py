@@ -7,7 +7,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import stt, tts
-from .config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["voice"])

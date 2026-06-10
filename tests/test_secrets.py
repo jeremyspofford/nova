@@ -1,9 +1,9 @@
 """Integration tests for /api/v1/secrets — requires agent-core running at localhost:8000."""
 import os
-import pytest
-import httpx
-
 import pathlib
+
+import httpx
+import pytest
 
 BASE = os.environ.get("AGENT_CORE_URL", "http://localhost:8000")
 

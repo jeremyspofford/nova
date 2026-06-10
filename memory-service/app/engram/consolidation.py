@@ -25,11 +25,12 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from sqlalchemy import text
+
 from app.config import settings
 from app.db.database import AsyncSessionLocal
 from app.embedding import get_embedding, get_redis, to_pg_vector
 from app.http_client import get_http_client
-from sqlalchemy import text
 
 from .cortex_stimulus import emit_to_cortex
 

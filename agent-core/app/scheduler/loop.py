@@ -1,13 +1,14 @@
 """Scheduler loop: polls the schedules table, dispatches due tasks."""
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Any, Callable, Awaitable
+from datetime import datetime, timezone
+from typing import Any, Callable
 
-from .utils import compute_next_fire, resolve_placeholders
 from ..watchers.handler import _fire_queue
+from .utils import compute_next_fire, resolve_placeholders
 
 logger = logging.getLogger(__name__)
 

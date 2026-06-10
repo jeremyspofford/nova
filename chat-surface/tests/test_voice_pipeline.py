@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from app.voice.pipeline import run_voice_turn
 from app.ws.session import WebSocketSession
 

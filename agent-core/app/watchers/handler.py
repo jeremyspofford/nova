@@ -1,11 +1,12 @@
 """Watchdog event handler that enqueues schedule fire events."""
 from __future__ import annotations
+
 import fnmatch
 import logging
 import queue
 from pathlib import Path
 
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
 logger = logging.getLogger(__name__)
 

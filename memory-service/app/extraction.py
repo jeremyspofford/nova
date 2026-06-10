@@ -12,8 +12,8 @@ import logging
 
 import httpx
 
-from .config import settings
 from . import embed, store
+from .config import settings
 
 logger = logging.getLogger(__name__)
 

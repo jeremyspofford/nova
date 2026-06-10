@@ -8,11 +8,11 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .buffer import buffer_event, replay_buffer
-from .session import WebSocketSession
+from ..config import settings
 from ..voice.barge_in import handle_barge_in
 from ..voice.pipeline import run_voice_turn
-from ..config import settings
+from .buffer import buffer_event, replay_buffer
+from .session import WebSocketSession
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

@@ -1,8 +1,8 @@
 """Integration tests: all services return 200 on /health/ready.
 Requires: docker compose up (all services running).
 """
-import pytest
 import httpx
+import pytest
 
 SERVICES = [
     ("agent-core",    "http://localhost:8000"),

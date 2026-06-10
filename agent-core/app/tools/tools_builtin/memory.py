@@ -1,8 +1,9 @@
 """Memory-service tools: search, write."""
 import httpx
-from ..registry import tool, Tier
-from ..context import ToolContext
+
 from ...config import settings
+from ..context import ToolContext
+from ..registry import Tier, tool
 
 _mem_client: httpx.AsyncClient | None = None
 

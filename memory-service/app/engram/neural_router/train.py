@@ -18,9 +18,10 @@ import logging
 import redis.asyncio as aioredis
 import torch
 import torch.nn as nn
+from sqlalchemy import text
+
 from app.config import settings
 from app.db.database import get_db
-from sqlalchemy import text
 
 from .features import extract_scalar_features
 from .model import EmbeddingReranker, ScalarReranker

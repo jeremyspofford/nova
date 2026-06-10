@@ -1,6 +1,6 @@
 import os
 import tempfile
-import pytest
+
 from app.watchers.handler import ScheduleWatchHandler, _fire_queue
 
 

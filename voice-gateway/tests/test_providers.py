@@ -1,6 +1,6 @@
 import pytest
-from httpx import AsyncClient, ASGITransport
 from app.main import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture

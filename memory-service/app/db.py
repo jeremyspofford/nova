@@ -1,7 +1,9 @@
 # memory-service/app/db.py
 import asyncio
+
 import asyncpg
 from pgvector.asyncpg import register_vector
+
 from .config import settings
 
 _pool: asyncpg.Pool | None = None

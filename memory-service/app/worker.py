@@ -6,9 +6,9 @@ import logging
 import httpx
 import redis.asyncio as aioredis
 
+from . import embed, store
 from .config import settings
 from .db import get_pool
-from . import embed, store
 
 logger = logging.getLogger(__name__)
 

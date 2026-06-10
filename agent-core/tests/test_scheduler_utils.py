@@ -1,5 +1,5 @@
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 from app.scheduler.utils import compute_next_fire, resolve_placeholders
 
 

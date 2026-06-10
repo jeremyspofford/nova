@@ -1,5 +1,6 @@
 """Manages watchdog Observer instances for fs_watch schedules."""
 from __future__ import annotations
+
 import logging
 
 from watchdog.observers import Observer

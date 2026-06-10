@@ -1,7 +1,8 @@
 """Web tools: fetch, search."""
 import httpx
-from ..registry import tool, Tier
+
 from ..context import ToolContext
+from ..registry import Tier, tool
 
 _MAX_CONTENT = 50_000
 
