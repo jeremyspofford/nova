@@ -1,7 +1,6 @@
 import pytest
-from cryptography.exceptions import InvalidTag
-
 from app.secrets.crypto import decrypt, derive_key, encrypt
+from cryptography.exceptions import InvalidTag
 
 MASTER_KEY = "aa" * 32  # 64 hex chars = 32 bytes
 

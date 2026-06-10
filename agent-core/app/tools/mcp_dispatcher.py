@@ -5,7 +5,6 @@ import logging
 
 from .audit import write_event
 from .mcp import mcp_manager
-from .mcp.discovery import discover_tools
 from .registry import Tier
 
 logger = logging.getLogger(__name__)

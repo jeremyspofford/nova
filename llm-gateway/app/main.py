@@ -2,10 +2,10 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from nova_contracts import HealthStatus
 
 from .config import settings
 from .router import router
-from nova_contracts import HealthStatus
 
 logging.basicConfig(level=settings.log_level)
 # Suppress httpx request logging — it includes full URLs with embedded API keys

@@ -1,7 +1,7 @@
 """Tests for MCP tool discovery — tier heuristic and verb extraction."""
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 # ── classify_tier ────────────────────────────────────────────────────────────
 

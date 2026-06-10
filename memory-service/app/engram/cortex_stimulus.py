@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
+
 from app.config import settings
 
 log = logging.getLogger(__name__)

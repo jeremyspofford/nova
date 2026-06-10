@@ -1,9 +1,10 @@
 # recovery/app/main.py
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from nova_contracts import HealthStatus
-from .config import settings
+
 from .db import close_pool, get_pool
 
 logger = logging.getLogger(__name__)

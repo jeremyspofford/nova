@@ -1,6 +1,6 @@
 """SPECIAL-tier subagent dispatch tool."""
-from ..registry import tool, Tier
 from ..context import ToolContext
+from ..registry import Tier, tool
 
 
 @tool(tier=Tier.SPECIAL, cap_scope="subagent:{role}", timeout_s=600, name="dispatch_subagent")

@@ -1,8 +1,9 @@
 """Integration tests for the MCP router (real FastAPI app, no pool mock)."""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from httpx import AsyncClient, ASGITransport
+
+import pytest
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture

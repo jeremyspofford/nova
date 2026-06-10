@@ -1,35 +1,34 @@
 # agent-core/app/main.py
 import asyncio
-import asyncpg
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+import asyncpg
 import httpx
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from nova_contracts import HealthStatus
 
-import os
-
+from .approvals_router import router as approvals_router
 from .config import settings
+from .conversations_router import router as conversations_router
 from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
-from .secrets import store as secrets_store
-from .conversations_router import router as conversations_router
-from .memories_proxy_router import router as memories_proxy_router
 from .mcp_router import router as mcp_router
+from .memories_proxy_router import router as memories_proxy_router
+from .scheduler import scheduler_loop
 from .schedules_router import router as schedules_router
+from .secrets import store as secrets_store
 from .secrets.router import router as secrets_router
 from .tasks_router import router as tasks_router
-from .approvals_router import router as approvals_router
-from nova_contracts import HealthStatus
 
 # Importing tools_builtin triggers @tool self-registration as a side effect.
 from .tools import tools_builtin  # noqa: F401
 from .tools.mcp import mcp_manager
 from .tools.mcp.registry import boot_mcp_servers
 from .tools.tools_builtin.memory import close_mem_client
-from .scheduler import scheduler_loop, fire_task_complete_schedules
 from .watchers import WatcherManager
 
 logging.basicConfig(level=settings.log_level)

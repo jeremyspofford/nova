@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from .lifecycle import _classify_tier as classify_tier  # noqa: F401  (re-export)
 from .client import StdioMCPClient
+from .lifecycle import _classify_tier as classify_tier  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
 

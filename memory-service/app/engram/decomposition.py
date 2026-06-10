@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 
+from nova_contracts.engram import DecompositionResult
+
 from app.config import settings
 from app.http_client import get_http_client
-from nova_contracts.engram import DecompositionResult
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ async def resolve_model(model: str) -> str:
         import json as _json
 
         import redis.asyncio as aioredis
+
         from app.config import settings as _settings
 
         config_redis_url = _settings.redis_url.rsplit("/", 1)[0] + "/1"

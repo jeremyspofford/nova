@@ -1,10 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 
 def test_schedule_create_registered_as_mutate():
-    import app.tools.tools_builtin.schedules
-    from app.tools.registry import _registry, Tier
+    import app.tools.tools_builtin.schedules  # noqa: F401 — registers schedule tools
+    from app.tools.registry import Tier, _registry
     td = _registry.get("schedule_create")
     assert td is not None
     assert td.tier == Tier.MUTATE
@@ -12,14 +13,14 @@ def test_schedule_create_registered_as_mutate():
 
 
 def test_schedule_disable_is_mutate():
-    import app.tools.tools_builtin.schedules
-    from app.tools.registry import _registry, Tier
+    import app.tools.tools_builtin.schedules  # noqa: F401 — registers schedule tools
+    from app.tools.registry import Tier, _registry
     assert _registry["schedule_disable"].tier == Tier.MUTATE
 
 
 def test_schedule_delete_is_destruct():
-    import app.tools.tools_builtin.schedules
-    from app.tools.registry import _registry, Tier
+    import app.tools.tools_builtin.schedules  # noqa: F401 — registers schedule tools
+    from app.tools.registry import Tier, _registry
     assert _registry["schedule_delete"].tier == Tier.DESTRUCT
 
 

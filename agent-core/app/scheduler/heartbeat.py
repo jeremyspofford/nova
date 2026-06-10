@@ -1,5 +1,6 @@
 """Daily briefing builder and alert condition definitions for the scheduler heartbeat."""
 from __future__ import annotations
+
 import logging
 from typing import Any
 

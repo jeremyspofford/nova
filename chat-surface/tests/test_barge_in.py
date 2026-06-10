@@ -1,6 +1,7 @@
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from app.voice.barge_in import handle_barge_in
 from app.ws.session import WebSocketSession
 

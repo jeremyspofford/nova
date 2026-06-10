@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 
-from app.db.database import engine
-from app.embedding import get_redis
 from fastapi import APIRouter
 from sqlalchemy import text
+
+from app.db.database import engine
+from app.embedding import get_redis
 
 log = logging.getLogger(__name__)
 health_router = APIRouter(prefix="/health", tags=["health"])

@@ -1,6 +1,7 @@
 """Tests for app.tools.mcp.env_resolver."""
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 @pytest.fixture
@@ -73,6 +74,7 @@ async def test_non_ref_string_not_looked_up(pool):
 async def test_empty_env_always_pass_vars_present(pool):
     """Empty raw_env still produces PATH/HOME in result."""
     import os
+
     from app.tools.mcp.env_resolver import resolve_env
 
     result = await resolve_env({}, pool)
@@ -87,6 +89,7 @@ async def test_empty_env_always_pass_vars_present(pool):
 async def test_always_pass_vars_injected(pool):
     """PATH and HOME from os.environ are always included in the result."""
     import os
+
     from app.tools.mcp.env_resolver import resolve_env
 
     # Ensure PATH and HOME are set for the test (they virtually always are,
@@ -106,6 +109,7 @@ async def test_user_supplied_path_not_overwritten(pool):
     user config, not an override of intentionally-set values.
     """
     import os
+
     from app.tools.mcp.env_resolver import resolve_env
 
     with patch.dict(os.environ, {"PATH": "/injected/path"}, clear=False):

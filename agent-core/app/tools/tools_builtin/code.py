@@ -2,8 +2,8 @@
 import base64
 import shlex
 
-from ..registry import tool, Tier
 from ..context import ToolContext
+from ..registry import Tier, tool
 from ..sandbox.manager import run_in_sandbox
 
 _RUNNERS = {"python": "python3", "javascript": "node", "bash": "bash"}

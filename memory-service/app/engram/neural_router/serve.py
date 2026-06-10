@@ -12,9 +12,10 @@ import logging
 from datetime import datetime
 
 import torch
-from app.config import settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
 
 from .features import extract_embedding_features, extract_scalar_features
 from .model import EmbeddingReranker, ScalarReranker

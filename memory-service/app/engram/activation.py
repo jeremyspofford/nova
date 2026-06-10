@@ -13,10 +13,11 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.config import settings
-from app.embedding import get_embedding, to_pg_vector
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.embedding import get_embedding, to_pg_vector
 
 log = logging.getLogger(__name__)
 

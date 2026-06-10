@@ -15,10 +15,11 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from app.config import settings
-from app.http_client import get_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.http_client import get_http_client
 
 log = logging.getLogger(__name__)
 

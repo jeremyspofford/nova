@@ -4,12 +4,13 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from nova_contracts import HealthStatus
 
 from .config import settings
 from .db import close_pool, get_pool
-from .embed import close as close_embed, probe_and_lock
+from .embed import close as close_embed
+from .embed import probe_and_lock
 from .router import router
-from nova_contracts import HealthStatus
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -22,11 +23,15 @@ _extract_task: asyncio.Task | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from .extraction import close as close_extraction
     from .worker import (
-        embed_worker, extract_worker, recover_unembedded,
         close_http as close_worker_http,
     )
-    from .extraction import close as close_extraction
+    from .worker import (
+        embed_worker,
+        extract_worker,
+        recover_unembedded,
+    )
 
     pool = await get_pool()
     await probe_and_lock(pool)

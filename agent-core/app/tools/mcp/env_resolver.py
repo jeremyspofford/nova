@@ -1,10 +1,10 @@
 """Resolve MCP server env dicts: expand ${secret:name} refs, block sensitive keys."""
+import logging
 import os
 import re
-import logging
 
-from app.secrets.store import get_secret
 from app.config import settings
+from app.secrets.store import get_secret
 
 logger = logging.getLogger(__name__)
 

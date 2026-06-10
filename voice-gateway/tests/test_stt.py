@@ -1,8 +1,9 @@
 import json
-import pytest
-from httpx import AsyncClient, ASGITransport
 from unittest.mock import patch
+
+import pytest
 from app.main import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -22,7 +23,7 @@ async def test_stt_stream_returns_sse(client):
         )
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
-    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    lines = [ln for ln in resp.text.splitlines() if ln.startswith("data:")]
     assert len(lines) >= 1
     payload = json.loads(lines[-1].removeprefix("data: "))
     assert payload["is_final"] is True

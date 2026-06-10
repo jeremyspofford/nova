@@ -5,12 +5,12 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
 from nova_contracts import MemorySearchRequest
+from pydantic import BaseModel, Field
 
+from . import embed, store
 from .config import settings
 from .db import get_pool
-from . import embed, store
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 logger = logging.getLogger(__name__)

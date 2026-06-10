@@ -1,6 +1,6 @@
 """Sandboxed shell command tool — runs inside Docker container, never on host."""
-from ..registry import tool, Tier
 from ..context import ToolContext
+from ..registry import Tier, tool
 from ..sandbox.manager import run_in_sandbox
 
 

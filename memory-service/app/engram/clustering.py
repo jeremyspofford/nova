@@ -15,11 +15,12 @@ import logging
 from uuid import UUID
 
 import numpy as np
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
 from app.embedding import get_embedding, to_pg_vector
 from app.http_client import get_http_client
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 

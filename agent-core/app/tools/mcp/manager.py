@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from . import client as mcp_client
 from .client import StdioMCPClient
-from .lifecycle import start_server, stop_server
 from .env_resolver import resolve_env
+from .lifecycle import start_server, stop_server
 
 logger = logging.getLogger(__name__)
 

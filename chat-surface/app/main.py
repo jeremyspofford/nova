@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 import httpx
 import redis.asyncio as aioredis
 from fastapi import FastAPI
-
 from nova_contracts import HealthStatus
+
 from .config import settings
 
 

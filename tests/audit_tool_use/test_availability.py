@@ -38,8 +38,8 @@ def test_check_tool_available_live_against_mcp_servers(monkeypatch):
     catches that — if Playwright MCP is configured, browser_navigate must
     resolve to (True, None)."""
     import asyncio
-    import os
     import pathlib
+
     import httpx
 
     from audit_tool_use.availability import check_tool_available
