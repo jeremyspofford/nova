@@ -112,7 +112,19 @@ Restore the v0.1.0-alpha model management features on the v2 stack: hardware-awa
 recommended-model list (single manifest, remote-refreshed from the repo), one-click
 Ollama pull with streamed progress, install-wizard model picker, and per-model
 capability gauges (agent/tool-calling first) with local vs cloud/frontier models
-clearly separated. Spec: `docs/specs/2026-06-10-recommended-models-design.md`.
+clearly separated. Handles split deployments: when `LOCAL_INFERENCE_URL` points at
+another machine (e.g. gateway on a mini-PC, Ollama on a GPU box), recommendations are
+gated by the *inference host's* declared hardware profile, and pull/verify work over
+HTTP unchanged. Spec: `docs/specs/2026-06-10-recommended-models-design.md`.
+
+### 7. Wake-on-LAN — remote inference host power management
+For split deployments where the GPU machine sleeps: when routing is
+local-first/local-only and the inference host is unreachable, send a WoL magic packet
+(host MAC stored as a secret), wait for boot with a timeout, then retry the request;
+local-first falls back to cloud while the host wakes. Manual "Wake" button on the
+Models page's "inference host unreachable" banner (hook point shipped by #6).
+Design note: containers on the bridge network can't emit L2 broadcast — needs a
+host-network helper or directed broadcast; settle in design.
 
 ---
 

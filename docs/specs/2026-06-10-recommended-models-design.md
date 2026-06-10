@@ -139,16 +139,48 @@ This piece lands first, inside the **proactivity increment**, as its safety
 prerequisite — proactive autonomous cycles must not run on a model that can't reliably
 tool-call. The rest of this spec is its own increment.
 
-### Hardware detection
+### Hardware detection & the inference host profile
 
-- Port `detect_hardware.sh` (v1) into `./install`: writes `data/hardware.json`
-  (GPUs + VRAM, CPU cores, RAM, disk free). Mounted read-only into llm-gateway.
-- `GET /hardware` (llm-gateway): file contents + live best-effort signals (container
-  RAM/CPU; Ollama `/api/ps` for VRAM-in-use). No GPU tooling inside containers — the
-  file is authoritative for capacity, live calls only for utilization.
-- Fit rule: GPU present → `min_vram_gb <= total_vram`; CPU-only → `min_ram_gb <= ram_gb`
-  with a "will be slow" annotation above ~7B (the dev-box lesson: qwen2.5-coder:7b at
-  >90 s/response on CPU).
+**The machine running llm-gateway is not necessarily the machine running inference.**
+`LOCAL_INFERENCE_URL` already points off-box in the default dev setup (WSL2 containers →
+Windows-host Ollama), and the target home topology is a low-power box running the Nova
+stack with Ollama on a separate GPU machine (mini-PC gateway + GPU Dell). Recommendations
+must therefore be gated by the **inference host's** hardware, never the gateway's. The
+"hardware profile" is a profile *of whatever `LOCAL_INFERENCE_URL` points at*, built from
+the best available source:
+
+1. **Detected** — inference runs on the install machine: `./install` runs the ported v1
+   `detect_hardware.sh` → `data/hardware.json` (GPUs + VRAM, CPU cores, RAM, disk free),
+   mounted read-only into llm-gateway. The v1 two-phase approach — no GPU tooling exists
+   inside containers.
+2. **Declared** — inference host is remote: the user supplies the remote box's specs,
+   either in the dashboard (persisted via `PUT /hardware` to the hardware volume,
+   `source: "declared"`) or by running `detect_hardware.sh` on the remote machine and
+   copying the JSON. The install wizard asks for these when the configured inference URL
+   is not the local machine.
+3. **Observed** — empirical annotations, never gates: after a model loads, Ollama
+   `/api/ps` reports per-model `size_vram` — nonzero confirms GPU execution; zero on a
+   host with a declared GPU flags a misconfiguration (exactly the 2026-06-09 dev-box
+   caveat, where the GPU was invisible and inference silently ran on CPU).
+4. **Unknown** — no profile: nothing is gated; the grid shows all models with sizes
+   prominent and a "declare your inference host's specs" prompt.
+
+- Fit rule (against the inference host profile): GPU present → `min_vram_gb <=
+  total_vram`; CPU-only → `min_ram_gb <= ram_gb` with a "will be slow" annotation above
+  ~7B (the dev-box lesson: qwen2.5-coder:7b at >90 s/response on CPU).
+- The dashboard hardware header names the host it describes (the inference URL) and the
+  profile source (detected / declared / unknown), so a mini-PC user sees "dell-gpu.local
+  — declared: RTX 3090, 24 GB" rather than the mini-PC's own specs.
+
+**Split deployments otherwise work unchanged.** Every Ollama interaction in this spec —
+pull, delete, `/api/show`, the tool-call probe, `/api/ps` — is an HTTP call against
+`LOCAL_INFERENCE_URL`, so one-click pull and verification work identically for a remote
+host. Two consequences the UI must surface: models download to and consume disk on the
+*remote* machine (the pull card says so), and an unreachable inference host (e.g. the
+GPU box is asleep) disables pull/verify buttons with an "inference host unreachable"
+banner while the grid itself still renders (the manifest is local). That banner is the
+hook point for Wake-on-LAN power management — a separate roadmap item (#7), where
+local-first/local-only routing can wake a sleeping GPU host on demand.
 
 ### API surface
 
@@ -159,7 +191,8 @@ GET    /models/recommended      # manifest ∩ hardware fit ∩ installed-state 
 GET    /models/pulled           # installed Ollama models w/ size, digest, verification
 POST   /models/pull             # {model} → SSE progress (proxied from Ollama's NDJSON)
 DELETE /models/{name}
-GET    /hardware
+GET    /hardware                # inference host profile + source + observed signals
+PUT    /hardware                # declare specs for a remote inference host
 POST   /models/{name}/verify    # re-run the tool-call probe
 ```
 
@@ -192,17 +225,20 @@ stays for power users, with an inline warning if the typed model is denylisted.
 
 ### Install wizard
 
-Replace the free-text model prompt: read `hardware.json` + manifest, present the top
-3–4 fitting models (default preselected), set `LOCAL_COMPLETION_MODEL`,
-`EXTRACTION_MODEL`, and `LOCAL_EMBED_MODEL` in one pass from the same data. Free-text
-escape hatch remains.
+Replace the free-text model prompt: build the inference host profile (detect locally,
+or ask for the remote host's GPU/VRAM/RAM when the configured inference URL is another
+machine), present the top 3–4 fitting models from the manifest (default preselected),
+set `LOCAL_COMPLETION_MODEL`, `EXTRACTION_MODEL`, and `LOCAL_EMBED_MODEL` in one pass
+from the same data. Free-text escape hatch remains.
 
 ### Error handling
 
 - Manifest fetch failure → bundled copy, `logger.warning`, staleness noted in API
   response (`manifest_source: "bundled" | "remote"`, `fetched_at`).
-- Ollama unreachable → recommended grid still renders (manifest is local); pull
-  buttons disabled with the existing "Ollama offline" treatment.
+- Inference host unreachable (local Ollama down, or a remote GPU box asleep) →
+  recommended grid still renders (manifest is local); pull/verify buttons disabled with
+  an "inference host unreachable" banner naming the URL. Wake-on-LAN hooks in here
+  (roadmap #7).
 - Pull failures surface Ollama's error text on the card, card returns to pullable.
 - Probe timeouts (CPU boxes) → "unverified", never "failed"; verification is
   best-effort, the `/api/show` capability check is the hard gate.
@@ -210,20 +246,26 @@ escape hatch remains.
 ### Testing (real services, no mocks)
 
 - `test_model_recommendations.py`: manifest loads + validates; `/models/recommended`
-  filters by a synthetic `hardware.json` (no-GPU vs 8 GB vs 24 GB fixtures); denylisted
-  model never appears; installed-state merge correct.
+  filters by a synthetic hardware profile (no-GPU vs 8 GB vs 24 GB fixtures); declared
+  remote profile gates identically to a detected local one; unknown profile gates
+  nothing; denylisted model never appears; installed-state merge correct.
 - Pull lifecycle against real Ollama: pull a tiny model (`qwen2.5:0.5b`), assert SSE
-  progress events, presence in `/models/pulled`, delete, absence.
+  progress events, presence in `/models/pulled`, delete, absence. The dev environment
+  already exercises the remote-host path (gateway container → Windows-host Ollama over
+  `host.docker.internal`) — assert it explicitly rather than incidentally.
 - Capability gate: assert a known no-tools model is flagged and refused as completion
   default; assert the configured default model passes `/api/show`.
 - Dashboard: Playwright per the regression gate — pull from the grid, watch progress,
-  verify gauge renders, verify cloud section separation.
+  verify gauge renders, verify cloud section separation, verify the hardware header
+  names the inference host and profile source.
 
 ### Out of scope (this increment)
 
 vLLM/llamacpp automated downloads (entries list HF ids; no pull API — manual flow
 documented on the card), HuggingFace live search (port later if vLLM usage demands it),
-benchmark automation for scores (curated by hand in the manifest), multi-user anything.
+benchmark automation for scores (curated by hand in the manifest), Wake-on-LAN power
+management for sleeping inference hosts (roadmap #7 — this increment only surfaces the
+unreachable state it hooks into), multi-user anything.
 
 ## Sequencing
 
