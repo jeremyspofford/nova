@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT UNIQUE NOT NULL,
     command      TEXT NOT NULL,
-    args         TEXT[] NOT NULL DEFAULT '{}',
+    args         JSONB NOT NULL DEFAULT '[]'::jsonb,
     env          JSONB DEFAULT '{}',
     working_dir  TEXT,
     enabled      BOOL DEFAULT true,

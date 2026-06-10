@@ -157,7 +157,7 @@ def test_once_schedule_fires_and_surfaces_result_in_chat():
 
 def test_webhook_schedule_fires_and_records():
     token = uuid.uuid4().hex
-    secret_name = f"itest-webhook-token-{uuid.uuid4().hex[:6]}"
+    secret_name = f"itest_webhook_token_{uuid.uuid4().hex[:6]}"
     name = f"itest-webhook-{uuid.uuid4().hex[:6]}"
 
     r = httpx.post(
