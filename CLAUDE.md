@@ -205,34 +205,20 @@ make prune         # Remove containers + images (preserves volumes)
 
 ## Dead Code — Do Not Use
 
-These directories are v1 artifacts that have NOT been deleted. They are not in
-`docker-compose.yml` and are not part of the running stack. Do not reference, extend,
-or port from them:
-
-| Directory / File | What it was |
-|---|---|
-| `orchestrator/` | v1 orchestrator (replaced by `agent-core/`) |
-| `chat-api/` | v1 WebSocket bridge (replaced by `chat-surface/`) |
-| `chat-bridge/` | v1 Telegram/Slack bridge (not ported to v2) |
-| `cortex/` | v1 autonomous brain (not ported to v2) |
-| `intel-worker/` | v1 RSS/feed poller (not ported to v2) |
-| `knowledge-worker/` | v1 web crawler (not ported to v2) |
-| `voice-service/` | v1 STT/TTS (replaced by `voice-gateway/`) |
-| `screenpipe-bridge/` | v1 screen capture bridge (not ported to v2) |
-| `recovery-service/` | v1 recovery (replaced by `recovery/`) |
-| `nova-worker-common/` | v1 shared library (dead) |
-| `baseline-markdown/` | Memory benchmarks, not a service |
-| `baseline-mem0/` | Memory benchmarks, not a service |
-| `baseline-pgvector/` | Memory benchmarks, not a service |
-| `dashboard/src/pages/Brain.tsx` | v1 3D engram graph — calls non-existent v1 endpoints, not routed |
-| `dashboard/src/components/ForceGraph3D.tsx` | v1 Three.js graph renderer (used only by Brain.tsx) |
-| `dashboard/src/components/brain/` | v1 Brain HUD widgets |
-| `dashboard/src/components/layout/Sidebar.tsx` | v1 sidebar — not rendered by v2 Layout.tsx |
-| `dashboard/src/components/layout/MobileNav.tsx` | v1 mobile nav — not rendered by v2 Layout.tsx |
+The v1 service directories (`orchestrator/`, `chat-api/`, `chat-bridge/`, `cortex/`,
+`intel-worker/`, `knowledge-worker/`, `voice-service/`, `screenpipe-bridge/`,
+`recovery-service/`, `nova-worker-common/`, the `baseline-*` benchmark dirs, and the
+v1 dashboard Brain/Sidebar/MobileNav components) were **deleted** in commit `a328813`
+(2026-05-20). If you see references to them — in docs, CI, or old plans — they are
+stale; do not resurrect them from git history. v1 replacements: `orchestrator/` →
+`agent-core/`, `chat-api/` → `chat-surface/`, `voice-service/` → `voice-gateway/`,
+`recovery-service/` → `recovery/`.
 
 `nova-contracts/` is partially alive — `chat.py`, `llm.py`, `memory.py`, `models.py`,
-`tier.py` are used by v2. The engram/feature-flag/orchestrator modules in it are v1 dead
-code.
+`tier.py`, `logging.py` are used by v2. `engram.py` and `orchestrator.py` in it are v1
+dead code still on disk. Likewise `memory-service/app/engram/` is v1 dead code inside an
+active service: nothing imports it (it references the deleted
+`nova_contracts.feature_flags` and would crash if it were imported).
 
 ---
 
