@@ -95,9 +95,11 @@ async def _api_key_for(model: str) -> str | None:
 async def _resolve_explicit_model(model_id: str) -> tuple[str, dict]:
     """Return (litellm_model, extra_kwargs) for a user-supplied model ID.
 
-    If the ID matches a discovered local model, wraps it in the correct
-    LiteLLM format (ollama_chat/ or openai/ with api_base). Otherwise
-    returns the ID unchanged for cloud routing.
+    If the ID matches a discovered local model, wraps it as openai/ with the
+    backend's OpenAI-compatible api_base (Ollama serves one under /v1 — used
+    instead of litellm's ollama_chat, whose tool support forces format=json
+    and wrecks conversational turns). Otherwise returns the ID unchanged for
+    cloud routing.
     """
     backend = settings.nova_inference_backend
     if backend != "none":
@@ -105,7 +107,9 @@ async def _resolve_explicit_model(model_id: str) -> tuple[str, dict]:
         if any(m["id"] == model_id for m in local_models):
             url = settings.local_inference_url
             if backend in ("ollama-host", "ollama"):
-                return f"ollama_chat/{model_id}", {"api_base": url}
+                return f"openai/{model_id}", {
+                    "api_base": selector.ollama_openai_base(url), "api_key": "none",
+                }
             else:
                 return f"openai/{model_id}", {"api_base": url, "api_key": "none"}
     return model_id, {}
@@ -139,6 +143,24 @@ async def _try_complete(
             )
             return resp, model
         except Exception as exc:
+            # Models without a tool template (e.g. gemma on Ollama /v1) reject
+            # requests that offer tools. They couldn't have called one anyway —
+            # retry the turn without tools instead of failing it.
+            if "tools" in kwargs and "does not support tools" in str(exc):
+                logger.info("Model %s lacks tool support — retrying without tools", model)
+                retry_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+                try:
+                    resp = await litellm.acompletion(
+                        model=litellm_model,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stream=stream,
+                        **retry_kwargs,
+                    )
+                    return resp, model
+                except Exception as retry_exc:
+                    exc = retry_exc
             logger.warning("Requested model %s failed: %s", model, exc)
             raise HTTPException(status_code=503, detail=f"Model {model} unavailable: {exc}")
 

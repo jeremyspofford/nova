@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     llm_gateway_url: str = "http://llm-gateway:8001"
     log_level: str = "INFO"
     port: int = 8002
+    extraction_model: str = "auto"
+    extraction_timeout_s: float = 90.0
 
     class Config:
         env_file = ".env"

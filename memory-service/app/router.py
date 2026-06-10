@@ -1,10 +1,11 @@
 # memory-service/app/router.py
+import json
 import logging
 from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from nova_contracts import MemorySearchRequest
 
 from .config import settings
@@ -28,9 +29,13 @@ class MemoryWriteRequest(BaseModel):
     content: str
     source_kind: str
     source_uri: Optional[str] = None
+    kind: str = "fact"
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    extract: bool = False
 
 
-# IMPORTANT: /stats must be defined BEFORE /{memory_id} to avoid "stats" matching as an ID
+# IMPORTANT: /stats and /profile must be defined BEFORE /{memory_id} so the
+# literal paths don't match as an ID
 @router.get("/stats")
 async def get_stats():
     pool = await get_pool()
@@ -38,10 +43,36 @@ async def get_stats():
     return {**stats, "degraded": embed.is_degraded()}
 
 
-@router.post("", status_code=201)
-async def write_memory(body: MemoryWriteRequest):
+@router.get("/profile")
+async def get_profile(limit: int = 12):
     pool = await get_pool()
-    memory_id = await store.write_memory(pool, body.content, body.source_kind, body.source_uri)
+    return {"profile": await store.get_profile(pool, limit)}
+
+
+@router.post("", status_code=201)
+async def write_memory(body: MemoryWriteRequest, response: Response):
+    pool = await get_pool()
+
+    if body.extract:
+        # Defer to the extract worker — returns 202 with no row yet.
+        # If Redis is down we fall through to a direct verbatim write:
+        # losing the exchange is the one unacceptable outcome.
+        try:
+            r = await _get_redis()
+            await r.rpush("memory:extract:queue", json.dumps({
+                "content": body.content,
+                "source_kind": body.source_kind,
+                "source_uri": body.source_uri,
+            }))
+            response.status_code = 202
+            return {"queued": True}
+        except Exception as exc:
+            logger.warning("Failed to queue extraction, storing verbatim: %s", exc)
+
+    memory_id = await store.write_memory(
+        pool, body.content, body.source_kind, body.source_uri,
+        kind=body.kind, importance=body.importance,
+    )
     try:
         r = await _get_redis()
         await r.rpush("memory:embed:queue", memory_id)
