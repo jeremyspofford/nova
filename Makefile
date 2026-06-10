@@ -118,10 +118,6 @@ prune-all: ## Backup DB, then prune everything
 	  docker volume rm "nova_$$v" 2>/dev/null && echo "  Removed $$v" || true; \
 	done
 
-refresh-llm-fixtures: ## Re-record all LLM fixtures (clears existing, records from llm-gateway)
-	rm -rf memory-service/tests/fixtures/llm/*.json
-	cd memory-service && RECORD_LLM_FIXTURES=1 uv run pytest tests/ -v
-
 audit-tool-use: ## Tool-use audit — live services, ~10-30 min, never CI-gating
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx \
 	  --with python-dotenv \

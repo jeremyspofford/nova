@@ -1,7 +1,7 @@
 """Tier and task-type enums for adaptive model routing.
 
-Named RoutingTaskType (not TaskType) to avoid collision with
-nova_contracts.orchestrator.TaskType which is a different enum.
+Named RoutingTaskType (not TaskType) to avoid collision with the
+TaskType enum from the deleted v1 orchestrator contracts.
 """
 from __future__ import annotations
 

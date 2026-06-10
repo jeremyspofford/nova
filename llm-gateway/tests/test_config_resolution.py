@@ -1,57 +1,68 @@
-"""Unit tests for OLLAMA_BASE_URL resolution."""
+"""Unit tests for local inference URL resolution in Settings."""
 from __future__ import annotations
 
-from app.config import _resolve_ollama_url
+import pytest
+from app.config import _BACKEND_DEFAULT_URLS, _OLLAMA_HOST_URL, Settings
 
 
-class TestResolveOllamaUrl:
-    """Verify back-compat behavior of OLLAMA_BASE_URL aliases."""
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """Isolate Settings from the developer's environment."""
+    for var in ("NOVA_INFERENCE_BACKEND", "LOCAL_INFERENCE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def make_settings(**overrides) -> Settings:
+    return Settings(_env_file=None, **overrides)
+
+
+class TestLocalInferenceUrlResolution:
+    """Back-compat aliases and backend-default resolution for LOCAL_INFERENCE_URL."""
 
     def test_literal_url_passes_through(self):
         url = "http://192.168.0.50:11434"
-        assert _resolve_ollama_url(url) == url
+        assert make_settings(local_inference_url=url).local_inference_url == url
 
-    def test_auto_resolves_to_bundled(self):
-        """'auto' is a back-compat alias for the bundled compose service URL."""
-        assert _resolve_ollama_url("auto") == "http://ollama:11434"
+    def test_auto_resolves_to_host_ollama(self):
+        """'auto' is a back-compat alias for the host-Ollama URL."""
+        s = make_settings(local_inference_url="auto")
+        assert s.local_inference_url == _OLLAMA_HOST_URL
 
-    def test_host_resolves_to_bundled(self):
-        """'host' is a back-compat alias for the bundled compose service URL."""
-        assert _resolve_ollama_url("host") == "http://ollama:11434"
-
-    def test_external_lan_url_passes_through(self):
-        """A user-provided LAN URL must pass through unchanged."""
-        url = "http://192.168.12.10:11434"
-        assert _resolve_ollama_url(url) == url
+    def test_host_resolves_to_host_ollama(self):
+        """'host' is a back-compat alias for the host-Ollama URL."""
+        s = make_settings(local_inference_url="host")
+        assert s.local_inference_url == _OLLAMA_HOST_URL
 
     def test_https_url_passes_through(self):
-        """An HTTPS cloud URL must pass through unchanged."""
         url = "https://ollama.example.com"
-        assert _resolve_ollama_url(url) == url
+        assert make_settings(local_inference_url=url).local_inference_url == url
 
-    def test_no_subprocess_calls_during_resolution(self, monkeypatch):
-        """Resolution must NOT shell out — that was the old probe logic."""
-        import subprocess
-        called = {"count": 0}
-        original_run = subprocess.run
+    def test_default_backend_keeps_host_ollama_url(self):
+        s = make_settings()
+        assert s.nova_inference_backend == "ollama-host"
+        assert s.local_inference_url == _OLLAMA_HOST_URL
 
-        def fake_run(*args, **kwargs):
-            called["count"] += 1
-            return original_run(*args, **kwargs)
+    def test_non_ollama_backend_gets_its_default_url(self):
+        """URL left at default + non-Ollama backend → that backend's default URL."""
+        s = make_settings(nova_inference_backend="vllm")
+        assert s.local_inference_url == _BACKEND_DEFAULT_URLS["vllm"]
 
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        _resolve_ollama_url("auto")
-        _resolve_ollama_url("host")
-        _resolve_ollama_url("http://ollama:11434")
-        assert called["count"] == 0, "URL resolution must not call subprocess"
+    def test_explicit_url_beats_backend_default(self):
+        url = "http://10.0.0.5:8000"
+        s = make_settings(nova_inference_backend="vllm", local_inference_url=url)
+        assert s.local_inference_url == url
 
-    def test_subprocess_no_longer_imported_by_module(self):
-        """Catch a partial revert: app.config must not re-import subprocess."""
-        import importlib
+    def test_auto_with_non_ollama_backend_resolves_to_backend_default(self):
+        """'auto' defers to the backend: the alias resolves to the host-Ollama
+        URL, which still counts as 'left at default', so the backend's own
+        default URL wins."""
+        s = make_settings(nova_inference_backend="llamacpp", local_inference_url="auto")
+        assert s.local_inference_url == _BACKEND_DEFAULT_URLS["llamacpp"]
 
-        import app.config as cfg_mod
-        importlib.reload(cfg_mod)
-        assert "subprocess" not in dir(cfg_mod), (
-            "subprocess must not be a module attribute of app.config — "
-            "this catches an accidental revert of the resolver simplification"
-        )
+
+def test_subprocess_not_imported_by_module():
+    """Catch a revert to the old probe logic: URL resolution must stay pure
+    config — app.config must not import subprocess."""
+    import app.config as cfg_mod
+
+    assert "subprocess" not in dir(cfg_mod)
