@@ -1,6 +1,6 @@
 # Nova — Roadmap
 
-> Last updated: 2026-05-19. v2 rewrite shipped 2026-05-12.
+> Last updated: 2026-06-10. v2 rewrite shipped 2026-05-12.
 >
 > **Vision:** A self-directed autonomous AI platform. You define a goal. Nova breaks it into
 > tasks, executes them with tools, and runs autonomously between conversations.
@@ -98,6 +98,21 @@ Add `/v1/` → llm-gateway and `/recovery-api/` → recovery proxies to `dashboa
 
 ### 4. Schedules — End-to-end
 Verify scheduled tasks fire correctly and produce results. Wire schedule output back into chat or notifications.
+
+### 5. Proactivity — Nova acts on its own
+Increment 2 of the continuity-memory plan (`docs/specs/2026-06-09-continuity-memory-design.md`):
+a lightweight autonomy pulse inside agent-core — periodic self-review schedule
+(`created_by='nova'`), an LLM "anything worth doing?" gate with a hard budget cap and kill
+switch, and a proactive inbox in the dashboard. Depends on #4 (rides the scheduler).
+Includes the model tool-call verification gate from the recommended-models spec as a
+safety prerequisite.
+
+### 6. Recommended models — restore v1 Models page, with capability gauges
+Restore the v0.1.0-alpha model management features on the v2 stack: hardware-aware
+recommended-model list (single manifest, remote-refreshed from the repo), one-click
+Ollama pull with streamed progress, install-wizard model picker, and per-model
+capability gauges (agent/tool-calling first) with local vs cloud/frontier models
+clearly separated. Spec: `docs/specs/2026-06-10-recommended-models-design.md`.
 
 ---
 
