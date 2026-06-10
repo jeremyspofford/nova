@@ -214,11 +214,11 @@ stale; do not resurrect them from git history. v1 replacements: `orchestrator/` 
 `agent-core/`, `chat-api/` → `chat-surface/`, `voice-service/` → `voice-gateway/`,
 `recovery-service/` → `recovery/`.
 
-`nova-contracts/` is partially alive — `chat.py`, `llm.py`, `memory.py`, `models.py`,
-`tier.py`, `logging.py` are used by v2. `engram.py` and `orchestrator.py` in it are v1
-dead code still on disk. Likewise `memory-service/app/engram/` is v1 dead code inside an
-active service: nothing imports it (it references the deleted
-`nova_contracts.feature_flags` and would crash if it were imported).
+`nova-contracts/` is the shared contracts package: services import the shared models
+through the package root (re-exports from `models.py`), and `chat.py` documents the
+chat-surface WebSocket protocol. Its v1 modules (`engram.py`, `orchestrator.py`) and
+the `memory-service/app/engram/` package that consumed them were deleted in June 2026,
+along with the v1 engram test suite that lived in `memory-service/tests/`.
 
 ---
 

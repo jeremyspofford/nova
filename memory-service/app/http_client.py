@@ -1,9 +1,8 @@
 """Shared httpx.AsyncClient singleton for memory-service.
 
-Mirrors the get_redis()/close_redis() pattern from app/embedding.py.
-A single client is created on first use and reused across all engram
-modules. close_http_client() is called from the FastAPI lifespan shutdown
-to release sockets cleanly.
+A single client is created on first use and reused across all modules.
+close_http_client() is called from the FastAPI lifespan shutdown to
+release sockets cleanly.
 
 P3 fix: prior code created a fresh AsyncClient per call (8 sites), each
 spinning up a new TCP+TLS pool. With the singleton, connections are
@@ -21,8 +20,8 @@ def get_http_client() -> httpx.AsyncClient:
     """Lazy-init shared httpx.AsyncClient. Per-call construction is the leak."""
     global _client
     if _client is None:
-        # Default timeout matches sources.py's 30s; downstream callers can override
-        # per-request via timeout=... on individual calls.
+        # Downstream callers can override per-request via timeout=... on
+        # individual calls.
         _client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
     return _client
 
