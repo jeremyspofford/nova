@@ -265,6 +265,7 @@ test_secrets.py         — secrets CRUD
 test_voice_gateway.py   — STT/TTS providers
 test_health.py          — service health endpoints
 test_memory.py          — memory store and search
+test_schedules.py       — schedule CRUD, poll + webhook firing, chat-thread output (slowest file — firing tests wait out the 30s poll cycle)
 ```
 
 "The code looks correct" is not a test result. A green `make test-v2` + Playwright

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..watchers.handler import _fire_queue
+from .results import record_fire
 from .utils import compute_next_fire, resolve_placeholders
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ async def _drain_file_queue(pool, dispatch_fn: Callable) -> None:
         })
         try:
             task_id = await dispatch_fn(prompt, f"schedule:{schedule_id}", schedule_id)
+            await record_fire(pool, schedule_id)
             logger.info(
                 "fs_watch dispatched task %s for schedule %s (file=%s event=%s)",
                 str(task_id)[:8], schedule_id[:8], file_path, file_event,
@@ -195,6 +197,7 @@ async def fire_task_complete_schedules(
         })
         try:
             task_id = await dispatch_fn(prompt, f"schedule:{schedule_id}", schedule_id)
+            await record_fire(pool, schedule_id)
             logger.info(
                 "task_complete schedule %s dispatched task %s (upstream=%s status=%s)",
                 schedule_id[:8], str(task_id)[:8], completed_task_id[:8], final_status,
@@ -231,6 +234,7 @@ async def fire_webhook_schedule(
     prompt = resolve_placeholders(row["prompt"], ctx)
     try:
         task_id = await dispatch_fn(prompt, f"schedule:{schedule_id}", schedule_id)
+        await record_fire(pool, schedule_id)
         logger.info("Webhook schedule %s dispatched task %s", schedule_id[:8], str(task_id)[:8])
     except Exception as exc:
         logger.error("Failed to dispatch webhook schedule %s: %s", schedule_id[:8], exc)

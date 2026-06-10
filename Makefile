@@ -94,7 +94,8 @@ test-v2: ## Run only v2-service integration tests (fast, no v1 noise) — run be
 	  test_secrets.py \
 	  test_voice_gateway.py \
 	  test_health.py \
-	  test_memory.py
+	  test_memory.py \
+	  test_schedules.py
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)

@@ -44,6 +44,18 @@ async def _notify_task_complete(pool, task_id: str, final_status: str) -> None:
         logger.warning("task_complete schedule hook failed for task %s: %s", task_id[:8], exc)
 
 
+async def _surface_schedule_result(pool, task_id: str, final_status: str, result_text: str) -> None:
+    """If this task was dispatched by a schedule, post its output to the schedule's chat thread."""
+    try:
+        schedule_id = await pool.fetchval("SELECT schedule_id FROM tasks WHERE id = $1", task_id)
+        if schedule_id is None:
+            return
+        from ..scheduler import post_schedule_result
+        await post_schedule_result(pool, task_id, schedule_id, final_status, result_text)
+    except Exception as exc:
+        logger.warning("schedule result hook failed for task %s: %s", task_id[:8], exc)
+
+
 def get_llm_client() -> httpx.AsyncClient:
     global _llm_client
     if _llm_client is None:
@@ -87,6 +99,7 @@ async def run_task(task_id: str, goal: str, pool) -> dict:
                 task_id, result.get("final", ""),
             )
         await audit.write_event(pool, task_id, "task_completed", result)
+        await _surface_schedule_result(pool, task_id, "completed", result.get("final", ""))
         await _notify_task_complete(pool, task_id, "completed")
         return result
     except Exception as exc:
@@ -97,6 +110,7 @@ async def run_task(task_id: str, goal: str, pool) -> dict:
                 task_id, str(exc),
             )
         await audit.write_event(pool, task_id, "task_failed", {"error": str(exc)})
+        await _surface_schedule_result(pool, task_id, "failed", str(exc))
         await _notify_task_complete(pool, task_id, "failed")
         return {"error": str(exc)}
     finally:
