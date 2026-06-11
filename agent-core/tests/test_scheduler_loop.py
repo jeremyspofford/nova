@@ -39,6 +39,7 @@ async def test_poll_dispatches_due_interval_schedule():
         "prompt": "check things",
         "trigger": {"type": "interval", "every_seconds": 3600},
         "enabled": True,
+        "created_by": "user",
         "last_fired": None,
         "next_fire": datetime.now(timezone.utc) - timedelta(seconds=60),
     }
@@ -64,6 +65,7 @@ async def test_poll_skips_when_previous_run_active():
         "prompt": "heavy task",
         "trigger": {"type": "cron", "expr": "0 * * * *"},
         "enabled": True,
+        "created_by": "user",
         "next_fire": datetime.now(timezone.utc) - timedelta(seconds=10),
     }
     pool, conn = make_pool_conn(fetch_rows=[schedule])
@@ -87,6 +89,7 @@ async def test_once_schedule_sets_enabled_false():
         "prompt": "one time",
         "trigger": {"type": "once", "at": (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()},
         "enabled": True,
+        "created_by": "user",
         "next_fire": datetime.now(timezone.utc) - timedelta(seconds=5),
     }
     pool, conn = make_pool_conn(fetch_rows=[schedule])

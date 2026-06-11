@@ -105,7 +105,7 @@ a lightweight autonomy pulse inside agent-core — periodic self-review schedule
 (`created_by='nova'`), an LLM "anything worth doing?" gate with a hard budget cap and kill
 switch, and a proactive inbox in the dashboard. Depends on #4 (rides the scheduler).
 Includes the model tool-call verification gate from the recommended-models spec as a
-safety prerequisite.
+safety prerequisite. Spec: `docs/specs/2026-06-10-proactivity-design.md`.
 
 ### 6. Recommended models — restore v1 Models page, with capability gauges
 Restore the v0.1.0-alpha model management features on the v2 stack: hardware-aware

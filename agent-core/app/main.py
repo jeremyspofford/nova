@@ -18,6 +18,7 @@ from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
 from .mcp_router import router as mcp_router
 from .memories_proxy_router import router as memories_proxy_router
+from .proactivity_router import router as proactivity_router
 from .scheduler import scheduler_loop
 from .schedules_router import router as schedules_router
 from .secrets import store as secrets_store
@@ -172,6 +173,7 @@ app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
 app.include_router(conversations_router)
 app.include_router(memories_proxy_router)
 app.include_router(mcp_router)
+app.include_router(proactivity_router)
 app.include_router(schedules_router)
 app.include_router(secrets_router)
 app.include_router(tasks_router)
@@ -257,6 +259,27 @@ async def llm_models(refresh: bool = False, _: None = Depends(_require_admin)):
                 params={"refresh": "true" if refresh else "false"},
             )
         return r.json()
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
+@app.get("/api/v1/llm/models/capabilities")
+async def llm_model_capabilities(
+    model: str | None = None, probe: bool = False, _: None = Depends(_require_admin)
+):
+    """Proxy to llm-gateway /models/capabilities — tool-capability verification."""
+    try:
+        params: dict = {"probe": "true" if probe else "false"}
+        if model:
+            params["model"] = model
+        async with httpx.AsyncClient(timeout=60.0 if probe else 10.0) as client:
+            r = await client.get(f"{settings.llm_gateway_url}/models/capabilities", params=params)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("llm-gateway unreachable: %s", exc)
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
