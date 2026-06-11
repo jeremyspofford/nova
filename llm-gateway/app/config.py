@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     )
     log_level: str = "INFO"
     port: int = 8001
+    # Recommended-models manifest + hardware profile (runtime dir is volume-mounted).
+    runtime_dir: str = "/app/runtime"
+    manifest_url: str = (
+        "https://raw.githubusercontent.com/jeremyspofford/nova/main/"
+        "llm-gateway/data/recommended_models.json"
+    )
+    manifest_refresh_s: int = 86400
 
     @field_validator("local_inference_url")
     @classmethod
