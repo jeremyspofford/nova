@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..watchers.handler import _fire_queue
+from .guards import check_nova_dispatch, note_block_state
 from .results import record_fire
 from .utils import compute_next_fire, resolve_placeholders
 
@@ -35,11 +36,15 @@ async def scheduler_loop(pool, dispatch_fn: Callable) -> None:
 async def _poll_once(pool, dispatch_fn: Callable) -> None:
     """Find all enabled schedules whose next_fire <= now and dispatch them."""
     now = datetime.now(timezone.utc)
+    guard_skipped: dict[str, str] = {}   # schedule_id -> block reason
+    nova_allowed: list[str] = []         # nova schedules that passed the guard
+    nova_guard: tuple[bool, str | None] | None = None  # evaluated once per cycle
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             due = await conn.fetch(
                 """
-                SELECT id, name, prompt, trigger, enabled, last_fired, next_fire
+                SELECT id, name, prompt, trigger, enabled, created_by, last_fired, next_fire
                 FROM schedules
                 WHERE enabled = true
                   AND next_fire IS NOT NULL
@@ -73,6 +78,23 @@ async def _poll_once(pool, dispatch_fn: Callable) -> None:
                     )
                     continue
 
+                # Autonomy guards: nova-created schedules pass the kill switch /
+                # budget / tool-capability checks; user schedules never do this.
+                if row["created_by"] == "nova":
+                    if nova_guard is None:
+                        nova_guard = await check_nova_dispatch(pool)
+                    allowed, reason = nova_guard
+                    if not allowed:
+                        logger.info("Skipping nova schedule %s — %s", schedule_id[:8], reason)
+                        guard_skipped[schedule_id] = reason or "blocked"
+                        skip_next_fire = compute_next_fire(trigger) if trigger.get("type") not in ("once",) else next_fire
+                        await conn.execute(
+                            "UPDATE schedules SET next_fire = $1 WHERE id = $2",
+                            skip_next_fire, row["id"],
+                        )
+                        continue
+                    nova_allowed.append(schedule_id)
+
                 # Missed-schedule note.
                 lateness = (now - next_fire.replace(tzinfo=timezone.utc) if next_fire.tzinfo is None
                             else now - next_fire).total_seconds()
@@ -99,9 +121,18 @@ async def _poll_once(pool, dispatch_fn: Callable) -> None:
                         row["id"], now, new_next_fire,
                     )
 
+    # Guard-state transitions post outside the lock: a new block reason notes once
+    # in the schedule's thread; a passing nova dispatch clears the stored reason.
+    for schedule_id, reason in guard_skipped.items():
+        await note_block_state(pool, schedule_id, reason)
+    for schedule_id in nova_allowed:
+        await note_block_state(pool, schedule_id, None)
+
     # Dispatch OUTSIDE the transaction to avoid holding the lock during execution.
     for row in due:
         schedule_id = str(row["id"])
+        if schedule_id in guard_skipped:
+            continue
         prompt = row["prompt"]
         trigger = row["trigger"]
         next_fire = row["next_fire"]

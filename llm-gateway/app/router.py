@@ -284,6 +284,111 @@ async def resolve_best_model():
     return {"model": display_id, "source": source}
 
 
+# ── Tool-capability verification ─────────────────────────────────────────────
+# The proactivity guard (agent-core) must not run autonomous cycles on a model
+# that can't tool-call; the Models page will use the probe as ground truth.
+
+_caps_cache: dict[str, tuple[float, dict]] = {}
+_CAPS_TTL = 600.0
+
+_PROBE_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "ping",
+        "description": "Reply to a ping. Call this tool with the message 'pong'.",
+        "parameters": {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        },
+    },
+}]
+
+
+async def _ollama_show_capabilities(model: str) -> list[str] | None:
+    """Query Ollama /api/show for a model's capabilities array. None on failure."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{settings.local_inference_url}/api/show", json={"model": model}
+            )
+            r.raise_for_status()
+            caps = r.json().get("capabilities")
+            return caps if isinstance(caps, list) else None
+    except Exception as exc:
+        logger.debug("ollama /api/show failed for %s: %s", model, exc)
+        return None
+
+
+@router.get("/models/capabilities")
+async def model_capabilities(model: str | None = None, probe: bool = False):
+    """Tool-capability check. Defaults to the active completion model.
+
+    tools: true/false from Ollama /api/show for local models; true (assumed) for
+    cloud models; null (unknown) for non-Ollama local backends or on errors.
+    probe=true additionally runs a one-shot completion with a trivial tool and
+    reports whether a well-formed tool call came back.
+    """
+    if model is None:
+        cloud = await _available_cloud()
+        candidates = selector.completion_candidates(cloud)
+        if not candidates:
+            raise HTTPException(status_code=503, detail="No models available")
+        litellm_model, _ = candidates[0]
+        model = _litellm_to_display_id(litellm_model)
+        is_local = litellm_model != model
+    else:
+        local_models = await discover_local_models()
+        local_ids = {m["id"] for m in local_models}
+        is_local = model in local_ids or model.removesuffix(":latest") in local_ids
+
+    cache_key = f"{model}|probe={probe}"
+    now = time.monotonic()
+    cached = _caps_cache.get(cache_key)
+    if cached and (now - cached[0]) < _CAPS_TTL:
+        return cached[1]
+
+    tools: bool | None
+    if not is_local:
+        tools, method = True, "assumed-cloud"
+    elif settings.nova_inference_backend in ("ollama", "ollama-host"):
+        caps = await _ollama_show_capabilities(model)
+        if caps is None:
+            tools, method = None, "unknown"
+        else:
+            tools, method = ("tools" in caps), "ollama/api/show"
+    else:
+        # vllm / llamacpp / sglang / lmstudio expose no capability API.
+        tools, method = None, "unknown"
+
+    result: dict[str, Any] = {
+        "model": model,
+        "source": "local" if is_local else "cloud",
+        "tools": tools,
+        "method": method,
+    }
+
+    if probe:
+        try:
+            resp, _ = await _try_complete(
+                messages=[{"role": "user", "content": "Use the ping tool to send the message 'pong'."}],
+                max_tokens=80,
+                temperature=0.0,
+                model=model,
+                extra_kwargs={"tools": _PROBE_TOOL, "tool_choice": "auto"},
+            )
+            raw_tc = getattr(resp.choices[0].message, "tool_calls", None)
+            result["probe_passed"] = bool(raw_tc)
+        except Exception as exc:
+            logger.warning("tool probe failed for %s: %s", model, exc)
+            result["probe_passed"] = None
+            result["probe_error"] = str(exc)
+
+    _caps_cache[cache_key] = (now, result)
+    return result
+
+
 class LLMConfigUpdate(BaseModel):
     routing_strategy: str | None = None
 

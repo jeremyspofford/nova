@@ -17,7 +17,16 @@ async def post_schedule_result(pool, task_id, schedule_id, final_status: str, re
     """Append a scheduled run's result to the schedule's conversation thread.
 
     Never raises — surfacing output must not affect task completion.
+
+    Convention: a completed run whose entire result is `NOTHING` is intentionally
+    quiet — nothing posts. The proactivity pulse relies on this so "no, nothing
+    worth doing" cycles don't spam the thread; any schedule may use it. Matched
+    case-insensitively and ignoring trailing punctuation: small local models reply
+    "Nothing." as often as the requested exact token (observed live, qwen2.5:0.5b).
     """
+    if final_status == "completed" and (result_text or "").strip().rstrip(".!").strip().upper() == "NOTHING":
+        logger.debug("schedule %s run was a quiet NOTHING — not posting", str(schedule_id)[:8])
+        return
     try:
         async with pool.acquire() as conn:
             sched = await conn.fetchrow(
