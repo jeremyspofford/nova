@@ -35,7 +35,7 @@ dist/
 backups/
 
 # Machine-specific runtime data (hardware detection output, etc.)
-data/
+/data/
 
 # OS
 .DS_Store

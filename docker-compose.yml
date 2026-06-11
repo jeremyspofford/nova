@@ -95,6 +95,8 @@ services:
       context: .
       dockerfile: llm-gateway/Dockerfile
     env_file: .env
+    volumes:
+      - ${LLM_GATEWAY_RUNTIME_DIR:-./data/llm-gateway}:/app/runtime
     ports:
       - "8001:8001"
     healthcheck:

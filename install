@@ -56,8 +56,49 @@ COMPOSE_PROFILES="voice"
 LOCAL_URL=""
 LOCAL_MODEL=""
 LOCAL_EMBED="nomic-embed-text"
+EXTRACTION_MODEL_PICK=""
+
+# Pick an Ollama model from the recommended manifest, filtered by detected
+# hardware. Sets LOCAL_MODEL (and EXTRACTION_MODEL_PICK); free-text escape hatch.
+_pick_ollama_model() {
+  local candidates
+  candidates=$(python3 scripts/pick_model.py completion 2>/dev/null || true)
+  if [ -z "$candidates" ]; then
+    read -rp "Ollama model [default: qwen2.5:1.5b]: " LOCAL_MODEL || true
+    LOCAL_MODEL="${LOCAL_MODEL:-qwen2.5:1.5b}"
+  else
+    echo ""
+    echo "${BOLD}Recommended models for your hardware${RESET} (agent score = tool-use capability, 0-5)"
+    local i=1 ids=()
+    while IFS='|' read -r id name size agent desc; do
+      printf "  %d) %-22s %4s GB  agent %s/5  %s\n" "$i" "$id" "$size" "$agent" "${CYAN}${name}${RESET}"
+      ids+=("$id")
+      i=$((i+1))
+    done <<< "$candidates"
+    printf "  %d) other — type a model name\n" "$i"
+    echo ""
+    read -rp "Choice [1-$i, default: 1]: " PICK || true
+    PICK="${PICK:-1}"
+    if [ "$PICK" -ge 1 ] 2>/dev/null && [ "$PICK" -lt "$i" ]; then
+      LOCAL_MODEL="${ids[$((PICK-1))]}"
+    else
+      read -rp "Ollama model: " LOCAL_MODEL || true
+      LOCAL_MODEL="${LOCAL_MODEL:-qwen2.5:1.5b}"
+    fi
+  fi
+  # Extraction model: best small fitting model (memory distillation on a budget).
+  EXTRACTION_MODEL_PICK=$(python3 scripts/pick_model.py extraction 2>/dev/null | head -1 | cut -d'|' -f1 || true)
+}
 
 if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
+  # Profile this machine's hardware — drives the model picker and the dashboard's
+  # Models page. If inference will run on a DIFFERENT machine, declare its specs
+  # later in the dashboard (Models → Declare specs).
+  echo ""
+  echo "${BOLD}Detecting hardware...${RESET}"
+  bash scripts/detect-hardware.sh data/llm-gateway/hardware.json || \
+    echo "  Detection failed — declare specs later in the dashboard (Models page)"
+
   # Detect host Ollama
   HOST_OLLAMA_URL="http://host.docker.internal:11434"
   HOST_OLLAMA_AVAILABLE=false
@@ -86,8 +127,7 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
       LOCAL_BACKEND="ollama"
       LOCAL_URL="http://nova-ollama:11434"
       COMPOSE_PROFILES="voice,local-ollama"
-      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL || true
-      LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
+      _pick_ollama_model
       echo "  → Will pull ${LOCAL_MODEL} after start"
       ;;
     3)
@@ -125,8 +165,7 @@ if [ -n "$LOCAL_BACKEND" ] && [ "$LOCAL_BACKEND" != "none" ]; then
     *)
       LOCAL_BACKEND="ollama-host"
       LOCAL_URL="$HOST_OLLAMA_URL"
-      read -rp "Ollama model [default: llama3.2]: " LOCAL_MODEL || true
-      LOCAL_MODEL="${LOCAL_MODEL:-llama3.2}"
+      _pick_ollama_model
       ;;
   esac
 else
@@ -165,6 +204,9 @@ _set_env "NOVA_INFERENCE_BACKEND" "$LOCAL_BACKEND"
 _set_env "LOCAL_INFERENCE_URL" "$LOCAL_URL"
 _set_env "LOCAL_COMPLETION_MODEL" "$LOCAL_MODEL"
 _set_env "LOCAL_EMBED_MODEL" "${LOCAL_EMBED:-nomic-embed-text}"
+if [ -n "$EXTRACTION_MODEL_PICK" ]; then
+  _set_env "EXTRACTION_MODEL" "$EXTRACTION_MODEL_PICK"
+fi
 _set_env "LLM_ROUTING_STRATEGY" "$ROUTING"
 _set_env "COMPOSE_PROFILES" "$COMPOSE_PROFILES"
 
@@ -172,7 +214,7 @@ echo ""
 echo "${GREEN}✓${RESET} Inference: backend=${BOLD}${LOCAL_BACKEND}${RESET} routing=${BOLD}${ROUTING}${RESET} profiles=${BOLD}${COMPOSE_PROFILES}${RESET}"
 
 # ── Build and start ────────────────────────────────────────────────────────────
-mkdir -p data/postgres data/redis backups
+mkdir -p data/postgres data/redis data/llm-gateway backups
 
 echo ""
 echo "${BOLD}Building services...${RESET}"

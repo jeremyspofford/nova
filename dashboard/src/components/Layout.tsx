@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { MessageSquare, ListTodo, Brain, CalendarClock, Settings } from "lucide-react";
+import { MessageSquare, ListTodo, Brain, CalendarClock, Cpu, Settings } from "lucide-react";
 import { ServiceStatusDot } from "./ServiceStatusDot";
 
 function useBootstrap() {
@@ -21,6 +21,7 @@ const NAV = [
   { to: "/tasks",     icon: ListTodo,      label: "Tasks" },
   { to: "/memory",    icon: Brain,         label: "Memory" },
   { to: "/schedules", icon: CalendarClock, label: "Schedules" },
+  { to: "/models",    icon: Cpu,           label: "Models" },
   { to: "/settings",  icon: Settings,      label: "Settings" },
 ] as const;
 

@@ -7,6 +7,7 @@ import { Layout } from "./components/Layout";
 import { Chat } from "./pages/chat/ChatPage";
 import { Tasks } from "./pages/Tasks";
 import { Memory } from "./pages/Memory";
+import { Models } from "./pages/Models";
 import { Schedules } from "./pages/Schedules";
 import { Settings } from "./pages/Settings";
 
@@ -15,6 +16,7 @@ const chatRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", comp
 const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tasks", component: Tasks });
 const memoryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/memory", component: Memory });
 const schedulesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/schedules", component: Schedules });
+const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/models", component: Models });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: Settings });
 
 const routeTree = rootRoute.addChildren([
@@ -22,6 +24,7 @@ const routeTree = rootRoute.addChildren([
   tasksRoute,
   memoryRoute,
   schedulesRoute,
+  modelsRoute,
   settingsRoute,
 ]);
 

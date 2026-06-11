@@ -3,15 +3,17 @@ import logging
 import time
 from typing import Any
 
+import httpx
 import litellm
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 from pydantic import BaseModel
 
-from . import secrets_client, selector
+from . import hardware, secrets_client, selector
 from .config import settings
 from .discovery import _cloud_providers, _local_provider_entry, discover_local_models
+from .manifest import get_manifest
 from .selector import VALID_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -282,6 +284,177 @@ async def resolve_best_model():
     display_id = _litellm_to_display_id(litellm_model)
     source = "local" if litellm_model != display_id else "cloud"
     return {"model": display_id, "source": source}
+
+
+# ── Recommended models, hardware profile, pull lifecycle ─────────────────────
+
+
+def _norm(model_id: str) -> str:
+    return model_id.removesuffix(":latest")
+
+
+def _require_ollama() -> None:
+    if settings.nova_inference_backend not in ("ollama", "ollama-host"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model management requires an Ollama backend (active: {settings.nova_inference_backend})",
+        )
+
+
+@router.get("/hardware")
+async def get_hardware():
+    """Inference host profile (detected/declared/unknown) + live observed signals."""
+    profile = hardware.read_profile()
+    return {
+        **profile,
+        "inference_url": settings.local_inference_url,
+        "backend": settings.nova_inference_backend,
+        "observed": await hardware.observe(),
+    }
+
+
+class HardwareDeclare(BaseModel):
+    gpus: list[dict] | None = None     # [{"name": "RTX 3090", "vram_gb": 24}]
+    ram_gb: float | None = None
+    cpu_cores: int | None = None
+    disk_free_gb: float | None = None
+
+
+@router.put("/hardware")
+async def put_hardware(body: HardwareDeclare):
+    """Declare the inference host's specs (split deployments — remote GPU box)."""
+    profile = hardware.write_declared(body.model_dump())
+    return {
+        **profile,
+        "inference_url": settings.local_inference_url,
+        "backend": settings.nova_inference_backend,
+        "observed": await hardware.observe(),
+    }
+
+
+@router.get("/models/recommended")
+async def recommended_models(refresh: bool = False):
+    """The curated manifest merged with hardware fit + installed state.
+
+    local entries: installed / fits / slow / denylisted flags resolved live.
+    cloud entries: availability keyed off configured provider keys.
+    """
+    data = await get_manifest(force=refresh)
+    profile = hardware.read_profile()
+    installed = {_norm(m["id"]) for m in await discover_local_models()}
+    cloud_keys = await _available_cloud()
+
+    deny = data.get("denylist") or []
+
+    def deny_reason(ollama_id: str | None) -> str | None:
+        if not ollama_id:
+            return None
+        for d in deny:
+            if d.get("match") and ollama_id.startswith(d["match"]):
+                return d.get("reason", "denylisted")
+        return None
+
+    local, cloud = [], []
+    for entry in data.get("models", []):
+        e = dict(entry)
+        if e.get("cloud"):
+            provider = e.get("provider")
+            if provider == "ollama-cloud":
+                e["available"] = settings.nova_inference_backend in ("ollama", "ollama-host")
+                e["installed"] = bool(e.get("ollama_id")) and _norm(e["ollama_id"]) in installed
+            else:
+                e["available"] = provider in cloud_keys
+            cloud.append(e)
+            continue
+        oid = e.get("ollama_id")
+        e["installed"] = bool(oid) and _norm(oid) in installed
+        e["fits"] = hardware.fits(profile, e.get("min_vram_gb") or 0, e.get("min_ram_gb") or 0)
+        # CPU-only boxes crawl above ~7B — the 2026-06-09 dev-box lesson.
+        e["slow_on_cpu"] = hardware.total_vram_gb(profile) == 0 and (e.get("size_gb") or 0) > 5
+        e["deny_reason"] = deny_reason(oid)
+        local.append(e)
+
+    return {
+        "manifest_source": data.get("_source"),
+        "manifest_fetched_at": data.get("_fetched_at"),
+        "manifest_updated": data.get("updated"),
+        "hardware_source": profile.get("source"),
+        "local": local,
+        "cloud": cloud,
+    }
+
+
+@router.get("/models/pulled")
+async def pulled_models():
+    """Installed Ollama models with size/digest/modified."""
+    _require_ollama()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.local_inference_url}/api/tags")
+            r.raise_for_status()
+            models = r.json().get("models", [])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
+    return [
+        {
+            "name": m.get("name"),
+            "id": _norm(m.get("name", "")),
+            "size_bytes": m.get("size"),
+            "digest": (m.get("digest") or "")[:12],
+            "modified_at": m.get("modified_at"),
+        }
+        for m in models
+    ]
+
+
+class PullRequestBody(BaseModel):
+    model: str
+
+
+@router.post("/models/pull")
+async def pull_model(body: PullRequestBody):
+    """Pull a model onto the inference host; Ollama's NDJSON progress as SSE."""
+    _require_ollama()
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.local_inference_url}/api/pull",
+                    json={"model": body.model, "stream": True},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            yield f"data: {line}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        # Pull changes the catalog — make new models visible without the 5-min wait.
+        await discover_local_models(force=True)
+        _caps_cache.clear()
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.delete("/models/{model_name:path}")
+async def delete_model(model_name: str):
+    _require_ollama()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.request(
+                "DELETE",
+                f"{settings.local_inference_url}/api/delete",
+                json={"model": model_name},
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    await discover_local_models(force=True)
+    _caps_cache.clear()
+    return {"deleted": model_name}
 
 
 # ── Tool-capability verification ─────────────────────────────────────────────
