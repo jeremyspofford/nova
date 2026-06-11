@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 from pydantic import BaseModel
 
-from . import hardware, secrets_client, selector
+from . import hardware, secrets_client, selector, wol
 from .config import settings
 from .discovery import _cloud_providers, _local_provider_entry, discover_local_models
 from .manifest import get_manifest
@@ -172,6 +172,7 @@ async def _try_complete(
         raise HTTPException(status_code=503, detail="No LLM providers configured")
 
     last_exc: Exception | None = None
+    woke_host = False
     for cand_model, model_extra in candidates:
         kwargs = {**model_extra}
         if extra_kwargs:
@@ -192,8 +193,23 @@ async def _try_complete(
         except Exception as exc:
             logger.warning("Provider %s failed: %s", cand_model, exc)
             last_exc = exc
+            # A local candidate failing to connect may just be a sleeping GPU
+            # box — fire a rate-limited Wake-on-LAN if one is configured.
+            is_local = settings.local_inference_url and settings.local_inference_url in str(
+                model_extra.get("api_base", "")
+            )
+            if is_local and _is_connection_error(exc):
+                woke_host = await wol.wake_if_due(f"local candidate {cand_model} unreachable")
 
-    raise HTTPException(status_code=503, detail=f"All LLM providers failed: {last_exc}")
+    detail = f"All LLM providers failed: {last_exc}"
+    if woke_host:
+        detail += " — sent Wake-on-LAN to the inference host; retry in a minute or two"
+    raise HTTPException(status_code=503, detail=detail)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(s in text for s in ("connection", "connect", "timed out", "timeout", "unreachable"))
 
 
 @router.get("/providers")
@@ -310,7 +326,26 @@ async def get_hardware():
         "inference_url": settings.local_inference_url,
         "backend": settings.nova_inference_backend,
         "observed": await hardware.observe(),
+        "wol_configured": (await wol.get_mac()) is not None,
     }
+
+
+@router.post("/hardware/wake", status_code=202)
+async def wake_inference_host():
+    """Manually send a Wake-on-LAN magic packet to the inference host."""
+    mac = await wol.get_mac(force=True)
+    if not mac:
+        raise HTTPException(
+            status_code=409,
+            detail="Wake-on-LAN not configured — add a 'wol_mac' secret with the inference host's MAC",
+        )
+    try:
+        result = await wol.send_wake(mac)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Wake send failed: {exc}")
+    return {"triggered": True, **result}
 
 
 class HardwareDeclare(BaseModel):

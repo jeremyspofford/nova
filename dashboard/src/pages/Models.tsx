@@ -45,6 +45,7 @@ interface HardwareProfile {
   inference_url: string;
   backend: string;
   observed?: { gpu_in_use: boolean | null; models_loaded: number | null };
+  wol_configured?: boolean;
 }
 
 interface PulledModel {
@@ -128,9 +129,16 @@ export function Models() {
     queryKey: ["llm-hardware"],
     queryFn: () => apiFetch("/api/v1/llm/hardware"),
   });
-  const { data: pulled = [] } = useQuery<PulledModel[]>({
+  const pulledQuery = useQuery<PulledModel[]>({
     queryKey: ["models-pulled"],
     queryFn: () => apiFetch("/api/v1/llm/models/pulled"),
+    retry: 1,
+  });
+  const pulled = pulledQuery.data ?? [];
+  const hostUnreachable = pulledQuery.isError;
+
+  const wakeMutation = useMutation({
+    mutationFn: () => apiFetch("/api/v1/llm/hardware/wake", { method: "POST" }),
   });
 
   const refresh = () => {
@@ -264,6 +272,21 @@ export function Models() {
               {hwKnown ? "Edit specs" : "Declare specs"}
             </button>
           </div>
+          {hostUnreachable && (
+            <div className="mt-2 flex items-center gap-3 text-xs text-amber-400">
+              <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+              <span>Inference host unreachable — pulls and verification are unavailable.</span>
+              {hw?.wol_configured && (
+                <button
+                  onClick={() => wakeMutation.mutate()}
+                  disabled={wakeMutation.isPending}
+                  className="bg-amber-600/80 hover:bg-amber-500 text-stone-950 font-medium rounded px-2.5 py-1"
+                >
+                  {wakeMutation.isPending ? "Waking…" : wakeMutation.isSuccess ? "Magic packet sent ✓" : "Wake host"}
+                </button>
+              )}
+            </div>
+          )}
           {!hwKnown && !declaring && (
             <p className="mt-2 text-xs text-amber-400">
               Hardware unknown — recommendations aren't filtered. Declare your inference host's

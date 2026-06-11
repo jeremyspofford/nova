@@ -267,6 +267,8 @@ test_health.py          — service health endpoints
 test_memory.py          — memory store and search
 test_schedules.py       — schedule CRUD, poll + webhook firing, chat-thread output (slowest file — firing tests wait out the 30s poll cycle)
 test_proactivity.py     — capability gate, control API, pulse dispatch guards (slow — drives real poll cycles)
+test_model_recommendations.py — manifest, hardware fit gating, pull lifecycle (downloads a ~46MB model)
+test_wol.py             — Wake-on-LAN: magic packet capture on udp/9 (skips without root), helper auth
 ```
 
 "The code looks correct" is not a test result. A green `make test-v2` + Playwright

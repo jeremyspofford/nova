@@ -1,6 +1,6 @@
 # Nova — Roadmap
 
-> Last updated: 2026-06-10. v2 rewrite shipped 2026-05-12.
+> Last updated: 2026-06-11. v2 rewrite shipped 2026-05-12.
 >
 > **Vision:** A self-directed autonomous AI platform. You define a goal. Nova breaks it into
 > tasks, executes them with tools, and runs autonomously between conversations.
@@ -96,35 +96,26 @@ Confirm the agent tool-use loop works end-to-end: user asks Nova to do something
 ### 3. Production nginx
 Add `/v1/` → llm-gateway and `/recovery-api/` → recovery proxies to `dashboard/nginx.conf`.
 
-### 4. Schedules — End-to-end
-Verify scheduled tasks fire correctly and produce results. Wire schedule output back into chat or notifications.
+---
 
-### 5. Proactivity — Nova acts on its own
-Increment 2 of the continuity-memory plan (`docs/specs/2026-06-09-continuity-memory-design.md`):
-a lightweight autonomy pulse inside agent-core — periodic self-review schedule
-(`created_by='nova'`), an LLM "anything worth doing?" gate with a hard budget cap and kill
-switch, and a proactive inbox in the dashboard. Depends on #4 (rides the scheduler).
-Includes the model tool-call verification gate from the recommended-models spec as a
-safety prerequisite. Spec: `docs/specs/2026-06-10-proactivity-design.md`.
+## Shipped 2026-06-10/11 (PRs #21–#24)
 
-### 6. Recommended models — restore v1 Models page, with capability gauges
-Restore the v0.1.0-alpha model management features on the v2 stack: hardware-aware
-recommended-model list (single manifest, remote-refreshed from the repo), one-click
-Ollama pull with streamed progress, install-wizard model picker, and per-model
-capability gauges (agent/tool-calling first) with local vs cloud/frontier models
-clearly separated. Handles split deployments: when `LOCAL_INFERENCE_URL` points at
-another machine (e.g. gateway on a mini-PC, Ollama on a GPU box), recommendations are
-gated by the *inference host's* declared hardware profile, and pull/verify work over
-HTTP unchanged. Spec: `docs/specs/2026-06-10-recommended-models-design.md`.
-
-### 7. Wake-on-LAN — remote inference host power management
-For split deployments where the GPU machine sleeps: when routing is
-local-first/local-only and the inference host is unreachable, send a WoL magic packet
-(host MAC stored as a secret), wait for boot with a timeout, then retry the request;
-local-first falls back to cloud while the host wakes. Manual "Wake" button on the
-Models page's "inference host unreachable" banner (hook point shipped by #6).
-Design note: containers on the bridge network can't emit L2 broadcast — needs a
-host-network helper or directed broadcast; settle in design.
+- **Schedules end-to-end** — verified firing (poll + webhook + counters); schedule
+  output surfaces in a per-schedule chat thread (`⏰ {name}`), reply-able. Also fixed:
+  fresh installs crashed at migration 010 (`mcp_servers.args` TEXT[]→JSONB).
+- **Proactivity** — `nova-self-review` pulse rides the scheduler; kill switch, 24h
+  budget, tool-capability gate; quiet `NOTHING` runs; block reasons posted to the
+  thread; `GET/PUT /api/v1/proactivity`. Spec: `docs/specs/2026-06-10-proactivity-design.md`.
+- **Recommended models** — curated manifest (remote-refreshed daily, bundled fallback),
+  inference-host hardware profiles (detected/declared/unknown) for split deployments,
+  Models page with capability gauges + denylist + one-click pull with streamed
+  progress, separated cloud/frontier section, hardware-aware install wizard picker.
+  Spec: `docs/specs/2026-06-10-recommended-models-design.md`.
+- **Wake-on-LAN** — `wol_mac` secret + manual Wake button on the unreachable-host
+  banner + rate-limited auto-wake when a local completion candidate is unreachable
+  (local-first falls back to cloud while the host boots). Magic packets need L2
+  broadcast, so the optional `wol` compose profile runs a host-network `wol-helper`
+  sidecar; direct UDP broadcast is the fallback. `WOL_HELPER_URL` in `.env`.
 
 ---
 

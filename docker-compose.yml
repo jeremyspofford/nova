@@ -105,6 +105,20 @@ services:
       timeout: 5s
       retries: 6
 
+  # Wake-on-LAN helper — magic packets need L2 broadcast on the LAN, which
+  # bridge-network containers can't emit. Host networking; profile `wol`.
+  # Enable: COMPOSE_PROFILES=...,wol and WOL_HELPER_URL=http://host.docker.internal:8890
+  wol-helper:
+    profiles: ["wol"]
+    build:
+      context: .
+      dockerfile: wol-helper/Dockerfile
+    network_mode: host
+    environment:
+      ADMIN_SECRET: ${ADMIN_SECRET:?}
+      WOL_HELPER_PORT: "8890"
+    restart: unless-stopped
+
   voice-gateway:
     build:
       context: .

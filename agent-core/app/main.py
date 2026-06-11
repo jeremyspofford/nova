@@ -347,6 +347,22 @@ async def llm_hardware_get(_: None = Depends(_require_admin)):
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
+@app.post("/api/v1/llm/hardware/wake", status_code=202)
+async def llm_hardware_wake(_: None = Depends(_require_admin)):
+    """Proxy to llm-gateway POST /hardware/wake — Wake-on-LAN the inference host."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(f"{settings.llm_gateway_url}/hardware/wake")
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
 @app.put("/api/v1/llm/hardware")
 async def llm_hardware_put(request: Request, _: None = Depends(_require_admin)):
     """Proxy to llm-gateway PUT /hardware — declare a remote inference host's specs."""
