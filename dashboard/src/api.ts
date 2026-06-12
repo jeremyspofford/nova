@@ -342,7 +342,7 @@ export async function* streamChat(
     task_id: taskId,
     ...(model ? { model } : {}),
     ...(contentBlocks ? { content: contentBlocks } : {}),
-    ...(options?.web_search ? { web_search: true } : {}),
+    web_search: options?.web_search ?? true,
     ...(options?.deep_research ? { deep_research: true } : {}),
     ...(options?.council ? { council: true } : {}),
     ...(options?.output_style ? { output_style: options.output_style } : {}),

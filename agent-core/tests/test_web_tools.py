@@ -104,7 +104,7 @@ async def test_ddg_is_last_resort_with_note(monkeypatch):
     out = await web.web_search("q", ctx=make_ctx())
     assert out["provider"] == "ddg-instant"
     assert out["results"] == []
-    assert "SEARXNG_URL" in out["note"]
+    assert "`search` compose profile" in out["note"]
 
 
 @pytest.mark.asyncio

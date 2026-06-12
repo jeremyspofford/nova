@@ -153,7 +153,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [customInstructions, setCustomInstructions] = useState(
     () => localStorage.getItem('nova_custom_instructions') ?? ''
   )
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false)
+  const [webSearchEnabled, setWebSearchEnabled] = useState(
+    () => localStorage.getItem('nova_web_search') !== 'off'
+  )
   const [councilEnabled, setCouncilEnabled] = useState(false)
   const [deepResearchEnabled, setDeepResearchEnabled] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -173,6 +175,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem('nova_sidebar_collapsed', String(sidebarCollapsed))
   }, [sidebarCollapsed])
+
+  // Persist web-search preference (default on)
+  useEffect(() => {
+    localStorage.setItem('nova_web_search', webSearchEnabled ? 'on' : 'off')
+  }, [webSearchEnabled])
 
   const loadConversation = useCallback(async (id: string) => {
     try {

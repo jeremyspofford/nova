@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     llm_gateway_url: str = "http://llm-gateway:8001"
     docker_socket_proxy_url: str = "http://docker-socket-proxy:2375"
     # Self-hosted metasearch for web.search (compose profile `search`).
-    # Empty = skip SearXNG; web.search falls back to Brave (secret) then DDG.
-    searxng_url: str = ""
+    # Defaults to the sidecar address so enabling the profile is the only
+    # step; an unreachable host falls through to Brave (secret) then DDG.
+    searxng_url: str = "http://searxng:8080"
 
     @field_validator("credential_master_key")
     @classmethod
