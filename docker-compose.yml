@@ -115,7 +115,11 @@ services:
       dockerfile: wol-helper/Dockerfile
     network_mode: host
     environment:
-      ADMIN_SECRET: ${ADMIN_SECRET:?}
+      # Soft fallback (NOT :?): compose interpolates ALL services at parse time,
+      # even profile-gated ones — a hard-required var here breaks every compose
+      # command for users without it. The helper itself rejects all requests
+      # when the secret is empty, so an unset value fails safe.
+      ADMIN_SECRET: ${ADMIN_SECRET:-${NOVA_ADMIN_SECRET:-}}
       WOL_HELPER_PORT: "8890"
     restart: unless-stopped
 
