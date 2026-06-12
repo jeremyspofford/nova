@@ -96,6 +96,15 @@ Confirm the agent tool-use loop works end-to-end: user asks Nova to do something
 ### 3. Production nginx
 Add `/v1/` → llm-gateway and `/recovery-api/` → recovery proxies to `dashboard/nginx.conf`.
 
+### 4. Inference endpoint pool + Deep Think
+Local models performing like frontier models by trading time for quality. Two parts,
+designed together (`docs/specs/2026-06-11-deep-think-endpoint-pool-design.md`):
+multiple inference endpoints (mini-PC + GPU box; per-endpoint discovery, hardware,
+pull, WoL; `on-demand` burst lifecycle reserved) and an opt-in Deep Think mode —
+parallel Mixture-of-Agents proposers across the pool + grounded aggregation, with the
+existing verified-execution loop as the spine for tool tasks. Hard caps, kill switch,
+daily budget, and a non-gating quality audit harness before it earns default-on.
+
 ---
 
 ## Shipped 2026-06-10/11 (PRs #21–#24)
