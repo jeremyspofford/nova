@@ -353,7 +353,7 @@ export function Chat() {
     const streamOptions = {
       ...(outputStyle ? { output_style: outputStyle } : {}),
       ...(customInstructions.trim() ? { custom_instructions: customInstructions.trim() } : {}),
-      ...(webSearchEnabled ? { web_search: true } : {}),
+      web_search: webSearchEnabled,
       ...(deepResearchEnabled ? { deep_research: true } : {}),
       ...(councilEnabled ? { council: true } : {}),
       ...(activeConversationId ? { conversation_id: activeConversationId } : {}),

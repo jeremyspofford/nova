@@ -132,6 +132,27 @@ def _assistant_sourced(item_text: str, user_part: str, assistant_part: str) -> b
     return assistant_overlap > user_overlap
 
 
+_roles_cache: tuple[float, str | None] | None = None
+_ROLES_TTL = 60.0
+
+
+async def _extraction_override() -> str | None:
+    """The gateway's runtime extraction-role override (Models page), if set."""
+    global _roles_cache
+    import time
+    now = time.monotonic()
+    if _roles_cache is not None and (now - _roles_cache[0]) < _ROLES_TTL:
+        return _roles_cache[1]
+    try:
+        r = await _client().get(f"{settings.llm_gateway_url}/models/roles")
+        r.raise_for_status()
+        model = (r.json().get("overrides") or {}).get("extraction") or None
+    except Exception:
+        model = None
+    _roles_cache = (now, model)
+    return model
+
+
 async def _llm_extract(content: str) -> list[dict] | None:
     """One LLM call → parsed items, or None on any failure.
 
@@ -139,7 +160,8 @@ async def _llm_extract(content: str) -> list[dict] | None:
     memory distillation (observed live: a host pinning a model it never
     pulled stored months of verbatim transcripts) — retry once with auto
     routing and say so."""
-    for model in dict.fromkeys([settings.extraction_model, "auto"]):
+    override = await _extraction_override()
+    for model in dict.fromkeys([override or settings.extraction_model, "auto"]):
         try:
             r = await _client().post(
                 f"{settings.llm_gateway_url}/complete",

@@ -68,7 +68,7 @@ async def websocket_endpoint(ws: WebSocket):
                 text_input = msg.get("text", "")
                 model = msg.get("model") or None
                 content = msg.get("content") or None
-                web_search = bool(msg.get("web_search", False))
+                web_search = bool(msg.get("web_search", True))
                 deep_research = bool(msg.get("deep_research", False))
                 council = bool(msg.get("council", False))
                 output_style = msg.get("output_style") or None
@@ -136,7 +136,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 async def _dispatch_text_turn(
     session, task_id, text, http_agent, redis, sessions,
-    model=None, content=None, web_search=False, deep_research=False,
+    model=None, content=None, web_search=True, deep_research=False,
     council=False, output_style=None, custom_instructions=None,
 ):
     body: dict = {"text": text}
@@ -144,8 +144,9 @@ async def _dispatch_text_turn(
         body["model"] = model
     if content is not None:
         body["content"] = content
-    if web_search:
-        body["web_search"] = True
+    # Always explicit: agent-core defaults web_search to true, so omitting
+    # the key would silently re-enable web for a user who toggled it off.
+    body["web_search"] = bool(web_search)
     if deep_research:
         body["deep_research"] = True
     if council:

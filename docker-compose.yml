@@ -106,7 +106,8 @@ services:
       retries: 6
 
   # Self-hosted metasearch for web.search — profile `search`.
-  # Enable: add `search` to COMPOSE_PROFILES and set SEARXNG_URL=http://searxng:8080
+  # Enable: add `search` to COMPOSE_PROFILES (SEARXNG_URL already defaults
+  # to this sidecar's address).
   searxng:
     image: searxng/searxng:latest
     profiles: ["search"]

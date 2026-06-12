@@ -445,6 +445,42 @@ async def llm_hardware_put(request: Request, endpoint: str = "default", _: None 
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
+@app.get("/api/v1/llm/models/roles")
+async def llm_model_roles_get(_: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /models/roles."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{settings.llm_gateway_url}/models/roles")
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
+@app.put("/api/v1/llm/models/roles")
+async def llm_model_roles_put(request: Request, _: None = Depends(_require_admin)):
+    """Proxy to llm-gateway PUT /models/roles."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="JSON body required")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.put(f"{settings.llm_gateway_url}/models/roles", json=body)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
 @app.get("/api/v1/llm/models/capabilities")
 async def llm_model_capabilities(
     model: str | None = None, probe: bool = False, _: None = Depends(_require_admin)

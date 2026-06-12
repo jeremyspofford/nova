@@ -463,7 +463,7 @@ class MessageRequest(BaseModel):
     text: str
     content: list[dict] | None = None  # multimodal content blocks (text/image_url)
     model: str | None = None
-    web_search: bool = False
+    web_search: bool = True  # on by default — Nova should answer "what's happening now" questions
     deep_research: bool = False
     council: bool = False  # opt-in MoA refinement of the final answer (slow, capped)
     output_style: str | None = None
@@ -500,10 +500,10 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
         )
 
     # Build the offered tool list FIRST so the system prompt can advertise
-    # only what's actually available. Previously the prompt advertised
-    # web.fetch / web.search even when they weren't in the offered tool list
-    # (web_search=False default), confusing small models into emitting
-    # serialized tool calls for tools they couldn't actually call.
+    # only what's actually available. The prompt must never advertise
+    # web.fetch / web.search when they aren't in the offered tool list
+    # (web_search=false), or small models emit serialized tool calls for
+    # tools they can't actually call.
     all_tools = to_openai_tools()
     offered_tools = [t for t in all_tools if _is_chat_tool(t["function"]["name"], include_web=body.web_search)]
     offered_tool_names: set[str] = {t["function"]["name"] for t in offered_tools}

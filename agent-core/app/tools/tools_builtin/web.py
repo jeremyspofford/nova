@@ -186,8 +186,9 @@ async def web_search(query: str, limit: int = 5, *, ctx: ToolContext) -> dict:
         results = await _search_ddg(query, limit)
         out = {"query": query, "provider": "ddg-instant", "results": results}
         if not results:
-            out["note"] = ("instant answers only — configure SEARXNG_URL or a "
-                           "brave_api_key secret for real web search")
+            out["note"] = ("instant answers only — enable the `search` compose "
+                           "profile (SearXNG) or add a brave_api_key secret "
+                           "for real web search")
         return out
     except Exception as exc:
         errors.append(f"ddg: {exc}")
