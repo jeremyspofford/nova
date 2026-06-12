@@ -14,6 +14,7 @@ from nova_contracts import HealthStatus
 from .approvals_router import router as approvals_router
 from .config import settings
 from .conversations_router import router as conversations_router
+from .council_router import router as council_router
 from .db import close_pool, get_pool
 from .loop.main import close_llm_client, run_task, set_task_complete_dispatch_fn
 from .mcp_router import router as mcp_router
@@ -171,6 +172,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="agent-core", version="2.0.0", lifespan=lifespan)
 app.include_router(conversations_router)
+app.include_router(council_router)
 app.include_router(memories_proxy_router)
 app.include_router(mcp_router)
 app.include_router(proactivity_router)

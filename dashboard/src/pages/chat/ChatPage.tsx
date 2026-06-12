@@ -37,6 +37,7 @@ export function Chat() {
     outputStyle,
     customInstructions,
     webSearchEnabled,
+    councilEnabled,
     deepResearchEnabled,
     setDraftInput,
     sidebarCollapsed, setSidebarCollapsed,
@@ -354,6 +355,7 @@ export function Chat() {
       ...(customInstructions.trim() ? { custom_instructions: customInstructions.trim() } : {}),
       ...(webSearchEnabled ? { web_search: true } : {}),
       ...(deepResearchEnabled ? { deep_research: true } : {}),
+      ...(councilEnabled ? { council: true } : {}),
       ...(activeConversationId ? { conversation_id: activeConversationId } : {}),
     }
 
@@ -382,7 +384,7 @@ export function Chat() {
           setMessages(prev =>
             prev.map(m =>
               m.id === assistantMsgId
-                ? { ...m, modelUsed: event.meta.model, category: event.meta.category }
+                ? { ...m, modelUsed: event.meta.model ?? m.modelUsed, category: event.meta.category ?? m.category, ...(event.meta.council ? { council: event.meta.council } : {}) }
                 : m
             )
           )
@@ -438,7 +440,7 @@ export function Chat() {
         queryClient.invalidateQueries({ queryKey: ['conversations'] })
       }
     }
-  }, [sessionId, conversationId, modelId, isStreaming, pendingFiles, outputStyle, customInstructions, webSearchEnabled, deepResearchEnabled, queryClient])
+  }, [sessionId, conversationId, modelId, isStreaming, pendingFiles, outputStyle, customInstructions, webSearchEnabled, deepResearchEnabled, councilEnabled, queryClient])
   handleSubmitRef.current = handleSubmit
 
   // Process queued messages sequentially when streaming completes

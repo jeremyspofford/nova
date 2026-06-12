@@ -115,6 +115,8 @@ class LLMRequest(BaseModel):
     max_tokens: int = 2000
     temperature: float = 0.7
     tools: list[dict[str, Any]] | None = None  # OpenAI function-call tool definitions
+    mode: str = "standard"  # "council": parallel proposers + aggregator (tool-free requests only)
+    seed_proposal: str | None = None  # council: a pre-existing draft to include as proposal 0
 
 
 class LLMResponse(BaseModel):

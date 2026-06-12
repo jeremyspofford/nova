@@ -1,4 +1,4 @@
-import { Globe, BookOpen } from 'lucide-react'
+import { Globe, BookOpen, Users } from 'lucide-react'
 import { useChatStore } from '../../stores/chat-store'
 import { Toggle } from '../../components/ui/Toggle'
 
@@ -6,6 +6,7 @@ export function ResearchToggles() {
   const {
     webSearchEnabled, setWebSearchEnabled,
     deepResearchEnabled, setDeepResearchEnabled,
+    councilEnabled, setCouncilEnabled,
   } = useChatStore()
 
   return (
@@ -26,6 +27,13 @@ export function ResearchToggles() {
           description={deepResearchEnabled ? 'Multi-step research with cross-referencing' : undefined}
           checked={deepResearchEnabled}
           onChange={setDeepResearchEnabled}
+        />
+        <ToggleRow
+          icon={<Users size={14} />}
+          label="Council"
+          description={councilEnabled ? 'Several models answer in parallel; one synthesizes. Slower, stronger.' : undefined}
+          checked={councilEnabled}
+          onChange={setCouncilEnabled}
         />
       </div>
     </div>

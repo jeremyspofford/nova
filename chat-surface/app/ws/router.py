@@ -70,6 +70,7 @@ async def websocket_endpoint(ws: WebSocket):
                 content = msg.get("content") or None
                 web_search = bool(msg.get("web_search", False))
                 deep_research = bool(msg.get("deep_research", False))
+                council = bool(msg.get("council", False))
                 output_style = msg.get("output_style") or None
                 custom_instructions = msg.get("custom_instructions") or None
                 if task_id and text_input:
@@ -80,7 +81,7 @@ async def websocket_endpoint(ws: WebSocket):
                         _dispatch_text_turn(
                             session, task_id, text_input, http_agent, redis, sessions,
                             model=model, content=content, web_search=web_search,
-                            deep_research=deep_research, output_style=output_style,
+                            deep_research=deep_research, council=council, output_style=output_style,
                             custom_instructions=custom_instructions,
                         )
                     )
@@ -136,7 +137,7 @@ async def websocket_endpoint(ws: WebSocket):
 async def _dispatch_text_turn(
     session, task_id, text, http_agent, redis, sessions,
     model=None, content=None, web_search=False, deep_research=False,
-    output_style=None, custom_instructions=None,
+    council=False, output_style=None, custom_instructions=None,
 ):
     body: dict = {"text": text}
     if model:
@@ -147,6 +148,8 @@ async def _dispatch_text_turn(
         body["web_search"] = True
     if deep_research:
         body["deep_research"] = True
+    if council:
+        body["council"] = True
     if output_style:
         body["output_style"] = output_style
     if custom_instructions:
