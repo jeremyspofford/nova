@@ -48,8 +48,9 @@ async def test_selects_distinct_models_by_score(monkeypatch):
     assert [p["model"] for p in out][:2] == ["big:32b", "mid:7b"]
     assert out[0]["endpoint"] == "b"      # big:32b only lives on endpoint b
     assert out[1]["endpoint"] == "a"      # mid:7b deduped to its first sighting
-    assert len(out) == 3                  # third seat filled by jitter fallback
-    assert out[2]["model"] == settings.local_completion_model
+    assert len(out) == 3                  # third seat filled by jitter on the best model
+    assert out[2]["model"] == "big:32b"
+    assert out[2]["temperature"] != out[0]["temperature"]
 
 
 @pytest.mark.asyncio
@@ -141,3 +142,20 @@ async def test_aggregation_failure_returns_best_proposal(monkeypatch):
     assert final.startswith("proposal")
     assert meta["aggregator"] is None
     assert meta["capped"] is True
+
+
+@pytest.mark.asyncio
+async def test_quality_floor_excludes_weak_proposers(monkeypatch):
+    """A below-floor model must never propose — its hallucinations poison the
+    chair (observed live: audit prompt 5). Seats fall back to the best
+    qualified model with jitter, not to weak distinct models."""
+    monkeypatch.setattr(council, "get_manifest", fake_manifest(MANIFEST))
+    monkeypatch.setattr(council, "discover_endpoint_models",
+                        fake_discovery({"a": ["big:32b", "tiny:1b"]}))
+    monkeypatch.setattr(council.ep_mod, "routable", lambda: eps("a"))
+
+    out = await council.select_proposers(3)
+    assert all(p["model"] != "tiny:1b" for p in out), "tiny:1b is below the quality floor"
+    assert out[0]["model"] == "big:32b"
+    assert all(p["model"] == "big:32b" for p in out[1:]), "fill seats use the best qualified model"
+    assert len({p["temperature"] for p in out}) > 1, "fill seats vary temperature"

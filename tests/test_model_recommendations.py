@@ -7,6 +7,7 @@ import json
 import os
 
 import httpx
+import pytest
 from dotenv import dotenv_values
 
 BASE = "http://localhost:8000"
@@ -55,9 +56,17 @@ def test_denylist_flags_no_tool_models():
 
 
 def test_installed_state_reflects_ollama():
+    # Compare against what's actually installed — hardcoding a model name makes
+    # the test fail on any host that didn't pull that exact model.
+    pulled = httpx.get(f"{BASE}/api/v1/llm/models/pulled", headers=ADMIN, timeout=20.0).json()
+    installed_ids = {m["name"].removesuffix(":latest") for m in pulled}
     body = _recommended()
-    half_b = next(e for e in body["local"] if e["ollama_id"] == "qwen2.5:0.5b")
-    assert half_b["installed"] is True
+    overlap = [e for e in body["local"] if e["ollama_id"] and e["ollama_id"] in installed_ids]
+    if not overlap:
+        pytest.skip("no manifest-listed model installed on this host")
+    assert all(e["installed"] for e in overlap), [e["ollama_id"] for e in overlap]
+    absent = [e for e in body["local"] if e["ollama_id"] and e["ollama_id"] not in installed_ids]
+    assert all(not e["installed"] for e in absent), [e["ollama_id"] for e in absent if e["installed"]]
 
 
 def test_hardware_declare_gates_fit():

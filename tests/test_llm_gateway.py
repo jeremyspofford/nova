@@ -125,8 +125,21 @@ def test_local_model_with_tools_stays_conversational():
     if not any(p.get("local") and p.get("available") for p in providers):
         pytest.skip("no local provider available")
 
+    # Use an INSTALLED tool-capable local model — hardcoding a model name makes
+    # the test fail on any host that didn't happen to pull that exact model.
+    discovered = httpx.get(f"{BASE}/models/discover", timeout=15.0).json()
+    local_ids = [
+        m["id"]
+        for p in discovered if p.get("type") == "local"
+        for m in p.get("models", [])
+        if "embed" not in m["id"]
+    ]
+    if not local_ids:
+        pytest.skip("no local completion models installed")
+    model = next((m for m in local_ids if "qwen" in m), local_ids[0])
+
     r = httpx.post(f"{BASE}/complete", json={
-        "model": "qwen2.5:1.5b",
+        "model": model,
         "max_tokens": 60,
         "temperature": 0.0,
         "messages": [
