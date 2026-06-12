@@ -1,4 +1,5 @@
 """Provider routing: given a strategy, return ordered (litellm_model, extra_kwargs) candidates."""
+from . import model_roles
 from .config import settings
 
 _routing_strategy_override: str | None = None
@@ -24,7 +25,7 @@ def _local_candidate() -> tuple[str, dict] | None:
     """Single-backend candidate from env settings (pre-pool back-compat)."""
     backend = settings.nova_inference_backend
     url = settings.local_inference_url
-    model = settings.local_completion_model
+    model = model_roles.completion_model()
 
     if backend == "none":
         return None
@@ -57,14 +58,14 @@ def local_candidates() -> list[tuple[str, dict]]:
     synthesized default endpoint this returns exactly the pre-pool candidate.
     """
     from . import endpoints as ep_mod
-    model = settings.local_completion_model
+    model = model_roles.completion_model()
     return [endpoint_candidate(ep, model) for ep in ep_mod.routable()]
 
 
 def _local_embed_candidate() -> tuple[str, dict] | None:
     backend = settings.nova_inference_backend
     url = settings.local_inference_url
-    model = settings.local_embed_model
+    model = model_roles.embedding_model()
 
     if backend == "none":
         return None

@@ -182,6 +182,24 @@ export function Models() {
   const [declVram, setDeclVram] = useState("");
   const [declRam, setDeclRam] = useState("");
 
+  // Model roles: which installed model fills each duty (completion/extraction/embedding).
+  const { data: roles } = useQuery<{ roles: Record<string, { model: string | null; source: string }> }>({
+    queryKey: ["model-roles"],
+    queryFn: () => apiFetch("/api/v1/llm/models/roles"),
+  });
+  const [roleDraft, setRoleDraft] = useState<Record<string, string>>({});
+  const [roleError, setRoleError] = useState("");
+  const saveRolesMutation = useMutation({
+    mutationFn: (body: Record<string, string>) =>
+      apiFetch("/api/v1/llm/models/roles", { method: "PUT", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      setRoleDraft({});
+      setRoleError("");
+      qc.invalidateQueries({ queryKey: ["model-roles"] });
+    },
+    onError: (e) => setRoleError(String(e)),
+  });
+
   // Endpoint pool: every model/hardware call is scoped to the selected endpoint.
   const [endpointId, setEndpointId] = useState("default");
   const [editingPool, setEditingPool] = useState(false);
@@ -669,6 +687,52 @@ export function Models() {
               </button>
             </div>
           )}
+        </div>
+
+        {/* Model roles — the .env trio (completion/extraction/embedding), now UI-owned.
+            Server-side validation refuses uninstalled models and tool-less completion picks. */}
+        <div className="bg-stone-800/50 rounded-xl p-4 mb-6">
+          <h2 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Model roles</h2>
+          <div className="flex flex-wrap items-end gap-4 text-xs">
+            {(["completion", "extraction", "embedding"] as const).map((role) => {
+              const eff = roles?.roles?.[role];
+              return (
+                <label key={role} className="flex flex-col gap-1">
+                  <span className="text-stone-500">
+                    {role}
+                    <span className={`ml-1.5 px-1 rounded text-[10px] ${eff?.source === "override" ? "bg-teal-900/60 text-teal-300" : "bg-stone-700 text-stone-400"}`}>
+                      {eff?.source ?? "env"}
+                    </span>
+                  </span>
+                  <select
+                    value={roleDraft[role] ?? eff?.model ?? ""}
+                    onChange={(e) => setRoleDraft({ ...roleDraft, [role]: e.target.value })}
+                    className="bg-stone-800 border border-stone-700 rounded-lg px-2 py-1 font-mono min-w-44"
+                  >
+                    <option value="">(env default{role === "extraction" ? " / auto" : ""})</option>
+                    {pulled.map((m) => (
+                      <option key={m.name} value={m.name.replace(/:latest$/, "")}>
+                        {m.name.replace(/:latest$/, "")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+            <button
+              onClick={() => saveRolesMutation.mutate(roleDraft)}
+              disabled={saveRolesMutation.isPending || Object.keys(roleDraft).length === 0}
+              className="bg-teal-600 hover:bg-teal-500 disabled:bg-stone-700 rounded-lg px-3 py-1.5"
+            >
+              {saveRolesMutation.isPending ? "Saving…" : "Save roles"}
+            </button>
+          </div>
+          {roleError && <p className="mt-2 text-xs text-red-400">{roleError}</p>}
+          <p className="mt-2 text-micro text-stone-600">
+            Completion drives chat and the agent loop (tool-calling required — invalid picks are
+            refused). Extraction distills memories. Embedding powers semantic search. Changes apply
+            without a restart.
+          </p>
         </div>
 
         {/* Installed */}

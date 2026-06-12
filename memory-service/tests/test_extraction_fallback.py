@@ -64,3 +64,26 @@ async def test_total_failure_returns_none(monkeypatch, parsed):
 
     assert await extraction._llm_extract("User: hello") is None
     assert fake.calls == ["qwen2.5:1.5b", "auto"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_role_override_beats_env_pin(monkeypatch, parsed):
+    """The Models-page extraction override must win over the env pin."""
+    monkeypatch.setattr(settings, "extraction_model", "env-pinned:1b")
+    extraction._roles_cache = None
+
+    class RolesAwareClient(FakeClient):
+        async def get(self, url):
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"overrides": {"extraction": "ui-chosen:3b"}},
+            )
+
+    fake = RolesAwareClient(fail_models=set())
+    monkeypatch.setattr(extraction, "_client", lambda: fake)
+
+    items = await extraction._llm_extract("User: hello")
+    assert items == parsed
+    assert fake.calls == ["ui-chosen:3b"], "override model should be tried first"
+    extraction._roles_cache = None

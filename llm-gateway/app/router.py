@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 from pydantic import BaseModel
 
-from . import council, hardware, secrets_client, selector, wol
+from . import council, hardware, model_roles, secrets_client, selector, wol
 from . import endpoints as ep_mod
 from .config import settings
 from .discovery import (
@@ -393,7 +393,7 @@ async def gpu_check(endpoint: str = "default"):
     """
     ep = _resolve_ep(endpoint)
     _require_ollama(ep)
-    model = settings.local_completion_model
+    model = model_roles.completion_model()
     started = time.monotonic()
     detail = None
     try:
@@ -602,6 +602,67 @@ async def delete_model(model_name: str, endpoint: str = "default"):
     invalidate(ep["id"])
     _caps_cache.clear()
     return {"deleted": model_name}
+
+
+# ── Model roles (completion / extraction / embedding) ────────────────────────
+
+
+@router.get("/models/roles")
+async def get_model_roles():
+    """Effective role assignments and their source (override vs env)."""
+    return {"roles": model_roles.effective(), "overrides": model_roles.overrides()}
+
+
+class RolesUpdate(BaseModel):
+    completion: str | None = None
+    extraction: str | None = None
+    embedding: str | None = None
+
+
+@router.put("/models/roles")
+async def put_model_roles(body: RolesUpdate):
+    """Set role overrides. Empty string clears a role back to its env value.
+
+    Validation: the model must be installed on a routable endpoint; the
+    completion role additionally refuses models that definitively lack tool
+    calling (the agent loop would silently break — the capability gate's whole
+    point). Unknown capability = allowed.
+    """
+    updates = body.model_dump(exclude_unset=True)
+    installed: dict[str, dict] = {}
+    for ep in ep_mod.routable():
+        for m in await discover_endpoint_models(ep):
+            installed.setdefault(m["id"], ep)
+
+    for role, model in updates.items():
+        if not model:
+            continue  # clearing — always allowed
+        mid = model.removesuffix(":latest")
+        if mid not in installed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{role}: model '{model}' is not installed on any enabled endpoint",
+            )
+        ep = installed[mid]
+        if ep["engine"] in ("ollama", "ollama-host"):
+            caps = await _ollama_show_capabilities(mid, url=ep["url"])
+            if role == "completion" and caps is not None and "tools" not in caps:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"completion: '{model}' has no tool calling — it cannot drive Nova's agent loop",
+                )
+            if role == "embedding" and caps is not None and "embedding" not in caps:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"embedding: '{model}' does not report embedding capability",
+                )
+
+    try:
+        model_roles.save(updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    _caps_cache.clear()
+    return {"roles": model_roles.effective(), "overrides": model_roles.overrides()}
 
 
 # ── Tool-capability verification ─────────────────────────────────────────────

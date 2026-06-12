@@ -270,6 +270,7 @@ test_model_recommendations.py — manifest, hardware fit gating, pull lifecycle 
 test_wol.py             — Wake-on-LAN: magic packet capture on udp/9 (skips without root), helper auth
 test_endpoint_pool.py   — endpoint pool CRUD, per-endpoint scoping, degenerate-case invariance
 test_council.py         — council mode: MoA mechanics, chat refinement + metadata, kill switch/budget guards
+test_model_roles.py     — model-role overrides: round trip, uninstalled/capability validation
 ```
 
 "The code looks correct" is not a test result. A green `make test-v2` + Playwright
