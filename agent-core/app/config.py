@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://memory-service:8002"
     llm_gateway_url: str = "http://llm-gateway:8001"
     docker_socket_proxy_url: str = "http://docker-socket-proxy:2375"
+    # Self-hosted metasearch for web.search (compose profile `search`).
+    # Empty = skip SearXNG; web.search falls back to Brave (secret) then DDG.
+    searxng_url: str = ""
 
     @field_validator("credential_master_key")
     @classmethod
