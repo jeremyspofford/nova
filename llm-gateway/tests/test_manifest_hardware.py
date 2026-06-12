@@ -44,6 +44,21 @@ def test_exactly_one_default():
     assert len(defaults) == 1, defaults
 
 
+def test_loaded_model_shaping():
+    # The three diagnostic states: fully on CPU, partial offload, fully resident.
+    shaped = hardware.shape_loaded_models([
+        {"name": "cpu-bound", "size": 1000, "size_vram": 0},
+        {"name": "partial", "size": 1000, "size_vram": 600},
+        {"name": "resident", "size": 1000, "size_vram": 1000},
+        {"name": "no-size", "size": 0, "size_vram": 0},
+    ])
+    by_name = {m["name"]: m for m in shaped}
+    assert by_name["cpu-bound"]["vram_pct"] == 0
+    assert by_name["partial"]["vram_pct"] == 60
+    assert by_name["resident"]["vram_pct"] == 100
+    assert by_name["no-size"]["vram_pct"] is None
+
+
 def test_fit_logic():
     gpu24 = {"source": "declared", "gpus": [{"vram_gb": 24}], "ram_gb": 64}
     cpu16 = {"source": "detected", "gpus": [], "ram_gb": 16}

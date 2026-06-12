@@ -28,7 +28,9 @@ MAC_SECRET_NAME = "wol_mac"
 
 _mac_cache: tuple[float, str | None] | None = None
 _MAC_CACHE_TTL = 60.0
-_last_auto_wake: float = 0.0
+# None = never woke. (Not 0.0: monotonic starts near zero on a fresh boot, which
+# would silently rate-limit auto-wake for the first wol_min_interval_s of uptime.)
+_last_auto_wake: float | None = None
 
 
 def build_magic_packet(mac: str) -> bytes:
@@ -86,7 +88,7 @@ async def wake_if_due(reason: str) -> bool:
     """
     global _last_auto_wake
     now = time.monotonic()
-    if (now - _last_auto_wake) < settings.wol_min_interval_s:
+    if _last_auto_wake is not None and (now - _last_auto_wake) < settings.wol_min_interval_s:
         return False
     try:
         mac = await get_mac()

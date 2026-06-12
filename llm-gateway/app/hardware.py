@@ -61,9 +61,33 @@ def total_vram_gb(profile: dict[str, Any]) -> float:
     return sum(float(g.get("vram_gb") or 0) for g in profile.get("gpus") or [])
 
 
+def shape_loaded_models(models: list[dict]) -> list[dict]:
+    """Per-model VRAM offload detail from Ollama /api/ps — the diagnostic core.
+
+    vram_pct 0 = fully on CPU (GPU invisible to Ollama, or no GPU);
+    1-99 = partial offload (model too big for the GPU); 100 = fully resident.
+    """
+    out = []
+    for m in models:
+        size = m.get("size") or 0
+        vram = m.get("size_vram") or 0
+        out.append({
+            "name": m.get("name"),
+            "size_bytes": size,
+            "vram_bytes": vram,
+            "vram_pct": round(vram / size * 100) if size else None,
+        })
+    return out
+
+
 async def observe() -> dict[str, Any]:
     """Live best-effort signals from the inference host. Never raises."""
-    out: dict[str, Any] = {"gpu_in_use": None, "models_loaded": None, "checked_at": time.time()}
+    out: dict[str, Any] = {
+        "gpu_in_use": None,
+        "models_loaded": None,
+        "loaded": [],
+        "checked_at": time.time(),
+    }
     if settings.nova_inference_backend not in ("ollama", "ollama-host"):
         return out
     try:
@@ -72,8 +96,9 @@ async def observe() -> dict[str, Any]:
             r.raise_for_status()
             models = r.json().get("models") or []
         out["models_loaded"] = len(models)
+        out["loaded"] = shape_loaded_models(models)
         if models:
-            out["gpu_in_use"] = any((m.get("size_vram") or 0) > 0 for m in models)
+            out["gpu_in_use"] = any(m["vram_bytes"] > 0 for m in out["loaded"])
     except Exception as exc:
         logger.debug("observe failed: %s", exc)
     return out

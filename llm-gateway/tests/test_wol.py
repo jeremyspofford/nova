@@ -46,7 +46,7 @@ async def test_wake_if_due_rate_limits(monkeypatch):
 
     monkeypatch.setattr(wol, "get_mac", fake_get_mac)
     monkeypatch.setattr(wol, "send_wake", fake_send)
-    wol._last_auto_wake = 0.0
+    wol._last_auto_wake = None
 
     assert await wol.wake_if_due("first") is True
     assert await wol.wake_if_due("suppressed") is False
@@ -63,5 +63,5 @@ async def test_wake_if_due_noop_without_mac(monkeypatch):
         return None
 
     monkeypatch.setattr(wol, "get_mac", fake_get_mac)
-    wol._last_auto_wake = 0.0
+    wol._last_auto_wake = None
     assert await wol.wake_if_due("unconfigured") is False

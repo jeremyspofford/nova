@@ -44,15 +44,32 @@ interface RecommendedResponse {
   cloud: ModelEntry[];
 }
 
+interface LoadedModel {
+  name: string;
+  size_bytes: number;
+  vram_bytes: number;
+  vram_pct: number | null;
+}
+
 interface HardwareProfile {
   source: "detected" | "declared" | "unknown";
   gpus: { name?: string; vram_gb: number }[];
   ram_gb: number | null;
   inference_url: string;
   backend: string;
-  observed?: { gpu_in_use: boolean | null; models_loaded: number | null };
+  observed?: {
+    gpu_in_use: boolean | null;
+    models_loaded: number | null;
+    loaded?: LoadedModel[];
+  };
   wol_configured?: boolean;
 }
+
+const GPU_NOT_USED_HINT =
+  "Ollama on the inference host reports 0 bytes of VRAM in use — the GPU is invisible to it. " +
+  "Likely causes: GPU driver not detected by Ollama (restart the Ollama service after driver " +
+  "installs/updates), an outdated Ollama build, or a CPU-only install. On the host, run " +
+  "'ollama ps' (look for '100% CPU') and check the Ollama server log for its GPU detection lines.";
 
 interface PulledModel {
   name: string;
@@ -311,10 +328,28 @@ export function Models() {
               </span>
             )}
             {hw?.observed?.gpu_in_use === false && totalVram > 0 && (
-              <span className="text-xs text-amber-400" title="Models are loaded but not using the GPU">
-                ⚠ inference running on CPU
+              <span className="text-xs text-amber-400 cursor-help" title={GPU_NOT_USED_HINT}>
+                ⚠ Ollama is not using the GPU —{" "}
+                {(hw.observed.loaded ?? [])
+                  .map((m) => `${m.name} is 100% in system RAM`)
+                  .join(", ") || "loaded models are entirely in system RAM"}{" "}
+                (hover for fixes)
               </span>
             )}
+            {hw?.observed?.gpu_in_use === true &&
+              (hw.observed.loaded ?? []).some((m) => m.vram_pct !== null && m.vram_pct < 90) && (
+                <span
+                  className="text-xs text-amber-400 cursor-help"
+                  title="The model doesn't fully fit in VRAM, so layers spill to system RAM and responses slow down. Use a smaller model or quantization that fits."
+                >
+                  ⚠{" "}
+                  {(hw.observed.loaded ?? [])
+                    .filter((m) => m.vram_pct !== null && m.vram_pct < 90)
+                    .map((m) => `${m.name} only ${m.vram_pct}% in VRAM`)
+                    .join(", ")}{" "}
+                  — too big for the GPU
+                </span>
+              )}
             <button
               onClick={() => setDeclaring((d) => !d)}
               className="ml-auto text-xs text-teal-400 hover:underline"
