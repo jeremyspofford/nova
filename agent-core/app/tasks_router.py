@@ -15,7 +15,7 @@ from . import memory_client
 from .config import settings
 from .council_router import council_allowed, record_council_run
 from .db import get_pool
-from .loop.main import run_task
+from .loop.main import clip_tool_result, run_task
 from .tools import capability
 from .tools.dispatcher import cleanup_task, dispatch
 from .tools.registry import to_openai_tools
@@ -299,16 +299,31 @@ async def _llm_complete_chat(messages: list[dict], tools: list[dict], model: str
         body["tools"] = safe_tools
     if model:
         body["model"] = model
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
-            r.raise_for_status()
-            resp = r.json()
-    except httpx.ReadTimeout:
-        logger.warning("llm /complete timed out (model=%s)", model)
-        return {"_error": "The model took too long to respond. Local models can be slow with many tools — try a cloud model or send a simpler message."}
-    except Exception as exc:
-        logger.warning("llm /complete failed: %r", exc)
+    # Transport errors and 5xx retry with short backoff; ReadTimeout doesn't —
+    # the request already waited up to 180s, and a second wait that long is a
+    # worse experience than the honest timeout message.
+    resp = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
+                r.raise_for_status()
+                resp = r.json()
+            break
+        except httpx.ReadTimeout:
+            logger.warning("llm /complete timed out (model=%s)", model)
+            return {"_error": "The model took too long to respond. Local models can be slow with many tools — try a cloud model or send a simpler message."}
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                logger.warning("llm /complete rejected request: %r", exc)
+                return {"_error": "LLM gateway unreachable"}
+            err: Exception = exc
+        except Exception as exc:
+            err = exc
+        logger.warning("llm /complete attempt %d/3 failed: %r", attempt, err)
+        if attempt < 3:
+            await asyncio.sleep(attempt)
+    if resp is None:
         return {"_error": "LLM gateway unreachable"}
 
     # Restore original tool names in any tool_calls the LLM returned
@@ -546,6 +561,17 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 if resp is None or "_error" in resp:
                     err_msg = (resp or {}).get("_error", "LLM gateway unreachable")
                     yield json.dumps({"text": err_msg}) + "\n"
+                    # The user saw this text as Nova's reply — persist it, or
+                    # the message vanishes from history on reload.
+                    try:
+                        async with pool.acquire() as conn:
+                            await conn.execute(
+                                "INSERT INTO task_messages (task_id, role, content) "
+                                "VALUES ($1::uuid, 'assistant', $2)",
+                                task_id, err_msg,
+                            )
+                    except Exception as exc:
+                        logger.warning("failed to persist error reply task=%s: %s", task_id, exc)
                     return
 
                 tool_calls = resp.get("tool_calls") or []
@@ -620,10 +646,23 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                 for tc in tool_calls:
                     fn = tc.get("function") or {}
                     name = fn.get("name", "")
+                    raw_args = fn.get("arguments", "{}") or "{}"
+                    # Bad arguments are reported back as the tool result, not
+                    # silently coerced to {} — the model can only correct what
+                    # it can see.
                     try:
-                        args = json.loads(fn.get("arguments", "{}") or "{}")
-                    except Exception:
-                        args = {}
+                        args = json.loads(raw_args)
+                        if not isinstance(args, dict):
+                            raise ValueError("arguments must be a JSON object")
+                    except Exception as arg_exc:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": json.dumps(
+                                {"error": f"invalid tool arguments ({arg_exc}): {raw_args[:200]}"}
+                            ),
+                        })
+                        continue
 
                     # Run dispatch as a background task so we can concurrently
                     # drain approval events while it may be blocked waiting.
@@ -665,7 +704,9 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
-                        "content": json.dumps(result) if not isinstance(result, str) else result,
+                        "content": clip_tool_result(
+                            json.dumps(result) if not isinstance(result, str) else result
+                        ),
                     })
             else:
                 final_text = "I've reached the maximum number of steps for this turn."

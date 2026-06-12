@@ -24,8 +24,18 @@ async def dispatch(
     pool,
 ) -> Any:
     """Dispatch one tool call. Returns result. Raises PermissionError on denial."""
-    tool_def = lookup(name)
     call_id = str(uuid.uuid4())
+    try:
+        tool_def = lookup(name)
+    except KeyError:
+        # Models hallucinate tool names; that's an error *result* the model
+        # can recover from, never a task-killing exception — and it must
+        # leave an audit trail like every other call.
+        msg = f"Unknown tool: {name!r} — not in the available tool list"
+        await audit.write_event(pool, task_id, "tool_call_error", {
+            "call_id": call_id, "tool_name": name, "error": msg,
+        })
+        return {"error": msg}
 
     _task_sems.setdefault(task_id, asyncio.Semaphore(5))
 
