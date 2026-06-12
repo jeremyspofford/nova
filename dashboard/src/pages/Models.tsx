@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Cloud, Download, HardDrive, Loader2, Trash2, TriangleAlert } from "lucide-react";
-import { apiFetch } from "../api";
+import { Check, Cloud, Download, HardDrive, Loader2, Trash2, TriangleAlert, Zap } from "lucide-react";
+import { apiFetch, createSecret, deleteSecret, updateSecret } from "../api";
+
+const WOL_SECRET = "wol_mac";
+
+function isValidMac(mac: string): boolean {
+  return /^[0-9a-f]{12}$/.test(mac.replace(/[:\-.]/g, "").toLowerCase());
+}
 
 interface Scores {
   agent: number;
@@ -38,14 +44,32 @@ interface RecommendedResponse {
   cloud: ModelEntry[];
 }
 
+interface LoadedModel {
+  name: string;
+  size_bytes: number;
+  vram_bytes: number;
+  vram_pct: number | null;
+}
+
 interface HardwareProfile {
   source: "detected" | "declared" | "unknown";
   gpus: { name?: string; vram_gb: number }[];
   ram_gb: number | null;
   inference_url: string;
   backend: string;
-  observed?: { gpu_in_use: boolean | null; models_loaded: number | null };
+  observed?: {
+    gpu_in_use: boolean | null;
+    models_loaded: number | null;
+    loaded?: LoadedModel[];
+  };
+  wol_configured?: boolean;
 }
+
+const GPU_NOT_USED_HINT =
+  "Ollama on the inference host reports 0 bytes of VRAM in use — the GPU is invisible to it. " +
+  "Likely causes: GPU driver not detected by Ollama (restart the Ollama service after driver " +
+  "installs/updates), an outdated Ollama build, or a CPU-only install. On the host, run " +
+  "'ollama ps' (look for '100% CPU') and check the Ollama server log for its GPU detection lines.";
 
 interface PulledModel {
   name: string;
@@ -58,6 +82,31 @@ interface PullProgress {
   status: string;
   pct: number | null;
 }
+
+interface GpuCheckResult {
+  verdict: "gpu" | "partial" | "cpu" | "unknown" | "error";
+  model_tested: string;
+  loaded?: LoadedModel[];
+  elapsed_s?: number;
+  hint: string;
+  detail?: string | null;
+}
+
+const VERDICT_STYLE: Record<string, string> = {
+  gpu: "text-emerald-400",
+  partial: "text-amber-400",
+  cpu: "text-amber-400",
+  unknown: "text-stone-400",
+  error: "text-red-400",
+};
+
+const VERDICT_LABEL: Record<string, string> = {
+  gpu: "✓ GPU in use",
+  partial: "⚠ partially on GPU",
+  cpu: "⚠ CPU only",
+  unknown: "? inconclusive",
+  error: "✗ check failed",
+};
 
 const CATEGORIES = ["all", "general", "reasoning", "code", "vision", "embedding"];
 
@@ -128,10 +177,69 @@ export function Models() {
     queryKey: ["llm-hardware"],
     queryFn: () => apiFetch("/api/v1/llm/hardware"),
   });
-  const { data: pulled = [] } = useQuery<PulledModel[]>({
+  const pulledQuery = useQuery<PulledModel[]>({
     queryKey: ["models-pulled"],
     queryFn: () => apiFetch("/api/v1/llm/models/pulled"),
+    retry: 1,
   });
+  const pulled = pulledQuery.data ?? [];
+  const hostUnreachable = pulledQuery.isError;
+
+  const wakeMutation = useMutation({
+    mutationFn: () => apiFetch("/api/v1/llm/hardware/wake", { method: "POST" }),
+  });
+
+  // End-to-end self-check: loads the configured model through Nova's own path
+  // and reads the real VRAM offload state — answers "is Nova using the GPU?".
+  const gpuCheckMutation = useMutation<GpuCheckResult>({
+    mutationFn: () => apiFetch("/api/v1/llm/hardware/gpu-check", { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["llm-hardware"] }),
+  });
+  const gpuCheck = gpuCheckMutation.data;
+
+  // WoL setup — opt-in: the feature is keyed entirely on the wol_mac secret.
+  const [wolOpen, setWolOpen] = useState(false);
+  const [wolMac, setWolMac] = useState("");
+  const [wolError, setWolError] = useState("");
+
+  const refreshHardware = async () => {
+    const fresh = await apiFetch<HardwareProfile>("/api/v1/llm/hardware?refresh=true");
+    qc.setQueryData(["llm-hardware"], fresh);
+  };
+
+  const saveWolMutation = useMutation({
+    mutationFn: async () => {
+      try {
+        await createSecret({
+          name: WOL_SECRET,
+          value: wolMac.trim(),
+          purpose: "Wake-on-LAN MAC for the inference host",
+        });
+      } catch {
+        await updateSecret(WOL_SECRET, { value: wolMac.trim() });
+      }
+    },
+    onSuccess: async () => {
+      setWolOpen(false);
+      setWolMac("");
+      setWolError("");
+      await refreshHardware();
+    },
+  });
+
+  const removeWolMutation = useMutation({
+    mutationFn: () => deleteSecret(WOL_SECRET),
+    onSettled: refreshHardware,
+  });
+
+  const handleWolSave = () => {
+    if (!isValidMac(wolMac)) {
+      setWolError("That doesn't look like a MAC address (e.g. aa:bb:cc:dd:ee:ff)");
+      return;
+    }
+    setWolError("");
+    saveWolMutation.mutate();
+  };
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["models-recommended"] });
@@ -253,23 +361,132 @@ export function Models() {
               </span>
             )}
             {hw?.observed?.gpu_in_use === false && totalVram > 0 && (
-              <span className="text-xs text-amber-400" title="Models are loaded but not using the GPU">
-                ⚠ inference running on CPU
+              <span className="text-xs text-amber-400 cursor-help" title={GPU_NOT_USED_HINT}>
+                ⚠ Ollama is not using the GPU —{" "}
+                {(hw.observed.loaded ?? [])
+                  .map((m) => `${m.name} is 100% in system RAM`)
+                  .join(", ") || "loaded models are entirely in system RAM"}{" "}
+                (hover for fixes)
               </span>
             )}
+            {hw?.observed?.gpu_in_use === true &&
+              (hw.observed.loaded ?? []).some((m) => m.vram_pct !== null && m.vram_pct < 90) && (
+                <span
+                  className="text-xs text-amber-400 cursor-help"
+                  title="The model doesn't fully fit in VRAM, so layers spill to system RAM and responses slow down. Use a smaller model or quantization that fits."
+                >
+                  ⚠{" "}
+                  {(hw.observed.loaded ?? [])
+                    .filter((m) => m.vram_pct !== null && m.vram_pct < 90)
+                    .map((m) => `${m.name} only ${m.vram_pct}% in VRAM`)
+                    .join(", ")}{" "}
+                  — too big for the GPU
+                </span>
+              )}
+            <button
+              onClick={() => gpuCheckMutation.mutate()}
+              disabled={gpuCheckMutation.isPending}
+              className="ml-auto text-xs text-teal-400 hover:underline disabled:text-stone-600"
+              title="Loads the configured model through Nova's own inference path and reports the real VRAM offload state"
+            >
+              {gpuCheckMutation.isPending ? "Checking… (loading model)" : "Run GPU check"}
+            </button>
             <button
               onClick={() => setDeclaring((d) => !d)}
-              className="ml-auto text-xs text-teal-400 hover:underline"
+              className="text-xs text-teal-400 hover:underline"
             >
               {hwKnown ? "Edit specs" : "Declare specs"}
             </button>
           </div>
+          {gpuCheck && (
+            <p
+              className={`mt-2 text-xs cursor-help ${VERDICT_STYLE[gpuCheck.verdict]}`}
+              title={gpuCheck.detail ?? gpuCheck.hint}
+            >
+              {VERDICT_LABEL[gpuCheck.verdict]} — {gpuCheck.model_tested}
+              {(gpuCheck.loaded ?? [])
+                .filter((m) => m.vram_pct !== null)
+                .map((m) => ` ${m.vram_pct}% in VRAM`)
+                .join(",")}
+              {gpuCheck.elapsed_s !== undefined && ` · checked in ${gpuCheck.elapsed_s}s`}{" "}
+              <span className="text-stone-500">(hover for details)</span>
+            </p>
+          )}
+          {hostUnreachable && (
+            <div className="mt-2 flex items-center gap-3 text-xs text-amber-400">
+              <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+              <span>Inference host unreachable — pulls and verification are unavailable.</span>
+              {hw?.wol_configured && (
+                <button
+                  onClick={() => wakeMutation.mutate()}
+                  disabled={wakeMutation.isPending}
+                  className="bg-amber-600/80 hover:bg-amber-500 text-stone-950 font-medium rounded px-2.5 py-1"
+                >
+                  {wakeMutation.isPending ? "Waking…" : wakeMutation.isSuccess ? "Magic packet sent ✓" : "Wake host"}
+                </button>
+              )}
+            </div>
+          )}
           {!hwKnown && !declaring && (
             <p className="mt-2 text-xs text-amber-400">
               Hardware unknown — recommendations aren't filtered. Declare your inference host's
               specs to see what fits.
             </p>
           )}
+
+          {/* Wake-on-LAN setup — only relevant for split deployments (chat on one
+              machine, GPU on another). Keyed on the wol_mac secret; off by default. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <Zap className={`h-3 w-3 ${hw?.wol_configured ? "text-teal-400" : "text-stone-600"}`} />
+            {hw?.wol_configured ? (
+              <>
+                <span className="text-stone-400">Wake-on-LAN configured</span>
+                <button
+                  onClick={() => wakeMutation.mutate()}
+                  disabled={wakeMutation.isPending}
+                  className="text-teal-400 hover:underline"
+                  title="Fire a magic packet now to verify delivery"
+                >
+                  {wakeMutation.isPending ? "Sending…" : wakeMutation.isSuccess ? "Test packet sent ✓" : "Send test packet"}
+                </button>
+                <button
+                  onClick={() => removeWolMutation.mutate()}
+                  className="text-stone-500 hover:text-red-400 hover:underline"
+                >
+                  Remove
+                </button>
+              </>
+            ) : wolOpen ? (
+              <>
+                <input
+                  value={wolMac}
+                  onChange={(e) => setWolMac(e.target.value)}
+                  placeholder="GPU machine's MAC (aa:bb:cc:dd:ee:ff)"
+                  className="w-64 bg-stone-800 border border-stone-700 rounded-lg px-3 py-1.5 placeholder:text-stone-600"
+                />
+                <button
+                  onClick={handleWolSave}
+                  disabled={saveWolMutation.isPending}
+                  className="bg-teal-600 hover:bg-teal-500 rounded-lg px-3 py-1.5"
+                >
+                  {saveWolMutation.isPending ? "Saving…" : "Save"}
+                </button>
+                <button onClick={() => { setWolOpen(false); setWolError(""); }} className="text-stone-500 hover:underline">
+                  Cancel
+                </button>
+                {wolError && <span className="text-red-400 w-full">{wolError}</span>}
+                <span className="text-stone-600 w-full">
+                  Lets Nova wake a sleeping GPU machine. Enable WoL in that machine's BIOS/NIC;
+                  for reliable delivery add the <span className="font-mono">wol</span> compose
+                  profile (see .env.example).
+                </span>
+              </>
+            ) : (
+              <button onClick={() => setWolOpen(true)} className="text-stone-500 hover:text-teal-400 hover:underline">
+                Set up Wake-on-LAN (optional — wake a sleeping GPU machine)
+              </button>
+            )}
+          </div>
           {declaring && (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
               <input

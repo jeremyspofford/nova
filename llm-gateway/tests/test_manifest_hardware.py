@@ -44,6 +44,35 @@ def test_exactly_one_default():
     assert len(defaults) == 1, defaults
 
 
+def test_loaded_model_shaping():
+    # The three diagnostic states: fully on CPU, partial offload, fully resident.
+    shaped = hardware.shape_loaded_models([
+        {"name": "cpu-bound", "size": 1000, "size_vram": 0},
+        {"name": "partial", "size": 1000, "size_vram": 600},
+        {"name": "resident", "size": 1000, "size_vram": 1000},
+        {"name": "no-size", "size": 0, "size_vram": 0},
+    ])
+    by_name = {m["name"]: m for m in shaped}
+    assert by_name["cpu-bound"]["vram_pct"] == 0
+    assert by_name["partial"]["vram_pct"] == 60
+    assert by_name["resident"]["vram_pct"] == 100
+    assert by_name["no-size"]["vram_pct"] is None
+
+
+def test_gpu_verdict():
+    def loaded(*pcts):
+        return [{"name": f"m{i}", "vram_pct": p} for i, p in enumerate(pcts)]
+
+    assert hardware.gpu_verdict(loaded(100)) == "gpu"
+    assert hardware.gpu_verdict(loaded(95, 100)) == "gpu"   # >=90 counts as resident
+    assert hardware.gpu_verdict(loaded(0)) == "cpu"
+    assert hardware.gpu_verdict(loaded(0, 0)) == "cpu"
+    assert hardware.gpu_verdict(loaded(60)) == "partial"
+    assert hardware.gpu_verdict(loaded(0, 100)) == "partial"  # mixed = something's wrong
+    assert hardware.gpu_verdict([]) == "unknown"
+    assert hardware.gpu_verdict([{"name": "x", "vram_pct": None}]) == "unknown"
+
+
 def test_fit_logic():
     gpu24 = {"source": "declared", "gpus": [{"vram_gb": 24}], "ram_gb": 64}
     cpu16 = {"source": "detected", "gpus": [], "ram_gb": 16}

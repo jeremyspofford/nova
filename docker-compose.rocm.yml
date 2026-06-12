@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  ollama:
+  nova-ollama:
     # ROCm-enabled Ollama image (Ollama ships separate ROCm builds)
     image: ollama/ollama:rocm
     devices:

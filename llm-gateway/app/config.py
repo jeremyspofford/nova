@@ -43,6 +43,13 @@ class Settings(BaseSettings):
         "llm-gateway/data/recommended_models.json"
     )
     manifest_refresh_s: int = 86400
+    # Wake-on-LAN for a sleeping inference host. MAC lives in the secrets vault
+    # ('wol_mac'); these tune delivery. Helper URL points at the host-network
+    # wol-helper sidecar (compose profile `wol`).
+    wol_broadcast_addr: str = "255.255.255.255"
+    wol_port: int = 9
+    wol_helper_url: str = ""
+    wol_min_interval_s: int = 300
 
     @field_validator("local_inference_url")
     @classmethod
