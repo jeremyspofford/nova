@@ -4,6 +4,18 @@
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 
 services:
+  # Containerised Ollama: without this reservation the container runs CPU-only
+  # even on a GPU machine. On Windows/WSL2 the chain is: Windows NVIDIA driver
+  # -> WSL2 GPU paravirtualization -> Docker Desktop GPU support -> this block.
+  nova-ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   nova-vllm:
     deploy:
       resources:
