@@ -83,6 +83,31 @@ interface PullProgress {
   pct: number | null;
 }
 
+interface GpuCheckResult {
+  verdict: "gpu" | "partial" | "cpu" | "unknown" | "error";
+  model_tested: string;
+  loaded?: LoadedModel[];
+  elapsed_s?: number;
+  hint: string;
+  detail?: string | null;
+}
+
+const VERDICT_STYLE: Record<string, string> = {
+  gpu: "text-emerald-400",
+  partial: "text-amber-400",
+  cpu: "text-amber-400",
+  unknown: "text-stone-400",
+  error: "text-red-400",
+};
+
+const VERDICT_LABEL: Record<string, string> = {
+  gpu: "✓ GPU in use",
+  partial: "⚠ partially on GPU",
+  cpu: "⚠ CPU only",
+  unknown: "? inconclusive",
+  error: "✗ check failed",
+};
+
 const CATEGORIES = ["all", "general", "reasoning", "code", "vision", "embedding"];
 
 const SOURCE_BADGE: Record<string, string> = {
@@ -163,6 +188,14 @@ export function Models() {
   const wakeMutation = useMutation({
     mutationFn: () => apiFetch("/api/v1/llm/hardware/wake", { method: "POST" }),
   });
+
+  // End-to-end self-check: loads the configured model through Nova's own path
+  // and reads the real VRAM offload state — answers "is Nova using the GPU?".
+  const gpuCheckMutation = useMutation<GpuCheckResult>({
+    mutationFn: () => apiFetch("/api/v1/llm/hardware/gpu-check", { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["llm-hardware"] }),
+  });
+  const gpuCheck = gpuCheckMutation.data;
 
   // WoL setup — opt-in: the feature is keyed entirely on the wol_mac secret.
   const [wolOpen, setWolOpen] = useState(false);
@@ -351,12 +384,34 @@ export function Models() {
                 </span>
               )}
             <button
+              onClick={() => gpuCheckMutation.mutate()}
+              disabled={gpuCheckMutation.isPending}
+              className="ml-auto text-xs text-teal-400 hover:underline disabled:text-stone-600"
+              title="Loads the configured model through Nova's own inference path and reports the real VRAM offload state"
+            >
+              {gpuCheckMutation.isPending ? "Checking… (loading model)" : "Run GPU check"}
+            </button>
+            <button
               onClick={() => setDeclaring((d) => !d)}
-              className="ml-auto text-xs text-teal-400 hover:underline"
+              className="text-xs text-teal-400 hover:underline"
             >
               {hwKnown ? "Edit specs" : "Declare specs"}
             </button>
           </div>
+          {gpuCheck && (
+            <p
+              className={`mt-2 text-xs cursor-help ${VERDICT_STYLE[gpuCheck.verdict]}`}
+              title={gpuCheck.detail ?? gpuCheck.hint}
+            >
+              {VERDICT_LABEL[gpuCheck.verdict]} — {gpuCheck.model_tested}
+              {(gpuCheck.loaded ?? [])
+                .filter((m) => m.vram_pct !== null)
+                .map((m) => ` ${m.vram_pct}% in VRAM`)
+                .join(",")}
+              {gpuCheck.elapsed_s !== undefined && ` · checked in ${gpuCheck.elapsed_s}s`}{" "}
+              <span className="text-stone-500">(hover for details)</span>
+            </p>
+          )}
           {hostUnreachable && (
             <div className="mt-2 flex items-center gap-3 text-xs text-amber-400">
               <TriangleAlert className="h-3.5 w-3.5 shrink-0" />

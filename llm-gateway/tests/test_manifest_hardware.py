@@ -59,6 +59,20 @@ def test_loaded_model_shaping():
     assert by_name["no-size"]["vram_pct"] is None
 
 
+def test_gpu_verdict():
+    def loaded(*pcts):
+        return [{"name": f"m{i}", "vram_pct": p} for i, p in enumerate(pcts)]
+
+    assert hardware.gpu_verdict(loaded(100)) == "gpu"
+    assert hardware.gpu_verdict(loaded(95, 100)) == "gpu"   # >=90 counts as resident
+    assert hardware.gpu_verdict(loaded(0)) == "cpu"
+    assert hardware.gpu_verdict(loaded(0, 0)) == "cpu"
+    assert hardware.gpu_verdict(loaded(60)) == "partial"
+    assert hardware.gpu_verdict(loaded(0, 100)) == "partial"  # mixed = something's wrong
+    assert hardware.gpu_verdict([]) == "unknown"
+    assert hardware.gpu_verdict([{"name": "x", "vram_pct": None}]) == "unknown"
+
+
 def test_fit_logic():
     gpu24 = {"source": "declared", "gpus": [{"vram_gb": 24}], "ram_gb": 64}
     cpu16 = {"source": "detected", "gpus": [], "ram_gb": 16}

@@ -80,6 +80,18 @@ def shape_loaded_models(models: list[dict]) -> list[dict]:
     return out
 
 
+def gpu_verdict(loaded: list[dict]) -> str:
+    """Classify the offload state of loaded models: gpu | partial | cpu | unknown."""
+    pcts = [m["vram_pct"] for m in loaded if m.get("vram_pct") is not None]
+    if not pcts:
+        return "unknown"
+    if all(p >= 90 for p in pcts):
+        return "gpu"
+    if all(p == 0 for p in pcts):
+        return "cpu"
+    return "partial"
+
+
 async def observe() -> dict[str, Any]:
     """Live best-effort signals from the inference host. Never raises."""
     out: dict[str, Any] = {

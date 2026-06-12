@@ -119,3 +119,20 @@ def test_pull_streams_progress_then_delete():
 def test_delete_unknown_model_404():
     r = httpx.delete(f"{BASE}/api/v1/llm/models/definitely-not-a-model:1b", headers=ADMIN)
     assert r.status_code == 404
+
+
+def test_gpu_check_end_to_end():
+    """Nova verifies its own inference path: load model, read VRAM offload, verdict.
+
+    This sandbox has no GPU, so the honest verdict here is 'cpu' — which is
+    exactly the condition the check exists to expose.
+    """
+    r = httpx.post(f"{BASE}/api/v1/llm/hardware/gpu-check", headers=ADMIN, timeout=200.0)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["verdict"] in ("gpu", "partial", "cpu"), body
+    assert body["model_tested"]
+    assert body["loaded"], "a model must be loaded after the check generation"
+    assert body["hint"]
+    for m in body["loaded"]:
+        assert "vram_pct" in m

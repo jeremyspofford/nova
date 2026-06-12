@@ -334,6 +334,67 @@ async def get_hardware(refresh: bool = False):
     }
 
 
+_GPU_CHECK_HINTS = {
+    "gpu": "All layers resident in VRAM — Nova is using the GPU.",
+    "partial": "The model doesn't fully fit in VRAM, so layers spill to system RAM and "
+               "responses slow down. Use a smaller model or tighter quantization.",
+    "cpu": "Ollama sees no usable GPU. On the inference host: restart Ollama (it probes "
+           "GPUs only at startup), update it, verify nvidia-smi works there, then check "
+           "the Ollama server log's GPU detection lines near startup.",
+    "unknown": "No model stayed loaded to measure. Try again, or check that the "
+               "configured completion model is installed.",
+    "error": "The check could not run — see detail.",
+}
+
+
+@router.post("/hardware/gpu-check")
+async def gpu_check():
+    """End-to-end GPU verification through Nova's own inference path.
+
+    Loads the configured completion model with a 1-token generation, then reads
+    /api/ps for the real VRAM offload state. One click answers "is Nova using
+    the GPU?" — no host-side forensics required.
+    """
+    _require_ollama()
+    model = settings.local_completion_model
+    started = time.monotonic()
+    detail = None
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.post(
+                f"{settings.local_inference_url}/api/generate",
+                json={"model": model, "prompt": "hi", "stream": False,
+                      "options": {"num_predict": 1}},
+            )
+            if r.status_code == 404:
+                return {
+                    "verdict": "error",
+                    "detail": f"Model '{model}' is not installed on the inference host — pull it first.",
+                    "hint": _GPU_CHECK_HINTS["error"],
+                    "model_tested": model,
+                }
+            r.raise_for_status()
+    except Exception as exc:
+        return {
+            "verdict": "error",
+            "detail": f"Inference host unreachable or generation failed: {exc}",
+            "hint": _GPU_CHECK_HINTS["error"],
+            "model_tested": model,
+        }
+
+    observed = await hardware.observe()
+    loaded = observed.get("loaded") or []
+    verdict = hardware.gpu_verdict(loaded)
+    return {
+        "verdict": verdict,
+        "model_tested": model,
+        "loaded": loaded,
+        "elapsed_s": round(time.monotonic() - started, 1),
+        "hint": _GPU_CHECK_HINTS[verdict],
+        "detail": detail,
+    }
+
+
 @router.post("/hardware/wake", status_code=202)
 async def wake_inference_host():
     """Manually send a Wake-on-LAN magic packet to the inference host."""
