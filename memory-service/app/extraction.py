@@ -133,25 +133,38 @@ def _assistant_sourced(item_text: str, user_part: str, assistant_part: str) -> b
 
 
 async def _llm_extract(content: str) -> list[dict] | None:
-    """One LLM call → parsed items, or None on any failure."""
-    try:
-        r = await _client().post(
-            f"{settings.llm_gateway_url}/complete",
-            json={
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": content[:MAX_INPUT_CHARS]},
-                ],
-                "model": settings.extraction_model,
-                "max_tokens": 500,
-                "temperature": 0.1,
-            },
-        )
-        r.raise_for_status()
-        return _parse_items(r.json().get("content", ""))
-    except Exception as exc:
-        logger.warning("extraction LLM call failed: %s", exc)
-        return None
+    """One LLM call → parsed items, or None on any failure.
+
+    A pinned EXTRACTION_MODEL that isn't installed must not silently break
+    memory distillation (observed live: a host pinning a model it never
+    pulled stored months of verbatim transcripts) — retry once with auto
+    routing and say so."""
+    for model in dict.fromkeys([settings.extraction_model, "auto"]):
+        try:
+            r = await _client().post(
+                f"{settings.llm_gateway_url}/complete",
+                json={
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": content[:MAX_INPUT_CHARS]},
+                    ],
+                    "model": model,
+                    "max_tokens": 500,
+                    "temperature": 0.1,
+                },
+            )
+            r.raise_for_status()
+            return _parse_items(r.json().get("content", ""))
+        except Exception as exc:
+            if model != "auto":
+                logger.warning(
+                    "extraction model %r failed (%s) — retrying with auto routing; "
+                    "check EXTRACTION_MODEL against installed models",
+                    model, exc,
+                )
+            else:
+                logger.warning("extraction LLM call failed: %s", exc)
+    return None
 
 
 async def _store_item(pool, item: dict, source_kind: str, source_uri: str | None) -> str:

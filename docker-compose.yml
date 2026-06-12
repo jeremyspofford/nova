@@ -105,6 +105,18 @@ services:
       timeout: 5s
       retries: 6
 
+  # Self-hosted metasearch for web.search — profile `search`.
+  # Enable: add `search` to COMPOSE_PROFILES and set SEARXNG_URL=http://searxng:8080
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ["search"]
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-${ADMIN_SECRET:-${NOVA_ADMIN_SECRET:-nova-searxng}}}
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    restart: unless-stopped
+
   # Wake-on-LAN helper — magic packets need L2 broadcast on the LAN, which
   # bridge-network containers can't emit. Host networking; profile `wol`.
   # Enable: COMPOSE_PROFILES=...,wol and WOL_HELPER_URL=http://host.docker.internal:8890
