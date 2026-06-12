@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     council_proposers: int = 3
     council_wall_s: int = 300
     council_parallel: int = 3
+    # Quality floor for proposers (manifest agent+reasoning sum). Models below it
+    # never propose — weak members poison the chair.
+    council_min_score: int = 5
 
     @field_validator("local_inference_url")
     @classmethod

@@ -33,8 +33,12 @@ JITTER_TEMPS = [0.4, 0.8, 1.0, 0.6, 0.9]
 CHAIR_INSTRUCTIONS = (
     "You are the chair of a council. Above is a request, and below are candidate "
     "answers from several council members. Synthesize the single strongest answer:\n"
-    "- Prefer claims that multiple members agree on.\n"
-    "- Where members disagree, resolve the disagreement explicitly and briefly.\n"
+    "- Obey the original request's constraints exactly (length, format, counts — "
+    "if it asked for three things, give exactly three).\n"
+    "- If members interpret an ambiguous term differently, choose the interpretation "
+    "that best fits the conversation context; do not blend interpretations.\n"
+    "- Prefer claims that multiple members agree on. Where members disagree and you "
+    "cannot tell who is right, state the uncertainty briefly rather than guessing.\n"
     "- Do not introduce claims that appear in no member's answer; if you must note "
     "uncertainty, mark it as unverified.\n"
     "- Output ONLY the final answer — no preamble about the council or the process."
@@ -53,9 +57,13 @@ def _score(entry: dict) -> int:
 async def select_proposers(n: int) -> list[dict]:
     """Top-n distinct manifest-scored models across routable endpoints.
 
-    Returns [{model, kwargs, endpoint, temperature}], best first. Seats the pool
-    can't fill with distinct models are filled by the configured completion
-    model with temperature jitter.
+    Returns [{model, kwargs, endpoint, temperature}], best first. Models below
+    the quality floor (council_min_score, agent+reasoning) never propose — one
+    weak member's confident hallucination poisons the chair (observed live:
+    audit prompt 5, where a junk proposal redefined RAG). Seats the pool can't
+    fill with distinct qualified models are filled by the best qualified model
+    with temperature jitter (self-consistency), falling back to the configured
+    completion model only when nothing qualifies.
     """
     n = max(1, min(n, 5))
     manifest = await get_manifest()
@@ -72,6 +80,8 @@ async def select_proposers(n: int) -> list[dict]:
             mid = m["id"]
             if mid in seen_models or mid not in scored:
                 continue
+            if scored[mid] < settings.council_min_score:
+                continue
             seen_models.add(mid)
             ranked.append((scored[mid], mid, ep))
     ranked.sort(key=lambda t: t[0], reverse=True)
@@ -82,19 +92,22 @@ async def select_proposers(n: int) -> list[dict]:
         out.append({"model": mid, "litellm": litellm_model, "kwargs": kwargs,
                     "endpoint": ep["id"], "temperature": 0.7})
 
-    # Fill remaining seats with the configured model + jitter.
-    fallback = selector.local_candidates()
-    if not fallback:
-        if out:
-            fallback = [(out[0]["litellm"], out[0]["kwargs"])]
-        else:
+    # Fill remaining seats with jitter on the best qualified model — or the
+    # configured model when the pool has no qualified members at all.
+    if out:
+        fb_model, fb_litellm, fb_kwargs = out[0]["model"], out[0]["litellm"], out[0]["kwargs"]
+        fb_endpoint = out[0]["endpoint"]
+    else:
+        fallback = selector.local_candidates()
+        if not fallback:
             raise CouncilUnavailable("no routable local endpoints")
-    fb_litellm, fb_kwargs = fallback[0]
-    fb_model = fb_litellm.removeprefix("openai/")
+        fb_litellm, fb_kwargs = fallback[0]
+        fb_model = fb_litellm.removeprefix("openai/")
+        fb_endpoint = ep_mod.routable()[0]["id"] if ep_mod.routable() else "default"
     i = 0
     while len(out) < n:
         out.append({"model": fb_model, "litellm": fb_litellm, "kwargs": fb_kwargs,
-                    "endpoint": ep_mod.routable()[0]["id"] if ep_mod.routable() else "default",
+                    "endpoint": fb_endpoint,
                     "temperature": JITTER_TEMPS[i % len(JITTER_TEMPS)]})
         i += 1
     return out
@@ -174,10 +187,13 @@ async def run_council(
         {"role": "user", "content": f"{CHAIR_INSTRUCTIONS}\n\n{block}"}
     ]
     try:
+        # Synthesis runs longer than a direct answer — without headroom the
+        # chair truncates mid-sentence (observed live: 3 of 8 audit answers).
+        chair_tokens = min(max_tokens * 2, max_tokens + 600)
         resp = await asyncio.wait_for(
             litellm.acompletion(
                 model=chair["litellm"], messages=chair_messages,
-                max_tokens=max_tokens, temperature=0.2, **chair["kwargs"],
+                max_tokens=chair_tokens, temperature=0.2, **chair["kwargs"],
             ),
             timeout=min(remaining, PROPOSAL_TIMEOUT_S),
         )

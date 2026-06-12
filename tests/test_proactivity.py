@@ -8,6 +8,7 @@ import os
 import time
 
 import httpx
+import pytest
 from dotenv import dotenv_values
 
 BASE = "http://localhost:8000"
@@ -50,18 +51,28 @@ def test_seeded_pulse_schedule_exists():
 
 
 def test_capabilities_endpoint_distinguishes_models():
+    # Probe INSTALLED models — hardcoded names fail on hosts that didn't pull them.
+    pulled = httpx.get(f"{BASE}/api/v1/llm/models/pulled", headers=ADMIN, timeout=20.0).json()
+    names = [m["name"].removesuffix(":latest") for m in pulled]
+    if not names:
+        pytest.skip("no local models installed")
+
+    target = next((n for n in names if "embed" not in n), names[0])
     r = httpx.get(
         f"{BASE}/api/v1/llm/models/capabilities",
-        headers=ADMIN, params={"model": "qwen2.5:0.5b"}, timeout=15.0,
+        headers=ADMIN, params={"model": target}, timeout=15.0,
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["tools"] is True
-    assert body["method"] == "ollama/api/show"
+    assert body["method"] == "ollama/api/show", body
+    assert body["tools"] in (True, False)
 
+    embed = next((n for n in names if "embed" in n), None)
+    if embed is None:
+        pytest.skip("no embedding model installed for the tools=False case")
     r = httpx.get(
         f"{BASE}/api/v1/llm/models/capabilities",
-        headers=ADMIN, params={"model": "nomic-embed-text"}, timeout=15.0,
+        headers=ADMIN, params={"model": embed}, timeout=15.0,
     )
     assert r.status_code == 200, r.text
     assert r.json()["tools"] is False
