@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Cloud, Download, HardDrive, Loader2, Trash2, TriangleAlert } from "lucide-react";
-import { apiFetch } from "../api";
+import { Check, Cloud, Download, HardDrive, Loader2, Trash2, TriangleAlert, Zap } from "lucide-react";
+import { apiFetch, createSecret, deleteSecret, updateSecret } from "../api";
+
+const WOL_SECRET = "wol_mac";
+
+function isValidMac(mac: string): boolean {
+  return /^[0-9a-f]{12}$/.test(mac.replace(/[:\-.]/g, "").toLowerCase());
+}
 
 interface Scores {
   agent: number;
@@ -140,6 +146,50 @@ export function Models() {
   const wakeMutation = useMutation({
     mutationFn: () => apiFetch("/api/v1/llm/hardware/wake", { method: "POST" }),
   });
+
+  // WoL setup — opt-in: the feature is keyed entirely on the wol_mac secret.
+  const [wolOpen, setWolOpen] = useState(false);
+  const [wolMac, setWolMac] = useState("");
+  const [wolError, setWolError] = useState("");
+
+  const refreshHardware = async () => {
+    const fresh = await apiFetch<HardwareProfile>("/api/v1/llm/hardware?refresh=true");
+    qc.setQueryData(["llm-hardware"], fresh);
+  };
+
+  const saveWolMutation = useMutation({
+    mutationFn: async () => {
+      try {
+        await createSecret({
+          name: WOL_SECRET,
+          value: wolMac.trim(),
+          purpose: "Wake-on-LAN MAC for the inference host",
+        });
+      } catch {
+        await updateSecret(WOL_SECRET, { value: wolMac.trim() });
+      }
+    },
+    onSuccess: async () => {
+      setWolOpen(false);
+      setWolMac("");
+      setWolError("");
+      await refreshHardware();
+    },
+  });
+
+  const removeWolMutation = useMutation({
+    mutationFn: () => deleteSecret(WOL_SECRET),
+    onSettled: refreshHardware,
+  });
+
+  const handleWolSave = () => {
+    if (!isValidMac(wolMac)) {
+      setWolError("That doesn't look like a MAC address (e.g. aa:bb:cc:dd:ee:ff)");
+      return;
+    }
+    setWolError("");
+    saveWolMutation.mutate();
+  };
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["models-recommended"] });
@@ -293,6 +343,60 @@ export function Models() {
               specs to see what fits.
             </p>
           )}
+
+          {/* Wake-on-LAN setup — only relevant for split deployments (chat on one
+              machine, GPU on another). Keyed on the wol_mac secret; off by default. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <Zap className={`h-3 w-3 ${hw?.wol_configured ? "text-teal-400" : "text-stone-600"}`} />
+            {hw?.wol_configured ? (
+              <>
+                <span className="text-stone-400">Wake-on-LAN configured</span>
+                <button
+                  onClick={() => wakeMutation.mutate()}
+                  disabled={wakeMutation.isPending}
+                  className="text-teal-400 hover:underline"
+                  title="Fire a magic packet now to verify delivery"
+                >
+                  {wakeMutation.isPending ? "Sending…" : wakeMutation.isSuccess ? "Test packet sent ✓" : "Send test packet"}
+                </button>
+                <button
+                  onClick={() => removeWolMutation.mutate()}
+                  className="text-stone-500 hover:text-red-400 hover:underline"
+                >
+                  Remove
+                </button>
+              </>
+            ) : wolOpen ? (
+              <>
+                <input
+                  value={wolMac}
+                  onChange={(e) => setWolMac(e.target.value)}
+                  placeholder="GPU machine's MAC (aa:bb:cc:dd:ee:ff)"
+                  className="w-64 bg-stone-800 border border-stone-700 rounded-lg px-3 py-1.5 placeholder:text-stone-600"
+                />
+                <button
+                  onClick={handleWolSave}
+                  disabled={saveWolMutation.isPending}
+                  className="bg-teal-600 hover:bg-teal-500 rounded-lg px-3 py-1.5"
+                >
+                  {saveWolMutation.isPending ? "Saving…" : "Save"}
+                </button>
+                <button onClick={() => { setWolOpen(false); setWolError(""); }} className="text-stone-500 hover:underline">
+                  Cancel
+                </button>
+                {wolError && <span className="text-red-400 w-full">{wolError}</span>}
+                <span className="text-stone-600 w-full">
+                  Lets Nova wake a sleeping GPU machine. Enable WoL in that machine's BIOS/NIC;
+                  for reliable delivery add the <span className="font-mono">wol</span> compose
+                  profile (see .env.example).
+                </span>
+              </>
+            ) : (
+              <button onClick={() => setWolOpen(true)} className="text-stone-500 hover:text-teal-400 hover:underline">
+                Set up Wake-on-LAN (optional — wake a sleeping GPU machine)
+              </button>
+            )}
+          </div>
           {declaring && (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
               <input

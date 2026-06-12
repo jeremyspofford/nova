@@ -336,11 +336,14 @@ async def llm_models_delete(model_name: str, _: None = Depends(_require_admin)):
 
 
 @app.get("/api/v1/llm/hardware")
-async def llm_hardware_get(_: None = Depends(_require_admin)):
+async def llm_hardware_get(refresh: bool = False, _: None = Depends(_require_admin)):
     """Proxy to llm-gateway /hardware — inference host profile."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{settings.llm_gateway_url}/hardware")
+            r = await client.get(
+                f"{settings.llm_gateway_url}/hardware",
+                params={"refresh": "true" if refresh else "false"},
+            )
         return r.json()
     except Exception as exc:
         logger.warning("llm-gateway unreachable: %s", exc)

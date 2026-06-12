@@ -318,15 +318,19 @@ def _require_ollama() -> None:
 
 
 @router.get("/hardware")
-async def get_hardware():
-    """Inference host profile (detected/declared/unknown) + live observed signals."""
+async def get_hardware(refresh: bool = False):
+    """Inference host profile (detected/declared/unknown) + live observed signals.
+
+    refresh=true bypasses the 60s wol_mac cache — the dashboard uses it right
+    after creating/removing the secret so the UI reflects the change instantly.
+    """
     profile = hardware.read_profile()
     return {
         **profile,
         "inference_url": settings.local_inference_url,
         "backend": settings.nova_inference_backend,
         "observed": await hardware.observe(),
-        "wol_configured": (await wol.get_mac()) is not None,
+        "wol_configured": (await wol.get_mac(force=refresh)) is not None,
     }
 
 

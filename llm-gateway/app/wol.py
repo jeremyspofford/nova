@@ -41,12 +41,16 @@ def build_magic_packet(mac: str) -> bytes:
 
 
 async def get_mac(force: bool = False) -> str | None:
-    """The wol_mac secret, cached briefly. None ⇒ WoL not configured."""
+    """The wol_mac secret, cached briefly. None ⇒ WoL not configured.
+
+    force propagates all the way through secrets_client so setup/remove in the
+    dashboard reflects immediately.
+    """
     global _mac_cache
     now = time.monotonic()
     if not force and _mac_cache is not None and (now - _mac_cache[0]) < _MAC_CACHE_TTL:
         return _mac_cache[1]
-    mac = await secrets_client.resolve(MAC_SECRET_NAME)
+    mac = await secrets_client.resolve(MAC_SECRET_NAME, force=force)
     _mac_cache = (now, mac)
     return mac
 

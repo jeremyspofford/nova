@@ -54,17 +54,22 @@ def test_wake_409_when_unconfigured():
 
 
 def test_hardware_reports_wol_state():
+    # The gateway caches the MAC lookup for 60s; refresh=true bypasses it so the
+    # dashboard's setup flow reflects secret changes instantly.
     _del_mac_secret()
-    # The gateway caches the MAC lookup for 60s; a manual wake (force=True)
-    # refreshes it, so only assert the configured=true path after setting.
+    hw = httpx.get(f"{BASE}/api/v1/llm/hardware", headers=ADMIN,
+                   params={"refresh": "true"}, timeout=20.0).json()
+    assert hw["wol_configured"] is False
     _set_mac_secret()
     try:
-        r = httpx.post(f"{BASE}/api/v1/llm/hardware/wake", headers=ADMIN, timeout=20.0)
-        assert r.status_code == 202, r.text  # force-refresh sees the secret
-        hw = httpx.get(f"{BASE}/api/v1/llm/hardware", headers=ADMIN).json()
+        hw = httpx.get(f"{BASE}/api/v1/llm/hardware", headers=ADMIN,
+                       params={"refresh": "true"}, timeout=20.0).json()
         assert hw["wol_configured"] is True
     finally:
         _del_mac_secret()
+        hw = httpx.get(f"{BASE}/api/v1/llm/hardware", headers=ADMIN,
+                       params={"refresh": "true"}, timeout=20.0).json()
+        assert hw["wol_configured"] is False
 
 
 def test_wake_sends_real_magic_packet():
