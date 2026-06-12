@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     wol_port: int = 9
     wol_helper_url: str = ""
     wol_min_interval_s: int = 300
+    # Council mode (Mixture-of-Agents): proposer seats, total wall-clock cap,
+    # and proposal concurrency (drop to 1 on CPU-only or RAM-tight inference
+    # hosts — parallel generations can crash a constrained llama runner).
+    council_proposers: int = 3
+    council_wall_s: int = 300
+    council_parallel: int = 3
 
     @field_validator("local_inference_url")
     @classmethod

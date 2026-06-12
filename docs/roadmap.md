@@ -1,6 +1,6 @@
 # Nova — Roadmap
 
-> Last updated: 2026-06-11. v2 rewrite shipped 2026-05-12.
+> Last updated: 2026-06-12. v2 rewrite shipped 2026-05-12.
 >
 > **Vision:** A self-directed autonomous AI platform. You define a goal. Nova breaks it into
 > tasks, executes them with tools, and runs autonomously between conversations.
@@ -80,7 +80,6 @@
 
 - **Voice TTS not wired:** STT (mic → text) exists in Chat.tsx. TTS (Nova speaks back) — hook and overlay exist but are disconnected. Not yet wired.
 - **Voice-gateway not in default stack:** Requires `COMPOSE_PROFILES=voice`. STT mic button will fail without it.
-- **nginx production gaps:** `/v1/` (llm-gateway) and `/recovery-api/` not proxied in production nginx — only available in dev (Vite proxy). Affects direct LLM API access and recovery UI in production.
 - **Dead letter queue:** ~285 stale pre-v2 entries in Redis. Not growing. Flush: `docker compose exec redis redis-cli -n 2 DEL nova:queue:dead_letter`
 
 ---
@@ -93,14 +92,13 @@ Wire TTS into Chat.tsx using the existing `useVoiceChat` hook and `VoiceModeOver
 ### 2. Autonomous Execution — Verify and harden
 Confirm the agent tool-use loop works end-to-end: user asks Nova to do something, Nova uses MCP tools to do it, reports back. Identify and fix any gaps in the agent loop.
 
-### 3. Production nginx
-Add `/v1/` → llm-gateway and `/recovery-api/` → recovery proxies to `dashboard/nginx.conf`.
-
-### 4. Inference endpoint pool + Deep Think
+### 3. Inference endpoint pool + Council (test-time compute)
 Local models performing like frontier models by trading time for quality. Two parts,
 designed together (`docs/specs/2026-06-11-deep-think-endpoint-pool-design.md`):
 multiple inference endpoints (mini-PC + GPU box; per-endpoint discovery, hardware,
-pull, WoL; `on-demand` burst lifecycle reserved) and an opt-in Deep Think mode —
+pull, WoL; `on-demand` burst lifecycle reserved — **pool shipped, PR #26**) and an
+opt-in **Council** mode (renamed from "deep think" — it's parallel deliberation,
+not deeper pondering) —
 parallel Mixture-of-Agents proposers across the pool + grounded aggregation, with the
 existing verified-execution loop as the spine for tool tasks. Hard caps, kill switch,
 daily budget, and a non-gating quality audit harness before it earns default-on.

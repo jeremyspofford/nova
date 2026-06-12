@@ -236,12 +236,24 @@ export interface StreamChatOptions {
   custom_instructions?: string
   web_search?: boolean
   deep_research?: boolean
+  council?: boolean
   conversation_id?: string
+}
+
+export interface CouncilMeta {
+  proposers?: { model: string; endpoint: string; ok: boolean; elapsed_s: number }[]
+  aggregator?: string | null
+  seeded?: boolean
+  elapsed_s?: number
+  total_tokens?: number
+  capped?: boolean
+  downgraded?: string
 }
 
 export interface StreamMeta {
   model?: string
   category?: string
+  council?: CouncilMeta
 }
 
 export interface EngramSummary {
@@ -332,6 +344,7 @@ export async function* streamChat(
     ...(contentBlocks ? { content: contentBlocks } : {}),
     ...(options?.web_search ? { web_search: true } : {}),
     ...(options?.deep_research ? { deep_research: true } : {}),
+    ...(options?.council ? { council: true } : {}),
     ...(options?.output_style ? { output_style: options.output_style } : {}),
     ...(options?.custom_instructions ? { custom_instructions: options.custom_instructions } : {}),
   }))
@@ -348,7 +361,7 @@ export async function* streamChat(
       } else if (msg.type === 'response_final') {
         finished = true
       } else if (msg.type === 'meta') {
-        queue.push({ meta: { model: msg.model as string | undefined, category: msg.category as string | undefined } })
+        queue.push({ meta: { model: msg.model as string | undefined, category: msg.category as string | undefined, council: msg.council as CouncilMeta | undefined } })
       } else if (msg.type === 'tool_approval_request') {
         queue.push({ approval: {
           tool_call_id: msg.tool_call_id as string,

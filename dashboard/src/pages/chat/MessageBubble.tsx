@@ -160,6 +160,26 @@ export const MessageBubble = memo(function MessageBubble({
           </div>
         )}
 
+        {/* Council attribution — always visible: the cost must be visible */}
+        {message.council && !message.council.downgraded && (
+          <p
+            className="mt-2 font-mono text-[10px] text-accent/80"
+            title={(message.council.proposers ?? [])
+              .map((p) => `${p.model}@${p.endpoint} ${p.ok ? "✓" : "✗"} ${p.elapsed_s}s`)
+              .join("\n")}
+          >
+            ⚖ council of {(message.council.proposers?.length ?? 0) + (message.council.seeded ? 1 : 0)}
+            {message.council.aggregator ? ` · chaired by ${message.council.aggregator}` : ""}
+            {message.council.elapsed_s !== undefined ? ` · ${message.council.elapsed_s}s` : ""}
+            {message.council.capped ? " · capped" : ""}
+          </p>
+        )}
+        {message.council?.downgraded && (
+          <p className="mt-2 font-mono text-[10px] text-warning/80">
+            ⚖ council skipped: {message.council.downgraded}
+          </p>
+        )}
+
         {/* Footer — visible on hover only */}
         <p className="mt-2 font-mono text-[10px] text-content-tertiary/60 opacity-0 group-hover:opacity-100 transition-opacity duration-fast">
           {format(message.timestamp, 'h:mm a')}

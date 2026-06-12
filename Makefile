@@ -99,7 +99,8 @@ test-v2: ## Run only v2-service integration tests (fast, no v1 noise) — run be
 	  test_proactivity.py \
 	  test_model_recommendations.py \
 	  test_wol.py \
-	  test_endpoint_pool.py
+	  test_endpoint_pool.py \
+	  test_council.py
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)
@@ -122,6 +123,9 @@ prune-all: ## Backup DB, then prune everything
 	@for v in ollama-data llamacpp-models vllm-cache sglang-cache tailscale-state; do \
 	  docker volume rm "nova_$$v" 2>/dev/null && echo "  Removed $$v" || true; \
 	done
+
+audit-council: ## Council vs standard quality report — live services, never CI-gating
+	@cd tests && uv run --with httpx python audit_council.py
 
 audit-tool-use: ## Tool-use audit — live services, ~10-30 min, never CI-gating
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx \

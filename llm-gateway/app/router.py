@@ -10,8 +10,8 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 from pydantic import BaseModel
 
+from . import council, hardware, secrets_client, selector, wol
 from . import endpoints as ep_mod
-from . import hardware, secrets_client, selector, wol
 from .config import settings
 from .discovery import (
     _cloud_providers,
@@ -738,6 +738,31 @@ async def update_config(body: LLMConfigUpdate):
 
 @router.post("/complete")
 async def complete(body: LLMRequest):
+    # Council mode: parallel proposers + chair synthesis. Tool-offering requests
+    # downgrade to standard (the agent loop's tool turns must stay single-shot);
+    # an unavailable council falls back to standard rather than failing the turn.
+    if body.mode == "council":
+        if body.tools:
+            council_meta = {"downgraded": "tools offered — council runs tool-free turns only"}
+        else:
+            try:
+                final, meta = await council.run_council(
+                    messages=[m.model_dump() for m in body.messages],
+                    max_tokens=body.max_tokens,
+                    seed_proposal=body.seed_proposal,
+                )
+                return {
+                    "content": final,
+                    "model": f"council/{meta.get('aggregator') or 'best-proposal'}",
+                    "usage": {"total_tokens": meta.get("total_tokens", 0)},
+                    "tool_calls": None,
+                    "council": meta,
+                }
+            except council.CouncilUnavailable as exc:
+                council_meta = {"downgraded": str(exc)}
+    else:
+        council_meta = None
+
     extra: dict[str, Any] = {}
     if body.tools:
         extra["tools"] = _sanitize_tools_for_gemini(body.tools)
@@ -770,7 +795,10 @@ async def complete(body: LLMRequest):
             "prompt_tokens": resp.usage.prompt_tokens,
             "completion_tokens": resp.usage.completion_tokens,
         }
-    return {"content": content, "model": model_used, "usage": usage, "tool_calls": tool_calls}
+    out = {"content": content, "model": model_used, "usage": usage, "tool_calls": tool_calls}
+    if council_meta is not None:
+        out["council"] = council_meta
+    return out
 
 
 @router.post("/stream")

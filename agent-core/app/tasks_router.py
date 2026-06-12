@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from . import memory_client
 from .config import settings
+from .council_router import council_allowed, record_council_run
 from .db import get_pool
 from .loop.main import run_task
 from .tools import capability
@@ -268,6 +269,29 @@ def _sanitize_tools_for_openai(tools: list[dict]) -> tuple[list[dict], dict[str,
     return sanitized, mapping
 
 
+async def _council_refine(messages: list[dict], draft: str) -> dict | None:
+    """Run a council pass over the turn: the draft is proposal 0, fresh local
+    proposers answer in parallel, a chair synthesizes. Tool-free by design.
+    None on any failure — the draft stands."""
+    body = {
+        "messages": [m for m in messages if m["role"] in ("system", "user", "assistant")],
+        "max_tokens": 2000,
+        "mode": "council",
+        "seed_proposal": draft,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=330.0) as client:
+            r = await client.post(f"{settings.llm_gateway_url}/complete", json=body)
+            r.raise_for_status()
+            resp = r.json()
+        if resp.get("council", {}).get("downgraded"):
+            return None
+        return resp
+    except Exception as exc:
+        logger.warning("council refinement failed: %r", exc)
+        return None
+
+
 async def _llm_complete_chat(messages: list[dict], tools: list[dict], model: str | None = None) -> dict | None:
     safe_tools, name_map = _sanitize_tools_for_openai(tools)
     body: dict = {"messages": messages, "max_tokens": 2000, "temperature": 0.7}
@@ -441,6 +465,7 @@ class MessageRequest(BaseModel):
     model: str | None = None
     web_search: bool = False
     deep_research: bool = False
+    council: bool = False  # opt-in MoA refinement of the final answer (slow, capped)
     output_style: str | None = None
     custom_instructions: str | None = None
 
@@ -570,8 +595,8 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                             tool_calls = [synth_tc]
                             # fall through to the structured tool_calls dispatch
                     if parsed is None:
+                        # Don't yield yet — council mode may refine final_text below.
                         final_text = content
-                        yield json.dumps({"text": content}) + "\n"
                         break
 
                 # History must use sanitized names — OpenAI rejects dotted names like
@@ -644,9 +669,28 @@ async def post_message(task_id: str, body: MessageRequest) -> StreamingResponse:
                     })
             else:
                 final_text = "I've reached the maximum number of steps for this turn."
-                yield json.dumps({"text": final_text}) + "\n"
+
+            # Council refinement: the draft becomes proposal 0, fresh proposers
+            # answer in parallel, a chair synthesizes. Guarded by the kill
+            # switch + daily budget; blocked or failed councils run standard
+            # and say why in metadata — never silently.
+            if body.council and final_text:
+                allowed, reason = await council_allowed(pool)
+                if not allowed:
+                    yield json.dumps({"type": "meta", "council": {"downgraded": reason}}) + "\n"
+                else:
+                    refined = await _council_refine(base_messages, final_text)
+                    if refined is not None:
+                        final_text = refined["content"] or final_text
+                        await record_council_run(pool)
+                        yield json.dumps({"type": "meta", "council": refined.get("council", {})}) + "\n"
+                    else:
+                        yield json.dumps(
+                            {"type": "meta", "council": {"downgraded": "council unavailable — answered standard"}}
+                        ) + "\n"
 
             if final_text:
+                yield json.dumps({"text": final_text}) + "\n"
                 try:
                     async with pool.acquire() as conn:
                         await conn.execute(

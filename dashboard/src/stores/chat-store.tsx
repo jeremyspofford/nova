@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { apiFetch, type ToolApprovalRequest } from '../api'
+import { apiFetch, type CouncilMeta, type ToolApprovalRequest } from '../api'
 
 export interface EngramSummary {
   id: string
@@ -35,6 +35,7 @@ export interface Message {
   isStreaming?: boolean
   modelUsed?: string
   category?: string
+  council?: CouncilMeta
   activitySteps?: ActivityStep[]
   activityCollapsed?: boolean
   attachments?: AttachedFile[]
@@ -76,6 +77,8 @@ interface ChatStore {
   setCustomInstructions: React.Dispatch<React.SetStateAction<string>>
   webSearchEnabled: boolean
   setWebSearchEnabled: React.Dispatch<React.SetStateAction<boolean>>
+  councilEnabled: boolean
+  setCouncilEnabled: React.Dispatch<React.SetStateAction<boolean>>
   deepResearchEnabled: boolean
   setDeepResearchEnabled: React.Dispatch<React.SetStateAction<boolean>>
 
@@ -151,6 +154,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     () => localStorage.getItem('nova_custom_instructions') ?? ''
   )
   const [webSearchEnabled, setWebSearchEnabled] = useState(false)
+  const [councilEnabled, setCouncilEnabled] = useState(false)
   const [deepResearchEnabled, setDeepResearchEnabled] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem('nova_sidebar_collapsed') === 'true'
@@ -239,6 +243,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       outputStyle, setOutputStyle,
       customInstructions, setCustomInstructions,
       webSearchEnabled, setWebSearchEnabled,
+      councilEnabled, setCouncilEnabled,
       deepResearchEnabled, setDeepResearchEnabled,
       sidebarCollapsed, setSidebarCollapsed,
     }}>
