@@ -26,11 +26,12 @@ logger = logging.getLogger(__name__)
 
 MAC_SECRET_NAME = "wol_mac"
 
-_mac_cache: tuple[float, str | None] | None = None
+_mac_cache: dict[str, tuple[float, str | None]] = {}   # secret name -> (time, mac)
 _MAC_CACHE_TTL = 60.0
-# None = never woke. (Not 0.0: monotonic starts near zero on a fresh boot, which
-# would silently rate-limit auto-wake for the first wol_min_interval_s of uptime.)
-_last_auto_wake: float | None = None
+# Per-endpoint last-wake times. Absent key = never woke. (Not 0.0: monotonic
+# starts near zero on a fresh boot, which would silently rate-limit auto-wake
+# for the first wol_min_interval_s of uptime.)
+_last_auto_wake: dict[str, float] = {}
 
 
 def build_magic_packet(mac: str) -> bytes:
@@ -42,18 +43,19 @@ def build_magic_packet(mac: str) -> bytes:
     return b"\xff" * 6 + mac_bytes * 16
 
 
-async def get_mac(force: bool = False) -> str | None:
-    """The wol_mac secret, cached briefly. None ⇒ WoL not configured.
+async def get_mac(force: bool = False, secret_name: str = MAC_SECRET_NAME) -> str | None:
+    """A WoL MAC secret, cached briefly. None ⇒ WoL not configured.
 
     force propagates all the way through secrets_client so setup/remove in the
-    dashboard reflects immediately.
+    dashboard reflects immediately. Pool endpoints may name their own secret
+    (wol_mac_secret); the default endpoint uses 'wol_mac'.
     """
-    global _mac_cache
     now = time.monotonic()
-    if not force and _mac_cache is not None and (now - _mac_cache[0]) < _MAC_CACHE_TTL:
-        return _mac_cache[1]
-    mac = await secrets_client.resolve(MAC_SECRET_NAME, force=force)
-    _mac_cache = (now, mac)
+    cached = _mac_cache.get(secret_name)
+    if not force and cached is not None and (now - cached[0]) < _MAC_CACHE_TTL:
+        return cached[1]
+    mac = await secrets_client.resolve(secret_name, force=force)
+    _mac_cache[secret_name] = (now, mac)
     return mac
 
 
@@ -81,23 +83,26 @@ async def send_wake(mac: str) -> dict:
     return {"via": "direct-udp", "broadcast": settings.wol_broadcast_addr}
 
 
-async def wake_if_due(reason: str) -> bool:
-    """Rate-limited auto-wake for routing failures. True if a wake was sent.
+async def wake_if_due(reason: str, ep: dict | None = None) -> bool:
+    """Rate-limited (per endpoint) auto-wake for routing failures.
 
-    Never raises — a failed wake must not mask the original completion error.
+    True if a wake was sent. Never raises — a failed wake must not mask the
+    original completion error.
     """
-    global _last_auto_wake
+    eid = ep["id"] if ep else "default"
+    secret_name = (ep or {}).get("wol_mac_secret") or MAC_SECRET_NAME
     now = time.monotonic()
-    if _last_auto_wake is not None and (now - _last_auto_wake) < settings.wol_min_interval_s:
+    last = _last_auto_wake.get(eid)
+    if last is not None and (now - last) < settings.wol_min_interval_s:
         return False
     try:
-        mac = await get_mac()
+        mac = await get_mac(secret_name=secret_name)
         if not mac:
             return False
-        _last_auto_wake = now
+        _last_auto_wake[eid] = now
         result = await send_wake(mac)
-        logger.info("WoL fired (%s) — %s", result["via"], reason)
+        logger.info("WoL fired for endpoint %s (%s) — %s", eid, result["via"], reason)
         return True
     except Exception as exc:
-        logger.warning("WoL attempt failed (%s): %s", reason, exc)
+        logger.warning("WoL attempt failed for endpoint %s (%s): %s", eid, reason, exc)
         return False

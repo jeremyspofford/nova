@@ -98,7 +98,8 @@ test-v2: ## Run only v2-service integration tests (fast, no v1 noise) — run be
 	  test_schedules.py \
 	  test_proactivity.py \
 	  test_model_recommendations.py \
-	  test_wol.py
+	  test_wol.py \
+	  test_endpoint_pool.py
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)

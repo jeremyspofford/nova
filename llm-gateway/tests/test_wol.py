@@ -37,7 +37,7 @@ def test_connection_error_detection():
 async def test_wake_if_due_rate_limits(monkeypatch):
     sent = []
 
-    async def fake_get_mac(force=False):
+    async def fake_get_mac(force=False, secret_name=None):
         return "aa:bb:cc:dd:ee:ff"
 
     async def fake_send(mac):
@@ -46,22 +46,22 @@ async def test_wake_if_due_rate_limits(monkeypatch):
 
     monkeypatch.setattr(wol, "get_mac", fake_get_mac)
     monkeypatch.setattr(wol, "send_wake", fake_send)
-    wol._last_auto_wake = None
+    wol._last_auto_wake = {}
 
     assert await wol.wake_if_due("first") is True
     assert await wol.wake_if_due("suppressed") is False
     assert sent == ["aa:bb:cc:dd:ee:ff"]
 
-    wol._last_auto_wake = time.monotonic() - 10_000
+    wol._last_auto_wake = {"default": time.monotonic() - 10_000}
     assert await wol.wake_if_due("after interval") is True
     assert len(sent) == 2
 
 
 @pytest.mark.asyncio
 async def test_wake_if_due_noop_without_mac(monkeypatch):
-    async def fake_get_mac(force=False):
+    async def fake_get_mac(force=False, secret_name=None):
         return None
 
     monkeypatch.setattr(wol, "get_mac", fake_get_mac)
-    wol._last_auto_wake = None
+    wol._last_auto_wake = {}
     assert await wol.wake_if_due("unconfigured") is False

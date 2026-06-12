@@ -65,6 +65,19 @@ interface HardwareProfile {
   wol_configured?: boolean;
 }
 
+interface InferenceEndpoint {
+  id: string;
+  name: string;
+  engine: string;
+  url: string;
+  lifecycle: "always-on" | "wake-on-lan" | "on-demand";
+  wol_mac_secret: string | null;
+  enabled: boolean;
+}
+
+const ENGINES = ["ollama-host", "ollama", "vllm", "llamacpp", "sglang", "lmstudio"];
+const LIFECYCLES = ["always-on", "wake-on-lan", "on-demand"];
+
 const GPU_NOT_USED_HINT =
   "Ollama on the inference host reports 0 bytes of VRAM in use — the GPU is invisible to it. " +
   "Likely causes: GPU driver not detected by Ollama (restart the Ollama service after driver " +
@@ -169,31 +182,58 @@ export function Models() {
   const [declVram, setDeclVram] = useState("");
   const [declRam, setDeclRam] = useState("");
 
+  // Endpoint pool: every model/hardware call is scoped to the selected endpoint.
+  const [endpointId, setEndpointId] = useState("default");
+  const [editingPool, setEditingPool] = useState(false);
+  const [poolDraft, setPoolDraft] = useState<InferenceEndpoint[] | null>(null);
+  const [poolError, setPoolError] = useState("");
+
+  const { data: pool } = useQuery<{ endpoints: InferenceEndpoint[] }>({
+    queryKey: ["llm-endpoints"],
+    queryFn: () => apiFetch("/api/v1/llm/endpoints"),
+  });
+  const endpoints = pool?.endpoints ?? [];
+
+  const savePoolMutation = useMutation({
+    mutationFn: (eps: InferenceEndpoint[]) =>
+      apiFetch("/api/v1/llm/endpoints", {
+        method: "PUT",
+        body: JSON.stringify({ endpoints: eps }),
+      }),
+    onSuccess: () => {
+      setEditingPool(false);
+      setPoolDraft(null);
+      setPoolError("");
+      qc.invalidateQueries();
+    },
+    onError: (e) => setPoolError(String(e)),
+  });
+
   const { data: rec } = useQuery<RecommendedResponse>({
-    queryKey: ["models-recommended"],
-    queryFn: () => apiFetch("/api/v1/llm/models/recommended"),
+    queryKey: ["models-recommended", endpointId],
+    queryFn: () => apiFetch(`/api/v1/llm/models/recommended?endpoint=${endpointId}`),
   });
   const { data: hw } = useQuery<HardwareProfile>({
-    queryKey: ["llm-hardware"],
-    queryFn: () => apiFetch("/api/v1/llm/hardware"),
+    queryKey: ["llm-hardware", endpointId],
+    queryFn: () => apiFetch(`/api/v1/llm/hardware?endpoint=${endpointId}`),
   });
   const pulledQuery = useQuery<PulledModel[]>({
-    queryKey: ["models-pulled"],
-    queryFn: () => apiFetch("/api/v1/llm/models/pulled"),
+    queryKey: ["models-pulled", endpointId],
+    queryFn: () => apiFetch(`/api/v1/llm/models/pulled?endpoint=${endpointId}`),
     retry: 1,
   });
   const pulled = pulledQuery.data ?? [];
   const hostUnreachable = pulledQuery.isError;
 
   const wakeMutation = useMutation({
-    mutationFn: () => apiFetch("/api/v1/llm/hardware/wake", { method: "POST" }),
+    mutationFn: () => apiFetch(`/api/v1/llm/hardware/wake?endpoint=${endpointId}`, { method: "POST" }),
   });
 
   // End-to-end self-check: loads the configured model through Nova's own path
   // and reads the real VRAM offload state — answers "is Nova using the GPU?".
   const gpuCheckMutation = useMutation<GpuCheckResult>({
-    mutationFn: () => apiFetch("/api/v1/llm/hardware/gpu-check", { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["llm-hardware"] }),
+    mutationFn: () => apiFetch(`/api/v1/llm/hardware/gpu-check?endpoint=${endpointId}`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["llm-hardware", endpointId] }),
   });
   const gpuCheck = gpuCheckMutation.data;
 
@@ -203,8 +243,8 @@ export function Models() {
   const [wolError, setWolError] = useState("");
 
   const refreshHardware = async () => {
-    const fresh = await apiFetch<HardwareProfile>("/api/v1/llm/hardware?refresh=true");
-    qc.setQueryData(["llm-hardware"], fresh);
+    const fresh = await apiFetch<HardwareProfile>(`/api/v1/llm/hardware?refresh=true&endpoint=${endpointId}`);
+    qc.setQueryData(["llm-hardware", endpointId], fresh);
   };
 
   const saveWolMutation = useMutation({
@@ -242,19 +282,19 @@ export function Models() {
   };
 
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["models-recommended"] });
-    qc.invalidateQueries({ queryKey: ["models-pulled"] });
+    qc.invalidateQueries({ queryKey: ["models-recommended", endpointId] });
+    qc.invalidateQueries({ queryKey: ["models-pulled", endpointId] });
   };
 
   const deleteMutation = useMutation({
     mutationFn: (name: string) =>
-      apiFetch(`/api/v1/llm/models/${encodeURIComponent(name)}`, { method: "DELETE" }),
+      apiFetch(`/api/v1/llm/models/${encodeURIComponent(name)}?endpoint=${endpointId}`, { method: "DELETE" }),
     onSettled: refresh,
   });
 
   const declareMutation = useMutation({
     mutationFn: () =>
-      apiFetch("/api/v1/llm/hardware", {
+      apiFetch(`/api/v1/llm/hardware?endpoint=${endpointId}`, {
         method: "PUT",
         body: JSON.stringify({
           gpus: declVram ? [{ vram_gb: Number(declVram) }] : [],
@@ -263,8 +303,8 @@ export function Models() {
       }),
     onSettled: () => {
       setDeclaring(false);
-      qc.invalidateQueries({ queryKey: ["llm-hardware"] });
-      qc.invalidateQueries({ queryKey: ["models-recommended"] });
+      qc.invalidateQueries({ queryKey: ["llm-hardware", endpointId] });
+      qc.invalidateQueries({ queryKey: ["models-recommended", endpointId] });
     },
   });
 
@@ -272,7 +312,7 @@ export function Models() {
     setPulls((p) => ({ ...p, [model]: { status: "starting", pct: null } }));
     try {
       const secret = localStorage.getItem("adminSecret");
-      const res = await fetch("/api/v1/llm/models/pull", {
+      const res = await fetch(`/api/v1/llm/models/pull?endpoint=${endpointId}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -350,6 +390,20 @@ export function Models() {
         <div className="bg-stone-800/50 rounded-xl p-4 mb-6">
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <HardDrive className="h-4 w-4 text-stone-400" />
+            {endpoints.length > 1 ? (
+              <select
+                value={endpointId}
+                onChange={(e) => setEndpointId(e.target.value)}
+                className="text-xs bg-stone-800 border border-stone-700 rounded-lg px-2 py-1 font-mono"
+                title="Inference endpoint"
+              >
+                {endpoints.map((ep) => (
+                  <option key={ep.id} value={ep.id}>
+                    {ep.name} {ep.enabled ? "" : "(disabled)"}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <span className="font-mono text-xs text-stone-300">{hw?.inference_url}</span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${SOURCE_BADGE[hw?.source ?? "unknown"]}`}>
               {hw?.source ?? "…"}
@@ -392,6 +446,16 @@ export function Models() {
               {gpuCheckMutation.isPending ? "Checking… (loading model)" : "Run GPU check"}
             </button>
             <button
+              onClick={() => {
+                setPoolDraft(endpoints.map((e) => ({ ...e })));
+                setEditingPool((v) => !v);
+              }}
+              className="text-xs text-teal-400 hover:underline"
+              title="Add or edit inference endpoints (e.g. a second machine with a GPU)"
+            >
+              Manage endpoints
+            </button>
+            <button
               onClick={() => setDeclaring((d) => !d)}
               className="text-xs text-teal-400 hover:underline"
             >
@@ -432,6 +496,102 @@ export function Models() {
               Hardware unknown — recommendations aren't filtered. Declare your inference host's
               specs to see what fits.
             </p>
+          )}
+
+          {/* Endpoint pool editor — names, engines, URLs, lifecycles. */}
+          {editingPool && poolDraft && (
+            <div className="mt-3 space-y-2 text-xs border-t border-stone-700/60 pt-3">
+              {poolDraft.map((ep, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    value={ep.id}
+                    onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, id: e.target.value } : p)))}
+                    placeholder="id"
+                    className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 font-mono"
+                  />
+                  <input
+                    value={ep.name}
+                    onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, name: e.target.value } : p)))}
+                    placeholder="name"
+                    className="w-28 bg-stone-800 border border-stone-700 rounded px-2 py-1"
+                  />
+                  <select
+                    value={ep.engine}
+                    onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, engine: e.target.value } : p)))}
+                    className="bg-stone-800 border border-stone-700 rounded px-2 py-1"
+                  >
+                    {ENGINES.map((eng) => <option key={eng}>{eng}</option>)}
+                  </select>
+                  <input
+                    value={ep.url}
+                    onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, url: e.target.value } : p)))}
+                    placeholder="http://host:11434"
+                    className="flex-1 min-w-44 bg-stone-800 border border-stone-700 rounded px-2 py-1 font-mono"
+                  />
+                  <select
+                    value={ep.lifecycle}
+                    onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, lifecycle: e.target.value as InferenceEndpoint["lifecycle"] } : p)))}
+                    className="bg-stone-800 border border-stone-700 rounded px-2 py-1"
+                    title="wake-on-lan endpoints get auto-WoL when unreachable; on-demand is reserved"
+                  >
+                    {LIFECYCLES.map((lc) => <option key={lc}>{lc}</option>)}
+                  </select>
+                  {ep.lifecycle === "wake-on-lan" && (
+                    <input
+                      value={ep.wol_mac_secret ?? ""}
+                      onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, wol_mac_secret: e.target.value || null } : p)))}
+                      placeholder="wol secret name"
+                      className="w-32 bg-stone-800 border border-stone-700 rounded px-2 py-1 font-mono"
+                      title="Secrets-vault entry holding this host's MAC (default: wol_mac)"
+                    />
+                  )}
+                  <label className="flex items-center gap-1 text-stone-400">
+                    <input
+                      type="checkbox"
+                      checked={ep.enabled}
+                      onChange={(e) => setPoolDraft(poolDraft.map((p, j) => (j === i ? { ...p, enabled: e.target.checked } : p)))}
+                      className="accent-teal-500"
+                    />
+                    enabled
+                  </label>
+                  <button
+                    onClick={() => setPoolDraft(poolDraft.filter((_, j) => j !== i))}
+                    className="text-stone-500 hover:text-red-400"
+                    title="Remove endpoint"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() =>
+                    setPoolDraft([
+                      ...poolDraft,
+                      { id: "", name: "", engine: "ollama", url: "", lifecycle: "always-on", wol_mac_secret: null, enabled: true },
+                    ])
+                  }
+                  className="text-teal-400 hover:underline"
+                >
+                  + Add endpoint
+                </button>
+                <button
+                  onClick={() => savePoolMutation.mutate(poolDraft)}
+                  disabled={savePoolMutation.isPending}
+                  className="bg-teal-600 hover:bg-teal-500 rounded-lg px-3 py-1"
+                >
+                  {savePoolMutation.isPending ? "Saving…" : "Save endpoints"}
+                </button>
+                <button onClick={() => { setEditingPool(false); setPoolError(""); }} className="text-stone-500 hover:underline">
+                  Cancel
+                </button>
+              </div>
+              {poolError && <p className="text-red-400">{poolError}</p>}
+              <p className="text-stone-600">
+                Routing tries enabled endpoints in order with the configured completion model.
+                Models, hardware profiles, pulls, and Wake-on-LAN are all per-endpoint.
+              </p>
+            </div>
           )}
 
           {/* Wake-on-LAN setup — only relevant for split deployments (chat on one

@@ -264,27 +264,63 @@ async def llm_models(refresh: bool = False, _: None = Depends(_require_admin)):
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
-@app.get("/api/v1/llm/models/recommended")
-async def llm_models_recommended(refresh: bool = False, _: None = Depends(_require_admin)):
-    """Proxy to llm-gateway /models/recommended — manifest ∩ hardware ∩ installed."""
+@app.get("/api/v1/llm/endpoints")
+async def llm_endpoints_get(_: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /endpoints — the inference endpoint pool."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(
-                f"{settings.llm_gateway_url}/models/recommended",
-                params={"refresh": "true" if refresh else "false"},
-            )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{settings.llm_gateway_url}/endpoints")
         return r.json()
     except Exception as exc:
         logger.warning("llm-gateway unreachable: %s", exc)
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
+@app.put("/api/v1/llm/endpoints")
+async def llm_endpoints_put(request: Request, _: None = Depends(_require_admin)):
+    """Proxy to llm-gateway PUT /endpoints."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="JSON body required")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.put(f"{settings.llm_gateway_url}/endpoints", json=body)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
+@app.get("/api/v1/llm/models/recommended")
+async def llm_models_recommended(refresh: bool = False, endpoint: str = "default", _: None = Depends(_require_admin)):
+    """Proxy to llm-gateway /models/recommended — manifest ∩ hardware ∩ installed."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"{settings.llm_gateway_url}/models/recommended",
+                params={"refresh": "true" if refresh else "false", "endpoint": endpoint},
+            )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("llm-gateway unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="llm-gateway unavailable")
+
+
 @app.get("/api/v1/llm/models/pulled")
-async def llm_models_pulled(_: None = Depends(_require_admin)):
+async def llm_models_pulled(endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway /models/pulled — installed Ollama models."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{settings.llm_gateway_url}/models/pulled")
+            r = await client.get(f"{settings.llm_gateway_url}/models/pulled", params={"endpoint": endpoint})
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -296,7 +332,7 @@ async def llm_models_pulled(_: None = Depends(_require_admin)):
 
 
 @app.post("/api/v1/llm/models/pull")
-async def llm_models_pull(request: Request, _: None = Depends(_require_admin)):
+async def llm_models_pull(request: Request, endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway /models/pull — streams SSE pull progress through."""
     try:
         body = await request.json()
@@ -307,7 +343,8 @@ async def llm_models_pull(request: Request, _: None = Depends(_require_admin)):
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
-                    "POST", f"{settings.llm_gateway_url}/models/pull", json=body
+                    "POST", f"{settings.llm_gateway_url}/models/pull",
+                    params={"endpoint": endpoint}, json=body
                 ) as resp:
                     async for chunk in resp.aiter_bytes():
                         yield chunk
@@ -320,11 +357,11 @@ async def llm_models_pull(request: Request, _: None = Depends(_require_admin)):
 
 
 @app.delete("/api/v1/llm/models/{model_name:path}")
-async def llm_models_delete(model_name: str, _: None = Depends(_require_admin)):
+async def llm_models_delete(model_name: str, endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway DELETE /models/{name}."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.delete(f"{settings.llm_gateway_url}/models/{model_name}")
+            r = await client.delete(f"{settings.llm_gateway_url}/models/{model_name}", params={"endpoint": endpoint})
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -336,26 +373,30 @@ async def llm_models_delete(model_name: str, _: None = Depends(_require_admin)):
 
 
 @app.get("/api/v1/llm/hardware")
-async def llm_hardware_get(refresh: bool = False, _: None = Depends(_require_admin)):
+async def llm_hardware_get(refresh: bool = False, endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway /hardware — inference host profile."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(
                 f"{settings.llm_gateway_url}/hardware",
-                params={"refresh": "true" if refresh else "false"},
+                params={"refresh": "true" if refresh else "false", "endpoint": endpoint},
             )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("llm-gateway unreachable: %s", exc)
         raise HTTPException(status_code=503, detail="llm-gateway unavailable")
 
 
 @app.post("/api/v1/llm/hardware/gpu-check")
-async def llm_hardware_gpu_check(_: None = Depends(_require_admin)):
+async def llm_hardware_gpu_check(endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway POST /hardware/gpu-check — loads a model, reads VRAM state."""
     try:
         async with httpx.AsyncClient(timeout=190.0) as client:
-            r = await client.post(f"{settings.llm_gateway_url}/hardware/gpu-check")
+            r = await client.post(f"{settings.llm_gateway_url}/hardware/gpu-check", params={"endpoint": endpoint})
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -367,11 +408,11 @@ async def llm_hardware_gpu_check(_: None = Depends(_require_admin)):
 
 
 @app.post("/api/v1/llm/hardware/wake", status_code=202)
-async def llm_hardware_wake(_: None = Depends(_require_admin)):
+async def llm_hardware_wake(endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway POST /hardware/wake — Wake-on-LAN the inference host."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(f"{settings.llm_gateway_url}/hardware/wake")
+            r = await client.post(f"{settings.llm_gateway_url}/hardware/wake", params={"endpoint": endpoint})
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -383,7 +424,7 @@ async def llm_hardware_wake(_: None = Depends(_require_admin)):
 
 
 @app.put("/api/v1/llm/hardware")
-async def llm_hardware_put(request: Request, _: None = Depends(_require_admin)):
+async def llm_hardware_put(request: Request, endpoint: str = "default", _: None = Depends(_require_admin)):
     """Proxy to llm-gateway PUT /hardware — declare a remote inference host's specs."""
     try:
         body = await request.json()
@@ -391,7 +432,7 @@ async def llm_hardware_put(request: Request, _: None = Depends(_require_admin)):
         raise HTTPException(status_code=422, detail="JSON body required")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.put(f"{settings.llm_gateway_url}/hardware", json=body)
+            r = await client.put(f"{settings.llm_gateway_url}/hardware", params={"endpoint": endpoint}, json=body)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()

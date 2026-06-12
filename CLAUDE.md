@@ -57,8 +57,7 @@ the `local-ollama` profile. `LOCAL_INFERENCE_URL` points to the Windows host IP.
 **Dev proxy** (Vite, port 5173): `/api` → 8000, `/v1` → 8001, `/ws` → 8004,
 `/voice-api` → 8003, `/recovery-api` → 8888.
 
-**Production nginx gaps (known, not yet fixed):** nginx does not proxy `/v1/` or
-`/recovery-api/` in production — only `/api/`, `/voice-api/`, and `/ws/`.
+**Production nginx** proxies `/api/`, `/v1/`, `/voice-api/`, `/recovery-api/`, and `/ws/`.
 
 ---
 
@@ -269,6 +268,7 @@ test_schedules.py       — schedule CRUD, poll + webhook firing, chat-thread ou
 test_proactivity.py     — capability gate, control API, pulse dispatch guards (slow — drives real poll cycles)
 test_model_recommendations.py — manifest, hardware fit gating, pull lifecycle (downloads a ~46MB model)
 test_wol.py             — Wake-on-LAN: magic packet capture on udp/9 (skips without root), helper auth
+test_endpoint_pool.py   — endpoint pool CRUD, per-endpoint scoping, degenerate-case invariance
 ```
 
 "The code looks correct" is not a test result. A green `make test-v2` + Playwright
