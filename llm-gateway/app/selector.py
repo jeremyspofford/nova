@@ -21,14 +21,7 @@ def ollama_openai_base(url: str) -> str:
 
 
 def _local_candidate() -> tuple[str, dict] | None:
-    """Return (litellm_model, extra_kwargs) for the active local backend, or None.
-
-    Ollama completions go through its native OpenAI-compatible endpoint, NOT
-    litellm's ollama_chat provider: ollama_chat implements tool calling by
-    forcing format=json on every request, which makes models hallucinate tool
-    calls for conversational turns and wrap final answers in JSON envelopes
-    (ignoring the system persona). The /v1 endpoint uses the model's own chat
-    template for native tool calling."""
+    """Single-backend candidate from env settings (pre-pool back-compat)."""
     backend = settings.nova_inference_backend
     url = settings.local_inference_url
     model = settings.local_completion_model
@@ -42,6 +35,30 @@ def _local_candidate() -> tuple[str, dict] | None:
         # LiteLLM requires a non-empty api_key for openai/ routes; "none" is a safe sentinel
         return (f"openai/{model}", {"api_base": url, "api_key": "none"})
     return None
+
+
+def endpoint_candidate(ep: dict, model: str) -> tuple[str, dict]:
+    """(litellm_model, kwargs) for a model served by a pool endpoint.
+
+    Ollama completions go through its native OpenAI-compatible /v1 endpoint —
+    NOT litellm's ollama_chat (which forces format=json and wrecks tool calls).
+    """
+    if ep["engine"] in ("ollama-host", "ollama"):
+        return (f"openai/{model}", {"api_base": ollama_openai_base(ep["url"]), "api_key": "none"})
+    return (f"openai/{model}", {"api_base": ep["url"], "api_key": "none"})
+
+
+def local_candidates() -> list[tuple[str, dict]]:
+    """One candidate per routable pool endpoint, in file (priority) order.
+
+    Increment-1 scope: every endpoint is tried with the configured completion
+    model; per-endpoint best-model selection (manifest agent scores) lands with
+    deep-think, which needs per-proposer model picking anyway. With only the
+    synthesized default endpoint this returns exactly the pre-pool candidate.
+    """
+    from . import endpoints as ep_mod
+    model = settings.local_completion_model
+    return [endpoint_candidate(ep, model) for ep in ep_mod.routable()]
 
 
 def _local_embed_candidate() -> tuple[str, dict] | None:
@@ -58,7 +75,7 @@ def _local_embed_candidate() -> tuple[str, dict] | None:
 
 
 def completion_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
-    local = _local_candidate()
+    local = local_candidates()
     cloud: list[tuple[str, dict]] = []
     if "anthropic" in available_cloud:
         cloud.append(("claude-haiku-4-5-20251001", {}))
@@ -71,14 +88,14 @@ def completion_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:
 
     strategy = get_routing_strategy()
     if strategy == "local-only":
-        return [local] if local else []
+        return local
     if strategy == "cloud-only":
         return cloud
     if strategy == "local-first":
-        return ([local] if local else []) + cloud
+        return local + cloud
     if strategy == "cloud-first":
-        return cloud + ([local] if local else [])
-    return ([local] if local else []) + cloud
+        return cloud + local
+    return local + cloud
 
 
 def embed_candidates(available_cloud: set[str]) -> list[tuple[str, dict]]:

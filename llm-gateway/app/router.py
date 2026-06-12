@@ -10,9 +10,16 @@ from fastapi.responses import StreamingResponse
 from nova_contracts import EmbedRequest, LLMRequest
 from pydantic import BaseModel
 
+from . import endpoints as ep_mod
 from . import hardware, secrets_client, selector, wol
 from .config import settings
-from .discovery import _cloud_providers, _local_provider_entry, discover_local_models
+from .discovery import (
+    _cloud_providers,
+    _local_provider_entry,
+    discover_all_endpoints,
+    discover_endpoint_models,
+    invalidate,
+)
 from .manifest import get_manifest
 from .selector import VALID_STRATEGIES
 
@@ -103,17 +110,10 @@ async def _resolve_explicit_model(model_id: str) -> tuple[str, dict]:
     and wrecks conversational turns). Otherwise returns the ID unchanged for
     cloud routing.
     """
-    backend = settings.nova_inference_backend
-    if backend != "none":
-        local_models = await discover_local_models()
+    for ep in ep_mod.routable():
+        local_models = await discover_endpoint_models(ep)
         if any(m["id"] == model_id for m in local_models):
-            url = settings.local_inference_url
-            if backend in ("ollama-host", "ollama"):
-                return f"openai/{model_id}", {
-                    "api_base": selector.ollama_openai_base(url), "api_key": "none",
-                }
-            else:
-                return f"openai/{model_id}", {"api_base": url, "api_key": "none"}
+            return selector.endpoint_candidate(ep, model_id)
     return model_id, {}
 
 
@@ -194,12 +194,12 @@ async def _try_complete(
             logger.warning("Provider %s failed: %s", cand_model, exc)
             last_exc = exc
             # A local candidate failing to connect may just be a sleeping GPU
-            # box — fire a rate-limited Wake-on-LAN if one is configured.
-            is_local = settings.local_inference_url and settings.local_inference_url in str(
-                model_extra.get("api_base", "")
-            )
-            if is_local and _is_connection_error(exc):
-                woke_host = await wol.wake_if_due(f"local candidate {cand_model} unreachable")
+            # box — fire a rate-limited Wake-on-LAN for that endpoint.
+            failed_ep = ep_mod.by_api_base(str(model_extra.get("api_base", "")))
+            if failed_ep is not None and _is_connection_error(exc):
+                woke_host = await wol.wake_if_due(
+                    f"local candidate {cand_model} unreachable", failed_ep
+                ) or woke_host
 
     detail = f"All LLM providers failed: {last_exc}"
     if woke_host:
@@ -269,15 +269,17 @@ async def list_providers():
 async def discover_models(refresh: bool = False):
     """Return all providers with their available models.
 
-    Local models are discovered live from the active backend (cached 5 min).
-    Cloud providers are included when their API key is configured.
-    Pass ?refresh=true to bypass the discovery cache.
+    Local models are discovered live, one provider entry per enabled pool
+    endpoint (cached 5 min). Cloud providers are included when their API key is
+    configured. Pass ?refresh=true to bypass the discovery cache.
     """
-    local_models = await discover_local_models(force=refresh)
     cloud = await _available_cloud()
     providers = _cloud_providers(cloud)
-    if settings.nova_inference_backend != "none":
-        providers.insert(0, _local_provider_entry(local_models))
+    local_entries = []
+    for ep, models in await discover_all_endpoints(force=refresh):
+        local_entries.append(_local_provider_entry(models, ep))
+    for entry in reversed(local_entries):
+        providers.insert(0, entry)
     return providers
 
 
@@ -302,6 +304,37 @@ async def resolve_best_model():
     return {"model": display_id, "source": source}
 
 
+# ── Endpoint pool ─────────────────────────────────────────────────────────────
+
+
+def _resolve_ep(endpoint_id: str) -> dict:
+    ep = ep_mod.get(endpoint_id)
+    if ep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown endpoint '{endpoint_id}'")
+    return ep
+
+
+@router.get("/endpoints")
+async def list_inference_endpoints():
+    """The inference endpoint pool. With no saved config: the env default."""
+    return {"endpoints": ep_mod.list_endpoints()}
+
+
+class EndpointsUpdate(BaseModel):
+    endpoints: list[dict]
+
+
+@router.put("/endpoints")
+async def put_inference_endpoints(body: EndpointsUpdate):
+    try:
+        saved = ep_mod.save(body.endpoints)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    invalidate()  # endpoint set changed — discovery caches are stale
+    _caps_cache.clear()
+    return {"endpoints": saved}
+
+
 # ── Recommended models, hardware profile, pull lifecycle ─────────────────────
 
 
@@ -309,28 +342,31 @@ def _norm(model_id: str) -> str:
     return model_id.removesuffix(":latest")
 
 
-def _require_ollama() -> None:
-    if settings.nova_inference_backend not in ("ollama", "ollama-host"):
+def _require_ollama(ep: dict) -> None:
+    if ep["engine"] not in ("ollama", "ollama-host"):
         raise HTTPException(
             status_code=400,
-            detail=f"Model management requires an Ollama backend (active: {settings.nova_inference_backend})",
+            detail=f"Model management requires an Ollama endpoint ('{ep['id']}' is {ep['engine']})",
         )
 
 
 @router.get("/hardware")
-async def get_hardware(refresh: bool = False):
+async def get_hardware(refresh: bool = False, endpoint: str = "default"):
     """Inference host profile (detected/declared/unknown) + live observed signals.
 
     refresh=true bypasses the 60s wol_mac cache — the dashboard uses it right
     after creating/removing the secret so the UI reflects the change instantly.
     """
-    profile = hardware.read_profile()
+    ep = _resolve_ep(endpoint)
+    profile = hardware.read_profile(ep["id"])
+    secret_name = ep.get("wol_mac_secret") or wol.MAC_SECRET_NAME
     return {
         **profile,
-        "inference_url": settings.local_inference_url,
-        "backend": settings.nova_inference_backend,
-        "observed": await hardware.observe(),
-        "wol_configured": (await wol.get_mac(force=refresh)) is not None,
+        "endpoint": ep["id"],
+        "inference_url": ep["url"],
+        "backend": ep["engine"],
+        "observed": await hardware.observe(ep),
+        "wol_configured": (await wol.get_mac(force=refresh, secret_name=secret_name)) is not None,
     }
 
 
@@ -348,28 +384,29 @@ _GPU_CHECK_HINTS = {
 
 
 @router.post("/hardware/gpu-check")
-async def gpu_check():
+async def gpu_check(endpoint: str = "default"):
     """End-to-end GPU verification through Nova's own inference path.
 
     Loads the configured completion model with a 1-token generation, then reads
     /api/ps for the real VRAM offload state. One click answers "is Nova using
     the GPU?" — no host-side forensics required.
     """
-    _require_ollama()
+    ep = _resolve_ep(endpoint)
+    _require_ollama(ep)
     model = settings.local_completion_model
     started = time.monotonic()
     detail = None
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             r = await client.post(
-                f"{settings.local_inference_url}/api/generate",
+                f"{ep['url']}/api/generate",
                 json={"model": model, "prompt": "hi", "stream": False,
                       "options": {"num_predict": 1}},
             )
             if r.status_code == 404:
                 return {
                     "verdict": "error",
-                    "detail": f"Model '{model}' is not installed on the inference host — pull it first.",
+                    "detail": f"Model '{model}' is not installed on endpoint '{ep['id']}' — pull it first.",
                     "hint": _GPU_CHECK_HINTS["error"],
                     "model_tested": model,
                 }
@@ -382,7 +419,7 @@ async def gpu_check():
             "model_tested": model,
         }
 
-    observed = await hardware.observe()
+    observed = await hardware.observe(ep)
     loaded = observed.get("loaded") or []
     verdict = hardware.gpu_verdict(loaded)
     return {
@@ -396,13 +433,15 @@ async def gpu_check():
 
 
 @router.post("/hardware/wake", status_code=202)
-async def wake_inference_host():
-    """Manually send a Wake-on-LAN magic packet to the inference host."""
-    mac = await wol.get_mac(force=True)
+async def wake_inference_host(endpoint: str = "default"):
+    """Manually send a Wake-on-LAN magic packet to an inference host."""
+    ep = _resolve_ep(endpoint)
+    secret_name = ep.get("wol_mac_secret") or wol.MAC_SECRET_NAME
+    mac = await wol.get_mac(force=True, secret_name=secret_name)
     if not mac:
         raise HTTPException(
             status_code=409,
-            detail="Wake-on-LAN not configured — add a 'wol_mac' secret with the inference host's MAC",
+            detail=f"Wake-on-LAN not configured — add a '{secret_name}' secret with the inference host's MAC",
         )
     try:
         result = await wol.send_wake(mac)
@@ -421,27 +460,31 @@ class HardwareDeclare(BaseModel):
 
 
 @router.put("/hardware")
-async def put_hardware(body: HardwareDeclare):
-    """Declare the inference host's specs (split deployments — remote GPU box)."""
-    profile = hardware.write_declared(body.model_dump())
+async def put_hardware(body: HardwareDeclare, endpoint: str = "default"):
+    """Declare an inference host's specs (split deployments — remote GPU box)."""
+    ep = _resolve_ep(endpoint)
+    profile = hardware.write_declared(body.model_dump(), ep["id"])
     return {
         **profile,
-        "inference_url": settings.local_inference_url,
-        "backend": settings.nova_inference_backend,
-        "observed": await hardware.observe(),
+        "endpoint": ep["id"],
+        "inference_url": ep["url"],
+        "backend": ep["engine"],
+        "observed": await hardware.observe(ep),
     }
 
 
 @router.get("/models/recommended")
-async def recommended_models(refresh: bool = False):
+async def recommended_models(refresh: bool = False, endpoint: str = "default"):
     """The curated manifest merged with hardware fit + installed state.
 
-    local entries: installed / fits / slow / denylisted flags resolved live.
-    cloud entries: availability keyed off configured provider keys.
+    local entries: installed / fits / slow / denylisted flags resolved live
+    against the chosen endpoint. cloud entries: availability keyed off
+    configured provider keys.
     """
+    ep = _resolve_ep(endpoint)
     data = await get_manifest(force=refresh)
-    profile = hardware.read_profile()
-    installed = {_norm(m["id"]) for m in await discover_local_models()}
+    profile = hardware.read_profile(ep["id"])
+    installed = {_norm(m["id"]) for m in await discover_endpoint_models(ep, force=refresh)}
     cloud_keys = await _available_cloud()
 
     deny = data.get("denylist") or []
@@ -460,7 +503,7 @@ async def recommended_models(refresh: bool = False):
         if e.get("cloud"):
             provider = e.get("provider")
             if provider == "ollama-cloud":
-                e["available"] = settings.nova_inference_backend in ("ollama", "ollama-host")
+                e["available"] = ep["engine"] in ("ollama", "ollama-host")
                 e["installed"] = bool(e.get("ollama_id")) and _norm(e["ollama_id"]) in installed
             else:
                 e["available"] = provider in cloud_keys
@@ -479,18 +522,20 @@ async def recommended_models(refresh: bool = False):
         "manifest_fetched_at": data.get("_fetched_at"),
         "manifest_updated": data.get("updated"),
         "hardware_source": profile.get("source"),
+        "endpoint": ep["id"],
         "local": local,
         "cloud": cloud,
     }
 
 
 @router.get("/models/pulled")
-async def pulled_models():
+async def pulled_models(endpoint: str = "default"):
     """Installed Ollama models with size/digest/modified."""
-    _require_ollama()
+    ep = _resolve_ep(endpoint)
+    _require_ollama(ep)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{settings.local_inference_url}/api/tags")
+            r = await client.get(f"{ep['url']}/api/tags")
             r.raise_for_status()
             models = r.json().get("models", [])
     except Exception as exc:
@@ -512,16 +557,17 @@ class PullRequestBody(BaseModel):
 
 
 @router.post("/models/pull")
-async def pull_model(body: PullRequestBody):
-    """Pull a model onto the inference host; Ollama's NDJSON progress as SSE."""
-    _require_ollama()
+async def pull_model(body: PullRequestBody, endpoint: str = "default"):
+    """Pull a model onto an inference host; Ollama's NDJSON progress as SSE."""
+    ep = _resolve_ep(endpoint)
+    _require_ollama(ep)
 
     async def generate():
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
                     "POST",
-                    f"{settings.local_inference_url}/api/pull",
+                    f"{ep['url']}/api/pull",
                     json={"model": body.model, "stream": True},
                 ) as resp:
                     async for line in resp.aiter_lines():
@@ -530,20 +576,21 @@ async def pull_model(body: PullRequestBody):
         except Exception as exc:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         # Pull changes the catalog — make new models visible without the 5-min wait.
-        await discover_local_models(force=True)
+        invalidate(ep["id"])
         _caps_cache.clear()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.delete("/models/{model_name:path}")
-async def delete_model(model_name: str):
-    _require_ollama()
+async def delete_model(model_name: str, endpoint: str = "default"):
+    ep = _resolve_ep(endpoint)
+    _require_ollama(ep)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.request(
                 "DELETE",
-                f"{settings.local_inference_url}/api/delete",
+                f"{ep['url']}/api/delete",
                 json={"model": model_name},
             )
     except Exception as exc:
@@ -552,7 +599,7 @@ async def delete_model(model_name: str):
         raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
-    await discover_local_models(force=True)
+    invalidate(ep["id"])
     _caps_cache.clear()
     return {"deleted": model_name}
 
@@ -578,14 +625,12 @@ _PROBE_TOOL = [{
 }]
 
 
-async def _ollama_show_capabilities(model: str) -> list[str] | None:
+async def _ollama_show_capabilities(model: str, url: str | None = None) -> list[str] | None:
     """Query Ollama /api/show for a model's capabilities array. None on failure."""
-    import httpx
+    base = url or settings.local_inference_url
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"{settings.local_inference_url}/api/show", json={"model": model}
-            )
+            r = await client.post(f"{base}/api/show", json={"model": model})
             r.raise_for_status()
             caps = r.json().get("capabilities")
             return caps if isinstance(caps, list) else None
@@ -603,18 +648,25 @@ async def model_capabilities(model: str | None = None, probe: bool = False):
     probe=true additionally runs a one-shot completion with a trivial tool and
     reports whether a well-formed tool call came back.
     """
+    serving_ep: dict | None = None
     if model is None:
         cloud = await _available_cloud()
         candidates = selector.completion_candidates(cloud)
         if not candidates:
             raise HTTPException(status_code=503, detail="No models available")
-        litellm_model, _ = candidates[0]
+        litellm_model, kwargs0 = candidates[0]
         model = _litellm_to_display_id(litellm_model)
         is_local = litellm_model != model
+        if is_local:
+            serving_ep = ep_mod.by_api_base(kwargs0.get("api_base", ""))
     else:
-        local_models = await discover_local_models()
-        local_ids = {m["id"] for m in local_models}
-        is_local = model in local_ids or model.removesuffix(":latest") in local_ids
+        # Find which pool endpoint (if any) serves this model.
+        for ep in ep_mod.routable():
+            ids = {m["id"] for m in await discover_endpoint_models(ep)}
+            if model in ids or model.removesuffix(":latest") in ids:
+                serving_ep = ep
+                break
+        is_local = serving_ep is not None
 
     cache_key = f"{model}|probe={probe}"
     now = time.monotonic()
@@ -622,11 +674,14 @@ async def model_capabilities(model: str | None = None, probe: bool = False):
     if cached and (now - cached[0]) < _CAPS_TTL:
         return cached[1]
 
+    ep_engine = serving_ep["engine"] if serving_ep else settings.nova_inference_backend
+    ep_url = serving_ep["url"] if serving_ep else settings.local_inference_url
+
     tools: bool | None
     if not is_local:
         tools, method = True, "assumed-cloud"
-    elif settings.nova_inference_backend in ("ollama", "ollama-host"):
-        caps = await _ollama_show_capabilities(model)
+    elif ep_engine in ("ollama", "ollama-host"):
+        caps = await _ollama_show_capabilities(model, url=ep_url)
         if caps is None:
             tools, method = None, "unknown"
         else:

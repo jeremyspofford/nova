@@ -25,12 +25,16 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
-def _profile_path() -> Path:
-    return Path(settings.runtime_dir) / "hardware.json"
+def _profile_path(endpoint_id: str = "default") -> Path:
+    # The default endpoint keeps the legacy filename — it's what ./install's
+    # detection writes; additional endpoints get hardware-{id}.json.
+    if endpoint_id == "default":
+        return Path(settings.runtime_dir) / "hardware.json"
+    return Path(settings.runtime_dir) / f"hardware-{endpoint_id}.json"
 
 
-def read_profile() -> dict[str, Any]:
-    path = _profile_path()
+def read_profile(endpoint_id: str = "default") -> dict[str, Any]:
+    path = _profile_path(endpoint_id)
     try:
         if path.exists():
             data = json.loads(path.read_text())
@@ -42,7 +46,7 @@ def read_profile() -> dict[str, Any]:
     return {"source": "unknown", "gpus": [], "ram_gb": None, "cpu_cores": None, "disk_free_gb": None}
 
 
-def write_declared(profile: dict[str, Any]) -> dict[str, Any]:
+def write_declared(profile: dict[str, Any], endpoint_id: str = "default") -> dict[str, Any]:
     data = {
         "source": "declared",
         "gpus": profile.get("gpus") or [],
@@ -51,7 +55,7 @@ def write_declared(profile: dict[str, Any]) -> dict[str, Any]:
         "disk_free_gb": profile.get("disk_free_gb"),
         "declared_at": time.time(),
     }
-    path = _profile_path()
+    path = _profile_path(endpoint_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
     return data
@@ -92,19 +96,21 @@ def gpu_verdict(loaded: list[dict]) -> str:
     return "partial"
 
 
-async def observe() -> dict[str, Any]:
-    """Live best-effort signals from the inference host. Never raises."""
+async def observe(ep: dict | None = None) -> dict[str, Any]:
+    """Live best-effort signals from an inference endpoint. Never raises."""
+    engine = ep["engine"] if ep else settings.nova_inference_backend
+    url = ep["url"] if ep else settings.local_inference_url
     out: dict[str, Any] = {
         "gpu_in_use": None,
         "models_loaded": None,
         "loaded": [],
         "checked_at": time.time(),
     }
-    if settings.nova_inference_backend not in ("ollama", "ollama-host"):
+    if engine not in ("ollama", "ollama-host"):
         return out
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"{settings.local_inference_url}/api/ps")
+            r = await client.get(f"{url}/api/ps")
             r.raise_for_status()
             models = r.json().get("models") or []
         out["models_loaded"] = len(models)
