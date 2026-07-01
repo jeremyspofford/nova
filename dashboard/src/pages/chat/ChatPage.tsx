@@ -395,6 +395,13 @@ export function Chat() {
       )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      // Self-heal a stale/orphaned conversation: if the backend can't find the
+      // conversation we sent (e.g. it was reset, or belongs to another user),
+      // drop the id so the ChatPage re-creates a fresh one for the next send.
+      if (msg.includes('Conversation not found') || msg.startsWith('404')) {
+        localStorage.removeItem('nova_active_conversation')
+        setConversationId(null)
+      }
       setError(msg)
       setMessages(prev =>
         prev.map(m => {

@@ -187,7 +187,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setError(null)
       setPendingFiles([])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load conversation')
+      const msg = err instanceof Error ? err.message : ''
+      // Self-heal a stale/orphaned conversation id (e.g. left in localStorage
+      // after a DB reset, or owned by a different user): drop it so we stop
+      // sending it — the ChatPage will then fetch/create a fresh conversation.
+      // apiFetch throws "<status>: <body>", so a 404/403 surfaces here.
+      if (msg.startsWith('404') || msg.startsWith('403') || /not found/i.test(msg)) {
+        localStorage.removeItem('nova_active_conversation')
+        setMessages([])
+        setConversationId(null)
+        setSessionId(undefined)
+        setError(null)
+        setPendingFiles([])
+        return
+      }
+      setError(msg || 'Failed to load conversation')
     }
   }, [])
 
