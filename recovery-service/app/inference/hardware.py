@@ -112,42 +112,6 @@ async def get_full_recommendation(hardware: dict | None = None) -> dict:
     return {"backend": backend, "model": model_id, "reason": reason}
 
 
-async def get_gpu_stats() -> dict | None:
-    """Get live GPU stats by exec-ing nvidia-smi in the inference container."""
-    from app.inference.controller import BACKENDS, get_backend_status
-
-    status = await get_backend_status()
-    backend = status.get("backend", "none")
-    if backend not in BACKENDS:
-        return None
-
-    container = BACKENDS[backend]["container"]
-    try:
-        result = subprocess.run(
-            ["docker", "exec", container,
-             "nvidia-smi",
-             "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-
-        parts = result.stdout.strip().split(", ")
-        if len(parts) < 4:
-            return None
-
-        return {
-            "gpu_utilization_pct": int(parts[0]),
-            "vram_used_gb": round(int(parts[1]) / 1024, 1),
-            "vram_total_gb": round(int(parts[2]) / 1024, 1),
-            "temperature_c": int(parts[3]),
-        }
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        logger.debug("GPU stats unavailable: %s", e)
-        return None
-
-
 def _detect_gpus() -> list[dict]:
     """Detect GPUs using nvidia-smi or rocm-smi."""
     gpus = _detect_nvidia_gpus()

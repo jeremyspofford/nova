@@ -6,6 +6,7 @@ from .chatgpt_subscription_provider import (
 from .fallback_provider import FallbackProvider
 from .gemini_adc_provider import GeminiADCProvider
 from .litellm_provider import LiteLLMProvider
+from .lmstudio_provider import LMStudioProvider
 from .local_inference_provider import LocalInferenceProvider
 from .ollama_cloud_fallback import OllamaCloudFallback
 from .ollama_provider import OllamaProvider
@@ -26,6 +27,7 @@ __all__ = [
     "OpenAICompatibleProvider",
     "VLLMProvider",
     "SGLangProvider",
+    "LMStudioProvider",
     "RemoteInferenceProvider",
     "LocalInferenceProvider",
 ]

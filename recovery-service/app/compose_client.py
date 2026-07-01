@@ -13,18 +13,8 @@ COMPOSE_PROJECT_NAME = os.getenv("COMPOSE_PROJECT_NAME", "nova")
 
 async def _run_compose(*args: str) -> tuple[int, str, str]:
     """Run a docker compose command and return (returncode, stdout, stderr)."""
-    compose_files = [COMPOSE_FILE]
-    gpu_overlay = os.path.join(COMPOSE_PROJECT_DIR, "docker-compose.gpu.yml")
-    rocm_overlay = os.path.join(COMPOSE_PROJECT_DIR, "docker-compose.rocm.yml")
-    if os.path.exists(gpu_overlay):
-        compose_files.append(gpu_overlay)
-    elif os.path.exists(rocm_overlay):
-        compose_files.append(rocm_overlay)
-
-    file_args = []
-    for f in compose_files:
-        file_args.extend(["-f", f])
-    cmd = ["docker", "compose", *file_args, "-p", COMPOSE_PROJECT_NAME, *args]
+    # No GPU overlays — Nova bundles no inference container to accelerate.
+    cmd = ["docker", "compose", "-f", COMPOSE_FILE, "-p", COMPOSE_PROJECT_NAME, *args]
     logger.info("Running: %s", " ".join(cmd))
     proc = await asyncio.create_subprocess_exec(
         *cmd,

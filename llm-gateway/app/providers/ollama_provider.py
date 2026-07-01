@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+import uuid
 from typing import AsyncIterator
 
 import httpx
@@ -42,7 +44,6 @@ def _tool_to_ollama(tool) -> dict:
 
 def _parse_ollama_tool_calls(raw_calls: list) -> list[ToolCall]:
     """Convert Ollama tool_calls into Nova's ToolCall contract."""
-    import uuid
     out: list[ToolCall] = []
     for tc in raw_calls or []:
         fn = tc.get("function", {}) or {}
@@ -56,6 +57,71 @@ def _parse_ollama_tool_calls(raw_calls: list) -> list[ToolCall]:
         out.append(ToolCall(
             id=tc.get("id") or f"call_{uuid.uuid4().hex[:8]}",
             name=fn.get("name", ""),
+            arguments=args if isinstance(args, dict) else {},
+        ))
+    return out
+
+
+# Some models' Ollama templates lack native tool support and instead print the
+# tool call as plain text in `content` (e.g. certain qwen2.5-coder builds emit
+# `{"name": "run_shell", "arguments": {...}}`). Without recovery the agent
+# narrates tool use but never acts. These patterns extract such calls.
+_TOOL_CALL_TAG_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:json|tool_call)?", re.IGNORECASE)
+# A JSON object allowing a single level of nesting (covers {"arguments": {...}}).
+_JSON_OBJ_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}")
+
+
+def _extract_text_tool_calls(content: str, valid_names: set[str]) -> list[ToolCall]:
+    """Best-effort recovery of tool calls a model emitted as text instead of via
+    Ollama's native tool_calls field.
+
+    Only calls whose name matches a tool that was actually offered are returned,
+    so ordinary JSON in a model's prose is not mistaken for a tool call.
+    """
+    if not content or not valid_names:
+        return []
+
+    blocks = _TOOL_CALL_TAG_RE.findall(content)
+    if blocks:
+        candidates = blocks
+    else:
+        stripped = _FENCE_RE.sub("", content).strip()
+        try:
+            whole = json.loads(stripped)
+            candidates = (
+                [json.dumps(x) for x in whole]
+                if isinstance(whole, list)
+                else [json.dumps(whole)]
+            )
+        except Exception:
+            candidates = _JSON_OBJ_RE.findall(stripped)
+
+    out: list[ToolCall] = []
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        fn = obj.get("function")
+        if isinstance(fn, dict):
+            name = obj.get("name") or fn.get("name")
+            args = fn.get("arguments", obj.get("arguments", {}))
+        else:
+            name = obj.get("name") or obj.get("tool")
+            args = obj.get("arguments", obj.get("parameters", {}))
+        if name not in valid_names:
+            continue
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        out.append(ToolCall(
+            id=f"call_{uuid.uuid4().hex[:8]}",
+            name=name,
             arguments=args if isinstance(args, dict) else {},
         ))
     return out
@@ -187,7 +253,13 @@ class OllamaProvider(ModelProvider):
                     asyncio.create_task(send_wol(wol_mac, wol_broadcast))
                     log.info("WoL packet sent to %s (broadcast %s)", wol_mac, wol_broadcast)
 
-                raise RuntimeError(f"Ollama unreachable at {base_url}") from e
+                raise RuntimeError(
+                    f"Local inference unreachable: Ollama did not respond at {base_url}. "
+                    f"Check that the backend is running and that inference.url / "
+                    f"OLLAMA_BASE_URL points at a reachable host. Note: from inside this "
+                    f"container 'localhost' is the container itself — use the compose "
+                    f"service name (http://ollama:11434) or http://host.docker.internal:11434."
+                ) from e
 
     async def complete(self, request: CompleteRequest) -> CompleteResponse:
         await self._ensure_healthy()
@@ -211,11 +283,21 @@ class OllamaProvider(ModelProvider):
             data = resp.json()
 
         msg = data.get("message", {})
+        content = msg.get("content", "") or ""
         tool_calls = _parse_ollama_tool_calls(msg.get("tool_calls", []))
+        # Fallback: recover tool calls emitted as text by models whose Ollama
+        # template lacks native tool support, so the agent acts instead of
+        # narrating the call it meant to make.
+        if not tool_calls and request.tools:
+            recovered = _extract_text_tool_calls(content, {t.name for t in request.tools})
+            if recovered:
+                log.info("Recovered %d text-emitted tool call(s) from content", len(recovered))
+                tool_calls = recovered
+                content = ""  # the text WAS the tool call, not a user-facing answer
         finish_reason = "tool_calls" if tool_calls else "stop"
 
         return CompleteResponse(
-            content=msg.get("content", "") or "",
+            content=content,
             model=data.get("model", request.model),
             tool_calls=tool_calls,
             input_tokens=data.get("prompt_eval_count", 0),

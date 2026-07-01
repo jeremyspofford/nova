@@ -321,11 +321,8 @@ PROFILE_MAP = {
     "bridges": "chat-bridge",
     "editor-vscode": "editor-vscode",
     "editor-neovim": "editor-neovim",
-    # Inference backend profiles — let the dashboard start/stop the bundled
-    # local-AI service when the user changes routing strategy / mode.
-    "local-ollama": "ollama",
-    "local-vllm": "nova-vllm",
-    "local-sglang": "nova-sglang",
+    # No inference profiles — local inference is external/user-run, not a
+    # bundled compose service the dashboard can start/stop.
 }
 
 

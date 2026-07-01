@@ -58,46 +58,13 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: marker for long-running e2e tests (~3-5 min)")
     config.addinivalue_line(
         "markers",
-        "requires_local_ollama: skip if the local-ollama compose profile is not active",
-    )
-    config.addinivalue_line(
-        "markers",
         "requires_github: skip unless REQUIRES_GITHUB=1 and NOVA_GITHUB_PAT are set "
         "(real-GitHub e2e tests against jeremyspofford/nova-test-cap)",
     )
 
 
-def _local_ollama_in_profiles() -> bool:
-    """True iff `local-ollama` is in the active COMPOSE_PROFILES.
-
-    `load_dotenv` at module import has already populated os.environ from the
-    repo's `.env`, so this picks up the value `make dev` would see.
-    """
-    raw = os.environ.get("COMPOSE_PROFILES", "") or ""
-    return "local-ollama" in [p.strip() for p in raw.split(",") if p.strip()]
-
-
-@pytest.fixture(scope="session")
-def local_ollama_active() -> bool:
-    return _local_ollama_in_profiles()
-
-
 def pytest_collection_modifyitems(config, items):
-    """Skip `requires_local_ollama` and `requires_github` tests when their gating
-    env / profile is missing.
-
-    Both markers are evaluated independently — a test marked with both stays
-    skipped if either gate is closed.
-    """
-    # ── requires_local_ollama: tied to COMPOSE_PROFILES=local-ollama ──────────
-    if not _local_ollama_in_profiles():
-        skip_ollama = pytest.mark.skip(
-            reason="local-ollama profile is not active (COMPOSE_PROFILES)"
-        )
-        for item in items:
-            if "requires_local_ollama" in item.keywords:
-                item.add_marker(skip_ollama)
-
+    """Skip `requires_github` tests when their gating env is missing."""
     # ── requires_github: tied to REQUIRES_GITHUB=1 + NOVA_GITHUB_PAT ──────────
     # Aligns with tests/test_capability_smoke_real_github.py's gating env vars.
     requires_github_active = (

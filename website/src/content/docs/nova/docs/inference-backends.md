@@ -1,6 +1,6 @@
 ---
 title: "Inference Backends"
-description: "How Nova manages local inference backends -- Ollama, vLLM, and SGLang -- with automatic lifecycle management, hardware detection, and one-click switching."
+description: "How Nova manages local inference backends -- Ollama, vLLM, SGLang, and LM Studio -- with automatic lifecycle management, hardware detection, and one-click switching."
 ---
 
 Nova manages local inference backend lifecycle for you. Select a backend from the dashboard, and Nova handles pulling the container image, starting it with the right GPU flags, health monitoring, and graceful switching -- no manual Docker Compose profile editing required.
@@ -66,6 +66,8 @@ Nova manages three backends -- **Ollama**, **vLLM**, and **SGLang**. Only one lo
 | SGLang | `local-sglang` | `nova-sglang` | 8000 | Managed |
 
 Users do not set `COMPOSE_PROFILES` manually for inference backends. The recovery service starts and stops profiled services via its Docker Compose integration.
+
+LM Studio is also a first-class backend but is **not** container-managed -- see [LM Studio](#lm-studio).
 
 ## Hardware detection
 
@@ -143,9 +145,13 @@ All inference backend settings are configured through the dashboard UI and store
 
 | Key | Purpose | Values |
 |-----|---------|--------|
-| `nova:config:inference.backend` | Active backend | `ollama`, `vllm`, `sglang`, `custom`, `none` |
+| `nova:config:inference.backend` | Active backend | `ollama`, `vllm`, `sglang`, `lmstudio`, `custom`, `none` |
 | `nova:config:inference.state` | Lifecycle state | `ready`, `starting`, `draining`, `error`, `stopped` |
-| `nova:config:inference.url` | Backend URL override | Empty = use default for backend |
+| `nova:config:inference.url` | Backend URL override (Ollama/vLLM/SGLang) | Empty = use default for backend |
+| `nova:config:inference.lmstudio_url` | LM Studio server URL | Empty = `http://host.docker.internal:1234` |
+| `nova:config:inference.lmstudio_api_key` | LM Studio server API key (optional) | Empty = no auth |
+| `nova:config:llm.embed_provider` | Embedding provider override | `auto` (route by model name), `lmstudio`, `ollama`, `gemini`, `litellm` |
+| `nova:config:llm.embed_model` | Model name sent to the embedding provider | Used when `llm.embed_provider` is set |
 | `nova:system:hardware` | Detected hardware info | JSON (GPU, CPU, RAM, disk) |
 
 ### What stays in .env
@@ -173,9 +179,10 @@ The LLM Gateway uses a `LocalInferenceProvider` that wraps whichever backend is 
 
 | Class | Protocol | Notes |
 |-------|----------|-------|
-| `OpenAICompatibleProvider` | OpenAI `/v1/chat/completions`, `/v1/embeddings` | Base class for vLLM and SGLang |
+| `OpenAICompatibleProvider` | OpenAI `/v1/chat/completions`, `/v1/embeddings` | Base class for vLLM, SGLang, and LM Studio |
 | `VLLMProvider` | Extends above | Thin wrapper -- vLLM speaks native OpenAI format |
 | `SGLangProvider` | Extends above | Thin wrapper -- SGLang speaks native OpenAI format with RadixAttention benefits |
+| `LMStudioProvider` | Extends above | Host-side desktop app; health-checked via `/v1/models`; URL/key runtime-configurable |
 | `RemoteInferenceProvider` | Extends above | For user-managed OpenAI-compatible servers (custom URL + optional auth) |
 | `OllamaProvider` | Ollama API | Existing provider, unchanged |
 
@@ -189,6 +196,32 @@ The existing routing strategies -- `local-first`, `cloud-first`, `local-only`, `
 
 Fallback chain: `LocalInferenceProvider` (active backend) then cloud providers.
 
+## Embeddings
+
+Embeddings are **decoupled from chat**. Memory-service calls the gateway's `POST /embed` with a model name, and the gateway resolves the provider independently of `inference.backend`. By default the embedding model is `nomic-embed-text` (routed by name to Ollama) -- selecting LM Studio for chat does not re-point embeddings at it.
+
+### The single-model constraint
+
+LM Studio and Ollama are single-model local servers: each embed call evicts the currently-loaded chat model (a 1-5s reload). To avoid this, **don't run chat and embeddings on the same local server**. Pair them across two servers, or use a cloud embed model:
+
+| Chat | Embeddings | Notes |
+|------|-----------|-------|
+| LM Studio (local model) | LM Studio (cloud model) | One local model in VRAM; LM Studio proxies the cloud embed model. `llm.embed_provider=lmstudio` |
+| LM Studio (cloud model) | LM Studio (local model) | Inverse of above |
+| LM Studio (local) | Ollama (`nomic-embed-text`) | Tiny (~270MB) embed model stays resident in Ollama; zero chat impact. `llm.embed_provider=ollama` (or `auto`) |
+| Ollama | LM Studio (local) | `llm.embed_provider=lmstudio` |
+
+### Embedding provider override
+
+Because a model name can only map to one provider in the registry, routing embeddings through LM Studio (even for a cloud model LM Studio proxies) requires an explicit override. Set it in Settings \u2192 AI & Models \u2192 Embedding Model:
+
+- `llm.embed_provider` -- `auto` (default; route by model name) or a provider slug (`lmstudio`, `ollama`, `gemini`, `litellm`)
+- `llm.embed_model` -- the model name to send to that provider (used when the override is active)
+
+:::caution
+Embeddings must match memory-service's `EMBEDDING_DIMENSIONS` (default **768**). Use a 768-dim model (e.g. `nomic-embed-text`) unless you've reconfigured memory-service and re-embedded existing memories -- mixing dimensions breaks pgvector similarity queries.
+:::
+
 ## SGLang
 
 SGLang is Nova's third managed backend, optimized for workloads with shared prefixes -- exactly Nova's agent pipeline pattern.
@@ -199,9 +232,41 @@ The `SGLangProvider` extends `OpenAICompatibleProvider` in the LLM Gateway, so i
 
 Configuration is done entirely through the dashboard -- select SGLang from the Local Inference section in Settings, and Nova handles the rest.
 
+## LM Studio
+
+[LM Studio](https://lmstudio.ai) is a desktop GUI app (macOS/Windows/Linux) that runs models locally and exposes an OpenAI-compatible server. Unlike Ollama/vLLM/SGLang, **Nova does not manage the LM Studio process** -- you start it yourself. Nova discovers loaded models via `/v1/models` and, on LM Studio 0.4.0+, can **load and unload models** from your downloaded library without touching the GUI.
+
+This makes LM Studio ideal for users who already run it on their host (e.g. Nova in WSL/Docker while LM Studio runs on Windows). The gateway reaches it at `http://host.docker.internal:1234` by default; override the URL in Settings for a remote LM Studio box.
+
+LM Studio is multi-model and user-managed (like Ollama), **not** single-model switchable (unlike vLLM/SGLang) -- there is no model-switch path.
+
+### Setup
+
+1. Install LM Studio from [lmstudio.ai](https://lmstudio.ai)
+2. Open the **Developer** tab \u2192 **Start Server** (port 1234)
+3. Download a model in LM Studio (you can also load one in the GUI, but see below)
+4. In Nova: Settings \u2192 AI & Models \u2192 Local Inference \u2192 select **LM Studio**
+5. (Optional) Set a server API key in LM Studio and enter it in the Nova settings card
+
+The settings card shows a live connection status, loaded models, and a Test Connection button. Because the recovery container has no `host.docker.internal` mapping, status is probed through the gateway's `GET /health/providers/lmstudio/status` endpoint.
+
+### The Models Library (load & unload on demand)
+
+When LM Studio is the active backend, the **Models** page shows a dedicated **LM Studio Models** section that lists every model you've *downloaded* -- not just the ones currently loaded. For each model you see its parameter size, quantization, max context, capabilities (vision/tools/embedding), size on disk, and whether it's currently in memory.
+
+- **Load** brings a downloaded model into memory and immediately registers it with the gateway so it's routable from Nova (a loaded model can serve chat via `/v1/chat/completions`).
+- **Unload** frees the memory it occupied.
+- Use **Refresh** to re-sync after you download or load models in the LM Studio GUI.
+
+This uses LM Studio's native v1 REST API (`GET /api/v1/models`, `POST /api/v1/models/load`, `POST /api/v1/models/unload`), which is available in **LM Studio 0.4.0+**. On older builds, the library gracefully falls back to the OpenAI-compatible `/v1/models` endpoint -- the list still renders (showing loaded models) but the load/unload buttons aren't available; load models from the LM Studio GUI instead.
+
+### Onboarding
+
+LM Studio appears as an engine option in the first-run wizard **only when** a probe to the server succeeds -- users never see a dead choice.
+
 ## Custom endpoints
 
-For backends Nova doesn't manage (llama.cpp, LMStudio, a remote vLLM instance, etc.), configure them as custom OpenAI-compatible endpoints via the Settings UI.
+For backends Nova doesn't manage (llama.cpp, a remote vLLM instance, etc.), configure them as custom OpenAI-compatible endpoints via the Settings UI.
 
 The `RemoteInferenceProvider` connects to any OpenAI-compatible server at a user-specified URL. Optional authentication is supported via a configurable auth header value. Custom endpoints are registered through the dashboard's Local Inference settings under the "Custom" backend option, where you provide the server URL and optional authentication.
 

@@ -87,6 +87,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.debug("vLLM not available at startup: %s", e)
 
+    # Probe LM Studio (host-side desktop app) so loaded models appear in the
+    # catalog. No-op (and never an error) if LM Studio isn't running — it's a
+    # user-managed external server, not a Nova container.
+    try:
+        from app.registry import sync_lmstudio_models
+        added = await sync_lmstudio_models()
+        if added:
+            log.info("Synced %d LM Studio model(s) into registry", added)
+    except Exception as e:
+        log.debug("LM Studio not available at startup: %s", e)
+
     # Feature-flags SDK wiring (B7c). See memory-service/app/main.py for
     # canonical comments.
     from pathlib import Path as _Path

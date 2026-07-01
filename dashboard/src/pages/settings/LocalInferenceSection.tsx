@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Cpu, Play, Square, RefreshCw, Wifi, AlertCircle, Lightbulb, CheckCircle2, ArrowRight, Eye, EyeOff } from "lucide-react";
 import { Section, Button, Toggle, Badge, StatusDot, Card } from "../../components/ui";
 import { ConfigField, useConfigValue, type ConfigSectionProps } from "./shared";
-import { recoveryFetch, getEnvVars, patchEnv } from "../../api-recovery";
+import { recoveryFetch } from "../../api-recovery";
 import { getRecommendation, type InferenceRecommendation } from "../../api-recovery";
+import { getLMStudioStatus } from "../../api";
 
 interface HardwareInfo {
   gpus: Array<{ vendor: string; model: string; vram_gb: number; index: number }>;
@@ -28,6 +29,7 @@ const BACKENDS = [
   { value: "vllm", label: "vLLM", description: "Production GPU inference (NVIDIA/AMD)" },
   { value: "sglang", label: "SGLang", description: "High-throughput GPU inference" },
   { value: "ollama", label: "Ollama", description: "Easy mode / CPU fallback" },
+  { value: "lmstudio", label: "LM Studio", description: "Desktop OpenAI-compatible server on your host" },
   { value: "custom", label: "Custom", description: "User-managed OpenAI-compatible server" },
   { value: "none", label: "None", description: "Cloud providers only" },
 ] as const;
@@ -40,137 +42,129 @@ const STATE_LABELS: Record<string, { label: string; status: 'success' | 'neutral
   error:    { label: "Error",        status: "danger" },
 };
 
-function BackendModelField({ backend, onRestart }: { backend: string; onRestart: () => void }) {
+function LMStudioCard({ entries, onSave, saving }: ConfigSectionProps) {
   const queryClient = useQueryClient();
-  const { data: envVars } = useQuery({
-    queryKey: ["env-vars"],
-    queryFn: getEnvVars,
-    staleTime: 30_000,
+  const lmstudioUrl = useConfigValue(entries, "inference.lmstudio_url", "http://host.docker.internal:1234");
+  const lmstudioKey = useConfigValue(entries, "inference.lmstudio_api_key", "");
+  const [urlDraft, setUrlDraft] = useState(lmstudioUrl);
+  const [keyDraft, setKeyDraft] = useState(lmstudioKey);
+  const [urlDirty, setUrlDirty] = useState(false);
+  const [keyDirty, setKeyDirty] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+
+  useEffect(() => { setUrlDraft(lmstudioUrl); setUrlDirty(false); }, [lmstudioUrl]);
+  useEffect(() => { setKeyDraft(lmstudioKey); setKeyDirty(false); }, [lmstudioKey]);
+
+  const { data: lmStatus, refetch, isFetching } = useQuery({
+    queryKey: ["lmstudio-status"],
+    queryFn: getLMStudioStatus,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    retry: 1,
   });
 
-  const envKey = backend === "sglang" ? "SGLANG_MODEL" : "VLLM_MODEL";
-  const defaultModel = "Qwen/Qwen2.5-1.5B-Instruct";
-  const currentModel = envVars?.[envKey] ?? defaultModel;
-  const [draft, setDraft] = useState("");
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDraft(currentModel);
-    setDirty(false);
-  }, [currentModel]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await patchEnv({ [envKey]: draft });
-      queryClient.invalidateQueries({ queryKey: ["env-vars"] });
-      setDirty(false);
-      onRestart();
-    } finally {
-      setSaving(false);
-    }
+  const handleSaveUrl = () => { onSave("inference.lmstudio_url", JSON.stringify(urlDraft)); setUrlDirty(false); };
+  const handleSaveKey = () => { onSave("inference.lmstudio_api_key", JSON.stringify(keyDraft)); setKeyDirty(false); };
+  const handleTest = async () => {
+    await refetch();
+    // Refresh the model catalog so LM Studio's loaded models appear in pickers.
+    queryClient.invalidateQueries({ queryKey: ["model-catalog"] });
   };
 
   return (
-    <div className="mt-4 pt-4 border-t border-border-subtle space-y-1.5">
-      <div className="flex items-center justify-between">
-        <label className="text-caption font-medium text-content-secondary">Model</label>
-        {dirty && (
-          <Button size="sm" onClick={handleSave} loading={saving}>Save & Restart</Button>
+    <div className="mt-4 space-y-3">
+      {/* Server URL */}
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label className="text-caption font-medium text-content-secondary">Server URL</label>
+          {urlDirty && (
+            <Button size="sm" onClick={handleSaveUrl} loading={saving}>Save</Button>
+          )}
+        </div>
+        <input
+          type="text"
+          value={urlDraft}
+          onChange={e => { setUrlDraft(e.target.value); setUrlDirty(e.target.value !== lmstudioUrl); }}
+          placeholder="http://host.docker.internal:1234"
+          className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 text-compact text-content-primary placeholder:text-content-tertiary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors font-mono"
+        />
+        <p className="mt-1 text-caption text-content-tertiary">
+          LM Studio&rsquo;s local server URL. The default points at a host-colocated LM Studio (the Windows/macOS app, or a host install). For a remote LM Studio box, use its LAN IP.
+        </p>
+      </div>
+
+      {/* API key (optional) */}
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label className="text-caption font-medium text-content-secondary">API Key (optional)</label>
+          {keyDirty && (
+            <Button size="sm" onClick={handleSaveKey} loading={saving}>Save</Button>
+          )}
+        </div>
+        <div className="relative">
+          <input
+            type={showKey ? "text" : "password"}
+            value={keyDraft}
+            onChange={e => { setKeyDraft(e.target.value); setKeyDirty(e.target.value !== lmstudioKey); }}
+            placeholder="Only if you enabled server auth in LM Studio"
+            className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 pr-8 text-compact text-content-primary placeholder:text-content-tertiary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey(!showKey)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-content-tertiary hover:text-content-primary transition-colors"
+          >
+            {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        </div>
+      </div>
+
+      {/* Connection + loaded models */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleTest}
+          loading={isFetching}
+          icon={<RefreshCw size={14} />}
+        >
+          Test Connection
+        </Button>
+        {lmStatus && (
+          <span className={`text-compact ${lmStatus.healthy ? "text-success" : "text-danger"}`}>
+            {lmStatus.healthy
+              ? `Connected \u2014 ${lmStatus.model_count} model${lmStatus.model_count === 1 ? "" : "s"} loaded`
+              : "Not reachable"}
+          </span>
         )}
       </div>
-      <input
-        type="text"
-        value={draft}
-        onChange={e => { setDraft(e.target.value); setDirty(e.target.value !== currentModel) }}
-        placeholder="org/model-name"
-        className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 text-compact text-content-primary placeholder:text-content-tertiary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors font-mono"
-      />
-      <p className="text-caption text-content-tertiary">
-        HuggingFace model ID. Changing the model restarts the backend to load it.
-      </p>
-    </div>
-  );
-}
-
-function HuggingFaceTokenField() {
-  const queryClient = useQueryClient();
-  const { data: envVars } = useQuery({
-    queryKey: ["env-vars"],
-    queryFn: getEnvVars,
-    staleTime: 30_000,
-  });
-
-  const currentToken = envVars?.HF_TOKEN ?? "";
-  const [draft, setDraft] = useState("");
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [showToken, setShowToken] = useState(false);
-
-  useEffect(() => {
-    setDraft(currentToken);
-    setDirty(false);
-  }, [currentToken]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await patchEnv({ HF_TOKEN: draft });
-      queryClient.invalidateQueries({ queryKey: ["env-vars"] });
-      setDirty(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="mt-4 pt-4 border-t border-border-subtle space-y-1.5">
-      <div className="flex items-center justify-between">
-        <label className="text-caption font-medium text-content-secondary">HuggingFace Token</label>
-        {dirty && (
-          <Button size="sm" onClick={handleSave} loading={saving}>Save</Button>
-        )}
-      </div>
-      {!currentToken && (
-        <div className="rounded-sm bg-surface-elevated p-2.5 text-caption text-content-tertiary space-y-1.5">
-          <p>
-            <span className="font-medium text-content-secondary">Not required for the default model.</span>{" "}
-            Only needed if you switch to a gated model (Llama, Gemma, etc.).
-          </p>
-          <p>To use a gated model:</p>
-          <ol className="list-decimal list-inside space-y-0.5 ml-1">
-            <li>Accept the model&apos;s license on its <span className="text-content-secondary">HuggingFace page</span></li>
-            <li>Create a token at{" "}
-              <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                huggingface.co/settings/tokens
-              </a>
-            </li>
-            <li>Paste it below and restart the backend</li>
-          </ol>
+      {lmStatus?.healthy && lmStatus.models.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {lmStatus.models.map(m => (
+            <Badge key={m} color="neutral" size="sm" className="font-mono">{m}</Badge>
+          ))}
         </div>
       )}
-      <div className="relative">
-        <input
-          type={showToken ? "text" : "password"}
-          value={draft}
-          onChange={e => { setDraft(e.target.value); setDirty(e.target.value !== currentToken) }}
-          placeholder="hf_..."
-          className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 pr-8 text-compact text-content-primary placeholder:text-content-tertiary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors font-mono"
-        />
-        <button
-          type="button"
-          onClick={() => setShowToken(!showToken)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-content-tertiary hover:text-content-primary transition-colors"
-        >
-          {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
-        </button>
-      </div>
-      {currentToken && (
-        <p className="text-caption text-content-tertiary">
-          Token set. Requires container restart after changes.
-        </p>
+      {lmStatus && !lmStatus.healthy && (
+        <div className="rounded-sm bg-surface-elevated p-2.5 text-caption text-content-tertiary space-y-1">
+          <p>Start LM Studio &rarr; <span className="text-content-secondary">Developer</span> tab &rarr; <span className="text-content-secondary">Start Server</span> on port 1234, then load a model.</p>
+          <p>
+            Download LM Studio at{" "}
+            <a href="https://lmstudio.ai" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">lmstudio.ai</a>
+          </p>
+        </div>
       )}
+
+      {/* Embeddings guidance */}
+      <div className="rounded-sm border border-amber-200 dark:border-amber-800 bg-warning-dim p-2.5 text-caption space-y-1">
+        <p className="font-medium text-amber-800 dark:text-amber-300">Embeddings are separate from chat</p>
+        <p className="text-amber-700 dark:text-amber-400">
+          Nova uses its own embedding model for memory (see <span className="font-medium">Embedding Model</span> in LLM Routing). Keep embeddings on a different local server than your chat model &mdash; running both on one single-model server (LM Studio <em>or</em> Ollama) evicts the chat model on every embed call.
+        </p>
+        <p className="text-amber-700 dark:text-amber-400">
+          To use LM Studio for embeddings, pick it as the embedding provider below &mdash; ideally a 768-dim model (e.g. nomic-embed-text) to match existing memories.
+        </p>
+      </div>
     </div>
   );
 }
@@ -284,12 +278,14 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
     if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
 
     if (backend === "none" || backend === "custom") {
-      // No container to start — just save config
+      // No Nova-managed container to start — just save config
       setSwitchInfo(null);
       return;
     }
 
-    // Track the switch — only show "switching" banner when actually changing backends
+    // LM Studio is config-only (no container), but selecting it still goes
+    // through start_backend so recovery can stop any running container backend
+    // we're switching away from and mark state ready.
     if (currentBackend && currentBackend !== backend) {
       setSwitchInfo({ from: currentBackend, to: backend });
     } else {
@@ -367,6 +363,17 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
             Switching from <strong>{BACKENDS.find(b => b.value === switchInfo.from)?.label || switchInfo.from}</strong>
             {" "}to <strong>{BACKENDS.find(b => b.value === switchInfo.to)?.label || switchInfo.to}</strong>...
           </span>
+          {/* Escape hatch: a stuck start (e.g. SGLang on a GPU-less host) traps
+              the user here. Cancelling stops the in-flight start + container. */}
+          {currentState === "starting" && (
+            <button
+              className="ml-auto text-content-tertiary hover:text-danger text-caption"
+              onClick={() => stopBackend.mutate()}
+              disabled={stopBackend.isPending}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
@@ -380,7 +387,7 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
               variant={(status?.backend || configBackend) === b.value ? 'primary' : 'secondary'}
               size="sm"
               onClick={() => handleSwitchBackend(b.value)}
-              disabled={isTransitioning}
+              disabled={currentState === "draining"}
             >
               {b.label}
             </Button>
@@ -398,7 +405,7 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
               <Badge color="neutral" size="sm">{status.backend}</Badge>
             </div>
             <div className="flex gap-2">
-              {currentState === "ready" ? (
+              {status.backend !== "lmstudio" && currentState === "ready" && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -406,7 +413,8 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
                   loading={stopBackend.isPending}
                   icon={<Square size={14} />}
                 />
-              ) : currentState === "stopped" || currentState === "error" ? (
+              )}
+              {status.backend !== "lmstudio" && (currentState === "stopped" || currentState === "error") && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -414,7 +422,17 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
                   loading={startBackend.isPending}
                   icon={<Play size={14} />}
                 />
-              ) : null}
+              )}
+              {status.backend !== "lmstudio" && currentState === "starting" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => stopBackend.mutate()}
+                  loading={stopBackend.isPending}
+                  icon={<Square size={14} />}
+                  title="Cancel this start"
+                />
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -487,15 +505,20 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
         </div>
       )}
 
-      {/* Model + HuggingFace Token — shown for vLLM/SGLang */}
+      {/* LM Studio config — host-side desktop app */}
+      {(status?.backend || configBackend) === "lmstudio" && (
+        <LMStudioCard entries={entries} onSave={onSave} saving={saving} />
+      )}
+
+      {/* vLLM / SGLang run on your own server — you choose the model when you
+          launch it (e.g. `vllm serve <model>`). Nova connects by URL and does
+          not start, stop, or swap models on it. */}
       {["vllm", "sglang"].includes((status?.backend || configBackend).replace(/"/g, '')) && (
-        <>
-          <BackendModelField
-            backend={(status?.backend || configBackend).replace(/"/g, '')}
-            onRestart={() => startBackend.mutate((status?.backend || configBackend).replace(/"/g, ''))}
-          />
-          <HuggingFaceTokenField />
-        </>
+        <p className="mt-3 text-caption text-content-tertiary">
+          The model is set when you launch {(status?.backend || configBackend).replace(/"/g, '')} on
+          your server (e.g. <code className="font-mono">vllm serve &lt;model&gt;</code>). Set its
+          URL below — Nova connects to it and never restarts or swaps its model.
+        </p>
       )}
 
       {/* Remote Backend Toggle */}

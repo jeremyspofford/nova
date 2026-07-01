@@ -52,9 +52,6 @@ NOVA_SERVICES = [
 OPTIONAL_SERVICES = {
     "chat-bridge": "bridges",
     "website": "website",
-    "ollama": "local-ollama",
-    "nova-vllm": "local-vllm",
-    "nova-sglang": "local-sglang",
     "cloudflared": "cloudflare-tunnel",
     "tailscale": "tailscale",
     "editor-vscode": "editor-vscode",

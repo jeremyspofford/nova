@@ -1,8 +1,10 @@
 import time
+import logging
 
 import httpx
 from fastapi import APIRouter
 
+log = logging.getLogger(__name__)
 health_router = APIRouter(prefix="/health", tags=["health"])
 
 
@@ -117,6 +119,46 @@ async def ollama_status():
         result["wol_last_sent_seconds_ago"] = int(wol_age) if wol_age is not None else None
 
     return result
+
+
+@health_router.get("/providers/lmstudio/status")
+async def lmstudio_status():
+    """Return fresh LM Studio reachability + loaded models.
+
+    LM Studio is a host-side desktop app, not a Nova container, so there's no
+    Docker status to report \u2014 this endpoint probes the server directly (via
+    host.docker.internal, which the gateway can reach) and returns the loaded
+    models. Recovery's backend-status endpoint delegates here because the
+    recovery container has no host.docker.internal mapping.
+    """
+    from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+    url = await _refresh_lmstudio_runtime_url()
+    # Force a fresh probe (bypass the 15s health cache) so the dashboard status
+    # card reflects the current state, not a stale read.
+    _lmstudio._last_health_check = 0.0
+    healthy = await _lmstudio.check_health()
+
+    models: list[str] = []
+    active_model = None
+    if healthy:
+        try:
+            async with httpx.AsyncClient(timeout=5.0, headers=_lmstudio._extra_headers) as client:
+                r = await client.get(f"{url}/v1/models")
+                if r.status_code == 200:
+                    for m in r.json().get("data", []):
+                        if m.get("id"):
+                            models.append(m["id"])
+                    active_model = models[0] if models else None
+        except Exception as e:
+            log.debug("LM Studio model probe failed: %s", e)
+
+    return {
+        "healthy": healthy,
+        "base_url": url,
+        "model_count": len(models),
+        "active_model": active_model,
+        "models": models,
+    }
 
 
 @health_router.get("/inflight")

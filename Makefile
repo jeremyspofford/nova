@@ -2,34 +2,16 @@
 
 DASHBOARD    = dashboard
 
-# ── GPU auto-detection ────────────────────────────────────────────────────────
-# Override with NOVA_GPU=cpu|nvidia|rocm in .env or environment
-NOVA_GPU     ?= auto
-GPU_OVERLAY  :=
-ifeq ($(NOVA_GPU),nvidia)
-  GPU_OVERLAY = -f docker-compose.gpu.yml
-else ifeq ($(NOVA_GPU),rocm)
-  GPU_OVERLAY = -f docker-compose.rocm.yml
-else ifeq ($(NOVA_GPU),auto)
-  GPU_OVERLAY = $(shell command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 && echo "-f docker-compose.gpu.yml")
-endif
-
-# OLLAMA_BASE_URL: 'auto' and 'host' are back-compat aliases handled inside
-# the gateway (llm-gateway/app/config.py). The Makefile no longer pre-resolves
-# them — the gateway treats them as http://ollama:11434, and the bundled
-# Compose service is reachable at that internal hostname.
+# ── Inference is external ─────────────────────────────────────────────────────
+# Nova does not bundle or GPU-manage any inference server. Local inference
+# (Ollama, LM Studio, vLLM, SGLang, any OpenAI-compatible endpoint) runs on the
+# host / elsewhere and is configured at runtime in Settings. There is no GPU
+# overlay and no local-ollama/vllm/sglang compose profile to activate.
 
 EDITOR_PROFILE := $(if $(filter vscode,$(EDITOR_FLAVOR)),--profile editor-vscode,$(if $(filter neovim,$(EDITOR_FLAVOR)),--profile editor-neovim,))
 
-# Include the local-ollama profile in compose commands when NOVA_INFERENCE_MODE
-# is hybrid or local-only. setup.sh writes this to .env; we read it here so
-# `make dev` / `make up` activate the bundled Ollama service automatically.
-NOVA_INFERENCE_MODE ?= $(shell grep -E '^NOVA_INFERENCE_MODE=' .env 2>/dev/null | cut -d= -f2-)
-INFERENCE_PROFILE := $(if $(filter hybrid local-only,$(NOVA_INFERENCE_MODE)),--profile local-ollama,)
-
-COMPOSE      = docker compose -f docker-compose.yml $(GPU_OVERLAY) --profile voice $(EDITOR_PROFILE) $(INFERENCE_PROFILE)
+COMPOSE      = docker compose -f docker-compose.yml --profile voice $(EDITOR_PROFILE)
 ALL_PROFILES = --profile voice --profile website --profile bridges --profile knowledge \
-               --profile local-ollama --profile local-vllm --profile local-sglang \
                --profile cloudflare-tunnel --profile tailscale \
                --profile editor-vscode --profile editor-neovim
 
@@ -55,10 +37,10 @@ build: ## Rebuild all Docker images (run before up after code changes)
 	$(COMPOSE) build
 
 down: ## Stop and remove all containers (all profiles + orphans)
-	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
+	docker compose -f docker-compose.yml $(ALL_PROFILES) down --remove-orphans
 
 restart: ## Stop and start all services without rebuilding (preserves cached images)
-	docker compose -f docker-compose.yml $(GPU_OVERLAY) $(ALL_PROFILES) down --remove-orphans
+	docker compose -f docker-compose.yml $(ALL_PROFILES) down --remove-orphans
 	$(COMPOSE) up -d
 
 # ── Develop ──────────────────────────────────────────────────────────────────
@@ -109,13 +91,13 @@ prune: ## Remove stopped containers, dangling images, build cache (preserves ALL
 	docker system prune -f
 	@echo "\n  Volumes untouched. Use 'make prune-all' to also clean model caches."
 
-prune-all: ## Backup DB, then prune everything including model cache volumes
-	@echo "This will remove Ollama/vLLM/SGLang model caches (re-downloadable)."
+prune-all: ## Backup DB, then prune everything including named volumes
+	@echo "This will remove named volumes (re-downloadable caches)."
 	@echo "Postgres and Redis data are safe (bind-mounted to ./data/)."
 	@read -p "Continue? [y/N] " yn; [ "$$yn" = "y" ] || exit 1
 	@./scripts/backup.sh
 	docker system prune -f
-	@for v in ollama-data nova-vllm-cache nova-sglang-cache tailscale-state; do \
+	@for v in tailscale-state; do \
 	  docker volume rm "nova_$$v" 2>/dev/null && echo "  Removed $$v" || true; \
 	done
 

@@ -22,10 +22,14 @@ from .vllm_provider import VLLMProvider
 
 logger = logging.getLogger(__name__)
 
+# All backends are external, user-run servers reached over HTTP. Defaults point
+# at the host on each server's conventional port (override per-endpoint via
+# inference.url / inference.lmstudio_url in Settings). Nova bundles none of these.
 DEFAULT_URLS = {
-    "ollama": settings.ollama_base_url,  # Use resolved URL (auto/host already expanded)
-    "vllm": "http://nova-vllm:8000",
-    "sglang": "http://nova-sglang:8000",
+    "ollama": settings.ollama_base_url,  # resolved host URL (auto/host expanded)
+    "vllm": "http://host.docker.internal:8000",
+    "sglang": "http://host.docker.internal:30000",
+    "lmstudio": "http://host.docker.internal:1234",  # desktop app on the host (WSL/Mac/Win)
 }
 
 READY_STATES = {"ready"}
@@ -105,17 +109,30 @@ class LocalInferenceProvider(ModelProvider):
                 if backend == "custom":
                     custom_url = await _get_redis_config("inference.custom_url", "")
                     custom_auth = await _get_redis_config("inference.custom_auth_header", "")
+                lmstudio_url = ""
+                lmstudio_api_key = ""
+                if backend == "lmstudio":
+                    lmstudio_url = await _get_redis_config("inference.lmstudio_url", "")
+                    lmstudio_api_key = await _get_redis_config("inference.lmstudio_api_key", "")
             except Exception:
                 logger.debug("Failed to read inference config from Redis, keeping current state")
                 return
 
             self._state = state
 
-            if backend != self._current_backend or url_override != self._current_url:
+            # Effective URL drives delegate swap detection. LM Studio uses its
+            # dedicated inference.lmstudio_url (not the shared inference.url
+            # override, which is for Ollama/vLLM/SGLang external pointing).
+            effective_url = lmstudio_url if backend == "lmstudio" else url_override
+
+            if backend != self._current_backend or effective_url != self._current_url:
                 self._current_backend = backend
-                self._current_url = url_override
-                self._delegate = self._create_delegate(backend, url_override,
-                                                       custom_url=custom_url, custom_auth=custom_auth)
+                self._current_url = effective_url
+                self._delegate = self._create_delegate(
+                    backend, url_override,
+                    custom_url=custom_url, custom_auth=custom_auth,
+                    lmstudio_url=lmstudio_url, lmstudio_api_key=lmstudio_api_key,
+                )
                 self._local_models.clear()
                 # Probe the new delegate so it's available immediately
                 if self._delegate and hasattr(self._delegate, 'check_health'):
@@ -123,7 +140,8 @@ class LocalInferenceProvider(ModelProvider):
                 logger.info("Local inference backend changed to: %s", backend)
 
     def _create_delegate(self, backend: str, url_override: str,
-                         custom_url: str = "", custom_auth: str = "") -> Optional[ModelProvider]:
+                         custom_url: str = "", custom_auth: str = "",
+                         lmstudio_url: str = "", lmstudio_api_key: str = "") -> Optional[ModelProvider]:
         """Create a new provider instance for the given backend."""
         if backend == "none":
             return None
@@ -143,6 +161,15 @@ class LocalInferenceProvider(ModelProvider):
                 return None
             from .remote_provider import RemoteInferenceProvider
             return RemoteInferenceProvider(url=custom_url, auth_header=custom_auth or None)
+        elif backend == "lmstudio":
+            # LM Studio uses a dedicated URL/key; the shared inference.url override
+            # does NOT apply (it's for Ollama/vLLM/SGLang external pointing).
+            from .lmstudio_provider import LMStudioProvider
+            lm_url = lmstudio_url or DEFAULT_URLS["lmstudio"]
+            headers: dict[str, str] = {}
+            if lmstudio_api_key:
+                headers["Authorization"] = f"Bearer {lmstudio_api_key}"
+            return LMStudioProvider(base_url=lm_url, extra_headers=headers or None)
         else:
             logger.warning("Unknown backend: %s", backend)
             return None

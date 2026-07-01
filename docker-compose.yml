@@ -62,100 +62,13 @@ services:
       interval: 3s
       start_period: 5s
 
-  # Ollama for local model serving. Activated by the `local-ollama` profile,
-  # which the setup wizard adds to COMPOSE_PROFILES in .env when the user picks
-  # `hybrid` or `local-only` mode (the default). Cloud-only mode leaves the
-  # profile out, so this service is not pulled or started.
-  # To point Nova at an external Ollama/vLLM instance, set OLLAMA_BASE_URL in
-  # .env to a literal URL (e.g. http://192.168.12.10:11434). A runtime UI for
-  # swapping the inference target without a restart is coming soon.
-  ollama:
-    <<: *nova-common
-    profiles: ["local-ollama"]
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      # Keep loaded models resident — default 5m evicts between Cortex/intel cycles,
-      # forcing a 1-2s runner reload each call. -1 holds forever.
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
-    healthcheck:
-      <<: *nova-healthcheck
-      # ollama/ollama image does not include curl — use the ollama binary itself.
-      # `ollama list` connects to the running server and exits 0 when ready.
-      test: ["CMD", "ollama", "list"]
-      start_period: 60s # give more time on first run (model downloads may be pending)
-    deploy:
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: 8G
-    # On Apple Silicon, Ollama uses Metal automatically — no GPU flags needed
-
-  nova-vllm:
-    <<: *nova-common
-    image: vllm/vllm-openai:v0.8.5
-    container_name: nova-vllm
-    profiles: ["local-vllm"]
-    volumes:
-      - nova-vllm-cache:/root/.cache/huggingface
-    environment:
-      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
-      - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
-      - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:---enforce-eager}
-      - HF_TOKEN=${HF_TOKEN:-}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        python3 -m vllm.entrypoints.openai.api_server
-        --model "$$VLLM_MODEL"
-        --gpu-memory-utilization "$$VLLM_GPU_MEMORY_UTILIZATION"
-        --max-model-len "$$VLLM_MAX_MODEL_LEN"
-        $$VLLM_EXTRA_ARGS
-        --host 0.0.0.0
-        --port 8000
-    deploy:
-      resources:
-        limits:
-          cpus: "8"
-          memory: 16G
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 120s
-
-  nova-sglang:
-    <<: *nova-common
-    image: lmsysorg/sglang:latest
-    container_name: nova-sglang
-    profiles: ["local-sglang"]
-    volumes:
-      - nova-sglang-cache:/root/.cache/huggingface
-    environment:
-      - SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        python3 -m sglang.launch_server
-        --model-path "$$SGLANG_MODEL"
-        --host 0.0.0.0
-        --port 8000
-    deploy:
-      resources:
-        limits:
-          cpus: "8.0"
-          memory: 16G
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 120s
+  # Local inference is NOT bundled. Nova is a client of external, user-run
+  # inference servers (Ollama, LM Studio, vLLM, SGLang, llama.cpp, or any
+  # OpenAI-compatible endpoint) plus cloud providers. Configure the endpoint(s)
+  # in Settings → Local Inference; the gateway reaches them over HTTP (the
+  # gateway has extra_hosts host.docker.internal:host-gateway for host-run
+  # servers). There is no GPU passthrough, model auto-pull, or container
+  # lifecycle to manage here — that belongs to the inference server itself.
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Nova Platform Services
@@ -188,7 +101,10 @@ services:
         - action: rebuild
           path: ./llm-gateway/pyproject.toml
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      # Optional bootstrap default for a host-run Ollama; the real inference
+      # target is configured at runtime in Settings (Redis inference.*). No
+      # bundled ollama service exists — this points at the host by default.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ORCHESTRATOR_URL: http://orchestrator:8000
       REDIS_URL: redis://redis:6379/1
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
@@ -248,9 +164,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
-        required: false  # cloud-only mode (no local-ollama profile) skips this dep
     healthcheck:
       <<: *nova-healthcheck
       test:
@@ -354,6 +267,11 @@ services:
       LLM_GATEWAY_URL: http://llm-gateway:8001
       DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Path to the real .env file (repo is mounted at /nova). Read at boot to
+      # detect runtime keys still set in .env that platform_config now owns —
+      # os.environ can't distinguish an operator .env value from a compose
+      # default, so we parse the file directly. See config_demotion.py.
+      NOVA_ENV_FILE: /nova/.env
       # Phase 2: auth + cost tracking
       DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
       NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
@@ -589,8 +507,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./.env:/project/.env:rw
       - ./docker-compose.yml:/project/docker-compose.yml:ro
-      - ./docker-compose.gpu.yml:/project/docker-compose.gpu.yml:ro
-      - ./docker-compose.rocm.yml:/project/docker-compose.rocm.yml:ro
       - ./data:/app/data:ro
       # Sources filesystem blobs need rw for restore (overlays the :ro parent mount above).
       # Scoped to just data/sources rather than widening the whole /app/data mount.
@@ -1147,9 +1063,6 @@ networks:
 volumes:
   # Critical data (postgres, redis) uses host bind mounts in ./data/ — immune to docker volume prune.
   # Only re-downloadable caches remain as named volumes:
-  ollama-data:
-  nova-vllm-cache:
-  nova-sglang-cache:
   tailscale-state:
   vaultwarden-data:
   mem0-data:

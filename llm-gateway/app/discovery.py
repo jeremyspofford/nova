@@ -59,6 +59,11 @@ async def close_redis() -> None:
 AUTH_METHODS: dict[str, list[str]] = {
     "ollama": ["Always available (local)"],
     "vllm": ["Available when vLLM is the active inference backend"],
+    "lmstudio": [
+        "Start LM Studio \u2192 Developer \u2192 Start Server (port 1234)",
+        "Set inference.lmstudio_url if LM Studio is not on the host",
+        "Optional: inference.lmstudio_api_key if you enabled server auth",
+    ],
     "chatgpt": [
         "CHATGPT_ACCESS_TOKEN env var",
         "~/.codex/auth.json (auto-detected after `codex login`)",
@@ -105,6 +110,53 @@ class PullRequest(BaseModel):
     name: str
 
 
+# ── LM Studio downloaded-model library (native v1 REST API) ─────────────────────
+#
+# LM Studio exposes two model-listing concepts:
+#   • GET /v1/models          (OpenAI-compatible) → currently LOADED models only
+#   • GET /api/v1/models       (native v1, LM Studio 0.4.0+) → all DOWNLOADED
+#     models with rich metadata (quant, size, context, capabilities, variants)
+#     and a `loaded_instances` array showing which are live right now.
+#
+# The downloaded list powers the "models library" UI: users see everything
+# they have in LM Studio (loaded or not) and can load/unload on demand via
+# POST /api/v1/models/load and /unload. We gracefully fall back to the
+# OpenAI-compatible endpoint on older LM Studio builds that predate the v1
+# native API — those entries come back as loaded-only with minimal metadata.
+
+class LMStudioDownloadedModel(BaseModel):
+    key: str  # unique model identifier (used for load)
+    type: str  # "llm" | "embedding"
+    publisher: str
+    display_name: str
+    architecture: str | None = None
+    quantization: str | None = None
+    bits_per_weight: float | None = None
+    size_bytes: int = 0
+    params_string: str | None = None
+    loaded: bool = False
+    loaded_instances: list[str] = []  # instance_ids of live loads
+    max_context_length: int | None = None
+    format: str | None = None  # "gguf" | "mlx" | null
+    supports_vision: bool = False
+    supports_tools: bool = False
+    variants: list[str] = []
+    selected_variant: str | None = None
+
+
+class LMStudioLoadRequest(BaseModel):
+    model: str  # the model key to load
+    context_length: int | None = None
+    flash_attention: bool | None = None
+    eval_batch_size: int | None = None
+    num_experts: int | None = None
+    offload_kv_cache_to_gpu: bool | None = None
+
+
+class LMStudioUnloadRequest(BaseModel):
+    instance_id: str
+
+
 # ── Auto-registration helper ──────────────────────────────────────────────────
 
 def _ensure_registered(model_id: str, provider: "ModelProvider") -> None:
@@ -145,7 +197,7 @@ async def _discover_vllm() -> list[DiscoveredModel]:
     models = []
     try:
         from app.registry import _get_redis_config
-        url = await _get_redis_config("inference.url", "") or "http://nova-vllm:8000"
+        url = await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
         backend = await _get_redis_config("inference.backend", "ollama")
         if backend != "vllm":
             return []
@@ -163,6 +215,35 @@ async def _discover_vllm() -> list[DiscoveredModel]:
     except Exception as e:
         log.debug("vLLM discovery failed: %s", e)
     return models
+
+
+async def _discover_lmstudio() -> list[DiscoveredModel]:
+    """Discover loaded models from a running LM Studio server.
+
+    Unlike vLLM, LM Studio is always probed regardless of the active chat
+    backend \u2014 it may serve embeddings (llm.embed_provider=lmstudio) while
+    another backend handles chat. Reaches the host via host.docker.internal.
+    """
+    try:
+        from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+        url = await _refresh_lmstudio_runtime_url()
+        await _lmstudio.check_health()
+        if not _lmstudio.is_available:
+            return []
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT, headers=_lmstudio._extra_headers) as client:
+            r = await client.get(f"{url}/v1/models")
+            r.raise_for_status()
+            data = r.json()
+        models: list[DiscoveredModel] = []
+        for m in data.get("data", []):
+            model_id = m.get("id", "")
+            if model_id:
+                _ensure_registered(model_id, _lmstudio)
+                models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
+    except Exception as e:
+        log.debug("LM Studio discovery failed: %s", e)
+        return []
 
 
 async def _discover_groq() -> list[DiscoveredModel]:
@@ -348,6 +429,7 @@ async def _discover_from_model_map(slug: str) -> list[DiscoveredModel]:
 _PROVIDER_META = [
     {"slug": "ollama",      "name": "Ollama",           "type": "local"},
     {"slug": "vllm",        "name": "vLLM",             "type": "local"},
+    {"slug": "lmstudio",    "name": "LM Studio",       "type": "local"},
     {"slug": "anthropic",   "name": "Anthropic API",    "type": "paid"},
     {"slug": "openai",      "name": "OpenAI API",       "type": "paid"},
     {"slug": "chatgpt",     "name": "ChatGPT Plus/Pro", "type": "subscription"},
@@ -362,6 +444,7 @@ _PROVIDER_META = [
 _DISCOVERY_FNS: dict[str, Any] = {
     "ollama": _discover_ollama,
     "vllm": _discover_vllm,
+    "lmstudio": _discover_lmstudio,
     "groq": _discover_groq,
     "anthropic": _discover_anthropic,
     "openai": _discover_openai,
@@ -384,6 +467,15 @@ async def _is_provider_available(slug: str) -> bool:
         from app.registry import _get_redis_config
         backend = await _get_redis_config("inference.backend", "ollama")
         return backend == "vllm"
+
+    if slug == "lmstudio":
+        # Available when it's the active chat backend, OR when the server is
+        # reachable (it may serve embeddings while another backend handles chat).
+        from app.registry import _get_redis_config, _lmstudio
+        backend = await _get_redis_config("inference.backend", "ollama")
+        if backend == "lmstudio":
+            return True
+        return _lmstudio.is_available
 
     checks = {
         "ollama": lambda: True,
@@ -699,3 +791,210 @@ async def delete_ollama_model(name: str):
         pass
 
     return {"status": "ok", "model": name}
+
+
+# ── LM Studio downloaded-model library ─────────────────────────────────────────
+
+_LMSTUDIO_LOAD_TIMEOUT = 300.0  # model load can take minutes for large GGUFs
+
+
+def _parse_lmstudio_capabilities(raw: dict | None) -> tuple[bool, bool]:
+    """Extract (supports_vision, supports_tools) from an LM Studio model entry.
+
+    The v1 native API nests these under ``capabilities`` (absent for embedding
+    models). Older v0/OpenAI-compat responses don't include them.
+    """
+    if not isinstance(raw, dict):
+        return False, False
+    return bool(raw.get("vision", False)), bool(raw.get("trained_for_tool_use", False))
+
+
+@discovery_router.get("/lmstudio/downloaded")
+async def get_lmstudio_downloaded() -> list[LMStudioDownloadedModel]:
+    """List all downloaded models in the user's LM Studio installation.
+
+    Uses the native v1 REST API (``GET /api/v1/models``) which returns every
+    downloaded model with rich metadata plus a ``loaded_instances`` array. On
+    older LM Studio builds that predate the v1 API, falls back to the
+    OpenAI-compatible ``/v1/models`` endpoint (loaded-only, minimal metadata)
+    so the library still renders — load/unload just won't be available there.
+    """
+    from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+    url = await _refresh_lmstudio_runtime_url()
+    await _lmstudio.check_health()
+    if not _lmstudio.is_available:
+        raise HTTPException(status_code=502, detail="LM Studio server is not reachable")
+
+    headers = _lmstudio._extra_headers
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT, headers=headers) as client:
+            # Native v1 first — richer data + includes unloaded models.
+            resp = await client.get(f"{url}/api/v1/models")
+            if resp.status_code == 404:
+                # Older LM Studio (pre-0.4.0): fall back to OpenAI-compat endpoint.
+                resp = await client.get(f"{url}/v1/models")
+                resp.raise_for_status()
+                data = resp.json()
+                models: list[LMStudioDownloadedModel] = []
+                for m in data.get("data", []):
+                    mid = m.get("id", "")
+                    if not mid:
+                        continue
+                    models.append(LMStudioDownloadedModel(
+                        key=mid,
+                        type="llm",
+                        publisher=mid.split("/", 1)[0] if "/" in mid else "local",
+                        display_name=mid,
+                        loaded=True,
+                        loaded_instances=[mid],
+                    ))
+                return models
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"LM Studio unreachable: {e}")
+
+    out: list[LMStudioDownloadedModel] = []
+    for m in data.get("models", []):
+        key = m.get("key", "")
+        if not key:
+            continue
+        quant = m.get("quantization") or {}
+        caps = m.get("capabilities")
+        vision, tools = _parse_lmstudio_capabilities(caps if isinstance(caps, dict) else None)
+        instances = [
+            i.get("id", "") for i in (m.get("loaded_instances") or []) if i.get("id")
+        ]
+        out.append(LMStudioDownloadedModel(
+            key=key,
+            type=m.get("type", "llm"),
+            publisher=m.get("publisher", ""),
+            display_name=m.get("display_name", key),
+            architecture=m.get("architecture"),
+            quantization=quant.get("name") if isinstance(quant, dict) else None,
+            bits_per_weight=quant.get("bits_per_weight") if isinstance(quant, dict) else None,
+            size_bytes=m.get("size_bytes", 0) or 0,
+            params_string=m.get("params_string"),
+            loaded=bool(instances),
+            loaded_instances=instances,
+            max_context_length=m.get("max_context_length"),
+            format=m.get("format"),
+            supports_vision=vision,
+            supports_tools=tools,
+            variants=m.get("variants") or [],
+            selected_variant=m.get("selected_variant"),
+        ))
+    return out
+
+
+@discovery_router.post("/lmstudio/load")
+async def load_lmstudio_model(req: LMStudioLoadRequest):
+    """Load a downloaded model into LM Studio memory (POST /api/v1/models/load).
+
+    After a successful load, syncs the gateway's model registry so the newly
+    loaded model is immediately routable via /v1/chat/completions, and bumps
+    the discovery cache so the dashboard reflects the change.
+    """
+    from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+    url = await _refresh_lmstudio_runtime_url()
+    await _lmstudio.check_health()
+    if not _lmstudio.is_available:
+        raise HTTPException(status_code=502, detail="LM Studio server is not reachable")
+
+    body: dict[str, Any] = {"model": req.model}
+    for opt in ("context_length", "flash_attention", "eval_batch_size",
+                "num_experts", "offload_kv_cache_to_gpu"):
+        v = getattr(req, opt)
+        if v is not None:
+            body[opt] = v
+
+    try:
+        async with httpx.AsyncClient(timeout=_LMSTUDIO_LOAD_TIMEOUT,
+                                    headers=_lmstudio._extra_headers) as client:
+            resp = await client.post(f"{url}/api/v1/models/load", json=body)
+            if resp.status_code >= 400:
+                detail = resp.text[:300]
+                if resp.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"LM Studio could not find model '{req.model}'. "
+                               f"If your LM Studio predates 0.4.0, the native load API is "
+                               f"unavailable — load models from the LM Studio GUI instead.",
+                    )
+                raise HTTPException(status_code=resp.status_code,
+                                    detail=f"LM Studio load failed: {detail}")
+            result = resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"Load timed out after {_LMSTUDIO_LOAD_TIMEOUT}s")
+    except HTTPException:
+        raise
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"LM Studio unreachable: {e}")
+
+    # Register the freshly loaded model so it's routable immediately.
+    try:
+        from app.registry import sync_lmstudio_models
+        await sync_lmstudio_models()
+    except Exception as e:
+        log.warning("sync_lmstudio_models after load failed: %s", e)
+
+    # Invalidate discovery cache so the dashboard's library refreshes.
+    try:
+        r = await _get_redis()
+        await r.delete("nova:model_catalog:lmstudio")
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "instance_id": result.get("instance_id", req.model),
+        "load_time_seconds": result.get("load_time_seconds"),
+    }
+
+
+@discovery_router.post("/lmstudio/unload")
+async def unload_lmstudio_model(req: LMStudioUnloadRequest):
+    """Unload a model instance from LM Studio memory (POST /api/v1/models/unload)."""
+    from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+    url = await _refresh_lmstudio_runtime_url()
+    await _lmstudio.check_health()
+    if not _lmstudio.is_available:
+        raise HTTPException(status_code=502, detail="LM Studio server is not reachable")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, headers=_lmstudio._extra_headers) as client:
+            resp = await client.post(f"{url}/api/v1/models/unload",
+                                     json={"instance_id": req.instance_id})
+            if resp.status_code >= 400:
+                detail = resp.text[:300]
+                if resp.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"LM Studio instance '{req.instance_id}' not found — "
+                               f"it may already be unloaded, or your LM Studio predates 0.4.0 "
+                               f"(unload via the GUI instead).",
+                    )
+                raise HTTPException(status_code=resp.status_code,
+                                    detail=f"LM Studio unload failed: {detail}")
+            result = resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Unload timed out after 30s")
+    except HTTPException:
+        raise
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"LM Studio unreachable: {e}")
+
+    # Re-sync registry so an unloaded model is no longer (falsely) routable.
+    try:
+        from app.registry import sync_lmstudio_models
+        await sync_lmstudio_models()
+    except Exception as e:
+        log.warning("sync_lmstudio_models after unload failed: %s", e)
+
+    try:
+        r = await _get_redis()
+        await r.delete("nova:model_catalog:lmstudio")
+    except Exception:
+        pass
+
+    return {"status": "ok", "instance_id": result.get("instance_id", req.instance_id)}

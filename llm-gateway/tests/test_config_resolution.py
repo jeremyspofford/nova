@@ -11,13 +11,17 @@ class TestResolveOllamaUrl:
         url = "http://192.168.0.50:11434"
         assert _resolve_ollama_url(url) == url
 
-    def test_auto_resolves_to_bundled(self):
-        """'auto' is a back-compat alias for the bundled compose service URL."""
-        assert _resolve_ollama_url("auto") == "http://ollama:11434"
+    def test_auto_resolves_to_host(self):
+        """'auto' aliases a host-run Ollama (Nova bundles none)."""
+        assert _resolve_ollama_url("auto") == "http://host.docker.internal:11434"
 
-    def test_host_resolves_to_bundled(self):
-        """'host' is a back-compat alias for the bundled compose service URL."""
-        assert _resolve_ollama_url("host") == "http://ollama:11434"
+    def test_host_resolves_to_host(self):
+        """'host' aliases a host-run Ollama (Nova bundles none)."""
+        assert _resolve_ollama_url("host") == "http://host.docker.internal:11434"
+
+    def test_empty_resolves_to_host(self):
+        """An empty value falls back to the host Ollama default."""
+        assert _resolve_ollama_url("") == "http://host.docker.internal:11434"
 
     def test_external_lan_url_passes_through(self):
         """A user-provided LAN URL must pass through unchanged."""

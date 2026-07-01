@@ -9,11 +9,11 @@ _log = logging.getLogger(__name__)
 def _resolve_ollama_url(raw: str) -> str:
     """Resolve OLLAMA_BASE_URL.
 
-    'auto' and 'host' are back-compat aliases for the bundled compose service URL.
+    'auto' and 'host' are aliases for a host-run Ollama (Nova bundles none).
     Any other value is treated as a literal URL and passes through unchanged.
     """
-    if raw in ("auto", "host"):
-        return "http://ollama:11434"
+    if raw in ("auto", "host", ""):
+        return "http://host.docker.internal:11434"
     return raw
 
 
@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     # /api/v1/feature-flags/ at startup and to refetch on pubsub invalidate.
     orchestrator_url: str = "http://orchestrator:8000"
 
-    # Ollama
-    ollama_base_url: str = "http://ollama:11434"
+    # Ollama (external / host-run — Nova bundles no ollama service)
+    ollama_base_url: str = "http://host.docker.internal:11434"
 
     @model_validator(mode="after")
     def resolve_magic_ollama_url(self):
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     llm_routing_strategy: str = "local-first"    # local-only | local-first | cloud-only | cloud-first
 
     # Inference backend config (read from Redis nova:config:inference.*)
-    inference_backend: str = "ollama"  # ollama, vllm, sglang, none
+    inference_backend: str = "ollama"  # ollama, vllm, sglang, lmstudio, custom, none
     inference_state: str = "ready"     # ready, draining, starting, error
     inference_url: str = ""            # Override URL (empty = use default for backend)
 

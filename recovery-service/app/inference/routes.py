@@ -1,26 +1,27 @@
-"""API routes for inference backend management."""
+"""API routes for inference backend selection + status.
+
+Nova is a client of external inference servers — there is no container to
+start/stop or model to swap. These routes record which backend is selected,
+report its live reachability (via the gateway), and expose host hardware as an
+advisory (what the machine could comfortably run).
+"""
 import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 
 from app.inference.controller import (
+    clear_backend,
     get_backend_status,
-    list_backends,
-    start_backend,
-    stop_backend,
-    switch_model,
+    select_backend,
 )
 from app.inference.hardware import (
     detect_hardware,
     get_backend_recommendation,
     get_full_recommendation,
-    get_gpu_stats,
     get_hardware,
 )
-from app.inference.model_search import search_models as do_search_models
 from app.routes import _check_admin
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,24 @@ router = APIRouter(prefix="/api/v1/recovery/inference", tags=["inference"])
 
 RECOMMENDED_MODELS_PATH = Path("/app/data/recommended_models.json")
 
+# Supported external inference server types, for the Settings UI to offer. Each
+# is reached over HTTP at a user-provided URL — Nova never launches them.
+SUPPORTED_BACKENDS = [
+    {"name": "ollama", "label": "Ollama", "kind": "ollama-api", "default_port": 11434},
+    {"name": "lmstudio", "label": "LM Studio", "kind": "openai", "default_port": 1234},
+    {"name": "vllm", "label": "vLLM", "kind": "openai", "default_port": 8000},
+    {"name": "sglang", "label": "SGLang", "kind": "openai", "default_port": 30000},
+    {"name": "openai", "label": "OpenAI-compatible", "kind": "openai", "default_port": None},
+]
+
+
+# ── Hardware (host advisory) ──────────────────────────────────────────────────
+
 
 @router.get("/hardware")
 async def get_hardware_info(_: None = Depends(_check_admin)):
-    """Return detected hardware info (GPU, CPU, RAM, disk)."""
+    """Return detected host hardware (GPU, CPU, RAM, disk). Advisory only —
+    inference runs on an external server, not in a Nova container."""
     hw = await get_hardware()
     recommendation = get_backend_recommendation(hw)
     return {**hw, "recommended_backend": recommendation}
@@ -40,83 +55,44 @@ async def get_hardware_info(_: None = Depends(_check_admin)):
 
 @router.post("/hardware/detect")
 async def redetect_hardware(_: None = Depends(_check_admin)):
-    """Force re-detection of hardware."""
+    """Force re-detection of host hardware."""
     hw = await detect_hardware()
     recommendation = get_backend_recommendation(hw)
     return {**hw, "recommended_backend": recommendation}
 
 
-@router.get("/hardware/gpu-stats")
-async def get_gpu_stats_endpoint(_: None = Depends(_check_admin)):
-    """Return live GPU utilization stats (or null if unavailable)."""
-    return await get_gpu_stats()
-
-
 @router.get("/recommendation")
 async def get_inference_recommendation(_: None = Depends(_check_admin)):
-    """Return recommended backend and model based on detected hardware."""
+    """Return a hardware-based advisory (what this host could comfortably run)."""
     return await get_full_recommendation()
 
 
-# ── Backend lifecycle ─────────────────────────────────────────────────────────
+# ── Backend selection + status ────────────────────────────────────────────────
 
 
 @router.get("/backend")
 async def get_inference_backend(_: None = Depends(_check_admin)):
-    """Get current inference backend status."""
+    """Get the selected inference backend and its live reachability."""
     return await get_backend_status()
 
 
 @router.get("/backends")
 async def list_inference_backends(_: None = Depends(_check_admin)):
-    """List all available inference backends."""
-    return await list_backends()
+    """List the supported external inference server types the UI can offer."""
+    return SUPPORTED_BACKENDS
 
 
 @router.post("/backend/stop")
 async def stop_inference_backend(_: None = Depends(_check_admin)):
-    """Stop the active inference backend."""
-    return await stop_backend()
+    """Deselect local inference (fall back to cloud/none)."""
+    return await clear_backend()
 
 
 @router.post("/backend/{backend_name}/start", status_code=202)
 async def start_inference_backend(backend_name: str, _: None = Depends(_check_admin)):
-    """Start (or switch to) an inference backend. Returns immediately; poll /backend for progress."""
-    try:
-        return await start_backend(backend_name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ── Model switching ──────────────────────────────────────────────────────────
-
-
-class SwitchModelRequest(BaseModel):
-    model: str
-
-
-@router.post("/backend/{backend_name}/switch-model", status_code=202)
-async def switch_inference_model(
-    backend_name: str,
-    body: SwitchModelRequest,
-    _: None = Depends(_check_admin),
-):
-    """Switch the model on a single-model backend (vLLM, SGLang)."""
-    try:
-        return await switch_model(backend_name, body.model)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/models/search")
-async def search_models_endpoint(
-    q: str,
-    backend: str = "vllm",
-    max_vram_gb: float | None = None,
-    _: None = Depends(_check_admin),
-):
-    """Search model catalogs (HuggingFace for vLLM/SGLang, Ollama registry)."""
-    return await do_search_models(q, backend, max_vram_gb)
+    """Select an inference backend. Nova does not launch it — the user runs the
+    server; this records the choice and the gateway routes to it."""
+    return await select_backend(backend_name)
 
 
 @router.get("/models/recommended")
@@ -125,7 +101,7 @@ async def get_recommended_models(
     max_vram_gb: float | None = None,
     _: None = Depends(_check_admin),
 ):
-    """Return curated recommended models, optionally filtered."""
+    """Return curated recommended models (advisory — load them on your server)."""
     try:
         models = json.loads(RECOMMENDED_MODELS_PATH.read_text())
     except (FileNotFoundError, json.JSONDecodeError):

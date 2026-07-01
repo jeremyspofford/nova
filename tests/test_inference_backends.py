@@ -106,6 +106,111 @@ class TestSGLangProvider:
         assert "sglang" in names
 
 
+class TestLMStudioProvider:
+    """LM Studio is a host-side desktop app, not a Nova-managed container."""
+
+    async def test_lmstudio_in_gateway_provider_catalog(self, llm_gateway: httpx.AsyncClient):
+        """LM Studio must appear in the gateway's provider catalog."""
+        r = await llm_gateway.get("/health/providers")
+        assert r.status_code == 200
+        slugs = [p["slug"] for p in r.json()]
+        assert "lmstudio" in slugs
+
+    async def test_lmstudio_in_discovery(self, llm_gateway: httpx.AsyncClient):
+        """Model discovery must include LM Studio as a provider (even if unreachable)."""
+        r = await llm_gateway.get("/v1/models/discover")
+        assert r.status_code == 200
+        slugs = [p["slug"] for p in r.json()]
+        assert "lmstudio" in slugs
+
+    async def test_lmstudio_status_endpoint(self, llm_gateway: httpx.AsyncClient):
+        """The dedicated LM Studio status endpoint must return the documented shape.
+
+        It probes the server (unreachable in CI) so it just must not 500 and
+        must report healthy=False with an empty model list.
+        """
+        r = await llm_gateway.get("/health/providers/lmstudio/status")
+        assert r.status_code == 200
+        data = r.json()
+        assert "healthy" in data
+        assert "base_url" in data
+        assert "models" in data
+        assert isinstance(data["models"], list)
+
+    async def test_start_lmstudio_is_config_only(self, recovery: httpx.AsyncClient, admin_headers: dict):
+        """Starting the LM Studio backend must not try to launch a container.
+
+        It's config-only: marks state ready and returns accepted.
+        """
+        try:
+            r = await recovery.post(
+                "/api/v1/recovery/inference/backend/lmstudio/start",
+                headers=admin_headers,
+            )
+            assert r.status_code == 202
+        finally:
+            # Restore whatever the prior backend was to avoid leaking state.
+            await recovery.post(
+                "/api/v1/recovery/inference/backend/ollama/start",
+                headers=admin_headers,
+            )
+
+    async def test_lmstudio_backend_status_probes_gateway(self, recovery: httpx.AsyncClient, admin_headers: dict):
+        """When inference.backend=lmstudio, status must reflect the gateway probe
+        (not a container, since recovery can't reach host.docker.internal)."""
+        import asyncio
+        try:
+            await recovery.post(
+                "/api/v1/recovery/inference/backend/lmstudio/start",
+                headers=admin_headers,
+            )
+            await asyncio.sleep(1)
+            r = await recovery.get("/api/v1/recovery/inference/backend", headers=admin_headers)
+            assert r.status_code == 200
+            data = r.json()
+            assert data["backend"] == "lmstudio"
+            assert data["state"] in ("ready", "stopped", "error")
+        finally:
+            await recovery.post(
+                "/api/v1/recovery/inference/backend/ollama/start",
+                headers=admin_headers,
+            )
+
+    async def test_lmstudio_downloaded_endpoint_shape(self, llm_gateway: httpx.AsyncClient):
+        """The downloaded-model library endpoint must return the documented shape.
+
+        In CI, LM Studio is unreachable so this must respond with a clean 502
+        (not a 500) and a human-readable detail. When LM Studio IS reachable the
+        response is a list of LMStudioDownloadedModel objects.
+        """
+        r = await llm_gateway.get("/v1/models/lmstudio/downloaded")
+        # 502 when unreachable is the expected CI path; 200 with a list when LM
+        # Studio is actually running on the host.
+        assert r.status_code in (200, 502), r.text
+        if r.status_code == 200:
+            data = r.json()
+            assert isinstance(data, list)
+            for m in data:
+                assert "key" in m
+                assert "type" in m
+                assert "loaded" in m
+                assert isinstance(m["loaded_instances"], list)
+
+    async def test_lmstudio_load_requires_model_field(self, llm_gateway: httpx.AsyncClient):
+        """The load endpoint must reject a body missing the required `model` field.
+
+        A 422 (Pydantic validation) is expected before any LM Studio probe, so
+        this holds even when LM Studio is unreachable in CI.
+        """
+        r = await llm_gateway.post("/v1/models/lmstudio/load", json={})
+        assert r.status_code == 422
+
+    async def test_lmstudio_unload_requires_instance_id(self, llm_gateway: httpx.AsyncClient):
+        """The unload endpoint must reject a body missing `instance_id`."""
+        r = await llm_gateway.post("/v1/models/lmstudio/unload", json={})
+        assert r.status_code == 422
+
+
 class TestVLLMDiscovery:
     """Tests for vLLM model discovery."""
 

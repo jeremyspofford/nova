@@ -155,6 +155,21 @@ async def stream(request: CompleteRequest, raw_request: Request):
 @router.post("/embed", response_model=EmbedResponse)
 async def embed(request: EmbedRequest):
     """Generate embeddings for a list of texts."""
+    # Embedding provider override (llm.embed_provider / llm.embed_model).
+    # When set, routes to the named provider regardless of the model string
+    # memory-service sent, and substitutes llm.embed_model as the model name.
+    # Default ("auto") preserves model-name registry lookup. Resolved BEFORE
+    # caching so the cache key reflects the effective provider+model (avoids
+    # returning stale vectors from a different provider after a config change).
+    from app.registry import _resolve_embed_override
+    override_provider, override_model = await _resolve_embed_override()
+    if override_provider is not None:
+        provider = override_provider
+        if override_model and override_model != request.model:
+            request = request.model_copy(update={"model": override_model})
+    else:
+        provider = await get_embed_provider(request.model)
+
     await _enforce_rate_limit(request.model)
 
     # Embeddings are always deterministic — cache unconditionally
@@ -163,10 +178,6 @@ async def embed(request: EmbedRequest):
     if cached:
         return EmbedResponse(**cached)
 
-    # Embeddings bypass chat routing strategy — direct provider lookup.
-    # The routing strategy (local-only/cloud-only/etc.) governs chat completions,
-    # not infrastructure like embeddings that the memory system depends on.
-    provider = await get_embed_provider(request.model)
     is_local = provider.is_local
 
     global _local_inflight

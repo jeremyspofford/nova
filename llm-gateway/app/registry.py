@@ -44,6 +44,7 @@ from app.providers import (
     FallbackProvider,
     GeminiADCProvider,
     LiteLLMProvider,
+    LMStudioProvider,
     LocalInferenceProvider,
     ModelProvider,
     OllamaCloudFallback,
@@ -142,9 +143,14 @@ if _chatgpt_subscription.is_available:
 else:
     log.info("  ChatGPT subscription not detected  (run `codex login`)")
 
-# ── Local inference backends (managed containers) ─────────────────────────────
+# ── Local inference backends (external, user-run — never managed by Nova) ─────
 
 _vllm = VLLMProvider()
+
+# LM Studio is a host-side desktop app, NOT a managed container — Nova never
+# starts/stops it. The single shared instance's base_url/headers are refreshed
+# from Redis runtime config before use (see _refresh_lmstudio_runtime_url).
+_lmstudio = LMStudioProvider()
 
 # ── Local inference wrapper (delegates to active backend: Ollama, vLLM, etc.) ─
 _local = LocalInferenceProvider()
@@ -314,7 +320,7 @@ async def get_ollama_base_url() -> str:
 
     Reads `nova:config:inference.url` (canonical, written by the dashboard's
     LocalInferenceSection); falls through to settings.ollama_base_url (env-
-    derived default, typically http://ollama:11434) when no override is set.
+    derived default, typically http://host.docker.internal:11434) when no override is set.
 
     The legacy `llm.ollama_url` key is retired — main.py runs a one-time
     migration on startup that copies any legacy value into inference.url.
@@ -408,7 +414,8 @@ async def sync_vllm_models() -> int:
         return 0
 
     try:
-        async with httpx.AsyncClient(base_url="http://nova-vllm:8000", timeout=5.0) as client:
+        vllm_url = await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
+        async with httpx.AsyncClient(base_url=vllm_url, timeout=5.0) as client:
             resp = await client.get("/v1/models")
             resp.raise_for_status()
             data = resp.json()
@@ -424,6 +431,65 @@ async def sync_vllm_models() -> int:
             _local.update_local_models(_local._local_models | {model_id})
             added += 1
             log.info("Auto-registered vLLM model: %s", model_id)
+    return added
+
+
+async def _refresh_lmstudio_runtime_url() -> str:
+    """Refresh the shared _lmstudio instance's base_url + auth headers from
+    Redis runtime config (inference.lmstudio_url / inference.lmstudio_api_key).
+
+    The instance is created once at module load with the default host URL; this
+    keeps it in sync with dashboard edits without a restart. Returns the
+    resolved URL (also used by discovery / sync probes).
+    """
+    url = await _get_redis_config("inference.lmstudio_url", "") or "http://host.docker.internal:1234"
+    api_key = await _get_redis_config("inference.lmstudio_api_key", "")
+    _lmstudio._base_url = url.rstrip("/")
+    _lmstudio._extra_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    # Reset health cache so the next check_health re-probes the new URL.
+    _lmstudio._last_health_check = 0.0
+    return _lmstudio._base_url
+
+
+async def sync_lmstudio_models() -> int:
+    """Probe a running LM Studio server and register any loaded models.
+
+    LM Studio is multi-model and user-managed (models are loaded in its GUI),
+    so unlike vLLM/SGLang there is no model-switch path — we just discover
+    whatever is currently loaded via ``/v1/models`` and register each. Safe to
+    call at startup and whenever the user refreshes the model catalog.
+    Returns the count of newly registered models.
+    """
+    import httpx
+    url = await _refresh_lmstudio_runtime_url()
+    # Flip the provider's health flag from the probe so the catalog reflects
+    # reachability (available = is_available).
+    await _lmstudio.check_health()
+    if not _lmstudio.is_available:
+        return 0
+    try:
+        async with httpx.AsyncClient(timeout=5.0, headers=_lmstudio._extra_headers) as client:
+            resp = await client.get(f"{url}/v1/models")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        log.debug("sync_lmstudio_models: LM Studio unreachable at %s: %s", url, e)
+        return 0
+
+    added = 0
+    loaded: set[str] = set()
+    for m in data.get("data", []):
+        model_id = m.get("id", "")
+        if not model_id:
+            continue
+        loaded.add(model_id)
+        if model_id not in MODEL_REGISTRY and model_id != DEFAULT_MODEL_KEY:
+            MODEL_REGISTRY[model_id] = _lmstudio
+            added += 1
+            log.info("Auto-registered LM Studio model: %s", model_id)
+    if loaded:
+        _local.update_local_models(_local._local_models | loaded)
+        log.info("sync_lmstudio_models: %d model(s) loaded (%d new)", len(loaded), added)
     return added
 
 
@@ -562,6 +628,8 @@ def get_provider_catalog() -> list[dict]:
          "available": bool(settings.openai_api_key),      "default_model": "gpt-4o"},
         {"slug": "vllm",        "name": "vLLM",                "type": "local",        "instance": _vllm,
          "default_model": None},
+        {"slug": "lmstudio",    "name": "LM Studio",           "type": "local",        "instance": _lmstudio,
+         "default_model": None},
     ]
 
     # Count models per provider
@@ -597,6 +665,50 @@ def get_provider_catalog() -> list[dict]:
         })
 
     return result
+
+
+async def _resolve_embed_override() -> tuple[ModelProvider | None, str]:
+    """Read the embedding provider override from Redis.
+
+    Config (written by the dashboard EmbeddingModelPicker):
+    - ``llm.embed_provider``: "auto" (default) | "lmstudio" | "ollama" |
+      "gemini" | "litellm" | "groq" | "cerebras" | "openrouter" | "github"
+    - ``llm.embed_model``: model name string to send to the provider (used
+      when the override is active; ignored when "auto").
+
+    Returns ``(provider_or_None, effective_model)``. ``provider`` is None when
+    the override is unset/"auto" — the caller falls back to model-name registry
+    lookup (``get_embed_provider``), preserving today's behavior.
+
+    Rationale: embeddings bypass chat routing (see get_embed_provider). Without
+    this override, a model name can only ever map to ONE provider in the registry
+    — so "route embeddings through LM Studio" (even for a cloud model LM Studio
+    proxies) was impossible. This lets the user pin embeddings to any provider.
+    """
+    slug = await _get_redis_config("llm.embed_provider", "auto")
+    model = await _get_redis_config("llm.embed_model", "")
+    if not slug or slug == "auto":
+        return None, ""
+
+    overrides: dict[str, ModelProvider] = {
+        "lmstudio": _lmstudio,
+        "ollama": _ollama,
+        "gemini": _gemini,
+        "litellm": _litellm,
+        "groq": _groq,
+        "cerebras": _cerebras,
+        "openrouter": _openrouter,
+        "github": _github,
+    }
+    provider = overrides.get(slug)
+    if provider is None:
+        log.warning("Unknown llm.embed_provider override '%s', ignoring", slug)
+        return None, ""
+    # LM Studio's URL/key are runtime-configurable — refresh before use so the
+    # instance points at the server the user configured in the dashboard.
+    if slug == "lmstudio":
+        await _refresh_lmstudio_runtime_url()
+    return provider, model
 
 
 async def get_embed_provider(model: str) -> ModelProvider:

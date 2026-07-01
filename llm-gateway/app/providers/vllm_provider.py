@@ -7,7 +7,7 @@ from .openai_compatible_provider import OpenAICompatibleProvider
 class VLLMProvider(OpenAICompatibleProvider):
     """Provider for vLLM OpenAI-compatible server."""
 
-    def __init__(self, base_url: str = "http://nova-vllm:8000"):
+    def __init__(self, base_url: str = "http://host.docker.internal:8000"):
         super().__init__(
             base_url=base_url,
             provider_name="vllm",

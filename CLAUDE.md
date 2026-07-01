@@ -57,9 +57,9 @@ make build        # rebuild all images
 make up           # start detached
 make down         # stop all
 
-# GPU overlays (auto-detected by setup.sh)
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # NVIDIA
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d  # AMD ROCm
+# Local inference is external — no GPU overlays. Run your own Ollama / LM Studio /
+# vLLM / SGLang server (or any OpenAI-compatible endpoint) and point Nova at it in
+# Settings → Local Inference. Nova bundles/GPU-manages no inference container.
 
 # Backup / Restore (emergency CLI — normally use the Recovery UI at /recovery)
 make backup               # create a database backup to ./backups/
@@ -160,9 +160,12 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 
 | Key | Values | Effect |
 |---|---|---|
-| `inference.backend` | `ollama`, `vllm`, `sglang`, `none` | Which local inference backend the gateway uses |
+| `inference.backend` | `ollama`, `vllm`, `sglang`, `lmstudio`, `custom`, `none` | Which local inference backend the gateway uses |
 | `inference.state` | `ready`, `starting`, `error`, `draining` | Whether local inference is accepting requests |
-| `inference.url` | URL | Runtime override for the local inference endpoint (replaces legacy `llm.ollama_url`, which is now migrated on gateway startup) |
+| `inference.url` | URL | Runtime override for the local inference endpoint (Ollama/vLLM/SGLang; replaces legacy `llm.ollama_url`, which is now migrated on gateway startup) |
+| `inference.lmstudio_url` | URL | LM Studio server URL (default `http://host.docker.internal:1234`) |
+| `inference.lmstudio_api_key` | string | Optional bearer token for the LM Studio server |
+| `llm.embed_provider` | `auto`, `lmstudio`, `ollama`, `gemini`, `litellm` | Overrides which provider serves embeddings (default `auto` = route by model name). Lets embeddings run on a different server than chat to avoid single-model eviction. |
 | `llm.routing_strategy` | `local-first`, `local-only`, `cloud-first`, `cloud-only` | How the gateway routes requests between local and cloud |
 | `screenpipe.enabled` | `true`/`false` | Whether the bridge connects to screenpipe |
 | `screenpipe.url` | URL | Workstation screenpipe daemon URL (e.g. `http://workstation:3030`) |
@@ -175,7 +178,7 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 | `capture.session_min_seconds` | int (0–300) | Min focus session duration before drop (default 30) |
 | `capture.buffer_size` | int (1–100) | Bridge backpressure buffer (default 10) |
 
-**Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.state` and `inference.backend` in Redis before debugging code. The gateway treats `OLLAMA_BASE_URL=auto`/`host` as aliases for the bundled service URL (`http://ollama:11434`); Redis runtime overrides via `inference.url` win when set.
+**Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.state` and `inference.backend` in Redis before debugging code. Nova bundles no inference server — all backends are external (host/LAN). The gateway treats `OLLAMA_BASE_URL=auto`/`host`/empty as aliases for a host-run Ollama (`http://host.docker.internal:11434`); Redis runtime overrides via `inference.url` (and `inference.lmstudio_url` for LM Studio) win when set.
 
 ## Feature Flags
 
@@ -221,14 +224,9 @@ A separate per-service file at `data/flag-cache/<service>.json` is read at start
 **CRITICAL_FLAGS** — hardcoded denylist in `orchestrator/app/feature_flags_router.py` and mirrored in the dashboard. PATCH requires `confirm: <key>` body field. Today's set:
 
 ```
-kill.engram.ingestion
-kill.consolidation.cycle
-kill.cortex.thinking_loop
 pipeline.guardrail_strict_mode
 pipeline.web_fetch_strict_sanitize
 ```
-
-**Operational runbook** for kill switches: `docs/runbooks/kill-switches.md`. When a Nova subsystem misbehaves, prefer flipping the flag over `docker compose restart` — the flag preserves in-flight state.
 
 **Security-sensitive toggles NOT in the flag system** (v1 deliberate exclusion): `SELFMOD_ENABLED` and the home/root sandbox tiers. They retain `.env` boot-time gating until Phase 2 RBAC + per-write confirmation tokens land — admin-secret-only auth is too weak for "agent gets `$HOME` write" semantics.
 
@@ -237,7 +235,7 @@ pipeline.web_fetch_strict_sanitize
 - `.env` — DB password, admin secret, infra-only knobs (`COMPOSE_PROFILES`, `OLLAMA_BASE_URL`, `NOVA_INFERENCE_MODE`, `VLLM_MODEL`, etc.), `NOVA_WORKSPACE`, `LOG_LEVEL`, `REQUIRE_AUTH`
 - `OLLAMA_BASE_URL` — Set to `auto` (probes host, falls back to Docker), `host` (always use host machine), or explicit URL
 - `POSTGRES_DATA_DIR` / `REDIS_DATA_DIR` — Host bind-mount paths for critical data (default: `./data/postgres`, `./data/redis`). Immune to `docker volume prune`.
-- `models.yaml` — Ollama models to auto-pull on startup
+- Local inference: external/user-run (Ollama, LM Studio, vLLM, SGLang, any OpenAI-compatible endpoint). Configure the endpoint in Settings → Local Inference (Redis `inference.*`). Nova pulls no models and runs no inference container.
 - Context budgets in orchestrator config: system=10%, tools=15%, memory=40%, history=20%, working=15%
 - Voice: `STT_PROVIDER`, `TTS_PROVIDER`, `TTS_VOICE`, `TTS_MODEL` — voice settings (runtime-configurable via dashboard Settings or Redis `nova:config:voice.*`)
 

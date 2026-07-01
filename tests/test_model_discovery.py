@@ -20,7 +20,7 @@ class TestDiscoverEndpoint:
 
         slugs = {p["slug"] for p in providers}
         expected = {
-            "ollama", "vllm", "chatgpt", "groq",
+            "ollama", "vllm", "lmstudio", "chatgpt", "groq",
             "gemini", "cerebras", "openrouter", "github",
             "anthropic", "openai",
         }
