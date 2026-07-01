@@ -124,7 +124,11 @@ export function Downloading({ backend, model, onNext }: Props) {
         Setting Up
       </h2>
       <p className="text-compact text-content-secondary mb-10 text-center max-w-md">
-        {backend === 'cloud' ? 'Configuring cloud providers...' : `Installing ${model} via ${backend}...`}
+        {backend === 'cloud'
+          ? 'Configuring cloud providers...'
+          : backend === 'lmstudio'
+            ? 'Connecting to LM Studio...'
+            : `Installing ${model} via ${backend}...`}
       </p>
 
       {/* Progress steps */}

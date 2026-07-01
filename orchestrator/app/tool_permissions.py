@@ -53,6 +53,33 @@ async def get_disabled_tool_groups() -> set[str]:
     return set()
 
 
+async def get_default_allowed_tools() -> list[str] | None:
+    """Return the global default tool allowlist, or None if unset.
+
+    When set, agent turns that don't carry their own pod allowlist (i.e. the
+    interactive chat path) see ONLY these tools. This keeps the default surface
+    tiny so small local models reliably emit tool calls and the system prompt
+    stays small — everything else (web, git, hardware, etc.) is reachable
+    through run_shell. Other tools remain registered; widen or clear this list
+    from the dashboard to expose them.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value FROM platform_config WHERE key = $1", _CONFIG_KEY
+        )
+    if not row:
+        return None
+    val = row["value"]
+    if isinstance(val, str):
+        val = json.loads(val)
+    if isinstance(val, dict):
+        allow = val.get("default_allowed_tools")
+        if isinstance(allow, list) and allow:
+            return [str(t) for t in allow]
+    return None
+
+
 async def resolve_effective_tools(
     allowed_tools: list[str] | None = None,
     sandbox_tier: "SandboxTier | None" = None,
@@ -84,6 +111,10 @@ async def resolve_effective_tools(
         tier_by_name = {t.name: t for t in tier_tools}
         tools = [tier_by_name.get(t.name, t) for t in tools]
 
+    # Tool-level allowlist: an explicit pod allowlist wins; otherwise fall back
+    # to the global default allowlist so the chat agent gets a minimal surface.
+    if allowed_tools is None:
+        allowed_tools = await get_default_allowed_tools()
     if allowed_tools is not None:
         allowed_set = set(allowed_tools)
         tools = [t for t in tools if t.name in allowed_set]

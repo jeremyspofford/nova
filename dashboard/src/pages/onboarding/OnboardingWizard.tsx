@@ -26,7 +26,7 @@ const stepLabels: Record<Step, string> = {
 export function OnboardingWizard() {
   const [step, setStep] = useState<Step>('welcome')
   const [hardware, setHardware] = useState<HardwareInfo | null>(null)
-  const [engine, setEngine] = useState<'vllm' | 'ollama' | 'cloud'>('ollama')
+  const [engine, setEngine] = useState<'vllm' | 'ollama' | 'cloud' | 'lmstudio'>('ollama')
   const [model, setModel] = useState('')
 
   const completeOnboarding = useCallback(async () => {
@@ -51,7 +51,9 @@ export function OnboardingWizard() {
   }, [])
 
   const handleEngineNext = useCallback(() => {
-    if (engine === 'cloud') {
+    // Cloud and LM Studio skip model selection: cloud has no local model, and
+    // LM Studio models are loaded in its GUI (nothing to pull).
+    if (engine === 'cloud' || engine === 'lmstudio') {
       setStep('downloading')
     } else {
       setStep('model')

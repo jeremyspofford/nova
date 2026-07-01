@@ -54,7 +54,11 @@ async def run_schema_migrations(*, max_retries: int = 10, delay: float = 2.0) ->
 
     def _replace_do(m: re.Match) -> str:
         do_blocks.append(m.group(0))
-        return f"__DO_BLOCK_{len(do_blocks) - 1}__"
+        # Re-append ';' so each placeholder is its own split-chunk. The regex
+        # below consumes the block's trailing ';'; without this, consecutive DO
+        # blocks collapse into one chunk and only the first gets dispatched
+        # (the others are silently dropped — the runner still logs success).
+        return f"__DO_BLOCK_{len(do_blocks) - 1}__;"
 
     sql_safe = re.sub(
         r"DO\s+\$\$.*?\$\$\s*;", _replace_do, sql_stripped, flags=re.DOTALL

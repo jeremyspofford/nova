@@ -1,9 +1,11 @@
-import { Server, Cloud, Cpu } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Server, Cloud, Cpu, Laptop } from 'lucide-react'
 import type { HardwareInfo } from '../../../api-recovery'
+import { getLMStudioStatus } from '../../../api'
 import { Button, Badge } from '../../../components/ui'
 import clsx from 'clsx'
 
-type Engine = 'vllm' | 'ollama' | 'cloud'
+type Engine = 'vllm' | 'ollama' | 'lmstudio' | 'cloud'
 
 interface Props {
   hardware: HardwareInfo
@@ -20,6 +22,7 @@ const engines: Array<{
   icon: typeof Server
   requiresGpu: boolean
   minVram?: number
+  requiresProbe?: boolean
 }> = [
   {
     id: 'vllm',
@@ -37,6 +40,14 @@ const engines: Array<{
     requiresGpu: false,
   },
   {
+    id: 'lmstudio',
+    label: 'LM Studio',
+    description: 'Use the LM Studio desktop app for local models. Requires LM Studio running on your host with the local server started.',
+    icon: Laptop,
+    requiresGpu: false,
+    requiresProbe: true,
+  },
+  {
     id: 'cloud',
     label: 'Cloud Only',
     description: 'Use cloud LLM providers (Anthropic, OpenAI, etc). No local setup needed.',
@@ -52,6 +63,17 @@ function getRecommended(hardware: HardwareInfo): Engine {
 }
 
 export function ChooseEngine({ hardware, selected, onSelect, onNext, onBack }: Props) {
+  // Probe for a host-side LM Studio server. The option only appears when one is
+  // reachable (via the gateway's host.docker.internal mapping) so users never
+  // see a dead choice. Probe is best-effort: never blocks the step.
+  const { data: lmstudioStatus } = useQuery({
+    queryKey: ['lmstudio-status'],
+    queryFn: getLMStudioStatus,
+    staleTime: 30_000,
+    retry: 0,
+  })
+  const lmstudioReachable = !!lmstudioStatus?.healthy
+
   const recommended = getRecommended(hardware)
   const hasGpu = hardware.gpus.length > 0
   const totalVram = hardware.gpus.reduce((s, g) => s + g.vram_gb, 0)
@@ -59,6 +81,7 @@ export function ChooseEngine({ hardware, selected, onSelect, onNext, onBack }: P
   const available = engines.filter(e => {
     if (e.requiresGpu && !hasGpu) return false
     if (e.minVram && totalVram < e.minVram) return false
+    if (e.requiresProbe && !lmstudioReachable) return false
     return true
   })
 

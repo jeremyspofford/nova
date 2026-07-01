@@ -10,13 +10,17 @@ import {
   getProviderStatus,
   testProvider,
   getRoutingStats,
+  getLMStudioStatus,
+  getLMStudioDownloaded,
+  loadLMStudioModel,
+  unloadLMStudioModel,
 } from '../api'
-import type { ProviderModelList, OllamaPulledModel, OllamaStatus } from '../api'
+import type { ProviderModelList, OllamaPulledModel, OllamaStatus, LMStudioStatus, LMStudioDownloadedModel } from '../api'
 import { RECOMMENDED_OLLAMA_MODELS, CLOUD_PROVIDER_ORDER } from '../constants'
 import {
   RefreshCw, Trash2, Download, Check, HardDrive, Cloud, Loader2,
   AlertTriangle, ExternalLink, Server, X, Info, Play, Cpu, Thermometer,
-  Activity, Layers, Zap, ChevronDown, ChevronRight,
+  Activity, Layers, Zap, ChevronDown, ChevronRight, Power, Eye, Wrench,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatBytes } from '../lib/format'
@@ -327,7 +331,210 @@ const HELP_ENTRIES = [
   { term: 'Routing Strategy', definition: 'How Nova decides where to send requests — local-first tries your machine first, cloud-first prefers API providers, etc.' },
   { term: 'Provider', definition: 'An AI service Nova can call — Anthropic (Claude), OpenAI (GPT), Groq, Gemini, etc. Each needs an API key.' },
   { term: 'Pulled Models', definition: 'AI models downloaded and cached locally in Ollama, ready for immediate inference.' },
+  { term: 'LM Studio', definition: 'A desktop app that runs local models via an OpenAI-compatible server. Nova discovers loaded models and (on LM Studio 0.4.0+) can load/unload models from your downloaded library.' },
 ]
+
+// ── LM Studio Library Section ─────────────────────────────────────────────────
+
+function LMStudioStatusBadge({ status }: { status: LMStudioStatus | undefined }) {
+  const healthy = status?.healthy ?? false
+  return (
+    <Badge color={healthy ? 'success' : 'danger'} size="sm">
+      <StatusDot status={healthy ? 'success' : 'danger'} pulse={healthy} />
+      {healthy ? 'Connected' : 'Not reachable'}
+    </Badge>
+  )
+}
+
+function LMStudioLibrarySection() {
+  const qc = useQueryClient()
+  const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set())
+  const [unloadingModels, setUnloadingModels] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<string | null>(null)
+
+  const status = useQuery({
+    queryKey: ['lmstudio-status'],
+    queryFn: getLMStudioStatus,
+    refetchInterval: 10_000,
+  })
+
+  const downloaded = useQuery({
+    queryKey: ['lmstudio-downloaded'],
+    queryFn: () => getLMStudioDownloaded().catch(() => [] as LMStudioDownloadedModel[]),
+    refetchInterval: 15_000,
+    enabled: status.data?.healthy ?? false,
+  })
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })
+    qc.invalidateQueries({ queryKey: ['lmstudio-status'] })
+    qc.invalidateQueries({ queryKey: ['model-catalog'] })
+    qc.fetchQuery({ queryKey: ['model-catalog'], queryFn: () => discoverModels(true) })
+  }
+
+  const loadModel = useMutation({
+    mutationFn: (key: string) => loadLMStudioModel(key),
+    onMutate: (key) => {
+      setError(null)
+      setLoadingModels(prev => new Set(prev).add(key))
+    },
+    onSuccess: () => invalidateAll(),
+    onError: (e: Error) => setError(e.message || 'Failed to load model'),
+    onSettled: () => setLoadingModels(prev => { const n = new Set(prev); n.clear(); return n }),
+  })
+
+  const unloadModel = useMutation({
+    mutationFn: (instanceId: string) => unloadLMStudioModel(instanceId),
+    onMutate: (instanceId) => {
+      setError(null)
+      setUnloadingModels(prev => new Set(prev).add(instanceId))
+    },
+    onSuccess: () => invalidateAll(),
+    onError: (e: Error) => setError(e.message || 'Failed to unload model'),
+    onSettled: () => setUnloadingModels(prev => { const n = new Set(prev); n.clear(); return n }),
+  })
+
+  const healthy = status.data?.healthy ?? false
+  const models = downloaded.data ?? []
+  const loadedCount = models.filter(m => m.loaded).length
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-3">
+        <HardDrive className="h-5 w-5 text-accent" />
+        <h2 className="text-compact font-semibold text-content-primary">LM Studio Models</h2>
+        <LMStudioStatusBadge status={status.data} />
+        {models.length > 0 && (
+          <Badge color="neutral" size="sm">{models.length} downloaded · {loadedCount} loaded</Badge>
+        )}
+      </div>
+
+      {!healthy && (
+        <EmptyState
+          icon={Server}
+          title="LM Studio is not reachable"
+          description="Start LM Studio, open the Developer tab, and click Start Server (default port 1234). Then set inference.lmstudio_url in Settings if it isn't on your host."
+          action={{ label: 'Configure in Settings', onClick: () => window.location.hash = '#/settings#local-inference' }}
+        />
+      )}
+
+      {error && (
+        <div className="flex items-center gap-2 text-compact text-danger">
+          <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+
+      {healthy && downloaded.isLoading && (
+        <Card><div className="p-4"><Skeleton lines={3} /></div></Card>
+      )}
+
+      {healthy && !downloaded.isLoading && models.length === 0 && (
+        <Card>
+          <div className="px-4 py-6 text-compact text-content-tertiary text-center">
+            No models downloaded in LM Studio yet. Download models in the LM Studio app to see them here.
+          </div>
+        </Card>
+      )}
+
+      {models.length > 0 && (
+        <Card>
+          <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
+            <h3 className="text-compact font-medium text-content-primary">Downloaded Models</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw className={`h-3.5 w-3.5 ${downloaded.isFetching ? 'animate-spin' : ''}`} />}
+              onClick={() => qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })}
+            >
+              Refresh
+            </Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-compact">
+              <thead>
+                <tr className="text-caption text-content-tertiary border-b border-border-subtle">
+                  <th className="text-left px-4 py-2 font-medium">Model</th>
+                  <th className="hidden md:table-cell text-left px-4 py-2 font-medium">Params</th>
+                  <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Quant</th>
+                  <th className="hidden lg:table-cell text-left px-4 py-2 font-medium">Context</th>
+                  <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Capabilities</th>
+                  <th className="text-right px-4 py-2 font-medium">Size</th>
+                  <th className="text-right px-4 py-2 font-medium">Status</th>
+                  <th className="w-28" />
+                </tr>
+              </thead>
+              <tbody>
+                {models.map(m => {
+                  const isLoading = loadingModels.has(m.key)
+                  const primaryInstance = m.loaded_instances[0] ?? m.key
+                  const isUnloading = unloadingModels.has(primaryInstance)
+                  return (
+                    <tr key={m.key} className="border-b border-border-subtle last:border-0 hover:bg-surface-card-hover transition-colors">
+                      <td className="px-4 py-2.5">
+                        <div className="font-mono text-content-primary truncate max-w-[220px]">{m.display_name}</div>
+                        <div className="text-caption text-content-tertiary font-mono truncate max-w-[220px]">{m.key}</div>
+                      </td>
+                      <td className="hidden md:table-cell px-4 py-2.5 text-content-secondary">{m.params_string || '--'}</td>
+                      <td className="hidden sm:table-cell px-4 py-2.5 text-content-secondary">{m.quantization || '--'}</td>
+                      <td className="hidden lg:table-cell px-4 py-2.5 text-content-secondary">
+                        {m.max_context_length ? `${Math.round(m.max_context_length / 1024)}K` : '--'}
+                      </td>
+                      <td className="hidden sm:table-cell px-4 py-2.5">
+                        <div className="flex gap-1 flex-wrap">
+                          {m.type === 'embedding' && <Badge color="neutral" size="sm">embed</Badge>}
+                          {m.supports_vision && <Badge color="info" size="sm"><Eye className="h-2.5 w-2.5 inline mr-1" />vision</Badge>}
+                          {m.supports_tools && <Badge color="info" size="sm"><Wrench className="h-2.5 w-2.5 inline mr-1" />tools</Badge>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-content-secondary">{formatBytes(m.size_bytes)}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        {m.loaded ? (
+                          <Badge color="success" size="sm"><Check className="h-2.5 w-2.5 inline mr-1" />loaded</Badge>
+                        ) : (
+                          <Badge color="neutral" size="sm">disk</Badge>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {m.loaded ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={isUnloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
+                            onClick={() => unloadModel.mutate(primaryInstance)}
+                            disabled={isUnloading}
+                            title="Unload from memory"
+                          >
+                            Unload
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            icon={isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
+                            onClick={() => loadModel.mutate(m.key)}
+                            disabled={isLoading}
+                            title="Load into memory"
+                          >
+                            Load
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {models.some(m => !m.loaded && m.loaded_instances.length === 0) && (
+            <div className="px-4 py-2 border-t border-border-subtle text-caption text-content-tertiary">
+              Tip: loaded models are immediately routable from Nova. Use Load to bring a model into memory.
+            </div>
+          )}
+        </Card>
+      )}
+    </section>
+  )
+}
 
 // ── Main Component ───────────────────────────────────────────────────────────
 
@@ -1017,6 +1224,11 @@ export function Models() {
             </Card>
           )}
         </section>
+      )}
+
+      {/* Section A: Local Models (LM Studio) */}
+      {activeBackend === 'lmstudio' && (
+        <LMStudioLibrarySection />
       )}
 
       {/* Section A: No backend configured */}

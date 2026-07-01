@@ -58,9 +58,14 @@ class Settings:
     cortex_api_key: str = "sk-nova-cortex-internal"
     journal_conversation_id: str = "c0000000-0000-0000-0000-000000000001"
 
-    # Model selection for Cortex's own LLM calls
-    planning_model: str = os.getenv("CORTEX_PLANNING_MODEL", "")  # empty = use DEFAULT_CHAT_MODEL
-    reflection_model: str = os.getenv("CORTEX_REFLECTION_MODEL", "")
+    # Model selection for Cortex's own LLM calls. Defaults to qwen2.5:7b — a
+    # reliable local tool-calling model present on the host ollama — so the
+    # brain works out of the box (matches the orchestrator default_model).
+    # Override via env for a stronger model, e.g. qwen3.5:9b or hermes3:8b.
+    # NOTE: the previous "" default sent an empty model to the gateway, which
+    # 404'd at ollama's /api/chat and failed every cycle.
+    planning_model: str = os.getenv("CORTEX_PLANNING_MODEL", "qwen2.5:7b")
+    reflection_model: str = os.getenv("CORTEX_REFLECTION_MODEL", "qwen2.5:7b")
 
     # Learning from experience
     stuck_threshold_min: int = int(os.getenv("CORTEX_STUCK_THRESHOLD_MIN", "3"))
