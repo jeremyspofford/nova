@@ -466,7 +466,7 @@ async def test_router_patch_creates_override_and_propagates_via_pubsub():
 @pytest.mark.asyncio
 async def test_router_patch_critical_flag_requires_confirm():
     """S3: a CRITICAL_FLAGS key without `confirm` returns 400."""
-    key = "kill.engram.ingestion"  # in CRITICAL_FLAGS
+    key = "pipeline.guardrail_strict_mode"  # in CRITICAL_FLAGS
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
             f"{ORCH_URL}/api/v1/feature-flags/{key}",
@@ -479,7 +479,7 @@ async def test_router_patch_critical_flag_requires_confirm():
 
 @pytest.mark.asyncio
 async def test_router_patch_critical_flag_with_correct_confirm_succeeds():
-    key = "kill.engram.ingestion"
+    key = "pipeline.guardrail_strict_mode"
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
             f"{ORCH_URL}/api/v1/feature-flags/{key}",
@@ -696,9 +696,6 @@ async def test_public_flags_endpoint_does_not_leak_kill_switches():
         body = r.json()
         # Every CRITICAL_FLAGS member must be absent
         forbidden = {
-            "kill.engram.ingestion",
-            "kill.consolidation.cycle",
-            "kill.cortex.thinking_loop",
             "pipeline.guardrail_strict_mode",
             "pipeline.web_fetch_strict_sanitize",
         }

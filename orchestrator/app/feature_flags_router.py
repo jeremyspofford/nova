@@ -49,17 +49,13 @@ router = APIRouter(prefix="/api/v1/feature-flags", tags=["feature-flags"])
 # ---------------------------------------------------------------------------
 # Critical-flag confirm gate (security blocker S3)
 #
-# A subset of flags would be catastrophic if flipped accidentally — kill
-# switches that disable memory ingestion, the cortex thinking loop, the
-# pipeline guardrail, etc. PATCHing one of these requires the request
-# body to include `confirm: <key>` matching the URL key. Phase 2 RBAC
-# replaces this with proper criticality + role-gated writes.
+# A subset of flags would be catastrophic if flipped accidentally — the
+# pipeline guardrail and web-fetch sanitizer. PATCHing one of these requires
+# the request body to include `confirm: <key>` matching the URL key. Phase 2
+# RBAC replaces this with proper criticality + role-gated writes.
 # ---------------------------------------------------------------------------
 
 CRITICAL_FLAGS: frozenset[str] = frozenset({
-    "kill.engram.ingestion",
-    "kill.consolidation.cycle",
-    "kill.cortex.thinking_loop",
     "pipeline.guardrail_strict_mode",
     "pipeline.web_fetch_strict_sanitize",
 })

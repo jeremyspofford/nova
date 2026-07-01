@@ -670,6 +670,17 @@ export interface OllamaStatus {
 export const getOllamaStatus = () =>
   apiFetch<OllamaStatus>('/v1/health/providers/ollama/status')
 
+export interface LMStudioStatus {
+  healthy: boolean
+  base_url: string
+  model_count: number
+  active_model: string | null
+  models: string[]
+}
+
+export const getLMStudioStatus = () =>
+  apiFetch<LMStudioStatus>('/v1/health/providers/lmstudio/status')
+
 // ── Model Discovery ──────────────────────────────────────────────────────────
 
 export interface DiscoveredModel {
@@ -738,6 +749,46 @@ export const deleteOllamaModel = (name: string) =>
     method: 'DELETE',
   })
 
+// ── LM Studio downloaded-model library ───────────────────────────────────────
+
+export interface LMStudioDownloadedModel {
+  key: string
+  type: 'llm' | 'embedding'
+  publisher: string
+  display_name: string
+  architecture: string | null
+  quantization: string | null
+  bits_per_weight: number | null
+  size_bytes: number
+  params_string: string | null
+  loaded: boolean
+  loaded_instances: string[]
+  max_context_length: number | null
+  format: string | null
+  supports_vision: boolean
+  supports_tools: boolean
+  variants: string[]
+  selected_variant: string | null
+}
+
+export const getLMStudioDownloaded = () =>
+  apiFetch<LMStudioDownloadedModel[]>('/v1/models/lmstudio/downloaded')
+
+export const loadLMStudioModel = (
+  model: string,
+  context_length?: number,
+) =>
+  apiFetch<{ status: string; instance_id: string; load_time_seconds?: number }>(
+    '/v1/models/lmstudio/load',
+    { method: 'POST', body: JSON.stringify({ model, context_length }) },
+  )
+
+export const unloadLMStudioModel = (instance_id: string) =>
+  apiFetch<{ status: string; instance_id: string }>(
+    '/v1/models/lmstudio/unload',
+    { method: 'POST', body: JSON.stringify({ instance_id }) },
+  )
+
 // ── Tool catalog ──────────────────────────────────────────────────────────────
 
 export interface ToolInfo { name: string; description: string }
@@ -754,10 +805,30 @@ export interface PlatformConfigEntry {
   description: string
   is_secret: boolean
   updated_at: string | null
+  /**
+   * Present when this DB-owned key ALSO has a legacy .env variable set.
+   * `ignored` is true when the .env value disagrees with the effective DB
+   * value — i.e. the operator has dead weight in .env they should remove.
+   */
+  env_override?: { var: string; value: string; ignored: boolean }
+}
+
+/** One row of a config key's change history (from platform_config_audit). */
+export interface PlatformConfigHistoryEntry {
+  old_value: string | number | boolean | null
+  new_value: string | number | boolean | null
+  changed_by: string | null
+  changed_at: string | null
 }
 
 export const getPlatformConfig = () =>
   apiFetch<PlatformConfigEntry[]>('/api/v1/config')
+
+/** Change history for a single config key, newest first. */
+export const getPlatformConfigHistory = (key: string) =>
+  apiFetch<PlatformConfigHistoryEntry[]>(
+    `/api/v1/config/${encodeURIComponent(key)}/history`,
+  )
 
 /**
  * Update a single platform config entry.

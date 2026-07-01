@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://memory-service:8002"
     llm_gateway_url: str = "http://llm-gateway:8001"
 
+    # qwen2.5:7b emits NATIVE Ollama tool_calls reliably (verified e2e). Avoid
+    # models whose Ollama template lacks tool support (e.g. some qwen2.5-coder
+    # builds emit tool calls as plain text) — they silently never act.
     default_model: str = "qwen2.5:7b"
     default_system_prompt: str = (
         "You are a helpful AI assistant with persistent memory. "

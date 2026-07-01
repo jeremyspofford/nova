@@ -3,9 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Save, RotateCcw, Radio, Wifi, WifiOff, Power } from 'lucide-react'
 import { getOllamaStatus, discoverModels, resolveModel, testProvider, type PlatformConfigEntry } from '../../api'
 import { Section, Button, Input, Select, Toggle, StatusDot, Card, Slider, Badge } from '../../components/ui'
-import { ConfigField, useConfigValue } from './shared'
+import { ConfigField, useConfigValue, EnvOverrideBadge, ConfigHistoryToggle } from './shared'
 import { LocalInferenceSection } from './LocalInferenceSection'
-import { manageComposeProfile, patchEnv } from '../../api-recovery'
 
 // ── LLM Routing section ──────────────────────────────────────────────────────
 
@@ -20,10 +19,12 @@ function CloudFallbackModelPicker({
   value,
   onSave,
   saving,
+  override,
 }: {
   value: string
   onSave: (key: string, value: string) => void
   saving: boolean
+  override?: { var: string; value: string; ignored: boolean }
 }) {
   const { data: providers } = useQuery({
     queryKey: ['model-catalog'],
@@ -52,8 +53,12 @@ function CloudFallbackModelPicker({
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <label className="text-caption font-medium text-content-secondary">Cloud Fallback Model</label>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <label className="text-caption font-medium text-content-secondary">Cloud Fallback Model</label>
+          <EnvOverrideBadge override={override} />
+          <ConfigHistoryToggle configKey="llm.cloud_fallback_model" />
+        </div>
         {dirty && (
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={handleReset} icon={<RotateCcw size={10} />}>Reset</Button>
@@ -128,8 +133,12 @@ function DefaultModelPicker({
 
   return (
     <div className="border-t border-border-subtle pt-4">
-      <div className="mb-1.5 flex items-center justify-between">
-        <label className="text-caption font-medium text-content-secondary">Default Chat Model</label>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <label className="text-caption font-medium text-content-secondary">Default Chat Model</label>
+          <EnvOverrideBadge override={entries.find(e => e.key === 'llm.default_chat_model')?.env_override} />
+          <ConfigHistoryToggle configKey="llm.default_chat_model" />
+        </div>
         {dirty && (
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={handleReset} icon={<RotateCcw size={10} />}>Reset</Button>
@@ -362,6 +371,129 @@ function IntelligentRoutingSection({
   )
 }
 
+// ── Embedding model picker ───────────────────────────────────────────────────
+
+const EMBED_PROVIDERS = [
+  { value: 'auto', label: 'Auto (route by model name)' },
+  { value: 'lmstudio', label: 'LM Studio' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'gemini', label: 'Gemini (free)' },
+  { value: 'litellm', label: 'OpenAI / Anthropic (paid)' },
+] as const
+
+function EmbeddingModelPicker({
+  entries,
+  onSave,
+  saving,
+}: {
+  entries: PlatformConfigEntry[]
+  onSave: (key: string, value: string) => void
+  saving: boolean
+}) {
+  const provider = useConfigValue(entries, 'llm.embed_provider', 'auto')
+  const model = useConfigValue(entries, 'llm.embed_model', '')
+
+  const [providerDraft, setProviderDraft] = useState(provider)
+  const [modelDraft, setModelDraft] = useState(model)
+  const [providerDirty, setProviderDirty] = useState(false)
+  const [modelDirty, setModelDirty] = useState(false)
+
+  useEffect(() => { setProviderDraft(provider); setProviderDirty(false) }, [provider])
+  useEffect(() => { setModelDraft(model); setModelDirty(false) }, [model])
+
+  const { data: resolved } = useQuery({
+    queryKey: ['resolved-model'],
+    queryFn: resolveModel,
+    staleTime: 30_000,
+  })
+
+  const { data: providers } = useQuery({
+    queryKey: ['model-catalog'],
+    queryFn: () => discoverModels(),
+    staleTime: 60_000,
+  })
+
+  // Suggest models from the chosen provider's discovered catalog (datalist).
+  const suggestions: string[] = (() => {
+    if (providerDraft === 'auto' || !providers) return []
+    // 'litellm' covers OpenAI/Anthropic; discovery exposes them as 'openai'/'anthropic'.
+    const slug = providerDraft === 'litellm' ? 'openai' : providerDraft
+    const entry = providers.find(p => p.slug === slug)
+    if (!entry) return []
+    return entry.models.filter(m => m.registered).map(m => m.id)
+  })()
+
+  const handleSaveProvider = () => {
+    onSave('llm.embed_provider', JSON.stringify(providerDraft))
+    setProviderDirty(false)
+  }
+  const handleSaveModel = () => {
+    onSave('llm.embed_model', JSON.stringify(modelDraft))
+    setModelDirty(false)
+  }
+
+  const isExplicit = providerDraft !== 'auto'
+
+  return (
+    <div className="border-t border-border-subtle pt-4">
+      <div className="mb-1.5 flex items-center justify-between">
+        <label className="text-caption font-medium text-content-secondary">Embedding Model</label>
+        {providerDirty && (
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => { setProviderDraft(provider); setProviderDirty(false) }} icon={<RotateCcw size={10} />}>Reset</Button>
+            <Button size="sm" onClick={handleSaveProvider} loading={saving} icon={<Save size={10} />}>Save</Button>
+          </div>
+        )}
+      </div>
+      <select
+        value={providerDraft}
+        onChange={e => { setProviderDraft(e.target.value); setProviderDirty(e.target.value !== provider) }}
+        className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 text-compact text-content-primary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors appearance-none"
+      >
+        {EMBED_PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+      </select>
+
+      {!isExplicit ? (
+        <p className="mt-1 text-caption text-content-tertiary">
+          Embeddings route by model name (memory-service&rsquo;s EMBEDDING_MODEL, default <code>nomic-embed-text</code>). Pin a provider above to force embeddings through it.
+        </p>
+      ) : (
+        <div className="mt-2 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-caption text-content-tertiary">Model name to send</label>
+            {modelDirty && (
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => { setModelDraft(model); setModelDirty(false) }} icon={<RotateCcw size={10} />}>Reset</Button>
+                <Button size="sm" onClick={handleSaveModel} loading={saving} icon={<Save size={10} />}>Save</Button>
+              </div>
+            )}
+          </div>
+          <input
+            type="text"
+            value={modelDraft}
+            onChange={e => { setModelDraft(e.target.value); setModelDirty(e.target.value !== model) }}
+            placeholder={providerDraft === 'lmstudio' ? 'text-embedding-3-small (or a local GGUF embed model)' : 'model-id'}
+            list="embed-model-suggestions"
+            className="h-9 w-full rounded-sm border border-border bg-surface-input px-3 text-compact text-content-primary placeholder:text-content-tertiary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 transition-colors font-mono"
+          />
+          <datalist id="embed-model-suggestions">
+            {suggestions.map(id => <option key={id} value={id} />)}
+          </datalist>
+        </div>
+      )}
+
+      <div className="mt-2 rounded-sm bg-surface-elevated p-2.5 text-caption text-content-tertiary space-y-1">
+        <p>
+          <span className="font-medium text-content-secondary">Single-model servers:</span> don&rsquo;t run chat and embeddings on the same LM Studio <em>or</em> Ollama instance &mdash; each embed call evicts the chat model. Put chat and embeddings on different local servers, or use a cloud embed model.
+        </p>
+        <p>
+          <span className="font-medium text-content-secondary">Dimensions:</span> embeddings must match memory-service&rsquo;s EMBEDDING_DIMENSIONS (default 768). Use a 768-dim model (e.g. <code>nomic-embed-text</code>) unless you&rsquo;ve reconfigured memory-service and re-embedded. Effective resolved model: <code>{resolved?.model ?? 'nomic-embed-text'}</code>.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function LLMRoutingSection({
   entries,
   onSave,
@@ -378,8 +510,6 @@ export function LLMRoutingSection({
   const wolBroadcast = useConfigValue(entries, 'llm.wol_broadcast', '255.255.255.255')
 
   const [strategySaved, setStrategySaved] = useState(false)
-  const [switchingTo, setSwitchingTo] = useState<string | null>(null)
-  const [switchError, setSwitchError] = useState<string | null>(null)
 
   const usesOllama = strategy !== 'cloud-only'
   const usesCloud = strategy !== 'local-only'
@@ -408,40 +538,13 @@ export function LLMRoutingSection({
     }
   }, [])
 
-  const handleStrategyChange = async (value: string) => {
-    // Save runtime strategy (existing — flows to nova:config:llm.routing_strategy in Redis).
+  const handleStrategyChange = (value: string) => {
+    // Routing strategy is purely a gateway routing preference — it flows to
+    // nova:config:llm.routing_strategy and the gateway honors it live. There is
+    // no bundled inference container to start/stop; local inference is external.
     onSave('llm.routing_strategy', JSON.stringify(value))
-    setSwitchingTo(value)
-    setSwitchError(null)
-
-    // Drive the bundled Ollama compose service from the routing choice so the
-    // user never has to re-run setup.sh to switch modes:
-    //   cloud-only          → stop the bundled service (no local AI needed)
-    //   any other strategy  → start it (local-only / local-first / cloud-first)
-    // Also persist NOVA_INFERENCE_MODE in .env so `make dev` honors the choice
-    // on the next boot.
-    const mode = value === 'cloud-only' ? 'cloud-only'
-               : value === 'local-only' ? 'local-only'
-               : 'hybrid'
-    const action = mode === 'cloud-only' ? 'stop' : 'start'
-    const errors: string[] = []
-    try {
-      await manageComposeProfile('local-ollama', action)
-    } catch (e) {
-      errors.push(`compose ${action}: ${(e as Error).message || String(e)}`)
-    }
-    try {
-      await patchEnv({ NOVA_INFERENCE_MODE: mode })
-    } catch (e) {
-      errors.push(`persist mode: ${(e as Error).message || String(e)}`)
-    }
-    setSwitchingTo(null)
-    if (errors.length > 0) {
-      setSwitchError(errors.join('; '))
-    } else {
-      setStrategySaved(true)
-      setTimeout(() => setStrategySaved(false), 1500)
-    }
+    setStrategySaved(true)
+    setTimeout(() => setStrategySaved(false), 1500)
   }
 
   return (
@@ -457,12 +560,9 @@ export function LLMRoutingSection({
       <div>
         <div className="mb-2 flex items-center gap-2">
           <label className="text-caption font-medium text-content-secondary">Routing Strategy</label>
-          {switchingTo && (
-            <Badge color="warning" size="sm">
-              {switchingTo === 'cloud-only' ? 'Stopping local Ollama…' : 'Starting local Ollama…'}
-            </Badge>
-          )}
-          {!switchingTo && strategySaved && (
+          <EnvOverrideBadge override={entries.find(e => e.key === 'llm.routing_strategy')?.env_override} />
+          <ConfigHistoryToggle configKey="llm.routing_strategy" />
+          {strategySaved && (
             <Badge color="success" size="sm">Saved</Badge>
           )}
         </div>
@@ -471,7 +571,7 @@ export function LLMRoutingSection({
             <button
               key={value}
               onClick={() => handleStrategyChange(value)}
-              disabled={saving || switchingTo !== null}
+              disabled={saving}
               className={
                 'rounded-xs px-3 py-1.5 text-caption font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ' +
                 (strategy === value
@@ -486,17 +586,6 @@ export function LLMRoutingSection({
         <p className="mt-1.5 text-caption text-content-tertiary">
           {ROUTING_STRATEGIES.find(s => s.value === strategy)?.desc}
         </p>
-        {switchError && (
-          <div className="mt-2 rounded-sm border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-caption text-status-danger">
-            <strong>Switch failed:</strong> {switchError}
-            <button
-              onClick={() => setSwitchError(null)}
-              className="ml-2 text-content-tertiary hover:text-content-primary"
-            >
-              dismiss
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Ollama settings */}
@@ -577,11 +666,15 @@ export function LLMRoutingSection({
           value={cloudFallback}
           onSave={onSave}
           saving={saving}
+          override={entries.find(e => e.key === 'llm.cloud_fallback_model')?.env_override}
         />
       )}
 
       {/* Default chat model */}
       <DefaultModelPicker onSave={onSave} saving={saving} entries={entries} />
+
+      {/* Embedding model (chat↔embed provider pairing) */}
+      <EmbeddingModelPicker entries={entries} onSave={onSave} saving={saving} />
 
       {/* Intelligent routing */}
       <IntelligentRoutingSection entries={entries} onSave={onSave} saving={saving} />

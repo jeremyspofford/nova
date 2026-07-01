@@ -14,15 +14,12 @@ import { Section, Button, Toggle, Badge, Select } from '../../components/ui'
 // ── CRITICAL_FLAGS — must match orchestrator/app/feature_flags_router.py ─────
 //
 // These flags require a typed-confirmation modal because flipping them in
-// error has user-visible blast radius (memory writes stop, cortex pauses,
-// pipeline guardrail disarms). The dashboard mirrors the server-side
-// hardcoded set so the modal renders even before the PATCH is sent;
-// the server still re-checks on receipt — defense in depth.
+// error has user-visible blast radius (the pipeline guardrail disarms). The
+// dashboard mirrors the server-side hardcoded set so the modal renders even
+// before the PATCH is sent; the server still re-checks on receipt — defense
+// in depth.
 
 const CRITICAL_FLAGS = new Set<string>([
-  'kill.engram.ingestion',
-  'kill.consolidation.cycle',
-  'kill.cortex.thinking_loop',
   'pipeline.guardrail_strict_mode',
   'pipeline.web_fetch_strict_sanitize',
 ])

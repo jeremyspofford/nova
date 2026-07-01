@@ -675,7 +675,15 @@ class ConfigUpdateRequest(BaseModel):
 
 
 def _config_row(row: dict) -> dict:
-    """Decode JSONB value back to a Python scalar for the API response."""
+    """Decode JSONB value back to a Python scalar for the API response.
+
+    Also labels the value's source so the UI can show where truth comes from:
+      - "env_override": present when this DB-owned key ALSO has a stale .env
+        variable set (dead weight the operator should remove); the DB value
+        wins regardless. Lets Settings badge "also set in .env (ignored)".
+    """
+    from app.config_demotion import CONFIG_KEY_TO_ENV, explicit_env_value
+
     d = dict(row)
     d["updated_at"] = d["updated_at"].isoformat() if d.get("updated_at") else None
     # Decode the JSONB value so the frontend receives a plain string/number/null
@@ -684,6 +692,19 @@ def _config_row(row: dict) -> dict:
         d["value"] = json.loads(raw) if raw is not None else None
     except Exception:
         d["value"] = raw
+
+    env_var = CONFIG_KEY_TO_ENV.get(d.get("key"))
+    if env_var:
+        # Read the .env FILE (not os.environ): a compose default doesn't count
+        # as an operator override.
+        env_val = explicit_env_value(env_var)
+        if env_val:
+            d["env_override"] = {
+                "var": env_var,
+                "value": env_val,
+                # True when .env disagrees with the effective DB value.
+                "ignored": env_val != d.get("value"),
+            }
     return d
 
 
@@ -713,6 +734,55 @@ async def get_platform_config(key: str, _admin: AdminDep) -> dict:
     return _config_row(dict(row))
 
 
+@router.get("/api/v1/config/{key}/history")
+async def get_platform_config_history(
+    key: str, _admin: AdminDep, limit: int = 50
+) -> list[dict]:
+    """Return the change history for a single config key, newest first.
+
+    Reads platform_config_audit (populated in the same transaction as every
+    write). Values are decoded from JSONB so the UI shows plain scalars.
+    Admin-only.
+    """
+    limit = max(1, min(limit, 200))
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT old_value, new_value, changed_by, changed_at "
+            "FROM platform_config_audit WHERE config_key = $1 "
+            "ORDER BY changed_at DESC LIMIT $2",
+            key, limit,
+        )
+        # Redact the actual before/after values for secret-flagged keys — the
+        # rotation history of a secret shouldn't be readable even to admins.
+        is_secret = await conn.fetchval(
+            "SELECT is_secret FROM platform_config WHERE key = $1", key
+        )
+
+    def _decode(v):
+        if v is None:
+            return None
+        try:
+            return json.loads(v)
+        except Exception:
+            return v
+
+    def _value(v):
+        if is_secret:
+            return None if v is None else "••••••"
+        return _decode(v)
+
+    return [
+        {
+            "old_value": _value(r["old_value"]),
+            "new_value": _value(r["new_value"]),
+            "changed_by": str(r["changed_by"]) if r["changed_by"] else None,
+            "changed_at": r["changed_at"].isoformat() if r["changed_at"] else None,
+        }
+        for r in rows
+    ]
+
+
 @router.patch("/api/v1/config/{key}")
 async def update_platform_config(
     key: str, req: ConfigUpdateRequest, _admin: AdminDep
@@ -734,9 +804,22 @@ async def update_platform_config(
 
     pool = get_pool()
     async with pool.acquire() as conn:
+        # Upsert + audit in a single atomic statement. The audit CTE reads the
+        # prior value directly as jsonb (no ::text round-trip and re-cast, which
+        # would add an extra JSON-encoding layer), so old_value and new_value are
+        # stored at the same encoding depth as platform_config.value itself.
+        # A NULL old_value records a creation; IS DISTINCT FROM skips no-op writes.
         desc = req.description or ''
         row = await conn.fetchrow(
             """
+            WITH audit AS (
+                INSERT INTO platform_config_audit (config_key, old_value, new_value)
+                SELECT $1,
+                       (SELECT value FROM platform_config WHERE key = $1),
+                       $2::jsonb
+                WHERE (SELECT value FROM platform_config WHERE key = $1)
+                      IS DISTINCT FROM $2::jsonb
+            )
             INSERT INTO platform_config (key, value, description, updated_at)
             VALUES ($1, $2::jsonb, $3, NOW())
             ON CONFLICT (key) DO UPDATE

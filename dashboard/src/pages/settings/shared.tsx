@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Save, RotateCcw, CheckCircle2, XCircle } from 'lucide-react'
+import { Save, RotateCcw, CheckCircle2, XCircle, History, AlertTriangle } from 'lucide-react'
 import { Button, Input, Textarea } from '../../components/ui'
-import type { PlatformConfigEntry } from '../../api'
+import { getPlatformConfigHistory } from '../../api'
+import type { PlatformConfigEntry, PlatformConfigHistoryEntry } from '../../api'
 
 // Re-export the new design system Section so existing section files can migrate gradually
 export { Section } from '../../components/ui'
@@ -30,6 +31,7 @@ export function ConfigField({
   placeholder = '',
   onSave,
   saving,
+  envOverride,
 }: {
   label: string
   configKey: string
@@ -40,6 +42,8 @@ export function ConfigField({
   placeholder?: string
   onSave: (key: string, value: string) => void
   saving: boolean
+  /** Passed for keys that also have a legacy .env variable set (source badge). */
+  envOverride?: { var: string; value: string; ignored: boolean }
 }) {
   const [draft, setDraft] = useState(value)
   const [dirty, setDirty] = useState(false)
@@ -60,8 +64,12 @@ export function ConfigField({
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <label className="text-caption font-medium text-content-secondary">{label}</label>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <label className="text-caption font-medium text-content-secondary">{label}</label>
+          <EnvOverrideBadge override={envOverride} />
+          <ConfigHistoryToggle configKey={configKey} />
+        </div>
         {dirty && (
           <div className="flex items-center gap-2">
             <Button
@@ -103,6 +111,103 @@ export function ConfigField({
         />
       )}
     </div>
+  )
+}
+
+// ── .env override badge ───────────────────────────────────────────────────────
+// Amber "source" warning: this DB-owned key also has a legacy .env variable set
+// whose value is being ignored (Settings wins). Signals dead weight to remove.
+
+export function EnvOverrideBadge({
+  override,
+}: {
+  override?: { var: string; value: string; ignored: boolean }
+}) {
+  if (!override?.ignored) return null
+  return (
+    <span
+      title={`Also set in .env as ${override.var}=${override.value}, but that value is ignored — this Settings value wins. Remove it from .env to silence.`}
+      className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+    >
+      <AlertTriangle size={11} /> .env ignored
+    </span>
+  )
+}
+
+// ── Config change history disclosure ──────────────────────────────────────────
+// A clock button that lazily fetches platform_config_audit rows for one key.
+// Available on every ConfigField so any setting can show "who changed what when".
+
+function formatConfigValue(v: string | number | boolean | null): string {
+  if (v === null || v === undefined) return '(none)'
+  if (typeof v === 'string') return v === '' ? '(empty)' : v
+  return String(v)
+}
+
+export function ConfigHistoryToggle({ configKey }: { configKey: string }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [rows, setRows] = useState<PlatformConfigHistoryEntry[] | null>(null)
+
+  const toggle = async () => {
+    const next = !open
+    setOpen(next)
+    if (next && rows === null && !loading) {
+      setLoading(true)
+      setError(null)
+      try {
+        setRows(await getPlatformConfigHistory(configKey))
+      } catch {
+        setError('Failed to load history')
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={toggle}
+        title="Change history"
+        aria-label="Change history"
+        className={`inline-flex items-center rounded p-0.5 transition-colors ${
+          open ? 'text-teal-500' : 'text-content-tertiary hover:text-content-secondary'
+        }`}
+      >
+        <History size={13} />
+      </button>
+      {open && (
+        <div className="mt-1 w-full basis-full rounded-md border border-stone-200 bg-stone-50 p-2 text-caption dark:border-stone-700 dark:bg-stone-900/50">
+          {loading && <div className="text-content-tertiary">Loading history…</div>}
+          {error && <div className="text-error">{error}</div>}
+          {rows && rows.length === 0 && (
+            <div className="text-content-tertiary">No recorded changes yet.</div>
+          )}
+          {rows && rows.length > 0 && (
+            <ul className="space-y-1.5">
+              {rows.map((r, i) => (
+                <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="font-mono text-[11px] text-content-tertiary line-through">
+                    {formatConfigValue(r.old_value)}
+                  </span>
+                  <span className="text-content-tertiary">→</span>
+                  <span className="font-mono text-[11px] text-content-primary">
+                    {formatConfigValue(r.new_value)}
+                  </span>
+                  <span className="ml-auto text-[11px] text-content-tertiary">
+                    {r.changed_at ? new Date(r.changed_at).toLocaleString() : ''}
+                    {r.changed_by ? ` · ${r.changed_by.slice(0, 8)}` : ' · system'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
   )
 }
 

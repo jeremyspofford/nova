@@ -17,18 +17,6 @@ _crawl_semaphore = asyncio.Semaphore(3)
 _active_crawls: set[str] = set()
 
 
-from nova_contracts.feature_flags import register_flag
-
-# B-Task 9: kill switch — pauses crawl scheduling. In-flight crawls
-# in _active_crawls finish; new ones aren't dispatched until cleared.
-KILL_KNOWLEDGE_CRAWL = register_flag(
-    key="kill.knowledge_worker.crawl",
-    type="bool",
-    default=False,
-    description="Pause knowledge-worker crawl scheduling (in-flight crawls complete).",
-)
-
-
 async def run_scheduling_loop(config, get_orch_client, get_llm_client, push_to_engram):
     """Main scheduling loop. Fetches active sources, runs due crawls."""
     logger.info(
@@ -36,24 +24,8 @@ async def run_scheduling_loop(config, get_orch_client, get_llm_client, push_to_e
         config.poll_interval,
     )
 
-    _last_kill_state = False
     while True:
         try:
-            if KILL_KNOWLEDGE_CRAWL.value():
-                if not _last_kill_state:
-                    logger.warning(
-                        "kill.knowledge_worker.crawl=True — pausing scheduler "
-                        "(in-flight crawls complete; new ones deferred)"
-                    )
-                    _last_kill_state = True
-                await asyncio.sleep(config.poll_interval)
-                continue
-            elif _last_kill_state:
-                logger.info(
-                    "kill.knowledge_worker.crawl cleared — resuming scheduler"
-                )
-                _last_kill_state = False
-
             orch = get_orch_client()
             llm = get_llm_client()
 

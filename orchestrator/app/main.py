@@ -154,6 +154,61 @@ async def _seed_config_from_env() -> None:
         log.warning("Failed to seed platform_config from .env (DB not ready?)", exc_info=True)
 
 
+async def _reconcile_demoted_env() -> None:
+    """Import-then-warn for runtime .env keys now owned by platform_config.
+
+    The Settings UI is the source of truth for these keys (see
+    docs/designs/2026-06-30-unified-runtime-config.md §3.6). For each still-set
+    .env runtime key:
+      - platform_config row missing  -> seed it once (import the .env value so
+        removing it from .env later doesn't lose the operator's setting).
+      - DB value == .env value        -> silent (consistent).
+      - DB value != .env value        -> WARN: the .env value is IGNORED; the
+        effective value comes from Settings. Never overwrites the DB — the UI
+        is authoritative.
+    """
+    import json
+
+    from app.config_demotion import DEMOTED_RUNTIME_ENV, explicit_env_value
+    from app.db import get_pool
+
+    pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            for env_var, cfg_key in DEMOTED_RUNTIME_ENV.items():
+                # Read the .env FILE, not os.environ — compose injects a default
+                # for every var, so os.environ can't tell an operator's explicit
+                # value from a compose fallback.
+                env_val = explicit_env_value(env_var)
+                if not env_val:
+                    continue
+                row = await conn.fetchrow(
+                    "SELECT value #>> '{}' AS val FROM platform_config WHERE key = $1",
+                    cfg_key,
+                )
+                if row is None:
+                    await conn.execute(
+                        "INSERT INTO platform_config (key, value, updated_at) "
+                        "VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (key) DO NOTHING",
+                        cfg_key, json.dumps(env_val),
+                    )
+                    log.info(
+                        "Imported .env %s into platform_config %s — Settings now owns it",
+                        env_var, cfg_key,
+                    )
+                    continue
+                if row["val"] == env_val:
+                    continue
+                log.warning(
+                    "Config %s is set in .env (%s=%r) but that value is IGNORED — "
+                    "the effective value %r comes from Settings (platform_config.%s). "
+                    "Remove %s from .env to silence this warning.",
+                    cfg_key, env_var, env_val, row["val"], cfg_key, env_var,
+                )
+    except Exception:
+        log.warning("Failed to reconcile demoted .env keys (DB not ready?)", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Orchestrator starting")
@@ -200,6 +255,11 @@ async def lifespan(app: FastAPI):
 
     # Seed platform_config from .env for existing deployments
     await _seed_config_from_env()
+
+    # Import-then-warn for runtime keys demoted from .env to platform_config,
+    # so the Settings UI is the source of truth and stale .env overrides surface
+    # as a startup WARN instead of silently winning.
+    await _reconcile_demoted_env()
 
     # Sync DB config to Redis so LLM gateway has correct values immediately
     from app.config_sync import (

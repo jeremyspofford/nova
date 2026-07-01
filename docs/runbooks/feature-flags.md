@@ -9,18 +9,14 @@
 
 ## Why flags exist
 
-Three jobs. Everything in the flag system should map to one of them:
+Two jobs. Everything in the flag system should map to one of them:
 
-1. **Kill switches** — instant, hot-path lever to pause a misbehaving
-   subsystem without restarting a container or losing in-flight state.
-   (`kill.engram.ingestion`, `kill.cortex.thinking_loop`)
-
-2. **Behavior toggles** — turn a code path on or off across the stack.
+1. **Behavior toggles** — turn a code path on or off across the stack.
    Covers experiments, staged rollouts, and configuration that changes
    during normal operation. (`pipeline.guardrail_strict_mode`,
    `pipeline.outcome_feedback_symmetric`)
 
-3. **Capability / surface gates** — temporarily hide partially-built
+2. **Capability / surface gates** — temporarily hide partially-built
    features or surfaces until they're ready. Exists for code that's
    shipped but not yet meant to be visible. (`ui.surface_preset`,
    `brain.enabled`)
@@ -36,11 +32,10 @@ What flags are **not** for:
 
 ---
 
-## The four namespaces
+## The three namespaces
 
 | Pattern | Purpose | Lifetime | Example |
 |---|---|---|---|
-| `kill.<system>.<thing>` | Emergency kill-switch: pause without restart | Permanent (operational) | `kill.engram.ingestion` |
 | `<system>.<behavior>` | Behavior toggle: code-path experiment or rollout | Permanent (config) | `pipeline.guardrail_strict_mode` |
 | `feature.<area>.enabled` | Capability gate: hide WIP until launch | **Temporary** — set a delete-by date | `feature.capture.enabled` |
 | `ui.<setting>` | UI preset / surface preference | Permanent (UX) | `ui.surface_preset` |
@@ -48,19 +43,6 @@ What flags are **not** for:
 **Enforcement:** naming is convention only in v1. `register_flag()` does
 not enforce the prefix. Code review is the gate — PRs adding flags in
 the wrong namespace should be sent back.
-
-### `kill.*` — emergency kill-switches
-
-Boolean flags only. Default `false` (system on). Flipping to `true`
-pauses the named subsystem at its next loop boundary without losing
-in-flight state. These are `CRITICAL_FLAGS` — every write requires a
-typed-confirm field in the PATCH body.
-
-Current kill switches: `kill.engram.ingestion`,
-`kill.consolidation.cycle`, `kill.cortex.thinking_loop`,
-`kill.intel_worker.poll`, `kill.knowledge_worker.crawl`.
-
-See [kill-switches.md](kill-switches.md) for the per-flag playbook.
 
 ### `<system>.<behavior>` — behavior toggles
 
@@ -133,9 +115,9 @@ PUBLIC_FLAGS: frozenset[str] = frozenset({
 
 **Why the allowlist is small on purpose:**
 
-- Kill-switch state must never reach the browser. An attacker observing
-  `kill.engram.ingestion=true` knows an operator is fighting an active
-  incident.
+- Critical-flag state must never reach the browser. An attacker observing
+  a disarmed guardrail (`pipeline.guardrail_strict_mode=false`) learns
+  something about the system's security posture.
 - `CRITICAL_FLAGS` overlap with `PUBLIC_FLAGS` is treated as a bug in
   code review.
 

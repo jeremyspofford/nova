@@ -93,19 +93,6 @@ async def _process_event_guarded(
             log.warning("Failed to clear payload from processing list", exc_info=True)
 
 
-from nova_contracts.feature_flags import register_flag
-
-# B-Task 9: kill switch — pauses new engram decomposition. In-flight
-# items still complete; the BLMOVE just becomes a no-op until the flag
-# clears. Default off = ingestion runs.
-KILL_INGESTION = register_flag(
-    key="kill.engram.ingestion",
-    type="bool",
-    default=False,
-    description="Pause new engram decomposition (memory-service).",
-)
-
-
 async def ingestion_loop() -> None:
     """Main ingestion loop — atomic BLMOVE from queue to processing list, then
     process each event. Startup recovers any orphaned in-flight payloads."""
@@ -127,24 +114,8 @@ async def ingestion_loop() -> None:
 
     log.info("Engram ingestion worker started (queue=%s)", queue)
 
-    _last_kill_state = False
     while True:
         try:
-            # Kill-switch check: items already moved to the processing list
-            # complete normally; new payloads are deferred.
-            if KILL_INGESTION.value():
-                if not _last_kill_state:
-                    log.warning(
-                        "kill.engram.ingestion=True — new decomposition paused "
-                        "(in-flight items still complete; queue continues to grow)"
-                    )
-                    _last_kill_state = True
-                await asyncio.sleep(int(settings.engram_ingestion_batch_timeout) or 1)
-                continue
-            elif _last_kill_state:
-                log.info("kill.engram.ingestion cleared — resuming decomposition")
-                _last_kill_state = False
-
             # BLMOVE atomically pops the tail of the main queue and pushes it
             # to the head of the processing list. Returns None on timeout.
             payload_raw = await redis.blmove(

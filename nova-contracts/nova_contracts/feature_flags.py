@@ -34,7 +34,7 @@ _BOOL_FALSE = frozenset({"false", "0", "no", "n", "off"})
 def _envvar_name(flag_key: str) -> str:
     """Translate a flag key to its NOVA_FLAG_* environment variable name.
 
-    'kill.intel_worker.poll' -> 'NOVA_FLAG_KILL_INTEL_WORKER_POLL'
+    'pipeline.guardrail_strict_mode' -> 'NOVA_FLAG_PIPELINE_GUARDRAIL_STRICT_MODE'
     """
     return "NOVA_FLAG_" + flag_key.replace(".", "_").upper()
 

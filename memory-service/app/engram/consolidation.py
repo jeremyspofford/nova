@@ -65,18 +65,6 @@ async def _user_recently_active() -> bool:
         return False
 
 
-from nova_contracts.feature_flags import register_flag
-
-# B-Task 9: kill switch — pauses the sleep-cycle consolidation pipeline
-# without restarting memory-service. Default off = consolidation runs.
-KILL_CONSOLIDATION = register_flag(
-    key="kill.consolidation.cycle",
-    type="bool",
-    default=False,
-    description="Pause sleep-cycle consolidation (memory-service).",
-)
-
-
 async def consolidation_loop() -> None:
     """Background loop that triggers consolidation on idle/threshold/schedule."""
     if not settings.engram_consolidation_enabled:
@@ -87,24 +75,9 @@ async def consolidation_loop() -> None:
     _last_consolidation_at = time.monotonic()
     log.info("Consolidation daemon started")
 
-    _last_kill_state = False
     while True:
         try:
             await asyncio.sleep(60)  # Check every minute
-
-            # Kill-switch check: an in-flight consolidation cycle finishes
-            # to completion (mutex-guarded; no torn writes).
-            if KILL_CONSOLIDATION.value():
-                if not _last_kill_state:
-                    log.warning(
-                        "kill.consolidation.cycle=True — pausing cycle scheduler "
-                        "(no triggers will fire until flag cleared)"
-                    )
-                    _last_kill_state = True
-                continue
-            elif _last_kill_state:
-                log.info("kill.consolidation.cycle cleared — resuming cycle scheduler")
-                _last_kill_state = False
 
             now_mono = time.monotonic()
             idle_minutes = (now_mono - _last_consolidation_at) / 60

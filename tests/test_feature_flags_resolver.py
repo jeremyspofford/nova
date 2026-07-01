@@ -332,12 +332,12 @@ def test_flag_override_takes_precedence_over_envvar(monkeypatch):
 
 
 def test_envvar_key_translation_dots_become_underscores(monkeypatch):
-    """Flag key 'kill.intel_worker.poll' resolves to env-var
-    NOVA_FLAG_KILL_INTEL_WORKER_POLL (matches spec §First Flags to Ship)."""
+    """Flag key 'sample.worker.poll' resolves to env-var
+    NOVA_FLAG_SAMPLE_WORKER_POLL (matches spec §First Flags to Ship)."""
     flag = register_flag(
-        key="kill.intel_worker.poll", type="bool", default=False, description=""
+        key="sample.worker.poll", type="bool", default=False, description=""
     )
-    monkeypatch.setenv("NOVA_FLAG_KILL_INTEL_WORKER_POLL", "true")
+    monkeypatch.setenv("NOVA_FLAG_SAMPLE_WORKER_POLL", "true")
     assert flag.value() is True
 
 
@@ -497,14 +497,14 @@ def test_init_cache_file_loads_existing_json(tmp_path):
     are unreachable on cold boot, last-seen kill-switch values apply."""
     cache_path = tmp_path / "orchestrator.json"
     cache_path.write_text(json.dumps({
-        "kill.intel_worker.poll": True,
+        "sample.worker.poll": True,
         "memory.retrieval_mode": "tools",
     }))
 
     init_cache_file(cache_path)
 
     bool_flag = register_flag(
-        key="kill.intel_worker.poll", type="bool", default=False,
+        key="sample.worker.poll", type="bool", default=False,
         description="",
     )
     enum_flag = register_flag(
@@ -564,7 +564,7 @@ def test_partition_fallback_kill_switch_stays_armed(tmp_path):
 
     cache_path = tmp_path / "orchestrator.json"
     cache_path.write_text(json.dumps({
-        "kill.engram.ingestion": True,  # someone flipped this online
+        "pipeline.guardrail_strict_mode": True,  # someone flipped this online
     }))
 
     # Simulate a cold boot (cache empty before init).
@@ -572,7 +572,7 @@ def test_partition_fallback_kill_switch_stays_armed(tmp_path):
     init_cache_file(cache_path)
 
     flag = register_flag(
-        key="kill.engram.ingestion", type="bool", default=False,
+        key="pipeline.guardrail_strict_mode", type="bool", default=False,
         description="kill ingestion",
     )
     # Even without any HTTP success, the kill switch is still armed.
@@ -628,7 +628,7 @@ async def test_warm_cache_populates_from_orchestrator_response():
         return httpx.Response(
             200,
             json=[
-                {"key": "kill.intel_worker.poll", "current_value": True, "is_override": True},
+                {"key": "sample.worker.poll", "current_value": True, "is_override": True},
                 {"key": "memory.retrieval_mode", "current_value": "tools", "is_override": True},
                 {"key": "pipeline.guardrail_strict_mode", "current_value": False, "is_override": False},
             ],
@@ -642,7 +642,7 @@ async def test_warm_cache_populates_from_orchestrator_response():
 
     cache = _read_cache_dict_for_test()
     assert cache == {
-        "kill.intel_worker.poll": True,
+        "sample.worker.poll": True,
         "memory.retrieval_mode": "tools",
         "pipeline.guardrail_strict_mode": False,
     }
