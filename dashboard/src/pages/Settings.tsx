@@ -45,7 +45,6 @@ import { SelfModelSection } from './settings/SelfModelSection'
 import { ConsolidationSection } from './settings/ConsolidationSection'
 import { MaintenanceSection } from './settings/MaintenanceSection'
 import { EngramSourcesSection } from './settings/EngramSourcesSection'
-import { RouterStatusSection } from './settings/RouterStatusSection'
 import { MemoryProviderSection } from './settings/MemoryProviderSection'
 import { BrainSection } from './settings/BrainSection'
 import EditorSection from './settings/EditorSection'
@@ -128,7 +127,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'memory-provider', label: 'Memory Provider', icon: Database },
       { id: 'self-model', label: 'Self-Model', icon: Brain },
       { id: 'engram-sources', label: 'Engram Sources', icon: Database },
-      { id: 'router-status', label: 'Neural Router', icon: Activity },
       { id: 'maintenance', label: 'Maintenance', icon: Wrench },
       { id: 'consolidation', label: 'Consolidation', icon: GitMerge },
     ],
@@ -743,12 +741,6 @@ export function Settings() {
         {show('engram-sources') && (
           <div id="engram-sources">
             <EngramSourcesSection />
-          </div>
-        )}
-
-        {show('router-status') && (
-          <div id="router-status">
-            <RouterStatusSection />
           </div>
         )}
 

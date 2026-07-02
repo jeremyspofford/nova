@@ -1,15 +1,11 @@
 """
-Retrieval logger — Phase 5 of the Engram Network (Neural Router foundation).
+Retrieval logger — Phase 5 of the Engram Network.
 
 Logs every retrieval event to the retrieval_log table:
   - What was queried (embedding + text)
   - What was surfaced (engram IDs from activation)
-  - What was actually used (filled later by the orchestrator)
+  - What was actually used (filled later via mark-used feedback)
   - Temporal context (time, day, active goal)
-
-This data is the training set for the Neural Router. The NN training
-container listens for train signals on Redis db6 and trains when
-enough labeled observations accumulate.
 """
 
 from __future__ import annotations
@@ -18,7 +14,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import redis.asyncio as aioredis
 from app.config import settings
 from app.embedding import to_pg_vector
 from sqlalchemy import text
@@ -27,20 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger(__name__)
 
 _DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001"
-
-# Redis client for neural router train signals (db6, separate from embedding cache on db0)
-_train_redis: aioredis.Redis | None = None
-
-
-async def _get_train_redis() -> aioredis.Redis:
-    """Lazy-init Redis client for neural router signals on db6."""
-    global _train_redis
-    if _train_redis is None:
-        # Parse base URL and force db6
-        base = settings.redis_url.rsplit("/", 1)[0]
-        _train_redis = aioredis.from_url(f"{base}/6", decode_responses=True)
-    return _train_redis
-
 
 async def log_retrieval(
     session: AsyncSession,
@@ -51,7 +32,7 @@ async def log_retrieval(
     active_goal: str = "",
     tenant_id: str = _DEFAULT_TENANT,
 ) -> str | None:
-    """Log a retrieval event for future Neural Router training.
+    """Log a retrieval event (surfaced ids; mark-used fills usage later).
 
     Returns the log entry ID (for later marking which engrams were used).
     """
@@ -85,12 +66,7 @@ async def log_retrieval(
             },
         )
         row = result.fetchone()
-        log_id = str(row.id) if row else None
-
-        if log_id:
-            await _maybe_emit_train_signal(session, tenant_id)
-
-        return log_id
+        return str(row.id) if row else None
     except Exception:
         log.debug("Failed to log retrieval", exc_info=True)
         return None
@@ -111,15 +87,6 @@ async def mark_engrams_used(
             """),
             {"id": retrieval_log_id, "used": engram_ids_used},
         )
-        # Labeled data just grew — check if training threshold crossed
-        # Get tenant_id from the log entry
-        tid_row = await session.execute(
-            text("SELECT tenant_id FROM retrieval_log WHERE id = CAST(:id AS uuid)"),
-            {"id": retrieval_log_id},
-        )
-        tid = tid_row.scalar()
-        if tid:
-            await _maybe_emit_train_signal(session, str(tid))
     except Exception:
         log.debug("Failed to mark engrams used", exc_info=True)
 
@@ -159,37 +126,3 @@ async def get_labeled_observation_count(
         return result.scalar() or 0
     except Exception:
         return 0
-
-
-async def _maybe_emit_train_signal(
-    session: AsyncSession,
-    tenant_id: str,
-) -> None:
-    """Emit a Redis train signal if labeled observations cross the retrain threshold."""
-    try:
-        if not settings.neural_router_enabled:
-            return
-
-        labeled = await get_labeled_observation_count(session, tenant_id)
-        if labeled < settings.neural_router_min_observations:
-            return
-
-        # Check if new labeled observations since last model exceed retrain_every
-        r = await _get_train_redis()
-        last_key = f"neural_router:last_trained_count:{tenant_id}"
-        last_count = await r.get(last_key)
-        last_count = int(last_count) if last_count else 0
-
-        if labeled - last_count >= settings.neural_router_retrain_every:
-            await r.lpush(
-                "neural_router:train_signal",
-                json.dumps({"tenant_id": tenant_id, "observation_count": labeled}),
-            )
-            await r.set(last_key, labeled)
-            log.info(
-                "Emitted train signal for tenant %s (%d labeled observations)",
-                tenant_id,
-                labeled,
-            )
-    except Exception:
-        log.debug("Failed to emit train signal", exc_info=True)

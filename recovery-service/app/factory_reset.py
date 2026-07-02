@@ -142,20 +142,19 @@ CATEGORIES: dict[str, dict[str, Any]] = {
     # ── Kept by default (Tier 1 — valuable/destructive) ─────────────────────
     "memory_and_knowledge": {
         "label": "Memory & knowledge",
-        "description": "All engrams, relationships, sources (incl. blob files), neural router model, working memory, consolidation/retrieval history",
+        "description": "All engrams, relationships, sources (incl. blob files), working memory, consolidation/retrieval history",
         "default_keep": True,
         "tables": [
             "engram_edges",
             "working_memory_slots",
             "retrieval_log",
             "consolidation_log",
-            "neural_router_models",
             "engram_archive",
             "engrams",
             "sources",
         ],
         "filesystem": ["/app/data/sources"],
-        "redis": [(6, "neural_router:last_trained_count:*")],
+        "redis": [],
         "backups": False,
     },
     "api_keys": {

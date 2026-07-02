@@ -122,8 +122,8 @@ async def reconstruct(
 ) -> str:
     """Reconstruct coherent memory text from activated engrams.
 
-    Uses template assembly for small sets, narrative reconstruction for
-    dense clusters (>threshold interconnected engrams).
+    Template assembly only — LLM narrative reconstruction was removed
+    (it hallucinated false connections between unrelated memories).
     """
     if not activated:
         return ""
@@ -136,16 +136,6 @@ async def reconstruct(
 
     parts: list[str] = []
     for cluster in clusters:
-        if len(cluster) >= settings.engram_narrative_cluster_threshold:
-            # Dense cluster → narrative reconstruction via LLM
-            narrative = await _narrative_reconstruct(
-                cluster, context, self_model_summary
-            )
-            if narrative:
-                parts.append(narrative)
-                continue
-
-        # Sparse cluster or narrative failed → template assembly
         assembled = _template_assemble(cluster)
         if assembled:
             parts.append(assembled)
@@ -305,58 +295,6 @@ def _template_assemble(cluster: list[ActivatedEngram]) -> str:
             lines.append(_fmt(e))
 
     return "\n".join(lines)
-
-
-async def _narrative_reconstruct(
-    cluster: list[ActivatedEngram],
-    context: str,
-    self_model_summary: str,
-) -> str:
-    """LLM-powered narrative reconstruction for dense clusters.
-
-    Produces first-person, context-sensitive memory narrative.
-    """
-    engram_text = "\n".join(
-        f"- [{e.type}] {e.content} (importance: {e.importance:.1f})"
-        for e in sorted(cluster, key=lambda e: e.final_score, reverse=True)
-    )
-
-    system = (
-        "You are Nova, reconstructing a memory from fragments. "
-        "Speak in first person. Be concise — 2-4 sentences. "
-        "Emphasize what's most relevant to the current context."
-    )
-    if self_model_summary:
-        system += f"\n\nYour identity: {self_model_summary}"
-
-    user_prompt = f"Current context: {context}\n\nMemory fragments:\n{engram_text}"
-
-    try:
-        client = get_http_client()
-        resp = await client.post(
-            f"{settings.llm_gateway_url}/complete",
-            json={
-                "model": settings.engram_reconstruction_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data.get("content", "")
-        if isinstance(content, list):
-            content = content[0].get("text", "") if content else ""
-        return content.strip()
-    except Exception:
-        log.warning(
-            "Narrative reconstruction failed, falling back to template", exc_info=True
-        )
-        return ""
 
 
 async def get_self_model_summary(session: AsyncSession) -> str:

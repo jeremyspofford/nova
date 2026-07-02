@@ -5,7 +5,7 @@ Phase 1: POST /ingest, GET /stats
 Phase 2: POST /activate, POST /reconstruct
 Phase 3: POST /context, GET /self-model, POST /self-model/bootstrap
 Phase 4: POST /consolidate, GET /consolidation-log
-Phase 5: GET /router-status, POST /mark-used
+Phase 5: POST /mark-used
 Phase 6: GET /graph
 Phase 7: POST /outcome-feedback
 """
@@ -32,14 +32,9 @@ from sqlalchemy import text
 from .activation import spreading_activation
 from .consolidation import bootstrap_self_model, run_consolidation
 from .ingestion import ingest_direct
-from .neural_router.serve import get_cached_model
 from .outcome_feedback import process_feedback
 from .reconstruction import get_self_model_summary, reconstruct
-from .retrieval_logger import (
-    get_labeled_observation_count,
-    get_observation_count,
-    mark_engrams_used,
-)
+from .retrieval_logger import mark_engrams_used
 from .working_memory import assemble_context, format_context_prompt
 
 log = logging.getLogger(__name__)
@@ -244,20 +239,10 @@ async def memory_health():
         )
         lc = last_consol.fetchone()
 
-        # 6. Neural router
-        nr_row = await session.execute(
-            text("""
-            SELECT count(*) AS models,
-                   max(trained_at) AS latest
-            FROM neural_router_models
-        """)
-        )
-        nr = nr_row.fetchone()
-
         obs_row = await session.execute(text("SELECT count(*) FROM retrieval_log"))
         obs_count = obs_row.scalar()
 
-        # 7. Age check (for activation decay status)
+        # 6. Age check (for activation decay status)
         age_row = await session.execute(
             text("""
             SELECT min(created_at) AS oldest,
@@ -331,11 +316,7 @@ async def memory_health():
             if lc
             else None,
         },
-        "neural_router": {
-            "models_trained": nr.models or 0,
-            "retrieval_observations": obs_count or 0,
-            "latest_model_date": nr.latest.isoformat() if nr.latest else None,
-        },
+        "retrieval_observations": obs_count or 0,
         "self_improving": self_improving,
         "issues": issues,
     }
@@ -852,46 +833,15 @@ async def delete_engram(engram_id: str):
     return None
 
 
-# ── Phase 5: Neural Router Status & Mark-Used ─────────────────────────
-
-
-@engram_router.get("/router-status")
-async def router_status():
-    """Neural Router status: mode, model info, observation counts."""
-    async with get_db() as session:
-        obs_count = await get_observation_count(session)
-        labeled_count = await get_labeled_observation_count(session)
-
-    model, arch = get_cached_model()
-
-    if model is not None:
-        mode = "embedding_reranker" if arch == "embedding" else "scalar_reranker"
-    elif obs_count >= 200:
-        mode = "ready_for_training"
-    else:
-        mode = "cosine_only"
-
-    return {
-        "observation_count": obs_count,
-        "labeled_count": labeled_count,
-        "mode": mode,
-        "model_loaded": model is not None,
-        "architecture": arch,
-        "ready_for_training": labeled_count >= 200,
-        "message": (
-            f"Active: {mode} ({obs_count} observations, {labeled_count} labeled)"
-            if model is not None
-            else f"Collecting observations: {labeled_count}/200 labeled"
-        ),
-    }
+# ── Phase 5: Mark-Used (retrieval feedback) ─────────────────────────
 
 
 @engram_router.post("/mark-used")
 async def mark_used(req: MarkUsedRequest):
     """Mark which engrams were actually used from a retrieval context.
 
-    Called by the orchestrator after the LLM response to provide ground
-    truth for Neural Router training.
+    Called post-hoc by the orchestrator so retrieval feedback adjusts
+    future ranking.
     """
     tenant_id = _resolve_tenant(req.tenant_id, "/mark-used")
     async with get_db() as session:

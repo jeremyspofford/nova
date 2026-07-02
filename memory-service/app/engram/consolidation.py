@@ -11,8 +11,8 @@ Transforms raw experience into lasting wisdom through six phases:
 
 Triggers: idle (30+ min), nightly (3 AM), threshold (50+ new engrams).
 
-PERF-003 phase 2 — LLM-heavy phases (2 pattern extraction, 2.5 topic
-clustering) are gated by user activity: if the user chatted within the
+PERF-003 phase 2 — the LLM-heavy phase (2, pattern extraction) is gated
+by user activity: if the user chatted within the
 configured idle window, those phases skip so Ollama can serve chat
 without queue contention. Scheduled/nightly triggers bypass the gate.
 """
@@ -186,7 +186,6 @@ async def run_consolidation(trigger: str = "manual") -> dict:
                 settings.engram_consolidation_user_idle_minutes,
             )
             stats["schemas_created"] = 0
-            stats["topics_created"] = 0
             stats["llm_phases_skipped"] = True
         else:
 
@@ -194,28 +193,6 @@ async def run_consolidation(trigger: str = "manual") -> dict:
                 stats["schemas_created"] = await _extract_patterns(session)
 
             await _run_phase("Phase 2 (pattern extraction)", _phase2)
-
-            # Phase 2.5: Topic Discovery — cluster engrams into topics
-            async def _phase25(session):
-                from .clustering import (
-                    assign_new_engrams_to_topics,
-                    discover_topics,
-                    maintain_topics,
-                )
-
-                topics_created = await discover_topics(session)
-                topics_assigned = await assign_new_engrams_to_topics(session)
-                maintenance = await maintain_topics(session)
-                stats["topics_created"] = topics_created
-                log.info(
-                    "Phase 2.5: %d topics created, %d engrams assigned, %d dissolved, %d regenerated",
-                    topics_created,
-                    topics_assigned,
-                    maintenance.get("dissolved", 0),
-                    maintenance.get("regenerated", 0),
-                )
-
-            await _run_phase("Phase 2.5 (topic discovery)", _phase25)
 
         # Phase 3: Edge Strengthening & Weakening (Hebbian)
         async def _phase3(session):

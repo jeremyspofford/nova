@@ -17,7 +17,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY memory-service/pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install .
 
 COPY memory-service/app/ app/

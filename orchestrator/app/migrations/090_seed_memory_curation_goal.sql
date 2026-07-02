@@ -18,7 +18,7 @@ Steps:
 3. For each durable fact, preference, decision, or learning found in those entries, call remember(title=..., type=..., description=..., text=...) to write or update a topic file. Merge related facts into one concept rather than creating near-duplicates; link related concepts with markdown links.
 4. Skip transient content (small talk, one-off status updates, superseded states).
 5. Report how many journal entries you reviewed and how many concepts you wrote.',
-    'paused',  -- activated when the user flips the OKF backend on (A6)
+    'active',
     3,
     '0 3 * * *',
     86400,

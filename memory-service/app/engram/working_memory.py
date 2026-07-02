@@ -22,7 +22,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .activation import ActivatedEngram, spreading_activation
-from .neural_router.serve import get_cached_model, neural_rerank
 from .reconstruction import get_self_model_summary, reconstruct
 from .retrieval_logger import log_retrieval
 
@@ -100,112 +99,17 @@ async def assemble_context(
         ctx.total_tokens += _estimate_tokens(goal)
 
     # 3. Spreading activation on the query
-    # Widen the funnel when a neural router model is loaded
-    model, _ = get_cached_model()
-    if model is not None:
-        seed_count = settings.neural_router_seed_count
-        max_results = settings.neural_router_candidate_count
-    else:
-        seed_count = None  # use defaults
-        max_results = None
-
     activated = await spreading_activation(
         session,
         query,
-        seed_count=seed_count,
-        max_results=max_results,
         depth=depth,
         tenant_id=tenant_id,
     )
 
-    # Compute query embedding once per turn (P9 fix: reuse downstream in line 211)
+    # Compute query embedding once per turn (reused by retrieval logging)
     query_embedding = await get_embedding(query, session) if activated else None
 
-    # 3b. Neural re-ranking (if model loaded)
-    if activated and model is not None:
-        # Before neural reranking, exclude index-node types
-        rerank_candidates = [a for a in activated if a.type not in ("topic",)]
-
-        # Build temporal context for feature extraction
-        now = datetime.now(timezone.utc)
-        temporal_context = {
-            "time_of_day": now.hour / 24 + now.minute / 1440,
-            "day_of_week": now.strftime("%A"),
-            "active_goal": goal,
-        }
-
-        # Convert ActivatedEngram to dicts for reranking
-        candidate_dicts = []
-        for e in rerank_candidates:
-            candidate_dicts.append(
-                {
-                    "id": str(e.id),
-                    "type": e.type,
-                    "content": e.content,
-                    "cosine_similarity": e.activation,
-                    "importance": e.importance,
-                    "activation": e.activation,
-                    "last_accessed": None,
-                    "convergence_paths": e.convergence_paths,
-                    "outcome_avg": getattr(e, "outcome_avg", None),
-                    "outcome_count": getattr(e, "outcome_count", 0),
-                    "embedding": None,  # Not stored on ActivatedEngram
-                    "final_score": e.final_score,
-                    "source_type": e.source_type,
-                    "confidence": getattr(e, "confidence", 0.5),
-                    "access_count": getattr(e, "access_count", 0),
-                }
-            )
-
-        reranked_dicts = neural_rerank(
-            candidate_dicts,
-            query_embedding=query_embedding,
-            temporal_context=temporal_context,
-            max_results=settings.engram_max_results,
-        )
-
-        # Add back excluded topic engrams (they skip reranking but are still included)
-        topic_engrams = [a for a in activated if a.type in ("topic",)]
-        topic_dicts = [
-            {
-                "id": str(e.id),
-                "type": e.type,
-                "content": e.content,
-                "cosine_similarity": e.activation,
-                "importance": e.importance,
-                "activation": e.activation,
-                "last_accessed": None,
-                "convergence_paths": e.convergence_paths,
-                "outcome_avg": getattr(e, "outcome_avg", None),
-                "outcome_count": getattr(e, "outcome_count", 0),
-                "embedding": None,
-                "final_score": e.final_score,
-                "source_type": e.source_type,
-                "confidence": getattr(e, "confidence", 0.5),
-                "access_count": getattr(e, "access_count", 0),
-            }
-            for e in topic_engrams
-        ]
-        reranked_dicts.extend(topic_dicts)
-
-        # Convert back to ActivatedEngram for reconstruction
-        activated = [
-            ActivatedEngram(
-                id=d["id"],
-                type=d["type"],
-                content=d["content"],
-                activation=d["activation"],
-                importance=d["importance"],
-                confidence=d.get("confidence", 0.5),
-                final_score=d["final_score"],
-                convergence_paths=d.get("convergence_paths", 0),
-                access_count=d.get("access_count", 0),
-                source_type=d.get("source_type", "chat"),
-            )
-            for d in reranked_dicts
-        ]
-
-    # 3c. Log retrieval observation for Neural Router training
+    # 3b. Log retrieval observation (mark-used feedback loop)
     if activated:
         try:
             log_id = await log_retrieval(

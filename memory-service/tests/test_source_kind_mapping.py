@@ -3,7 +3,7 @@
 Rewritten in MEM-001 Task 5.7 to import the function directly instead of
 loading ingestion.py via importlib with mock stubs. The original approach
 left a mock-contaminated app.engram.ingestion in sys.modules, which broke
-test_clustering.py tests that ran after this file.
+tests that ran after this file.
 
 The function is pure (dict lookup), so a direct import works fine.
 """

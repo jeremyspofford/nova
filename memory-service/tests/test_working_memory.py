@@ -7,7 +7,6 @@ Strategy
   - wm_mod.get_self_model_summary -> fixed string
   - wm_mod.reconstruct -> echoes query text
   - wm_mod.log_retrieval -> returns None
-  - wm_mod.get_cached_model -> (None, None) unless neural router needed
 * _estimate_tokens, format_context_prompt, slot helpers tested directly.
 * working_memory_slots table exercised via add_sticky_decision + queries.
 * P9 contract test (get_embedding called at most once per turn) moved from
@@ -47,16 +46,14 @@ async def _stub_log_retrieval(session, **kwargs):
 
 def _patch_base_no_ops(monkeypatch):
     """Patch the minimum set of external calls for assemble_context to run
-    without an LLM gateway or neural router."""
+    without an LLM gateway."""
     from app.engram import activation as act_mod
-    from app.engram.neural_router import serve as router_serve
 
     monkeypatch.setattr(wm_mod, "get_embedding", _stub_embedding)
     monkeypatch.setattr(act_mod, "get_embedding", _stub_embedding)
     monkeypatch.setattr(wm_mod, "get_self_model_summary", _stub_self_model)
     monkeypatch.setattr(wm_mod, "reconstruct", _stub_reconstruct)
     monkeypatch.setattr(wm_mod, "log_retrieval", _stub_log_retrieval)
-    monkeypatch.setattr(router_serve, "_cached_model", None)
 
 
 # Token estimation (sync, pure function)
@@ -403,22 +400,13 @@ async def test_get_embedding_called_at_most_once_per_turn(
 ):
     """Wrap get_embedding in a counter; assert <=2 calls per assemble_context turn.
 
-    Includes 1 call from spreading_activation + 1 from assemble_context top-level
-    (was 3 before P9 fix when neural router was loaded).
+    Includes 1 call from spreading_activation + 1 from assemble_context top-level.
     """
     _p9_call_count["n"] = 0
 
     emb = [0.5] * 768
     await engram_factory(content="seed", embedding=emb, source_type="chat")
     await db_session.flush()
-
-    from unittest.mock import MagicMock
-
-    from app.engram.neural_router import serve as router_serve
-
-    mock_model = MagicMock()
-    mock_model.predict = MagicMock(return_value=[(i, 0.9 - i * 0.1) for i in range(3)])
-    monkeypatch.setattr(router_serve, "_cached_model", mock_model)
 
     from app.engram import activation as act_mod
 

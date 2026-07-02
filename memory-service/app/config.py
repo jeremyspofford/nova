@@ -20,8 +20,8 @@ class Settings(BaseSettings):
 
     # Memory backend selection — which storage engine serves /api/v1/memory/*.
     # Runtime override: Redis db1 nova:config:memory.backend (dashboard-set).
-    # "engram" = pgvector graph; "okf" = OKF markdown bundle.
-    memory_backend: str = "engram"
+    # "okf" = OKF markdown bundle (default); "engram" = legacy pgvector graph.
+    memory_backend: str = "okf"
 
     # OKF markdown backend — bundle lives in the shared Nova workspace so
     # agent file tools (orchestrator mounts the same host dir) and humans
@@ -63,7 +63,6 @@ class Settings(BaseSettings):
         0.4  # fraction of seed slots reserved for personal sources
     )
     engram_reconstruction_model: str = "auto"
-    engram_narrative_cluster_threshold: int = 999  # disabled — template assembly always; LLM narrative hallucinates false connections
 
     # Engram Network (Phase 3: Working Memory Gate)
     engram_wm_self_model_budget: int = 500
@@ -94,34 +93,12 @@ class Settings(BaseSettings):
         40  # higher = better recall, slower probe; stable top-K (P2)
     )
 
-    # Engram Network (Topic Clustering)
-    engram_cluster_min_size: int = 5  # HDBSCAN min_cluster_size
-    engram_cluster_umap_dims: int = 30  # UMAP target dimensions
-    engram_cluster_umap_neighbors: int = 15  # UMAP n_neighbors
-    engram_topic_assignment_threshold: float = 0.5  # cosine sim for new engram -> topic
-    engram_topic_regeneration_pct: float = (
-        0.3  # % membership change to trigger re-summary
-    )
+    # Engram Network (Schema extraction — consolidation Phase 2)
     engram_schema_coherence_threshold: float = (
         0.5  # min embedding coherence for schemas
     )
     engram_schema_max_tokens: int = 800  # max_tokens for schema synthesis
     engram_schema_dedup_threshold: float = 0.85  # embedding sim for schema dedup
-
-    # Engram Network (Phase 5: Neural Router)
-    neural_router_enabled: bool = True
-    neural_router_min_observations: int = 200
-    neural_router_embedding_threshold: int = 1000
-    neural_router_retrain_every: int = 50
-    neural_router_candidate_count: int = 50
-    neural_router_seed_count: int = 30
-    neural_router_model_check_interval: int = 60
-    neural_router_training_epochs: int = 20
-    neural_router_learning_rate: float = 1e-3
-    neural_router_validation_split: float = 0.2
-    neural_router_min_precision_gain: float = 0.0
-    neural_router_max_inactive_models: int = 5
-    neural_router_max_training_obs: int = 500  # cap observations to bound memory
 
     # Service
     service_host: str = "0.0.0.0"

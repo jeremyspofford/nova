@@ -14,7 +14,6 @@ from app.embedding import close_redis as close_embedding_redis
 from app.embedding import get_embedding
 from app.engram.consolidation import bootstrap_self_model, consolidation_loop
 from app.engram.ingestion import ingestion_loop
-from app.engram.neural_router.serve import load_latest_model
 from app.engram.router import engram_router
 from app.health import health_router
 from app.memory_router import memory_router
@@ -59,9 +58,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_warmup_embedding(), name="warmup")
     asyncio.create_task(_verify_decomposition_model(), name="verify-decomp-model")
     asyncio.create_task(_bootstrap_self_model(), name="engram-bootstrap")
-    _neural_router_task = asyncio.create_task(
-        _neural_router_refresh(), name="neural-router-refresh"
-    )
     _okf_maintenance_task = asyncio.create_task(
         _okf_maintenance_loop(), name="okf-maintenance"
     )
@@ -124,14 +120,12 @@ async def lifespan(app: FastAPI):
     # Give tasks a grace period to complete current work before cancelling
     _ingestion_task.cancel()
     _consolidation_task.cancel()
-    _neural_router_task.cancel()
     _okf_maintenance_task.cancel()
     try:
         await asyncio.wait_for(
             asyncio.gather(
                 _ingestion_task,
                 _consolidation_task,
-                _neural_router_task,
                 _okf_maintenance_task,
                 return_exceptions=True,
             ),
@@ -145,17 +139,6 @@ async def lifespan(app: FastAPI):
     await close_http_client()
     await _admin_resolver.close()
     log.info("Memory Service shutdown complete")
-
-
-async def _neural_router_refresh():
-    """Background task: periodically check for newer neural router model."""
-    while True:
-        try:
-            async with AsyncSessionLocal() as session:
-                await load_latest_model(session)
-        except Exception:
-            log.debug("Neural router model refresh failed", exc_info=True)
-        await asyncio.sleep(settings.neural_router_model_check_interval)
 
 
 async def _okf_maintenance_loop():
