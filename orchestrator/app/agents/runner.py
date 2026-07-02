@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -32,6 +33,11 @@ from nova_contracts import (
 )
 
 log = logging.getLogger(__name__)
+
+# Markdown links to external http(s) URLs, e.g. [Blog post](https://…). Used to
+# detect fabricated citations when no web tool actually ran (see the guard in
+# run_agent_turn_streaming).
+_CITATION_LINK_RE = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
 
 
 async def run_agent_turn(
@@ -330,6 +336,17 @@ async def run_agent_turn_streaming(
         while not tool_queue.empty():
             yield tool_queue.get_nowait()
 
+    # Did a web tool actually execute this turn? Used by the fabricated-citation
+    # guard below: a weak model often narrates "search results" and invents URLs
+    # without ever calling web_search. Tool result messages carry role="tool"
+    # and the tool name.
+    web_tool_ran = any(
+        getattr(m, "role", None) == "tool"
+        and getattr(m, "name", None) in ("web_search", "web_fetch", "browser_open",
+                                         "browser_snapshot", "browser_navigate")
+        for m in streaming_messages
+    )
+
     # Final streaming turn: we want a text answer, not another tool call.
     # Tool rounds were already resolved above, so offering tools here lets a
     # weak model emit yet another tool call — which streams zero text and the
@@ -411,6 +428,31 @@ async def run_agent_turn_streaming(
                     stream_cost_usd = fb_data["cost_usd"]
         except Exception as e:
             log.warning("Empty-stream fallback completion failed: %s", e)
+
+    # Fabricated-citation guard: if the model cited external URLs (markdown
+    # links) but no web/browser tool actually ran this turn, those links are
+    # invented — a model can't know real current URLs without fetching them.
+    # Append an honest disclaimer so users don't trust (or click) fake sources.
+    # Runs only when the answer contains markdown http links, so normal
+    # answers are untouched.
+    if full_response and not web_tool_ran:
+        answer_text = "".join(full_response)
+        fabricated = _CITATION_LINK_RE.findall(answer_text)
+        if fabricated:
+            log.warning(
+                "Response cited %d external URL(s) but no web tool ran "
+                "(model=%s) — appending unverified-citations note",
+                len(fabricated), model,
+            )
+            note = (
+                "\n\n---\n"
+                "> ⚠️ **Unverified:** I did not run a live web search this turn, "
+                "so the link(s) above were generated from memory and may be "
+                "inaccurate or dead. Turn on web search (or ask me to search) "
+                "for verified, current sources."
+            )
+            full_response.append(note)
+            yield note
 
     if full_response:
         await _store_exchange(agent_id, session_id, query, "".join(full_response), tenant_id=tenant_id)

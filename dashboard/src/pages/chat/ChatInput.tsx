@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Paperclip, SlidersHorizontal, Mic, Loader2, Volume2, VolumeX, ALargeSmall, Globe, BookOpen, Settings2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useChatStore } from '../../stores/chat-store'
@@ -49,6 +49,7 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
   const [isDragging, setIsDragging] = useState(false)
 
   const {
+    messages,
     draftInput: input,
     setDraftInput: setInput,
     drawerOpen,
@@ -60,6 +61,15 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
     deepResearchEnabled,
     setDeepResearchEnabled,
   } = useChatStore()
+
+  // Prior user messages, oldest → newest, for Up/Down history recall.
+  const userHistory = useMemo(
+    () => messages.filter(m => m.role === 'user').map(m => m.content),
+    [messages]
+  )
+  // -1 = editing the live draft; 0 = newest sent message, 1 = the one before, …
+  const historyIdxRef = useRef(-1)
+  const draftBeforeHistoryRef = useRef('')
 
   const { pendingFiles, addFiles, removeFile, openFilePicker } = useFileAttach()
 
@@ -107,14 +117,58 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
     const text = input.trim()
     if (!text) return
     setInput('')
+    historyIdxRef.current = -1
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     onSubmit(text)
   }, [input, onSubmit])
+
+  // Load a history entry into the textarea and put the caret at the end.
+  const recall = useCallback((text: string) => {
+    setInput(text)
+    requestAnimationFrame(() => {
+      resizeTextarea()
+      const el = textareaRef.current
+      if (el) el.setSelectionRange(text.length, text.length)
+    })
+  }, [setInput])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
+      return
+    }
+
+    const el = textareaRef.current
+    if (!el || userHistory.length === 0) return
+    const collapsed = el.selectionStart === el.selectionEnd
+
+    // ArrowUp: recall an older message — only when the caret is on the first
+    // line (or the box is empty), so normal within-message cursor movement and
+    // multi-line editing are untouched.
+    if (e.key === 'ArrowUp' && collapsed) {
+      const onFirstLine = el.value.slice(0, el.selectionStart).indexOf('\n') === -1
+      if (!onFirstLine) return
+      const nextIdx = historyIdxRef.current + 1
+      if (nextIdx >= userHistory.length) return  // already at the oldest
+      if (historyIdxRef.current === -1) draftBeforeHistoryRef.current = input  // stash live draft
+      historyIdxRef.current = nextIdx
+      e.preventDefault()
+      recall(userHistory[userHistory.length - 1 - nextIdx])
+      return
+    }
+
+    // ArrowDown: move toward newer messages, then back to the stashed draft.
+    if (e.key === 'ArrowDown' && collapsed && historyIdxRef.current !== -1) {
+      const onLastLine = el.value.slice(el.selectionStart).indexOf('\n') === -1
+      if (!onLastLine) return
+      e.preventDefault()
+      const nextIdx = historyIdxRef.current - 1
+      historyIdxRef.current = nextIdx
+      recall(nextIdx === -1
+        ? draftBeforeHistoryRef.current
+        : userHistory[userHistory.length - 1 - nextIdx])
+      return
     }
   }
 
@@ -258,7 +312,13 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={e => { setInput(e.target.value); resizeTextarea() }}
+          onChange={e => {
+            // Typing over a recalled message drops out of history navigation:
+            // the edited text becomes the live draft and Enter re-submits it.
+            historyIdxRef.current = -1
+            setInput(e.target.value)
+            resizeTextarea()
+          }}
           onKeyDown={handleKeyDown}
           placeholder={voice?.conversationMode ? 'Conversation mode active (Esc to exit)' : `Message ${aiName}...`}
           rows={1}
