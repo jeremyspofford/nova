@@ -1,19 +1,18 @@
 """
-Memory Tools — agent-callable knowledge retrieval.
+Memory Tools — agent-callable knowledge retrieval and writing.
 
-These tools let agents search, recall, and read from Nova's memory system
-on-demand instead of relying on pre-injected context. This gives agents
-control over what they retrieve and when, keeping the context window lean.
+These tools talk to the neutral memory API (/api/v1/memory/*) on the
+memory-service, so they work identically whichever backend is active
+(engram graph or OKF markdown bundle).
 
 Tools provided:
-  what_do_i_know            -- lightweight domain awareness (what topics/sources exist)
-  search_memory             -- semantic search across engrams (ranked results)
-  recall_topic              -- retrieve all engrams connected to an entity
-  read_source               -- fetch full content from a source record
-  get_consolidation_status  -- recent consolidation cycle history
-  get_memory_stats          -- engram counts, graph stats, system health
-  trigger_consolidation     -- manually start a consolidation cycle
-  get_router_status         -- neural router mode (cosine vs trained reranker)
+  what_do_i_know   -- lightweight overview of what memory holds
+  search_memory    -- ranked retrieval for a query
+  recall_topic     -- comprehensive recall about one entity/topic
+  read_memory      -- full content of one memory item by id
+  read_source      -- full content of a source record (engram backend)
+  remember         -- write a durable memory (concept file / engram)
+  get_memory_stats -- backend name, item counts, health
 """
 from __future__ import annotations
 
@@ -24,7 +23,8 @@ from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 
-MEMORY_BASE = "http://memory-service:8002/api/v1/engrams"
+MEMORY_BASE = "http://memory-service:8002/api/v1/memory"
+ENGRAM_BASE = "http://memory-service:8002/api/v1/engrams"
 _TIMEOUT = httpx.Timeout(15.0)
 
 # ─── Tool definitions (what the LLM sees) ────────────────────────────────────
@@ -33,24 +33,14 @@ MEMORY_TOOLS: list[ToolDefinition] = [
     ToolDefinition(
         name="what_do_i_know",
         description=(
-            "Get a lightweight overview of what knowledge domains and sources you have "
-            "in memory. Returns topic areas, source titles, and counts — NOT the actual "
-            "knowledge. Use this FIRST to understand what you know before doing deeper "
-            "retrieval. Costs almost zero context tokens."
+            "Get a lightweight overview of what knowledge you have in memory — "
+            "topic areas, recent entries, counts. NOT the actual knowledge. Use "
+            "this FIRST to understand what you know before deeper retrieval. "
+            "Costs almost zero context tokens."
         ),
         parameters={
             "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Optional topic to focus the overview on",
-                },
-                "depth": {
-                    "type": "string",
-                    "enum": ["shallow", "standard", "deep"],
-                    "description": "shallow=topics only, standard=topics+schemas, deep=full breakdown",
-                },
-            },
+            "properties": {},
             "required": [],
         },
         blast_radius=BlastRadius.READ,
@@ -59,9 +49,9 @@ MEMORY_TOOLS: list[ToolDefinition] = [
         name="search_memory",
         description=(
             "Search your memory for knowledge relevant to a query. Returns ranked "
-            "engrams (facts, episodes, procedures) with source attribution. Use this "
-            "when you need to recall specific information. More expensive than "
-            "what_do_i_know but returns actual knowledge content."
+            "excerpts with memory ids and source attribution. Use this when you "
+            "need to recall specific information. Follow up with read_memory on "
+            "an id when an excerpt isn't detailed enough."
         ),
         parameters={
             "type": "object",
@@ -70,14 +60,10 @@ MEMORY_TOOLS: list[ToolDefinition] = [
                     "type": "string",
                     "description": "What to search for in memory",
                 },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Max results to return (default: 10, max: 30)",
-                },
                 "depth": {
                     "type": "string",
                     "enum": ["shallow", "standard", "deep"],
-                    "description": "shallow=schemas/topics only, standard=default, deep=follow all structural edges",
+                    "description": "shallow=few results, standard=default, deep=widest recall",
                 },
             },
             "required": ["query"],
@@ -87,10 +73,9 @@ MEMORY_TOOLS: list[ToolDefinition] = [
     ToolDefinition(
         name="recall_topic",
         description=(
-            "Retrieve all knowledge connected to a specific entity or topic. Uses "
-            "graph traversal to find everything related — facts, episodes, procedures "
-            "that reference the entity and their connections. Use this when you want "
-            "comprehensive recall about a person, project, concept, or tool."
+            "Retrieve everything connected to a specific entity or topic — a "
+            "person, project, concept, or tool. Wider than search_memory: use "
+            "when you want comprehensive recall rather than one fact."
         ),
         parameters={
             "type": "object",
@@ -99,27 +84,35 @@ MEMORY_TOOLS: list[ToolDefinition] = [
                     "type": "string",
                     "description": "The entity/topic to recall (e.g., 'Jeremy', 'Nova', 'Python')",
                 },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Max results (default: 15, max: 50)",
-                },
-                "depth": {
-                    "type": "string",
-                    "enum": ["shallow", "standard", "deep"],
-                    "description": "shallow=schemas/topics only, standard=default, deep=everything connected",
-                },
             },
             "required": ["entity"],
         },
         blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
+        name="read_memory",
+        description=(
+            "Read the full content of one memory item by its id (as returned by "
+            "search_memory/recall_topic). Use when an excerpt isn't enough."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "Memory id, e.g. 'topics/gpu-setup.md' or an engram UUID",
+                },
+            },
+            "required": ["memory_id"],
+        },
+        blast_radius=BlastRadius.READ,
+    ),
+    ToolDefinition(
         name="read_source",
         description=(
-            "Read the full content of a source document. Sources are the raw material "
-            "behind engrams — articles, conversations, documents, crawled pages. Use "
-            "this when engram summaries aren't detailed enough and you need the original "
-            "content. Returns the full text, which may be large."
+            "Read the full content of a source document (raw material behind "
+            "memories — articles, conversations, crawled pages). Only available "
+            "on the engram backend; on the markdown backend use read_memory."
         ),
         parameters={
             "type": "object",
@@ -134,62 +127,55 @@ MEMORY_TOOLS: list[ToolDefinition] = [
         blast_radius=BlastRadius.READ,
     ),
     ToolDefinition(
-        name="get_consolidation_status",
+        name="remember",
         description=(
-            "Check the status and history of memory consolidation cycles. Returns "
-            "recent consolidation log entries showing when cycles ran, how long they "
-            "took, and what they did (pattern extraction, pruning, contradiction "
-            "resolution). Use this to verify consolidation is running and healthy."
+            "Write a durable memory. Use for facts, preferences, decisions, and "
+            "learnings worth keeping long-term — NOT for transient conversation "
+            "state. On the markdown backend this creates/updates a concept file "
+            "(topics/people/projects/preferences) that humans can read and edit; "
+            "give it a clear title and 1-line description. Re-using an existing "
+            "title appends an update to that file."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "limit": {
-                    "type": "integer",
-                    "description": "Number of recent log entries to return (default: 5, max: 20)",
+                "text": {
+                    "type": "string",
+                    "description": "The memory content (markdown welcome)",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short concept title, e.g. 'Jeremy GPU Setup'",
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["note", "fact", "preference", "person", "project", "procedure", "reflection"],
+                    "description": "What kind of memory this is (default: note)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line summary shown in memory indexes",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Cross-cutting tags",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Optional existing memory id to append to (overrides title-based placement)",
                 },
             },
-            "required": [],
-        },
-        blast_radius=BlastRadius.READ,
-    ),
-    ToolDefinition(
-        name="get_memory_stats",
-        description=(
-            "Get statistics about the memory system: total engram count, type breakdown, "
-            "edge counts, source counts, and ingestion queue depth. Use this to monitor "
-            "memory health and growth."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        blast_radius=BlastRadius.READ,
-    ),
-    ToolDefinition(
-        name="trigger_consolidation",
-        description=(
-            "Manually trigger a memory consolidation cycle. Consolidation replays "
-            "recent engrams, extracts patterns, strengthens connections (Hebbian "
-            "learning), resolves contradictions, prunes weak memories, and updates "
-            "the self-model. Will be skipped if a cycle is already running. "
-            "Use sparingly, typically when you notice fragmented knowledge."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {},
-            "required": [],
+            "required": ["text", "title"],
         },
         blast_radius=BlastRadius.MUTATE,
     ),
     ToolDefinition(
-        name="get_router_status",
+        name="get_memory_stats",
         description=(
-            "Check the Neural Router status — whether memory retrieval uses basic "
-            "cosine similarity or a trained ML reranker. The router trains automatically "
-            "after 200+ labeled retrieval observations. Returns mode, observation counts, "
-            "and whether training is ready. Use this to understand your own retrieval quality."
+            "Get statistics about the memory system: active backend, item counts, "
+            "link/edge counts, last ingestion time. Use this to monitor memory "
+            "health and growth."
         ),
         parameters={
             "type": "object",
@@ -212,132 +198,102 @@ async def execute_tool(name: str, arguments: dict) -> str:
             return await _search_memory(arguments)
         elif name == "recall_topic":
             return await _recall_topic(arguments)
+        elif name == "read_memory":
+            return await _read_memory(arguments)
         elif name == "read_source":
             return await _read_source(arguments)
-        elif name == "get_consolidation_status":
-            return await _get_consolidation_status(arguments)
+        elif name == "remember":
+            return await _remember(arguments)
         elif name == "get_memory_stats":
             return await _get_memory_stats(arguments)
-        elif name == "trigger_consolidation":
-            return await _trigger_consolidation(arguments)
-        elif name == "get_router_status":
-            return await _get_router_status(arguments)
         else:
             return f"Unknown memory tool: {name}"
     except httpx.TimeoutException:
-        return "Memory service timed out. Try again or reduce max_results."
+        return "Memory service timed out. Try again."
     except Exception as e:
         log.warning("Memory tool '%s' failed: %s", name, e)
         return f"Memory tool error: {e}"
 
 
-async def _what_do_i_know(args: dict) -> str:
-    depth = args.get("depth", "shallow")
-
+async def _context(query: str, depth: str = "standard") -> dict:
+    """Shared retrieval call — mark_used=true because an agent explicitly
+    asking IS the usage signal (no post-hoc mark-used needed)."""
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        # Try topic-based overview first (direct query, not semantic search)
-        topics_resp = await c.get(f"{MEMORY_BASE}/topics")
-        if topics_resp.status_code == 200:
-            topics_data = topics_resp.json()
-            topic_list = topics_data.get("topics", [])
+        resp = await c.post(
+            f"{MEMORY_BASE}/context",
+            json={"query": query, "depth": depth, "mark_used": True},
+        )
+        resp.raise_for_status()
+        return resp.json()
 
-            if topic_list:
-                lines = [f"Knowledge domains ({len(topic_list)} topics):"]
-                for t in topic_list:
-                    member_note = f" ({t.get('member_count', '?')} items)" if t.get("member_count") else ""
-                    lines.append(f"\n- {t['content'][:200]}{member_note}")
 
-                # Standard/deep: also fetch schema summaries for each topic
-                if depth in ("standard", "deep") and topic_list:
-                    lines.append("\n\nSchemas:")
-                    schemas_resp = await c.post(
-                        f"{MEMORY_BASE}/activate",
-                        params={"query": "knowledge patterns", "max_results": 30, "depth": "shallow"},
-                    )
-                    if schemas_resp.status_code == 200:
-                        schemas_data = schemas_resp.json()
-                        for e in schemas_data.get("engrams", []):
-                            if e.get("type") == "schema":
-                                lines.append(f"\n- [schema] {e['content'][:200]}")
+async def _what_do_i_know(args: dict) -> str:
+    # Backend-aware: engram has richer topic/domain views; okf's root index
+    # (returned by an empty-query context call) IS the overview.
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        backend_resp = await c.get(f"{MEMORY_BASE}/backend")
+        backend = backend_resp.json().get("backend", "engram") if backend_resp.status_code == 200 else "engram"
 
+        if backend == "engram":
+            resp = await c.get(f"{ENGRAM_BASE}/sources/domain-summary")
+            if resp.status_code == 200:
+                data = resp.json()
+                lines = [
+                    f"Knowledge overview ({data.get('engram_count', '?')} memories "
+                    f"from {data.get('source_count', '?')} sources):"
+                ]
+                if data.get("domains"):
+                    lines.append(f"\nKey topics: {', '.join(data['domains'][:10])}")
+                if data.get("recent_sources"):
+                    lines.append("\nRecent sources:")
+                    for s in data["recent_sources"][:10]:
+                        lines.append(f"  - [{s.get('kind', '?')}] {s.get('title', '?')}")
                 return "\n".join(lines)
 
-        # Fall back to source-based domain summary
-        resp = await c.get(f"{MEMORY_BASE}/sources/domain-summary")
+        resp = await c.post(f"{MEMORY_BASE}/context", json={"query": ""})
         resp.raise_for_status()
-        data = resp.json()
+        ctx = resp.json().get("context", "")
+    return ctx or "Memory is empty — nothing stored yet."
 
-    lines = [f"Knowledge overview ({data['engram_count']} memories from {data['source_count']} sources):"]
 
-    if data.get("by_kind"):
-        lines.append("\nSources by type:")
-        for kind, info in data["by_kind"].items():
-            stale_note = f" ({info['stale_count']} stale)" if info.get("stale_count") else ""
-            lines.append(f"  - {kind}: {info['count']}{stale_note}")
-
-    if data.get("domains"):
-        lines.append(f"\nKey topics: {', '.join(data['domains'][:10])}")
-
-    if data.get("recent_sources"):
-        lines.append("\nRecent sources:")
-        for s in data["recent_sources"][:10]:
-            lines.append(f"  - [{s['kind']}] {s['title']}")
-
+def _format_hits(data: dict, empty_msg: str) -> str:
+    context = data.get("context", "")
+    ids = data.get("memory_ids", [])
+    if not context and not ids:
+        return empty_msg
+    lines = [context]
+    if ids:
+        lines.append("\nMemory ids (for read_memory): " + ", ".join(ids))
     return "\n".join(lines)
 
 
 async def _search_memory(args: dict) -> str:
-    query = args.get("query", "")
-    max_results = min(args.get("max_results", 10), 30)
-    depth = args.get("depth", "standard")
-
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        resp = await c.post(
-            f"{MEMORY_BASE}/activate",
-            params={"query": query, "max_results": max_results, "depth": depth},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    if not data.get("engrams"):
-        return "No relevant memories found."
-
-    lines = [f"Found {data['count']} relevant memories:"]
-    for e in data["engrams"]:
-        source_note = f" [from: {e.get('source_type', '?')}]" if e.get("source_type") else ""
-        score = f" (relevance: {e.get('final_score', 0):.2f})"
-        lines.append(f"\n- [{e['type']}]{source_note}{score}\n  {e['content']}")
-
-    return "\n".join(lines)
+    data = await _context(args.get("query", ""), args.get("depth", "standard"))
+    return _format_hits(data, "No relevant memories found.")
 
 
 async def _recall_topic(args: dict) -> str:
     entity = args.get("entity", "")
-    max_results = min(args.get("max_results", 15), 50)
-    depth = args.get("depth", "standard")
+    data = await _context(entity, depth="deep")
+    return _format_hits(data, f"No knowledge found about '{entity}'.")
 
+
+async def _read_memory(args: dict) -> str:
+    memory_id = args.get("memory_id", "")
+    if not memory_id:
+        return "memory_id is required."
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        resp = await c.post(
-            f"{MEMORY_BASE}/activate",
-            params={"query": entity, "max_results": max_results, "depth": depth},
-        )
+        resp = await c.get(f"{MEMORY_BASE}/item/{memory_id}")
+        if resp.status_code == 404:
+            return f"Memory '{memory_id}' not found."
         resp.raise_for_status()
         data = resp.json()
 
-    if not data.get("engrams"):
-        return f"No knowledge found about '{entity}'."
-
-    by_type: dict[str, list] = {}
-    for e in data["engrams"]:
-        by_type.setdefault(e["type"], []).append(e)
-
-    lines = [f"Knowledge about '{entity}' ({data['count']} items):"]
-    for etype, engrams in by_type.items():
-        lines.append(f"\n## {etype.title()}s")
-        for e in engrams:
-            lines.append(f"- {e['content']}")
-
-    return "\n".join(lines)
+    content = data.get("content", "")
+    if len(content) > 15000:
+        content = content[:15000] + f"\n\n[... truncated, {len(content)} chars total]"
+    header = f"# {data.get('title', memory_id)} [{data.get('type', '?')}] ({memory_id})"
+    return f"{header}\n\n{content}"
 
 
 async def _read_source(args: dict) -> str:
@@ -346,13 +302,13 @@ async def _read_source(args: dict) -> str:
         return "source_id is required."
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        meta_resp = await c.get(f"{MEMORY_BASE}/sources/{source_id}")
+        meta_resp = await c.get(f"{ENGRAM_BASE}/sources/{source_id}")
         if meta_resp.status_code == 404:
             return f"Source '{source_id}' not found."
         meta_resp.raise_for_status()
         meta = meta_resp.json()
 
-        content_resp = await c.get(f"{MEMORY_BASE}/sources/{source_id}/content")
+        content_resp = await c.get(f"{ENGRAM_BASE}/sources/{source_id}/content")
         if content_resp.status_code == 404:
             if meta.get("uri"):
                 return (
@@ -376,53 +332,41 @@ async def _read_source(args: dict) -> str:
     return f"{header}\n\n{content}"
 
 
-async def _get_consolidation_status(args: dict) -> str:
-    limit = min(args.get("limit", 5), 20)
+async def _remember(args: dict) -> str:
+    text = args.get("text", "").strip()
+    title = args.get("title", "").strip()
+    if not text or not title:
+        return "Both text and title are required."
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        resp = await c.get(
-            f"{MEMORY_BASE}/consolidation-log",
-            params={"limit": limit},
+    okf_meta = {
+        "type": args.get("type", "note"),
+        "title": title,
+    }
+    if args.get("description"):
+        okf_meta["description"] = args["description"]
+    if args.get("tags"):
+        okf_meta["tags"] = args["tags"]
+    if args.get("target"):
+        okf_meta["target"] = args["target"]
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as c:
+        resp = await c.post(
+            f"{MEMORY_BASE}/ingest",
+            json={
+                "raw_text": text,
+                "source_type": "tool",
+                "metadata": {"okf": okf_meta},
+            },
         )
         resp.raise_for_status()
         data = resp.json()
 
-    entries = data.get("entries", []) if isinstance(data, dict) else data
-    if not entries:
-        return "No consolidation cycles have run yet."
-
-    lines = [f"Recent consolidation cycles ({len(entries)} entries):"]
-    for entry in entries:
-        trigger = entry.get("trigger", "?")
-        ts = entry.get("created_at", "?")
-        duration_ms = entry.get("duration_ms")
-        dur_str = f" ({duration_ms / 1000:.1f}s)" if duration_ms is not None else ""
-
-        parts = []
-        if entry.get("engrams_reviewed"):
-            parts.append(f"{entry['engrams_reviewed']} reviewed")
-        if entry.get("schemas_created"):
-            parts.append(f"{entry['schemas_created']} schemas")
-        if entry.get("topics_created"):
-            parts.append(f"{entry['topics_created']} topics")
-        if entry.get("edges_strengthened"):
-            parts.append(f"{entry['edges_strengthened']} edges strengthened")
-        if entry.get("edges_pruned"):
-            parts.append(f"{entry['edges_pruned']} pruned")
-        if entry.get("contradictions_resolved"):
-            parts.append(f"{entry['contradictions_resolved']} contradictions resolved")
-        if entry.get("engrams_merged"):
-            parts.append(f"{entry['engrams_merged']} merged")
-        summary = ", ".join(parts) if parts else "no changes"
-
-        lines.append(f"\n- [{trigger}] {ts}{dur_str}")
-        lines.append(f"  {summary}")
-
-        sm = entry.get("self_model_updates")
-        if sm and isinstance(sm, dict) and sm.get("maturity_stage"):
-            lines.append(f"  Self-model: {sm['maturity_stage']} ({sm.get('total_engrams', '?')} engrams, {sm.get('schema_count', '?')} schemas)")
-
-    return "\n".join(lines)
+    ids = data.get("item_ids", [])
+    if data.get("items_created"):
+        return f"Remembered as new memory: {ids[0] if ids else title}"
+    if data.get("items_updated"):
+        return f"Appended to existing memory: {ids[0] if ids else title}"
+    return "Memory write accepted (no items reported — backend may process asynchronously)."
 
 
 async def _get_memory_stats(args: dict) -> str:
@@ -431,107 +375,15 @@ async def _get_memory_stats(args: dict) -> str:
         resp.raise_for_status()
         data = resp.json()
 
-    lines = ["Memory system statistics:"]
-
-    total = data.get("total_engrams", data.get("engram_count"))
-    if total is not None:
-        lines.append(f"\nTotal engrams: {total}")
-    if "total_edges" in data:
-        lines.append(f"Total edges: {data['total_edges']}")
-    if "total_archived" in data:
-        lines.append(f"Archived: {data['total_archived']}")
-
-    if data.get("by_type"):
-        lines.append("\nBy type:")
-        for etype, info in data["by_type"].items():
-            if isinstance(info, dict):
-                superseded = info.get("superseded", 0)
-                sup_note = f" ({superseded} superseded)" if superseded else ""
-                lines.append(f"  - {etype}: {info.get('total', '?')}{sup_note}")
-            else:
-                lines.append(f"  - {etype}: {info}")
-
-    if data.get("by_relation"):
-        top_relations = sorted(
-            data["by_relation"].items(),
-            key=lambda x: x[1].get("count", 0) if isinstance(x[1], dict) else x[1],
-            reverse=True,
-        )[:5]
-        lines.append("\nTop edge types:")
-        for rel, info in top_relations:
-            if isinstance(info, dict):
-                lines.append(f"  - {rel}: {info['count']} (avg weight: {info.get('avg_weight', '?')})")
-            else:
-                lines.append(f"  - {rel}: {info}")
-
-    if data.get("by_source_type"):
-        lines.append("\nBy source:")
-        for stype, count in data["by_source_type"].items():
-            lines.append(f"  - {stype}: {count}")
-
-    return "\n".join(lines)
-
-
-async def _trigger_consolidation(args: dict) -> str:
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as c:
-        resp = await c.post(f"{MEMORY_BASE}/consolidate")
-        resp.raise_for_status()
-        data = resp.json()
-
-    if isinstance(data, dict) and data.get("skipped"):
-        return (
-            f"Consolidation skipped: {data.get('reason', 'already running')}. "
-            "Use get_consolidation_status to check when the last cycle ran."
-        )
-
-    lines = ["Consolidation cycle completed."]
-    if isinstance(data, dict):
-        parts = []
-        if data.get("engrams_reviewed"):
-            parts.append(f"{data['engrams_reviewed']} engrams reviewed")
-        if data.get("schemas_created"):
-            parts.append(f"{data['schemas_created']} schemas created")
-        if data.get("topics_created"):
-            parts.append(f"{data['topics_created']} topics created")
-        if data.get("edges_strengthened"):
-            parts.append(f"{data['edges_strengthened']} edges strengthened")
-        if data.get("edges_pruned"):
-            parts.append(f"{data['edges_pruned']} edges pruned")
-        if data.get("contradictions_resolved"):
-            parts.append(f"{data['contradictions_resolved']} contradictions resolved")
-        if parts:
-            lines.append(", ".join(parts))
-        sm = data.get("self_model_updates")
-        if sm and isinstance(sm, dict) and sm.get("maturity_stage"):
-            lines.append(f"Self-model: {sm['maturity_stage']}")
-
-    return "\n".join(lines)
-
-
-async def _get_router_status(args: dict) -> str:
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        resp = await c.get(f"{MEMORY_BASE}/router-status")
-        resp.raise_for_status()
-        data = resp.json()
-
-    mode = data.get("mode", "unknown")
-    obs = data.get("observation_count", 0)
-    labeled = data.get("labeled_count", 0)
-    model_loaded = data.get("model_loaded", False)
-
-    lines = [f"Neural Router: {mode}"]
-    lines.append(f"Observations: {obs} total, {labeled} labeled")
-
-    if model_loaded:
-        arch = data.get("architecture", "unknown")
-        lines.append(f"Trained model active ({arch}) -- retrieval uses learned ranking")
-    elif labeled >= 200:
-        lines.append("Ready for training -- enough labeled data, model not yet trained")
-    else:
-        lines.append(f"Collecting data -- {labeled}/200 labeled observations needed before training")
-        lines.append("Currently using cosine similarity only for retrieval ranking")
-
-    if data.get("message"):
-        lines.append(f"Status: {data['message']}")
-
+    lines = [f"Memory backend: {data.get('provider_name', '?')}"]
+    lines.append(f"Total items: {data.get('total_items', 0)}")
+    if data.get("total_edges"):
+        lines.append(f"Links/edges: {data['total_edges']}")
+    if data.get("last_ingestion"):
+        lines.append(f"Last ingestion: {data['last_ingestion']}")
+    if data.get("capabilities"):
+        lines.append(f"Capabilities: {', '.join(data['capabilities'])}")
+    meta = data.get("metadata") or {}
+    if meta.get("bundle_path"):
+        lines.append(f"Bundle path: {meta['bundle_path']}")
     return "\n".join(lines)

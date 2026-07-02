@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI):
     _neural_router_task = asyncio.create_task(
         _neural_router_refresh(), name="neural-router-refresh"
     )
+    _okf_maintenance_task = asyncio.create_task(
+        _okf_maintenance_loop(), name="okf-maintenance"
+    )
 
     # Feature-flags SDK wiring (Phase B7b). Cold-boot fallback file lives in
     # /app/data/flag-cache (ephemeral across image rebuilds; preserved across
@@ -122,12 +125,14 @@ async def lifespan(app: FastAPI):
     _ingestion_task.cancel()
     _consolidation_task.cancel()
     _neural_router_task.cancel()
+    _okf_maintenance_task.cancel()
     try:
         await asyncio.wait_for(
             asyncio.gather(
                 _ingestion_task,
                 _consolidation_task,
                 _neural_router_task,
+                _okf_maintenance_task,
                 return_exceptions=True,
             ),
             timeout=15.0,
@@ -151,6 +156,25 @@ async def _neural_router_refresh():
         except Exception:
             log.debug("Neural router model refresh failed", exc_info=True)
         await asyncio.sleep(settings.neural_router_model_check_interval)
+
+
+async def _okf_maintenance_loop():
+    """Retention backstop for the OKF backend: archive old journal files and
+    refresh the BM25 index every 6h. Runs regardless of brain_enabled so the
+    journal inbox can't grow unbounded; the LLM-driven curation goal is the
+    quality layer on top."""
+    from app.backends import current_backend_name, get_backend
+
+    while True:
+        await asyncio.sleep(6 * 3600)
+        try:
+            if await current_backend_name() == "okf":
+                backend = await get_backend()
+                stats = await backend.consolidate()
+                if stats.get("journals_archived"):
+                    log.info("OKF maintenance: %s", stats)
+        except Exception:
+            log.warning("OKF maintenance cycle failed", exc_info=True)
 
 
 app = FastAPI(

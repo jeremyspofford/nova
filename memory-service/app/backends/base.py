@@ -103,6 +103,11 @@ class MemoryBackend(ABC):
 
     # ── Optional ─────────────────────────────────────────────────────────
 
+    async def read_item(self, memory_id: str) -> dict[str, Any] | None:
+        """Full content of one memory item (None if missing). Used by the
+        agent's read tools when an excerpt isn't enough."""
+        return None
+
     async def explain(self, memory_id: str, query: str) -> dict[str, Any]:
         """Why did this memory match? Default: unsupported."""
         return {

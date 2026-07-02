@@ -114,6 +114,16 @@ async def provenance(memory_id: str):
     return result
 
 
+@memory_router.get("/item/{memory_id:path}")
+async def read_item(memory_id: str):
+    """Full content of one memory item (agent read tools)."""
+    backend = await get_backend()
+    result = await backend.read_item(memory_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"memory {memory_id} not found")
+    return result
+
+
 @memory_router.post("/explain", response_model=ExplainResponse)
 async def explain(req: ExplainRequest):
     """Why did this memory match the query? (optional per backend)"""

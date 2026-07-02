@@ -190,6 +190,9 @@ services:
       TRUSTED_NETWORK_CIDRS: ${TRUSTED_NETWORK_CIDRS:-}
     volumes:
       - ./data/sources:/data/sources
+      # OKF markdown memory bundle — same host dir the orchestrator mounts,
+      # so agent file tools and the memory backend see identical files.
+      - ${NOVA_WORKSPACE:-${HOME}/.nova/workspace}:/workspace:rw
     ports:
       # Loopback-only by default (SEC-004). Dashboard/orchestrator reach it
       # via Docker DNS. Override with MEMORY_SERVICE_BIND to expose externally.

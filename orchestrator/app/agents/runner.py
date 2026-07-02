@@ -435,7 +435,7 @@ async def _get_domain_priming(session_id: str) -> str:
                 if titles:
                     lines.append(f"Recent sources: {', '.join(titles)}")
 
-        lines.append("Use your memory tools (search_memory, recall_topic, read_source) to retrieve details.")
+        lines.append("Use your memory tools (search_memory, recall_topic, read_memory) to retrieve details, and remember() to store durable learnings.")
         return "\n".join(lines)
     except Exception as e:
         log.warning("Domain priming fetch failed: %s", e)
@@ -468,13 +468,14 @@ async def _get_memory_context(
                 data = json.loads(cached)
                 context = data.get("context", "")
                 if context:
-                    sections = data.get("sections", {})
-                    section_count = sum(1 for v in sections.values() if v)
-                    engram_ids = data.get("engram_ids", [])
-                    engram_summaries = data.get("engram_summaries", [])
+                    meta = data.get("metadata", {})
+                    sections = meta.get("sections", {})
+                    section_count = sum(1 for v in sections.values() if v) or 1
+                    memory_ids = data.get("memory_ids", [])
+                    memory_summaries = meta.get("memory_summaries", [])
                     retrieval_log_id = data.get("retrieval_log_id")
                     log.debug("Memory cache hit for session %s", session_id)
-                    return context, section_count, engram_ids, engram_summaries, retrieval_log_id
+                    return context, section_count, memory_ids, memory_summaries, retrieval_log_id
         except Exception as e:
             log.debug("Memory cache lookup failed (falling through): %s", e)
 
@@ -484,7 +485,7 @@ async def _get_memory_context(
         if tenant_id:
             body["tenant_id"] = tenant_id
         resp = await memory_client.post(
-            "/api/v1/engrams/context",
+            "/api/v1/memory/context",
             json=body,
         )
         if resp.status_code != 200:
@@ -493,14 +494,15 @@ async def _get_memory_context(
         context = data.get("context", "")
         if not context:
             return "", 0, [], [], None
-        sections = data.get("sections", {})
-        section_count = sum(1 for v in sections.values() if v)
-        engram_ids = data.get("engram_ids", [])
-        engram_summaries = data.get("engram_summaries", [])
+        meta = data.get("metadata", {})
+        sections = meta.get("sections", {})
+        section_count = sum(1 for v in sections.values() if v) or 1
+        memory_ids = data.get("memory_ids", [])
+        memory_summaries = meta.get("memory_summaries", [])
         retrieval_log_id = data.get("retrieval_log_id")
-        return context, section_count, engram_ids, engram_summaries, retrieval_log_id
+        return context, section_count, memory_ids, memory_summaries, retrieval_log_id
     except Exception as e:
-        log.warning("Engram memory retrieval failed: %s", e)
+        log.warning("Memory retrieval failed: %s", e)
         return "", 0, [], [], None
 
 
@@ -522,7 +524,7 @@ async def _prewarm_memory(session_id: str, query: str, tenant_id: str | None = N
         if tenant_id:
             body["tenant_id"] = tenant_id
         resp = await memory_client.post(
-            "/api/v1/engrams/context",
+            "/api/v1/memory/context",
             json=body,
         )
         if resp.status_code == 200:
@@ -1055,9 +1057,9 @@ def _build_prompt(
     return result
 
 
-# TODO: When memory_retrieval_mode == "tools", extract engram IDs from
-# search_memory/recall_topic tool results and call _mark_engrams_used()
-# for the feedback loop. Requires parsing tool_results for memory tool calls.
+# Tools-mode usage feedback needs no post-hoc extraction: memory tools call
+# /api/v1/memory/context with mark_used=true, so the backend records usage at
+# retrieval time (the agent explicitly asking IS the signal).
 async def _store_exchange(
     agent_id: str,
     session_id: str,
@@ -1090,16 +1092,16 @@ async def _mark_engrams_used(
         memory_client = await get_memory_client_async()
         body = {
             "retrieval_log_id": retrieval_log_id,
-            "engram_ids_used": engram_ids,
+            "used_ids": engram_ids,
         }
         if tenant_id:
             body["tenant_id"] = tenant_id
         await memory_client.post(
-            "/api/v1/engrams/mark-used",
+            "/api/v1/memory/mark-used",
             json=body,
         )
     except Exception as e:
-        log.debug("Failed to mark engrams used: %s", e)
+        log.debug("Failed to mark memories used: %s", e)
 
 
 _engram_redis: object | None = None

@@ -198,6 +198,28 @@ class EngramBackend(MemoryBackend):
             "capabilities": ["graph_traversal", "consolidation", "spreading_activation"],
         }
 
+    async def read_item(self, memory_id: str) -> dict[str, Any] | None:
+        async with get_db() as session:
+            row = await session.execute(
+                text("""
+                    SELECT id, type, content, source_type, created_at
+                    FROM engrams WHERE id = CAST(:id AS uuid)
+                """),
+                {"id": memory_id},
+            )
+            m = row.mappings().first()
+        if m is None:
+            return None
+        return {
+            "memory_id": memory_id,
+            "title": m["content"][:80],
+            "type": m["type"],
+            "frontmatter": {"source_kind": m["source_type"],
+                            "created_at": m["created_at"].isoformat()
+                            if m["created_at"] else None},
+            "content": m["content"],
+        }
+
     async def explain(self, memory_id: str, query: str) -> dict[str, Any]:
         async with get_db() as session:
             row = await session.execute(
