@@ -30,6 +30,30 @@ configure_logging("orchestrator", settings.log_level)
 log = logging.getLogger(__name__)
 
 
+async def _ensure_default_tenant() -> None:
+    """Idempotently re-seed the default tenant (mirrors migration 020)."""
+    from app.db import get_pool
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO tenants (id, name)
+                VALUES ('00000000-0000-0000-0000-000000000001', 'Default')
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+                """
+            )
+        if row is not None:
+            log.warning(
+                "Default tenant was missing — re-seeded. This usually means the "
+                "tenants table was cleared by a data wipe."
+            )
+    except Exception:
+        log.warning("Default-tenant ensure failed", exc_info=True)
+
+
 async def _bootstrap_platform_secrets_from_env() -> None:
     """SEC-006a — sync platform_secrets ↔ .env on every orchestrator startup.
 
@@ -233,6 +257,12 @@ async def lifespan(app: FastAPI):
 
     # Initialize Postgres pool and apply versioned schema migrations
     await init_db()
+
+    # Ensure the default tenant exists. Migration 020 seeds it once, but a
+    # factory reset / data wipe can clear the tenants table without re-running
+    # migrations — leaving every tenant-scoped insert (usage_events, etc.) to
+    # fail its FK. Re-seeding on every boot self-heals that class of breakage.
+    await _ensure_default_tenant()
 
     # Auto-generate JWT secret if not configured
     from app.jwt_auth import ensure_jwt_secret

@@ -341,7 +341,11 @@ export interface ActivityStep {
   engram_summaries?: EngramSummary[]
 }
 
-export type StreamEvent = string | { meta: StreamMeta } | { status: ActivityStep }
+export type StreamEvent =
+  | string
+  | { meta: StreamMeta }
+  | { status: ActivityStep }
+  | { heartbeat: number }  // elapsed_ms since the turn started — proof-of-life during long work
 
 /**
  * Stream a chat turn directly with the primary Nova agent.
@@ -404,6 +408,10 @@ export async function* streamChat(
           }
           if (parsed.meta) {
             yield { meta: parsed.meta as StreamMeta }
+            continue
+          }
+          if (parsed.hb !== undefined) {
+            yield { heartbeat: parsed.hb as number }
             continue
           }
         } catch {

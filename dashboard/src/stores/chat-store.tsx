@@ -37,6 +37,7 @@ export interface Message {
   category?: string
   activitySteps?: ActivityStep[]
   activityCollapsed?: boolean
+  elapsedMs?: number  // live heartbeat elapsed while streaming (proof-of-life)
   attachments?: AttachedFile[]
   metadata?: Record<string, unknown>
 }

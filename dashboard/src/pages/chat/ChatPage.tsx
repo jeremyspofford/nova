@@ -370,6 +370,16 @@ export function Chat() {
           )
           continue
         }
+        if (typeof event === 'object' && 'heartbeat' in event) {
+          // Proof-of-life during a long silence — update elapsed so the status
+          // line can show "still working (Ns)" instead of looking frozen.
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantMsgId ? { ...m, elapsedMs: event.heartbeat } : m
+            )
+          )
+          continue
+        }
         // Text delta — collapse activity feed on first token
         if (firstTextDelta) {
           firstTextDelta = false
@@ -451,20 +461,26 @@ export function Chat() {
     }
   }, [conversationMode, muted, isStreaming, isRecording, isTranscribing, isSpeaking, toggleRecording])
 
-  // Compute streaming status text
+  // Compute streaming status text. Append an elapsed-seconds counter once a
+  // turn has been silent for a few seconds so slow work reads as "still going"
+  // rather than "frozen"; quick turns stay clean (no counter).
   const streamingStatus = isStreaming ? (() => {
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
     if (!lastAssistant) return 'thinking\u2026'
+    const elapsedS = lastAssistant.elapsedMs ? Math.round(lastAssistant.elapsedMs / 1000) : 0
+    const suffix = elapsedS >= 4 ? ` (${elapsedS}s)` : ''
     if (lastAssistant.content) return 'typing\u2026'
     const steps = lastAssistant.activitySteps ?? []
     const running = steps.find(s => s.state === 'running')
-    if (!running) return 'thinking\u2026'
     const labels: Record<string, string> = {
       classifying: 'classifying\u2026',
       memory: 'retrieving memories\u2026',
       generating: 'generating\u2026',
     }
-    return labels[running.step] ?? 'thinking\u2026'
+    const base = running
+      ? (labels[running.step] ?? `${running.detail || running.step}\u2026`)
+      : 'thinking\u2026'
+    return base + suffix
   })() : undefined
 
   const chatInputProps = {

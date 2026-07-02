@@ -83,11 +83,29 @@ router = APIRouter(tags=["orchestrator"])
 async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sandbox_token=None,
                       conversation_id: str | None = None, user_message: str | None = None,
                       session_id: str | None = None, message_metadata: dict | None = None):
-    """SSE-formatted wrapper: yields deltas from run_agent_turn_streaming, handles errors, resets agent status."""
+    """SSE-formatted wrapper: yields deltas from run_agent_turn_streaming, handles errors, resets agent status.
+
+    Emits a heartbeat every ``_HB_INTERVAL_S`` seconds while the generator is
+    producing nothing (slow model turn, long tool call). The heartbeat keeps
+    proxies from closing an idle connection AND lets the UI show elapsed time
+    so a user never mistakes "working" for "crashed".
+    """
     accumulated = ""
     model_used = None
+    _HB_INTERVAL_S = 3.0
+    started = _time.monotonic()
     try:
-        async for delta in stream_gen:
+        agen = stream_gen.__aiter__()
+        while True:
+            try:
+                delta = await asyncio.wait_for(agen.__anext__(), timeout=_HB_INTERVAL_S)
+            except asyncio.TimeoutError:
+                elapsed_ms = int((_time.monotonic() - started) * 1000)
+                yield f"data: {json.dumps({'hb': elapsed_ms})}\n\n".encode()
+                continue
+            except StopAsyncIteration:
+                break
+
             # JSON events (status/meta) from the runner — pass through as-is
             if isinstance(delta, str) and delta.startswith("{"):
                 try:
