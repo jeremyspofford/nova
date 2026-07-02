@@ -240,6 +240,8 @@ function CreateGoalModal({
   const [maxCost, setMaxCost] = useState('')
   const [maxIterations, setMaxIterations] = useState('')
   const [checkInterval, setCheckInterval] = useState('60')
+  const [scheduleCron, setScheduleCron] = useState('')
+  const [maxCompletions, setMaxCompletions] = useState('')
   const qc = useQueryClient()
 
   const create = useMutation({
@@ -252,6 +254,8 @@ function CreateGoalModal({
         max_iterations: maxIterations ? Number(maxIterations) : null,
         max_cost_usd: maxCost ? Number(maxCost) : undefined,
         check_interval_seconds: checkInterval ? Number(checkInterval) * 60 : undefined,
+        schedule_cron: scheduleCron.trim() || null,
+        max_completions: maxCompletions ? Number(maxCompletions) : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['goals'] })
@@ -269,6 +273,8 @@ function CreateGoalModal({
     setMaxCost('')
     setMaxIterations('')
     setCheckInterval('60')
+    setScheduleCron('')
+    setMaxCompletions('')
   }
 
   const handleClose = () => {
@@ -354,6 +360,23 @@ function CreateGoalModal({
             onChange={e => setCheckInterval(e.target.value)}
             placeholder="60"
             description="Minutes between thinking cycles"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Schedule (cron)"
+            value={scheduleCron}
+            onChange={e => setScheduleCron(e.target.value)}
+            placeholder="0 9 * * 1"
+            description="Optional. Fires the goal on a cron schedule (needs the brain enabled)."
+          />
+          <Input
+            label="Max Runs"
+            type="number"
+            value={maxCompletions}
+            onChange={e => setMaxCompletions(e.target.value)}
+            placeholder="Unlimited"
+            description="Auto-complete after N scheduled runs"
           />
         </div>
         {create.isError && (
@@ -759,6 +782,17 @@ function GoalCard({ goal }: { goal: Goal }) {
               Last run: <span className="text-content-secondary">
                 {formatDistanceToNow(new Date(goal.last_checked_at), { addSuffix: true })}
               </span>
+            </span>
+          )}
+          {goal.schedule_cron && (
+            <span>
+              Schedule: <span className="font-mono text-content-secondary">{goal.schedule_cron}</span>
+              {goal.schedule_next_at && (
+                <> · next {formatDistanceToNow(new Date(goal.schedule_next_at), { addSuffix: true })}</>
+              )}
+              {goal.max_completions != null && (
+                <> · run {goal.completion_count ?? 0}/{goal.max_completions}</>
+              )}
             </span>
           )}
         </div>

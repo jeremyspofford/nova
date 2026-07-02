@@ -519,6 +519,12 @@ export interface Goal {
   created_by: string
   created_at: string
   updated_at: string
+  // Recurring schedule (cron). schedule_next_at is the next fire time.
+  schedule_cron?: string | null
+  schedule_next_at?: string | null
+  schedule_last_ran_at?: string | null
+  max_completions?: number | null
+  completion_count?: number
   // Maturation fields (populated when goal maturation is active)
   maturation_status?: string | null
   scope_analysis?: unknown | null
@@ -571,7 +577,7 @@ export const getGoals = (status?: string) => {
 export const getGoal = (id: string) =>
   apiFetch<Goal>(`/api/v1/goals/${id}`)
 
-export const createGoal = (data: { title: string; description?: string; success_criteria?: string; priority?: number; max_iterations?: number | null; max_cost_usd?: number; check_interval_seconds?: number }) =>
+export const createGoal = (data: { title: string; description?: string; success_criteria?: string; priority?: number; max_iterations?: number | null; max_cost_usd?: number; check_interval_seconds?: number; schedule_cron?: string | null; max_completions?: number | null }) =>
   apiFetch<Goal>('/api/v1/goals', {
     method: 'POST',
     body: JSON.stringify(data),
