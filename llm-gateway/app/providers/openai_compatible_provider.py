@@ -13,9 +13,11 @@ from nova_contracts.llm import (
     EmbedResponse,
     ModelCapability,
     StreamChunk,
+    ToolCall,
 )
 
 from .base import ModelProvider
+from .utils import extract_text_tool_calls, serialize_messages
 
 logger = logging.getLogger(__name__)
 
@@ -106,13 +108,17 @@ class OpenAICompatibleProvider(ModelProvider):
             data = r.json()
 
         choice = data["choices"][0]
+        message = choice.get("message", {})
+        content = message.get("content") or ""
         usage = data.get("usage", {})
+        tool_calls = self._parse_tool_calls(request, message, content)
         return CompleteResponse(
-            content=choice["message"]["content"],
+            content=content,
             model=data.get("model", request.model),
+            tool_calls=tool_calls,
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
-            finish_reason=choice.get("finish_reason", "stop"),
+            finish_reason="tool_calls" if tool_calls else choice.get("finish_reason", "stop"),
         )
 
     async def stream(self, request: CompleteRequest) -> AsyncIterator[StreamChunk]:
@@ -167,16 +173,32 @@ class OpenAICompatibleProvider(ModelProvider):
         )
 
     def _build_chat_payload(self, request: CompleteRequest, stream: bool) -> dict:
-        """Build an OpenAI-format chat completion payload."""
-        messages = []
-        for msg in (request.messages or []):
-            messages.append({"role": msg.role, "content": msg.content})
+        """Build an OpenAI-format chat completion payload.
 
+        Uses serialize_messages so tool_calls / tool_call_id survive multi-turn
+        tool conversations, and forwards tools via the standard OpenAI `tools`
+        parameter that OpenAI-compatible servers (LM Studio, vLLM, SGLang)
+        implement — so the model gets a real structured tool mechanism instead
+        of being forced to freeform a text tool call.
+        """
         payload = {
             "model": request.model,
-            "messages": messages,
+            "messages": serialize_messages(request.messages or []),
             "stream": stream,
         }
+
+        if request.tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in request.tools
+            ]
 
         if request.temperature is not None:
             payload["temperature"] = request.temperature
@@ -184,3 +206,25 @@ class OpenAICompatibleProvider(ModelProvider):
             payload["max_tokens"] = request.max_tokens
 
         return payload
+
+    def _parse_tool_calls(self, request: CompleteRequest, message: dict, content: str) -> list[ToolCall]:
+        """Structured OpenAI tool_calls, with a text-recovery fallback for
+        models that ignore the tools param and emit a tool call as text."""
+        calls: list[ToolCall] = []
+        for tc in (message.get("tool_calls") or []):
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            calls.append(ToolCall(
+                id=tc.get("id") or "call_0",
+                name=fn.get("name", ""),
+                arguments=args if isinstance(args, dict) else {},
+            ))
+        if not calls and content and request.tools:
+            recovered = extract_text_tool_calls(content, {t.name for t in request.tools})
+            if recovered:
+                logger.info("%s: recovered %d text-emitted tool call(s)", self._name, len(recovered))
+                calls = recovered
+        return calls

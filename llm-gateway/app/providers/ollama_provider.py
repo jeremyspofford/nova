@@ -63,68 +63,13 @@ def _parse_ollama_tool_calls(raw_calls: list) -> list[ToolCall]:
 
 
 # Some models' Ollama templates lack native tool support and instead print the
-# tool call as plain text in `content` (e.g. certain qwen2.5-coder builds emit
-# `{"name": "run_shell", "arguments": {...}}`). Without recovery the agent
-# narrates tool use but never acts. These patterns extract such calls.
-_TOOL_CALL_TAG_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
-_FENCE_RE = re.compile(r"```(?:json|tool_call)?", re.IGNORECASE)
-# A JSON object allowing a single level of nesting (covers {"arguments": {...}}).
-_JSON_OBJ_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}")
-
-
+# tool call as plain text in `content`. Recovery lives in the shared provider
+# helper so every provider parses the same formats.
 def _extract_text_tool_calls(content: str, valid_names: set[str]) -> list[ToolCall]:
-    """Best-effort recovery of tool calls a model emitted as text instead of via
-    Ollama's native tool_calls field.
-
-    Only calls whose name matches a tool that was actually offered are returned,
-    so ordinary JSON in a model's prose is not mistaken for a tool call.
-    """
-    if not content or not valid_names:
-        return []
-
-    blocks = _TOOL_CALL_TAG_RE.findall(content)
-    if blocks:
-        candidates = blocks
-    else:
-        stripped = _FENCE_RE.sub("", content).strip()
-        try:
-            whole = json.loads(stripped)
-            candidates = (
-                [json.dumps(x) for x in whole]
-                if isinstance(whole, list)
-                else [json.dumps(whole)]
-            )
-        except Exception:
-            candidates = _JSON_OBJ_RE.findall(stripped)
-
-    out: list[ToolCall] = []
-    for c in candidates:
-        try:
-            obj = json.loads(c)
-        except Exception:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        fn = obj.get("function")
-        if isinstance(fn, dict):
-            name = obj.get("name") or fn.get("name")
-            args = fn.get("arguments", obj.get("arguments", {}))
-        else:
-            name = obj.get("name") or obj.get("tool")
-            args = obj.get("arguments", obj.get("parameters", {}))
-        if name not in valid_names:
-            continue
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except Exception:
-                args = {}
-        out.append(ToolCall(
-            id=f"call_{uuid.uuid4().hex[:8]}",
-            name=name,
-            arguments=args if isinstance(args, dict) else {},
-        ))
-    return out
+    """Recover tool calls a model emitted as text. Delegates to the shared
+    provider helper so every provider parses the same set of formats."""
+    from app.providers.utils import extract_text_tool_calls
+    return extract_text_tool_calls(content, valid_names)
 
 
 def _serialize_messages_for_ollama(messages) -> list[dict]:

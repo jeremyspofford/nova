@@ -298,6 +298,7 @@ async def run_agent_turn_streaming(
 
     prompt_messages = _build_prompt(system_prompt, nova_ctx, memory_ctx, messages, model=model)
 
+    resolved_content = ""  # answer the tool loop produced (non-guest path)
     if guest_mode:
         # Guest mode: no tools at all
         streaming_messages = prompt_messages
@@ -330,7 +331,7 @@ async def run_agent_turn_streaming(
                 continue
 
         # Propagate any exception from the tool loop
-        streaming_messages, used_tools = resolve_task.result()
+        streaming_messages, used_tools, resolved_content = resolve_task.result()
 
         # Drain any remaining queued events
         while not tool_queue.empty():
@@ -355,36 +356,52 @@ async def run_agent_turn_streaming(
     # content, so we keep them for claude models; every other provider (local
     # models like ollama/lmstudio, OpenAI-compatible endpoints) gets an empty
     # tool list, forcing a text response.
-    is_anthropic = model.startswith("claude")
-    final_tools = effective_tools if (used_tools and is_anthropic) else []
     llm_client = get_llm_client()
-    complete_req = CompleteRequest(
-        model=model,
-        messages=streaming_messages,
-        tools=final_tools,
-        stream=True,
-        metadata={"agent_id": agent_id, "session_id": session_id},
-    )
-
-    # Emit generating status (replaces old meta event — info is carried by status steps)
-    yield json.dumps({"status": {"step": "generating", "state": "running", "model": model, "category": category}})
-
     full_response: list[str] = []
     stream_input_tokens = 0
     stream_output_tokens = 0
     stream_cost_usd: float | None = None
-    async with llm_client.stream("POST", "/stream", json=complete_req.model_dump()) as resp:
-        resp.raise_for_status()
-        async for line in resp.aiter_lines():
-            if not line or line == "data: [DONE]":
-                continue
-            if line.startswith("data: "):
-                chunk_data = json.loads(line[6:])
-                if "error" in chunk_data:
-                    raise RuntimeError(
-                        f"LLM Gateway error ({chunk_data.get('provider', 'unknown')}): "
-                        f"{chunk_data['error']}"
-                    )
+
+    if used_tools and resolved_content.strip():
+        # The tool loop already produced the final answer (the model stopped
+        # calling tools and wrote a response). Stream that directly instead of
+        # re-generating — a second pass doubles latency and, on slow local
+        # models, often times out before producing any text. This is the
+        # common path once a tool has run.
+        yield json.dumps({"status": {"step": "generating", "state": "running", "model": model, "category": category}})
+        full_response.append(resolved_content)
+        yield resolved_content
+    else:
+        # Final streaming turn: we want a text answer, not another tool call.
+        # Anthropic's API *requires* tools= present when the message history
+        # references tool_use content, so we keep them for claude models; every
+        # other provider (local models, OpenAI-compatible endpoints) gets an
+        # empty tool list, forcing a text response.
+        is_anthropic = model.startswith("claude")
+        final_tools = effective_tools if (used_tools and is_anthropic) else []
+        complete_req = CompleteRequest(
+            model=model,
+            messages=streaming_messages,
+            tools=final_tools,
+            stream=True,
+            metadata={"agent_id": agent_id, "session_id": session_id},
+        )
+
+        # Emit generating status (replaces old meta event — info is carried by status steps)
+        yield json.dumps({"status": {"step": "generating", "state": "running", "model": model, "category": category}})
+
+        async with llm_client.stream("POST", "/stream", json=complete_req.model_dump()) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or line == "data: [DONE]":
+                    continue
+                if line.startswith("data: "):
+                    chunk_data = json.loads(line[6:])
+                    if "error" in chunk_data:
+                        raise RuntimeError(
+                            f"LLM Gateway error ({chunk_data.get('provider', 'unknown')}): "
+                            f"{chunk_data['error']}"
+                        )
                 delta = chunk_data.get("delta", "")
                 if delta:
                     full_response.append(delta)
@@ -924,13 +941,15 @@ async def _resolve_tool_rounds(
     max_rounds: int = 5,
     tools: list | None = None,
     on_tool_status: Callable | None = None,
-) -> tuple[list[Message], bool]:
+) -> tuple[list[Message], bool, str]:
     """
     Execute any tool-call rounds the LLM requests, returning the enriched
-    message list ready for the final streaming turn.
+    message list plus the final text the loop produced.
 
-    Returns (messages_with_tool_history, used_tools_flag).
-    Delegates to _run_tool_loop and discards token counts.
+    Returns (messages_with_tool_history, used_tools_flag, final_content).
+    final_content is the model's answer once it stopped calling tools — the
+    caller can stream it directly instead of re-generating (which matters a
+    lot for slow local models, where a second generation can time out).
     """
     content, _, _, _, current, used_tools = await _run_tool_loop(
         messages=messages,
@@ -941,7 +960,7 @@ async def _resolve_tool_rounds(
         return_messages=True,
         on_tool_status=on_tool_status,
     )
-    return current, used_tools
+    return current, used_tools, content or ""
 
 
 async def run_agent_turn_raw(

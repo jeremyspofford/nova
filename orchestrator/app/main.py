@@ -31,13 +31,21 @@ log = logging.getLogger(__name__)
 
 
 async def _ensure_default_tenant() -> None:
-    """Idempotently re-seed the default tenant (mirrors migration 020)."""
+    """Idempotently re-seed the default tenant and the synthetic-admin user.
+
+    Migration 020 seeds the tenant once, but a factory reset / data wipe can
+    clear these tables without re-running migrations — leaving tenant-scoped
+    inserts (usage_events) and the trusted-network admin (conversations,
+    which FK to users.id) to fail. Re-seeding on every boot self-heals both.
+    The synthetic admin id/tenant mirror auth._SYNTHETIC_ADMIN so trusted-
+    network / dev sessions can persist conversations.
+    """
     from app.db import get_pool
 
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
+            tenant_row = await conn.fetchrow(
                 """
                 INSERT INTO tenants (id, name)
                 VALUES ('00000000-0000-0000-0000-000000000001', 'Default')
@@ -45,13 +53,68 @@ async def _ensure_default_tenant() -> None:
                 RETURNING id
                 """
             )
-        if row is not None:
+            user_row = await conn.fetchrow(
+                """
+                INSERT INTO users (id, email, display_name, is_admin, role, tenant_id, provider)
+                VALUES ('00000000-0000-0000-0000-000000000000', 'admin@local', 'Admin',
+                        true, 'owner', '00000000-0000-0000-0000-000000000001', 'local')
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+                """
+            )
+        if tenant_row is not None or user_row is not None:
             log.warning(
-                "Default tenant was missing — re-seeded. This usually means the "
-                "tenants table was cleared by a data wipe."
+                "Default tenant/admin user was missing — re-seeded. This usually "
+                "means those tables were cleared by a data wipe."
             )
     except Exception:
-        log.warning("Default-tenant ensure failed", exc_info=True)
+        log.warning("Default-tenant/admin ensure failed", exc_info=True)
+
+
+# Curated interactive-chat tool surface: enough to be useful (search the web,
+# use memory, light file ops) without overwhelming small local models with the
+# full ~70-tool registry. Widen/clear from Settings → Tool Permissions.
+_DEFAULT_CHAT_TOOLS = [
+    "web_search", "web_fetch",
+    "what_do_i_know", "search_memory", "recall_topic", "read_memory", "remember",
+    "read_file", "list_dir", "run_shell",
+]
+
+
+async def _ensure_default_toolset() -> None:
+    """Seed tool_permissions.default_allowed_tools if it's missing."""
+    import json as _json
+
+    from app.db import get_pool
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM platform_config WHERE key = 'tool_permissions'"
+            )
+            current = {}
+            if row and row["value"]:
+                current = row["value"] if isinstance(row["value"], dict) else _json.loads(row["value"])
+            if current.get("default_allowed_tools"):
+                return  # user/migration already set it — don't override
+            current.setdefault("disabled_groups", [])
+            current["default_allowed_tools"] = _DEFAULT_CHAT_TOOLS
+            await conn.execute(
+                """
+                INSERT INTO platform_config (key, value, description)
+                VALUES ('tool_permissions', $1::jsonb,
+                        'Default agent tool surface (default_allowed_tools = chat allowlist).')
+                ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = now()
+                """,
+                _json.dumps(current),
+            )
+        log.warning(
+            "tool_permissions.default_allowed_tools was missing — seeded the "
+            "curated chat toolset (%d tools).", len(_DEFAULT_CHAT_TOOLS)
+        )
+    except Exception:
+        log.warning("Default-toolset ensure failed", exc_info=True)
 
 
 async def _bootstrap_platform_secrets_from_env() -> None:
@@ -263,6 +326,12 @@ async def lifespan(app: FastAPI):
     # migrations — leaving every tenant-scoped insert (usage_events, etc.) to
     # fail its FK. Re-seeding on every boot self-heals that class of breakage.
     await _ensure_default_tenant()
+
+    # Ensure a sane default chat tool surface. Without it, interactive chat
+    # sends ALL ~70 registered tools to the model — small local models choke on
+    # that payload (and fabricate rather than pick from a huge menu). Migration
+    # 086 seeds this once; a wipe clears it. Re-seed if absent.
+    await _ensure_default_toolset()
 
     # Auto-generate JWT secret if not configured
     from app.jwt_auth import ensure_jwt_secret
