@@ -19,6 +19,8 @@ class AuthMethod(str, Enum):
     PAT = "pat"
     GITHUB_APP = "github_app"
     OAUTH = "oauth"
+    PASSWORD = "password"  # web login captured by the browser worker
+    API_KEY = "api_key"    # generated API key stored by the browser worker
 
 
 class CredentialHealth(str, Enum):

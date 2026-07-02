@@ -12,6 +12,7 @@ EDITOR_PROFILE := $(if $(filter vscode,$(EDITOR_FLAVOR)),--profile editor-vscode
 
 COMPOSE      = docker compose -f docker-compose.yml --profile voice $(EDITOR_PROFILE)
 ALL_PROFILES = --profile voice --profile website --profile knowledge \
+               --profile browser \
                --profile cloudflare-tunnel --profile tailscale \
                --profile editor-vscode --profile editor-neovim
 

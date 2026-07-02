@@ -32,6 +32,8 @@ from app.tools.intel_tools import INTEL_TOOLS
 from app.tools.intel_tools import execute_tool as _exec_intel
 from app.tools.introspect_tools import INTROSPECT_TOOLS
 from app.tools.introspect_tools import execute_tool as _exec_introspect
+from app.tools.browser_tools import BROWSER_TOOLS
+from app.tools.browser_tools import execute_tool as _exec_browser
 from app.tools.memory_tools import MEMORY_TOOLS
 from app.tools.memory_tools import execute_tool as _exec_memory
 from app.tools.platform_tools import PLATFORM_TOOLS
@@ -55,6 +57,7 @@ _REGISTRY: list[ToolGroup] = [
     ToolGroup("Code",     "Files & Shell",     "Read, write, and search files; run shell",       CODE_TOOLS,     _exec_code),
     ToolGroup("Git",      "Version Control",   "View status, diffs, logs, and create commits",   GIT_TOOLS,      _exec_git),
     ToolGroup("Web",      "Internet Access",   "Search the internet and fetch web pages",        WEB_TOOLS,      _exec_web),
+    ToolGroup("Browser",  "Browser Automation", "Drive a real browser: navigate, read, fill forms, sign up for accounts, store credentials", BROWSER_TOOLS, _exec_browser),
     ToolGroup("Diagnosis", "Self-Diagnosis",  "Diagnose task failures, check service health, analyse errors", DIAGNOSIS_TOOLS, _exec_diagnosis),
     ToolGroup("Introspect", "Platform Awareness", "Query platform config, knowledge sources, MCP servers, user profiles", INTROSPECT_TOOLS, _exec_introspect),
     ToolGroup("Memory", "Knowledge Retrieval", "Search, recall, and read from Nova's memory system", MEMORY_TOOLS, _exec_memory),

@@ -634,6 +634,42 @@ services:
           "import urllib.request; urllib.request.urlopen('http://localhost:8120/health/live', timeout=3)",
         ]
 
+  # ── Browser Worker ──────────────────────────────────────────────────────────
+  browser-worker:
+    <<: *nova-common
+    container_name: nova-browser-worker
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: browser-worker/Dockerfile
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8150"]
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+      REDIS_URL: redis://redis:6379/11
+      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HEADLESS: ${BROWSER_HEADLESS:-true}
+      PROFILES_DIR: /data/browser-profiles
+    volumes:
+      # Persistent per-domain browser profiles — logins survive restarts.
+      - ./data/browser-profiles:/data/browser-profiles
+    ports:
+      # Loopback-only — reached by the orchestrator via Docker DNS.
+      - "${BROWSER_WORKER_BIND:-127.0.0.1:}8150:8150"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *nova-healthcheck
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8150/health/live', timeout=3)",
+        ]
+
   # ── Voice Service ───────────────────────────────────────────────────────────
   voice-service:
     <<: *nova-common
