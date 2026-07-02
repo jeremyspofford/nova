@@ -94,18 +94,40 @@ async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sa
     model_used = None
     _HB_INTERVAL_S = 3.0
     started = _time.monotonic()
+
+    # Drain the inner generator in a background task that feeds a queue. This is
+    # the ONLY safe way to interleave heartbeats: awaiting anext() directly with
+    # asyncio.wait_for cancels the generator on every timeout, which corrupts a
+    # slow turn (a tool loop mid-flight gets cancelled and produces nothing).
+    # The pump owns the generator; the SSE loop only reads the queue.
+    _SENTINEL = object()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _pump():
+        try:
+            async for delta in stream_gen:
+                await queue.put(("delta", delta))
+        except Exception as e:  # noqa: BLE001 — surfaced to the client below
+            await queue.put(("error", e))
+        finally:
+            await queue.put(("done", _SENTINEL))
+
+    pump_task = asyncio.create_task(_pump())
     try:
-        agen = stream_gen.__aiter__()
         while True:
             try:
-                delta = await asyncio.wait_for(agen.__anext__(), timeout=_HB_INTERVAL_S)
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL_S)
             except asyncio.TimeoutError:
                 elapsed_ms = int((_time.monotonic() - started) * 1000)
                 yield f"data: {json.dumps({'hb': elapsed_ms})}\n\n".encode()
                 continue
-            except StopAsyncIteration:
-                break
 
+            if kind == "done":
+                break
+            if kind == "error":
+                raise payload
+
+            delta = payload
             # JSON events (status/meta) from the runner — pass through as-is
             if isinstance(delta, str) and delta.startswith("{"):
                 try:
@@ -125,19 +147,28 @@ async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sa
         yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
         yield b"data: [DONE]\n\n"
     finally:
+        if not pump_task.done():
+            pump_task.cancel()
+            try:
+                await pump_task
+            except (asyncio.CancelledError, Exception):
+                pass
         await update_agent_status(agent_id, AgentStatus.idle)
         if sandbox_token is not None:
             try:
                 reset_sandbox(sandbox_token)
             except ValueError:
                 pass  # Token from copied async context — var expires naturally
-        # Persist messages to conversation if conversation_id provided
-        if conversation_id and accumulated:
+        # Persist messages to the conversation. The user message is saved even
+        # when the assistant response is empty — otherwise a failed/empty turn
+        # silently drops the user's message too, and it vanishes on refresh.
+        if conversation_id and (user_message or accumulated):
             try:
                 from app.conversations import add_message, generate_title
                 if user_message:
                     await add_message(conversation_id, "user", user_message, metadata=message_metadata)
-                await add_message(conversation_id, "assistant", accumulated, model_used=model_used)
+                if accumulated:
+                    await add_message(conversation_id, "assistant", accumulated, model_used=model_used)
                 # Auto-title: check if conversation still has no title
                 from app.db import get_pool
                 pool = get_pool()
