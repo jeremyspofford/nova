@@ -30,18 +30,6 @@ async def test_patch_env_rejects_provider_secret_keys(admin_headers):
 
 
 @pytest.mark.asyncio
-async def test_patch_env_rejects_chat_bridge_tokens(admin_headers):
-    """Telegram + Slack tokens belong in platform_secrets, not .env."""
-    async with httpx.AsyncClient(base_url="http://localhost:8888", timeout=10) as recovery:
-        resp = await recovery.patch(
-            "/api/v1/recovery/env",
-            headers=admin_headers,
-            json={"updates": {"TELEGRAM_BOT_TOKEN": "fake-rejected-token"}},
-        )
-    assert resp.status_code == 400, resp.text
-
-
-@pytest.mark.asyncio
 async def test_patch_env_still_accepts_infra_keys(admin_headers):
     """COMPOSE_PROFILES is consumed by docker compose and stays in .env.
 

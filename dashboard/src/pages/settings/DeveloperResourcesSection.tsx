@@ -14,7 +14,6 @@ const SERVICE_META: Record<string, { desc: string; hasDocs?: boolean }> = {
   'chat-api':       { desc: 'WebSocket streaming bridge' },
   'recovery':       { desc: 'Backup, restore, factory reset', hasDocs: true },
   'dashboard':      { desc: 'React admin UI' },
-  'chat-bridge':    { desc: 'Telegram & Slack integration' },
   'website':        { desc: 'Documentation & landing page' },
   'ollama':         { desc: 'Local model serving' },
   'cloudflared':    { desc: 'Cloudflare Tunnel' },

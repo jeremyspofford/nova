@@ -50,7 +50,6 @@ NOVA_SERVICES = [
 
 # Optional services gated behind compose profiles
 OPTIONAL_SERVICES = {
-    "chat-bridge": "bridges",
     "website": "website",
     "cloudflared": "cloudflare-tunnel",
     "tailscale": "tailscale",

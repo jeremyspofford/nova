@@ -50,12 +50,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/voice-api/, ''),
       },
-      // Chat Bridge — Telegram/Slack adapter management
-      '/bridge-api': {
-        target: 'http://localhost:8090',
-        changeOrigin: true,
-        rewrite: (path: string) => path.replace(/^\/bridge-api/, ''),
-      },
       // Screenpipe Bridge — screen capture ingestion
       '/screenpipe-api': {
         target: 'http://localhost:8140',

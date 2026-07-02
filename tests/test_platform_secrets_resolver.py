@@ -1,6 +1,6 @@
 """SEC-006a — PlatformSecretsResolver behavior against the live orchestrator.
 
-The resolver is the helper every non-orchestrator service (gateway, chat-bridge)
+The resolver is the helper every non-orchestrator service (e.g. llm-gateway)
 imports to fetch a platform secret with env-fallback semantics. Tests cover:
 
   1. Platform-secret hit returns the stored value.
@@ -140,7 +140,7 @@ async def test_cache_serves_value_after_backend_deletion(
 
 
 # ─── fetch_platform_secrets_sync ──────────────────────────────────────────────
-# Sync batch helper for service startup (gateway/bridge), where module-level
+# Sync batch helper for service startup (gateway), where module-level
 # code runs before any event loop exists. Returns {key: value} for every key
 # present in platform_secrets; missing keys are simply absent from the dict.
 

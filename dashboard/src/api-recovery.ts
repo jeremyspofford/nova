@@ -224,22 +224,6 @@ export interface RemoteAccessStatus {
 export const getRemoteAccessStatus = () =>
   recoveryFetch<RemoteAccessStatus>('/api/v1/recovery/remote-access/status')
 
-// ── Chat Integrations ──────────────────────────────────────────────────────
-
-export interface ChatIntegrationAdapter {
-  configured: boolean
-  container: { name: string; container_name: string | null; status: string; health: string; running: boolean }
-}
-
-export interface ChatIntegrationsStatus {
-  telegram: ChatIntegrationAdapter
-  slack: ChatIntegrationAdapter
-  container: { name: string; container_name: string | null; status: string; health: string; running: boolean }
-}
-
-export const getChatIntegrationsStatus = () =>
-  recoveryFetch<ChatIntegrationsStatus>('/api/v1/recovery/chat-integrations/status')
-
 // ── Inference Model Management ───────────────────────────────────────────────
 
 export interface BackendStatus {

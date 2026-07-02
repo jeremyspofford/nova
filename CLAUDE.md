@@ -14,7 +14,6 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 - **llm-gateway** (8001) — Multi-provider model routing via LiteLLM: Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub, Claude/ChatGPT subscription providers (FastAPI)
 - **memory-service** (8002) — Embedding + hybrid semantic/keyword retrieval via pgvector (FastAPI + SQLAlchemy async)
 - **chat-api** (8080) — WebSocket streaming bridge for external clients (FastAPI)
-- **chat-bridge** (8090) — Multi-platform chat integration: Telegram, Slack (FastAPI + httpx + redis). Optional, start with `--profile bridges`.
 - **dashboard** (3000/5173) — React admin UI (Vite dev / nginx prod)
 - **postgres** (5432) — pgvector-enabled PostgreSQL 16 (data bind-mounted to `./data/postgres/`)
 - **recovery** (8888) — Backup/restore, factory reset, service management (FastAPI + asyncpg + Docker SDK). Only depends on postgres — stays alive when other services crash.
@@ -25,13 +24,13 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 - **screenpipe-bridge** (8140) — Subscribes to a user-installed [screenpipe](https://screenpi.pe/) daemon (workstation-side) over WebSocket (HTTP polling fallback), aggregates raw events into 30-min-capped focus sessions, applies a two-layer privacy denylist, pushes payloads to engram ingestion queue (FastAPI + websockets + httpx + redis). Optional, requires user-installed screenpipe daemon.
 - **redis** (6379) — State, task queue (BRPOP), rate limiting, session memory (data bind-mounted to `./data/redis/`)
 
-**Inter-service communication:** All HTTP. Orchestrator calls llm-gateway (`/complete`, `/stream`, `/embed`) and memory-service (`/api/v1/engrams/*`). Dashboard proxies to orchestrator (`/api`), llm-gateway (`/v1`), recovery (`/recovery-api`), cortex (`/cortex-api`), and voice-service (`/voice-api`). Chat-api forwards to orchestrator's streaming endpoint. Chat-bridge calls orchestrator (`/api/v1/tasks/stream`) to relay messages from external platforms. Cortex calls orchestrator (task dispatch, goal management), llm-gateway (planning, evaluation), and memory-service (read/write knowledge). Intel-worker calls orchestrator (`/api/v1/intel/feeds`, `/api/v1/intel/content`, `/api/v1/intel/feeds/{id}/status`) and pushes to Redis queues (db0 engram ingestion, db6 intel new-items). Knowledge-worker calls orchestrator (`/api/v1/knowledge/sources`, `/api/v1/knowledge/crawl-log`), llm-gateway (`/complete` for relevance scoring), and pushes to Redis queues (db0 engram ingestion, db8 knowledge state). Screenpipe-bridge subscribes to a user-installed screenpipe daemon over the network (WS primary, /search poll fallback) and pushes focus-session payloads to the engram ingestion queue (Redis db0). Reads runtime config from Redis db1. Dashboard depends only on recovery at startup — shows a startup screen while other services come online.
+**Inter-service communication:** All HTTP. Orchestrator calls llm-gateway (`/complete`, `/stream`, `/embed`) and memory-service (`/api/v1/engrams/*`). Dashboard proxies to orchestrator (`/api`), llm-gateway (`/v1`), recovery (`/recovery-api`), cortex (`/cortex-api`), and voice-service (`/voice-api`). Chat-api forwards to orchestrator's streaming endpoint. Cortex calls orchestrator (task dispatch, goal management), llm-gateway (planning, evaluation), and memory-service (read/write knowledge). Intel-worker calls orchestrator (`/api/v1/intel/feeds`, `/api/v1/intel/content`, `/api/v1/intel/feeds/{id}/status`) and pushes to Redis queues (db0 engram ingestion, db6 intel new-items). Knowledge-worker calls orchestrator (`/api/v1/knowledge/sources`, `/api/v1/knowledge/crawl-log`), llm-gateway (`/complete` for relevance scoring), and pushes to Redis queues (db0 engram ingestion, db8 knowledge state). Screenpipe-bridge subscribes to a user-installed screenpipe daemon over the network (WS primary, /search poll fallback) and pushes focus-session payloads to the engram ingestion queue (Redis db0). Reads runtime config from Redis db1. Dashboard depends only on recovery at startup — shows a startup screen while other services come online.
 
 **Shared contracts:** `nova-contracts/` is a Pydantic-only package defining the API contract between services (chat, llm, memory, orchestrator models). Any service satisfying these models is a drop-in replacement.
 
 **Quartet Pipeline:** 5-stage agent chain — Context → Task → Guardrail → Code Review → Decision. Runs via Redis BRPOP task queue with heartbeat (30s) and stale reaper (150s timeout). Pipeline code lives in `orchestrator/app/pipeline/`.
 
-**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, chat-bridge=db4, cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10.
+**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, db4=unused (was chat-bridge), cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10.
 
 ## Build & Run Commands
 
@@ -244,7 +243,7 @@ pipeline.web_fetch_strict_sanitize
 Long-lived instance-level credentials live encrypted at rest in the
 `platform_secrets` Postgres table — never plaintext in `.env`. Covers LLM
 provider keys (Anthropic, OpenAI, Groq, Gemini, Cerebras, OpenRouter,
-GitHub, ChatGPT subscription), chat-bridge tokens (Telegram, Slack), the
+GitHub, ChatGPT subscription), the
 Google OAuth client secret, and the GitHub PAT used for self-modification.
 
 - **Encryption:** AES-256-GCM, envelope-encrypted under an HKDF subkey
@@ -253,7 +252,7 @@ Google OAuth client secret, and the GitHub PAT used for self-modification.
 - **API:** `GET /api/v1/admin/secrets` (list, no values), `PATCH` (upsert),
   `DELETE /{key}` (revoke), `POST /resolve` (plaintext for service
   consumers — admin-gated). Defined in `orchestrator/app/secrets_router.py`.
-- **Boot-time consumers:** `llm-gateway` and `chat-bridge` call
+- **Boot-time consumers:** `llm-gateway` calls
   `nova_worker_common.platform_secrets.fetch_platform_secrets_sync` at
   module load to override settings/env. Sync because providers/adapters
   capture tokens at construction. The orchestrator itself uses

@@ -1,6 +1,6 @@
 """SEC-006a — platform secrets resolver for non-orchestrator services.
 
-Worker services (llm-gateway, chat-bridge) call this helper to fetch a platform
+Worker services (llm-gateway) call this helper to fetch a platform
 secret with a 30s cache and a transparent ``os.environ`` fallback. The
 fallback keeps existing deploys working with their ``.env`` values until the
 user moves them into ``platform_secrets`` via Settings → Secrets.
@@ -131,7 +131,7 @@ def fetch_platform_secrets_sync(
 ) -> dict[str, str]:
     """Synchronous batch fetch of platform secrets — for service module load.
 
-    Worker services (llm-gateway, chat-bridge) need to populate ``os.environ``
+    Worker services (llm-gateway) need to populate ``os.environ``
     before any provider/adapter is constructed at module import time, which
     runs before the FastAPI event loop exists. This helper does one blocking
     HTTP POST and returns ``{key: value}`` for every key the orchestrator

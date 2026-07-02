@@ -35,8 +35,8 @@ async def get_redis_for_db(db: int) -> aioredis.Redis:
 
     Used by factory reset to wipe per-service state across all Nova Redis DBs:
     db0=memory-service, db1=llm-gateway, db2=orchestrator, db3=chat-api,
-    db4=chat-bridge, db5=cortex, db6=intel-worker, db7=recovery (reuses
-    get_redis), db8=knowledge-worker, db9=voice-service.
+    db4=unused (was chat-bridge), db5=cortex, db6=intel-worker, db7=recovery
+    (reuses get_redis), db8=knowledge-worker, db9=voice-service.
     """
     if db in _per_db_redis:
         return _per_db_redis[db]

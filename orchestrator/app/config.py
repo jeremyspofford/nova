@@ -111,9 +111,6 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     registration_mode: str = "invite"  # 'open' | 'invite' | 'admin'
 
-    # Bridge service auth — shared secret for bridge-to-orchestrator trust (X-Service-Secret header)
-    bridge_service_secret: str = ""
-
     # Capability credential vault — master key for AES-256-GCM envelope encryption
     # 64-character hex string (32 bytes).  Generate with:
     #   python -c "import os; print(os.urandom(32).hex())"

@@ -167,15 +167,6 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "redis": [],
         "backups": False,
     },
-    "linked_accounts": {
-        "label": "Linked chat accounts",
-        "description": "Telegram / Slack bridge linkages",
-        "default_keep": True,
-        "tables": ["linked_accounts"],
-        "filesystem": [],
-        "redis": [(4, "*")],
-        "backups": False,
-    },
     "platform_config": {
         "label": "Platform config",
         "description": "LLM provider keys, runtime overrides, MCP servers, skills, rules, self-mod history",
@@ -238,7 +229,6 @@ WIPE_ORDER: list[str] = [
     "chat_history",
     "memory_and_knowledge",
     "platform_config",
-    "linked_accounts",
     "api_keys",
     "backups",
     "users_and_auth",

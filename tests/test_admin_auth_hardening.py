@@ -3,7 +3,7 @@
 Covers three classes of fix shipped together:
 
 1. Constant-time secret comparison (`hmac.compare_digest`) across orchestrator,
-   voice-service, chat-bridge, and recovery — bad secrets get a generic 4xx
+   voice-service, and recovery — bad secrets get a generic 4xx
    regardless of how much they share with the real one.
 
 2. FC-002 default-secret refusal — extended to 6 services that previously
@@ -166,12 +166,11 @@ def test_orchestrator_uses_compare_digest():
     "service_path, identifier",
     [
         ("voice-service/app/routes.py", "voice-service"),
-        ("chat-bridge/app/main.py", "chat-bridge"),
         ("recovery-service/app/routes.py", "recovery"),
     ],
 )
 def test_other_services_use_compare_digest(service_path, identifier):
-    """Same lock-in for the three other services that previously used == / !=."""
+    """Same lock-in for the other services that previously used == / !=."""
     src = (ROOT / service_path).read_text()
     assert "hmac.compare_digest" in src, (
         f"{identifier}: hmac.compare_digest no longer present in {service_path}"
@@ -188,7 +187,6 @@ def test_other_services_use_compare_digest(service_path, identifier):
         ("llm-gateway/app/main.py", "llm-gateway"),
         ("memory-service/app/main.py", "memory-service"),
         ("voice-service/app/main.py", "voice-service"),
-        ("chat-bridge/app/main.py", "chat-bridge"),
         ("intel-worker/app/main.py", "intel-worker"),
         ("knowledge-worker/app/main.py", "knowledge-worker"),
     ],

@@ -31,13 +31,9 @@ The Dashboard wizard handles the entire setup:
 
 Create a token at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens).
 
-### Key benefit for Telegram
-
-Cloudflare Tunnel enables **webhook mode** for Telegram integration. Instead of polling Telegram servers repeatedly, Telegram pushes messages directly to your tunnel URL. This is faster, uses less bandwidth, and keeps your bot responsive. Without a public URL, you're limited to polling mode (check every 30–60 seconds).
-
 ### Trade-offs
 
-- **Pro:** Free tier is sufficient, no additional device setup needed, webhooks for instant Telegram updates
+- **Pro:** Free tier is sufficient, no additional device setup needed, public URL supports inbound webhooks from external services
 - **Con:** Traffic routes through Cloudflare's network (though still encrypted end-to-end)
 
 ### Setup
@@ -70,14 +66,10 @@ Tailscale connects Nova to your personal tailnet using WireGuard-based mesh netw
 - A Tailscale account
 - A Tailscale API key with permission to create auth keys (create at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
 
-### Key limitation for Telegram
-
-Tailscale creates a private mesh network, so Telegram's servers cannot reach your tunnel URL for webhooks. You must use **polling mode**, where Nova checks Telegram for new messages every 30–60 seconds. This is slower but still functional for personal use.
-
 ### Trade-offs
 
 - **Pro:** Private by default, no public exposure, direct fast access from your devices, no login required
-- **Con:** Need Tailscale client on every device, can't share access without inviting to tailnet, Telegram polling only (not webhooks)
+- **Con:** Need Tailscale client on every device, can't share access without inviting to tailnet, external services can't reach Nova with webhooks
 
 ### Setup
 

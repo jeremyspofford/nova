@@ -91,9 +91,6 @@ export const MessageBubble = memo(function MessageBubble({
             'opacity-0 group-hover:opacity-100 transition-opacity duration-fast',
           )}>
             {format(message.timestamp, 'h:mm a')}
-            {message.metadata?.channel === 'telegram' && (
-              <span className="ml-1.5">via Telegram</span>
-            )}
           </p>
         </div>
       </div>

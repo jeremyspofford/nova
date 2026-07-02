@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bot, Wrench, Palette, Users, Bug, Database, Lock, Code,
-  CircleUser, Shield, Radio as RadioIcon, Globe, MessageSquare,
+  CircleUser, Shield, Radio as RadioIcon, Globe,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
   Link2, Bookmark, Monitor, Settings2, ToggleRight,
@@ -17,7 +17,6 @@ import { LLMRoutingSection } from './settings/LLMRoutingSection'
 import { ProviderStatusSection } from './settings/ProviderStatusSection'
 import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
-import { ChatIntegrationsSection } from './settings/ChatIntegrationsSection'
 import { ScreenpipeConnectionSection } from './settings/ScreenpipeConnectionSection'
 import { CapturePrivacySection } from './settings/CapturePrivacySection'
 import { CaptureAdvancedSection } from './settings/CaptureAdvancedSection'
@@ -141,7 +140,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'connected-services', label: 'Connected Services', icon: Link2 },
       { id: 'remote-access', label: 'Remote Access', icon: Globe },
-      { id: 'chat-integrations', label: 'Chat Integrations', icon: MessageSquare },
       { id: 'screenpipe', label: 'Screenpipe', icon: Monitor },
       { id: 'capture-privacy', label: 'Capture Privacy', icon: ShieldAlert },
       { id: 'capture-advanced', label: 'Capture Advanced', icon: Settings2 },
@@ -777,12 +775,6 @@ export function Settings() {
         {show('remote-access') && (
           <div id="remote-access">
             <RemoteAccessSection />
-          </div>
-        )}
-
-        {show('chat-integrations') && (
-          <div id="chat-integrations">
-            <ChatIntegrationsSection />
           </div>
         )}
 

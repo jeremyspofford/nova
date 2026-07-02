@@ -81,7 +81,6 @@ class TestFactoryReset:
             "runtime_caches",
             "memory_and_knowledge",
             "api_keys",
-            "linked_accounts",
             "platform_config",
             "users_and_auth",
             "backups",
@@ -105,7 +104,6 @@ class TestFactoryReset:
         defaults_keep = {
             "memory_and_knowledge",
             "api_keys",
-            "linked_accounts",
             "platform_config",
             "users_and_auth",
             "backups",

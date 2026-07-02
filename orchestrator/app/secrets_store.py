@@ -1,6 +1,6 @@
 """SEC-006a — platform_secrets DB layer.
 
-Encrypts long-lived instance-level secrets (LLM provider keys, chat-bridge
+Encrypts long-lived instance-level secrets (LLM provider keys
 tokens, OAuth secrets, self-mod GitHub PAT) at rest using the same
 BuiltinCredentialProvider + master key that capability credentials use.
 

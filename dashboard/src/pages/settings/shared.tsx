@@ -212,7 +212,7 @@ export function ConfigHistoryToggle({ configKey }: { configKey: string }) {
 }
 
 // ── Service Status Badge ─────────────────────────────────────────────────────
-// Used by RemoteAccessSection and ChatIntegrationsSection to show running/stopped/unconfigured state.
+// Used by RemoteAccessSection to show running/stopped/unconfigured state.
 
 export function ServiceStatusBadge({ configured, running }: { configured: boolean; running: boolean }) {
   if (running) return (

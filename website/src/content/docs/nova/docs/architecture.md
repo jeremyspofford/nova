@@ -17,7 +17,6 @@ Nova runs as a multi-service Docker Compose stack. Each service has a single res
 | **postgres** | 5432 | pgvector-enabled PostgreSQL 16 |
 | **redis** | 6379 | State, task queue (BRPOP), rate limiting, session memory |
 | **recovery** | 8888 | Backup/restore, factory reset, service management, inference backend lifecycle. Depends on postgres and Redis (db 7). |
-| **chat-bridge** | 8090 | Multi-platform chat integration (Telegram, Slack). Opt-in via `bridges` profile. |
 | **cortex** | 8100 | Autonomous brain: thinking loop, goals, drives, budget tracking |
 | **intel-worker** | 8110 | AI ecosystem feed poller (RSS, Reddit JSON, GitHub trending/releases). Health-only HTTP server; pushes to Redis queues. |
 | **knowledge-worker** | 8120 | Autonomous personal-knowledge crawler (LLM-guided web crawl, GitHub API). Opt-in via `knowledge` profile. |
@@ -36,9 +35,6 @@ dashboard ──proxy──▶ orchestrator  (/api)
           ──proxy──▶ voice-service (/voice-api)
 
 chat-api ──────────▶ orchestrator  (streaming endpoint)
-
-chat-bridge ───────▶ orchestrator  (streaming endpoint, agent API)
-            ───────▶ redis         (session mapping, db 4)
 
 orchestrator ──────▶ llm-gateway   (/complete, /stream, /embed)
              ──────▶ memory-service (/api/v1/memories/*)
@@ -89,7 +85,6 @@ Each service uses a dedicated Redis database to avoid key collisions:
 | 1 | llm-gateway |
 | 2 | orchestrator |
 | 3 | chat-api |
-| 4 | chat-bridge |
 | 5 | cortex |
 | 6 | intel-worker |
 | 7 | recovery |

@@ -1265,31 +1265,6 @@ export const reindexMemory = (sources: string[], dryRun = false, since?: string)
 export const getReindexStatus = () =>
   apiFetch<ReindexStatusResponse>('/api/v1/engrams/reindex/status')
 
-// ── Linked Accounts ──────────────────────────────────────────────────────────
-
-export interface LinkedAccount {
-  id: string
-  user_id: string
-  display_name: string
-  email: string
-  platform: string
-  platform_id: string
-  platform_username: string | null
-  linked_at: string
-}
-
-export const getLinkedAccounts = () =>
-  apiFetch<LinkedAccount[]>('/api/v1/linked-accounts')
-
-export const deleteLinkedAccount = (id: string) =>
-  apiFetch<void>(`/api/v1/linked-accounts/${id}`, { method: 'DELETE' })
-
-export const generateLinkCode = () =>
-  apiFetch<{ code: string; ttl_seconds: number }>('/api/v1/linked-accounts/link-code', { method: 'POST' })
-
-export const reloadTelegramBot = () =>
-  apiFetch<void>('/bridge-api/reload-telegram', { method: 'POST' })
-
 // ── Skills ──────────────────────────────────────────────────────────────────
 
 export const getSkills = () => apiFetch<any[]>('/api/v1/skills')

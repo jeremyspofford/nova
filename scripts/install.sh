@@ -73,7 +73,7 @@ upsert_env() {
 }
 
 # Add or remove a single token from a comma-separated list in COMPOSE_PROFILES.
-# Preserves any other tokens already present (e.g. bridges, knowledge).
+# Preserves any other tokens already present (e.g. knowledge, voice).
 compose_profiles_set() {
   local action="$1"   # add | remove
   local token="$2"
@@ -142,13 +142,6 @@ if grep -q "^CREDENTIAL_MASTER_KEY=$" "${PROJECT_ROOT}/.env" 2>/dev/null; then
   CREDENTIAL_MASTER_KEY=$(openssl rand -hex 32)
   sed -i "s/^CREDENTIAL_MASTER_KEY=$/CREDENTIAL_MASTER_KEY=${CREDENTIAL_MASTER_KEY}/" "${PROJECT_ROOT}/.env"
   echo "  Generated CREDENTIAL_MASTER_KEY"
-fi
-
-# ── Generate bridge service secret if not set ──────────────────────────────────
-if grep -q "^BRIDGE_SERVICE_SECRET=$" "${PROJECT_ROOT}/.env" 2>/dev/null; then
-  BRIDGE_SERVICE_SECRET=$(openssl rand -hex 32)
-  sed -i "s/^BRIDGE_SERVICE_SECRET=$/BRIDGE_SERVICE_SECRET=${BRIDGE_SERVICE_SECRET}/" "${PROJECT_ROOT}/.env"
-  echo "  Generated BRIDGE_SERVICE_SECRET"
 fi
 
 # ── Generate Postgres password if not set ──────────────────────────────────────

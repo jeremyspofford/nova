@@ -7,7 +7,7 @@ import re
 logger = logging.getLogger("nova.recovery.env")
 
 # Only these keys can be read/written via the API.
-# SEC-006a: secret-bearing keys (LLM provider keys, chat-bridge tokens, OAuth
+# SEC-006a: secret-bearing keys (LLM provider keys, OAuth
 # client secret, GitHub PAT for self-modification) live in `platform_secrets`
 # now and must be managed via orchestrator's /api/v1/admin/secrets, NOT here.
 # Keys that remain in this whitelist are infra/compose-time values that have
@@ -40,8 +40,8 @@ ENV_WHITELIST = {
 }
 
 # Keys whose values should be masked in GET responses. The infra tunnel tokens
-# stay in .env so they get masked here; provider keys / bridge tokens / OAuth
-# secrets / GitHub PATs are no longer reachable through this path at all.
+# stay in .env so they get masked here; provider keys / OAuth secrets /
+# GitHub PATs are no longer reachable through this path at all.
 SECRET_KEYS = {
     "CLOUDFLARE_TUNNEL_TOKEN",
     "TAILSCALE_AUTHKEY",

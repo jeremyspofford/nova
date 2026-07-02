@@ -9,7 +9,6 @@ BLOCKED_HOSTS: set[str] = {
     "llm-gateway",
     "memory-service",
     "chat-api",
-    "chat-bridge",
     "dashboard",
     "intel-worker",
     "knowledge-worker",

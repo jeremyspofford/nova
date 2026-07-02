@@ -53,14 +53,13 @@ async def _bootstrap_platform_secrets_from_env() -> None:
     from app.db import get_pool
     from app.secrets_store import get_secret, set_secret
 
-    # Full list of secret-bearing keys Nova manages — LLM providers,
-    # chat-bridge tokens, and orchestrator-internal credentials. Adding a
-    # new key here is the only place a new secret needs to be registered.
+    # Full list of secret-bearing keys Nova manages — LLM providers and
+    # orchestrator-internal credentials. Adding a new key here is the only
+    # place a new secret needs to be registered.
     BOOTSTRAP_KEYS = [
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
         "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
         "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN",
-        "TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
         "GOOGLE_CLIENT_SECRET", "NOVA_GITHUB_PAT",
     ]
 
@@ -460,7 +459,6 @@ app.add_middleware(
 
 from app.capture_router import router as capture_router
 from app.engram_router import router as engram_router
-from app.linked_accounts_router import router as linked_accounts_router
 from app.quality_router import quality_router
 from app.secrets_router import router as secrets_router
 from app.webhooks_router import router as webhooks_router
@@ -479,7 +477,6 @@ app.include_router(intel_router)
 app.include_router(knowledge_router)
 app.include_router(capabilities_router)
 app.include_router(engram_router)
-app.include_router(linked_accounts_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
 app.include_router(capture_router)

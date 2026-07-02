@@ -340,31 +340,6 @@ async def require_user(
     if not await _get_require_auth():
         return _SYNTHETIC_ADMIN
 
-    # Service-to-service impersonation (bridge)
-    service_secret = request.headers.get("X-Service-Secret", "")
-    on_behalf_of = request.headers.get("X-On-Behalf-Of", "")
-    if service_secret and on_behalf_of:
-        import hmac
-        if settings.bridge_service_secret and hmac.compare_digest(service_secret, settings.bridge_service_secret):
-            # Trusted internal service — look up the user
-            from app.db import get_pool
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT id, email, display_name, is_admin, role, tenant_id FROM users WHERE id = $1::uuid",
-                    on_behalf_of,
-                )
-            if row:
-                return AuthenticatedUser(
-                    id=str(row["id"]),
-                    email=row["email"],
-                    display_name=row.get("display_name") or "",
-                    is_admin=row.get("is_admin", False),
-                    role=row.get("role", "member"),
-                    tenant_id=str(row["tenant_id"]) if row.get("tenant_id") else "00000000-0000-0000-0000-000000000001",
-                )
-        raise HTTPException(status_code=403, detail="Invalid service credentials")
-
     # Try JWT first
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]

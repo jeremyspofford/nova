@@ -36,9 +36,6 @@ class TestBlockedServiceHostnames:
     def test_chat_api(self):
         assert validate_url("http://chat-api:8080") is not None
 
-    def test_chat_bridge(self):
-        assert validate_url("http://chat-bridge:8090") is not None
-
 
 class TestBlockedPrivateIPs:
     def test_10_network(self):

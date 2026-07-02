@@ -282,7 +282,6 @@ services:
       NOVA_ROOT: /nova
       SHELL_TIMEOUT_SECONDS: ${SHELL_TIMEOUT_SECONDS:-30}
       CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-}
-      BRIDGE_SERVICE_SECRET: ${BRIDGE_SERVICE_SECRET:-}
       HOST_HOME: ${HOME}
       NOVA_GITHUB_PAT: ${NOVA_GITHUB_PAT:-}
       NOVA_GITHUB_REPO: ${NOVA_GITHUB_REPO:-}
@@ -305,9 +304,6 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       CHATGPT_ACCESS_TOKEN: ${CHATGPT_ACCESS_TOKEN:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     # Mount the host workspace at /workspace so agents can read/write files.
     # Set NOVA_WORKSPACE in .env to point at any directory.
@@ -385,60 +381,6 @@ services:
           "python3",
           "-c",
           "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/live', timeout=3)",
-        ]
-
-  chat-bridge:
-    <<: *nova-common
-    profiles: ["bridges"]
-    build:
-      context: .
-      dockerfile: chat-bridge/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8090",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./chat-bridge/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8000
-      REDIS_URL: redis://redis:6379/4
-      NOVA_API_KEY: ${NOVA_API_KEY:-}
-      DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-auto}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
-      BRIDGE_SERVICE_SECRET: ${BRIDGE_SERVICE_SECRET:-}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-changeme}
-    ports:
-      - "8090:8090"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8090/health/live', timeout=3)",
         ]
 
   # ─────────────────────────────────────────────────────────────────────────────

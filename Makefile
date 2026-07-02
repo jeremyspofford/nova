@@ -11,7 +11,7 @@ DASHBOARD    = dashboard
 EDITOR_PROFILE := $(if $(filter vscode,$(EDITOR_FLAVOR)),--profile editor-vscode,$(if $(filter neovim,$(EDITOR_FLAVOR)),--profile editor-neovim,))
 
 COMPOSE      = docker compose -f docker-compose.yml --profile voice $(EDITOR_PROFILE)
-ALL_PROFILES = --profile voice --profile website --profile bridges --profile knowledge \
+ALL_PROFILES = --profile voice --profile website --profile knowledge \
                --profile cloudflare-tunnel --profile tailscale \
                --profile editor-vscode --profile editor-neovim
 
