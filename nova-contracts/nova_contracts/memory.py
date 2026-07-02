@@ -2,7 +2,9 @@
 Memory Provider Interface contracts — the abstract contract for any memory system.
 
 Any service implementing endpoints that accept/return these types
-is a valid drop-in memory provider for Nova's orchestrator.
+is a valid drop-in memory provider for Nova's orchestrator. The neutral
+HTTP surface lives at /api/v1/memory/* on the memory-service; backends
+(engram graph, OKF markdown bundle, external providers) plug in behind it.
 """
 from __future__ import annotations
 
@@ -22,13 +24,19 @@ class ContextRequest(BaseModel):
     depth: str = "standard"  # shallow, standard, deep
     query_embedding: list[float] | None = None  # Optional pre-computed embedding for fair benchmarking
     max_results: int = 20
+    tenant_id: str | None = None
+    # When true, the backend records surfaced items as used at retrieval time.
+    # Set by agent-driven tool retrievals (the agent explicitly asking IS the
+    # usage signal); inject-mode retrievals leave this false and send feedback
+    # post-hoc via FeedbackRequest.
+    mark_used: bool = False
 
 
 class ContextResponse(BaseModel):
     """Response from a memory provider's context retrieval."""
     context: str  # Formatted text ready for LLM injection
     total_tokens: int
-    engram_ids: list[str] = Field(default_factory=list)  # Provider-specific item IDs
+    memory_ids: list[str] = Field(default_factory=list)  # Provider-specific item IDs
     retrieval_log_id: str | None = None  # For feedback loop
     metadata: dict[str, Any] = Field(default_factory=dict)  # Provider-specific data
 
@@ -42,7 +50,9 @@ class MemoryIngestRequest(BaseModel):
     source_type: str = "chat"
     source_id: str | None = None
     session_id: str | None = None
+    occurred_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    tenant_id: str | None = None
 
 
 class MemoryIngestResponse(BaseModel):
@@ -60,6 +70,47 @@ class MarkUsedRequest(BaseModel):
     retrieval_log_id: str
     used_ids: list[str]
     session_id: str = ""
+    tenant_id: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    """Outcome feedback for a memory item — adjusts future ranking."""
+    memory_id: str
+    outcome_score: float = Field(ge=-1.0, le=1.0)  # −1 bad … +1 good
+    session_id: str = ""
+    tenant_id: str | None = None
+
+
+# ── Provenance / explainability ──────────────────────────────────────────────
+
+
+class ProvenanceResponse(BaseModel):
+    """Where a memory came from: source record for a memory_id."""
+    memory_id: str
+    source_kind: str | None = None  # chat, intel_feed, knowledge_crawl, ...
+    source_id: str | None = None
+    uri: str | None = None
+    title: str | None = None
+    author: str | None = None
+    trust_score: float | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExplainRequest(BaseModel):
+    """Ask a backend why a memory matched a query."""
+    memory_id: str
+    query: str
+    tenant_id: str | None = None
+
+
+class ExplainResponse(BaseModel):
+    """Reasoning trace — engram: activation path; markdown: matching lines."""
+    memory_id: str
+    explanation: str
+    matched_fragments: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Provider stats ───────────────────────────────────────────────────────────

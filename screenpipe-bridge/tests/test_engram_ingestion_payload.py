@@ -7,7 +7,7 @@ from app.engram_producer import EngramProducer
 from app.session_aggregator import FocusSession
 from app.tenant import DEFAULT_TENANT
 
-_TEST_QUEUE = "engram:ingestion:queue:test"
+_TEST_QUEUE = "memory:ingestion:queue:test"
 
 
 @pytest.mark.asyncio

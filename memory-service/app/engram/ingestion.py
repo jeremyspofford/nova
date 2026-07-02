@@ -2,7 +2,7 @@
 Engram ingestion worker — consumes raw events from Redis queue, decomposes
 them into engrams, resolves entities, creates edges, and stores everything.
 
-Runs as an asyncio background task on the engram:ingestion:queue.
+Runs as an asyncio background task on the memory:ingestion:queue.
 Zero impact on chat latency — all processing is async background work.
 
 Crash safety: uses BLMOVE (main → processing list) + LREM-after-success
@@ -69,20 +69,47 @@ async def _recover_processing_list(redis) -> int:
     return len(items)
 
 
+async def _dispatch_event(payload_str: str) -> None:
+    """Route a queue payload to the active memory backend.
+
+    The engram backend funnels back into _process_event (decomposition);
+    other backends (okf) get the same normalized fields.
+    """
+    from app.backends import get_backend
+
+    backend = await get_backend()
+    if backend.name == "engram":
+        # Fast path — skip the write() indirection, identical behavior.
+        await _process_event(payload_str)
+        return
+
+    event = json.loads(payload_str)
+    await backend.write(
+        event.get("raw_text", ""),
+        source_type=event.get("source_type", "chat"),
+        source_id=event.get("source_id"),
+        session_id=event.get("session_id"),
+        occurred_at=event.get("occurred_at"),
+        metadata=event.get("metadata", {}),
+        tenant_id=event.get("tenant_id"),
+    )
+
+
 async def _process_event_guarded(
     payload_str: str,
     payload_raw,
     processing_list: str,
 ) -> None:
-    """Run _process_event under the decomposition semaphore with error handling.
-    Removes the payload from the processing list on completion (success or
-    caught failure). Only uncaught crashes leave items behind for recovery."""
+    """Run one queue event under the decomposition semaphore with error
+    handling. Removes the payload from the processing list on completion
+    (success or caught failure). Only uncaught crashes leave items behind
+    for recovery."""
     redis = get_redis()
     try:
         async with _decomposition_semaphore:
-            await _process_event(payload_str)
+            await _dispatch_event(payload_str)
     except Exception:
-        log.exception("Engram ingestion failed for event: %s", payload_str[:200])
+        log.exception("Memory ingestion failed for event: %s", payload_str[:200])
     finally:
         # Even on failure, drop from processing — matches prior BRPOP behavior
         # where exceptions already discarded the payload. The reliability win

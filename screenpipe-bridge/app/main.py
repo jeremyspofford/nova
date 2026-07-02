@@ -93,7 +93,7 @@ class BridgePipeline:
         trust: float = 0.80,
         paused_check: Callable[[], bool] = lambda: False,
         producer_blocked: bool = False,
-        queue_key: str = "engram:ingestion:queue",
+        queue_key: str = "memory:ingestion:queue",
     ):
         self._redis_db0 = redis_db0
         self._denylist = Denylist(

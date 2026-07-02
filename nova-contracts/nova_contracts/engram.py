@@ -114,7 +114,7 @@ class SourceSummary(BaseModel):
 
 
 class IngestionEvent(BaseModel):
-    """Payload pushed to the engram:ingestion:queue Redis list."""
+    """Payload pushed to the memory:ingestion:queue Redis list."""
     raw_text: str
     source_type: IngestionSourceType = IngestionSourceType.chat
     source_id: UUID | None = None

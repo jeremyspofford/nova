@@ -11,7 +11,7 @@ from app.tenant import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
 
-_QUEUE_KEY = "engram:ingestion:queue"
+_QUEUE_KEY = "memory:ingestion:queue"
 
 
 class EngramProducer:

@@ -22,7 +22,7 @@ from pydantic import BaseModel
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/engrams", tags=["engrams"])
 
-QUEUE_NAME = "engram:ingestion:queue"
+QUEUE_NAME = "memory:ingestion:queue"
 
 
 # ── Redis helper ─────────────────────────────────────────────────────────────

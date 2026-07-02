@@ -131,7 +131,7 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "filesystem": [],
         "redis": [
             (0, "nova:embed:*"),
-            (0, "engram:ingestion:queue"),
+            (0, "memory:ingestion:queue"),
             (1, "nova:cache:embed:*"),
             (1, "nova:model_catalog:*"),
             (1, "nova:ratelimit:*"),

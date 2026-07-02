@@ -28,7 +28,7 @@ async def test_full_buffer_drops_newest_session():
         device_id="primary",
         trust=0.80,
         producer_blocked=True,  # test-only flag: consumer blocks forever after dequeue
-        queue_key="engram:ingestion:queue:test",  # avoid live consumer
+        queue_key="memory:ingestion:queue:test",  # avoid live consumer
     )
     await pipeline.start_consumer()
     try:

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     # pubsub-driven invalidations; not on the engram hot path).
     orchestrator_url: str = "http://orchestrator:8000"
 
+    # Memory backend selection — which storage engine serves /api/v1/memory/*.
+    # Runtime override: Redis db1 nova:config:memory.backend (dashboard-set).
+    # "engram" = pgvector graph; "okf" = OKF markdown bundle (Phase A2).
+    memory_backend: str = "engram"
+
     # LLM Gateway (for embedding generation)
     llm_gateway_url: str = "http://llm-gateway:8001"
     embedding_model: str = "nomic-embed-text"  # Ollama default
@@ -30,7 +35,7 @@ class Settings(BaseSettings):
 
     # Engram Network (Phase 1: Ingestion)
     engram_ingestion_enabled: bool = True
-    engram_ingestion_queue: str = "engram:ingestion:queue"
+    engram_ingestion_queue: str = "memory:ingestion:queue"
     engram_ingestion_batch_timeout: float = 1.0  # BRPOP timeout in seconds
     engram_decomposition_model: str = "auto"
     engram_entity_similarity_threshold: float = (

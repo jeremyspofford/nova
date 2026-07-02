@@ -27,7 +27,7 @@ async def test_paused_state_discards_sessions_with_paused_counter():
         denylist_apps=[], denylist_url_patterns=[], denylist_window_titles=[],
         buffer_size=10,
         paused_check=lambda: paused_state["paused"],
-        queue_key="engram:ingestion:queue:test_pause",
+        queue_key="memory:ingestion:queue:test_pause",
     )
     await pipeline.start_consumer()
     try:

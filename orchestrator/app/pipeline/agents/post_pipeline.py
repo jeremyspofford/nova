@@ -104,7 +104,7 @@ class MemoryExtractionAgent(BaseAgent):
                 "source_title": f"Pipeline extraction: {state.task_input[:80]}",
                 "metadata": {"extraction_type": "pipeline_memory"},
             })
-            await redis.lpush("engram:ingestion:queue", payload)
+            await redis.lpush("memory:ingestion:queue", payload)
         except Exception as e:
             logger.warning(f"Memory extraction push failed (non-fatal): {e}")
 

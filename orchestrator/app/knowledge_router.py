@@ -535,7 +535,7 @@ async def paste_content(source_id: UUID, req: PasteContentRequest, _user: UserDe
             "metadata": {"import_method": "paste"},
             "tenant_id": tenant_id,
         })
-        await redis.lpush("engram:ingestion:queue", payload)
+        await redis.lpush("memory:ingestion:queue", payload)
     except Exception as e:
         log.error("Failed to push to engram queue: %s", e)
         raise HTTPException(status_code=500, detail="Failed to submit content for ingestion")

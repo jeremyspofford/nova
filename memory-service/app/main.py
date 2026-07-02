@@ -17,6 +17,7 @@ from app.engram.ingestion import ingestion_loop
 from app.engram.neural_router.serve import load_latest_model
 from app.engram.router import engram_router
 from app.health import health_router
+from app.memory_router import memory_router
 from app.http_client import close_http_client
 from fastapi import Depends, FastAPI
 from nova_contracts.logging import configure_logging
@@ -134,6 +135,8 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
         log.warning("Shutdown grace period expired — some tasks may not have completed")
     await close_embedding_redis()
+    from app.backends import close_config_redis
+    await close_config_redis()
     await close_http_client()
     await _admin_resolver.close()
     log.info("Memory Service shutdown complete")
@@ -171,6 +174,11 @@ _admin_auth = create_admin_auth_dep(_admin_resolver)
 app.add_middleware(TrustedNetworkMiddleware, trusted_cidrs=_trusted_cidrs)
 
 app.include_router(health_router)  # open
+# Neutral backend-agnostic surface — the only API consumers should target.
+app.include_router(memory_router, dependencies=[Depends(_admin_auth)])
+# Engram-internal inspection surface (graph, consolidation log, sources).
+# Only meaningful while memory.backend=engram; stays mounted because backend
+# selection is runtime config and FastAPI routes are fixed at startup.
 app.include_router(engram_router, dependencies=[Depends(_admin_auth)])
 
 

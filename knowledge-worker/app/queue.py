@@ -7,7 +7,7 @@ from nova_worker_common.queue import (
     create_redis_client,
 )
 from nova_worker_common.queue import (
-    push_to_engram_queue as _push_engram,
+    push_to_memory_queue as _push_memory,
 )
 
 from app.config import settings
@@ -46,7 +46,7 @@ async def push_to_engram(
     metadata: dict | None = None,
 ) -> None:
     """Push content to memory-service's engram ingestion queue."""
-    await _push_engram(
+    await _push_memory(
         _redis_engram,
         raw_text=raw_text,
         source_type=source_type,

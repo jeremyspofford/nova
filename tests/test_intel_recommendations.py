@@ -108,7 +108,7 @@ def test_intel_new_items_queue_not_growing():
     """The intel:new_items queue should be empty — nothing pushes to it anymore.
 
     The push to this queue was removed from intel-worker; content flows through
-    engram:ingestion:queue (db0) instead. Any remaining items are stale dead
+    memory:ingestion:queue (db0) instead. Any remaining items are stale dead
     letters that we drain on first encounter, then verify nothing new arrives.
     """
     redis = pytest.importorskip("redis", reason="redis package not installed")

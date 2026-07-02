@@ -353,7 +353,7 @@ async def _execute_check_service_health() -> str:
         engram_redis_url = settings.redis_url.rsplit("/", 1)[0] + "/0"
         engram_redis = aioredis.from_url(engram_redis_url, decode_responses=True)
         try:
-            engram_depth = await engram_redis.llen("engram:ingestion:queue")
+            engram_depth = await engram_redis.llen("memory:ingestion:queue")
             results.append(f"  Engram ingest:  {engram_depth}")
         finally:
             await engram_redis.close()

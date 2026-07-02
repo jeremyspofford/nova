@@ -20,7 +20,7 @@ def _session() -> FocusSession:
 @pytest.mark.asyncio
 async def test_session_payloads_carry_default_tenant_id():
     """End-to-end: drive session through pipeline, pop payload from Redis, verify tenant_id."""
-    test_queue_key = "engram:ingestion:queue:test_tenant"
+    test_queue_key = "memory:ingestion:queue:test_tenant"
     redis_db0 = redis_async.from_url("redis://localhost:6379/0")
     redis_db10 = redis_async.from_url("redis://localhost:6379/10")
     await redis_db0.delete(test_queue_key)

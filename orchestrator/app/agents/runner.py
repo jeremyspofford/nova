@@ -1164,6 +1164,6 @@ async def _emit_to_engram_queue(
         if tenant_id:
             payload_dict["tenant_id"] = tenant_id
         payload = json.dumps(payload_dict)
-        await redis.lpush("engram:ingestion:queue", payload)
+        await redis.lpush("memory:ingestion:queue", payload)
     except Exception as e:
         log.warning("Failed to emit to engram queue: %s", e)

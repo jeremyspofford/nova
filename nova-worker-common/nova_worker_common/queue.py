@@ -1,4 +1,8 @@
 """Redis queue helpers for Nova worker services."""
+
+#: The memory ingestion queue (db0). All producers push here; the
+#: memory-service consumer dispatches payloads to the active backend.
+MEMORY_INGESTION_QUEUE = "memory:ingestion:queue"
 import json
 
 import redis.asyncio as aioredis
@@ -14,14 +18,14 @@ async def close_redis_client(client: aioredis.Redis) -> None:
     await client.aclose()
 
 
-async def push_to_engram_queue(
+async def push_to_memory_queue(
     redis_client: aioredis.Redis,
     raw_text: str,
     source_type: str,
     source_id: str | None = None,
     metadata: dict | None = None,
 ) -> None:
-    """JSON-encode and LPUSH a payload to the engram ingestion queue."""
+    """JSON-encode and LPUSH a payload to the memory ingestion queue."""
     payload: dict = {
         "raw_text": raw_text,
         "source_type": source_type,
@@ -30,7 +34,7 @@ async def push_to_engram_queue(
         payload["source_id"] = source_id
     if metadata is not None:
         payload["metadata"] = metadata
-    await redis_client.lpush("engram:ingestion:queue", json.dumps(payload))
+    await redis_client.lpush(MEMORY_INGESTION_QUEUE, json.dumps(payload))
 
 
 async def push_to_notification_queue(
