@@ -330,13 +330,21 @@ async def run_agent_turn_streaming(
         while not tool_queue.empty():
             yield tool_queue.get_nowait()
 
-    # Pass tools when history contains tool interactions — Anthropic requires
-    # tools= to be present whenever any message references tool_use content.
+    # Final streaming turn: we want a text answer, not another tool call.
+    # Tool rounds were already resolved above, so offering tools here lets a
+    # weak model emit yet another tool call — which streams zero text and the
+    # user sees nothing after the tool status. Anthropic's API *requires*
+    # tools= to be present whenever the message history references tool_use
+    # content, so we keep them for claude models; every other provider (local
+    # models like ollama/lmstudio, OpenAI-compatible endpoints) gets an empty
+    # tool list, forcing a text response.
+    is_anthropic = model.startswith("claude")
+    final_tools = effective_tools if (used_tools and is_anthropic) else []
     llm_client = get_llm_client()
     complete_req = CompleteRequest(
         model=model,
         messages=streaming_messages,
-        tools=effective_tools if used_tools else [],
+        tools=final_tools,
         stream=True,
         metadata={"agent_id": agent_id, "session_id": session_id},
     )
@@ -371,6 +379,38 @@ async def run_agent_turn_streaming(
                     stream_output_tokens = chunk_data["output_tokens"]
                 if chunk_data.get("cost_usd") is not None:
                     stream_cost_usd = chunk_data["cost_usd"]
+
+    # Empty-stream fallback: if the model produced no text (e.g. it tried to
+    # emit another tool call instead of answering, or returned an empty turn),
+    # do one text-only non-streaming completion so the user never gets silence
+    # after the tool status. Tools are stripped to force a textual answer.
+    if not full_response:
+        log.warning(
+            "Streaming turn produced no text (model=%s, used_tools=%s) — "
+            "falling back to a text-only completion", model, used_tools,
+        )
+        try:
+            fallback_req = CompleteRequest(
+                model=model,
+                messages=streaming_messages,
+                tools=[],
+                metadata={"agent_id": agent_id, "session_id": session_id},
+            )
+            fb = await llm_client.post("/complete", json=fallback_req.model_dump())
+            fb.raise_for_status()
+            fb_data = fb.json()
+            text = fb_data.get("content", "") or ""
+            if text:
+                full_response.append(text)
+                yield text
+                if fb_data.get("input_tokens") is not None:
+                    stream_input_tokens = fb_data["input_tokens"]
+                if fb_data.get("output_tokens") is not None:
+                    stream_output_tokens = fb_data["output_tokens"]
+                if fb_data.get("cost_usd") is not None:
+                    stream_cost_usd = fb_data["cost_usd"]
+        except Exception as e:
+            log.warning("Empty-stream fallback completion failed: %s", e)
 
     if full_response:
         await _store_exchange(agent_id, session_id, query, "".join(full_response), tenant_id=tenant_id)
