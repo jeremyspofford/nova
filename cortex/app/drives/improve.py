@@ -1,12 +1,12 @@
 """Improve drive — investigate contradictions and system improvements.
 
-Reacts to engram.contradiction stimuli and neural router readiness.
+Reacts to engram.contradiction stimuli (engram backend only) and
+self-modification opportunities.
 """
 from __future__ import annotations
 
 import logging
 
-from ..clients import get_memory
 from . import DriveContext, DriveResult
 
 log = logging.getLogger(__name__)
@@ -18,26 +18,14 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
     description_parts = []
     context = {}
 
-    # React to contradiction stimuli
+    # React to contradiction stimuli (only the engram backend emits these;
+    # the OKF markdown backend has no contradiction detection)
     if ctx:
         contradictions = ctx.stimuli_of_type("engram.contradiction")
         if contradictions:
             urgency = max(urgency, 0.4)
             description_parts.append(f"{len(contradictions)} contradictions detected")
             context["contradictions"] = [s.get("payload", {}) for s in contradictions]
-
-    # Check neural router status
-    try:
-        mem = get_memory()
-        resp = await mem.get("/api/v1/engrams/router-status", timeout=5.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("ready_for_training") and not data.get("model_loaded"):
-                urgency = max(urgency, 0.3)
-                description_parts.append("Neural router ready for training")
-                context["router_status"] = data
-    except Exception as e:
-        log.debug("Failed to check router status: %s", e)
 
     # Self-modification opportunity
     if ctx:

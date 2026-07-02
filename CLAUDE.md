@@ -12,7 +12,7 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 
 - **orchestrator** (8000) — Agent lifecycle, task queue, pipeline execution, MCP tool dispatch, DB migrations (FastAPI + asyncpg)
 - **llm-gateway** (8001) — Multi-provider model routing via LiteLLM: Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter, GitHub, Claude/ChatGPT subscription providers (FastAPI)
-- **memory-service** (8002) — Embedding + hybrid semantic/keyword retrieval via pgvector (FastAPI + SQLAlchemy async)
+- **memory-service** (8002) — Pluggable memory backend behind a neutral `/api/v1/memory/*` API. Default backend: **OKF markdown bundle** (a folder of markdown files with OKF frontmatter + BM25 retrieval). Legacy `engram` pgvector graph backend still selectable (FastAPI + SQLAlchemy async)
 - **chat-api** (8080) — WebSocket streaming bridge for external clients (FastAPI)
 - **dashboard** (3000/5173) — React admin UI (Vite dev / nginx prod)
 - **postgres** (5432) — pgvector-enabled PostgreSQL 16 (data bind-mounted to `./data/postgres/`)
@@ -21,6 +21,7 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 - **intel-worker** (8110) — AI ecosystem feed poller: RSS, Reddit JSON, page change detection, GitHub trending/releases. Pushes content via orchestrator HTTP API, queues to engram ingestion (FastAPI, health-only server)
 - **knowledge-worker** (8120) — Autonomous personal knowledge crawler: LLM-guided web crawling, GitHub API extraction, encrypted credential storage (FastAPI). Optional, start with `--profile knowledge`.
 - **voice-service** (8130) — STT/TTS provider proxy: OpenAI Whisper, OpenAI TTS, Deepgram, ElevenLabs (FastAPI). Optional, start with `--profile voice`.
+- **browser-worker** (8150) — Playwright browser automation: navigate, snapshot (numbered accessibility-tree elements), act (click/type/select), submit forms, sign up for accounts. Persistent per-domain profiles so logins survive restarts. Optional, start with `--profile browser` (Playwright image ~1.5GB).
 - **screenpipe-bridge** (8140) — Subscribes to a user-installed [screenpipe](https://screenpi.pe/) daemon (workstation-side) over WebSocket (HTTP polling fallback), aggregates raw events into 30-min-capped focus sessions, applies a two-layer privacy denylist, pushes payloads to engram ingestion queue (FastAPI + websockets + httpx + redis). Optional, requires user-installed screenpipe daemon.
 - **redis** (6379) — State, task queue (BRPOP), rate limiting, session memory (data bind-mounted to `./data/redis/`)
 
@@ -30,7 +31,7 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 
 **Quartet Pipeline:** 5-stage agent chain — Context → Task → Guardrail → Code Review → Decision. Runs via Redis BRPOP task queue with heartbeat (30s) and stale reaper (150s timeout). Pipeline code lives in `orchestrator/app/pipeline/`.
 
-**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, db4=unused (was chat-bridge), cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10.
+**Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, db4=unused (was chat-bridge), cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10, browser-worker=db11.
 
 ## Build & Run Commands
 
@@ -115,26 +116,22 @@ Additional validation:
 - API key auth: `Authorization: Bearer sk-nova-<hash>` or `X-API-Key`
 - Streaming: SSE with JSON lines
 
-## Engram Memory System
+## Memory System (pluggable backends)
 
-The old 4-tier memory (working/episodic/semantic/procedural) has been replaced by the **Engram Network** — a graph-based cognitive memory system. Code lives in `memory-service/app/engram/`.
+Memory-service exposes a **backend-agnostic API at `/api/v1/memory/*`**; the active storage engine is a runtime-config choice (`memory.backend` in Redis db1). Backends implement `MemoryBackend` (`memory-service/app/backends/base.py`): `write`, `context`, `mark_used`, `feedback`, `provenance`, `stats` (+ optional `explain`, `consolidate`, `reindex`). The factory (`app/backends/__init__.py`) resolves the backend per request.
 
-**Key components:**
+**Default backend — OKF markdown** (`app/backends/okf/`): memory is a folder of markdown files with [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) frontmatter at `${NOVA_WORKSPACE}/memory/` (bind-mounted into memory-service, so agent file tools and the backend see the same files — you can `cat`/`git` your memory).
+- `index.md` (auto-maintained root index, always injected), `log.md` (dated change log), `topics/`/`people/`/`projects/`/`preferences/<slug>.md` (concept files), `journal/YYYY-MM-DD.md` (high-volume inbox), `sources/`, `.nova/` (BM25 index + retrieval log).
+- Retrieval is BM25 over `.nova/index.json` (no embeddings, no LLM calls); self-heals on file mtime drift so direct human/agent edits are supported. Links between files are untyped graph edges. Frontmatter maps Nova provenance onto OKF core fields + `nova_*` extensions.
+- Queue producers (chat, intel, knowledge, screenpipe, cortex) append digests to the journal; a seeded **"Nightly memory curation"** cron goal (03:00) distills journals into topics. A 45-day journal-retention backstop runs in memory-service regardless of the brain.
 
-- **Ingestion** (`ingestion.py`) — Async Redis queue worker decomposes raw text into structured engrams via LLM. Backpressure via `Semaphore(5)`.
-- **Spreading Activation** (`activation.py`) — Graph traversal retrieval via recursive CTE. Seeds by cosine similarity, then spreads through weighted edges.
-- **Working Memory** (`working_memory.py`) — Five-tier slot system (pinned, sticky, refreshed, sliding, expiring) with token budgeting.
-- **Consolidation** (`consolidation.py`) — Background "sleep cycle" with 6 phases: replay, pattern extraction, Hebbian learning, contradiction resolution, pruning/merging, self-model update. Mutex-protected.
-- **Neural Router** (`neural_router/`) — Learned ML re-ranker (PyTorch). Trains on retrieval feedback after 200+ labeled observations.
-- **Outcome Feedback** (`outcome_feedback.py`) — Post-LLM scoring adjusts engram activation/importance.
+**Legacy backend — engram** (`app/backends/engram_backend.py` over `app/engram/`): pgvector graph with spreading activation, consolidation, working-memory slots, sources provenance. Still selectable (`memory.backend=engram`) but frozen — the neural router and topic clustering were removed. Its internals surface stays at `/api/v1/engrams/*` (graph, consolidation log, sources) and is only meaningful when engram is active.
 
-**API:** All endpoints at `/api/v1/engrams/` — `POST /ingest`, `POST /context` (main entry point for orchestrator), `POST /activate`, `POST /consolidate`, `GET /stats`, `GET /graph`.
+**Ingestion queue:** producers push raw text to Redis `memory:ingestion:queue` (db0); the memory-service consumer routes each payload to the active backend's `write`.
 
-**Orchestrator integration:** `run_agent_turn()` calls `POST /api/v1/engrams/context` for memory, then `POST /mark-used` for feedback. New exchanges are pushed to Redis `engram:ingestion:queue` for async decomposition.
+**Orchestrator integration:** `run_agent_turn()` calls `POST /api/v1/memory/context`; memory tool retrievals pass `mark_used=true` (the agent asking IS the usage signal).
 
-**LLM models default to "auto"** — decomposition, reconstruction, and consolidation models auto-resolve by probing the gateway for available models. Override via `ENGRAM_DECOMPOSITION_MODEL` etc. in `.env`.
-
-### Source Provenance
+### Source Provenance (engram backend)
 
 Every engram links back to a `sources` table tracking where knowledge came from. Sources store metadata (URI, title, author, trust score) and optionally full content (hybrid: DB for small <100KB, filesystem for large at `data/sources/`, URI for re-fetchable). Dedup by content hash and URI.
 
@@ -144,14 +141,16 @@ Every engram links back to a `sources` table tracking where knowledge came from.
 
 ### Memory Tools
 
-Agents can access memory via tools instead of pre-injected context:
+Agents access memory via tools on the neutral API (work on either backend):
 
-- `what_do_i_know` — lightweight domain overview (~200 tokens)
-- `search_memory` — semantic search across engrams
-- `recall_topic` — graph traversal from an entity
-- `read_source` — full source content retrieval
+- `what_do_i_know` — lightweight overview (root index on okf; domain summary on engram)
+- `search_memory` — ranked retrieval for a query
+- `recall_topic` — comprehensive recall about one entity/topic
+- `read_memory` — full content of one memory item by id
+- `read_source` — full source content (engram backend)
+- `remember` — write a durable memory (concept file / engram)
 
-Controlled by `memory_retrieval_mode` in `.env` (`inject` for legacy 40% pre-injection, `tools` for agent-driven). Default: `inject`.
+Controlled by `memory_retrieval_mode` in `.env` (`inject` for pre-injection, `tools` for agent-driven). Default: `inject`.
 
 ## Runtime Configuration (Redis)
 
@@ -159,6 +158,8 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 
 | Key | Values | Effect |
 |---|---|---|
+| `memory.backend` | `okf`, `engram` | Which memory storage engine serves `/api/v1/memory/*` (default `okf`) |
+| `memory.provider_url` | URL | Advanced: point the orchestrator at an external memory provider serving `/api/v1/memory/*` |
 | `inference.backend` | `ollama`, `vllm`, `sglang`, `lmstudio`, `custom`, `none` | Which local inference backend the gateway uses |
 | `inference.state` | `ready`, `starting`, `error`, `draining` | Whether local inference is accepting requests |
 | `inference.url` | URL | Runtime override for the local inference endpoint (Ollama/vLLM/SGLang; replaces legacy `llm.ollama_url`, which is now migrated on gateway startup) |
@@ -284,7 +285,7 @@ docker compose exec redis redis-cli -n 1 MGET nova:config:inference.backend nova
 
 # Queue depths
 docker compose exec redis redis-cli -n 2 LLEN nova:queue:tasks
-docker compose exec redis redis-cli -n 0 LLEN engram:ingestion:queue
+docker compose exec redis redis-cli -n 0 LLEN memory:ingestion:queue
 
 # Memory system health
 curl -s http://localhost:8002/api/v1/engrams/stats | python3 -m json.tool

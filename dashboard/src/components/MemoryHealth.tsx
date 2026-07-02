@@ -17,7 +17,7 @@ interface HealthData {
     last_run: string | null
     last_run_stats: { topics_created: number; engrams_merged: number; edges_pruned: number } | null
   }
-  neural_router: { models_trained: number; retrieval_observations: number; latest_model_date: string | null }
+  retrieval_observations: number
   self_improving: boolean
   issues: string[]
 }
@@ -160,9 +160,9 @@ export function MemoryHealth() {
             <p>Clusters of related memories that help Nova find the right context.</p>
           </div>
           <div>
-            <p className="text-content-tertiary uppercase font-semibold tracking-wider mb-0.5">Retrieval Quality</p>
-            <p className="text-compact text-content-primary">{h.neural_router.retrieval_observations.toLocaleString()} queries learned from</p>
-            <p>Nova trains a model to rank which memories are most relevant to your questions.</p>
+            <p className="text-content-tertiary uppercase font-semibold tracking-wider mb-0.5">Retrieval Signal</p>
+            <p className="text-compact text-content-primary">{h.retrieval_observations.toLocaleString()} retrievals logged</p>
+            <p>Nova records which memories it surfaces and which get used to improve future ranking.</p>
           </div>
           <div>
             <p className="text-content-tertiary uppercase font-semibold tracking-wider mb-0.5">Memory Connections</p>

@@ -97,20 +97,21 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
 
 
 async def react(ctx: DriveContext, result: DriveResult) -> None:
-    """If quality is regressed and a loop watches the regressed dimension, run it.
+    """If quality is regressed on a memory dimension, kick a memory reindex.
 
-    This is called by the cycle when this drive wins. Currently a stub —
-    full handler integration is deferred until the cycle's react protocol
-    is finalized for new drives. For now, the drive just signals via
-    proposed_action and the human (or future cycle integration) acts.
+    Called by the cycle when this drive wins. The retrieval_tuning loop was
+    engram-specific (neural-router tuning); under the backend-agnostic memory
+    API this reduces to asking the active backend to rebuild its retrieval
+    index (no-op for backends that don't maintain one).
     """
     weak_dims = result.context.get("weak_dimensions", [])
     if not weak_dims:
         return
     if any(d in ("memory_relevance", "memory_usage") for d in weak_dims):
-        client = get_orchestrator()
+        from ..clients import get_memory
+
         try:
-            await client.post("/api/v1/quality/loops/retrieval_tuning/run-now", timeout=10.0)
-            log.info("Quality drive: triggered retrieval_tuning loop (weak: %s)", weak_dims)
+            await get_memory().post("/api/v1/memory/reindex", timeout=30.0)
+            log.info("Quality drive: triggered memory reindex (weak: %s)", weak_dims)
         except Exception as e:
-            log.warning("Quality drive: trigger failed: %s", e)
+            log.warning("Quality drive: reindex trigger failed: %s", e)

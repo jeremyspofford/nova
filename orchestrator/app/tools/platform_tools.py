@@ -269,7 +269,6 @@ async def _execute_get_agent_info(agent_id: str) -> str:
         f"  ID:           {agent.id}\n"
         f"  Model:        {agent.config.model}\n"
         f"  Status:       {agent.status.value}\n"
-        f"  Memory tiers: {', '.join(agent.config.memory_tiers)}\n"
         f"  Max tokens:   {agent.config.max_context_tokens}\n"
         f"  Tools:        {', '.join(agent.config.tools) or 'none'}\n"
         f"  System prompt (first 200 chars): {agent.config.system_prompt[:200]}"

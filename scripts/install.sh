@@ -185,8 +185,9 @@ done
 
 # ── Inference mode selection ─────────────────────────────────────────────────
 # NOVA_INFERENCE_MODE is the user-facing knob: hybrid | local-only | cloud-only.
-# It derives COMPOSE_PROFILES (whether to ship+start bundled Ollama) and
-# LLM_ROUTING_STRATEGY (how the gateway picks providers). Settings UI can
+# It derives LLM_ROUTING_STRATEGY (how the gateway picks between your external
+# local inference server and cloud providers). Local inference is always
+# external/user-run — Nova ships no inference container. Settings UI can
 # change this later; setup.sh asks once if it's not already set.
 if [ -z "${NOVA_INFERENCE_MODE:-}" ] && [ -t 0 ] && [ "${DERIVE_MODE_ONLY}" != "true" ]; then
   echo ""

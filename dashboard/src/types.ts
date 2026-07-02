@@ -3,7 +3,6 @@ export interface AgentConfig {
   model: string
   system_prompt: string
   tools: string[]
-  memory_tiers: string[]
   max_context_tokens: number
   fallback_models: string[]
   metadata: Record<string, unknown>

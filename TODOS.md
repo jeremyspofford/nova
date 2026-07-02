@@ -2,9 +2,23 @@
 
 > Items considered and explicitly deferred. Each has enough context to pick up cold.
 
+## Priority: Browser account-signup checkpoints (from the 2026-07-02 browser-worker work)
+
+**What:** Human-in-the-loop resume for CAPTCHAs and email verification during browser-driven account signups.
+**Why:** The browser-worker (port 8150) can navigate, fill forms, and submit — but real signups hit CAPTCHAs and email verification links. `browser_submit` is MUTATE so it pauses at the capability consent gate today, but there's no flow to hand Nova a pasted verification code and resume the same browser session.
+**How:** Add a `request_human_checkpoint(reason, instructions, screenshot?)` tool that creates a pending `approval_requests` row and parks the task in a `waiting_human` status; extend `decide_approval()` / `ApprovalDecision` with a `response_text` field; have `approval_worker.py` re-enqueue the parked task with the response injected as a tool result. Dashboard `PendingApprovals.tsx` / `ApprovalCard.tsx` get a screenshot + free-text reply box.
+**Effort:** 3-4 days.
+**Added:** 2026-07-02
+
 ## Priority: Cortex Autonomy Gaps
 
 These are the gaps preventing Nova from being truly self-directed. Ordered by impact.
+
+### Maturation Pipeline Executor + Learning from Failures + Cortex Tests (B3)
+**Status:** Deferred from the 2026-07-02 OKF/actions work — the memory + browser + cleanup phases shipped first.
+**Maturation executor (2-3d):** wire `cortex/app/maturation/{triage,scoping,speccing,building,verifying}.py` into the thinking cycle so goals transition through stages instead of sitting in `triaging`.
+**Learning from failures (3d, now easier):** PLAN phase queries `/api/v1/memory/context` for `type: reflection` entries — under the OKF backend, cortex reflections already flow through the ingestion queue into the journal/topics, so this is a pure retrieval change.
+**Cortex integration tests (2d):** none exist; any refactor can silently break the loop. See detail entries below.
 
 ### Goal Decomposition
 **What:** Break high-level goals ("build a feature") into subtask DAGs instead of one monolithic blob per cycle.

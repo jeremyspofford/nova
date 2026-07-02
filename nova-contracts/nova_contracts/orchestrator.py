@@ -24,7 +24,6 @@ class AgentConfig(BaseModel):
     system_prompt: str
     model: str = "claude-sonnet-4-6"
     tools: list[str] = Field(default_factory=list)
-    memory_tiers: list[str] = Field(default_factory=lambda: ["episodic", "semantic"])
     max_context_tokens: int = 8192
     fallback_models: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
