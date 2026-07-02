@@ -144,6 +144,35 @@ async def _check_admin(
     raise HTTPException(401, "Admin authentication required")
 
 
+async def _check_admin_strict(
+    request: Request,
+    authorization: str = Header(default=""),
+    x_admin_secret: str = Header(default=""),
+):
+    """Admin check for destructive endpoints (factory reset, restore, backup
+    delete). Deliberately does NOT honor the trusted-network bypass: being on
+    localhost/LAN must not be enough to wipe the database. Anything running on
+    the host (scripts, test suites, other containers) reaches recovery over a
+    trusted network, and a data wipe is not a recoverable mistake — explicit
+    admin credentials are required every time.
+    """
+    if x_admin_secret:
+        expected = await _get_admin_secret()
+        if expected and hmac.compare_digest(x_admin_secret, expected):
+            return
+
+    if authorization and authorization.startswith("Bearer "):
+        secret = await _get_jwt_secret()
+        if secret and _verify_admin_jwt(authorization[7:], secret):
+            return
+
+    raise HTTPException(
+        401,
+        "Explicit admin credentials required for destructive operations "
+        "(trusted-network access is not sufficient)",
+    )
+
+
 # ── Health ─────────────────────────────────────────────────────────────────────
 
 @router.get("/health/live")
@@ -258,7 +287,7 @@ async def create_backup_endpoint(_: None = Depends(_check_admin)):
 @router.post("/api/v1/recovery/backups/{filename}/restore")
 async def restore_backup_endpoint(
     filename: str,
-    _: None = Depends(_check_admin),
+    _: None = Depends(_check_admin_strict),
 ):
     """Restore from a specific backup."""
     try:
@@ -272,7 +301,7 @@ async def restore_backup_endpoint(
 @router.delete("/api/v1/recovery/backups/{filename}")
 async def delete_backup_endpoint(
     filename: str,
-    _: None = Depends(_check_admin),
+    _: None = Depends(_check_admin_strict),
 ):
     """Delete a specific backup."""
     try:
@@ -318,7 +347,6 @@ async def patch_env_vars(
 PROFILE_MAP = {
     "cloudflare-tunnel": "cloudflared",
     "tailscale": "tailscale",
-    "bridges": "chat-bridge",
     "editor-vscode": "editor-vscode",
     "editor-neovim": "editor-neovim",
     # No inference profiles — local inference is external/user-run, not a
@@ -373,27 +401,6 @@ async def get_remote_access_status(_: None = Depends(_check_admin)):
             "configured": bool(env.get("TAILSCALE_AUTHKEY")),
             "container": ts_status,
         },
-    }
-
-
-# ── Chat Integrations Status ─────────────────────────────────────────────────
-
-@router.get("/api/v1/recovery/chat-integrations/status")
-async def get_chat_integrations_status(_: None = Depends(_check_admin)):
-    """Container + config status for chat bridge adapters (Telegram, Slack)."""
-    env = read_env()
-    bridge_status = check_container_status("chat-bridge")
-
-    return {
-        "telegram": {
-            "configured": bool(env.get("TELEGRAM_BOT_TOKEN")),
-            "container": bridge_status,
-        },
-        "slack": {
-            "configured": bool(env.get("SLACK_BOT_TOKEN")),
-            "container": bridge_status,
-        },
-        "container": bridge_status,
     }
 
 
@@ -470,10 +477,20 @@ class FactoryResetRequest(BaseModel):
 @router.post("/api/v1/recovery/factory-reset")
 async def factory_reset_endpoint(
     req: FactoryResetRequest,
-    _: None = Depends(_check_admin),
+    _: None = Depends(_check_admin_strict),
 ):
-    """Factory reset — wipe data categories not in the 'keep' list."""
+    """Factory reset — wipe data categories not in the 'keep' list.
+
+    Always takes a safety backup first; the reset aborts if the backup fails.
+    """
     if req.confirm != "RESET":
         raise HTTPException(400, "Confirmation required: set confirm to 'RESET'")
+    try:
+        safety_backup = await create_backup()
+    except Exception as e:
+        raise HTTPException(
+            500, f"Aborted: safety backup before reset failed: {e}"
+        )
     result = await factory_reset(keep=set(req.keep))
+    result["safety_backup"] = safety_backup
     return result
