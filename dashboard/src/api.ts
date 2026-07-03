@@ -619,12 +619,6 @@ export interface CortexDrive {
 export const getCortexStatus = () =>
   apiFetch<CortexStatus>('/cortex-api/api/v1/cortex/status')
 
-export const pauseCortex = () =>
-  apiFetch<{ status: string }>('/cortex-api/api/v1/cortex/pause', { method: 'POST' })
-
-export const resumeCortex = () =>
-  apiFetch<{ status: string }>('/cortex-api/api/v1/cortex/resume', { method: 'POST' })
-
 export const triggerGoal = (goalId: string) =>
   apiFetch<{ status: string; task_id?: string }>(`/cortex-api/api/v1/cortex/trigger/${goalId}`, { method: 'POST' })
 

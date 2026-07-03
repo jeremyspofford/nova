@@ -79,20 +79,11 @@ async def _loop() -> None:
             # Check the runtime UI toggle (features.brain_enabled). Default off
             # so a fresh install / unconfigured Nova doesn't burn LLM cycles
             # before the operator opts in via /settings#brain.
+            # features.brain_enabled is the single on/off control (Settings →
+            # Memory → Brain). Default off so a fresh install doesn't burn LLM
+            # cycles before the operator opts in.
             if not await _is_brain_enabled():
                 log.debug("Brain disabled — sleeping %ds", timeout)
-                await asyncio.sleep(timeout)
-                continue
-
-            # Check if paused
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                status = await conn.fetchval(
-                    "SELECT status FROM cortex_state WHERE id = true"
-                )
-
-            if status == "paused":
-                log.debug("Cortex paused — sleeping %ds", timeout)
                 await asyncio.sleep(timeout)
                 continue
 

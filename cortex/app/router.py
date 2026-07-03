@@ -37,28 +37,9 @@ async def get_status():
     }
 
 
-@cortex_router.post("/pause")
-async def pause():
-    """Pause autonomous operation."""
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE cortex_state SET status = 'paused', updated_at = NOW() WHERE id = true"
-        )
-    log.info("Cortex paused")
-    return {"status": "paused"}
-
-
-@cortex_router.post("/resume")
-async def resume():
-    """Resume autonomous operation."""
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE cortex_state SET status = 'running', updated_at = NOW() WHERE id = true"
-        )
-    log.info("Cortex resumed")
-    return {"status": "running"}
+# The brain's single on/off control is features.brain_enabled (Settings →
+# Memory → Brain). The old /pause + /resume endpoints (a second, orphaned
+# control with no UI) were removed — they only confused which toggle did what.
 
 
 @cortex_router.post("/trigger/{goal_id}")

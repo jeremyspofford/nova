@@ -35,6 +35,34 @@ async def close_notify_redis() -> None:
         _notify_redis = None
 
 
+_journal_ensured = False
+
+
+async def _ensure_journal_conversation(conn) -> None:
+    """Idempotently create the Cortex journal conversation.
+
+    Migration 021 seeds it once, but a data wipe clears conversations
+    (and cascades from its owner user) without re-running migrations —
+    leaving every journal write to fail the conversation FK. Owned by the
+    synthetic-admin user (seeded by the orchestrator on boot), tenant
+    Default.
+    """
+    global _journal_ensured
+    if _journal_ensured:
+        return
+    await conn.execute(
+        """
+        INSERT INTO conversations (id, title, user_id, tenant_id)
+        VALUES ($1, 'Cortex Journal',
+                '00000000-0000-0000-0000-000000000000',
+                '00000000-0000-0000-0000-000000000001')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        JOURNAL_ID,
+    )
+    _journal_ensured = True
+
+
 async def write_entry(
     content: str,
     entry_type: str = "narration",
@@ -51,6 +79,7 @@ async def write_entry(
     }
     pool = get_pool()
     async with pool.acquire() as conn:
+        await _ensure_journal_conversation(conn)
         row = await conn.fetchrow(
             """
             INSERT INTO messages (conversation_id, role, content, metadata)

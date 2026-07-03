@@ -24,8 +24,10 @@ export function BrainSection({ entries, onSave, saving }: ConfigSectionProps) {
           <div className="flex-1">
             <div className="text-body font-medium text-content-primary">Enable Brain</div>
             <p className="mt-1 text-compact text-content-tertiary">
-              When on, Cortex runs an autonomous thinking cycle in the background and the dashboard
+              The single on/off switch for Nova's autonomous brain. When on, Cortex runs its
+              thinking cycle in the background (scheduled goals fire, drives run) and the dashboard
               prefetches the engram graph so the <code>/brain</code> page renders immediately.
+              When off, Cortex does nothing and makes no model calls.
             </p>
           </div>
           <Toggle
