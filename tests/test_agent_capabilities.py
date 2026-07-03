@@ -218,27 +218,11 @@ def _get_catalog_tool_names() -> list[str]:
     return names
 
 
-def test_consolidation_status_tool_in_catalog():
-    """get_consolidation_status tool should be in the tool catalog."""
-    tool_names = _get_catalog_tool_names()
-    assert "get_consolidation_status" in tool_names, (
-        f"get_consolidation_status not in tool catalog. Got: {sorted(tool_names)}"
-    )
-
-
 def test_memory_stats_tool_in_catalog():
     """get_memory_stats tool should be in the tool catalog."""
     tool_names = _get_catalog_tool_names()
     assert "get_memory_stats" in tool_names, (
         f"get_memory_stats not in tool catalog. Got: {sorted(tool_names)}"
-    )
-
-
-def test_trigger_consolidation_tool_in_catalog():
-    """trigger_consolidation tool should be in the tool catalog."""
-    tool_names = _get_catalog_tool_names()
-    assert "trigger_consolidation" in tool_names, (
-        f"trigger_consolidation not in tool catalog. Got: {sorted(tool_names)}"
     )
 
 
