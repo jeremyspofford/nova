@@ -32,7 +32,7 @@ VALID_SOURCE_TYPES = {
 VALID_STATUSES = {"active", "paused", "error", "restricted"}
 VALID_SCOPES = {"personal", "shared"}
 
-# ── Engram Redis client (db 0 — memory-service's queue) ─────────────────────
+# ── Ingestion Redis client (db 0 — memory-service's queue) ───────────────────
 
 _ingestion_redis: aioredis.Redis | None = None
 

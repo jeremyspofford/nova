@@ -44,7 +44,7 @@ export function ScreenpipeConnectionSection({ entries, onSave, saving }: ConfigS
     <Section
       icon={Monitor}
       title="Screenpipe"
-      description="Subscribe to a workstation-side screenpipe daemon for personal screen capture context. Captured events are ingested into Nova's memory as engrams."
+      description="Subscribe to a workstation-side screenpipe daemon for personal screen capture context. Captured events are ingested into Nova's memory."
     >
       {/* Enable / disable toggle */}
       <div className="flex items-center justify-between py-2">

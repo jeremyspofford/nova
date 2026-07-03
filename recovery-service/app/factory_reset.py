@@ -97,7 +97,7 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "description": "Feed subscriptions, fetched items, recommendations",
         "default_keep": False,
         "tables": [
-            "intel_recommendation_engrams",
+            "intel_recommendation_memories",
             "intel_recommendation_sources",
             "intel_recommendations",
             "intel_content_items_archive",
@@ -142,18 +142,10 @@ CATEGORIES: dict[str, dict[str, Any]] = {
     # ── Kept by default (Tier 1 — valuable/destructive) ─────────────────────
     "memory_and_knowledge": {
         "label": "Memory & knowledge",
-        "description": "All engrams, relationships, sources (incl. blob files), working memory, consolidation/retrieval history",
+        "description": "The OKF markdown memory bundle — topics, people, projects, preferences, journal, retrieval index",
         "default_keep": True,
-        "tables": [
-            "engram_edges",
-            "working_memory_slots",
-            "retrieval_log",
-            "consolidation_log",
-            "engram_archive",
-            "engrams",
-            "sources",
-        ],
-        "filesystem": ["/app/data/sources"],
+        "tables": [],
+        "filesystem": ["/workspace/memory"],
         "redis": [],
         "backups": False,
     },

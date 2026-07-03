@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   Target,
   Globe,
-  Brain,
   Boxes,
   Code,
   Cable,
@@ -19,7 +18,6 @@ import {
   ChevronsRight,
   ChevronDown,
   Users,
-  User,
   ShieldCheck,
   ScrollText,
   Camera,
@@ -62,10 +60,8 @@ export const navSections: NavSection[] = [
   {
     label: 'Knowledge',
     items: [
-      { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest', presetVisibility: ['standard', 'advanced'] },
       { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
       { to: '/capture', label: 'Capture', icon: Camera, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
-      { to: '/profile', label: 'Profile', icon: User, minRole: 'guest' },
     ],
   },
   {
@@ -111,7 +107,6 @@ export function Sidebar({
   const { data: attentionCount = 0 } = useAttentionCount()
   const { data: approvalsCount = 0 } = useApprovalsCount()
   const { isDebug } = useDebug()
-  const brainEnabled = useFeatureFlag<boolean>('brain.enabled', true)
   const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const isActive = (to: string) => {
     return location.pathname === to
@@ -138,8 +133,7 @@ export function Sidebar({
           const visibleItems = filterNavItemsByPreset(section.items, preset)
             .filter(item =>
               hasMinRole(userRole, item.minRole) &&
-              (!item.debugOnly || isDebug) &&
-              (item.to !== '/brain' || brainEnabled)
+              (!item.debugOnly || isDebug)
             )
           if (visibleItems.length === 0) return null
           return (

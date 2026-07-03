@@ -195,7 +195,7 @@ async def restore_backup(filename: str) -> dict:
         if proc.returncode != 0:
             raise RuntimeError(f"Database restore failed: {stderr.decode()}")
 
-        # Restore filesystem source blobs (after DB so source_ref_id rows resolve)
+        # Restore the OKF memory bundle (files live outside Postgres)
         memory_restored = _restore_memory_from_archive(tmp)
 
     logger.info("Restored from backup: %s", filename)

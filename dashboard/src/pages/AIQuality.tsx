@@ -99,7 +99,7 @@ const DIMENSION_LABELS: Record<string, string> = {
 }
 
 const PROVIDER_COLORS: Record<string, { bg: string; text: string; bar: string }> = {
-  engram:   { bg: 'bg-teal-500/15',    text: 'text-teal-700 dark:text-teal-400',    bar: 'bg-teal-500' },
+  okf:      { bg: 'bg-teal-500/15',    text: 'text-teal-700 dark:text-teal-400',    bar: 'bg-teal-500' },
   pgvector: { bg: 'bg-stone-500/15',   text: 'text-stone-700 dark:text-stone-400',  bar: 'bg-stone-500' },
   mem0:     { bg: 'bg-amber-500/15',   text: 'text-amber-700 dark:text-amber-400',  bar: 'bg-amber-500' },
   markdown: { bg: 'bg-emerald-500/15', text: 'text-emerald-700 dark:text-emerald-400', bar: 'bg-emerald-500' },
@@ -502,7 +502,7 @@ function BenchmarksTab() {
                 <p className="text-caption font-medium text-content-secondary mb-2">How to run benchmarks:</p>
                 <pre className="text-mono-sm text-content-tertiary overflow-x-auto whitespace-pre-wrap">{[
                   'python -m benchmarks.benchmark \\',
-                  '  --providers "engram=http://localhost:8002" \\',
+                  '  --providers "okf=http://localhost:8002" \\',
                   '  --test-cases benchmarks/test_cases.jsonl \\',
                   `  --output benchmarks/results/benchmark-${new Date().toISOString().slice(0, 10)}.jsonl \\`,
                   '  --llm-gateway http://localhost:8001',

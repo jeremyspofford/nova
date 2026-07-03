@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { ChevronRight, ChevronDown, Activity, Brain, Terminal, Loader2, Eye } from 'lucide-react'
+import { ChevronRight, ChevronDown, Activity, Brain, Terminal, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
-import type { ActivityStep, Message, EngramSummary } from '../../stores/chat-store'
-import { EngramDetailModal } from './EngramDetailModal'
+import type { ActivityStep, Message, MemorySummary } from '../../stores/chat-store'
 
 interface Props {
   messages: Message[]
@@ -11,27 +10,8 @@ interface Props {
   onToggle: () => void
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  fact: 'Fact',
-  episode: 'Episode',
-  concept: 'Concept',
-  procedure: 'Procedure',
-  preference: 'Preference',
-  topic: 'Topic',
-}
-
-const SOURCE_BADGE: Record<string, { label: string; className: string }> = {
-  chat: { label: 'Personal', className: 'text-blue-400' },
-  consolidation: { label: 'Synthesized', className: 'text-purple-400' },
-  intel: { label: 'Intel', className: 'text-orange-400' },
-  knowledge: { label: 'Crawled', className: 'text-emerald-400' },
-  external: { label: 'External', className: 'text-slate-400' },
-  pipeline: { label: 'Pipeline', className: 'text-red-400' },
-}
-
-function EngramRow({ engram, onViewDetail }: { engram: EngramSummary; onViewDetail: (id: string) => void }) {
+function MemoryRow({ memory }: { memory: MemorySummary }) {
   const [expanded, setExpanded] = useState(false)
-  const typeLabel = TYPE_LABELS[engram.type] ?? engram.type
 
   return (
     <div className="border-t border-border-subtle/20 first:border-0">
@@ -45,41 +25,23 @@ function EngramRow({ engram, onViewDetail }: { engram: EngramSummary; onViewDeta
           : <ChevronRight size={12} className="text-content-tertiary mt-0.5 shrink-0" />
         }
         <span className="text-compact text-content-primary leading-snug flex-1 min-w-0 line-clamp-2">
-          {engram.preview || 'Untitled engram'}
-        </span>
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label="View engram details"
-          onClick={(e) => { e.stopPropagation(); onViewDetail(engram.id) }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onViewDetail(engram.id) } }}
-          className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded-xs
-                     hover:bg-surface-elevated transition-opacity duration-fast text-content-tertiary hover:text-content-secondary"
-          title="View details"
-        >
-          <Eye size={12} />
+          {memory.title || 'Untitled memory'}
         </span>
       </button>
       {expanded && (
         <div className="pl-5 pb-1.5 space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-micro font-semibold uppercase text-content-tertiary">Type</span>
-            <span className="text-micro text-content-secondary">{typeLabel}</span>
-          </div>
-          {engram.source_type && SOURCE_BADGE[engram.source_type] && (
-            <div className="flex items-center gap-2">
-              <span className="text-micro font-semibold uppercase text-content-tertiary">Source</span>
-              <span className={clsx('text-micro', SOURCE_BADGE[engram.source_type].className)}>
-                {SOURCE_BADGE[engram.source_type].label}
-              </span>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <span className="text-micro font-semibold uppercase text-content-tertiary">ID</span>
-            <span className="text-mono-sm font-mono text-content-tertiary select-all">
-              {engram.id.slice(0, 12)}
+            <span className="text-micro font-semibold uppercase text-content-tertiary">File</span>
+            <span className="text-mono-sm font-mono text-content-tertiary select-all break-all">
+              {memory.id}
             </span>
           </div>
+          {memory.score != null && (
+            <div className="flex items-center gap-2">
+              <span className="text-micro font-semibold uppercase text-content-tertiary">Score</span>
+              <span className="text-micro text-content-secondary">{memory.score.toFixed(2)}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -87,23 +49,22 @@ function EngramRow({ engram, onViewDetail }: { engram: EngramSummary; onViewDeta
 }
 
 export function ContextPanel({ messages, isStreaming, collapsed, onToggle }: Props) {
-  const [selectedEngramId, setSelectedEngramId] = useState<string | null>(null)
-
   // Extract live state from the most recent assistant message
   const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
   const steps = lastAssistant?.activitySteps ?? []
 
-  // Prefer summaries (with preview text) over bare IDs
-  const engramSummaries: EngramSummary[] = steps
+  // Memory files recalled this turn ({id, title, score}), with a bare-id
+  // fallback when the backend sent ids but no summaries.
+  const memorySummaries: MemorySummary[] = steps
     .filter(s => s.step === 'memory')
-    .flatMap(s => s.engram_summaries ?? [])
-  // Fallback: wrap bare IDs if no summaries available
-  const engramIds = steps
-    .filter(s => s.step === 'memory' && s.engram_ids?.length)
-    .flatMap(s => s.engram_ids ?? [])
-  const memoryItems: EngramSummary[] = engramSummaries.length > 0
-    ? engramSummaries
-    : engramIds.map(id => ({ id, type: 'unknown', preview: id.slice(0, 12) + '\u2026' }))
+    .flatMap(s => s.memory_summaries ?? [])
+  const memoryIds = steps
+    .filter(s => s.step === 'memory' && s.memory_ids?.length)
+    .flatMap(s => s.memory_ids ?? [])
+  const memoryItems: MemorySummary[] =
+    memorySummaries.length > 0
+      ? memorySummaries
+      : memoryIds.map(id => ({ id, title: id }))
 
   // Tool call steps — anything that isn't a built-in pipeline step
   const builtinSteps = new Set(['classifying', 'memory', 'model', 'generating'])
@@ -193,8 +154,8 @@ export function ContextPanel({ messages, isStreaming, collapsed, onToggle }: Pro
         {/* Memory Hits */}
         {memoryItems.length > 0 && (
           <ContextSection icon={Brain} title="MEMORY HITS" count={memoryItems.length}>
-            {memoryItems.slice(0, 8).map((engram) => (
-              <EngramRow key={engram.id} engram={engram} onViewDetail={setSelectedEngramId} />
+            {memoryItems.slice(0, 8).map((memory) => (
+              <MemoryRow key={memory.id} memory={memory} />
             ))}
             {memoryItems.length > 8 && (
               <div className="text-micro text-content-tertiary pt-1">
@@ -234,10 +195,6 @@ export function ContextPanel({ messages, isStreaming, collapsed, onToggle }: Pro
           </ContextSection>
         )}
       </div>
-      <EngramDetailModal
-        engramId={selectedEngramId}
-        onClose={() => setSelectedEngramId(null)}
-      />
     </aside>
   )
 }

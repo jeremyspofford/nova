@@ -6,7 +6,6 @@ import { formatDistanceToNow, parseISO } from 'date-fns'
 import {
   getCaptureSessions,
   getCaptureTodayStats,
-  getSourceContent,
   getPlatformConfig,
   updatePlatformConfig,
   testScreenpipeConnection,
@@ -170,33 +169,31 @@ function SessionViewModal({
   session: CaptureSession | null
   onClose: () => void
 }) {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['source-content', session?.id],
-    queryFn: () => getSourceContent(session!.id),
-    enabled: session !== null,
-    staleTime: 5_000,
-    retry: 1,
-  })
-
+  const meta = session?.metadata ?? {}
   return (
     <Modal
       open={session !== null}
       onClose={onClose}
       size="lg"
-      title={session?.title || session?.metadata?.window || 'Session content'}
+      title={session?.title || session?.metadata?.window || 'Session details'}
     >
-      {isLoading && (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 size={20} className="animate-spin text-content-tertiary" />
+      {session && (
+        <div className="space-y-3 text-sm text-content-secondary">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+            {Object.entries(meta).map(([k, v]) => (
+              v != null && v !== '' ? (
+                <div key={k} className="contents">
+                  <dt className="text-content-tertiary">{k}</dt>
+                  <dd className="font-mono text-xs break-all">{String(v)}</dd>
+                </div>
+              ) : null
+            ))}
+          </dl>
+          <p className="text-xs text-content-tertiary">
+            Captured text is ingested into Nova's memory journal — see the journal files under
+            your workspace memory folder for the full content.
+          </p>
         </div>
-      )}
-      {error && (
-        <p className="text-sm text-red-500">Failed to load content: {(error as Error).message}</p>
-      )}
-      {data && (
-        <pre className="text-xs text-content-secondary whitespace-pre-wrap font-mono leading-relaxed">
-          {data.content || '(no content)'}
-        </pre>
       )}
     </Modal>
   )

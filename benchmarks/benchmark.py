@@ -6,7 +6,7 @@ an LLM-as-judge, and aggregate metrics are computed for comparison.
 
 Usage:
     python -m benchmarks.benchmark \
-        --providers "engram=http://localhost:8002,pgvector=http://localhost:8003" \
+        --providers "okf=http://localhost:8002,pgvector=http://localhost:8003" \
         --test-cases benchmarks/test_cases.jsonl \
         --output results/benchmark-20260401.jsonl \
         --llm-gateway http://localhost:8001
@@ -96,8 +96,8 @@ async def query_provider(
     latency = (time.monotonic() - start) * 1000
 
     # Normalize response — providers may return different shapes.
-    # The engram API returns: {context, engram_summaries, engram_ids, ...}
-    # We extract engram_summaries as the result list, falling back to
+    # The neutral memory API returns: {context, memory_summaries, memory_ids, ...}
+    # We extract memory_summaries as the result list, falling back to
     # constructing a single result from the context string.
     results = _extract_results(data)
     return results, latency
@@ -106,15 +106,16 @@ async def query_provider(
 def _extract_results(data: dict) -> list[dict]:
     """Extract a list of scored result dicts from a provider response.
 
-    Handles the engram API shape (engram_summaries) and falls back to
-    wrapping the raw context string as a single result.
+    Handles the neutral memory API shape (memory_summaries) and falls back
+    to wrapping the raw context string as a single result.
     """
-    # Engram-style: list of engram summaries with content/score/id
-    summaries = data.get("engram_summaries", [])
+    # Neutral API: list of memory summaries with title/score/id
+    # (nested under metadata; older providers may return it top-level)
+    summaries = data.get("metadata", {}).get("memory_summaries", []) or data.get("memory_summaries", [])
     if summaries:
         return [
             {
-                "content": s.get("content", ""),
+                "content": s.get("content", s.get("title", "")),
                 "score": s.get("score", s.get("final_score", 0)),
                 "id": s.get("id", ""),
             }
@@ -291,14 +292,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  # Benchmark engram against a baseline
+  # Benchmark the OKF backend against a baseline
   python -m benchmarks.benchmark \\
-    --providers "engram=http://localhost:8002" \\
+    --providers "okf=http://localhost:8002" \\
     --test-cases benchmarks/test_cases.jsonl
 
   # Compare multiple providers
   python -m benchmarks.benchmark \\
-    --providers "engram=http://localhost:8002,pgvector=http://localhost:8003" \\
+    --providers "okf=http://localhost:8002,pgvector=http://localhost:8003" \\
     --test-cases benchmarks/test_cases.jsonl \\
     --output results/benchmark-$(date +%%Y%%m%%d).jsonl
 """,
@@ -307,7 +308,7 @@ Examples:
     parser.add_argument(
         "--providers",
         required=True,
-        help="Comma-separated name=url pairs (e.g. 'engram=http://localhost:8002')",
+        help="Comma-separated name=url pairs (e.g. 'okf=http://localhost:8002')",
     )
     parser.add_argument(
         "--test-cases",

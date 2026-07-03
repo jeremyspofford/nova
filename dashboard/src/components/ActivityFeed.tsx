@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Check, Loader2, ChevronRight } from 'lucide-react'
+import { Check, Loader2, ChevronRight, FileText, Globe } from 'lucide-react'
 import type { ActivityStep } from '../stores/chat-store'
 
 interface Props {
@@ -27,26 +27,60 @@ const stepLabels: Record<string, string> = {
 function StepRow({ step }: { step: ActivityStep }) {
   const isDone = step.state === 'done'
   const label = stepLabels[step.step] ?? step.step
+  const memHits = step.memory_summaries ?? []
+  const webSources = step.sources ?? []
 
   return (
-    <div className="flex items-center gap-1.5 py-0.5">
-      {isDone ? (
-        <Check size={12} className="text-success shrink-0" />
-      ) : (
-        <Loader2 size={12} className="text-content-tertiary animate-spin shrink-0" />
-      )}
-      <span className="text-content-secondary">
-        {label}{step.detail ? `: ${step.detail}` : ''}
-      </span>
-      {isDone && step.elapsed_ms != null && (
-        <span className="text-content-tertiary ml-auto font-mono text-mono-sm tabular-nums">
-          {(step.elapsed_ms / 1000).toFixed(1)}s
+    <div className="py-0.5">
+      <div className="flex items-center gap-1.5">
+        {isDone ? (
+          <Check size={12} className="text-success shrink-0" />
+        ) : (
+          <Loader2 size={12} className="text-content-tertiary animate-spin shrink-0" />
+        )}
+        <span className="text-content-secondary">
+          {label}{step.detail ? `: ${step.detail}` : ''}
         </span>
-      )}
-      {!isDone && step.startedAt && (
-        <span className="text-content-tertiary ml-auto font-mono text-mono-sm tabular-nums">
-          <ElapsedTimer startedAt={step.startedAt} />
-        </span>
+        {isDone && step.elapsed_ms != null && (
+          <span className="text-content-tertiary ml-auto font-mono text-mono-sm tabular-nums">
+            {(step.elapsed_ms / 1000).toFixed(1)}s
+          </span>
+        )}
+        {!isDone && step.startedAt && (
+          <span className="text-content-tertiary ml-auto font-mono text-mono-sm tabular-nums">
+            <ElapsedTimer startedAt={step.startedAt} />
+          </span>
+        )}
+      </div>
+
+      {/* Sources — memory files recalled, or web pages pulled */}
+      {(memHits.length > 0 || webSources.length > 0) && (
+        <div className="ml-[18px] mt-0.5 flex flex-col gap-0.5">
+          {memHits.map(h => (
+            <span key={h.id} className="flex items-center gap-1.5 text-content-tertiary" title={h.id}>
+              <FileText size={10} className="shrink-0 text-content-tertiary/70" />
+              <span className="truncate">{h.title}</span>
+              {h.score != null && (
+                <span className="font-mono text-mono-sm text-content-tertiary/50 tabular-nums">
+                  {h.score.toFixed(1)}
+                </span>
+              )}
+            </span>
+          ))}
+          {webSources.map((s, i) => (
+            <a
+              key={`${s.url}-${i}`}
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-content-tertiary hover:text-accent transition-colors"
+              title={s.url}
+            >
+              <Globe size={10} className="shrink-0 text-content-tertiary/70" />
+              <span className="truncate underline decoration-content-tertiary/30 underline-offset-2">{s.title}</span>
+            </a>
+          ))}
+        </div>
       )}
     </div>
   )

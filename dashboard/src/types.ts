@@ -160,17 +160,3 @@ export interface Pod {
   active_agent_count?: number
   agents?: PodAgent[]
 }
-
-export interface EngramDetail {
-  id: string
-  type: string
-  content: string
-  activation: number
-  importance: number
-  access_count: number
-  confidence: number
-  source_type: string
-  superseded: boolean
-  created_at: string | null
-  source_ref_id: string | null
-}

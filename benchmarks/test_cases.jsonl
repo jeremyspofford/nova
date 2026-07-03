@@ -1,5 +1,5 @@
 {"query": "What database does Nova use for memory storage?", "query_type": "factual", "context": "technical question about Nova's architecture"}
-{"query": "How does the engram ingestion pipeline work?", "query_type": "factual", "context": "specific system component question"}
+{"query": "How does the memory ingestion pipeline work?", "query_type": "factual", "context": "specific system component question"}
 {"query": "What ports do the Nova services run on?", "query_type": "factual", "context": "deployment and configuration recall"}
 {"query": "What does Jeremy prefer for infrastructure-as-code?", "query_type": "preference", "context": "user preference recall"}
 {"query": "Which LLM providers has the user configured?", "query_type": "preference", "context": "personal configuration recall"}

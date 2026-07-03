@@ -4,7 +4,6 @@ import {
   MessageSquare,
   ListTodo,
   Target,
-  Brain,
   Ellipsis,
   X,
   Globe,
@@ -37,7 +36,6 @@ const primaryTabs: NavItem[] = [
   { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
   { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
   { to: '/goals', label: 'Goals', icon: Target, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
-  { to: '/brain', label: 'Brain', icon: Brain, minRole: 'guest', presetVisibility: ['standard', 'advanced'] },
 ]
 
 const moreItems: { label?: string; items: NavItem[] }[] = [
@@ -73,7 +71,6 @@ export function MobileNav() {
   const location = useLocation()
   const { user, authConfig } = useAuth()
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
-  const brainEnabled = useFeatureFlag<boolean>('brain.enabled', true)
   const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const { hidden } = useMobileNav()
 
@@ -87,9 +84,7 @@ export function MobileNav() {
   )
 
   const visibleTabs = filterNavItemsByPreset(primaryTabs, preset)
-    .filter(tab =>
-      hasMinRole(userRole, tab.minRole) && (tab.to !== '/brain' || brainEnabled)
-    )
+    .filter(tab => hasMinRole(userRole, tab.minRole))
 
   return (
     <>

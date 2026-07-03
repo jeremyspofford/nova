@@ -99,10 +99,8 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
 async def react(ctx: DriveContext, result: DriveResult) -> None:
     """If quality is regressed on a memory dimension, kick a memory reindex.
 
-    Called by the cycle when this drive wins. The retrieval_tuning loop was
-    engram-specific (neural-router tuning); under the backend-agnostic memory
-    API this reduces to asking the active backend to rebuild its retrieval
-    index (no-op for backends that don't maintain one).
+    Called by the cycle when this drive wins. Asks the active backend to
+    rebuild its retrieval index (no-op for backends that don't maintain one).
     """
     weak_dims = result.context.get("weak_dimensions", [])
     if not weak_dims:

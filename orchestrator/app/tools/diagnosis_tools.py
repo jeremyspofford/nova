@@ -52,7 +52,7 @@ DIAGNOSIS_TOOLS: list[ToolDefinition] = [
         description=(
             "Check the health of all Nova services (orchestrator, llm-gateway, "
             "memory-service, chat-api, cortex, recovery) and Redis queue depths "
-            "(task queue, dead letter, engram ingestion). Use this to determine "
+            "(task queue, dead letter, memory ingestion). Use this to determine "
             "if a failure is caused by a service being down or queues backing up."
         ),
         parameters={"type": "object", "properties": {}, "required": []},
@@ -345,20 +345,20 @@ async def _execute_check_service_health() -> str:
     except Exception as e:
         results.append(f"  Task queue:     ERROR ({e})")
 
-    # Engram ingestion queue lives in db0 (memory-service's Redis)
+    # Memory ingestion queue lives in db0 (memory-service's Redis)
     try:
         import redis.asyncio as aioredis
         from app.config import settings
-        # Engram queue is in db0, derive URL from orchestrator's db2 URL
-        engram_redis_url = settings.redis_url.rsplit("/", 1)[0] + "/0"
-        engram_redis = aioredis.from_url(engram_redis_url, decode_responses=True)
+        # Ingestion queue is in db0, derive URL from orchestrator's db2 URL
+        ingest_redis_url = settings.redis_url.rsplit("/", 1)[0] + "/0"
+        ingest_redis = aioredis.from_url(ingest_redis_url, decode_responses=True)
         try:
-            engram_depth = await engram_redis.llen("memory:ingestion:queue")
-            results.append(f"  Engram ingest:  {engram_depth}")
+            ingest_depth = await ingest_redis.llen("memory:ingestion:queue")
+            results.append(f"  Memory ingest:  {ingest_depth}")
         finally:
-            await engram_redis.close()
+            await ingest_redis.close()
     except Exception as e:
-        results.append(f"  Engram ingest:  ERROR ({e})")
+        results.append(f"  Memory ingest:  ERROR ({e})")
 
     return "\n".join(results)
 

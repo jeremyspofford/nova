@@ -90,7 +90,7 @@ export function SourceCard({ source }: Props) {
 
   const isPaused = source.status === 'paused'
   const isError = source.status === 'error'
-  const engramCount = (source.last_crawl_summary?.engrams_created as number) ?? null
+  const memoryCount = (source.last_crawl_summary?.engrams_created as number) ?? null
 
   return (
     <>
@@ -137,8 +137,8 @@ export function SourceCard({ source }: Props) {
                     Crawled {formatDistanceToNow(new Date(source.last_crawl_at), { addSuffix: true })}
                   </span>
                 )}
-                {engramCount !== null && (
-                  <span>{engramCount} engrams</span>
+                {memoryCount !== null && (
+                  <span>{memoryCount} memories</span>
                 )}
                 {source.error_count > 0 && (
                   <span className="inline-flex items-center gap-1 text-danger">

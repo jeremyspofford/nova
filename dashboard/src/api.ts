@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentSession, ApiKey, CodeReviewVerdict, EngramDetail, GuardrailFinding, OAIModel, PipelineTask, Pod, PodAgent, UsageEvent } from './types'
+import type { AgentInfo, AgentSession, ApiKey, CodeReviewVerdict, GuardrailFinding, OAIModel, PipelineTask, Pod, PodAgent, UsageEvent } from './types'
 
 // Admin secret is stored in localStorage so you can change it without
 // rebuilding the dashboard. Falls back to empty string when unset — setup.sh
@@ -323,12 +323,17 @@ export interface StreamMeta {
   category?: string
 }
 
-/** Activity step emitted during processing (before content deltas). */
-export interface EngramSummary {
-  id: string
-  type: string
-  preview: string
-  source_type?: string
+/** A memory file Nova recalled (OKF markdown backend). */
+export interface MemorySummary {
+  id: string        // bundle-relative path, e.g. "topics/gpu-setup.md"
+  title: string
+  score?: number
+}
+
+/** A web source Nova pulled from a search/fetch. */
+export interface WebSource {
+  title: string
+  url: string
 }
 
 export interface ActivityStep {
@@ -338,7 +343,9 @@ export interface ActivityStep {
   elapsed_ms?: number
   model?: string
   category?: string | null
-  engram_summaries?: EngramSummary[]
+  memory_ids?: string[]               // ids of memories recalled by the memory step
+  memory_summaries?: MemorySummary[]  // files recalled by the memory step
+  sources?: WebSource[]               // URLs a web_search/web_fetch returned
 }
 
 export type StreamEvent =
@@ -1065,7 +1072,7 @@ export interface IntelRecommendation {
   implementation_plan: string | null
   goal_id: string | null
   sources?: IntelContentItem[]
-  engrams?: { engram_id: string; activation_score: number }[]
+  memories?: { memory_id: string }[]
   comments?: Comment[]
   source_count?: number
   memory_count?: number
@@ -1228,55 +1235,25 @@ export const deleteKnowledgeCredential = (id: string) =>
 export const getKnowledgeStats = () =>
   apiFetch<KnowledgeStats>('/api/v1/knowledge/stats')
 
-export interface DomainSummary {
-  source_count: number
-  engram_count: number
-  by_kind: Record<string, { count: number; stale_count: number }>
-  domains: string[]
-  recent_sources: { title: string; kind: string }[]
-  gaps: { title: string; kind: string; coverage: string | null }[]
-  stale_sources: { title: string; kind: string }[]
+// ── Memory items (neutral /api/v1/memory API) ──────────────────────────────
+
+export interface MemoryItem {
+  memory_id: string
+  content: string
+  metadata?: Record<string, unknown>
 }
 
-export const getDomainSummary = () =>
-  apiFetch<DomainSummary>('/mem/api/v1/engrams/sources/domain-summary')
-
-export const getEngramDetail = (engramId: string) =>
-  apiFetch<EngramDetail>(`/mem/api/v1/engrams/engrams/${engramId}`)
-
-export const deleteEngram = (engramId: string) =>
-  apiFetch<void>(`/mem/api/v1/engrams/engrams/${engramId}`, { method: 'DELETE' })
-
-// ── Engram Reindex ──────────────────────────────────────────────────────────
+export const getMemoryItem = (memoryId: string) =>
+  apiFetch<MemoryItem>(`/mem/api/v1/memory/item/${memoryId}`)
 
 export interface ReindexResponse {
   status: string
-  queued: Record<string, number>
-  total: number
-  dry_run: boolean
-  message: string
+  backend?: string
+  reindexed?: number
 }
 
-export interface ReindexStatusResponse {
-  queue_depth: number
-  total_queued: number
-  processed: number
-  progress_pct: number
-  engram_count: number | null
-  active: boolean
-  sources: string[]
-  started_at: string | null
-  message: string
-}
-
-export const reindexMemory = (sources: string[], dryRun = false, since?: string) =>
-  apiFetch<ReindexResponse>('/api/v1/engrams/reindex', {
-    method: 'POST',
-    body: JSON.stringify({ sources, dry_run: dryRun, ...(since ? { since } : {}) }),
-  })
-
-export const getReindexStatus = () =>
-  apiFetch<ReindexStatusResponse>('/api/v1/engrams/reindex/status')
+export const reindexMemory = () =>
+  apiFetch<ReindexResponse>('/mem/api/v1/memory/reindex', { method: 'POST' })
 
 // ── Skills ──────────────────────────────────────────────────────────────────
 
@@ -1654,10 +1631,6 @@ export async function getCaptureSessions(limit = 50): Promise<{ sessions: Captur
 
 export async function getCaptureTodayStats(): Promise<CaptureTodayStats> {
   return apiFetch<CaptureTodayStats>('/api/v1/capture/today-stats')
-}
-
-export async function getSourceContent(id: string): Promise<{ content: string; title?: string }> {
-  return apiFetch<{ content: string; title?: string }>(`/mem/api/v1/engrams/sources/${id}/content`)
 }
 
 export type ExcludeScope = 'app' | 'url_pattern' | 'window_title'

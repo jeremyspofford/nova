@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Brain, ChevronRight, Globe, HeartPulse, Lightbulb, Plus, Rss, Users } from 'lucide-react'
-import clsx from 'clsx'
-import { getKnowledgeSources, getKnowledgeStats, getIntelStats, getIntelRecommendations, updateRecommendation, getDomainSummary, type KnowledgeSource, type IntelRecommendation } from '../api'
+import { ChevronRight, Globe, Lightbulb, Plus, Rss, Users } from 'lucide-react'
+import { getKnowledgeSources, getKnowledgeStats, getIntelStats, getIntelRecommendations, updateRecommendation, type KnowledgeSource, type IntelRecommendation } from '../api'
 import { useTabHash } from '../hooks/useTabHash'
 import { useToast } from '../components/ToastProvider'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -14,25 +13,22 @@ import { CredentialManager } from '../components/sources/CredentialManager'
 import { FeedStatusBar } from '../components/intel/FeedStatusBar'
 import { FeedManagerModal } from '../components/intel/FeedManagerModal'
 import { RecommendationCard } from '../components/intel/RecommendationCard'
-import { MemoryHealth } from '../components/MemoryHealth'
 
-type SourceTab = 'health' | 'personal' | 'feeds' | 'shared' | 'recommendations'
+type SourceTab = 'personal' | 'feeds' | 'shared' | 'recommendations'
 
 const SOURCE_TABS: { id: SourceTab; label: string; icon: typeof Globe }[] = [
   { id: 'personal', label: 'Personal', icon: Globe },
   { id: 'feeds', label: 'Feeds', icon: Rss },
   { id: 'shared', label: 'Shared', icon: Users },
   { id: 'recommendations', label: 'Recommendations', icon: Lightbulb },
-  { id: 'health', label: 'Health', icon: HeartPulse },
 ]
 
 const HELP_ENTRIES = [
-  { term: 'Memory Health', definition: 'Live diagnostics showing whether the memory system is self-improving: outcome feedback, activation decay, Hebbian learning, consolidation, and neural router training.' },
-  { term: 'Personal Sources', definition: 'Websites, GitHub profiles, and docs you want Nova to learn from. Crawled automatically and stored as engram memories.' },
+  { term: 'Personal Sources', definition: 'Websites, GitHub profiles, and docs you want Nova to learn from. Crawled automatically and ingested into Nova\'s memory.' },
   { term: 'Feeds', definition: 'RSS, Hacker News, Reddit, or GitHub sources that Nova monitors for new content and grades as recommendations.' },
   { term: 'Shared Sources', definition: 'Knowledge sources visible to all users. Admin-managed.' },
   { term: 'Credentials', definition: 'API tokens and keys used to authenticate with private sources (e.g., GitHub PATs for private repos).' },
-  { term: 'Crawl', definition: 'Fetches the source URL, extracts content, and decomposes it into engram memories.' },
+  { term: 'Crawl', definition: 'Fetches the source URL, extracts relevant content, and ingests it into Nova\'s memory.' },
   { term: 'Intelligence', definition: 'Automated feed scanning that discovers relevant tools, libraries, and techniques, then grades them for Nova\'s use.' },
   { term: 'Grade', definition: 'A = strong recommendation (high confidence), B = worth considering, C = low confidence or niche.' },
   { term: 'Approve', definition: 'Mark a recommendation for implementation. Nova may create a goal from it.' },
@@ -40,7 +36,7 @@ const HELP_ENTRIES = [
 ]
 
 export function Sources() {
-  const [activeTab, setActiveTab] = useTabHash<SourceTab>('personal', ['health', 'personal', 'feeds', 'shared', 'recommendations'])
+  const [activeTab, setActiveTab] = useTabHash<SourceTab>('personal', ['personal', 'feeds', 'shared', 'recommendations'])
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [feedManagerOpen, setFeedManagerOpen] = useState(false)
 
@@ -55,12 +51,6 @@ export function Sources() {
     queryKey: ['intel-stats'],
     queryFn: getIntelStats,
     staleTime: 30_000,
-  })
-
-  const { data: domainSummary } = useQuery({
-    queryKey: ['domain-summary'],
-    queryFn: getDomainSummary,
-    staleTime: 60_000,
   })
 
   const { data: pendingRecs = [] } = useQuery({
@@ -83,7 +73,6 @@ export function Sources() {
         description="Knowledge sources and intelligence feeds powering Nova's memory"
         helpEntries={HELP_ENTRIES}
         actions={
-          activeTab === 'health' ? undefined :
           activeTab === 'feeds' || activeTab === 'recommendations' ? (
             <Button
               variant="secondary"
@@ -126,7 +115,6 @@ export function Sources() {
       />
 
       {/* Tab content */}
-      {activeTab === 'health' && <MemoryHealth />}
       {activeTab === 'personal' && (
         <PersonalTab onAddSource={() => setAddModalOpen(true)} />
       )}
@@ -140,68 +128,40 @@ export function Sources() {
         <RecommendationsTab onManageFeeds={() => setFeedManagerOpen(true)} />
       )}
 
-      {/* Domain summary */}
-      {domainSummary && domainSummary.domains.length > 0 ? (
-        <Card className={clsx(
-          'p-5 relative overflow-hidden',
-          'border-accent/20 shadow-[0_0_20px_rgba(25,168,158,0.08)]',
-        )}>
-          <div className="flex items-start gap-3 mb-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-accent/15 text-accent shrink-0">
-              <Brain size={20} />
-            </div>
-            <div>
-              <p className="text-compact font-semibold text-content-primary">
-                Nova knows about
-              </p>
-              <p className="text-caption text-content-tertiary">
-                <span className="font-mono text-content-secondary">{domainSummary.engram_count.toLocaleString()}</span> memories from{' '}
-                <span className="font-mono text-content-secondary">{domainSummary.source_count}</span> sources
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {domainSummary.domains.map(domain => (
-              <Badge key={domain} color="accent" size="sm">{domain}</Badge>
-            ))}
-          </div>
-        </Card>
+      {/* Stats row */}
+      {statsLoading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="p-4">
+              <Skeleton lines={2} />
+            </Card>
+          ))}
+        </div>
       ) : (
-        /* Stats row fallback when no domain data */
-        statsLoading ? (
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Card key={i} className="p-4">
-                <Skeleton lines={2} />
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            <Card className="p-4">
-              <Metric
-                label="Total Sources"
-                value={totalSources}
-                icon={<Globe size={12} />}
-                tooltip="Knowledge sources plus active intel feeds."
-              />
-            </Card>
-            <Card className="p-4">
-              <Metric
-                label="Active"
-                value={activeSources}
-                tooltip="Sources and feeds currently being monitored."
-              />
-            </Card>
-            <Card className="p-4">
-              <Metric
-                label="Credentials"
-                value={totalCredentials}
-                tooltip="Stored authentication tokens for private sources."
-              />
-            </Card>
-          </div>
-        )
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <Card className="p-4">
+            <Metric
+              label="Total Sources"
+              value={totalSources}
+              icon={<Globe size={12} />}
+              tooltip="Knowledge sources plus active intel feeds."
+            />
+          </Card>
+          <Card className="p-4">
+            <Metric
+              label="Active"
+              value={activeSources}
+              tooltip="Sources and feeds currently being monitored."
+            />
+          </Card>
+          <Card className="p-4">
+            <Metric
+              label="Credentials"
+              value={totalCredentials}
+              tooltip="Stored authentication tokens for private sources."
+            />
+          </Card>
+        </div>
       )}
 
       {/* Credentials section */}

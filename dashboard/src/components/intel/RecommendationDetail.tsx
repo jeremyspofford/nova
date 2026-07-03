@@ -136,19 +136,18 @@ export function RecommendationDetail({ id, onStatusChange }: Props) {
       )}
 
       {/* Related Memories */}
-      {rec.engrams && rec.engrams.length > 0 && (
+      {rec.memories && rec.memories.length > 0 && (
         <div>
           <div className="text-caption font-semibold text-content-primary uppercase tracking-wide mb-2">
-            Related Memories ({rec.engrams.length})
+            Related Memories ({rec.memories.length})
           </div>
           <div className="flex flex-wrap gap-2">
-            {rec.engrams.map(eg => (
+            {rec.memories.map(m => (
               <span
-                key={eg.engram_id}
+                key={m.memory_id}
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-elevated text-micro font-mono text-content-secondary"
               >
-                {eg.engram_id.slice(0, 8)}
-                <span className="text-content-tertiary">({eg.activation_score.toFixed(2)})</span>
+                {m.memory_id}
               </span>
             ))}
           </div>

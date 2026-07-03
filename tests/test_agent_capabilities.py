@@ -131,22 +131,24 @@ class TestMemoryToolsAccessibility:
     async def test_search_memory_endpoint(self, memory):
         """POST /context (main memory retrieval) should be functional."""
         resp = await memory.post(
-            "http://localhost:8002/api/v1/engrams/context",
-            json={"query": "nova-test-memory-search", "max_results": 3},
+            "http://localhost:8002/api/v1/memory/context",
+            json={"query": "nova-test-memory-search"},
         )
         assert resp.status_code == 200
 
-    async def test_domain_overview_endpoint(self, memory):
-        """what_do_i_know tool calls domain-summary — verify it works."""
-        resp = await memory.get("http://localhost:8002/api/v1/engrams/sources/domain-summary")
+    async def test_overview_endpoint(self, memory):
+        """what_do_i_know tool sends an empty-query /context — verify it works."""
+        resp = await memory.post(
+            "http://localhost:8002/api/v1/memory/context",
+            json={"query": ""},
+        )
         assert resp.status_code == 200
-        data = resp.json()
-        assert "source_count" in data
 
-    async def test_engram_stats(self, memory):
-        """Stats endpoint should return engram count for self-monitoring."""
-        resp = await memory.get("http://localhost:8002/api/v1/engrams/stats")
+    async def test_memory_stats(self, memory):
+        """Stats endpoint should return item count for self-monitoring."""
+        resp = await memory.get("http://localhost:8002/api/v1/memory/stats")
         assert resp.status_code == 200
+        assert "total_items" in resp.json()
 
 
 class TestIntelRecommendationPipeline:

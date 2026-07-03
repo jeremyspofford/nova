@@ -92,7 +92,7 @@ class MemoryExtractionAgent(BaseAgent):
         except json.JSONDecodeError:
             result = {"summary": content}
 
-        # Push to engram ingestion queue
+        # Push to the memory ingestion queue
         try:
             from app.store import get_redis
             redis = get_redis()

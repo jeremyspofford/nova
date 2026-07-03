@@ -12,4 +12,4 @@
       expect_memory_match: true
       min_cosine: 0.6
     instruction_adherence:
-      rubric: "Response identifies Go as the current preference, not Python (the newer engram should win)"
+      rubric: "Response identifies Go as the current preference, not Python (the newer memory should win)"

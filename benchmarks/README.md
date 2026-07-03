@@ -16,22 +16,22 @@ Metrics are broken down by query type (factual, preference, multi_session, tempo
 ## Running
 
 ```bash
-# Single provider (engram baseline)
+# Single provider (okf baseline)
 python -m benchmarks.benchmark \
-  --providers "engram=http://localhost:8002" \
+  --providers "okf=http://localhost:8002" \
   --test-cases benchmarks/test_cases.jsonl \
   --llm-gateway http://localhost:8001
 
 # Multiple providers
 python -m benchmarks.benchmark \
-  --providers "engram=http://localhost:8002,pgvector=http://localhost:8003,mem0=http://localhost:8004" \
+  --providers "okf=http://localhost:8002,pgvector=http://localhost:8003,mem0=http://localhost:8004" \
   --test-cases benchmarks/test_cases.jsonl \
   --output results/benchmark-$(date +%Y%m%d).jsonl \
   --llm-gateway http://localhost:8001
 
 # With options
 python -m benchmarks.benchmark \
-  --providers "engram=http://localhost:8002" \
+  --providers "okf=http://localhost:8002" \
   --test-cases benchmarks/test_cases.jsonl \
   --judge-model claude-haiku-4-5-20251001 \
   --top-k 5 \
@@ -71,7 +71,7 @@ The runner prints a comparison table to stdout and optionally writes detailed JS
 MEMORY BENCHMARK RESULTS
 ======================================================================
 
-Metric                    engram        pgvector
+Metric                    okf           pgvector
 ----------------------------------------------------
 precision_at_5            0.7200          0.4800
 mrr                       0.8500          0.6000
@@ -82,8 +82,8 @@ total_tokens               1200             1200
 Each line in the output JSONL is either a per-case result or a provider summary:
 
 ```json
-{"provider": "engram", "query": "...", "query_type": "factual", "results_count": 5, "precision_at_5": 0.6, "mrr": 1.0, "latency_ms": 142, "tokens_used": 0, "scores": [3, 2, 1, 0, 0]}
-{"type": "summary", "provider": "engram", "precision_at_5": 0.72, "mrr": 0.85, "avg_latency_ms": 156, "total_tokens": 1200, "by_query_type": {"factual": {"precision_at_5": 0.8, "mrr": 1.0, "avg_latency_ms": 130.0, "n": 3}}}
+{"provider": "okf", "query": "...", "query_type": "factual", "results_count": 5, "precision_at_5": 0.6, "mrr": 1.0, "latency_ms": 142, "tokens_used": 0, "scores": [3, 2, 1, 0, 0]}
+{"type": "summary", "provider": "okf", "precision_at_5": 0.72, "mrr": 0.85, "avg_latency_ms": 156, "total_tokens": 1200, "by_query_type": {"factual": {"precision_at_5": 0.8, "mrr": 1.0, "avg_latency_ms": 130.0, "n": 3}}}
 ```
 
 ## Provider API Contract
@@ -91,7 +91,7 @@ Each line in the output JSONL is either a per-case result or a provider summary:
 Providers must expose `POST /api/v1/memory/context` accepting `{"query": "..."}`.
 
 The harness handles multiple response shapes:
-- **Engram-style**: `{engram_summaries: [{content, score, id}], ...}`
+- **Neutral memory API**: `{memory_summaries: [{title, score, id}], ...}`
 - **Generic**: `{results: [{content, score, id}]}`
 - **Fallback**: `{context: "..."}` (single result, no per-chunk scoring)
 

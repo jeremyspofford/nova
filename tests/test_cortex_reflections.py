@@ -12,7 +12,6 @@ import requests
 
 BASE = "http://localhost:8000/api/v1"
 CORTEX = "http://localhost:8100/api/v1/cortex"
-MEM = "http://localhost:8002/api/v1/engrams"
 
 
 @pytest.fixture

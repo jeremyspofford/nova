@@ -29,12 +29,10 @@ import { Sources } from './pages/Sources'
 import { Recovery } from './pages/Recovery'
 import { About } from './pages/About'
 import { AIQuality } from './pages/AIQuality'
-import { UserProfile } from './pages/UserProfile'
 import { Users } from './pages/Users'
 import { Invite } from './pages/Invite'
 import { Expired } from './pages/Expired'
 import Friction from './pages/Friction'
-import Brain from './pages/Brain'
 import CapturePage from './pages/CapturePage'
 import MeetingsPlaceholder from './pages/capture/MeetingsPlaceholder'
 import JournalsPlaceholder from './pages/capture/JournalsPlaceholder'
@@ -154,7 +152,7 @@ function MobileGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-/** Singleton notification listener — extracted from AppLayout to avoid duplicates with Brain keep-alive */
+/** Singleton notification listener — one instance for the whole app */
 function NotificationListener() {
   const qc = useQueryClient()
   const { addToast } = useToast()
@@ -182,74 +180,8 @@ function NotificationListener() {
   return null
 }
 
-/** Brain feature toggle — read from platform_config (default false).
- *  Gates the autonomous thinking loop AND the dashboard's graph prefetch
- *  + 3D keep-alive. Toggle lives in /settings#brain. */
-function useBrainEnabled(): boolean {
-  const { data } = useQuery<{ value: unknown } | null>({
-    queryKey: ['features.brain_enabled'],
-    queryFn: async () => {
-      try {
-        return await apiFetch('/api/v1/config/features.brain_enabled')
-      } catch {
-        return null
-      }
-    },
-    staleTime: 30_000,
-  })
-  return data?.value === true || data?.value === 'true'
-}
-
-/** Prefetch Brain graph data so it's cached before user navigates to /brain.
- *  Skipped entirely when brain is disabled — the engram graph query is one of
- *  the heavier reads in the dashboard (up to 500 nodes by default). */
-function BrainPrefetcher() {
-  const enabled = useBrainEnabled()
-  useEffect(() => {
-    if (!enabled) return
-    queryClient.prefetchQuery({
-      queryKey: ['engram-stats'],
-      queryFn: () => apiFetch('/mem/api/v1/engrams/stats'),
-      staleTime: 30_000,
-    })
-    queryClient.prefetchQuery({
-      queryKey: ['brain-graph', 500, false],
-      queryFn: () => apiFetch('/mem/api/v1/engrams/graph/lightweight?max_nodes=500'),
-      staleTime: 30_000,
-    })
-  }, [enabled])
-  return null
-}
-
-/** Tiny CTA shown at /brain when the feature is off — opens settings. */
-function BrainDisabledCTA() {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
-      <div className="max-w-md text-center space-y-4 p-8">
-        <h1 className="text-2xl font-semibold text-content-primary">Brain is disabled</h1>
-        <p className="text-content-tertiary text-sm leading-relaxed">
-          The autonomous thinking loop and 3D engram graph are turned off to save resources.
-          Enable them in Settings — note that the graph can significantly slow the dashboard
-          on lower-spec hardware.
-        </p>
-        <a
-          href="/settings#brain"
-          className="inline-block px-4 py-2 text-sm font-medium rounded bg-accent text-white hover:opacity-90"
-        >
-          Open Brain settings
-        </a>
-      </div>
-    </div>
-  )
-}
-
-/** Routes + Brain keep-alive — must be inside BrowserRouter */
+/** Routes — must be inside BrowserRouter */
 function RoutedContent() {
-  const location = useLocation()
-  const isMobile = useIsMobile()
-  const isBrainRoute = location.pathname === '/brain'
-  const brainEnabled = useBrainEnabled()
-
   return (
     <>
       <Routes>
@@ -262,16 +194,6 @@ function RoutedContent() {
 
         {/* Routes WITH sidebar */}
         <Route path="/" element={<HomeRoute />} />
-        {/* Brain: mobile redirects to chat. Desktop: keep-alive renders the canvas if enabled,
-            else show a CTA that points to settings. */}
-        <Route
-          path="/brain"
-          element={
-            isMobile
-              ? <Navigate to="/chat" replace />
-              : (brainEnabled ? null : <BrainDisabledCTA />)
-          }
-        />
         <Route path="/chat" element={<AppLayout fullWidth><ErrorBoundary><Chat /></ErrorBoundary></AppLayout>} />
         <Route path="/tasks" element={<MobileGuard><AppLayout><ErrorBoundary><Tasks /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/friction" element={<MobileGuard><AppLayout><ErrorBoundary><Friction /></ErrorBoundary></AppLayout></MobileGuard>} />
@@ -292,11 +214,12 @@ function RoutedContent() {
         <Route path="/settings" element={<MobileGuard><AppLayout><ErrorBoundary><Settings /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/recovery" element={<MobileGuard><AppLayout><ErrorBoundary><Recovery /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/ai-quality" element={<MobileGuard><AppLayout><ErrorBoundary><AIQuality /></ErrorBoundary></AppLayout></MobileGuard>} />
-        <Route path="/profile" element={<MobileGuard><AppLayout><ErrorBoundary><UserProfile /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/about" element={<MobileGuard><AppLayout><ErrorBoundary><About /></ErrorBoundary></AppLayout></MobileGuard>} />
 
         {/* Redirects for old routes */}
         <Route path="/intelligence" element={<Navigate to="/sources#recommendations" replace />} />
+        <Route path="/brain" element={<Navigate to="/goals" replace />} />
+        <Route path="/profile" element={<Navigate to="/settings" replace />} />
         <Route path="/mcp" element={<Navigate to="/integrations" replace />} />
         <Route path="/agents" element={<Navigate to="/integrations#agents" replace />} />
         <Route path="/keys" element={<Navigate to="/settings#keys" replace />} />
@@ -305,22 +228,6 @@ function RoutedContent() {
         <Route path="/rules" element={<Navigate to="/settings#behavior" replace />} />
         <Route path="/benchmarks" element={<Navigate to="/ai-quality" replace />} />
       </Routes>
-
-      {/* Brain canvas — lazy-mount only when on /brain route. Avoids holding a
-          1665×1949 WebGL context resident on every dashboard page. Trade-off: first
-          /brain visit pays the full mount cost (~6s headless / 30–60s on real GPU
-          via WSL2 + 2000-node graph). Default node count was reduced to 500 in
-          Brain.tsx — the existing selector lets users opt up.
-          See docs/perf/2026-05-07-startup-performance-findings.md */}
-      {isBrainRoute && brainEnabled && !isMobile && (
-        <div className="fixed inset-0 z-[5]">
-          <AppLayout fullWidth>
-            <ErrorBoundary>
-              <Brain hidden={false} />
-            </ErrorBoundary>
-          </AppLayout>
-        </div>
-      )}
     </>
   )
 }
@@ -355,7 +262,6 @@ function AppShell() {
     <BrowserRouter>
       <CommandPalette />
       <NotificationListener />
-      <BrainPrefetcher />
       <RoutedContent />
     </BrowserRouter>
     </ChatProvider>

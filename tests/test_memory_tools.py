@@ -16,7 +16,7 @@ async def test_active_backend_reported():
     async with httpx.AsyncClient(timeout=10) as c:
         resp = await c.get(f"{MEM}/api/v1/memory/backend", headers=_HDRS)
         assert resp.status_code == 200
-        assert resp.json().get("backend") in ("okf", "engram")
+        assert resp.json().get("backend") == "okf"
 
 
 @pytest.mark.asyncio

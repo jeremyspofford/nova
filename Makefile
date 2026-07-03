@@ -77,8 +77,9 @@ test-quick: ## Smoke test (health endpoints only)
 	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
 	  pytest -v --tb=short -k "health"
 
-benchmark-quality: ## Run AI quality benchmark suite
-	python -m benchmarks.quality.runner
+benchmark-quality: ## Kick off the in-process AI quality benchmark (requires services running)
+	@curl -sf -X POST -H "X-Admin-Secret: $${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}" \
+	  http://localhost:8000/api/v1/quality/benchmarks/run | python3 -m json.tool
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)

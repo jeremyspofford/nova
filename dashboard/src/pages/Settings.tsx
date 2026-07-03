@@ -41,10 +41,7 @@ import { AdminSecretSection } from './settings/AdminSecretSection'
 import { VaultwardenSection } from './settings/VaultwardenSection'
 import { SelfModSection } from './settings/SelfModSection'
 import { GoalCreationSection } from './settings/GoalCreationSection'
-import { SelfModelSection } from './settings/SelfModelSection'
-import { ConsolidationSection } from './settings/ConsolidationSection'
 import { MaintenanceSection } from './settings/MaintenanceSection'
-import { EngramSourcesSection } from './settings/EngramSourcesSection'
 import { MemoryProviderSection } from './settings/MemoryProviderSection'
 import { BrainSection } from './settings/BrainSection'
 import EditorSection from './settings/EditorSection'
@@ -124,11 +121,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Brain,
     items: [
       { id: 'brain', label: 'Brain', icon: Brain },
-      { id: 'memory-provider', label: 'Memory Provider', icon: Database },
-      { id: 'self-model', label: 'Self-Model', icon: Brain },
-      { id: 'engram-sources', label: 'Engram Sources', icon: Database },
+      { id: 'memory-provider', label: 'Memory', icon: Database },
       { id: 'maintenance', label: 'Maintenance', icon: Wrench },
-      { id: 'consolidation', label: 'Consolidation', icon: GitMerge },
     ],
   },
   {
@@ -732,27 +726,9 @@ export function Settings() {
           </div>
         )}
 
-        {show('self-model') && (
-          <div id="self-model">
-            <SelfModelSection />
-          </div>
-        )}
-
-        {show('engram-sources') && (
-          <div id="engram-sources">
-            <EngramSourcesSection />
-          </div>
-        )}
-
         {show('maintenance') && (
           <div id="maintenance">
             <MaintenanceSection />
-          </div>
-        )}
-
-        {show('consolidation') && (
-          <div id="consolidation">
-            <ConsolidationSection />
           </div>
         )}
 

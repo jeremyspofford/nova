@@ -24,38 +24,37 @@ def admin_headers() -> dict[str, str]:
     return {"X-Admin-Secret": "nova-admin-secret-change-me"}
 
 
-class TestEngramBatchEndpoint:
-    """POST /api/v1/engrams/batch returns engram content by ID list."""
+class TestMemoryItemEndpoint:
+    """GET /api/v1/memory/item/{id} returns full item content (quality scorer path)."""
 
-    async def test_batch_empty_ids(self, memory_client: httpx.AsyncClient):
-        r = await memory_client.post("/api/v1/engrams/batch", json={"ids": []})
-        assert r.status_code == 200
-        assert r.json() == []
+    async def test_item_nonexistent_returns_404(self, memory_client: httpx.AsyncClient):
+        r = await memory_client.get("/api/v1/memory/item/topics/nova-test-does-not-exist.md")
+        assert r.status_code == 404
 
-    async def test_batch_nonexistent_ids(self, memory_client: httpx.AsyncClient):
-        fake_id = "00000000-0000-0000-0000-000000000099"
-        r = await memory_client.post("/api/v1/engrams/batch", json={"ids": [fake_id]})
-        assert r.status_code == 200
-        assert r.json() == []
-
-    async def test_batch_returns_content(self, memory_client: httpx.AsyncClient):
-        """Ingest an engram, then fetch it via batch endpoint."""
-        ingest_r = await memory_client.post("/api/v1/engrams/ingest", json={
+    async def test_item_roundtrip(self, memory_client: httpx.AsyncClient):
+        """Ingest a memory as a concept file, fetch it by id, then delete it."""
+        ingest_r = await memory_client.post("/api/v1/memory/ingest", json={
             "raw_text": "nova-test-quality: Python is my favorite language",
             "source_type": "chat",
+            "metadata": {"okf": {
+                "type": "note",
+                "title": "nova-test-quality item",
+                "target": "topics/nova-test-quality-item.md",
+            }},
         })
         assert ingest_r.status_code == 201
-        engram_ids = ingest_r.json().get("engram_ids", [])
-        if not engram_ids:
-            pytest.skip("Ingest did not return engram_ids (async decomposition)")
+        item_ids = ingest_r.json().get("item_ids", [])
+        assert item_ids, "Ingest must return item_ids"
 
-        r = await memory_client.post("/api/v1/engrams/batch", json={"ids": engram_ids})
-        assert r.status_code == 200
-        results = r.json()
-        assert len(results) > 0
-        assert "id" in results[0]
-        assert "content" in results[0]
-        assert "node_type" in results[0]
+        try:
+            r = await memory_client.get(f"/api/v1/memory/item/{item_ids[0]}")
+            assert r.status_code == 200
+            item = r.json()
+            assert item["memory_id"] == item_ids[0]
+            assert "Python is my favorite language" in item["content"]
+        finally:
+            d = await memory_client.delete(f"/api/v1/memory/item/{item_ids[0]}")
+            assert d.status_code in (204, 404)
 
 
 class TestQualityAPI:

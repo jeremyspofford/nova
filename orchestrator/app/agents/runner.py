@@ -45,6 +45,46 @@ _CITATION_LINK_RE = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
 _REPLAY_CHUNK = 48
 _REPLAY_DELAY_S = 0.015
 
+# web_search/web_fetch results are formatted as "N. Title\n   https://url\n ...".
+# This pulls (title, url) pairs so the UI can show where data came from.
+_SOURCE_TITLE_RE = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
+_SOURCE_URL_RE = re.compile(r"https?://[^\s)]+")
+
+
+def _extract_web_sources(result: str, limit: int = 8) -> list[dict]:
+    """Parse (title, url) pairs from a web tool's formatted result text."""
+    if not result:
+        return []
+    sources: list[dict] = []
+    lines = result.split("\n")
+    for i, line in enumerate(lines):
+        m = _SOURCE_TITLE_RE.match(line)
+        if not m:
+            continue
+        title = m.group(1).strip()
+        # URL is usually on the next line (or on the title line itself).
+        url = None
+        for probe in (line, lines[i + 1] if i + 1 < len(lines) else ""):
+            um = _SOURCE_URL_RE.search(probe)
+            if um:
+                url = um.group(0).rstrip(".,)")
+                break
+        if url:
+            sources.append({"title": title[:120] or url, "url": url})
+        if len(sources) >= limit:
+            break
+    # Fallback: a plain list of URLs with no numbered titles (e.g. web_fetch).
+    if not sources:
+        seen = set()
+        for um in _SOURCE_URL_RE.finditer(result):
+            u = um.group(0).rstrip(".,)")
+            if u not in seen:
+                seen.add(u)
+                sources.append({"title": u, "url": u})
+            if len(sources) >= limit:
+                break
+    return sources
+
 
 async def run_agent_turn(
     agent_id: str,
@@ -1113,7 +1153,14 @@ async def _run_tool_loop(
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
             if on_tool_status:
-                await on_tool_status({"step": tc["name"], "state": "done", "detail": args_summary or tc["name"], "elapsed_ms": elapsed_ms})
+                done_status = {"step": tc["name"], "state": "done", "detail": args_summary or tc["name"], "elapsed_ms": elapsed_ms}
+                # Surface the web sources a search/fetch pulled so the user can
+                # see (and click) where the answer's data came from.
+                if tc["name"] in ("web_search", "web_fetch"):
+                    sources = _extract_web_sources(result)
+                    if sources:
+                        done_status["sources"] = sources
+                await on_tool_status(done_status)
 
             current.append(Message(
                 role="tool",

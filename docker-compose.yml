@@ -421,9 +421,9 @@ services:
       - ./.env:/project/.env:rw
       - ./docker-compose.yml:/project/docker-compose.yml:ro
       - ./data:/app/data:ro
-      # Sources filesystem blobs need rw for restore (overlays the :ro parent mount above).
-      # Scoped to just data/sources rather than widening the whole /app/data mount.
-      - ./data/sources:/app/data/sources:rw
+      # OKF memory bundle needs rw so backup can capture it and restore/factory
+      # reset can write it — memory lives in files, not Postgres.
+      - ${NOVA_WORKSPACE:-${HOME}/.nova/workspace}/memory:/workspace/memory:rw
       # Friction-log screenshots need rw so factory reset can clear them (PRIV-003).
       - ./data/friction-screenshots:/app/data/friction-screenshots:rw
     ports:
