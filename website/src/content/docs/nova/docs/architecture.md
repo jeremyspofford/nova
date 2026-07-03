@@ -21,7 +21,7 @@ Nova runs as a multi-service Docker Compose stack. Each service has a single res
 | **intel-worker** | 8110 | AI ecosystem feed poller (RSS, Reddit JSON, GitHub trending/releases). Health-only HTTP server; pushes to Redis queues. |
 | **knowledge-worker** | 8120 | Autonomous personal-knowledge crawler (LLM-guided web crawl, GitHub API). Opt-in via `knowledge` profile. |
 | **voice-service** | 8130 | STT/TTS provider proxy (OpenAI Whisper, Deepgram, ElevenLabs). Opt-in via `voice` profile. |
-| **ollama** | 11434 | Bundled local model serving (only active when `NOVA_INFERENCE_MODE=hybrid` or `local-only`). |
+| **ollama / vllm / sglang / llamacpp** | 11434 / 8005 / 30000 / 8180 | Bundled local inference (opt-in compose profiles `inference-*`, managed from Settings → Local Inference). |
 
 ## Inter-service communication
 

@@ -39,7 +39,7 @@ The `./install` wizard will:
 
 When it finishes, open **<http://localhost:3000>** for the dashboard.
 
-You can change inference mode, point at an external Ollama / vLLM instance, and manage cloud provider keys later via **Settings → AI & Models** — no scripts.
+You can change inference mode, start/stop bundled inference containers (Ollama, vLLM, SGLang, llama.cpp), point at an external server, and manage cloud provider keys later via **Settings → AI & Models** — no scripts.
 
 ---
 
@@ -50,14 +50,14 @@ You can change inference mode, point at an external Ollama / vLLM instance, and 
 | dashboard | 3000 | React admin UI |
 | orchestrator | 8000 | Agent lifecycle, tool dispatch, session state, pipeline queue, MCP |
 | llm-gateway | 8001 | Model routing — Anthropic, OpenAI, Ollama, Groq, Gemini, Cerebras, OpenRouter |
-| memory-service | 8002 | Embedding + Engram graph retrieval via pgvector |
+| memory-service | 8002 | Markdown memory (OKF frontmatter + BM25 retrieval) |
 | chat-api | 8080 | WebSocket streaming for external clients |
 | cortex | 8100 | Autonomous brain: thinking loop, goals, drives, budget tracking |
 | intel-worker | 8110 | AI ecosystem feed poller (RSS, Reddit, GitHub trending) |
-| voice-service | 8130 | STT/TTS proxy (OpenAI, Deepgram, ElevenLabs) — optional |
+| voice-service | 8130 | STT/TTS proxy (OpenAI) — optional |
 | recovery | 8888 | Backup/restore, factory reset, service management |
-| ollama | 11434 | Bundled local model serving (hybrid / local-only modes only) |
-| postgres | 5432 | pgvector/pg16 — agents, tasks, pods, platform config, engrams |
+| ollama | 11434 | Bundled local model serving (optional profile; vLLM/SGLang/llama.cpp also available) |
+| postgres | 5432 | pgvector/pg16 — agents, tasks, pods, platform config |
 | redis | 6379 | Agent state, task queue, rate limiting, runtime config |
 
 Full architecture detail: <https://arialabs.ai/nova/docs/architecture>.

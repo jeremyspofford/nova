@@ -1,5 +1,12 @@
 # Bundle Ollama by Default Implementation Plan
 
+> **SUPERSEDED (2026-07-03):** Bundled inference returned in a different shape — four
+> compose-profile services (`inference-ollama`, `inference-vllm`, `inference-sglang`,
+> `inference-llamacpp`) with a `docker-compose.gpu.yml` overlay, managed by the recovery
+> service (Settings → Local Inference). The `local-ollama` profile described below never
+> shipped in this form. See `docker-compose.yml` and
+> `website/src/content/docs/nova/docs/inference-backends.md` for the current design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship Nova with a bundled Ollama service that starts by default in `hybrid` and `local-only` modes (cloud-only mode skips it entirely), so a fresh `make dev` runs the full agent pipeline against local AI without any external setup — and users who don't want local inference don't pay for the image pull.

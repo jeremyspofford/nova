@@ -40,8 +40,8 @@ export const features: Feature[] = [
     description: 'Optional screenpipe-bridge ingests your screen activity into Nova\'s memory with a privacy denylist (apps, URL patterns, window titles) and pause-without-disconnect.',
   },
   {
-    title: 'Engram Memory',
-    description: 'Graph-based associative memory with spreading activation, sleep-cycle consolidation, neural reranking, and source provenance. Bounded query plans verified by 200+ unit tests.',
+    title: 'Markdown Memory',
+    description: 'Memory as a folder of markdown files with OKF frontmatter — human-readable, git-trackable, BM25 retrieval with no embeddings required. Edit it with any editor; the index self-heals.',
   },
   {
     title: 'MCP Tool Ecosystem',

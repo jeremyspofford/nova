@@ -1,6 +1,6 @@
 ---
 title: "Inference Backends"
-description: "How Nova manages local inference backends -- Ollama, vLLM, SGLang, and LM Studio -- with automatic lifecycle management, hardware detection, and one-click switching."
+description: "How Nova manages local inference -- bundled Ollama, vLLM, SGLang, and llama.cpp containers, plus external servers like LM Studio -- with hardware detection and one-click switching."
 ---
 
 Nova manages local inference backend lifecycle for you. Select a backend from the dashboard, and Nova handles pulling the container image, starting it with the right GPU flags, health monitoring, and graceful switching -- no manual Docker Compose profile editing required.
@@ -52,12 +52,24 @@ SGLang caches these in a radix tree -- subsequent requests skip re-computing att
 | **Coding sessions (multiple concurrent)** | vLLM or SGLang | Long contexts + concurrent requests need batching |
 
 :::note
-llama.cpp is not a managed backend but can still be used as a custom OpenAI-compatible endpoint. For CPU-only deployments, Ollama is the recommended managed option.
+llama.cpp ships as a bundled backend (`inference-llamacpp`), serving a GGUF file from `LLAMACPP_MODELS_DIR`. For CPU-only deployments, Ollama remains the easiest option.
 :::
 
 ## Managed backends
 
-Nova manages three backends -- **Ollama**, **vLLM**, and **SGLang**. Only one local backend runs at a time. Each backend is defined as a Docker Compose service with a profile, and the recovery service manages its lifecycle.
+Nova bundles four backends -- **Ollama**, **vLLM**, **SGLang**, and **llama.cpp**. Each is a Docker Compose service behind a profile (`inference-ollama`, `inference-vllm`, `inference-sglang`, `inference-llamacpp`), and the recovery service manages its lifecycle. Several containers can be warm at once; `inference.backend` picks the one the gateway routes to, so switching between running backends is instant.
+
+Model storage is configurable so you can reuse existing model stores instead of re-downloading:
+
+| Backend | Env var | Default | Container mount |
+|---|---|---|---|
+| Ollama | `OLLAMA_MODELS_DIR` | `./data/models/ollama` | `/root/.ollama` (point at `~/.ollama` to reuse) |
+| vLLM / SGLang | `HF_CACHE_DIR` | `./data/models/hf` | HuggingFace cache (point at `~/.cache/huggingface`) |
+| llama.cpp | `LLAMACPP_MODELS_DIR` + `LLAMACPP_MODEL` | `./data/models/gguf` | `/models` (GGUF files) |
+
+GPU access comes from the `docker-compose.gpu.yml` overlay, activated with `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` in `.env`. The installer writes this line only after positive NVIDIA detection (it hard-fails `docker compose up` on hosts without nvidia-container-toolkit — recovery is deleting the line). vLLM and SGLang starts are refused on CPU-only hosts; Ollama and llama.cpp run fine on CPU.
+
+LM Studio is a desktop app and **Custom** is any OpenAI-compatible URL — both stay external-only (no container).
 
 | Backend | Profile | Container | Port | Status |
 |---------|---------|-----------|------|--------|
