@@ -1,20 +1,25 @@
-"""API routes for inference backend selection + status.
+"""API routes for inference backend selection, bundled lifecycle, and status.
 
-Nova is a client of external inference servers — there is no container to
-start/stop or model to swap. These routes record which backend is selected,
-report its live reachability (via the gateway), and expose host hardware as an
-advisory (what the machine could comfortably run).
+Backends come in two flavors:
+  * bundled — Nova starts/stops an inference container (compose profile)
+  * external — a user-run server reached over HTTP at a configured URL
+
+These routes start/stop bundled containers, record which backend the gateway
+routes to, report live reachability, and expose host hardware as an advisory.
 """
 import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.inference.controller import (
+    bundled_containers_status,
     clear_backend,
     get_backend_status,
     select_backend,
+    start_bundled_backend,
+    stop_bundled_backend,
 )
 from app.inference.hardware import (
     detect_hardware,
@@ -30,14 +35,18 @@ router = APIRouter(prefix="/api/v1/recovery/inference", tags=["inference"])
 
 RECOMMENDED_MODELS_PATH = Path("/app/data/recommended_models.json")
 
-# Supported external inference server types, for the Settings UI to offer. Each
-# is reached over HTTP at a user-provided URL — Nova never launches them.
+# Supported inference server types, for the Settings UI to offer. `bundled`
+# means Nova can also run it as a compose-profile container; every backend can
+# alternatively be an external, user-run server reached over HTTP. LM Studio is
+# a desktop app and "openai" is a URL to any OpenAI-compatible endpoint — both
+# external-only. `gpu_required` gates bundled starts on CPU-only hosts.
 SUPPORTED_BACKENDS = [
-    {"name": "ollama", "label": "Ollama", "kind": "ollama-api", "default_port": 11434},
-    {"name": "lmstudio", "label": "LM Studio", "kind": "openai", "default_port": 1234},
-    {"name": "vllm", "label": "vLLM", "kind": "openai", "default_port": 8000},
-    {"name": "sglang", "label": "SGLang", "kind": "openai", "default_port": 30000},
-    {"name": "openai", "label": "OpenAI-compatible", "kind": "openai", "default_port": None},
+    {"name": "ollama", "label": "Ollama", "kind": "ollama-api", "default_port": 11434, "bundled": True, "gpu_required": False},
+    {"name": "llamacpp", "label": "llama.cpp", "kind": "openai", "default_port": 8080, "bundled": True, "gpu_required": False},
+    {"name": "vllm", "label": "vLLM", "kind": "openai", "default_port": 8000, "bundled": True, "gpu_required": True},
+    {"name": "sglang", "label": "SGLang", "kind": "openai", "default_port": 30000, "bundled": True, "gpu_required": True},
+    {"name": "lmstudio", "label": "LM Studio", "kind": "openai", "default_port": 1234, "bundled": False, "gpu_required": False},
+    {"name": "openai", "label": "OpenAI-compatible", "kind": "openai", "default_port": None, "bundled": False, "gpu_required": False},
 ]
 
 
@@ -78,7 +87,7 @@ async def get_inference_backend(_: None = Depends(_check_admin)):
 
 @router.get("/backends")
 async def list_inference_backends(_: None = Depends(_check_admin)):
-    """List the supported external inference server types the UI can offer."""
+    """List the supported inference server types the UI can offer."""
     return SUPPORTED_BACKENDS
 
 
@@ -90,9 +99,38 @@ async def stop_inference_backend(_: None = Depends(_check_admin)):
 
 @router.post("/backend/{backend_name}/start", status_code=202)
 async def start_inference_backend(backend_name: str, _: None = Depends(_check_admin)):
-    """Select an inference backend. Nova does not launch it — the user runs the
-    server; this records the choice and the gateway routes to it."""
+    """Select which backend the gateway routes to. For external servers this
+    just records the choice; a running bundled container is routed to directly."""
     return await select_backend(backend_name)
+
+
+# ── Bundled container lifecycle ───────────────────────────────────────────────
+
+
+@router.get("/bundled")
+async def list_bundled_containers(_: None = Depends(_check_admin)):
+    """Container + health status of every bundled inference backend
+    (multiple may be warm at once; `active` marks the one the gateway uses)."""
+    return await bundled_containers_status()
+
+
+@router.post("/bundled/{backend_name}/start", status_code=202)
+async def start_bundled_container(backend_name: str, _: None = Depends(_check_admin)):
+    """Start a bundled inference container and route the gateway to it.
+    Returns 400 on CPU-only hosts for GPU-required backends (vllm/sglang)."""
+    result = await start_bundled_backend(backend_name)
+    if result.get("ok") is False:
+        raise HTTPException(400, result.get("error", "start failed"))
+    return result
+
+
+@router.post("/bundled/{backend_name}/stop")
+async def stop_bundled_container(backend_name: str, _: None = Depends(_check_admin)):
+    """Stop and remove a bundled inference container; clears its routing URL."""
+    result = await stop_bundled_backend(backend_name)
+    if result.get("ok") is False:
+        raise HTTPException(400, result.get("error", "stop failed"))
+    return result
 
 
 @router.get("/models/recommended")

@@ -420,6 +420,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./.env:/project/.env:rw
       - ./docker-compose.yml:/project/docker-compose.yml:ro
+      - ./docker-compose.gpu.yml:/project/docker-compose.gpu.yml:ro
       - ./data:/app/data:ro
       # OKF memory bundle needs rw so backup can capture it and restore/factory
       # reset can write it — memory lives in files, not Postgres.
@@ -737,6 +738,86 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://localhost:8140/health/live', timeout=3)",
         ]
+
+  # ── Bundled Local Inference (optional; multiple may run at once) ────────────
+  # Started/stopped by the recovery service (Settings → Local Inference) or by
+  # adding profiles to COMPOSE_PROFILES (e.g. inference-ollama). The gateway
+  # reaches them via in-network DNS (http://ollama:11434, http://vllm:8000,
+  # http://sglang:30000, http://llamacpp:8080) written to Redis inference.url.
+  # GPU access comes from the docker-compose.gpu.yml overlay
+  # (COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml).
+  # Core services must never depends_on these.
+  ollama:
+    <<: *nova-common
+    image: ollama/ollama:latest
+    profiles: ["inference-ollama"]
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+    volumes:
+      - ${OLLAMA_MODELS_DIR:-./data/models/ollama}:/root/.ollama
+    ports:
+      # Host-published so `ollama` CLI on the host can pull/list models.
+      # Collides with a host-run Ollama — the installer warns and external
+      # mode should be used instead in that case.
+      - "${OLLAMA_BIND:-127.0.0.1:}11434:11434"
+    healthcheck:
+      <<: *nova-healthcheck
+      test: ["CMD", "ollama", "list"]
+
+  vllm:
+    <<: *nova-common
+    image: vllm/vllm-openai:latest
+    profiles: ["inference-vllm"]
+    ipc: host
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${HF_CACHE_DIR:-./data/models/hf}:/root/.cache/huggingface
+    ports:
+      - "${VLLM_BIND:-127.0.0.1:}8005:8000"
+
+  sglang:
+    <<: *nova-common
+    image: lmsysorg/sglang:latest
+    profiles: ["inference-sglang"]
+    ipc: host
+    command:
+      - "python3"
+      - "-m"
+      - "sglang.launch_server"
+      - "--model-path"
+      - "${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "30000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${HF_CACHE_DIR:-./data/models/hf}:/root/.cache/huggingface
+    ports:
+      - "${SGLANG_BIND:-127.0.0.1:}30000:30000"
+
+  llamacpp:
+    <<: *nova-common
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["inference-llamacpp"]
+    command:
+      - "-m"
+      - "/models/${LLAMACPP_MODEL:-model.gguf}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+    volumes:
+      - ${LLAMACPP_MODELS_DIR:-./data/models/gguf}:/models
+    ports:
+      - "${LLAMACPP_BIND:-127.0.0.1:}8180:8080"
 
   # ── Vaultwarden (optional secrets manager) ──────────────────────────────────
   vaultwarden:

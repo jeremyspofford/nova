@@ -349,8 +349,13 @@ PROFILE_MAP = {
     "tailscale": "tailscale",
     "editor-vscode": "editor-vscode",
     "editor-neovim": "editor-neovim",
-    # No inference profiles — local inference is external/user-run, not a
-    # bundled compose service the dashboard can start/stop.
+    # Bundled inference containers. Prefer the dedicated
+    # /api/v1/recovery/inference/bundled/* routes, which also manage the
+    # gateway routing URL — this generic path only handles the container.
+    "inference-ollama": "ollama",
+    "inference-vllm": "vllm",
+    "inference-sglang": "sglang",
+    "inference-llamacpp": "llamacpp",
 }
 
 

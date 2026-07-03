@@ -240,6 +240,26 @@ export interface BackendStatus {
 export const getBackendStatus = () =>
   recoveryFetch<BackendStatus>('/api/v1/recovery/inference/backend')
 
+// ── Bundled inference containers ─────────────────────────────────────────────
+
+export interface BundledBackend {
+  backend: string
+  container_status: string | null
+  healthy: boolean
+  base_url: string
+  active: boolean
+  gpu_required: boolean
+}
+
+export const getBundledBackends = () =>
+  recoveryFetch<BundledBackend[]>('/api/v1/recovery/inference/bundled')
+
+export const startBundledBackend = (name: string) =>
+  recoveryFetch<BundledBackend>(`/api/v1/recovery/inference/bundled/${name}/start`, { method: 'POST' })
+
+export const stopBundledBackend = (name: string) =>
+  recoveryFetch<{ ok: boolean }>(`/api/v1/recovery/inference/bundled/${name}/stop`, { method: 'POST' })
+
 export interface HardwareInfo {
   gpus: Array<{ vendor: string; model: string; vram_gb: number; index: number }>
   docker_gpu_runtime: string | null

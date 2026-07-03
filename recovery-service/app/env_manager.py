@@ -18,16 +18,21 @@ ENV_WHITELIST = {
     "TAILSCALE_AUTHKEY",
     # Compose / runtime config
     "COMPOSE_PROFILES",
+    "COMPOSE_FILE",
     "CORS_ALLOWED_ORIGINS",
     "REQUIRE_AUTH",
     "TRUSTED_PROXY_HEADER",
     # OAuth client ID is non-secret and used by docker-compose env interpolation
     "GOOGLE_CLIENT_ID",
     "REGISTRATION_MODE",
-    # Inference model config (used by docker compose for vLLM/SGLang containers)
+    # Inference model/storage config (consumed by the bundled compose services)
     "VLLM_MODEL",
     "SGLANG_MODEL",
     "VLLM_GPU_MEMORY_UTILIZATION",
+    "OLLAMA_MODELS_DIR",
+    "HF_CACHE_DIR",
+    "LLAMACPP_MODELS_DIR",
+    "LLAMACPP_MODEL",
     # Inference mode (user-facing rollup of routing strategy + bundled service)
     "NOVA_INFERENCE_MODE",
     "OLLAMA_BASE_URL",

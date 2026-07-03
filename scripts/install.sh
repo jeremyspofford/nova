@@ -245,23 +245,32 @@ if [ "${DERIVE_MODE_ONLY}" = "true" ]; then
   exit 0
 fi
 
-# No GPU overlays and no bundled inference containers — Nova only runs its own
-# platform services. Any GPU belongs to your external inference server.
+# Compose file list. COMPOSE_FILE in .env activates overlays (the wizard writes
+# docker-compose.yml:docker-compose.gpu.yml after positive NVIDIA detection).
 COMPOSE_FILES="-f docker-compose.yml"
+if [ -n "${COMPOSE_FILE:-}" ]; then
+  COMPOSE_FILES=""
+  IFS=':' read -ra _cf_parts <<< "${COMPOSE_FILE}"
+  for _cf in "${_cf_parts[@]}"; do
+    [ -n "${_cf}" ] && COMPOSE_FILES="${COMPOSE_FILES} -f ${_cf}"
+  done
+fi
 
 if [ "${LLM_ROUTING_STRATEGY:-local-first}" = "cloud-only" ]; then
   echo "  Cloud-only — no local inference server configured."
+elif echo "${COMPOSE_PROFILES:-}" | grep -q "inference-"; then
+  echo "  Bundled inference: ${COMPOSE_PROFILES}"
 else
   echo "  Local inference target: ${OLLAMA_BASE_URL:-configure in Settings → Local Inference}"
-  echo "  (Start your own Ollama / LM Studio / vLLM / SGLang server — Nova connects to it.)"
+  echo "  (Run your own Ollama / LM Studio / vLLM / SGLang server, or enable a"
+  echo "   bundled container in Settings → Local Inference.)"
 fi
 
-# ── Host hardware (advisory) ──────────────────────────────────────────────────
-# Writes data/hardware.json so the dashboard can show the host GPU/CPU/RAM as a
-# hint for what your external inference server could run. Not used to start or
-# GPU-accelerate anything — Nova runs no inference container.
+# ── Host hardware ─────────────────────────────────────────────────────────────
+# Writes data/hardware.json — used by the dashboard as an advisory and by the
+# recovery service to gate GPU-only bundled backends (vLLM/SGLang).
 echo ""
-echo "Detecting host hardware (advisory)..."
+echo "Detecting host hardware..."
 "${SCRIPT_DIR}/detect_hardware.sh" "${PROJECT_ROOT}/data/hardware.json" || true
 echo ""
 
@@ -271,10 +280,8 @@ echo "→ Starting infrastructure (postgres, redis)..."
 cd "${PROJECT_ROOT}"
 docker compose ${COMPOSE_FILES} up -d postgres redis
 
-# No bundled inference to start — the user runs their own server and points Nova
-# at it in Settings → Local Inference (or via OLLAMA_BASE_URL in .env).
-
 # ── Start all Nova platform services ─────────────────────────────────────────
+# COMPOSE_PROFILES (from .env) activates any bundled inference containers.
 echo ""
 echo "→ Starting all Nova services..."
 docker compose ${COMPOSE_FILES} up -d
@@ -282,6 +289,16 @@ docker compose ${COMPOSE_FILES} up -d
 echo ""
 echo "→ Waiting for all services to be healthy (up to 2 minutes)..."
 docker compose ${COMPOSE_FILES} up -d --wait 2>/dev/null || sleep 20
+
+# ── Pull the default model into the bundled Ollama (best-effort) ─────────────
+if echo "${COMPOSE_PROFILES:-}" | grep -q "inference-ollama"; then
+  _model="${DEFAULT_CHAT_MODEL:-qwen2.5:7b}"
+  _model="${_model#ollama/}"
+  echo ""
+  echo "→ Pulling default model into bundled Ollama: ${_model} (this can take a while)..."
+  docker compose ${COMPOSE_FILES} exec -T ollama ollama pull "${_model}" || \
+    echo "  ! Model pull failed — pull later with: docker compose exec ollama ollama pull ${_model}"
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════"

@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GPU overlay for the bundled inference services.
+#
+# Activate by setting in .env (the installer writes this after positive
+# NVIDIA detection — requires nvidia-container-toolkit on the host):
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+#
+# On hosts WITHOUT the toolkit this overlay makes `docker compose up` fail —
+# recovery is simply removing the COMPOSE_FILE line from .env.
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-nvidia-gpu: &nvidia-gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  ollama:
+    <<: *nvidia-gpu
+
+  vllm:
+    <<: *nvidia-gpu
+
+  sglang:
+    <<: *nvidia-gpu
+
+  llamacpp:
+    <<: *nvidia-gpu
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda

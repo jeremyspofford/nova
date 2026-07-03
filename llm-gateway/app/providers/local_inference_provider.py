@@ -22,13 +22,16 @@ from .vllm_provider import VLLMProvider
 
 logger = logging.getLogger(__name__)
 
-# All backends are external, user-run servers reached over HTTP. Defaults point
-# at the host on each server's conventional port (override per-endpoint via
-# inference.url / inference.lmstudio_url in Settings). Nova bundles none of these.
+# All backends are reached over HTTP. Defaults point at the host on each
+# server's conventional port for user-run external servers; when Nova's
+# bundled containers are started (recovery service), it writes the in-network
+# URL (http://ollama:11434, http://vllm:8000, …) to inference.url, which wins.
+# LM Studio is a desktop app and stays external-only (inference.lmstudio_url).
 DEFAULT_URLS = {
     "ollama": settings.ollama_base_url,  # resolved host URL (auto/host expanded)
     "vllm": "http://host.docker.internal:8000",
     "sglang": "http://host.docker.internal:30000",
+    "llamacpp": "http://host.docker.internal:8080",
     "lmstudio": "http://host.docker.internal:1234",  # desktop app on the host (WSL/Mac/Win)
 }
 
@@ -40,7 +43,7 @@ class LocalInferenceProvider(ModelProvider):
     Wrapper that reads active backend config from Redis and delegates.
 
     Config keys (in Redis nova:config:*):
-    - inference.backend: "ollama" | "vllm" | "sglang" | "custom" | "none"
+    - inference.backend: "ollama" | "vllm" | "sglang" | "llamacpp" | "lmstudio" | "custom" | "none"
     - inference.state: "ready" | "draining" | "starting" | "error"
     - inference.url: override URL (empty = default for backend)
     - inference.custom_url: URL for the custom backend
@@ -155,6 +158,9 @@ class LocalInferenceProvider(ModelProvider):
         elif backend == "sglang":
             from .sglang_provider import SGLangProvider
             return SGLangProvider(base_url=url or DEFAULT_URLS["sglang"])
+        elif backend == "llamacpp":
+            from .llamacpp_provider import LlamaCppProvider
+            return LlamaCppProvider(base_url=url or DEFAULT_URLS["llamacpp"])
         elif backend == "custom":
             if not custom_url:
                 logger.warning("Custom backend selected but no URL configured")

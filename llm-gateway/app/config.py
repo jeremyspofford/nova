@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     llm_routing_strategy: str = "local-first"    # local-only | local-first | cloud-only | cloud-first
 
     # Inference backend config (read from Redis nova:config:inference.*)
-    inference_backend: str = "ollama"  # ollama, vllm, sglang, lmstudio, custom, none
+    inference_backend: str = "ollama"  # ollama, vllm, sglang, llamacpp, lmstudio, custom, none
     inference_state: str = "ready"     # ready, draining, starting, error
     inference_url: str = ""            # Override URL (empty = use default for backend)
 

@@ -48,6 +48,8 @@ CFG_POSTGRES_PASSWORD=""
 CFG_REMOTE_ACCESS=""     # none, cloudflare-tunnel, tailscale
 CFG_TUNNEL_TOKEN=""
 CFG_TAILSCALE_KEY=""
+CFG_OLLAMA_MODELS_DIR="" # bundled Ollama model store (mode 1)
+CFG_GPU_OVERLAY="false"  # write COMPOSE_FILE GPU overlay line (mode 1 + NVIDIA)
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 BOLD="\033[1m"
@@ -240,7 +242,7 @@ step_mode() {
   echo ""
   printf "${BOLD}How will you run Nova?${RESET}\n"
   echo ""
-  echo "  1) All-in-one    — Everything on this machine (simplest)"
+  echo "  1) All-in-one    — Nova runs Ollama in a container on this machine (simplest)"
   echo "  2) Cloud only    — No local AI models, use cloud APIs only"
   echo "  3) Remote GPU    — This machine runs Nova, a separate PC runs AI models"
   echo "  4) Host native   — Ollama runs on this machine outside Docker (or Windows host in WSL2)"
@@ -261,7 +263,7 @@ step_mode() {
     default="4"
   elif [ -n "${existing_ollama_url}" ] && [ "${existing_ollama_url}" != "http://ollama:11434" ]; then
     default="3"
-  elif echo "${existing_profiles}" | grep -q "local-ollama" 2>/dev/null; then
+  elif echo "${existing_profiles}" | grep -q "inference-ollama" 2>/dev/null; then
     default="1"
   fi
 
@@ -348,6 +350,61 @@ step_provider() {
 
   if [ -n "${CFG_API_KEY}" ]; then
     ok "Key saved"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 3b: Bundled Inference Details (mode 1)
+# ══════════════════════════════════════════════════════════════════════════════
+step_bundled() {
+  if [ "${CFG_MODE}" != "1" ]; then
+    return
+  fi
+
+  echo ""
+  printf "${BOLD}Bundled Ollama Setup${RESET}\n"
+  echo ""
+
+  # Port collision: a host-run Ollama already owns 11434, which the bundled
+  # container also publishes for CLI access.
+  if curl -sf -m 2 "http://localhost:11434/api/tags" >/dev/null 2>&1; then
+    warn "An Ollama server is already running on this machine (port 11434)."
+    echo "     The bundled container can't bind the same port. Either pick"
+    echo "     mode 4 (Host native) to use the existing server, or stop it."
+    echo ""
+    prompt "Continue with the bundled container anyway? [y/N]" "n" bundled_continue
+    case "$(echo "${bundled_continue}" | tr 'A-Z' 'a-z')" in
+      y|yes) ;;
+      *) step_mode; step_provider; step_bundled; return ;;
+    esac
+  fi
+
+  # Model storage: fresh default under ./data, or reuse an existing store.
+  local default_models_dir
+  default_models_dir="$(get_existing OLLAMA_MODELS_DIR "")"
+  if [ -z "${default_models_dir}" ]; then
+    if [ -d "${HOME}/.ollama/models" ]; then
+      default_models_dir="${HOME}/.ollama"
+      echo "  Found an existing Ollama model store at ~/.ollama — reusing it"
+      echo "  avoids re-downloading models. Press Enter to reuse, or type a path."
+    else
+      default_models_dir="./data/models/ollama"
+    fi
+  fi
+  prompt "Model storage directory" "${default_models_dir}" CFG_OLLAMA_MODELS_DIR
+
+  # GPU detection → compose overlay. Only written on positive detection;
+  # activating it without nvidia-container-toolkit hard-fails compose up.
+  CFG_GPU_OVERLAY="false"
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    if docker info 2>/dev/null | grep -qi nvidia; then
+      CFG_GPU_OVERLAY="true"
+      ok "NVIDIA GPU detected — enabling GPU acceleration for bundled inference"
+    else
+      warn "NVIDIA GPU found but Docker's nvidia runtime is missing."
+      echo "     Install nvidia-container-toolkit to GPU-accelerate bundled"
+      echo "     inference; continuing CPU-only for now."
+    fi
   fi
 }
 
@@ -511,8 +568,9 @@ write_env() {
   local compose_profiles="" ollama_url="" routing_strategy="" default_model="" inference_mode=""
 
   case "${CFG_MODE}" in
-    1) # All-in-one
-      compose_profiles="local-ollama"
+    1) # All-in-one — bundled Ollama container (compose profile)
+      compose_profiles="inference-ollama"
+      ollama_url="http://ollama:11434"
       routing_strategy="local-first"
       default_model="qwen2.5:7b"
       inference_mode="hybrid"
@@ -523,7 +581,7 @@ write_env() {
       inference_mode="cloud-only"
       case "${CFG_PROVIDER}" in
         groq)       default_model="groq/llama-3.3-70b-versatile" ;;
-        cerebras)   default_model="cerebras/llama-3.3-70b" ;;
+        cerebras)   default_model="cerebras/llama3.1-8b" ;;
         gemini)     default_model="gemini/gemini-2.5-flash" ;;
         chatgpt)    default_model="chatgpt/gpt-4o" ;;
         *)          default_model="groq/llama-3.3-70b-versatile" ;;
@@ -557,6 +615,7 @@ write_env() {
   # Collect extra lines from existing .env that we don't manage
   local extra_lines=""
   local managed_keys="POSTGRES_PASSWORD NOVA_ADMIN_SECRET COMPOSE_PROFILES OLLAMA_BASE_URL NOVA_INFERENCE_MODE"
+  managed_keys="${managed_keys} COMPOSE_FILE OLLAMA_MODELS_DIR"
   managed_keys="${managed_keys} LLM_ROUTING_STRATEGY DEFAULT_CHAT_MODEL WOL_MAC_ADDRESS WOL_BROADCAST_IP"
   managed_keys="${managed_keys} GROQ_API_KEY CEREBRAS_API_KEY GEMINI_API_KEY CHATGPT_ACCESS_TOKEN"
   managed_keys="${managed_keys} REQUIRE_AUTH LOG_LEVEL SHELL_TIMEOUT_SECONDS GEMINI_USE_ADC"
@@ -647,6 +706,14 @@ ENVEOF
     echo "OLLAMA_BASE_URL=${ollama_url}" >> "${ENV_FILE}"
   fi
 
+  if [ -n "${CFG_OLLAMA_MODELS_DIR}" ]; then
+    echo "OLLAMA_MODELS_DIR=${CFG_OLLAMA_MODELS_DIR}" >> "${ENV_FILE}"
+  fi
+
+  if [ "${CFG_GPU_OVERLAY}" = "true" ]; then
+    echo "COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml" >> "${ENV_FILE}"
+  fi
+
   cat >> "${ENV_FILE}" <<ENVEOF
 LLM_ROUTING_STRATEGY=${routing_strategy}
 NOVA_INFERENCE_MODE=${inference_mode}
@@ -735,11 +802,20 @@ step_summary() {
   echo ""
 
   case "${CFG_MODE}" in
-    1) printf "  Mode:          All-in-one (local Ollama)\n" ;;
+    1) printf "  Mode:          All-in-one (bundled Ollama container)\n" ;;
     2) printf "  Mode:          Cloud only\n" ;;
     3) printf "  Mode:          Remote GPU (${CFG_REMOTE_IP})\n" ;;
     4) printf "  Mode:          Host native (Ollama on this machine)\n" ;;
   esac
+
+  if [ "${CFG_MODE}" = "1" ]; then
+    printf "  Model storage: ${CFG_OLLAMA_MODELS_DIR:-./data/models/ollama}\n"
+    if [ "${CFG_GPU_OVERLAY}" = "true" ]; then
+      printf "  GPU:           NVIDIA (compose overlay enabled)\n"
+    else
+      printf "  GPU:           none detected (CPU inference)\n"
+    fi
+  fi
 
   case "${CFG_PROVIDER}" in
     groq)       printf "  AI provider:   Groq (free tier)\n" ;;
@@ -793,6 +869,7 @@ main() {
   step_preflight
   step_mode
   step_provider
+  step_bundled
   step_remote
   step_admin
   step_remote_access
