@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.denylist import Denylist
-from app.engram_producer import EngramProducer
+from app.ingestion_producer import IngestionProducer
 from app.metrics import (
     sessions_dropped_total,
     sessions_ingested_total,
@@ -56,28 +56,28 @@ async def close_redis() -> None:
 
 
 class BridgePipeline:
-    """Wires denylist → backpressure queue → engram producer.
+    """Wires denylist → backpressure queue → ingestion producer.
 
     Constructable directly (no FastAPI dependency) so tests can drive
     ``_handle_finalized`` and assert ``dropped_count`` without HTTP.
 
     Args:
-        redis_db0: Redis connection for engram queue writes + dropped counters.
+        redis_db0: Redis connection for ingestion queue writes + dropped counters.
         redis_db10: Redis connection for bridge state (reserved for future use).
         denylist_apps: App names to suppress.
         denylist_url_patterns: URL regex patterns to suppress.
         denylist_window_titles: Window title substrings to suppress.
         buffer_size: Bounded asyncio.Queue capacity. When full, newest sessions
             are dropped and counted under ``"buffer_full"``.
-        device_id: Screenpipe device identifier embedded in engram source URIs.
-        trust: Source trust score (0–1) written into each engram payload.
+        device_id: Screenpipe device identifier embedded in capture source URIs.
+        trust: Source trust score (0–1) written into each ingestion payload.
         paused_check: Zero-arg callable returning True when capture is paused;
             sessions received while paused are dropped and counted as ``"paused"``.
         producer_blocked: **Test-only flag.** When True, the consumer dequeues
             sessions but blocks forever rather than pushing to Redis. This lets
-            tests verify drop behaviour without needing a real engram consumer.
+            tests verify drop behaviour without needing a real queue consumer.
             Never set this True in production.
-        queue_key: Redis list key for engram ingestion. Override in tests to
+        queue_key: Redis list key for memory ingestion. Override in tests to
             avoid interfering with a live consumer.
     """
 
@@ -101,7 +101,7 @@ class BridgePipeline:
             url_patterns=denylist_url_patterns,
             window_titles=denylist_window_titles,
         )
-        self._producer = EngramProducer(
+        self._producer = IngestionProducer(
             redis=redis_db0,
             device_id=device_id,
             trust=trust,
@@ -147,7 +147,7 @@ class BridgePipeline:
             )
 
     async def _consume_loop(self) -> None:
-        """Drain the queue and push each session to the engram ingestion queue."""
+        """Drain the queue and push each session to the memory ingestion queue."""
         if self._producer_blocked:
             # Test hook: block indefinitely without ever dequeuing so the full
             # buffer capacity is available for drop assertions.
@@ -167,7 +167,7 @@ class BridgePipeline:
                 await self._producer.push(session)
                 sessions_ingested_total.labels(app=session.app).inc()
             except Exception as exc:
-                logger.error("engram push failed: %s", exc)
+                logger.error("ingestion push failed: %s", exc)
 
     async def _increment_dropped(self, reason: str) -> None:
         """Increment the in-memory dropped counter, persist to Redis, and record metric."""

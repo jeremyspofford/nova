@@ -28,7 +28,6 @@ GOAL_SCHEDULE_DUE = "goal.schedule_due"
 GOAL_DEADLINE_APPROACHING = "goal.deadline_approaching"
 HEALTH_DEGRADED = "health.degraded"
 CONSOLIDATION_COMPLETE = "consolidation.complete"
-ENGRAM_CONTRADICTION = "engram.contradiction"
 BUDGET_TIER_CHANGE = "budget.tier_change"
 
 # Intelligence & maturation stimuli

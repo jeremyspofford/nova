@@ -380,6 +380,18 @@ export function Chat() {
           )
           continue
         }
+        if (typeof event === 'object' && 'think' in event) {
+          // The model's planning prose from a tool round — accumulate it into a
+          // live thinking block (each round is a paragraph).
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantMsgId
+                ? { ...m, thinking: (m.thinking ? m.thinking + '\n\n' : '') + event.think }
+                : m
+            )
+          )
+          continue
+        }
         // Text delta — collapse activity feed on first token
         if (firstTextDelta) {
           firstTextDelta = false

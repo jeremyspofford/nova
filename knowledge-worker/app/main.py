@@ -14,7 +14,7 @@ from app.client import (
 )
 from app.config import settings
 from app.credentials.health import run_credential_health_loop
-from app.queue import close_queues, init_queues, push_to_engram
+from app.queue import close_queues, init_queues, push_to_memory
 from app.scheduler import run_scheduling_loop
 
 logging.basicConfig(level=settings.log_level)
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
         config=settings,
         get_orch_client=get_orchestrator_client,
         get_llm_client=get_llm_client,
-        push_to_engram=push_to_engram,
+        push_to_memory=push_to_memory,
     ))
 
     # Start the credential health check loop as a background task

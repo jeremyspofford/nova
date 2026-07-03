@@ -105,7 +105,7 @@ FEEDBACK_CURSOR_KEY = "nova:state:outcome_feedback_cursor"
 
 
 async def _send_memory_feedback() -> int:
-    """Send outcome scores for engram-backed interactions to memory-service."""
+    """Send outcome scores for memory-backed interactions to memory-service."""
     redis = get_redis()
     pool = get_pool()
 
@@ -118,14 +118,13 @@ async def _send_memory_feedback() -> int:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT metadata->'engram_ids' AS engram_ids,
+            SELECT metadata->'memory_ids' AS memory_ids,
                    outcome_score,
-                   COALESCE(metadata->>'task_type', 'unknown') AS task_type,
                    created_at
             FROM usage_events
             WHERE outcome_score IS NOT NULL
-              AND metadata->'engram_ids' IS NOT NULL
-              AND jsonb_array_length(metadata->'engram_ids') > 0
+              AND metadata->'memory_ids' IS NOT NULL
+              AND jsonb_array_length(metadata->'memory_ids') > 0
               AND created_at > $1
             ORDER BY created_at ASC
             LIMIT 500
@@ -136,31 +135,32 @@ async def _send_memory_feedback() -> int:
     if not rows:
         return 0
 
-    # Build feedback batch
+    # Build feedback batch: neutral API is per-item {memory_id, outcome_score}.
     feedback = []
     for row in rows:
-        engram_ids = row["engram_ids"]  # already parsed as list by asyncpg JSONB codec
-        if not isinstance(engram_ids, list):
+        memory_ids = row["memory_ids"]  # already parsed as list by asyncpg JSONB codec
+        if not isinstance(memory_ids, list):
             continue
-        for eid in engram_ids:
-            feedback.append({
-                "engram_id": str(eid),
-                "outcome_score": float(row["outcome_score"]),
-                "task_type": row["task_type"],
-            })
+        # Scores land in [−1, 1] per the FeedbackRequest contract.
+        score = max(-1.0, min(1.0, float(row["outcome_score"])))
+        for mid in memory_ids:
+            feedback.append({"memory_id": str(mid), "outcome_score": score})
 
     if not feedback:
         return 0
 
-    # Send to memory-service
+    sent = 0
     try:
         from .clients import get_memory_client_async
         client = await get_memory_client_async()
-        resp = await client.post("/api/v1/engrams/outcome-feedback", json=feedback)
-        if resp.status_code in (200, 201):
-            log.info("Sent %d engram outcome feedback entries", len(feedback))
-        else:
-            log.warning("Memory outcome feedback failed: %d %s", resp.status_code, resp.text[:200])
+        for item in feedback:
+            resp = await client.post("/api/v1/memory/feedback", json=item)
+            if resp.status_code in (200, 201):
+                sent += 1
+        if sent < len(feedback):
+            log.warning(
+                "Memory outcome feedback: %d/%d entries accepted", sent, len(feedback)
+            )
     except Exception:
         log.warning("Failed to send memory outcome feedback", exc_info=True)
 
@@ -168,7 +168,7 @@ async def _send_memory_feedback() -> int:
     last_created = rows[-1]["created_at"]
     await redis.set(FEEDBACK_CURSOR_KEY, last_created.isoformat())
 
-    return len(feedback)
+    return sent
 
 
 async def effectiveness_loop() -> None:

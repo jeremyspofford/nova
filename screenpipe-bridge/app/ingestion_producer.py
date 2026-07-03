@@ -1,4 +1,9 @@
-"""Builds the engram ingestion payload from a finalized session and LPUSHes to Redis db0."""
+"""Builds the memory ingestion payload from a finalized session and LPUSHes to Redis db0.
+
+Also records a compact per-session entry in a capped Redis list
+(``nova:capture:sessions``) that backs the dashboard Capture page —
+the memory backend stores session *content*, not queryable rows.
+"""
 
 import hashlib
 import json
@@ -12,9 +17,11 @@ from app.tenant import DEFAULT_TENANT
 logger = logging.getLogger(__name__)
 
 _QUEUE_KEY = "memory:ingestion:queue"
+_SESSIONS_KEY = "nova:capture:sessions"
+_SESSIONS_MAX = 500
 
 
-class EngramProducer:
+class IngestionProducer:
     def __init__(
         self,
         redis: redis_async.Redis,
@@ -30,6 +37,23 @@ class EngramProducer:
     async def push(self, session: FocusSession) -> None:
         payload = self._build_payload(session)
         await self._redis.lpush(self._queue_key, json.dumps(payload))
+        # Session record for the dashboard Capture page (capped list).
+        try:
+            record = {
+                "id": payload["source_uri"],
+                "source_kind": "screenpipe",
+                "uri": payload["source_uri"],
+                "title": payload["source_title"],
+                "metadata": payload["metadata"],
+                "trust_score": self._trust,
+                "ingested_at": payload["metadata"]["captured_at_end"],
+            }
+            async with self._redis.pipeline(transaction=False) as pipe:
+                pipe.lpush(_SESSIONS_KEY, json.dumps(record))
+                pipe.ltrim(_SESSIONS_KEY, 0, _SESSIONS_MAX - 1)
+                await pipe.execute()
+        except Exception as exc:
+            logger.warning("failed to record capture session: %s", exc)
 
     def _build_payload(self, session: FocusSession) -> dict:
         start_iso = session.started_at.isoformat()

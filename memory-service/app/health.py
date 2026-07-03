@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import logging
 
-from app.db.database import engine
-from app.embedding import get_redis
+from app.redis_client import get_redis
 from fastapi import APIRouter
-from sqlalchemy import text
 
 log = logging.getLogger(__name__)
 health_router = APIRouter(prefix="/health", tags=["health"])
@@ -26,14 +24,6 @@ async def liveness():
 async def readiness():
     """K8s readiness probe — can the service handle traffic? Checks all dependencies."""
     checks = {}
-
-    # Check PostgreSQL
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        checks["postgres"] = "ok"
-    except Exception as e:
-        checks["postgres"] = f"error: {e}"
 
     # Check Redis
     try:

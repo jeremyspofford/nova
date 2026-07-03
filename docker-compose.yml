@@ -180,16 +180,11 @@ services:
       context: .
       dockerfile: memory-service/Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
       REDIS_URL: redis://redis:6379/0
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      EMBEDDING_MODEL: nomic-embed-text
-      EMBEDDING_DIMENSIONS: "768"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-}
       TRUSTED_NETWORK_CIDRS: ${TRUSTED_NETWORK_CIDRS:-}
     volumes:
-      - ./data/sources:/data/sources
       # OKF markdown memory bundle — same host dir the orchestrator mounts,
       # so agent file tools and the memory backend see identical files.
       - ${NOVA_WORKSPACE:-${HOME}/.nova/workspace}:/workspace:rw
@@ -198,11 +193,7 @@ services:
       # via Docker DNS. Override with MEMORY_SERVICE_BIND to expose externally.
       - "${MEMORY_SERVICE_BIND:-127.0.0.1:}8002:8002"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
-        condition: service_healthy
-      llm-gateway:
         condition: service_healthy
     healthcheck:
       <<: *nova-healthcheck
@@ -483,7 +474,7 @@ services:
       CORTEX_MAX_IDLE_INTERVAL: ${CORTEX_MAX_IDLE_INTERVAL:-1800}
       CORTEX_ACTIVE_INTERVAL: ${CORTEX_ACTIVE_INTERVAL:-30}
       CORTEX_MEMORY_ENABLED: ${CORTEX_MEMORY_ENABLED:-true}
-      CORTEX_REFLECT_TO_ENGRAMS: ${CORTEX_REFLECT_TO_ENGRAMS:-true}
+      CORTEX_REFLECT_TO_MEMORY: ${CORTEX_REFLECT_TO_MEMORY:-true}
       CORTEX_IDLE_CONSOLIDATION: ${CORTEX_IDLE_CONSOLIDATION:-true}
       CORTEX_TEST_MODE: ${CORTEX_TEST_MODE:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

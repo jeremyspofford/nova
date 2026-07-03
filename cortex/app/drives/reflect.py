@@ -52,6 +52,6 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
         priority=3,
         urgency=round(urgency, 2),
         description="; ".join(description_parts),
-        proposed_action="Review recent drive patterns and outcomes, write reflection engram",
+        proposed_action="Review recent drive patterns and outcomes, write reflection memory",
         context={"cycles_since_reflect": _cycles_since_reflect},
     )

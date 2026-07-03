@@ -901,14 +901,6 @@ async def update_platform_config(
         except Exception as e:
             log.warning("Failed to publish config %s to Redis: %s", key, e)
 
-    # Publish engram.* config changes to Redis for memory-service pickup
-    if key.startswith("engram."):
-        try:
-            from app.config_sync import push_config_to_redis
-            await push_config_to_redis(key, req.value)
-        except Exception as e:
-            log.warning("Failed to publish config %s to Redis: %s", key, e)
-
     # Publish memory.* config changes to Redis for runtime provider switching
     if key.startswith("memory."):
         try:

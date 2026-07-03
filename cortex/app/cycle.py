@@ -34,10 +34,10 @@ from .drives import (
 )
 from .journal import read_user_replies_since, write_entry
 from .memory import (
-    mark_engrams_used,
+    mark_memories_used,
     maybe_consolidate,
     perceive_with_memory,
-    reflect_to_engrams,
+    reflect_to_memory,
 )
 from .reflections import (
     TIER_ORDER,
@@ -127,7 +127,7 @@ class CycleState:
     user_messages: list[dict] = field(default_factory=list)
     stimuli: list[dict] = field(default_factory=list)
     memory_context: str = ""
-    engram_ids: list[str] = field(default_factory=list)
+    memory_ids: list[str] = field(default_factory=list)
     retrieval_log_id: str | None = None
     action_taken: str = "none"
     outcome: str = ""
@@ -246,7 +246,7 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
                 except Exception as e:
                     log.warning("CI triage stimulus handler failed: %s", e)
 
-        # Query engram memory for context
+        # Query memory for context
         goal_context = ""
         if state.stimuli:
             for s in state.stimuli:
@@ -256,7 +256,7 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
 
         mem_result = await perceive_with_memory(state.stimuli, goal_context)
         state.memory_context = mem_result["memory_context"]
-        state.engram_ids = mem_result["engram_ids"]
+        state.memory_ids = mem_result["memory_ids"]
         state.retrieval_log_id = mem_result["retrieval_log_id"]
 
         # ── EVALUATE ──────────────────────────────────────────────────────
@@ -324,9 +324,9 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
         # ── REFLECT ──────────────────────────────────────────────────────
         await _reflect(state)
 
-        # Write cycle outcome to engram memory
+        # Write cycle outcome to memory
         if state.action_taken not in ("idle", "none", "idle_consolidation"):
-            await reflect_to_engrams(
+            await reflect_to_memory(
                 cycle_number=state.cycle_number,
                 drive=state.action_taken,
                 urgency=state.winner.result.urgency if state.winner else 0,
@@ -336,9 +336,9 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
                 budget_tier=state.budget_tier,
             )
 
-        # Mark engrams used (all retrieved engrams — coarse heuristic)
-        if state.retrieval_log_id and state.engram_ids:
-            await mark_engrams_used(state.retrieval_log_id, state.engram_ids)
+        # Mark memories used (all retrieved items — coarse heuristic)
+        if state.retrieval_log_id and state.memory_ids:
+            await mark_memories_used(state.retrieval_log_id, state.memory_ids)
 
         await _update_state(state)
 
@@ -741,7 +741,6 @@ async def _execute_maintain(drive: DriveResult, plan: str) -> str:
 
 async def _execute_improve(drive: DriveResult, plan: str) -> str:
     """Execute an improve action — dispatch selfmod tasks or log improvement opportunity."""
-    contradictions = drive.context.get("contradictions", [])
     router_status = drive.context.get("router_status")
     selfmod_trigger = drive.context.get("selfmod_trigger")
 
@@ -772,8 +771,6 @@ async def _execute_improve(drive: DriveResult, plan: str) -> str:
             return f"Failed to dispatch selfmod task: {e}"
 
     parts = []
-    if contradictions:
-        parts.append(f"Noted {len(contradictions)} engram contradictions for review")
     if router_status:
         parts.append(f"Neural router status: {router_status.get('mode', 'unknown')}")
     parts.append(f"Plan: {plan[:200]}")
@@ -1120,7 +1117,7 @@ async def _record_cycle_reflection(state: CycleState) -> None:
         "model": state.resolved_model,
         "findings_count": outcome.findings_count,
         "task_cost_usd": outcome.total_cost_usd,
-        "memory_hits": len(state.engram_ids),
+        "memory_hits": len(state.memory_ids),
         "goal_description_hash": compute_approach_hash(goal_description) if goal_description else None,
     }
 
@@ -1186,7 +1183,7 @@ async def _record_cycle_reflection(state: CycleState) -> None:
     except Exception as e:
         log.warning("Stuck detection failed for goal %s: %s", state.goal_id, e)
 
-    # Ingest lesson into engrams for cross-goal learning
+    # Ingest lesson into memory for cross-goal learning
     if lesson:
         try:
             from .memory import ingest_lesson

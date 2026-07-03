@@ -2,13 +2,9 @@
 Neutral memory API — /api/v1/memory/*.
 
 Backend-agnostic surface the orchestrator (and any other consumer) talks
-to. Requests dispatch through the backend factory, so the active storage
-engine (engram graph, OKF markdown bundle) is a runtime-config decision
-(`memory.backend`), not a caller decision.
-
-Backend-specific inspection endpoints (graph view, consolidation log,
-sources browser) stay on /api/v1/engrams/* and are only meaningful when
-the engram backend is active.
+to. Requests dispatch through the backend factory ("okf" markdown bundle
+is the built-in backend; external providers plug in via
+memory.provider_url on the orchestrator side).
 """
 
 from __future__ import annotations
@@ -122,6 +118,22 @@ async def read_item(memory_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"memory {memory_id} not found")
     return result
+
+
+@memory_router.delete("/item/{memory_id:path}", status_code=204)
+async def delete_item(memory_id: str):
+    """Delete one memory item (benchmark teardown, curation)."""
+    backend = await get_backend()
+    try:
+        deleted = await backend.delete(memory_id)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501, detail=f"backend '{backend.name}' does not support delete"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"memory {memory_id} not found")
 
 
 @memory_router.post("/explain", response_model=ExplainResponse)

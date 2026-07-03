@@ -361,7 +361,6 @@ async def lifespan(app: FastAPI):
 
     # Sync DB config to Redis so LLM gateway has correct values immediately
     from app.config_sync import (
-        sync_engram_config_to_redis,
         sync_features_config_to_redis,
         sync_inference_config_to_redis,
         sync_llm_config_to_redis,
@@ -372,7 +371,6 @@ async def lifespan(app: FastAPI):
     )
     await sync_llm_config_to_redis()
     await sync_inference_config_to_redis()
-    await sync_engram_config_to_redis()
     await sync_voice_config_to_redis()
     await sync_features_config_to_redis()
     await sync_retrieval_config_to_redis()
@@ -520,8 +518,8 @@ async def lifespan(app: FastAPI):
     await close_clients()
     await close_redis()
     await close_stimulus_redis()
-    from app.knowledge_router import close_engram_redis
-    await close_engram_redis()
+    from app.knowledge_router import close_ingestion_redis
+    await close_ingestion_redis()
     from app.capture_router import close_capture_redis
     await close_capture_redis()
     # Close the admin-secret config Redis connection (lazy-opened in app.auth)
@@ -557,7 +555,6 @@ app.add_middleware(
 )
 
 from app.capture_router import router as capture_router
-from app.engram_router import router as engram_router
 from app.quality_router import quality_router
 from app.secrets_router import router as secrets_router
 from app.webhooks_router import router as webhooks_router
@@ -575,7 +572,6 @@ app.include_router(goals_router)
 app.include_router(intel_router)
 app.include_router(knowledge_router)
 app.include_router(capabilities_router)
-app.include_router(engram_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
 app.include_router(capture_router)

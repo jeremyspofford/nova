@@ -38,6 +38,7 @@ export interface Message {
   activitySteps?: ActivityStep[]
   activityCollapsed?: boolean
   elapsedMs?: number  // live heartbeat elapsed while streaming (proof-of-life)
+  thinking?: string   // model's planning prose from tool rounds, shown live then collapsed
   attachments?: AttachedFile[]
   metadata?: Record<string, unknown>
 }

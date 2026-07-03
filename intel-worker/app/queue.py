@@ -1,4 +1,4 @@
-"""Engram queue helper — delegates to nova-worker-common."""
+"""Memory ingestion queue helper — delegates to nova-worker-common."""
 import logging
 from urllib.parse import urlparse, urlunparse
 
@@ -15,21 +15,21 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
-_redis_engram: aioredis.Redis | None = None  # db0
+_redis_memory: aioredis.Redis | None = None  # db0
 
 
 async def init_queues() -> None:
-    global _redis_engram
+    global _redis_memory
     parsed = urlparse(settings.redis_url)
-    engram_url = urlunparse(parsed._replace(path="/0"))
-    _redis_engram = await create_redis_client(engram_url)
-    log.info("Redis queue initialized (engram=db0)")
+    memory_url = urlunparse(parsed._replace(path="/0"))
+    _redis_memory = await create_redis_client(memory_url)
+    log.info("Redis queue initialized (memory=db0)")
 
 
 async def push_to_memory_queue(item: dict) -> None:
-    """Push content to memory-service's engram ingestion queue."""
+    """Push content to memory-service's ingestion queue."""
     await _push_memory(
-        _redis_engram,
+        _redis_memory,
         raw_text=f"{item.get('title', '')}\n\n{item.get('body', '')}",
         source_type="intel",
         metadata={
@@ -41,7 +41,7 @@ async def push_to_memory_queue(item: dict) -> None:
 
 
 async def close_queues() -> None:
-    global _redis_engram
-    if _redis_engram:
-        await close_redis_client(_redis_engram)
-        _redis_engram = None
+    global _redis_memory
+    if _redis_memory:
+        await close_redis_client(_redis_memory)
+        _redis_memory = None

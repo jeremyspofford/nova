@@ -145,7 +145,7 @@ class CreateRecommendationRequest(BaseModel):
     auto_implementable: bool = False
     implementation_plan: str | None = None
     source_content_ids: list[str] = []
-    engram_ids: list[str] = []
+    memory_ids: list[str] = []
 
 
 class UpdateRecommendationRequest(BaseModel):
@@ -394,15 +394,15 @@ async def create_recommendation(req: CreateRecommendationRequest, _admin: AdminD
                 rec_id, cid,
             )
 
-        # Link engrams
-        for eid in req.engram_ids:
+        # Link supporting memories
+        for mid in req.memory_ids:
             await conn.execute(
                 """
-                INSERT INTO intel_recommendation_engrams (recommendation_id, engram_id)
-                VALUES ($1, $2::uuid)
+                INSERT INTO intel_recommendation_memories (recommendation_id, memory_id)
+                VALUES ($1, $2)
                 ON CONFLICT DO NOTHING
                 """,
-                rec_id, eid,
+                rec_id, mid,
             )
 
     log.info("Intel recommendation created: %s — %s (grade=%s)", rec_id, req.title, req.grade)
@@ -447,7 +447,7 @@ async def list_recommendations(
     query_with_counts = (
         f"SELECT r.*,"
         f" (SELECT COUNT(*) FROM intel_recommendation_sources WHERE recommendation_id = r.id) AS source_count,"
-        f" (SELECT COUNT(*) FROM intel_recommendation_engrams WHERE recommendation_id = r.id) AS memory_count,"
+        f" (SELECT COUNT(*) FROM intel_recommendation_memories WHERE recommendation_id = r.id) AS memory_count,"
         f" (SELECT COUNT(*) FROM comments WHERE entity_type = 'recommendation' AND entity_id = r.id) AS comment_count"
         f" FROM ({query}) r"
     )
@@ -460,7 +460,7 @@ async def list_recommendations(
 
 @intel_router.get("/api/v1/intel/recommendations/{rec_id}")
 async def get_recommendation(rec_id: UUID, _user: UserDep):
-    """Get a single recommendation with sources, engrams, and comments."""
+    """Get a single recommendation with sources, linked memories, and comments."""
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -478,8 +478,8 @@ async def get_recommendation(rec_id: UUID, _user: UserDep):
             """,
             rec_id,
         )
-        engrams = await conn.fetch(
-            "SELECT * FROM intel_recommendation_engrams WHERE recommendation_id = $1",
+        memories = await conn.fetch(
+            "SELECT * FROM intel_recommendation_memories WHERE recommendation_id = $1",
             rec_id,
         )
         comments = await conn.fetch(
@@ -493,7 +493,7 @@ async def get_recommendation(rec_id: UUID, _user: UserDep):
 
     rec = dict(row)
     rec["sources"] = [dict(s) for s in sources]
-    rec["engrams"] = [dict(e) for e in engrams]
+    rec["memories"] = [dict(m) for m in memories]
     rec["comments"] = [dict(c) for c in comments]
     return rec
 

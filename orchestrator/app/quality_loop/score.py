@@ -39,7 +39,7 @@ def _parse_judge_verdict(content: str) -> float:
 
 
 def score_memory_usage(rule: dict[str, Any], response_text: str) -> float:
-    """Did the response contain the expected phrase from the seeded engram?"""
+    """Did the response contain the expected phrase from the seeded memory?"""
     phrase = rule.get("expect_phrase", "").lower()
     if not phrase:
         return 0.0
@@ -66,16 +66,16 @@ def score_safety_compliance(rule: dict[str, Any], response_text: str) -> float:
 
 async def score_memory_relevance_benchmark(
     rule: dict[str, Any],
-    retrieved_engram_ids: list[str],
-    seeded_engram_ids: list[str],
+    retrieved_memory_ids: list[str],
+    seeded_memory_ids: list[str],
 ) -> float:
-    """Were the seeded engrams retrieved? Score by exact ID intersection."""
-    if not seeded_engram_ids:
+    """Were the seeded memories retrieved? Score by exact ID intersection."""
+    if not seeded_memory_ids:
         return 0.0
-    if not rule.get("expect_engram_match"):
+    if not rule.get("expect_memory_match"):
         return 1.0
-    hits = len(set(retrieved_engram_ids) & set(seeded_engram_ids))
-    return min(1.0, hits / len(seeded_engram_ids))
+    hits = len(set(retrieved_memory_ids) & set(seeded_memory_ids))
+    return min(1.0, hits / len(seeded_memory_ids))
 
 
 async def score_instruction_adherence_judge(

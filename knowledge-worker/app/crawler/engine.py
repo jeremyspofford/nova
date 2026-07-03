@@ -1,7 +1,7 @@
 """Autonomous LLM-guided web crawl engine.
 
 Orchestrates BFS crawling with SSRF protection, robots.txt compliance,
-per-domain rate limiting, LLM-scored link relevance, and engram ingestion.
+per-domain rate limiting, LLM-scored link relevance, and memory ingestion.
 """
 import logging
 from dataclasses import dataclass, field
@@ -84,7 +84,7 @@ class CrawlEngine:
 
         Performs BFS starting from ``source["url"]``, scoring discovered links
         via LLM to decide which to follow. Extracted content is pushed to the
-        engram ingestion queue.
+        memory ingestion queue.
         """
         result = CrawlResult()
         visited: set[str] = set()

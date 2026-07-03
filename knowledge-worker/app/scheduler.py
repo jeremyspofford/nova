@@ -17,7 +17,7 @@ _crawl_semaphore = asyncio.Semaphore(3)
 _active_crawls: set[str] = set()
 
 
-async def run_scheduling_loop(config, get_orch_client, get_llm_client, push_to_engram):
+async def run_scheduling_loop(config, get_orch_client, get_llm_client, push_to_memory):
     """Main scheduling loop. Fetches active sources, runs due crawls."""
     logger.info(
         "Knowledge worker scheduling loop started (interval=%ds)",
@@ -49,7 +49,7 @@ async def run_scheduling_loop(config, get_orch_client, get_llm_client, push_to_e
                     _active_crawls.add(sid)
                     # Fire and forget -- semaphore limits concurrency
                     asyncio.create_task(
-                        _run_crawl(source, config, orch, llm, push_to_engram)
+                        _run_crawl(source, config, orch, llm, push_to_memory)
                     )
 
         except Exception as e:
@@ -76,7 +76,7 @@ def _is_due(source: dict, default_interval: int) -> bool:
     return (now - last).total_seconds() >= interval
 
 
-async def _run_crawl(source, config, orch_client, llm_client, push_to_engram):
+async def _run_crawl(source, config, orch_client, llm_client, push_to_memory):
     """Run a single crawl within the concurrency semaphore."""
     source_id = source["id"]
     source_name = source.get("name", source_id)
@@ -91,11 +91,11 @@ async def _run_crawl(source, config, orch_client, llm_client, push_to_engram):
             try:
                 if extractor:
                     await _run_extractor(
-                        extractor, source, source_id, orch_client, push_to_engram,
+                        extractor, source, source_id, orch_client, push_to_memory,
                     )
                 else:
                     await _run_general_crawl(
-                        source, source_id, config, orch_client, llm_client, push_to_engram,
+                        source, source_id, config, orch_client, llm_client, push_to_memory,
                     )
 
                 logger.info("Crawl complete for source %s", source_name)
@@ -116,7 +116,7 @@ async def _run_crawl(source, config, orch_client, llm_client, push_to_engram):
         _active_crawls.discard(source_id)
 
 
-async def _run_extractor(extractor, source, source_id, orch_client, push_to_engram):
+async def _run_extractor(extractor, source, source_id, orch_client, push_to_memory):
     """Run a platform-specific extractor for a source."""
     from .credentials import retrieve_credential
 
@@ -133,7 +133,7 @@ async def _run_extractor(extractor, source, source_id, orch_client, push_to_engr
 
     items = await extractor.extract(source["url"], credential)
     for item in items:
-        await push_to_engram(
+        await push_to_memory(
             raw_text=f"{item.get('title', '')}\n\n{item.get('body', '')}",
             source_type="knowledge",
             source_id=source_id,
@@ -155,7 +155,7 @@ async def _run_extractor(extractor, source, source_id, orch_client, push_to_engr
 
 
 async def _run_general_crawl(
-    source, source_id, config, orch_client, llm_client, push_to_engram,
+    source, source_id, config, orch_client, llm_client, push_to_memory,
 ):
     """Run the general-purpose crawl engine for a source."""
     import httpx
@@ -185,7 +185,7 @@ async def _run_general_crawl(
         engine = CrawlEngine(
             http_client=crawl_client,
             llm_client=llm_client,
-            queue_push_fn=push_to_engram,
+            queue_push_fn=push_to_memory,
             max_pages=config.max_crawl_pages,
             max_llm_calls=config.max_llm_calls_per_crawl,
         )

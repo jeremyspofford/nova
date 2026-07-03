@@ -1,15 +1,15 @@
-"""Engram memory integration for Cortex.
+"""Memory integration for Cortex (neutral /api/v1/memory/* API).
 
 Three integration points:
-1. PERCEIVE — query engram context for drive-informed decisions
-2. REFLECT — write cycle outcomes as engrams for long-term learning
-3. IDLE — trigger consolidation when nothing else to do
+1. PERCEIVE — query memory context for drive-informed decisions
+2. REFLECT — write cycle outcomes to memory for long-term learning
+3. IDLE — trigger backend consolidation when nothing else to do
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import time
 
 from .clients import get_memory
 from .config import settings
@@ -18,12 +18,12 @@ log = logging.getLogger(__name__)
 
 
 async def perceive_with_memory(stimuli: list[dict], goal_context: str = "") -> dict:
-    """Query engram network for context relevant to current cycle.
+    """Query memory for context relevant to current cycle.
 
-    Returns dict with memory_context (str), engram_ids (list), retrieval_log_id (str|None).
+    Returns dict with memory_context (str), memory_ids (list), retrieval_log_id (str|None).
     """
     if not settings.memory_enabled:
-        return {"memory_context": "", "engram_ids": [], "retrieval_log_id": None}
+        return {"memory_context": "", "memory_ids": [], "retrieval_log_id": None}
 
     # Build a query from stimuli + goal context
     query_parts = []
@@ -37,25 +37,25 @@ async def perceive_with_memory(stimuli: list[dict], goal_context: str = "") -> d
     try:
         mem = get_memory()
         resp = await mem.post(
-            "/api/v1/engrams/context",
-            json={"query": query, "session_id": "cortex-perceive", "current_turn": 0},
+            "/api/v1/memory/context",
+            json={"query": query, "session_id": "cortex-perceive"},
             timeout=10.0,
         )
         if resp.status_code == 200:
             data = resp.json()
             return {
                 "memory_context": data.get("context", ""),
-                "engram_ids": data.get("engram_ids", []),
+                "memory_ids": data.get("memory_ids", []),
                 "retrieval_log_id": data.get("retrieval_log_id"),
             }
         log.warning("Memory context request returned %d", resp.status_code)
     except Exception as e:
         log.warning("Failed to get memory context: %s", e)
 
-    return {"memory_context": "", "engram_ids": [], "retrieval_log_id": None}
+    return {"memory_context": "", "memory_ids": [], "retrieval_log_id": None}
 
 
-async def reflect_to_engrams(
+async def reflect_to_memory(
     cycle_number: int,
     drive: str,
     urgency: float,
@@ -64,11 +64,11 @@ async def reflect_to_engrams(
     goal_id: str | None = None,
     budget_tier: str = "best",
 ) -> None:
-    """Ingest cycle outcome into engram network for long-term learning.
+    """Ingest cycle outcome into memory for long-term learning.
 
     Only ingests when an action was actually taken (not idle cycles).
     """
-    if not settings.reflect_to_engrams:
+    if not settings.reflect_to_memory:
         return
 
     raw_text = (
@@ -81,7 +81,7 @@ async def reflect_to_engrams(
     try:
         mem = get_memory()
         await mem.post(
-            "/api/v1/engrams/ingest",
+            "/api/v1/memory/ingest",
             json={
                 "raw_text": raw_text,
                 "source_type": "cortex",
@@ -95,9 +95,9 @@ async def reflect_to_engrams(
             },
             timeout=10.0,
         )
-        log.debug("Reflected cycle %d to engrams", cycle_number)
+        log.debug("Reflected cycle %d to memory", cycle_number)
     except Exception as e:
-        log.debug("Failed to reflect to engrams: %s", e)
+        log.debug("Failed to reflect to memory: %s", e)
 
 
 async def ingest_lesson(
@@ -109,12 +109,12 @@ async def ingest_lesson(
     goal_id: str | None = None,
     failure_mode: str | None = None,
 ) -> None:
-    """Ingest a reflection lesson into engrams for cross-goal learning.
+    """Ingest a reflection lesson into memory for cross-goal learning.
 
     Only called for reflections with non-null lessons (mid/best budget tier).
     Routine successes without surprising lessons are not ingested.
     """
-    if not settings.reflect_to_engrams:
+    if not settings.reflect_to_memory:
         return
 
     # Skip routine successes with no surprising lesson
@@ -138,7 +138,7 @@ async def ingest_lesson(
     try:
         mem = get_memory()
         await mem.post(
-            "/api/v1/engrams/ingest",
+            "/api/v1/memory/ingest",
             json={
                 "raw_text": raw_text,
                 "source_type": "cortex",
@@ -152,29 +152,26 @@ async def ingest_lesson(
         log.debug("Failed to ingest lesson: %s", e)
 
 
+# Process-local cooldown — the neutral API has no consolidation log to query.
+_last_consolidation_at: float = 0.0
+
+
 async def maybe_consolidate() -> bool:
-    """Trigger consolidation if enough time has passed since last run.
+    """Trigger backend consolidation if enough time has passed since last run.
 
     Returns True if consolidation was triggered.
     """
+    global _last_consolidation_at
     if not settings.idle_consolidation:
+        return False
+
+    if time.monotonic() - _last_consolidation_at < settings.consolidation_cooldown:
         return False
 
     try:
         mem = get_memory()
-
-        # Check last consolidation time
-        resp = await mem.get("/api/v1/engrams/consolidation-log?limit=1", timeout=5.0)
-        if resp.status_code == 200:
-            entries = resp.json().get("entries", [])
-            if entries:
-                last_at = datetime.fromisoformat(entries[0]["created_at"])
-                elapsed = (datetime.now(timezone.utc) - last_at).total_seconds()
-                if elapsed < settings.consolidation_cooldown:
-                    return False
-
-        # Trigger consolidation (fire and forget with timeout)
-        await mem.post("/api/v1/engrams/consolidate", timeout=5.0)
+        await mem.post("/api/v1/memory/consolidate", timeout=5.0)
+        _last_consolidation_at = time.monotonic()
         log.info("Triggered idle consolidation")
         return True
     except Exception as e:
@@ -182,16 +179,16 @@ async def maybe_consolidate() -> bool:
         return False
 
 
-async def mark_engrams_used(retrieval_log_id: str, engram_ids: list[str]) -> None:
-    """Report which engrams were used during planning."""
-    if not retrieval_log_id or not engram_ids:
+async def mark_memories_used(retrieval_log_id: str, memory_ids: list[str]) -> None:
+    """Report which memories were used during planning."""
+    if not retrieval_log_id or not memory_ids:
         return
     try:
         mem = get_memory()
         await mem.post(
-            "/api/v1/engrams/mark-used",
-            json={"retrieval_log_id": retrieval_log_id, "engram_ids_used": engram_ids},
+            "/api/v1/memory/mark-used",
+            json={"retrieval_log_id": retrieval_log_id, "used_ids": memory_ids},
             timeout=5.0,
         )
     except Exception as e:
-        log.debug("Failed to mark engrams used: %s", e)
+        log.debug("Failed to mark memories used: %s", e)

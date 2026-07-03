@@ -26,28 +26,35 @@ CORRECTION_PATTERNS = [
 ]
 
 
+async def _fetch_memory_items(
+    client: httpx.AsyncClient, memory_ids: list[str]
+) -> list[dict[str, str]]:
+    """Fetch item content from the neutral memory API. Missing ids skipped."""
+    items = []
+    for mid in memory_ids:
+        r = await client.get(f"{MEMORY_SERVICE}/api/v1/memory/item/{mid}")
+        if r.status_code == 200:
+            items.append({"id": mid, "content": r.json().get("content", "")})
+    return items
+
+
 async def score_memory_relevance(
-    engram_ids: list[str],
+    memory_ids: list[str],
     query_text: str,
 ) -> dict[str, Any] | None:
-    """Score how relevant retrieved engrams were to the user's query.
+    """Score how relevant retrieved memories were to the user's query.
 
-    Fetches engram content via batch endpoint, embeds both query and
-    engram texts, computes average cosine similarity.
+    Fetches item content via the neutral memory API, embeds both query and
+    item texts, computes average cosine similarity.
     """
-    if not engram_ids:
+    if not memory_ids:
         return None
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            # Fetch engram content
-            batch_r = await client.post(
-                f"{MEMORY_SERVICE}/api/v1/engrams/batch",
-                json={"ids": engram_ids},
-            )
-            if batch_r.status_code != 200 or not batch_r.json():
+            items = await _fetch_memory_items(client, memory_ids[:10])
+            if not items:
                 return None
-            engrams = batch_r.json()
 
             # Embed query (gateway contract: texts=list, response has embeddings=list[list])
             query_embed_r = await client.post(
@@ -60,19 +67,19 @@ async def score_memory_relevance(
             if not query_vec:
                 return None
 
-            # Embed each engram and compute similarities
+            # Embed each item and compute similarities
             similarities = []
-            for engram in engrams:
-                engram_embed_r = await client.post(
+            for item in items:
+                item_embed_r = await client.post(
                     f"{LLM_GATEWAY}/embed",
-                    json={"model": "auto", "texts": [engram["content"]]},
+                    json={"model": "auto", "texts": [item["content"][:2000]]},
                 )
-                if engram_embed_r.status_code != 200:
+                if item_embed_r.status_code != 200:
                     continue
-                engram_vec = (engram_embed_r.json().get("embeddings") or [[]])[0]
-                if engram_vec:
-                    sim = _cosine_similarity(query_vec, engram_vec)
-                    similarities.append({"engram_id": engram["id"], "similarity": sim})
+                item_vec = (item_embed_r.json().get("embeddings") or [[]])[0]
+                if item_vec:
+                    sim = _cosine_similarity(query_vec, item_vec)
+                    similarities.append({"memory_id": item["id"], "similarity": sim})
 
             if not similarities:
                 return None
@@ -84,7 +91,7 @@ async def score_memory_relevance(
             "score": max(0.0, min(1.0, avg_sim)),
             "confidence": min(1.0, len(similarities) / 5.0),
             "metadata": {
-                "engram_ids": engram_ids,
+                "memory_ids": memory_ids,
                 "similarities": similarities,
                 "query": query_text[:200],
             },
@@ -226,29 +233,23 @@ async def score_response_coherence(
 
 
 async def score_memory_usage(
-    engram_ids: list[str],
+    memory_ids: list[str],
     response_text: str,
 ) -> dict[str, Any] | None:
-    """Score whether retrieved engrams were actually used in the response.
+    """Score whether retrieved memories were actually used in the response.
 
-    Checks if key phrases from engram content appear in the assistant's response.
+    Checks if key phrases from item content appear in the assistant's response.
     High score = memory was useful. Low score = memory was retrieved but ignored.
     No embedding calls needed — pure text matching for speed.
     """
-    if not engram_ids or not response_text:
+    if not memory_ids or not response_text:
         return None
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            batch_r = await client.post(
-                f"{MEMORY_SERVICE}/api/v1/engrams/batch",
-                json={"ids": engram_ids[:10]},  # Cap at 10 to limit cost
-            )
-            if batch_r.status_code != 200:
-                return None
-            engrams = batch_r.json()
+            items = await _fetch_memory_items(client, memory_ids[:10])
 
-        if not engrams:
+        if not items:
             return None
 
         response_lower = response_text.lower()
@@ -256,13 +257,13 @@ async def score_memory_usage(
         checked = 0
         used_ids = []
 
-        for engram in engrams:
-            content = engram.get("content", "")
+        for item in items:
+            content = item.get("content", "")
             if len(content) < 10:
                 continue
             checked += 1
 
-            # Extract key phrases (3+ word sequences) from engram content
+            # Extract key phrases (3+ word sequences) from item content
             words = content.lower().split()
             # Check 3-grams for presence in response
             found = False
@@ -274,7 +275,7 @@ async def score_memory_usage(
 
             if found:
                 used += 1
-                used_ids.append(engram["id"])
+                used_ids.append(item["id"])
 
         if checked == 0:
             return None
@@ -286,8 +287,8 @@ async def score_memory_usage(
             "score": score,
             "confidence": min(1.0, checked / 5.0),
             "metadata": {
-                "engrams_checked": checked,
-                "engrams_used": used,
+                "items_checked": checked,
+                "items_used": used,
                 "used_ids": used_ids,
             },
         }

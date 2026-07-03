@@ -34,24 +34,24 @@ VALID_SCOPES = {"personal", "shared"}
 
 # ── Engram Redis client (db 0 — memory-service's queue) ─────────────────────
 
-_engram_redis: aioredis.Redis | None = None
+_ingestion_redis: aioredis.Redis | None = None
 
 
-def _get_engram_redis() -> aioredis.Redis:
-    """Get a Redis client for the engram ingestion queue (memory-service's DB 0)."""
-    global _engram_redis
-    if _engram_redis is None:
+def _get_ingestion_redis() -> aioredis.Redis:
+    """Get a Redis client for the memory ingestion queue (memory-service's DB 0)."""
+    global _ingestion_redis
+    if _ingestion_redis is None:
         base_url = settings.redis_url.rsplit("/", 1)[0]  # strip /2
-        _engram_redis = aioredis.from_url(f"{base_url}/0", decode_responses=True)
-    return _engram_redis
+        _ingestion_redis = aioredis.from_url(f"{base_url}/0", decode_responses=True)
+    return _ingestion_redis
 
 
-async def close_engram_redis() -> None:
-    """Close the engram Redis client. Call from orchestrator lifespan shutdown."""
-    global _engram_redis
-    if _engram_redis is not None:
-        await _engram_redis.aclose()
-        _engram_redis = None
+async def close_ingestion_redis() -> None:
+    """Close the ingestion-queue Redis client. Call from orchestrator lifespan shutdown."""
+    global _ingestion_redis
+    if _ingestion_redis is not None:
+        await _ingestion_redis.aclose()
+        _ingestion_redis = None
 
 
 # ── Request / Response models ────────────────────────────────────────────────
@@ -515,7 +515,7 @@ async def retrieve_credential(credential_id: UUID, _admin: AdminDep):
 
 @knowledge_router.post("/api/v1/knowledge/sources/{source_id}/paste")
 async def paste_content(source_id: UUID, req: PasteContentRequest, _user: UserDep):
-    """Manual content paste — pushes to engram ingestion queue. Tenant-scoped."""
+    """Manual content paste — pushes to the memory ingestion queue. Tenant-scoped."""
     tenant_id = _user.tenant_id
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -527,7 +527,7 @@ async def paste_content(source_id: UUID, req: PasteContentRequest, _user: UserDe
             raise HTTPException(status_code=404, detail="Source not found")
 
     try:
-        redis = _get_engram_redis()
+        redis = _get_ingestion_redis()
         payload = json.dumps({
             "raw_text": req.content,
             "source_type": "knowledge",
@@ -537,7 +537,7 @@ async def paste_content(source_id: UUID, req: PasteContentRequest, _user: UserDe
         })
         await redis.lpush("memory:ingestion:queue", payload)
     except Exception as e:
-        log.error("Failed to push to engram queue: %s", e)
+        log.error("Failed to push to ingestion queue: %s", e)
         raise HTTPException(status_code=500, detail="Failed to submit content for ingestion")
 
     log.info("Paste content submitted for source: %s", source_id)

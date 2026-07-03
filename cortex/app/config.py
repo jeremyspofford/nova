@@ -42,7 +42,7 @@ class Settings:
 
     # Memory integration
     memory_enabled: bool = os.getenv("CORTEX_MEMORY_ENABLED", "true").lower() == "true"
-    reflect_to_engrams: bool = os.getenv("CORTEX_REFLECT_TO_ENGRAMS", "true").lower() == "true"
+    reflect_to_memory: bool = os.getenv("CORTEX_REFLECT_TO_MEMORY", "true").lower() == "true"
     idle_consolidation: bool = os.getenv("CORTEX_IDLE_CONSOLIDATION", "true").lower() == "true"
     consolidation_cooldown: int = int(os.getenv("CORTEX_CONSOLIDATION_COOLDOWN", "1800"))
 

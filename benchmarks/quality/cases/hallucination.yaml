@@ -1,6 +1,6 @@
 - name: unknown_topic
   category: hallucination
-  seed_engrams: []
+  seed_memories: []
   conversation:
     - user: "What's my cat's name?"
   scoring:

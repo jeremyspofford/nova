@@ -30,7 +30,7 @@ from .store import OkfStore, extract_links
 
 log = logging.getLogger(__name__)
 
-# Trust defaults by producer (mirrors the engram sources table defaults)
+# Trust defaults by producer source kind
 TRUST_BY_SOURCE = {
     "chat": 0.95,
     "tool": 0.85,
@@ -120,6 +120,12 @@ class OkfBackend(MemoryBackend):
             items_updated=0 if created else 1,
             item_ids=[memory_id],
         )
+
+    async def delete(self, memory_id: str) -> bool:
+        deleted = await self.store.delete_file(memory_id)
+        if deleted:
+            self.index.refresh()
+        return deleted
 
     # ── context ──────────────────────────────────────────────────────────
 

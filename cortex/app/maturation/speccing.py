@@ -97,7 +97,7 @@ Respond with a single JSON object exactly matching this shape (no markdown fence
     {{"cmd": "<shell command>", "cwd": null, "timeout_s": <int>}}
   ],
   "success_criteria_structured": [
-    {{"statement": "<plain english>", "check": "<command|engram_query|llm_judge>", "check_arg": "<command-or-query-or-prompt>"}}
+    {{"statement": "<plain english>", "check": "<command|memory_query|llm_judge>", "check_arg": "<command-or-query-or-prompt>"}}
   ]
 }}
 

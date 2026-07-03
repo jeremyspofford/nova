@@ -1,6 +1,6 @@
 - name: format_compliance
   category: instruction_adherence
-  seed_engrams: []
+  seed_memories: []
   conversation:
     - user: "Respond with exactly one sentence summarizing what Nova is."
   scoring:

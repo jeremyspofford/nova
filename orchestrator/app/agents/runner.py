@@ -39,6 +39,12 @@ log = logging.getLogger(__name__)
 # run_agent_turn_streaming).
 _CITATION_LINK_RE = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
 
+# Replay-streaming of an already-generated answer (the tool-reuse path): reveal
+# it in small chunks so it looks like a live stream. ~48 chars every 15ms ≈
+# 3k chars/sec — fast enough to feel snappy, smooth enough to read as it lands.
+_REPLAY_CHUNK = 48
+_REPLAY_DELAY_S = 0.015
+
 
 async def run_agent_turn(
     agent_id: str,
@@ -55,13 +61,13 @@ async def run_agent_turn(
 ) -> TaskResult:
     """Execute one agent turn: memory retrieval → LLM call → memory storage → usage log.
 
-    tenant_id threads through to the memory-service /context call, the engram
+    tenant_id threads through to the memory-service /context call, the
     ingestion queue payload, and /mark-used feedback (FC-001). When the caller
     is an API key, derive it from AuthenticatedKey.tenant_id at the router.
 
-    skip_memory_storage skips the engram-queue push of the user/assistant
+    skip_memory_storage skips the ingestion-queue push of the user/assistant
     exchange. Used by the quality benchmark runner so synthetic conversations
-    don't pollute production memory (their seeded engrams carry a
+    don't pollute production memory (their seeded items carry a
     benchmark_run_id for teardown, but the live exchanges would not).
     """
     from app.usage import log_usage
@@ -107,10 +113,10 @@ async def run_agent_turn(
         if settings.memory_retrieval_mode == "tools":
             # Lightweight priming — agent uses memory tools for depth
             memory_ctx = await _get_domain_priming(session_id)
-            _mem_count, _engram_ids, _engram_summaries, _retrieval_log_id = 0, [], [], None
+            _mem_count, _memory_ids, _memory_summaries, _retrieval_log_id = 0, [], [], None
         else:
             # Legacy: full 40% context injection
-            memory_ctx, _mem_count, _engram_ids, _engram_summaries, _retrieval_log_id = await _get_memory_context(
+            memory_ctx, _mem_count, _memory_ids, _memory_summaries, _retrieval_log_id = await _get_memory_context(
                 agent_id, query, session_id, tenant_id=tenant_id,
             )
 
@@ -132,16 +138,16 @@ async def run_agent_turn(
         if not skip_memory_storage:
             await _store_exchange(agent_id, session_id, query, assistant_content, tenant_id=tenant_id)
 
-        # 4b. Mark engrams as used (ground truth for Neural Router training)
-        await _mark_engrams_used(_engram_ids, _retrieval_log_id, tenant_id=tenant_id)
+        # 4b. Mark memories as used (usage signal for ranking feedback)
+        await _mark_memories_used(_memory_ids, _retrieval_log_id, tenant_id=tenant_id)
 
         completed_at = datetime.now(timezone.utc)
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
         # 5. Log usage — fire-and-forget, no await
         _usage_meta = {"task_type": "chat"}
-        if _engram_ids:
-            _usage_meta["engram_ids"] = _engram_ids
+        if _memory_ids:
+            _usage_meta["memory_ids"] = _memory_ids
         log_usage(
             api_key_id=api_key_id,
             agent_id=UUID(agent_id),
@@ -227,7 +233,7 @@ async def run_agent_turn_streaming(
         pass
 
     category = None
-    _engram_ids: list[str] = []
+    _memory_ids: list[str] = []
     _retrieval_log_id: str | None = None
 
     # Resolve tool permissions before context build (fast DB read)
@@ -271,10 +277,10 @@ async def run_agent_turn_streaming(
             _mem_t = time.monotonic()
             memory_ctx = await _get_domain_priming(session_id)
             mem_ms = int((time.monotonic() - _mem_t) * 1000)
-            memory_count, _engram_ids, _engram_summaries, _retrieval_log_id = 0, [], [], None
+            memory_count, _memory_ids, _memory_summaries, _retrieval_log_id = 0, [], [], None
         else:
             _mem_t = time.monotonic()
-            memory_ctx, memory_count, _engram_ids, _engram_summaries, _retrieval_log_id = await _get_memory_context(
+            memory_ctx, memory_count, _memory_ids, _memory_summaries, _retrieval_log_id = await _get_memory_context(
                 agent_id, query, session_id, tenant_id=tenant_id,
             )
             mem_ms = int((time.monotonic() - _mem_t) * 1000)
@@ -284,10 +290,10 @@ async def run_agent_turn_streaming(
             yield json.dumps({"status": {"step": "classifying", "state": "done", "detail": category or "general", "elapsed_ms": cls_ms}})
         mem_detail = f"{memory_count} memor{'y' if memory_count == 1 else 'ies'}" if memory_count else "no memories"
         mem_status: dict = {"step": "memory", "state": "done", "detail": mem_detail, "elapsed_ms": mem_ms}
-        if _engram_ids:
-            mem_status["engram_ids"] = _engram_ids
-        if _engram_summaries:
-            mem_status["engram_summaries"] = _engram_summaries
+        if _memory_ids:
+            mem_status["memory_ids"] = _memory_ids
+        if _memory_summaries:
+            mem_status["memory_summaries"] = _memory_summaries
         yield json.dumps({"status": mem_status})
 
         if classified_model:
@@ -314,12 +320,19 @@ async def run_agent_turn_streaming(
         async def _push_tool_status(status: dict) -> None:
             await tool_queue.put(json.dumps({"status": status}))
 
+        async def _push_thinking(text: str) -> None:
+            # The model's planning prose from a tool round ("I'll search for
+            # X…"). Streamed to the UI as a live thinking block — previously
+            # this text was silently discarded.
+            await tool_queue.put(json.dumps({"think": text}))
+
         resolve_task = asyncio.create_task(_resolve_tool_rounds(
             messages=prompt_messages,
             model=model,
             metadata={"agent_id": agent_id, "session_id": session_id},
             tools=effective_tools,
             on_tool_status=_push_tool_status,
+            on_thinking=_push_thinking,
         ))
 
         # Drain tool status events while the tool loop runs concurrently
@@ -370,7 +383,12 @@ async def run_agent_turn_streaming(
         # common path once a tool has run.
         yield json.dumps({"status": {"step": "generating", "state": "running", "model": model, "category": category}})
         full_response.append(resolved_content)
-        yield resolved_content
+        # Replay-stream the already-generated answer in small chunks so it
+        # appears progressively (like a live token stream) instead of dumping
+        # 1000+ chars at once. The content is real; only the reveal is paced.
+        for i in range(0, len(resolved_content), _REPLAY_CHUNK):
+            yield resolved_content[i:i + _REPLAY_CHUNK]
+            await asyncio.sleep(_REPLAY_DELAY_S)
     else:
         # Final streaming turn: we want a text answer, not another tool call.
         # Anthropic's API *requires* tools= present when the message history
@@ -473,13 +491,13 @@ async def run_agent_turn_streaming(
 
     if full_response:
         await _store_exchange(agent_id, session_id, query, "".join(full_response), tenant_id=tenant_id)
-        await _mark_engrams_used(_engram_ids, _retrieval_log_id, tenant_id=tenant_id)
+        await _mark_memories_used(_memory_ids, _retrieval_log_id, tenant_id=tenant_id)
 
     completed_at = datetime.now(timezone.utc)
     duration_ms = int((completed_at - started_at).total_seconds() * 1000)
     _usage_meta = {"task_type": "chat"}
-    if _engram_ids:
-        _usage_meta["engram_ids"] = _engram_ids
+    if _memory_ids:
+        _usage_meta["memory_ids"] = _memory_ids
     log_usage(
         api_key_id=api_key_id,
         agent_id=UUID(agent_id),
@@ -510,29 +528,17 @@ async def _get_domain_priming(session_id: str) -> str:
 
         lines = []
 
-        # Always include self-model (pinned context)
-        self_model_resp = await memory_client.get("/api/v1/engrams/self-model")
-        if self_model_resp.status_code == 200:
-            sm = self_model_resp.json().get("self_model", "")
-            if sm:
-                lines.append(f"## About Me\n{sm}")
-
-        # Domain awareness summary
-        resp = await memory_client.get("/api/v1/engrams/sources/domain-summary")
+        # The bundle's root index (empty-query context) is the overview the
+        # OKF backend maintains for exactly this purpose.
+        resp = await memory_client.post(
+            "/api/v1/memory/context",
+            json={"query": "", "session_id": session_id},
+        )
         if resp.status_code == 200:
-            data = resp.json()
-            lines.append("## Your Knowledge")
-            lines.append(f"You have {data.get('engram_count', 0)} memories from {data.get('source_count', 0)} sources.")
-
-            domains = data.get("domains", [])
-            if domains:
-                lines.append(f"Topics: {', '.join(domains[:10])}")
-
-            sources = data.get("recent_sources", [])
-            if sources:
-                titles = [s["title"] for s in sources[:5] if s.get("title")]
-                if titles:
-                    lines.append(f"Recent sources: {', '.join(titles)}")
+            ctx = resp.json().get("context", "")
+            if ctx:
+                lines.append("## Your Knowledge")
+                lines.append(ctx)
 
         lines.append("Use your memory tools (search_memory, recall_topic, read_memory) to retrieve details, and remember() to store durable learnings.")
         return "\n".join(lines)
@@ -547,11 +553,11 @@ async def _get_memory_context(
     session_id: str = "",
     tenant_id: str | None = None,
 ) -> tuple[str, int, list[str], list[dict], str | None]:
-    """Fetch engram-powered memory context for prompt assembly.
+    """Fetch memory context for prompt assembly.
 
-    Calls the engram /context endpoint which returns a formatted prompt string
-    with sections (self-model, active goal, reconstructed memories, key decisions,
-    open threads). Returns (context_string, section_count, engram_ids, engram_summaries, retrieval_log_id).
+    Calls the neutral /context endpoint which returns a formatted prompt
+    string. Returns (context_string, section_count, memory_ids,
+    memory_summaries, retrieval_log_id).
     """
     if not query:
         return "", 0, [], [], None
@@ -941,6 +947,7 @@ async def _resolve_tool_rounds(
     max_rounds: int = 5,
     tools: list | None = None,
     on_tool_status: Callable | None = None,
+    on_thinking: Callable | None = None,
 ) -> tuple[list[Message], bool, str]:
     """
     Execute any tool-call rounds the LLM requests, returning the enriched
@@ -959,6 +966,7 @@ async def _resolve_tool_rounds(
         max_rounds=max_rounds,
         return_messages=True,
         on_tool_status=on_tool_status,
+        on_thinking=on_thinking,
     )
     return current, used_tools, content or ""
 
@@ -1026,6 +1034,7 @@ async def _run_tool_loop(
     max_rounds: int = 5,
     return_messages: bool = False,
     on_tool_status: Callable | None = None,
+    on_thinking: Callable | None = None,
     tool_context: dict | None = None,
 ) -> tuple[str, int, int, float | None] | tuple[str, int, int, float | None, list[Message], bool]:
     """
@@ -1039,6 +1048,9 @@ async def _run_tool_loop(
                 [] → no tools.
         on_tool_status:  Optional async callback for emitting tool execution status
                          events to the SSE stream.
+        on_thinking:  Optional async callback receiving the model's planning
+                      prose from tool rounds (the text it writes alongside a
+                      tool call), for live display as "thinking".
     """
     effective_tools = get_all_tools() if tools is None else tools
     llm_client = get_llm_client()
@@ -1065,6 +1077,12 @@ async def _run_tool_loop(
 
         used_tools = True
         log.info("Tool-use round %d: %d tool call(s)", round_num + 1, len(tool_calls))
+
+        # Surface the model's planning prose (text it wrote alongside the tool
+        # call, e.g. "I'll search for recent news…") as live thinking.
+        round_prose = (last_completion.get("content") or "").strip()
+        if round_prose and on_thinking:
+            await on_thinking(round_prose)
 
         # Set assistant content from completion before delegating to helper
         current.append(Message(
@@ -1103,6 +1121,13 @@ async def _run_tool_loop(
                 tool_call_id=tc["id"],
                 content=result,
             ))
+
+        # Tools for this round are done — the next model call is (usually) the
+        # answer. Surface a "generating" step now so the UI shows live progress
+        # during that generation instead of a silent gap. Harmless if the next
+        # round turns out to be another tool call.
+        if on_tool_status:
+            await on_tool_status({"step": "generating", "state": "running"})
 
     base = (
         last_completion.get("content", ""),
@@ -1168,32 +1193,31 @@ async def _store_exchange(
     assistant_response: str,
     tenant_id: str | None = None,
 ) -> None:
-    """Emit the exchange to the engram ingestion queue for graph decomposition.
+    """Emit the exchange to the memory ingestion queue.
 
-    The engram ingestion worker (memory-service) consumes this asynchronously
-    via BRPOP, decomposes it into atomic engrams, and builds the memory graph.
+    The memory-service consumer picks this up asynchronously and routes it
+    to the active backend's write().
     """
-    await _emit_to_engram_queue(agent_id, session_id, user_message, assistant_response, tenant_id=tenant_id)
+    await _emit_to_ingestion_queue(agent_id, session_id, user_message, assistant_response, tenant_id=tenant_id)
 
 
-async def _mark_engrams_used(
-    engram_ids: list[str],
+async def _mark_memories_used(
+    memory_ids: list[str],
     retrieval_log_id: str | None,
     tenant_id: str | None = None,
 ) -> None:
-    """Fire-and-forget: tell memory-service which engrams were used.
+    """Fire-and-forget: tell memory-service which memories were used.
 
-    Initial heuristic: mark ALL context engrams as used. This is a coarse
-    but functional signal — the NN learns "these engrams were selected for
-    context" which is still valuable. Refinement can be added later.
+    Initial heuristic: mark ALL context items as used — a coarse but
+    functional ranking signal. Refinement can be added later.
     """
-    if not retrieval_log_id or not engram_ids:
+    if not retrieval_log_id or not memory_ids:
         return
     try:
         memory_client = await get_memory_client_async()
         body = {
             "retrieval_log_id": retrieval_log_id,
-            "used_ids": engram_ids,
+            "used_ids": memory_ids,
         }
         if tenant_id:
             body["tenant_id"] = tenant_id
@@ -1205,18 +1229,18 @@ async def _mark_engrams_used(
         log.debug("Failed to mark memories used: %s", e)
 
 
-_engram_redis: object | None = None
+_ingestion_redis: object | None = None
 
 
-def _get_engram_redis():
-    """Get a Redis client for the engram ingestion queue (memory-service's DB 0)."""
-    global _engram_redis
-    if _engram_redis is None:
+def _get_ingestion_redis():
+    """Get a Redis client for the memory ingestion queue (memory-service's DB 0)."""
+    global _ingestion_redis
+    if _ingestion_redis is None:
         import redis.asyncio as aioredis
         # Memory-service uses Redis DB 0 — push to the same DB it consumes from
         base_url = settings.redis_url.rsplit("/", 1)[0]  # strip /2
-        _engram_redis = aioredis.from_url(f"{base_url}/0", decode_responses=True)
-    return _engram_redis
+        _ingestion_redis = aioredis.from_url(f"{base_url}/0", decode_responses=True)
+    return _ingestion_redis
 
 
 def _bump_activity_heartbeat() -> None:
@@ -1229,7 +1253,7 @@ def _bump_activity_heartbeat() -> None:
     consolidation behaves as before.
     """
     try:
-        redis = _get_engram_redis()
+        redis = _get_ingestion_redis()
         # 15-minute TTL is plenty longer than any configured idle window
         # and keeps the key from sticking around after a long outage.
         asyncio.create_task(
@@ -1239,21 +1263,21 @@ def _bump_activity_heartbeat() -> None:
         log.debug("Failed to bump activity heartbeat: %s", e)
 
 
-async def _emit_to_engram_queue(
+async def _emit_to_ingestion_queue(
     agent_id: str,
     session_id: str,
     user_message: str,
     assistant_response: str,
     tenant_id: str | None = None,
 ) -> None:
-    """Push a conversation exchange to the engram ingestion queue via Redis LPUSH.
+    """Push a conversation exchange to the memory ingestion queue via Redis LPUSH.
 
-    The memory-service ingestion worker consumes this asynchronously via BRPOP,
-    decomposes it into atomic engrams, and builds the memory graph.
+    The memory-service consumer picks it up asynchronously and routes it to
+    the active backend's write().
     Pushes to Redis DB 0 (memory-service's DB) regardless of orchestrator's DB.
     """
     try:
-        redis = _get_engram_redis()
+        redis = _get_ingestion_redis()
 
         raw_text = f"User: {user_message}\n\nAssistant: {assistant_response}"
         payload_dict = {
@@ -1269,4 +1293,4 @@ async def _emit_to_engram_queue(
         payload = json.dumps(payload_dict)
         await redis.lpush("memory:ingestion:queue", payload)
     except Exception as e:
-        log.warning("Failed to emit to engram queue: %s", e)
+        log.warning("Failed to emit to ingestion queue: %s", e)

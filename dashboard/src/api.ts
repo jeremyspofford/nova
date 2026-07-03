@@ -346,6 +346,7 @@ export type StreamEvent =
   | { meta: StreamMeta }
   | { status: ActivityStep }
   | { heartbeat: number }  // elapsed_ms since the turn started — proof-of-life during long work
+  | { think: string }      // the model's planning prose from a tool round, shown live
 
 /**
  * Stream a chat turn directly with the primary Nova agent.
@@ -412,6 +413,10 @@ export async function* streamChat(
           }
           if (parsed.hb !== undefined) {
             yield { heartbeat: parsed.hb as number }
+            continue
+          }
+          if (parsed.think !== undefined) {
+            yield { think: parsed.think as string }
             continue
           }
         } catch {

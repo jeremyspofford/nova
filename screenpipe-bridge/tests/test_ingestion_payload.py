@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 import redis.asyncio as redis_async
-from app.engram_producer import EngramProducer
+from app.ingestion_producer import IngestionProducer
 from app.session_aggregator import FocusSession
 from app.tenant import DEFAULT_TENANT
 
@@ -14,7 +14,7 @@ _TEST_QUEUE = "memory:ingestion:queue:test"
 async def test_payload_shape_matches_decomposer_contract():
     r = redis_async.from_url("redis://localhost:6379/0")
     await r.delete(_TEST_QUEUE)
-    producer = EngramProducer(redis=r, device_id="primary", trust=0.80, queue_key=_TEST_QUEUE)
+    producer = IngestionProducer(redis=r, device_id="primary", trust=0.80, queue_key=_TEST_QUEUE)
     started = datetime(2026, 5, 2, 14, 32, 0, tzinfo=timezone.utc)
     ended = datetime(2026, 5, 2, 14, 51, 0, tzinfo=timezone.utc)
     session = FocusSession(

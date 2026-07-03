@@ -3,8 +3,9 @@ Backend factory — resolves the active MemoryBackend from runtime config.
 
 `memory.backend` lives in Redis db1 (key nova:config:memory.backend,
 JSON-encoded, written by the orchestrator's runtime-config sync) and is
-re-read with a short cache so the dashboard can switch backends without
-a restart. Unknown or unset values fall back to the engram backend.
+re-read with a short cache. "okf" is the only built-in backend; unknown
+values fall back to it with a warning. An external provider is configured
+via memory.provider_url on the orchestrator side, not here.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import redis.asyncio as aioredis
 from app.config import settings
 
 from .base import ContextResult, MemoryBackend, WriteResult
-from .engram_backend import EngramBackend
 
 __all__ = [
     "MemoryBackend",
@@ -57,19 +57,11 @@ async def close_config_redis() -> None:
 
 def _instantiate(name: str) -> MemoryBackend:
     if name not in _instances:
-        if name == "okf":
-            try:
-                from .okf.backend import OkfBackend  # deferred import
+        # Fail loudly: memory is load-bearing, a broken backend must surface
+        # at the call site instead of silently degrading.
+        from .okf.backend import OkfBackend
 
-                _instances[name] = OkfBackend()
-            except ImportError:
-                log.error(
-                    "memory.backend=okf but the OKF backend is unavailable — "
-                    "falling back to engram"
-                )
-                return _instantiate("engram")
-        else:
-            _instances[name] = EngramBackend()
+        _instances[name] = OkfBackend()
     return _instances[name]
 
 
@@ -96,12 +88,10 @@ async def current_backend_name() -> str:
     except Exception:
         log.debug("memory.backend Redis read failed — using default", exc_info=True)
 
-    if name not in ("engram", "okf"):
-        log.warning("Unknown memory.backend %r — falling back to engram", name)
-        name = "engram"
+    if name != "okf":
+        log.warning("Unknown memory.backend %r — using okf", name)
+        name = "okf"
 
-    if name != _cached_name and _cached_name is not None:
-        log.info("Memory backend switched: %s → %s", _cached_name, name)
     _cached_name, _cached_at = name, now
     return name
 

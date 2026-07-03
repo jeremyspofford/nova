@@ -3,8 +3,8 @@
 Each criterion is one of:
   {"check": "command", "check_arg": "<shell>"}
       → look up the cmd in cmd_results; pass = exit_code == 0
-  {"check": "engram_query", "check_arg": "<query string>"}
-      → memory-service /context query; pass = ≥1 engram with importance ≥ 0.5
+  {"check": "memory_query", "check_arg": "<query string>"}
+      → memory-service /context query; pass = ≥1 matching memory item
   {"check": "llm_judge", "check_arg": "<prompt>"}
       → ask a tier=cheap LLM yes/no with criterion + cmd_results + quartet_review as evidence
 """
@@ -30,8 +30,8 @@ async def evaluate_criteria(
         try:
             if kind == "command":
                 passed, evidence = _eval_command(arg, cmd_results)
-            elif kind == "engram_query":
-                passed, evidence = await _eval_engram(arg)
+            elif kind == "memory_query":
+                passed, evidence = await _eval_memory(arg)
             elif kind == "llm_judge":
                 passed, evidence = await _eval_llm(arg, statement, cmd_results, quartet_review)
             else:
@@ -51,18 +51,17 @@ def _eval_command(arg: str, cmd_results: list[dict]) -> tuple[bool, str]:
     return False, "command not found in run set"
 
 
-async def _eval_engram(arg: str) -> tuple[bool, str]:
+async def _eval_memory(arg: str) -> tuple[bool, str]:
     from ..clients import get_memory
     mem = get_memory()
     try:
-        r = await mem.post("/api/v1/engrams/context", json={"query": arg, "k": 5})
+        r = await mem.post("/api/v1/memory/context", json={"query": arg})
         if r.status_code != 200:
             return False, f"memory http {r.status_code}"
-        engs = r.json().get("engrams") or []
-        good = [e for e in engs if (e.get("importance") or 0.0) >= 0.5]
-        return len(good) >= 1, f"matches={len(good)}"
+        ids = r.json().get("memory_ids") or []
+        return len(ids) >= 1, f"matches={len(ids)}"
     except Exception as e:
-        return False, f"engram err: {e}"
+        return False, f"memory err: {e}"
 
 
 async def _eval_llm(prompt_template: str, statement: str,

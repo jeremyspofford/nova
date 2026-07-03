@@ -4,7 +4,7 @@ Memory Provider Interface contracts — the abstract contract for any memory sys
 Any service implementing endpoints that accept/return these types
 is a valid drop-in memory provider for Nova's orchestrator. The neutral
 HTTP surface lives at /api/v1/memory/* on the memory-service; backends
-(engram graph, OKF markdown bundle, external providers) plug in behind it.
+(OKF markdown bundle, external providers) plug in behind it.
 """
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class ExplainRequest(BaseModel):
 
 
 class ExplainResponse(BaseModel):
-    """Reasoning trace — engram: activation path; markdown: matching lines."""
+    """Reasoning trace — backend-specific, e.g. matching lines for markdown BM25."""
     memory_id: str
     explanation: str
     matched_fragments: list[str] = Field(default_factory=list)

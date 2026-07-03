@@ -24,7 +24,7 @@ _RUNTIME_CONFIG_KEYS = [
     "nova:config:retrieval.spread_weight",
     "nova:config:llm.routing_strategy",
     "nova:config:inference.backend",
-    "nova:config:engram.consolidation_enabled",
+    "nova:config:memory.backend",
 ]
 
 

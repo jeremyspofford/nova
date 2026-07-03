@@ -108,6 +108,12 @@ class MemoryBackend(ABC):
         agent's read tools when an excerpt isn't enough."""
         return None
 
+    async def delete(self, memory_id: str) -> bool:
+        """Delete one memory item (False if missing). Used by benchmark
+        teardown so seeded test memories don't pollute the store.
+        Default: unsupported."""
+        raise NotImplementedError
+
     async def explain(self, memory_id: str, query: str) -> dict[str, Any]:
         """Why did this memory match? Default: unsupported."""
         return {

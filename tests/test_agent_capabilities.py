@@ -69,7 +69,7 @@ class TestAgentToolAvailability:
 
         internal_only_tools = {
             "diagnose_task", "check_service_health", "get_recent_errors",
-            "search_memory", "recall_topic", "what_do_i_know", "read_source",
+            "search_memory", "recall_topic", "what_do_i_know",
             "get_platform_config", "list_knowledge_sources",
         }
         exposed = internal_only_tools & tool_names

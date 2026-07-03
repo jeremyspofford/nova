@@ -1,4 +1,4 @@
-"""Dual-Redis queue helpers -- knowledge-worker state (db8) and engram ingestion (db0)."""
+"""Dual-Redis queue helpers -- knowledge-worker state (db8) and memory ingestion (db0)."""
 import logging
 from urllib.parse import urlparse, urlunparse
 
@@ -15,16 +15,16 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 _redis_state = None   # db8 — knowledge-worker own state
-_redis_engram = None  # db0 — engram ingestion queue
+_redis_memory = None  # db0 — memory ingestion queue
 
 
 async def init_queues() -> None:
-    global _redis_state, _redis_engram
+    global _redis_state, _redis_memory
     _redis_state = await create_redis_client(settings.redis_url)
     parsed = urlparse(settings.redis_url)
-    engram_url = urlunparse(parsed._replace(path="/0"))
-    _redis_engram = await create_redis_client(engram_url)
-    log.info("Redis queues initialized (state=db8, engram=db0)")
+    memory_url = urlunparse(parsed._replace(path="/0"))
+    _redis_memory = await create_redis_client(memory_url)
+    log.info("Redis queues initialized (state=db8, memory=db0)")
 
 
 def get_state_redis():
@@ -33,21 +33,21 @@ def get_state_redis():
     return _redis_state
 
 
-def get_engram_redis():
-    if _redis_engram is None:
-        raise RuntimeError("Engram Redis client not initialized")
-    return _redis_engram
+def get_memory_redis():
+    if _redis_memory is None:
+        raise RuntimeError("Memory Redis client not initialized")
+    return _redis_memory
 
 
-async def push_to_engram(
+async def push_to_memory(
     raw_text: str,
     source_type: str = "knowledge",
     source_id: str | None = None,
     metadata: dict | None = None,
 ) -> None:
-    """Push content to memory-service's engram ingestion queue."""
+    """Push content to memory-service's ingestion queue."""
     await _push_memory(
-        _redis_engram,
+        _redis_memory,
         raw_text=raw_text,
         source_type=source_type,
         source_id=source_id,
@@ -56,10 +56,10 @@ async def push_to_engram(
 
 
 async def close_queues() -> None:
-    global _redis_state, _redis_engram
+    global _redis_state, _redis_memory
     if _redis_state:
         await close_redis_client(_redis_state)
         _redis_state = None
-    if _redis_engram:
-        await close_redis_client(_redis_engram)
-        _redis_engram = None
+    if _redis_memory:
+        await close_redis_client(_redis_memory)
+        _redis_memory = None

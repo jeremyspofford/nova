@@ -4,19 +4,6 @@ from .chat import (
     SessionInfo,
     StreamChunkMessage,
 )
-from .engram import (
-    DecomposedContradiction,
-    DecomposedEngram,
-    DecomposedRelationship,
-    DecompositionResult,
-    EdgeRelation,
-    EngramDetail,
-    EngramType,
-    IngestionEvent,
-    IngestionSourceType,
-    IngestRequest,
-    IngestResponse,
-)
 from .llm import (
     BlastRadius,
     CompleteRequest,
@@ -61,9 +48,6 @@ __all__ = [
     "AgentStatus", "AgentConfig", "CreateAgentRequest", "AgentInfo",
     "TaskType", "SubmitTaskRequest", "TaskStatus", "TaskResult",
     "ChatMessageType", "ChatMessage", "StreamChunkMessage", "SessionInfo",
-    "EngramType", "EdgeRelation", "IngestionSourceType", "IngestionEvent",
-    "DecomposedEngram", "DecomposedRelationship", "DecomposedContradiction",
-    "DecompositionResult", "IngestRequest", "IngestResponse", "EngramDetail",
     "ContextRequest", "ContextResponse",
     "MemoryIngestRequest", "MemoryIngestResponse",
     "MarkUsedRequest", "ProviderStats",

@@ -1,7 +1,7 @@
 """Load benchmark cases from YAML fixtures.
 
 One file per category in benchmarks/quality/cases/. Each file is a list
-of cases. Each case declares: name, category, seed_engrams, conversation,
+of cases. Each case declares: name, category, seed_memories, conversation,
 scoring (per-dimension rules).
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ _REQUIRED_FIELDS = {"name", "category", "conversation", "scoring"}
 class BenchmarkCase:
     name: str
     category: str
-    seed_engrams: list[dict[str, Any]] = field(default_factory=list)
+    seed_memories: list[dict[str, Any]] = field(default_factory=list)
     conversation: list[dict[str, str]] = field(default_factory=list)
     scoring: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -57,7 +57,7 @@ def load_cases(cases_dir: Path, category: str | None = None) -> list[BenchmarkCa
                 BenchmarkCase(
                     name=raw["name"],
                     category=raw["category"],
-                    seed_engrams=raw.get("seed_engrams", []),
+                    seed_memories=raw.get("seed_memories", []),
                     conversation=raw["conversation"],
                     scoring=raw["scoring"],
                 )

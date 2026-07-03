@@ -21,7 +21,7 @@ Two concerns:
 
 Why not API keys? That requires DB access on the hot path for key lookup.
 Short-term, admin-secret + trusted-network covers the daily-driver threat
-model (Tailnet + LAN abuse of paid tokens + unauthenticated engram exfil).
+model (Tailnet + LAN abuse of paid tokens + unauthenticated memory exfil).
 API key support is a reasonable future extension — pass a `lookup_api_key`
 callback to `create_admin_auth_dep`.
 """

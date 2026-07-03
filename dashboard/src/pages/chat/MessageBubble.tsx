@@ -1,7 +1,7 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { FileText } from 'lucide-react'
+import { FileText, Brain, ChevronRight } from 'lucide-react'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -25,6 +25,37 @@ const MOBILE_TEXT_SIZE_CLASSES: Record<TextSize, string> = {
 }
 
 const VOICE_TEXT_CLASS = 'text-[20px] leading-[1.6]'
+
+/**
+ * Live "thinking" block — the model's planning prose from tool rounds.
+ * Auto-expanded while the model is still working with no answer yet; once the
+ * answer starts, it collapses to a one-line disclosure the user can re-open.
+ */
+function ThinkingBlock({ text, streaming, hasAnswer }: { text: string; streaming: boolean; hasAnswer: boolean }) {
+  const autoOpen = streaming && !hasAnswer
+  const [open, setOpen] = useState(autoOpen)
+  // Follow the auto state until the user interacts (once answer lands, collapse).
+  const [touched, setTouched] = useState(false)
+  const expanded = touched ? open : autoOpen
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => { setTouched(true); setOpen(!expanded) }}
+        className="flex items-center gap-1.5 text-caption text-content-tertiary hover:text-content-secondary transition-colors"
+      >
+        <Brain size={12} className="shrink-0 text-amber-400/70" />
+        <span>{streaming && !hasAnswer ? 'Thinking' : 'Thought process'}</span>
+        <ChevronRight size={11} className={clsx('shrink-0 transition-transform', expanded && 'rotate-90')} />
+      </button>
+      {expanded && (
+        <div className="mt-1.5 pl-2 border-l-2 border-amber-400/20 text-caption text-content-tertiary whitespace-pre-wrap leading-relaxed">
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function LoadingDots({ thinking }: { thinking: boolean }) {
   return (
@@ -124,6 +155,14 @@ export const MessageBubble = memo(function MessageBubble({
             steps={message.activitySteps}
             collapsed={message.activityCollapsed ?? false}
             isStreaming={message.isStreaming ?? false}
+          />
+        )}
+
+        {message.thinking && (
+          <ThinkingBlock
+            text={message.thinking}
+            streaming={message.isStreaming ?? false}
+            hasAnswer={!!cleanedContent}
           />
         )}
 

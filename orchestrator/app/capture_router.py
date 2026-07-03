@@ -39,39 +39,32 @@ async def close_capture_redis() -> None:
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
+SESSIONS_KEY = "nova:capture:sessions"
+
+
+async def _read_session_records(limit: int = 500) -> list[dict]:
+    """Read bridge-recorded capture sessions (newest first, capped list)."""
+    redis = _get_capture_redis()
+    raw_items = await redis.lrange(SESSIONS_KEY, 0, limit - 1)
+    records = []
+    for raw in raw_items:
+        try:
+            rec = json.loads(raw)
+            if isinstance(rec, dict):
+                records.append(rec)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return records
+
+
 @router.get("/sessions")
 async def list_sessions(limit: int = Query(50, ge=1, le=500)):
-    """List screenpipe capture sessions, most recent first."""
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, source_kind, uri, title, metadata, trust_score, ingested_at
-              FROM sources
-             WHERE source_kind = 'screenpipe'
-             ORDER BY ingested_at DESC
-             LIMIT $1
-            """,
-            limit,
-        )
-    return {
-        "sessions": [
-            {
-                "id": str(r["id"]),
-                "source_kind": r["source_kind"],
-                "uri": r["uri"],
-                "title": r["title"],
-                "metadata": (
-                    r["metadata"]
-                    if isinstance(r["metadata"], dict)
-                    else (json.loads(r["metadata"]) if r["metadata"] else {})
-                ),
-                "trust_score": r["trust_score"],
-                "ingested_at": r["ingested_at"].isoformat(),
-            }
-            for r in rows
-        ]
-    }
+    """List screenpipe capture sessions, most recent first.
+
+    Backed by the bridge-maintained Redis list (nova:capture:sessions) —
+    the memory backend stores session content, not queryable rows.
+    """
+    return {"sessions": await _read_session_records(limit)}
 
 
 @router.get("/today-stats")
@@ -80,28 +73,24 @@ async def today_stats():
     today_start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT metadata, ingested_at
-              FROM sources
-             WHERE source_kind = 'screenpipe' AND ingested_at >= $1
-            """,
-            today_start,
-        )
+    records = await _read_session_records()
+    rows = []
+    for rec in records:
+        try:
+            ingested = datetime.fromisoformat(
+                str(rec.get("ingested_at", "")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if ingested >= today_start:
+            rows.append(rec)
 
     sessions_count = len(rows)
     by_app: dict[str, float] = {}
     captured_seconds = 0.0
 
     for r in rows:
-        meta_raw = r["metadata"]
-        meta = (
-            meta_raw
-            if isinstance(meta_raw, dict)
-            else (json.loads(meta_raw) if meta_raw else {})
-        )
+        meta = r.get("metadata") or {}
         try:
             start = datetime.fromisoformat(
                 meta["captured_at_start"].replace("Z", "+00:00")

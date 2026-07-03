@@ -11,7 +11,7 @@ from app.db import get_pool
 from app.quality_loop.cases import BenchmarkCase, load_cases
 from app.quality_loop.score import SCORER_REGISTRY
 from app.quality_loop.snapshot import capture_snapshot
-from app.quality_loop.teardown import teardown_benchmark_engrams
+from app.quality_loop.teardown import teardown_benchmark_memories
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -181,7 +181,7 @@ async def run_quality_benchmark_v2(
     Captures a config snapshot, loads cases from
     benchmarks/quality/cases/*.yaml, runs each in-process via
     run_agent_turn, scores against the unified vocabulary, and tears
-    down seeded engrams in a finally block. Returns run_id immediately;
+    down seeded memories in a finally block. Returns run_id immediately;
     actual work runs in a background task.
     """
     pool = get_pool()
@@ -278,7 +278,7 @@ async def _run_benchmark_v2(run_id: str, category: str | None) -> None:
                 await _mark_failed(pool, run_id, "no benchmark cases found")
                 return
 
-            seeded_engram_ids: list[str] = []
+            seeded_memory_ids: list[str] = []
             case_results: list[dict] = []
             error_summary_parts: list[str] = []
 
@@ -287,7 +287,7 @@ async def _run_benchmark_v2(run_id: str, category: str | None) -> None:
                     log.info("Benchmark[%s]: running %s", run_id[:8], case.name)
                     try:
                         case_seeded, case_scores = await _run_single_case(case, run_id)
-                        seeded_engram_ids.extend(case_seeded)
+                        seeded_memory_ids.extend(case_seeded)
                         case_results.append({
                             "name": case.name,
                             "category": case.category,
@@ -345,11 +345,11 @@ async def _run_benchmark_v2(run_id: str, category: str | None) -> None:
                 log.info("Benchmark[%s] completed: %.1f composite", run_id[:8], composite)
 
             finally:
-                if seeded_engram_ids:
-                    deleted = await teardown_benchmark_engrams(seeded_engram_ids)
+                if seeded_memory_ids:
+                    deleted = await teardown_benchmark_memories(seeded_memory_ids)
                     log.info(
-                        "Benchmark[%s] teardown: %d/%d engrams deleted",
-                        run_id[:8], deleted, len(seeded_engram_ids),
+                        "Benchmark[%s] teardown: %d/%d memories deleted",
+                        run_id[:8], deleted, len(seeded_memory_ids),
                     )
     except Exception as e:
         log.exception("Benchmark[%s] crashed: %s", run_id[:8], e)
@@ -363,9 +363,9 @@ async def _run_single_case(
     case: BenchmarkCase,
     run_id: str,
 ) -> tuple[list[str], dict[str, float]]:
-    """Seed engrams, run conversation, score per-dimension.
+    """Seed memories, run conversation, score per-dimension.
 
-    Returns (seeded_engram_ids, scores_by_dimension).
+    Returns (seeded_memory_ids, scores_by_dimension).
     """
     from app.agents.runner import run_agent_turn
     from app.model_resolver import resolve_default_model
@@ -374,21 +374,28 @@ async def _run_single_case(
     tag = run_id[:8]
     seeded_ids: list[str] = []
 
-    # Seed benchmark engrams via the memory-service ingestion endpoint.
+    # Seed benchmark memories via the neutral memory API. Written as concept
+    # files (okf title/target) so they're BM25-retrievable and individually
+    # deletable in teardown.
     async with httpx.AsyncClient(timeout=120) as client:
-        for engram in case.seed_engrams:
+        for i, seed in enumerate(case.seed_memories):
             r = await client.post(
-                "http://memory-service:8002/api/v1/engrams/ingest",
+                "http://memory-service:8002/api/v1/memory/ingest",
                 json={
-                    "raw_text": f"[benchmark:{tag}] {engram['content']}",
-                    "source_type": engram.get("source_type", "chat"),
-                    "source_metadata": {"benchmark_run_id": run_id},
+                    "raw_text": f"[benchmark:{tag}] {seed['content']}",
+                    "source_type": seed.get("source_type", "chat"),
+                    "metadata": {
+                        "benchmark_run_id": run_id,
+                        "okf": {
+                            "type": "note",
+                            "title": f"Benchmark {tag} seed {i}",
+                            "target": f"topics/benchmark-{tag}-seed-{i}.md",
+                        },
+                    },
                 },
             )
             if r.status_code in (200, 201):
-                seeded_ids.extend(r.json().get("engram_ids", []))
-            # Give the ingestion worker a beat to drain before the next ingest.
-            await asyncio.sleep(1)
+                seeded_ids.extend(r.json().get("item_ids", []))
 
     # Resolve a real agent — _build_nova_context and other helpers walk the
     # agent registry, so we cannot use a synthetic ID. ensure_primary_agent
@@ -398,7 +405,7 @@ async def _run_single_case(
     model = primary.config.model or await resolve_default_model()
     system_prompt = primary.config.system_prompt
 
-    # One disposable session per case so memory cache and engram queue
+    # One disposable session per case so memory cache and ingestion queue
     # don't conflate cases. Tool tracker keys off this same session_id.
     session_id = f"benchmark-{run_id[:8]}-{case.name}"
 
@@ -424,7 +431,7 @@ async def _run_single_case(
                     api_key_id=None,
                     explicit_model=True,  # don't reroute via classifier
                     agent_name=primary.config.name,
-                    skip_memory_storage=True,  # benchmarks don't pollute production engram graph
+                    skip_memory_storage=True,  # benchmarks don't pollute production memory
                 )
             except Exception as e:
                 log.warning("Benchmark[%s] case %s turn failed: %s",
@@ -460,9 +467,9 @@ async def _run_single_case(
         mode, fn = SCORER_REGISTRY[dim]
         try:
             if dim == "memory_relevance":
-                # Retrieved engram IDs aren't surfaced from run_agent_turn
+                # Retrieved memory IDs aren't surfaced from run_agent_turn
                 # today; intersection with seeded_ids approximates retrieval.
-                # Until the runner threads engram_ids back, we treat any
+                # Until the runner threads memory_ids back, we treat any
                 # response that mentions the seed text as a "hit" via
                 # downstream dimensions; here we pass empty retrieved.
                 scores[dim] = await fn(rule, [], seeded_ids)

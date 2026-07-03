@@ -2,16 +2,14 @@
 Memory Tools — agent-callable knowledge retrieval and writing.
 
 These tools talk to the neutral memory API (/api/v1/memory/*) on the
-memory-service, so they work identically whichever backend is active
-(engram graph or OKF markdown bundle).
+memory-service (OKF markdown bundle backend).
 
 Tools provided:
   what_do_i_know   -- lightweight overview of what memory holds
   search_memory    -- ranked retrieval for a query
   recall_topic     -- comprehensive recall about one entity/topic
   read_memory      -- full content of one memory item by id
-  read_source      -- full content of a source record (engram backend)
-  remember         -- write a durable memory (concept file / engram)
+  remember         -- write a durable memory (concept file)
   get_memory_stats -- backend name, item counts, health
 """
 from __future__ import annotations
@@ -24,7 +22,6 @@ from nova_contracts import BlastRadius, ToolDefinition
 log = logging.getLogger(__name__)
 
 MEMORY_BASE = "http://memory-service:8002/api/v1/memory"
-ENGRAM_BASE = "http://memory-service:8002/api/v1/engrams"
 _TIMEOUT = httpx.Timeout(15.0)
 
 # ─── Tool definitions (what the LLM sees) ────────────────────────────────────
@@ -100,29 +97,10 @@ MEMORY_TOOLS: list[ToolDefinition] = [
             "properties": {
                 "memory_id": {
                     "type": "string",
-                    "description": "Memory id, e.g. 'topics/gpu-setup.md' or an engram UUID",
+                    "description": "Memory id, e.g. 'topics/gpu-setup.md'",
                 },
             },
             "required": ["memory_id"],
-        },
-        blast_radius=BlastRadius.READ,
-    ),
-    ToolDefinition(
-        name="read_source",
-        description=(
-            "Read the full content of a source document (raw material behind "
-            "memories — articles, conversations, crawled pages). Only available "
-            "on the engram backend; on the markdown backend use read_memory."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "source_id": {
-                    "type": "string",
-                    "description": "UUID of the source to read",
-                },
-            },
-            "required": ["source_id"],
         },
         blast_radius=BlastRadius.READ,
     ),
@@ -200,8 +178,6 @@ async def execute_tool(name: str, arguments: dict) -> str:
             return await _recall_topic(arguments)
         elif name == "read_memory":
             return await _read_memory(arguments)
-        elif name == "read_source":
-            return await _read_source(arguments)
         elif name == "remember":
             return await _remember(arguments)
         elif name == "get_memory_stats":
@@ -228,28 +204,9 @@ async def _context(query: str, depth: str = "standard") -> dict:
 
 
 async def _what_do_i_know(args: dict) -> str:
-    # Backend-aware: engram has richer topic/domain views; okf's root index
-    # (returned by an empty-query context call) IS the overview.
+    # The bundle's root index (returned by an empty-query context call) IS
+    # the overview.
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        backend_resp = await c.get(f"{MEMORY_BASE}/backend")
-        backend = backend_resp.json().get("backend", "engram") if backend_resp.status_code == 200 else "engram"
-
-        if backend == "engram":
-            resp = await c.get(f"{ENGRAM_BASE}/sources/domain-summary")
-            if resp.status_code == 200:
-                data = resp.json()
-                lines = [
-                    f"Knowledge overview ({data.get('engram_count', '?')} memories "
-                    f"from {data.get('source_count', '?')} sources):"
-                ]
-                if data.get("domains"):
-                    lines.append(f"\nKey topics: {', '.join(data['domains'][:10])}")
-                if data.get("recent_sources"):
-                    lines.append("\nRecent sources:")
-                    for s in data["recent_sources"][:10]:
-                        lines.append(f"  - [{s.get('kind', '?')}] {s.get('title', '?')}")
-                return "\n".join(lines)
-
         resp = await c.post(f"{MEMORY_BASE}/context", json={"query": ""})
         resp.raise_for_status()
         ctx = resp.json().get("context", "")
@@ -293,42 +250,6 @@ async def _read_memory(args: dict) -> str:
     if len(content) > 15000:
         content = content[:15000] + f"\n\n[... truncated, {len(content)} chars total]"
     header = f"# {data.get('title', memory_id)} [{data.get('type', '?')}] ({memory_id})"
-    return f"{header}\n\n{content}"
-
-
-async def _read_source(args: dict) -> str:
-    source_id = args.get("source_id", "")
-    if not source_id:
-        return "source_id is required."
-
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        meta_resp = await c.get(f"{ENGRAM_BASE}/sources/{source_id}")
-        if meta_resp.status_code == 404:
-            return f"Source '{source_id}' not found."
-        meta_resp.raise_for_status()
-        meta = meta_resp.json()
-
-        content_resp = await c.get(f"{ENGRAM_BASE}/sources/{source_id}/content")
-        if content_resp.status_code == 404:
-            if meta.get("uri"):
-                return (
-                    f"Source '{meta.get('title', source_id)}' is a reference — "
-                    f"content not stored locally. Original URI: {meta['uri']}\n"
-                    f"Summary: {meta.get('summary', 'No summary available.')}"
-                )
-            return "Source content not available."
-        content_resp.raise_for_status()
-        content = content_resp.json().get("content", "")
-
-    header = f"Source: {meta.get('title', 'Untitled')} [{meta['source_kind']}]"
-    if meta.get("author"):
-        header += f" by {meta['author']}"
-    if meta.get("trust_score"):
-        header += f" (trust: {meta['trust_score']:.1f})"
-
-    if len(content) > 15000:
-        content = content[:15000] + f"\n\n[... truncated, {len(content)} chars total]"
-
     return f"{header}\n\n{content}"
 
 

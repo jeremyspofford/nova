@@ -281,20 +281,20 @@ async def _process_new_messages() -> int:
             try:
                 quality_scores = []
 
-                # Memory relevance — check if engrams were injected
-                engram_ids = []
+                # Memory relevance — check if memories were injected
+                memory_ids = []
                 if assistant_row.get("metadata"):
                     meta = assistant_row["metadata"]
                     if isinstance(meta, str):
                         meta = json.loads(meta)
-                    engram_ids = meta.get("engram_ids", [])
+                    memory_ids = meta.get("memory_ids", [])
 
-                if engram_ids:
-                    relevance = await score_memory_relevance(engram_ids, user_text)
+                if memory_ids:
+                    relevance = await score_memory_relevance(memory_ids, user_text)
                     quality_scores.append(relevance)
 
                     # Memory usage — did the response actually use retrieved memories?
-                    usage = await score_memory_usage(engram_ids, assistant_text)
+                    usage = await score_memory_usage(memory_ids, assistant_text)
                     quality_scores.append(usage)
 
                 # Memory recall — correction detection
