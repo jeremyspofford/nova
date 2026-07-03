@@ -61,10 +61,6 @@ def _resolve_api_key(provider: str) -> str:
     # Fall back to env var from Settings
     if provider == "openai":
         return settings.openai_api_key
-    elif provider == "deepgram":
-        return settings.deepgram_api_key
-    elif provider == "elevenlabs":
-        return settings.elevenlabs_api_key
     return ""
 
 

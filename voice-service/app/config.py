@@ -14,8 +14,6 @@ class Settings(BaseSettings):
 
     # API keys
     openai_api_key: str = ""
-    deepgram_api_key: str = ""
-    elevenlabs_api_key: str = ""
 
     # Auth
     require_auth: bool = True

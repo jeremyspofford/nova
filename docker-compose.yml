@@ -214,29 +214,6 @@ services:
           "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live', timeout=3)",
         ]
 
-  neural-router-trainer:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: memory-service/Dockerfile
-    command: python -m app.engram.neural_router.train
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
-      REDIS_URL: redis://redis:6379/6
-      LLM_GATEWAY_URL: http://llm-gateway:8001
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
-
   orchestrator:
     <<: *nova-common
     extra_hosts:

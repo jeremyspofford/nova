@@ -20,7 +20,7 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 - **cortex** (8100) — Autonomous brain: thinking loop, goals, drives, budget tracking (FastAPI + asyncpg)
 - **intel-worker** (8110) — AI ecosystem feed poller: RSS, Reddit JSON, page change detection, GitHub trending/releases. Pushes content via orchestrator HTTP API, queues to engram ingestion (FastAPI, health-only server)
 - **knowledge-worker** (8120) — Autonomous personal knowledge crawler: LLM-guided web crawling, GitHub API extraction, encrypted credential storage (FastAPI). Optional, start with `--profile knowledge`.
-- **voice-service** (8130) — STT/TTS provider proxy: OpenAI Whisper, OpenAI TTS, Deepgram, ElevenLabs (FastAPI). Optional, start with `--profile voice`.
+- **voice-service** (8130) — STT/TTS provider proxy: OpenAI Whisper, OpenAI TTS (FastAPI). Optional, start with `--profile voice`.
 - **browser-worker** (8150) — Playwright browser automation: navigate, snapshot (numbered accessibility-tree elements), act (click/type/select), submit forms, sign up for accounts. Persistent per-domain profiles so logins survive restarts. Optional, start with `--profile browser` (Playwright image ~1.5GB).
 - **screenpipe-bridge** (8140) — Subscribes to a user-installed [screenpipe](https://screenpi.pe/) daemon (workstation-side) over WebSocket (HTTP polling fallback), aggregates raw events into 30-min-capped focus sessions, applies a two-layer privacy denylist, pushes payloads to engram ingestion queue (FastAPI + websockets + httpx + redis). Optional, requires user-installed screenpipe daemon.
 - **redis** (6379) — State, task queue (BRPOP), rate limiting, session memory (data bind-mounted to `./data/redis/`)

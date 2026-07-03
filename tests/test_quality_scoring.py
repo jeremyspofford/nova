@@ -87,6 +87,9 @@ class TestQualityAPI:
     async def test_summary_requires_admin(
         self, orchestrator_client: httpx.AsyncClient
     ):
+        from conftest import REQUIRE_AUTH
+        if not REQUIRE_AUTH:
+            pytest.skip("REQUIRE_AUTH=false — auth enforcement not active")
         r = await orchestrator_client.get("/api/v1/quality/summary?period=7d")
         assert r.status_code in (401, 403)
 
@@ -107,5 +110,8 @@ class TestBenchmarkAPI:
     async def test_benchmark_results_requires_admin(
         self, orchestrator_client: httpx.AsyncClient
     ):
+        from conftest import REQUIRE_AUTH
+        if not REQUIRE_AUTH:
+            pytest.skip("REQUIRE_AUTH=false — auth enforcement not active")
         r = await orchestrator_client.get("/api/v1/benchmarks/quality-results")
         assert r.status_code in (401, 403)

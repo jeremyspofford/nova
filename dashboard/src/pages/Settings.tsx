@@ -661,7 +661,7 @@ export function Settings() {
                 label="STT Provider"
                 configKey="voice.stt_provider"
                 value={voiceSttProvider}
-                description="Speech-to-text: openai (Whisper), deepgram"
+                description="Speech-to-text: openai (Whisper)"
                 onSave={handleSave}
                 saving={saveMutation.isPending}
               />
@@ -669,7 +669,7 @@ export function Settings() {
                 label="TTS Provider"
                 configKey="voice.tts_provider"
                 value={voiceTtsProvider}
-                description="Text-to-speech: openai, elevenlabs"
+                description="Text-to-speech: openai"
                 onSave={handleSave}
                 saving={saveMutation.isPending}
               />
