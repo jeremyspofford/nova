@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNovaIdentity } from '../hooks/useNovaIdentity'
 import { useAuth } from '../stores/auth-store'
-import { LogIn, UserPlus, Eye, EyeOff, ChevronDown, ChevronUp, User } from 'lucide-react'
+import { LogIn, UserPlus, Eye, EyeOff, ChevronDown, ChevronUp, KeyRound, User } from 'lucide-react'
+import { setAdminSecret } from '../api'
 import { Button, Input } from '../components/ui'
 
 export function Login() {
@@ -20,6 +21,36 @@ export function Login() {
   const [submitting, setSubmitting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [showInviteField, setShowInviteField] = useState(false)
+  const [showAdminSecret, setShowAdminSecret] = useState(false)
+  const [adminSecretInput, setAdminSecretInput] = useState('')
+  const [adminError, setAdminError] = useState<string | null>(null)
+  const [adminSubmitting, setAdminSubmitting] = useState(false)
+
+  // Operator path: the admin secret from .env. This MUST live on the login
+  // page — the Settings paste field is behind the very credential it stores
+  // (bootstrap paradox; SEC2 made it bite). Verified against an admin
+  // endpoint before storing so a typo doesn't silently break every page.
+  const handleAdminSecret = async () => {
+    const v = adminSecretInput.trim()
+    if (!v) return
+    setAdminError(null)
+    setAdminSubmitting(true)
+    try {
+      const resp = await fetch('/api/v1/tools', { headers: { 'X-Admin-Secret': v } })
+      if (resp.status === 429) {
+        setAdminError('Too many failed attempts from this address — wait a few minutes and try again.')
+      } else if (!resp.ok) {
+        setAdminError('Invalid admin secret. It is the ADMIN_SECRET value in your .env file.')
+      } else {
+        setAdminSecret(v)
+        window.location.href = '/chat'
+      }
+    } catch {
+      setAdminError('Could not reach the orchestrator to verify the secret.')
+    } finally {
+      setAdminSubmitting(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -250,6 +281,46 @@ export function Login() {
             )}
           </div>
         )}
+
+        {/* Operator path: admin secret from .env */}
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowAdminSecret(v => !v)}
+            className="flex items-center gap-1 text-caption text-content-tertiary hover:text-content-secondary transition-colors font-sans mx-auto"
+          >
+            <KeyRound size={13} />
+            Instance operator? Use the admin secret
+            {showAdminSecret ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+          {showAdminSecret && (
+            <div className="mt-3 bg-surface-card border border-border rounded-lg p-4 space-y-3 shadow-sm glass-card dark:border-white/[0.08]">
+              <Input
+                label="Admin secret"
+                type="password"
+                value={adminSecretInput}
+                onChange={e => setAdminSecretInput(e.target.value)}
+                placeholder="ADMIN_SECRET from your .env"
+                autoComplete="off"
+              />
+              {adminError && (
+                <div className="rounded-sm bg-danger/10 border border-danger/30 px-3 py-2 text-caption text-danger font-sans">
+                  {adminError}
+                </div>
+              )}
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                className="w-full"
+                loading={adminSubmitting}
+                onClick={handleAdminSecret}
+              >
+                Unlock admin
+              </Button>
+            </div>
+          )}
+        </div>
 
         {/* Toggle login / register */}
         {showRegister && !isFirstUser && (
