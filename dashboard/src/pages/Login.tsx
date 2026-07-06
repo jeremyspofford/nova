@@ -290,11 +290,16 @@ export function Login() {
             className="flex items-center gap-1 text-caption text-content-tertiary hover:text-content-secondary transition-colors font-sans mx-auto"
           >
             <KeyRound size={13} />
-            Instance operator? Use the admin secret
+            Break-glass: instance admin secret
             {showAdminSecret ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
           {showAdminSecret && (
             <div className="mt-3 bg-surface-card border border-border rounded-lg p-4 space-y-3 shadow-sm glass-card dark:border-white/[0.08]">
+              <p className="text-caption text-content-tertiary">
+                For recovery and automation — day-to-day admin is your owner account.
+                The secret is the <span className="font-mono">ADMIN_SECRET</span> value in this
+                instance's <span className="font-mono">.env</span>.
+              </p>
               <Input
                 label="Admin secret"
                 type="password"

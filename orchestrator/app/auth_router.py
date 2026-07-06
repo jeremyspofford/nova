@@ -117,12 +117,19 @@ async def register(req: RegisterRequest, request: Request):
     from app.jwt_auth import create_access_token, create_refresh_token
     from app.users import count_users, create_user, get_user_by_email
 
+    # First-boot exemption: the FIRST account is the instance owner creating
+    # their own instance — there is nobody to invite them and no admin to ask.
+    # Without this, an invite-mode instance can never create its first account
+    # through the UI (bootstrap paradox). All later registrations go through
+    # the configured mode as usual.
+    is_first_user = (await count_users()) == 0
+
     # Check registration mode
-    if settings.registration_mode == "admin":
+    if settings.registration_mode == "admin" and not is_first_user:
         raise HTTPException(status_code=403, detail="Registration is disabled. Ask an admin to create your account.")
 
     invite = None
-    if settings.registration_mode == "invite":
+    if settings.registration_mode == "invite" and not is_first_user:
         if not req.invite_code:
             raise HTTPException(status_code=400, detail="Invite code required")
         # Validate invite code
@@ -148,7 +155,6 @@ async def register(req: RegisterRequest, request: Request):
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     # Determine role and expiry from invite
-    user_count = await count_users()
     invite_role = "member"
     invite_tenant_id = "00000000-0000-0000-0000-000000000001"
     account_expires_at = None
@@ -160,7 +166,7 @@ async def register(req: RegisterRequest, request: Request):
             account_expires_at = datetime.now(timezone.utc) + timedelta(hours=invite["account_expires_in_hours"])
 
     # First user is always owner
-    if user_count == 0:
+    if is_first_user:
         invite_role = "owner"
         is_admin = True
     else:

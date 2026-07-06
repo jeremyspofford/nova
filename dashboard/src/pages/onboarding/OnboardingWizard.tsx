@@ -3,18 +3,21 @@ import clsx from 'clsx'
 import { Check } from 'lucide-react'
 import type { HardwareInfo } from '../../api-recovery'
 import { Welcome } from './steps/Welcome'
+import { CreateAccount } from './steps/CreateAccount'
 import { HardwareDetection } from './steps/HardwareDetection'
 import { ChooseEngine } from './steps/ChooseEngine'
 import { PickModel } from './steps/PickModel'
 import { Downloading } from './steps/Downloading'
 import { Ready } from './steps/Ready'
+import { useAuth } from '../../stores/auth-store'
 
-type Step = 'welcome' | 'hardware' | 'engine' | 'model' | 'downloading' | 'ready'
+type Step = 'welcome' | 'account' | 'hardware' | 'engine' | 'model' | 'downloading' | 'ready'
 
-const stepOrder: Step[] = ['welcome', 'hardware', 'engine', 'model', 'downloading', 'ready']
+const stepOrder: Step[] = ['welcome', 'account', 'hardware', 'engine', 'model', 'downloading', 'ready']
 
 const stepLabels: Record<Step, string> = {
   welcome: 'Welcome',
+  account: 'Account',
   hardware: 'Hardware',
   engine: 'Engine',
   model: 'Model',
@@ -23,7 +26,11 @@ const stepLabels: Record<Step, string> = {
 }
 
 export function OnboardingWizard() {
+  const { authConfig } = useAuth()
   const [step, setStep] = useState<Step>('welcome')
+  // Wizard re-runs on an instance that already has accounts skip the
+  // account step — it only exists to mint the FIRST owner.
+  const hasUsers = authConfig?.has_users === true
   const [hardware, setHardware] = useState<HardwareInfo | null>(null)
   const [engine, setEngine] = useState<'vllm' | 'ollama' | 'cloud' | 'lmstudio'>('ollama')
   const [model, setModel] = useState('')
@@ -120,7 +127,10 @@ export function OnboardingWizard() {
         {/* Step content card */}
         <div className="bg-surface-card rounded-lg border border-border-subtle shadow-sm glass-card dark:border-white/[0.08]">
           {step === 'welcome' && (
-            <Welcome onNext={() => setStep('hardware')} onSkip={handleSkip} />
+            <Welcome onNext={() => setStep(hasUsers ? 'hardware' : 'account')} onSkip={handleSkip} />
+          )}
+          {step === 'account' && (
+            <CreateAccount onNext={() => setStep('hardware')} />
           )}
           {step === 'hardware' && (
             <HardwareDetection onNext={handleHardwareNext} />

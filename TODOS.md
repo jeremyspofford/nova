@@ -48,6 +48,14 @@ These are the gaps preventing Nova from being truly self-directed. Ordered by im
 **Status (corrected 2026-07-05):** they exist (`test_cortex_*`, `test_maturation_*`, `test_decomposition_*`, `test_drive_scheduling`). Remaining: fix the two `test_drive_scheduling` tests that fail on `ModuleNotFoundError: app.drives` (import cortex internals not on the tests' pythonpath) and extend TRACK-phase feedback coverage.
 **Added:** 2026-03-27 · corrected 2026-07-05
 
+## Config & identity charter (Jeremy, 2026-07-06)
+
+Direction locked in conversation; first tranche shipped same day (owner account in onboarding, first-user invite exemption, break-glass relabel).
+
+- **UI-first configuration:** Nova ships with logical defaults; everything user-facing is editable in Settings (platform_config / platform_secrets). `.env` shrinks to machine bootstrap only (ports, bind mounts, `POSTGRES_PASSWORD`, `CREDENTIAL_MASTER_KEY`) — supersedes/absorbs FU-010 + SEC4. No flow may ever instruct a human to copy a value out of `.env` except break-glass recovery.
+- **Identity:** the onboarding wizard creates the owner account (that password IS the admin credential); owners/admins invite others with roles; multiple admins allowed; role taxonomy owner / admin / member / guest + a future **`service` role**: token-only (no password/login), owns API keys, named audit attribution. Evidence it's needed: `cortex@system.nova` already exists as a de-facto service account with role OWNER — formalizing `service` should demote it. Admin secret = break-glass + automation only.
+- **Export/import (design, not built):** encrypted instance bundle (user passphrase, age/AES-GCM) = pg_dump + OKF memory folder + key material (`CREDENTIAL_MASTER_KEY` — without it, restored platform_secrets are undecryptable). Import allowed on first-boot instances or with admin + typed confirmation. Builds on the recovery service's existing backup/restore. Security posture: fine if encrypted + authz-gated; refuse plaintext export.
+
 ## Post-SEC2 follow-up: onboarding wizard credential bootstrap
 
 **What:** the first-boot wizard's non-flag writes (provider keys, engine/model selection via admin PATCHes) still require admin credentials. Pre-SEC2 the trusted-network bypass papered over this; post-SEC2 a fresh install accessed through the dashboard proxy (or from a non-loopback device) will 403 on those steps. The gate/skip path is fixed (public one-shot `/api/v1/onboarding/status` + `/complete`), so nobody gets trapped — but a full wizard run needs the operator's admin secret.
