@@ -108,6 +108,15 @@ async def trigger_goal(goal_id: UUID):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to dispatch: {e}")
 
+    # Register with the background monitor so the outcome flows through
+    # TRACK like any scheduled run — manual triggers must feed goal
+    # progress and reflections (learning), not vanish after dispatch.
+    try:
+        from . import task_monitor
+        task_monitor.dispatch(task_id, str(goal_id), 0, "Manual trigger: " + user_input[:200])
+    except Exception as e:
+        log.warning("Manual trigger not registered for tracking (task %s): %s", task_id, e)
+
     # Only update after successful dispatch
     async with pool.acquire() as conn:
         await conn.execute(

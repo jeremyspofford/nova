@@ -25,8 +25,8 @@ Sequenced plan approved by Jeremy 2026-07-05 (also tracked as tasks #1–15 in t
 These are the gaps preventing Nova from being truly self-directed. Ordered by impact.
 
 ### Maturation Pipeline Executor + Learning from Failures + Cortex Tests (B3)
-**Status (corrected 2026-07-05 — see `architecture/05-dead-code.md` §0):** the maturation executor SHIPPED (`cortex/app/cycle.py:610-645` dispatches scoping/speccing/building/verifying; `drives/maintain.py` runs triage) and cortex/maturation/decomposition tests EXIST (15+ files in `tests/`). The only genuinely open piece:
-**Learning from failures (3d):** PLAN phase queries `/api/v1/memory/context` for reflection entries — cortex reflections already flow through the OKF ingestion queue into journal/topics, so this is a pure retrieval change.
+**Status (corrected 2026-07-05 — see `architecture/05-dead-code.md` §0):** the maturation executor SHIPPED (`cortex/app/cycle.py:610-645` dispatches scoping/speccing/building/verifying; `drives/maintain.py` runs triage) and cortex/maturation/decomposition tests EXIST (15+ files in `tests/`).
+**Learning from failures — RESOLVED 2026-07-06:** the loop was fully built all along (record_reflection on TRACK outcomes + LLM lesson extraction + ingest_lesson into OKF memory + query_reflections injected into PLAN with "do NOT repeat failed approaches") but was starved from birth: the cortex jsonb double-encoding crashed `_update_goal_progress`, and reflection recording shared its try block — zero rows for months. Fixed the corruption, split the try blocks, registered manual triggers with task_monitor (operator "run now" outcomes now teach), bumped the silent DEBUG failure logs to WARNING, added an INFO line when PLAN injects reflections. Verified live: first reflection row appeared the cycle after the jsonb fix; `tests/test_learning_from_failures.py` pins it.
 
 ### Goal Decomposition
 **Status (corrected 2026-07-05):** SHIPPED — the building phase spawns child goals / flat `goal_tasks` with a depth wall, covered by 4 `test_decomposition_*` files (currently red only from the Groq-key cascade, not logic — see `architecture/05-dead-code.md` §5·B).

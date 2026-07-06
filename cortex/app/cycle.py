@@ -208,28 +208,33 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
         # Collect results from background task monitor
         completed_tasks = task_monitor.collect_completed()
         for pending, outcome in completed_tasks:
+            # Progress update and reflection are SEPARATE trys on purpose: a
+            # crash in one must not starve the other. The old shared block
+            # meant months of zero reflections — the jsonb corruption killed
+            # _update_goal_progress first, and learning silently died with it.
             try:
                 await _update_goal_progress(pending.goal_id, outcome, pending.cycle_dispatched)
                 log.info(
                     "Processed background result: task %s goal %s status=%s",
                     pending.task_id, pending.goal_id, outcome.status,
                 )
-                # Record reflection for completed background tasks
-                if outcome.status in ("complete", "failed"):
-                    bg_state = CycleState(
-                        cycle_number=pending.cycle_dispatched,
-                        goal_id=pending.goal_id,
-                        action_taken="serve",
-                        task_outcome=outcome,
-                        plan_text=pending.plan_text,
-                        outcome=f"Background task {pending.task_id}: {outcome.status}",
-                    )
-                    try:
-                        await _record_cycle_reflection(bg_state)
-                    except Exception as e2:
-                        log.debug("Failed to record background reflection: %s", e2)
             except Exception as e:
                 log.warning("Failed to process background task %s: %s", pending.task_id, e)
+
+            # Record reflection for completed background tasks
+            if outcome.status in ("complete", "failed"):
+                bg_state = CycleState(
+                    cycle_number=pending.cycle_dispatched,
+                    goal_id=pending.goal_id,
+                    action_taken="serve",
+                    task_outcome=outcome,
+                    plan_text=pending.plan_text,
+                    outcome=f"Background task {pending.task_id}: {outcome.status}",
+                )
+                try:
+                    await _record_cycle_reflection(bg_state)
+                except Exception as e2:
+                    log.warning("Failed to record background reflection: %s", e2)
 
         # ── Reactive stimulus dispatch ─────────────────────────────────────
         # Process CI triage stimuli before drive evaluation — they dispatch
@@ -452,8 +457,13 @@ async def _plan_action(drive: DriveResult, state: CycleState) -> str:
                 desc = goal.get("description") or ""
                 desc_hash = compute_approach_hash(desc) if desc else None
                 reflection_history = format_reflection_history(reflections, current_goal_desc_hash=desc_hash)
+                if reflections:
+                    log.info(
+                        "PLAN: injecting %d prior reflection(s) for goal %s (%s)",
+                        len(reflections), goal_id, goal.get("title", "")[:40],
+                    )
             except Exception as e:
-                log.debug("Failed to query reflections for goal %s: %s", goal_id, e)
+                log.warning("Failed to query reflections for goal %s: %s", goal_id, e)
 
     skip_instruction = ""
     if forced:
@@ -1219,7 +1229,7 @@ async def _record_cycle_reflection(state: CycleState) -> None:
                 goal_id=state.goal_id, failure_mode=failure_mode,
             )
         except Exception as e:
-            log.debug("Lesson ingestion failed: %s", e)
+            log.warning("Lesson ingestion failed (cross-goal learning gap): %s", e)
 
 
 async def _extract_lesson(approach: str, outcome: str, detail: str) -> tuple[str | None, str | None]:
