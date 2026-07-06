@@ -12,12 +12,12 @@ Covers three classes of fix shipped together:
 3. Anti-brute-force throttle on `require_admin()` — per-IP failure counter,
    rejects further attempts with 429 once the threshold is hit.
 
-Trusted-network caveat: integration tests run from localhost, which is in the
-default trusted CIDRs (127.0.0.0/8). That bypass intentionally short-circuits
-admin auth — so we cannot trigger the failed-attempt counter from the test
-runner. The rate-limit primitives are validated via unit tests against the
-Redis backend directly. The integration tests still verify that admin
-endpoints don't accept random bad secrets when auth is actually checked.
+SEC2 (2026-07-06): require_admin no longer has a trusted-network bypass —
+network position grants USER-surface access only; admin always requires
+credentials. That makes admin auth genuinely testable from the test runner
+(the old caveat about localhost short-circuiting admin checks is gone), and
+this file now pins the new posture: no credentials → 401/403 on admin
+endpoints regardless of source network.
 """
 from __future__ import annotations
 
@@ -201,3 +201,68 @@ def test_service_has_fc002_check(main_path, identifier):
     assert "NOVA_ALLOW_DEFAULT_ADMIN_SECRET" in src, (
         f"{identifier}: FC-002 check missing the test-bypass env var"
     )
+
+
+@pytest.mark.timeout(150)
+def test_fc002_hard_fails_at_boot_with_default_secret():
+    """SEC3 behavioral proof: the orchestrator process actually refuses to start.
+
+    Runs the lifespan startup inside a throwaway container with the literal
+    default secret and the escape hatch disabled — FC-002 must raise before
+    anything else (it precedes DB init, so --no-deps is safe).
+    """
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "docker", "compose", "run", "--rm", "--no-deps",
+            "-e", "NOVA_ADMIN_SECRET=nova-admin-secret-change-me",
+            "-e", "NOVA_ALLOW_DEFAULT_ADMIN_SECRET=0",
+            "orchestrator",
+            "python", "-c",
+            "import asyncio\n"
+            "from app.main import app, lifespan\n"
+            "asyncio.run(lifespan(app).__aenter__())",
+        ],
+        capture_output=True, text=True, timeout=140, cwd=ROOT,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, (
+        f"orchestrator started with the default admin secret (exit 0):\n{combined[-800:]}"
+    )
+    assert "NOVA_ADMIN_SECRET is set to the literal default" in combined, (
+        f"exited nonzero but not via FC-002:\n{combined[-800:]}"
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# SEC2: admin endpoints never trust network position
+# ───────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_admin_requires_credentials_even_from_trusted_network():
+    """No credentials → 401/403 on admin endpoints, regardless of source CIDR.
+
+    The test runner's traffic arrives from loopback/docker-gateway — inside
+    the trusted ranges. Before SEC2 this returned 200 via the bypass; the
+    factory-reset incident rode exactly that hole.
+    """
+    async with httpx.AsyncClient(timeout=10) as c:
+        resp = await c.get(f"{ORCHESTRATOR}/api/v1/tools")
+        assert resp.status_code in (401, 403), (
+            f"admin endpoint served without credentials: {resp.status_code} "
+            "— trusted-network bypass is back on require_admin"
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_accepts_credentials():
+    """The credentialed path still works after removing the bypass."""
+    if not ADMIN_SECRET:
+        pytest.skip("NOVA_ADMIN_SECRET not set in test env")
+    async with httpx.AsyncClient(timeout=10) as c:
+        resp = await c.get(
+            f"{ORCHESTRATOR}/api/v1/tools",
+            headers={"X-Admin-Secret": ADMIN_SECRET},
+        )
+        assert resp.status_code == 200, resp.text

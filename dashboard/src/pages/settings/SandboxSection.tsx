@@ -226,9 +226,10 @@ export function SandboxSection({ entries, onSave, saving }: ConfigSectionProps) 
           <div>
             <div className="text-compact font-medium text-content-primary">Home tier access</div>
             <div className="text-caption text-content-tertiary mt-0.5">
-              Let agents read and write anywhere in your home directory. Off by default — enabling this
-              widens the blast radius of prompt injection. Bind-mount still gates access to paths outside
-              your home.
+              Let agents read anywhere in your home directory. Off by default — enabling this
+              widens the blast radius of prompt injection. Writing additionally requires{' '}
+              <span className="font-mono">NOVA_HOME_MOUNT=rw</span> in .env (the mount is
+              read-only by default) and a restart.
             </div>
           </div>
           <button

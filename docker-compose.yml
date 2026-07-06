@@ -286,9 +286,12 @@ services:
       # home tier is admin-opt-in (sandbox.home_enabled in platform_config).
       # Dropped 2026-04-17 / SEC-001: the /:/host-root:rw mount (the
       # `root` sandbox tier was RCE-by-design against any prompt injection).
-      # Override with NOVA_HOME_MOUNT=ro if you want to lock home tier to
-      # read-only at the mount layer (defence-in-depth on top of the UI toggle).
-      - ${HOME}:${HOME}:${NOVA_HOME_MOUNT:-rw}
+      # SEC1 (2026-07-06): read-only at the mount layer BY DEFAULT — writing
+      # to $HOME requires the explicit opt-in NOVA_HOME_MOUNT=rw in .env on
+      # top of the UI toggle. Defence-in-depth: a prompt-injected agent with
+      # the home tier enabled still can't modify dotfiles/keys unless the
+      # operator opted the mount into rw.
+      - ${HOME}:${HOME}:${NOVA_HOME_MOUNT:-ro}
     ports:
       - "8000:8000"
     depends_on:

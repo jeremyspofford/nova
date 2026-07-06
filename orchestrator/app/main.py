@@ -240,9 +240,13 @@ async def _seed_config_from_env() -> None:
 
     SEEDS = {
         # (config_key, env_value, default_db_value)
+        # default_db_value = "the shipped default" — a DB row equal to it is
+        # treated as never-customized and follows .env. Rows that differ
+        # (including pre-SEC2 installs holding the old broad CIDR list) are
+        # user state and are never overwritten.
         "trusted_networks": (
             settings.trusted_networks,
-            "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128",
+            "127.0.0.0/8,::1/128",
         ),
         "trusted_proxy_header": (settings.trusted_proxy_header, ""),
         "auth.require_auth": (str(settings.require_auth).lower(), "true"),
@@ -269,10 +273,11 @@ async def _seed_config_from_env() -> None:
                     except Exception:
                         pass
                 if db_val == default_val or db_val == "":
-                    json_val = json.dumps(env_val)
+                    # The pool's jsonb codec encodes — pre-dumping here
+                    # double-encodes (the migration-087 disease).
                     await conn.execute(
                         "UPDATE platform_config SET value = $2::jsonb, updated_at = NOW() WHERE key = $1",
-                        key, json_val,
+                        key, env_val,
                     )
                     seeded.append(key)
         if seeded:

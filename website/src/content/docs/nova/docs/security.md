@@ -36,6 +36,12 @@ Authorization: Bearer sk-nova-...
 X-API-Key: sk-nova-...
 ```
 
+### Trusted networks
+
+Requests from trusted CIDRs (**loopback only by default**; add your LAN or tailnet ranges in **Settings → System → Trusted Networks**) skip login for the *user surface* — dashboard viewing, chat, the Inbox.
+
+Network position never grants admin. Settings writes, secrets, feature flags, and recovery operations require the admin secret or an admin login no matter where the request originates — including requests proxied through the dashboard container.
+
 ### Development bypass
 
 When `REQUIRE_AUTH=false` (the default), API key authentication is bypassed. The admin secret is always required for admin endpoints regardless of this setting.
@@ -60,7 +66,9 @@ Sandbox tiers control what agents can access when executing tools. Each pod is c
 | **Isolated** | None -- ephemeral only | Ephemeral container per invocation | Pure computation, API calls, text tasks |
 | **Nova** | Nova installation directory at `/nova` | Path-constrained to `/nova` | Self-configuration -- updating settings, prompts |
 | **Workspace** (default) | Scoped to `NOVA_WORKSPACE` at `/workspace` | Path-constrained to `/workspace` | Coding projects, file generation |
-| **Host** | Full host filesystem | Unrestricted subprocess | DevOps, system administration (explicit opt-in) |
+| **Home** | Your home directory — **read-only by default** (writing requires the Settings toggle *and* `NOVA_HOME_MOUNT=rw` in `.env`) | Path-constrained to `$HOME` | Reading dotfiles/configs; opt-in writes |
+
+(The former **Host** tier — full filesystem, unrestricted shell — was removed in SEC-001: it was remote-code-execution-by-design against any prompt injection.)
 
 The sandbox tier is enforced by the Orchestrator's tool execution layer. The `workspace` tier is the default and recommended for most use cases.
 

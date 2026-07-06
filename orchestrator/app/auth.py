@@ -266,14 +266,17 @@ async def require_admin(
     """Validate admin access for key management and config endpoints.
 
     Accepts either:
-    1. Trusted network (LAN, Tailscale, localhost)
-    2. X-Admin-Secret header (original method)
-    3. JWT Bearer token from an admin user (dashboard after login)
-    """
-    # Trusted network bypass
-    if getattr(request.state, "is_trusted_network", False):
-        return
+    1. X-Admin-Secret header (original method)
+    2. JWT Bearer token from an admin user (dashboard after login)
 
+    SEC2 (2026-07-06): network position deliberately does NOT grant admin.
+    The trusted-network bypass here was the class of hole behind the July 1
+    factory-reset incident — any LAN/Docker-net device (including everything
+    proxied through the dashboard container while trusted_proxy_header is
+    unset) reached every admin endpoint credential-free. Trust by network
+    remains on the USER surface (dashboard viewing/chat via get_current_user
+    and the API-key gate); admin always requires credentials.
+    """
     # Brute-force throttle: if this IP already exceeded the failure threshold
     # within the current window, reject up-front with 429. This runs BEFORE the
     # secret/JWT check so an attacker can't even attempt comparisons.
@@ -307,10 +310,16 @@ async def require_admin(
         except Exception:
             pass
 
-    # Auth failed — record for brute-force throttle. Successful auth never touches
-    # the counter, so legitimate admins don't accumulate failures over time.
-    await _record_admin_failure(client_ip)
-    raise HTTPException(status_code=403, detail="Invalid admin secret")
+    # Brute-force throttle counts only requests that PRESENTED a credential
+    # and got it wrong — guessing. Credential-less requests are just an
+    # unauthenticated client (a logged-out dashboard polling admin views,
+    # a health probe): with SEC2 removing the network bypass they'd
+    # otherwise accumulate "failures" and lock the operator's IP out of
+    # admin — including subsequent VALID logins — for the whole window.
+    if x_admin_secret or (authorization and authorization.startswith("Bearer ")):
+        await _record_admin_failure(client_ip)
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+    raise HTTPException(status_code=401, detail="Admin credentials required")
 
 
 _SYNTHETIC_ADMIN = AuthenticatedUser(

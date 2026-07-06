@@ -88,9 +88,14 @@ class Settings(BaseSettings):
     # Maximum number of pipeline executions that can run concurrently
     pipeline_max_concurrent: int = 5
 
-    # Trusted networks — comma-separated CIDRs that bypass auth (treated as admin)
-    # Default includes RFC1918 private ranges, Tailscale CGNAT, and localhost
-    trusted_networks: str = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128"
+    # Trusted networks — comma-separated CIDRs that skip USER-surface auth
+    # (dashboard viewing/chat, API-key gate). Admin endpoints always require
+    # credentials regardless of network position (SEC2).
+    # SEC2: loopback only by default — trusting LAN/Tailscale ranges is an
+    # explicit opt-in (platform_config.trusted_networks). Broad private-range
+    # trust meant any device on the user's network reached the bypass
+    # surfaces on day one, silently. Existing installs keep their DB value.
+    trusted_networks: str = "127.0.0.0/8,::1/128"
     # Header containing the real client IP when behind a trusted reverse proxy
     # e.g. CF-Connecting-IP (Cloudflare), X-Real-IP (nginx), X-Forwarded-For
     trusted_proxy_header: str = ""

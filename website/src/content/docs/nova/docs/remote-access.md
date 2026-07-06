@@ -95,14 +95,17 @@ Click **Disconnect Tailscale** on the Remote Access page. This stops the Tailsca
 
 ## Dual access: Cloudflare Tunnel + Tailscale
 
-You can run both simultaneously. Nova uses **trusted networks** to automatically determine which requests need authentication:
+You can run both simultaneously. Nova uses **trusted networks** to decide which requests can use the dashboard without logging in:
 
-- **Tailscale / LAN / localhost** — private IP ranges are trusted, no login required
-- **Cloudflare Tunnel (public internet)** — real client IP extracted via `CF-Connecting-IP` header, login required
+- **Trusted CIDRs (localhost by default)** — no login for the *user surface*: viewing the dashboard, chat, Inbox
+- **Everything else (e.g. Cloudflare Tunnel traffic)** — real client IP extracted via `CF-Connecting-IP` header, login required
 
-The Cloudflare Tunnel wizard configures this automatically. When you provision a tunnel, it sets `REQUIRE_AUTH=true` and `TRUSTED_PROXY_HEADER=CF-Connecting-IP` in your `.env`. The trusted network middleware inspects each request's source IP against configurable CIDR ranges (default: RFC1918, Tailscale CGNAT, localhost) and bypasses auth for trusted IPs.
+Two deliberate limits on network trust:
 
-You can customize trusted CIDRs in **Settings → System → Trusted Networks**.
+- **Admin never rides network trust.** Settings writes, secrets, feature flags, and recovery always require the admin secret or an admin login — regardless of where the request comes from.
+- **Loopback only by default.** Fresh installs trust `127.0.0.0/8` and `::1` only. To use the no-login dashboard from your LAN or tailnet, add the ranges you actually use (e.g. `192.168.0.0/16`, Tailscale's `100.64.0.0/10`) in **Settings → System → Trusted Networks**.
+
+The Cloudflare Tunnel wizard sets `REQUIRE_AUTH=true` and `TRUSTED_PROXY_HEADER=CF-Connecting-IP` in your `.env` automatically.
 
 ## Tailscale-only access (recommended for self-hosted)
 
@@ -121,7 +124,7 @@ If you only access Nova from your own devices, Tailscale alone provides all the 
    # CLOUDFLARE_TUNNEL_TOKEN from .env and restart
    ```
 
-2. **Set `REQUIRE_AUTH=false`** in your `.env` — Tailscale is your auth layer, so application-level auth is unnecessary. (Or leave `REQUIRE_AUTH=true` — trusted networks will bypass auth for Tailscale IPs automatically.)
+2. **Set `REQUIRE_AUTH=false`** in your `.env` — Tailscale is your auth layer, so application-level auth is unnecessary. (Or leave `REQUIRE_AUTH=true` and add `100.64.0.0/10` to **Settings → System → Trusted Networks** — tailnet devices then skip login for the user surface. Admin actions ask for credentials either way.)
 
 3. **Access via Tailscale IP or MagicDNS** — reach Nova at `http://<tailscale-ip>:3000` or `http://mini-pc:3000` (if MagicDNS is enabled).
 
