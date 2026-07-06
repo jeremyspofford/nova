@@ -80,11 +80,11 @@ make prune-all            # backup DB first, then prune + remove model cache vol
 ## Testing
 
 ```bash
-make test          # Full integration suite (35 tests, ~2 min, requires services running)
+make test          # Full integration suite (~550 tests, ~45 min with LLM-backed pipeline tests, requires services running)
 make test-quick    # Health endpoints only (~0.4s)
 ```
 
-Integration tests live in `tests/` at the repo root. They hit real running services over HTTP/WebSocket — no mocks. Pipeline tests are opt-in (skipped unless an LLM provider is configured). Tests create resources with `nova-test-` prefix and clean up via fixture teardown.
+Integration tests live in `tests/` at the repo root. They hit real running services over HTTP/WebSocket — no mocks. Pipeline tests are opt-in (skipped unless an LLM provider is configured). Tests create resources with `nova-test-` prefix and clean up via fixture teardown. A per-test 180s timeout (pytest-timeout, signal method) is configured in `tests/pytest.ini` — do not switch it to the thread method, which kills the whole session on first timeout. Test deps are single-sourced from `tests/requirements.txt`.
 
 Additional validation:
 
@@ -99,7 +99,7 @@ Additional validation:
 
 - Async/await throughout (FastAPI + asyncpg + async Redis)
 - Config via `pydantic_settings.BaseSettings` reading from `.env`
-- Orchestrator uses raw asyncpg queries (no ORM); memory-service uses SQLAlchemy async
+- Orchestrator and cortex use raw asyncpg queries (no ORM); memory-service has no database at all (OKF markdown files + BM25 index)
 - Fault-tolerant: try/except + `logger.warning` — never crash on missing optional config
 - **Log levels matter:** ERROR for unrecoverable failures, WARNING for recoverable issues that affect functionality, INFO for state changes, DEBUG for detailed flow. Never log critical failures at DEBUG — they become invisible in production (LOG_LEVEL=INFO).
 - **Redis cleanup:** Every service with `get_redis()` must have a corresponding `close_redis()` called in the FastAPI lifespan shutdown path. Connection leaks accumulate across restarts.

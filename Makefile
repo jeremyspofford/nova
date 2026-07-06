@@ -2,11 +2,11 @@
 
 DASHBOARD    = dashboard
 
-# ── Inference is external ─────────────────────────────────────────────────────
-# Nova does not bundle or GPU-manage any inference server. Local inference
-# (Ollama, LM Studio, vLLM, SGLang, any OpenAI-compatible endpoint) runs on the
-# host / elsewhere and is configured at runtime in Settings. There is no GPU
-# overlay and no local-ollama/vllm/sglang compose profile to activate.
+# ── Inference is hybrid ───────────────────────────────────────────────────────
+# Bundled containers (compose profiles inference-ollama/-vllm/-sglang/-llamacpp,
+# GPU via the docker-compose.gpu.yml overlay + COMPOSE_FILE) are managed by the
+# recovery service from Settings → Local Inference. External servers (host
+# Ollama, LM Studio, any OpenAI-compatible endpoint) are configured there too.
 
 EDITOR_PROFILE := $(if $(filter vscode,$(EDITOR_FLAVOR)),--profile editor-vscode,$(if $(filter neovim,$(EDITOR_FLAVOR)),--profile editor-neovim,))
 
@@ -69,12 +69,12 @@ migrate: ## Apply pending SQL migrations (runs inside orchestrator container)
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 # ── Testing ──────────────────────────────────────────────────────────────────
-test: ## Run integration tests against running services
-	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
+test: ## Run integration tests against running services (deps: tests/requirements.txt)
+	@cd tests && uv run --with-requirements requirements.txt \
 	  pytest -v --tb=short
 
 test-quick: ## Smoke test (health endpoints only)
-	@cd tests && uv run --with pytest --with pytest-asyncio --with httpx --with websockets --with python-dotenv --with redis --with asyncpg --with requests --with psycopg2-binary --with uvicorn --with fastapi --with pydantic-settings --with cryptography \
+	@cd tests && uv run --with-requirements requirements.txt \
 	  pytest -v --tb=short -k "health"
 
 benchmark-quality: ## Kick off the in-process AI quality benchmark (requires services running)

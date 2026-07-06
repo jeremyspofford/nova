@@ -62,13 +62,12 @@ services:
       interval: 3s
       start_period: 5s
 
-  # Local inference is NOT bundled. Nova is a client of external, user-run
-  # inference servers (Ollama, LM Studio, vLLM, SGLang, llama.cpp, or any
-  # OpenAI-compatible endpoint) plus cloud providers. Configure the endpoint(s)
-  # in Settings → Local Inference; the gateway reaches them over HTTP (the
-  # gateway has extra_hosts host.docker.internal:host-gateway for host-run
-  # servers). There is no GPU passthrough, model auto-pull, or container
-  # lifecycle to manage here — that belongs to the inference server itself.
+  # Local inference is HYBRID. Bundled containers (ollama/vllm/sglang/llamacpp,
+  # defined at the bottom of this file behind inference-* profiles; GPU via the
+  # docker-compose.gpu.yml overlay) are started/stopped by the recovery service
+  # from Settings → Local Inference. External user-run servers (host Ollama,
+  # LM Studio, any OpenAI-compatible endpoint) are reached over HTTP via
+  # extra_hosts host.docker.internal. LM Studio and Custom are external-only.
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Nova Platform Services
@@ -102,12 +101,13 @@ services:
           path: ./llm-gateway/pyproject.toml
     environment:
       # Optional bootstrap default for a host-run Ollama; the real inference
-      # target is configured at runtime in Settings (Redis inference.*). No
-      # bundled ollama service exists — this points at the host by default.
+      # target is configured at runtime in Settings (Redis inference.*) —
+      # recovery writes the in-network URL when a bundled container starts
+      # and clears it on stop. This default points at the host.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ORCHESTRATOR_URL: http://orchestrator:8000
       REDIS_URL: redis://redis:6379/1
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://localhost:8080}
       DEFAULT_CHAT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
       DEFAULT_EMBED_MODEL: nomic-embed-text
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -247,7 +247,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://nova:${POSTGRES_PASSWORD:-nova_dev_password}@postgres:5432/nova
       NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://localhost:8080}
       # Phase 3: workspace + self-modification paths inside the container
       WORKSPACE_ROOT: /workspace
       NOVA_ROOT: /nova
@@ -338,7 +338,7 @@ services:
       DEFAULT_MODEL: ${DEFAULT_CHAT_MODEL:-qwen2.5:7b}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173,http://localhost:8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://localhost:8080}
     ports:
       - "8080:8080"
     depends_on:
@@ -668,13 +668,11 @@ services:
           path: ./voice-service/pyproject.toml
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       REDIS_URL: redis://redis:6379/9
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
     ports:
       # Loopback-only — dashboard proxies voice via nginx → docker-net DNS.
       - "${VOICE_SERVICE_BIND:-127.0.0.1:}8130:8130"
@@ -723,7 +721,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:5173}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
     ports:
       - "${SCREENPIPE_BRIDGE_BIND:-127.0.0.1:}8140:8140"
     depends_on:
