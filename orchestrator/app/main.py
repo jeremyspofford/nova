@@ -95,7 +95,15 @@ async def _ensure_default_toolset() -> None:
             )
             current = {}
             if row and row["value"]:
-                current = row["value"] if isinstance(row["value"], dict) else _json.loads(row["value"])
+                raw = row["value"]
+                if isinstance(raw, (str, bytes)):
+                    try:
+                        raw = _json.loads(raw)
+                    except (ValueError, TypeError):
+                        raw = {}
+                # Older bugs could leave a bare list/scalar here — anything
+                # non-dict is unusable for this key; rebuild it.
+                current = raw if isinstance(raw, dict) else {}
             if current.get("default_allowed_tools"):
                 return  # user/migration already set it — don't override
             current.setdefault("disabled_groups", [])
@@ -107,7 +115,10 @@ async def _ensure_default_toolset() -> None:
                         'Default agent tool surface (default_allowed_tools = chat allowlist).')
                 ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = now()
                 """,
-                _json.dumps(current),
+                # The pool's jsonb codec already encodes — pre-dumping here
+                # double-encodes the value into a jsonb string (the disease
+                # migration 087 cleaned up).
+                current,
             )
         log.warning(
             "tool_permissions.default_allowed_tools was missing — seeded the "

@@ -83,6 +83,8 @@ async def get_default_allowed_tools() -> list[str] | None:
 async def resolve_effective_tools(
     allowed_tools: list[str] | None = None,
     sandbox_tier: "SandboxTier | None" = None,
+    *,
+    default_allowlist_fallback: bool = True,
 ) -> tuple[list[ToolDefinition], set[str]]:
     """Centralized permission resolution — single entry point for all callers.
 
@@ -111,9 +113,12 @@ async def resolve_effective_tools(
         tier_by_name = {t.name: t for t in tier_tools}
         tools = [tier_by_name.get(t.name, t) for t in tools]
 
-    # Tool-level allowlist: an explicit pod allowlist wins; otherwise fall back
-    # to the global default allowlist so the chat agent gets a minimal surface.
-    if allowed_tools is None:
+    # Tool-level allowlist: an explicit pod allowlist wins; otherwise chat
+    # surfaces fall back to the global default allowlist (minimal surface).
+    # Pipeline agents pass default_allowlist_fallback=False — a NULL pod
+    # allowlist there means "all permitted tools", not "chat minimal": goal
+    # work (briefings, curation, intel) needs the full registry.
+    if allowed_tools is None and default_allowlist_fallback:
         allowed_tools = await get_default_allowed_tools()
     if allowed_tools is not None:
         allowed_set = set(allowed_tools)

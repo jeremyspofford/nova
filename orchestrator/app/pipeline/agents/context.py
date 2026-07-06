@@ -70,7 +70,7 @@ Return ONLY valid JSON matching this exact schema — no markdown, no preamble:
         # (search, browse, read) are available for context gathering.
         # Permission filtering ensures admin-disabled groups are respected.
         READ_ONLY = {"list_dir", "read_file", "search_codebase", "git_status", "git_log"}
-        all_permitted, _ = await resolve_effective_tools()
+        all_permitted, _ = await resolve_effective_tools(default_allowlist_fallback=False)
         tools = [t for t in all_permitted if t.name in READ_ONLY or t.name.startswith("mcp__")]
 
         prompt = (
