@@ -2,6 +2,17 @@
 
 > Items considered and explicitly deferred. Each has enough context to pick up cold.
 
+## Approved roadmap (2026-07-05, post-audit — see `architecture/06-refactor-plan.md`)
+
+Sequenced plan approved by Jeremy 2026-07-05 (also tracked as tasks #1–15 in the session task list):
+
+- **Phase 0 — Truth pass** (half day): `chmod +x scripts/*.sh`, stale "no bundled inference" compose comments, dead `COMPOSE_PROFILES` values (`bridges`, `search`), dead Deepgram/ElevenLabs env vars, CORS 3001→3000, delete `workspace/` junk + `PROMPT.md`, CLAUDE.md corrections, pytest-timeout (signal) in `tests/pytest.ini`.
+- **Phase 1 — Make the suite honest** (1–2 days): factory reset clears `schema_migrations` so seed migrations re-run (fixes ~11 failures); gateway fallback skips credential-invalid providers + rotate dead Groq key (~15 failures); rewrite/delete ~12 stale tests + auth-posture verdicts on ~8 endpoints; migration 093 drops the 9 orphan legacy memory tables.
+- **Phase 2 — Safe defaults** (2–3 days): `$HOME` mount `:ro` by default, trusted-network bypass → explicit endpoint allowlist, FC-002 hard-fail check.
+- **Phase 3 — Consolidation** (1–1.5 weeks, one PR each): intel-worker→orchestrator, chat-api→orchestrator, voice→llm-gateway, screenpipe+knowledge→one `ingest-worker` (12→9 always-on containers).
+- **Phase 4 — Nova starts DOING things**: push-notification channel + `request_human_checkpoint` primitive → daily-briefing standing goal → cortex learning-from-failures → journal curation decoupled from the brain toggle → brain on by default with training wheels.
+- **Feature tracks (parallel):** memory graph (graph endpoint + missing `PUT /api/v1/memory/items/{id}`; click = OKF frontmatter only, content behind a button, edit/delete from detail view); observability (`observability` compose profile — Grafana Postgres-datasource dashboards first, `/metrics` instrumentation second); **Nova identity** (own mailbox → Vaultwarden wiring for Nova's accounts → phone number → PWA/native app; every signup stays consent-gated).
+
 ## Priority: Browser account-signup checkpoints (from the 2026-07-02 browser-worker work)
 
 **What:** Human-in-the-loop resume for CAPTCHAs and email verification during browser-driven account signups.
@@ -15,12 +26,11 @@
 These are the gaps preventing Nova from being truly self-directed. Ordered by impact.
 
 ### Maturation Pipeline Executor + Learning from Failures + Cortex Tests (B3)
-**Status:** Deferred from the 2026-07-02 OKF/actions work — the memory + browser + cleanup phases shipped first.
-**Maturation executor (2-3d):** wire `cortex/app/maturation/{triage,scoping,speccing,building,verifying}.py` into the thinking cycle so goals transition through stages instead of sitting in `triaging`.
-**Learning from failures (3d, now easier):** PLAN phase queries `/api/v1/memory/context` for `type: reflection` entries — under the OKF backend, cortex reflections already flow through the ingestion queue into the journal/topics, so this is a pure retrieval change.
-**Cortex integration tests (2d):** none exist; any refactor can silently break the loop. See detail entries below.
+**Status (corrected 2026-07-05 — see `architecture/05-dead-code.md` §0):** the maturation executor SHIPPED (`cortex/app/cycle.py:610-645` dispatches scoping/speccing/building/verifying; `drives/maintain.py` runs triage) and cortex/maturation/decomposition tests EXIST (15+ files in `tests/`). The only genuinely open piece:
+**Learning from failures (3d):** PLAN phase queries `/api/v1/memory/context` for reflection entries — cortex reflections already flow through the OKF ingestion queue into journal/topics, so this is a pure retrieval change.
 
 ### Goal Decomposition
+**Status (corrected 2026-07-05):** SHIPPED — the building phase spawns child goals / flat `goal_tasks` with a depth wall, covered by 4 `test_decomposition_*` files (currently red only from the Groq-key cascade, not logic — see `architecture/05-dead-code.md` §5·B).
 **What:** Break high-level goals ("build a feature") into subtask DAGs instead of one monolithic blob per cycle.
 **Why:** Without decomposition, Cortex can only work on one atomic chunk per thinking cycle. Complex goals stall because there's no way to parallelize or sequence sub-work.
 **How:** Planning phase in the thinking loop produces a DAG of subtasks with dependencies. Cortex dispatches leaf tasks, tracks completion via TRACK phase, and schedules dependents.
@@ -35,19 +45,9 @@ These are the gaps preventing Nova from being truly self-directed. Ordered by im
 **Effort:** 3 days (reduced from 1 week)
 **Added:** 2026-03-27
 
-### Maturation Pipeline Executor
-**What:** Execute goal maturation stages (triaging → scoping → speccing → review → building → verifying) via Cortex drive logic.
-**Why:** Maturation columns exist in the schema but nothing transitions goals through the stages. Goals sit in "triaging" forever.
-**How:** New Cortex drive or sub-drive in the Improve/Serve drives that checks goal maturation status and runs the appropriate pipeline action for each stage.
-**Effort:** 2-3 days
-**Added:** 2026-03-27
-
 ### Cortex Integration Tests
-**What:** Integration test coverage for goals, drives, thinking loop, task feedback.
-**Why:** Zero test coverage on the autonomous brain. Any refactor could silently break the thinking loop.
-**How:** Tests in `tests/` that hit Cortex endpoints, create goals, verify drive selection, confirm task dispatch + TRACK phase feedback.
-**Effort:** 2 days
-**Added:** 2026-03-27
+**Status (corrected 2026-07-05):** they exist (`test_cortex_*`, `test_maturation_*`, `test_decomposition_*`, `test_drive_scheduling`). Remaining: fix the two `test_drive_scheduling` tests that fail on `ModuleNotFoundError: app.drives` (import cortex internals not on the tests' pythonpath) and extend TRACK-phase feedback coverage.
+**Added:** 2026-03-27 · corrected 2026-07-05
 
 ## Friction Log Enhancements
 
@@ -90,7 +90,7 @@ These are the gaps preventing Nova from being truly self-directed. Ordered by im
 
 ### Re-test Claude 4.6 Subscription OAuth
 **What:** Periodically test whether Anthropic has enabled Sonnet/Opus 4.6 for subscription OAuth on the public messages API.
-**Why:** Currently `claude-sonnet-4-6` and `claude-opus-4-6` return `invalid_request_error: "Error"` via OAuth token on `api.anthropic.com/v1/messages`. Only `claude-haiku-4-5-20251001` works. Claude Code uses a different internal API path. When Anthropic fixes this, update `_MODEL_MAP` in `claude_subscription_provider.py`.
+**Why:** Currently `claude-sonnet-4-6` and `claude-opus-4-6` return `invalid_request_error: "Error"` via OAuth token on `api.anthropic.com/v1/messages`. Only `claude-haiku-4-5-20251001` works. Claude Code uses a different internal API path. When Anthropic fixes this, re-add a Claude subscription provider under `llm-gateway/app/providers/` (the previous `claude_subscription_provider.py` was removed in the 2026-07 cleanup).
 **How:** `curl -s https://api.anthropic.com/v1/messages -H "x-api-key: $TOKEN" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-sonnet-4-6","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'` — if it returns a message instead of "Error", it's fixed.
 **Blocked by:** Anthropic API change (external).
 **Added:** 2026-03-19
