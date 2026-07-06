@@ -259,7 +259,17 @@ class BaseAgent:
                 # round-trip (small models tend to repeat the mistake verbatim
                 # on retry, exhausting all attempts).
                 try:
-                    parsed = json.loads(re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", cleaned))
+                    # Pair-aware: consume valid \\ pairs untouched and double
+                    # only LONE backslashes with an invalid successor. A bare
+                    # lookahead would match the second half of a valid pair
+                    # and corrupt correct output (e.g. a properly escaped \\d).
+                    parsed = json.loads(
+                        re.sub(
+                            r'(\\\\)|\\(?!["\\/bfrntu])',
+                            lambda m: m.group(1) or r"\\",
+                            cleaned,
+                        )
+                    )
                     logger.info(
                         f"[{self.ROLE}] JSON accepted after invalid-escape repair"
                     )
