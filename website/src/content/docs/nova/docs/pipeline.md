@@ -59,7 +59,7 @@ Additional terminal/special states: `failed`, `cancelled`, `clarification_needed
 
 - **`pending_human_review`** pauses the pipeline -- the task waits without failing
 - **`clarification_needed`** -- Context Agent detected ambiguity and paused with questions. The user answers via `POST /clarify`, and the pipeline resumes from its checkpoint with enriched input
-- **`waiting_human`** -- the Task Agent called `request_human_checkpoint` mid-flow (CAPTCHA, emailed verification code, judgment call). The conversation is snapshotted, a checkpoint card appears in Pending Approvals (and pushes to your phone), and your reply is injected back as the tool's result so the agent continues exactly where it stopped. Unanswered checkpoints are cancelled after 24h
+- **`waiting_human`** -- the Task Agent called `request_human_checkpoint` mid-flow (CAPTCHA, emailed verification code, judgment call). The conversation is snapshotted, a checkpoint card appears in Pending Approvals and the task's Checkpoint tab (and pushes to your phone -- with Continue/Decline buttons if [lockscreen actions](/nova/docs/notifications/) are configured), and your reply is injected back as the tool's result so the agent continues exactly where it stopped. If the agent was driving a browser it attaches a screenshot of the page it's parked on. Unanswered checkpoints are cancelled after 24h
 - Tasks can be cancelled from the dashboard at any state
 
 ## Pod presets

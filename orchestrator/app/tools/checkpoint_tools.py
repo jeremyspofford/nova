@@ -24,6 +24,39 @@ logger = logging.getLogger(__name__)
 
 CHECKPOINT_TOOL_NAME = "request_human_checkpoint"
 
+# Viewport PNGs run 70–400K b64 chars; anything past this is pathological
+# (full-page capture of an infinite-scroll page) and gets dropped rather
+# than bloating the approval row.
+_MAX_SCREENSHOT_B64 = 2_000_000
+
+
+async def _capture_screenshot(session_id: str) -> str | None:
+    """Grab the current page from the agent's browser-worker session.
+
+    Best-effort by contract: the browser profile is optional, the session may
+    have expired, and a missing screenshot must never fail the checkpoint.
+    """
+    import httpx
+    from app.tools import browser_tools
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            resp = await client.post(
+                f"{browser_tools.BROWSER_BASE}/sessions/{session_id}/snapshot",
+                json={"include_screenshot": True},
+            )
+            resp.raise_for_status()
+            shot = resp.json().get("screenshot_b64") or None
+        if shot and len(shot) > _MAX_SCREENSHOT_B64:
+            logger.info(
+                "checkpoint screenshot too large (%d chars) — dropping", len(shot),
+            )
+            return None
+        return shot
+    except Exception as e:
+        logger.info("checkpoint screenshot capture failed (non-fatal): %s", e)
+        return None
+
 
 class HumanCheckpointPending(Exception):
     """Raised by the tool loop when a checkpoint was created.
@@ -59,7 +92,9 @@ CHECKPOINT_TOOLS: list[ToolDefinition] = [
             "verification code, or make a judgment call. The task parks until "
             "the operator responds (on their phone or dashboard); their reply "
             "is returned as this tool's result and you continue exactly where "
-            "you left off. Use sparingly — every call interrupts a human."
+            "you left off. If you are working in a browser session, pass its "
+            "browser_session_id so the operator sees a screenshot of the page. "
+            "Use sparingly — every call interrupts a human."
         ),
         parameters={
             "type": "object",
@@ -80,6 +115,13 @@ CHECKPOINT_TOOLS: list[ToolDefinition] = [
                 "context": {
                     "type": "string",
                     "description": "Optional extra detail: page URL, account name, current state",
+                },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": (
+                        "Browser session you're working in (from browser_open) — "
+                        "attaches a screenshot of the current page for the operator"
+                    ),
                 },
             },
             "required": ["reason", "instructions"],
@@ -148,6 +190,12 @@ async def execute_tool(name: str, args: dict, context: dict | None = None) -> st
         "actor_id": ctx.get("actor_id", "task"),
     }
 
+    # Best-effort page screenshot so the operator sees what the agent sees.
+    screenshot_b64: str | None = None
+    session_id = str(args.get("browser_session_id") or "").strip()
+    if session_id:
+        screenshot_b64 = await _capture_screenshot(session_id)
+
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -156,14 +204,14 @@ async def execute_tool(name: str, args: dict, context: dict | None = None) -> st
               id, tenant_id, task_id, requested_by,
               tool_name, tool_kind, blast_radius,
               args_redacted, status, kind,
-              created_at, expires_at, tool_context
+              created_at, expires_at, tool_context, screenshot_b64
             ) VALUES (
-              $1,$2,$3,$4,$5,'native','propose',$6,'pending','checkpoint',now(),$7,$8
+              $1,$2,$3,$4,$5,'native','propose',$6,'pending','checkpoint',now(),$7,$8,$9
             )
             """,
             approval_id, tenant_id, UUID(str(task_id)),
             ctx.get("actor_id", "task"), CHECKPOINT_TOOL_NAME,
-            checkpoint_args, expires_at, tool_context,
+            checkpoint_args, expires_at, tool_context, screenshot_b64,
         )
 
     await audit.write_audit_event(

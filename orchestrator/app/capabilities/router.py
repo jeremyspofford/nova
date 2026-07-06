@@ -107,7 +107,12 @@ async def list_pending_approvals(
 ):
     pool = get_pool()
     rows = await consent_db.list_pending(pool, tenant_id=ctx.tenant_id)
-    return [dict(r) for r in rows]  # asyncpg Record → dict
+    # Strip inline screenshots from the list — a checkpoint capture can be
+    # hundreds of KB; the single-approval detail endpoint returns it.
+    return [
+        {k: v for k, v in dict(r).items() if k != "screenshot_b64"}
+        for r in rows
+    ]
 
 
 @router.get("/approvals/{approval_id}", response_model=dict)

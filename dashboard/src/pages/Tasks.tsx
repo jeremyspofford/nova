@@ -5,7 +5,7 @@ import {
   Send, RefreshCw, X, Clock, ChevronDown, ChevronUp,
   ThumbsUp, ThumbsDown, Loader2, Trash2, ShieldAlert,
   FileSearch, AlertTriangle, MessageSquare, Zap, CheckCircle2,
-  ListTodo, DollarSign, Timer, Brain, ScrollText,
+  ListTodo, DollarSign, Timer, Brain, ScrollText, HandHelping,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -23,6 +23,7 @@ import {
 } from '../api'
 import type { TaskSummary, Artifact } from '../api'
 import ArtifactCard, { MermaidDiagram } from '../components/ArtifactRenderer'
+import { CheckpointDecide } from '../components/CheckpointDecide'
 import FileViewer from '../components/FileViewer'
 import type { PipelineTask, TaskStatus, GuardrailFinding, CodeReviewVerdict, AgentSession } from '../types'
 import { ACTIVE_TASK_STATUSES, TASK_STATUS_CONFIG } from '../constants'
@@ -372,6 +373,36 @@ function ReviewPanel({ task, onDone }: { task: PipelineTask; onDone: () => void 
   )
 }
 
+// ── Checkpoint panel (for waiting_human tasks) ─────────────────────────────────
+
+function CheckpointPanel({ task, onDone }: { task: PipelineTask; onDone: () => void }) {
+  const approvalId = typeof task.metadata?.checkpoint_approval_id === 'string'
+    ? task.metadata.checkpoint_approval_id
+    : null
+  const reason = (task.metadata?.checkpoint_reason as string | undefined) || 'Nova needs your input'
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="flex items-center gap-1.5 mb-1.5 text-caption font-semibold text-warning">
+          <HandHelping size={13} /> {reason}
+        </div>
+        <p className="text-compact text-content-secondary">
+          The task is parked mid-flow waiting for you. Your reply is handed back to the
+          agent as the checkpoint result and it continues exactly where it stopped.
+        </p>
+      </div>
+      {approvalId ? (
+        <CheckpointDecide approvalId={approvalId} onDecided={onDone} />
+      ) : (
+        <p className="text-compact text-content-tertiary">
+          Checkpoint reference missing — decide it from Pending Approvals instead.
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ── Clarification panel (for clarification_needed tasks) ───────────────────────
 
 function ClarificationPanel({ task, onDone }: { task: PipelineTask; onDone: () => void }) {
@@ -695,6 +726,7 @@ export function TaskDetailSheet({
   const [detailTab, setDetailTab] = useState(
     task?.status === 'pending_human_review' ? 'review'
       : task?.status === 'clarification_needed' ? 'clarify'
+      : task?.status === 'waiting_human' ? 'checkpoint'
       : 'details'
   )
   const [viewingFile, setViewingFile] = useState<string | null>(null)
@@ -722,6 +754,7 @@ export function TaskDetailSheet({
   const isTerminal = ['complete', 'failed', 'cancelled'].includes(task.status)
   const needsReview = task.status === 'pending_human_review'
   const needsClarification = task.status === 'clarification_needed'
+  const isWaitingHuman = task.status === 'waiting_human'
 
   const handleDiscuss = () => {
     setPrefillInput(buildTaskContext(task))
@@ -735,6 +768,7 @@ export function TaskDetailSheet({
     { id: 'pipeline', label: 'Pipeline' },
     ...(needsReview ? [{ id: 'review', label: 'Review' }] : []),
     ...(needsClarification ? [{ id: 'clarify', label: 'Clarify' }] : []),
+    ...(isWaitingHuman ? [{ id: 'checkpoint', label: 'Checkpoint' }] : []),
   ]
 
   return (
@@ -837,6 +871,9 @@ export function TaskDetailSheet({
           )}
           {detailTab === 'clarify' && needsClarification && (
             <ClarificationPanel task={task} onDone={onClose} />
+          )}
+          {detailTab === 'checkpoint' && isWaitingHuman && (
+            <CheckpointPanel task={task} onDone={onClose} />
           )}
         </div>
 

@@ -126,8 +126,11 @@ async def gate(
         )
 
     # Reach the human: pending approvals otherwise sit silently in the
-    # dashboard. notify() never raises (delivery is best-effort).
+    # dashboard. notify() never raises (delivery is best-effort). When
+    # notify.action_base_url is configured, the push carries signed
+    # Approve/Deny buttons so the decision works from the lockscreen.
     from ..notifier import notify
+    from ..notify_actions import build_decide_actions
     await notify(
         "approval_requested",
         title=f"Approval needed: {tool_name}",
@@ -136,6 +139,7 @@ async def gate(
             + (f" via {provider_kind}" if provider_kind else "")
             + " is waiting for your decision in Pending Approvals."
         ),
+        actions=await build_decide_actions(str(approval_id), kind="consent"),
     )
 
     return ConsentDecision(action="pending", approval_id=approval_id)

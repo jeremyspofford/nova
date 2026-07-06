@@ -42,7 +42,10 @@ logger = logging.getLogger(__name__)
 
 # ── Notification helper ────────────────────────────────────────────────────────
 
-async def _publish_notification(notification_type: str, task_id: str, title: str, body: str = "") -> None:
+async def _publish_notification(
+    notification_type: str, task_id: str, title: str, body: str = "",
+    actions: list[dict] | None = None,
+) -> None:
     """Publish a notification to Redis pub/sub for SSE clients. Fire-and-forget — never blocks pipeline."""
     try:
         import json as _json
@@ -61,9 +64,9 @@ async def _publish_notification(notification_type: str, task_id: str, title: str
 
         # Same event, second leg: push to the human's phone via ntfy.
         # notify_task_event filters noise (completions only for goal-linked /
-        # cortex work) and never raises.
+        # cortex work) and never raises. `actions` become lockscreen buttons.
         from ..notifier import notify_task_event
-        await notify_task_event(notification_type, str(task_id), title, body)
+        await notify_task_event(notification_type, str(task_id), title, body, actions=actions)
     except Exception as e:
         logger.warning(f"Notification publish failed (non-fatal): {e}")
 
@@ -1573,10 +1576,12 @@ async def _park_for_checkpoint(
         "Task %s parked for human checkpoint at stage '%s': %s",
         task_id, stage_role, hcp.reason,
     )
+    from ..notify_actions import build_decide_actions
     await _publish_notification(
         "checkpoint_requested", task_id,
         f"Nova needs you: {hcp.reason}"[:200],
         hcp.instructions[:500],
+        actions=await build_decide_actions(hcp.approval_id, kind="checkpoint"),
     )
 
 

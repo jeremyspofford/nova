@@ -5,6 +5,7 @@ import {
   AlertTriangle, ChevronDown, ChevronRight, HandHelping,
 } from 'lucide-react'
 import { decideApproval, type Approval } from '../api'
+import { CheckpointDecide } from './CheckpointDecide'
 import { Button, Badge, Toast } from './ui'
 
 const BLAST_BADGE: Record<Approval['blast_radius'], { label: string; color: 'info' | 'warning' | 'danger' }> = {
@@ -32,16 +33,13 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
   const [showArgs, setShowArgs] = useState(false)
   const [rememberOpen, setRememberOpen] = useState(false)
   const [rememberGlob, setRememberGlob] = useState('*')
-  const [replyText, setReplyText] = useState('')
   const [toast, setToast] = useState<{ variant: 'success' | 'error'; message: string } | null>(null)
 
   // Checkpoint rows: a parked task asking the operator for input, not a
-  // pended tool call. Reason/instructions live in args_redacted; the reply
-  // is injected back into the task as the tool's result.
+  // pended tool call. CheckpointDecide renders the instructions/screenshot/
+  // reply UI; the card only contributes its header.
   const isCheckpoint = approval.kind === 'checkpoint'
   const checkpointReason = isCheckpoint ? String(approval.args_redacted?.reason ?? '') : ''
-  const checkpointInstructions = isCheckpoint ? String(approval.args_redacted?.instructions ?? '') : ''
-  const checkpointContext = isCheckpoint ? String(approval.args_redacted?.context ?? '') : ''
 
   const blast = BLAST_BADGE[approval.blast_radius]
   const argsPretty = useMemo(() => {
@@ -61,11 +59,9 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
       setRememberOpen(false)
       setToast({
         variant: 'success',
-        message: isCheckpoint
-          ? (vars.decision === 'approve' ? 'Response sent — task resuming.' : 'Checkpoint declined — task resuming to wrap up.')
-          : vars.decision === 'approve'
-            ? `Approved ${approval.tool_name}${vars.remember ? ' (rule saved)' : ''}.`
-            : `Rejected ${approval.tool_name}.`,
+        message: vars.decision === 'approve'
+          ? `Approved ${approval.tool_name}${vars.remember ? ' (rule saved)' : ''}.`
+          : `Rejected ${approval.tool_name}.`,
       })
     },
     onError: (e: Error) => setToast({ variant: 'error', message: e.message }),
@@ -108,27 +104,18 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         </div>
       </div>
 
-      {/* Checkpoint: what the operator should do + optional reply */}
+      {/* Checkpoint: instructions + screenshot + reply + Continue/Decline */}
       {isCheckpoint && (
-        <div className="mt-3 space-y-3">
-          <div className="rounded-md border border-border-subtle bg-surface-elevated p-3">
-            <p className="text-compact text-content-primary whitespace-pre-wrap">{checkpointInstructions}</p>
-            {checkpointContext && (
-              <p className="text-caption text-content-tertiary mt-2 whitespace-pre-wrap">{checkpointContext}</p>
-            )}
-          </div>
-          <div>
-            <label className="text-caption text-content-secondary block mb-1">
-              Reply to Nova <span className="text-content-tertiary">(optional — verification code, instructions, …)</span>
-            </label>
-            <textarea
-              value={replyText}
-              onChange={e => setReplyText(e.target.value)}
-              rows={2}
-              placeholder="e.g. the code is 493201"
-              className="w-full rounded-md border border-border-subtle bg-surface-input px-3 py-2 text-compact text-content-primary"
-            />
-          </div>
+        <div className="mt-3">
+          <CheckpointDecide
+            approvalId={approval.id}
+            onDecided={decision => setToast({
+              variant: 'success',
+              message: decision === 'approve'
+                ? 'Response sent — task resuming.'
+                : 'Checkpoint declined — task resuming to wrap up.',
+            })}
+          />
         </div>
       )}
 
@@ -141,21 +128,23 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         </div>
       )}
 
-      {/* Args (collapsed) */}
-      <div className="mt-3">
-        <button
-          onClick={() => setShowArgs(s => !s)}
-          className="flex items-center gap-1.5 text-caption text-content-secondary hover:text-content-primary"
-        >
-          {showArgs ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          Arguments {!showArgs && <span className="text-content-tertiary">({Object.keys(approval.args_redacted ?? {}).length} keys)</span>}
-        </button>
-        {showArgs && (
-          <pre className="mt-2 rounded-md bg-surface-elevated p-3 text-micro font-mono text-content-secondary overflow-auto max-h-72 whitespace-pre-wrap">
-            {argsPretty}
-          </pre>
-        )}
-      </div>
+      {/* Args (collapsed) — redundant for checkpoints, CheckpointDecide shows them */}
+      {!isCheckpoint && (
+        <div className="mt-3">
+          <button
+            onClick={() => setShowArgs(s => !s)}
+            className="flex items-center gap-1.5 text-caption text-content-secondary hover:text-content-primary"
+          >
+            {showArgs ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Arguments {!showArgs && <span className="text-content-tertiary">({Object.keys(approval.args_redacted ?? {}).length} keys)</span>}
+          </button>
+          {showArgs && (
+            <pre className="mt-2 rounded-md bg-surface-elevated p-3 text-micro font-mono text-content-secondary overflow-auto max-h-72 whitespace-pre-wrap">
+              {argsPretty}
+            </pre>
+          )}
+        </div>
+      )}
 
       {/* Approve & Remember scope panel */}
       {rememberOpen && (
@@ -208,32 +197,26 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         </div>
       )}
 
-      {/* Action row */}
-      <div className="mt-4 flex items-center gap-2 flex-wrap">
-        <Button
-          onClick={() => decide.mutate({
-            decision: 'approve',
-            ...(isCheckpoint && replyText.trim() ? { response_text: replyText.trim() } : {}),
-          })}
-          disabled={decide.isPending || rememberOpen}
-          loading={decide.isPending && (decide.variables as any)?.decision === 'approve' && !(decide.variables as any)?.remember}
-          icon={<Check size={14} />}
-        >
-          {isCheckpoint ? 'Send and continue' : 'Approve'}
-        </Button>
-        <Button
-          variant="danger"
-          onClick={() => decide.mutate({
-            decision: 'reject',
-            ...(isCheckpoint && replyText.trim() ? { response_text: replyText.trim() } : {}),
-          })}
-          disabled={decide.isPending || rememberOpen}
-          loading={decide.isPending && (decide.variables as any)?.decision === 'reject'}
-          icon={<X size={14} />}
-        >
-          {isCheckpoint ? 'Decline' : 'Reject'}
-        </Button>
-        {!isCheckpoint && (
+      {/* Action row — checkpoints get their buttons from CheckpointDecide */}
+      {!isCheckpoint && (
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
+          <Button
+            onClick={() => decide.mutate({ decision: 'approve' })}
+            disabled={decide.isPending || rememberOpen}
+            loading={decide.isPending && (decide.variables as any)?.decision === 'approve' && !(decide.variables as any)?.remember}
+            icon={<Check size={14} />}
+          >
+            Approve
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => decide.mutate({ decision: 'reject' })}
+            disabled={decide.isPending || rememberOpen}
+            loading={decide.isPending && (decide.variables as any)?.decision === 'reject'}
+            icon={<X size={14} />}
+          >
+            Reject
+          </Button>
           <Button
             variant="outline"
             onClick={() => setRememberOpen(true)}
@@ -242,8 +225,8 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
           >
             Approve and remember
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       {decide.isError && (
         <p className="mt-2 text-caption text-danger">{(decide.error as Error).message}</p>

@@ -1465,6 +1465,8 @@ export interface Approval {
   created_at: string
   expires_at: string
   response_text: string | null
+  /** Page screenshot attached by request_human_checkpoint. Detail endpoint only — stripped from lists. */
+  screenshot_b64?: string | null
 }
 
 export interface ApprovalDecisionPayload {

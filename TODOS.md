@@ -15,8 +15,9 @@ Sequenced plan approved by Jeremy 2026-07-05 (also tracked as tasks #1–15 in t
 
 ## Priority: Browser account-signup checkpoints (from the 2026-07-02 browser-worker work)
 
-**Status (2026-07-06):** SHIPPED as task #8 milestone B — `request_human_checkpoint(reason, instructions, context?)` tool, `waiting_human` parking with conversation snapshot, `decide_approval().response_text`, approval-worker resume with reply injection, checkpoint-aware ApprovalCard with reply box, 24h reaper sweep, 4 integration tests (`tests/test_human_checkpoint.py`).
-**Remaining (task #8 milestone C):** ntfy action buttons → signed approve/deny webhooks (lockscreen decisions without opening the dashboard); screenshot capture/rendering on checkpoint cards; richer waiting_human panel in the task detail sheet.
+**Status (2026-07-06):** SHIPPED — task #8 milestones B and C complete.
+**Milestone B:** `request_human_checkpoint(reason, instructions, context?)` tool, `waiting_human` parking with conversation snapshot, `decide_approval().response_text`, approval-worker resume with reply injection, checkpoint-aware ApprovalCard with reply box, 24h reaper sweep, 4 integration tests (`tests/test_human_checkpoint.py`).
+**Milestone C:** ntfy lockscreen buttons — signed one-shot approve/deny links (`app/notify_actions.py`, `POST /api/v1/notify/actions/decide`, `notify.action_base_url` + seeded `notify.action_key`); browser screenshot capture on checkpoints (`browser_session_id` arg → `approval_requests.screenshot_b64`, stripped from lists); shared `CheckpointDecide` component powering the approvals card and a new Checkpoint tab on waiting_human tasks; Settings → Notifications lockscreen-actions field; 7 integration tests (`tests/test_notify_actions.py`) incl. live ntfy button delivery and a real Playwright capture.
 **Added:** 2026-07-02 · shipped 2026-07-06
 
 ## Priority: Cortex Autonomy Gaps

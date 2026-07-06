@@ -188,8 +188,10 @@ async def _bootstrap_platform_secrets_from_env() -> None:
 
 
 async def _seed_notify_topic() -> None:
-    """First boot: seed a random ntfy topic. The topic name is the only
-    subscription secret, so it must be unguessable — never a fixed default."""
+    """First boot: seed a random ntfy topic and the action-link signing key.
+    The topic name is the only subscription secret, so it must be unguessable
+    — never a fixed default. The action key signs the one-shot approve/deny
+    links embedded in push-notification buttons; it never leaves the server."""
     import secrets as _secrets
 
     from app.db import get_pool
@@ -203,6 +205,13 @@ async def _seed_notify_topic() -> None:
                            'ntfy topic Nova publishes push notifications to — treat like a password')
                    ON CONFLICT (key) DO NOTHING""",
                 f"nova-{_secrets.token_hex(4)}",
+            )
+            await conn.execute(
+                """INSERT INTO platform_config (key, value, description)
+                   VALUES ('notify.action_key', to_jsonb($1::text),
+                           'HMAC key signing push-notification action links — internal, never share')
+                   ON CONFLICT (key) DO NOTHING""",
+                _secrets.token_hex(32),
             )
     except Exception as e:
         log.warning("notify topic seed failed (non-fatal): %s", e)

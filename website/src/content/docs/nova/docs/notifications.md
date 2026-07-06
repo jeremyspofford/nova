@@ -39,6 +39,27 @@ port). Pick one:
 - **Anywhere:** run the [Tailscale sidecar](/nova/docs/remote-access/) and
   point the app at your tailnet hostname.
 
+## Lockscreen actions
+
+Approval and checkpoint pushes can carry **Approve/Deny buttons** (Continue/
+Decline for checkpoints) that decide directly from the notification -- no
+dashboard, no login. Enable them in **Settings → Notifications → Lockscreen
+actions** by entering the dashboard URL your phone can reach (a LAN IP like
+`http://192.168.1.20:3000`, or your tailnet name).
+
+How it stays safe without putting credentials on your phone:
+
+- Each button carries a **signed one-shot link**: an HMAC over that single
+  approval id + decision + expiry, minted with a random server-side key
+  seeded at first boot (`notify.action_key`). The key never leaves the
+  server; the admin secret is never embedded in a push.
+- A token authorizes exactly one decision on exactly one approval and dies
+  with it -- tampering, decision-swapping, expiry, and replay after a
+  decision are all rejected.
+- Checkpoint buttons cover the yes/no case ("solved the CAPTCHA --
+  continue"). When Nova needs a typed reply (a verification code), tap
+  **Open** to answer from the dashboard's reply box instead.
+
 ## Configuration
 
 Runtime config (Settings UI / platform config):
@@ -48,6 +69,8 @@ Runtime config (Settings UI / platform config):
 | `notify.enabled` | `true` | Master switch for push delivery |
 | `notify.ntfy_url` | `http://ntfy` | Where the orchestrator publishes (in-network) |
 | `notify.ntfy_topic` | seeded `nova-<hex>` | The topic / subscription secret |
+| `notify.action_base_url` | empty (disabled) | Phone-reachable dashboard URL -- enables lockscreen action buttons |
+| `notify.action_key` | seeded 64-hex | HMAC key signing action links (internal, never share) |
 
 Compose-level:
 
@@ -62,6 +85,7 @@ Compose-level:
 |--------|------|------|-------------|
 | GET | `/api/v1/notify/config` | Admin | Current channel config + subscribe hint |
 | POST | `/api/v1/notify/test` | Admin | Send a test notification |
+| POST | `/api/v1/notify/actions/decide` | Signed token | Decide an approval from a push action button |
 
 Delivery is best-effort by design: a push failure is logged as a warning and
 never blocks consent decisions or pipeline execution.

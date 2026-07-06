@@ -63,14 +63,21 @@ async def get_notify_config() -> dict:
     if _conf_cache is not None and now - _conf_fetched_at < _CONF_TTL_SECONDS:
         return _conf_cache
 
-    conf = {"enabled": True, "url": "http://ntfy", "topic": ""}
+    conf = {
+        "enabled": True, "url": "http://ntfy", "topic": "",
+        # Lockscreen decide buttons (milestone C): base URL the phone can
+        # reach the dashboard/API on, and the server-side HMAC key that
+        # signs each button's one-shot decide link.
+        "action_base_url": "", "action_key": "",
+    }
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT key, value #>> '{}' AS val FROM platform_config "
                 "WHERE key = ANY($1::text[])",
-                ["notify.enabled", "notify.ntfy_url", "notify.ntfy_topic"],
+                ["notify.enabled", "notify.ntfy_url", "notify.ntfy_topic",
+                 "notify.action_base_url", "notify.action_key"],
             )
         for r in rows:
             val = (r["val"] or "").strip()
@@ -80,6 +87,10 @@ async def get_notify_config() -> dict:
                 conf["url"] = val.rstrip("/")
             elif r["key"] == "notify.ntfy_topic" and val:
                 conf["topic"] = val
+            elif r["key"] == "notify.action_base_url" and val:
+                conf["action_base_url"] = val.rstrip("/")
+            elif r["key"] == "notify.action_key" and val:
+                conf["action_key"] = val
     except Exception as e:
         logger.warning("notify: config read failed (using defaults): %s", e)
 
@@ -137,7 +148,8 @@ async def notify(
 
 
 async def notify_task_event(
-    notification_type: str, task_id: str, title: str, body: str = ""
+    notification_type: str, task_id: str, title: str, body: str = "",
+    actions: list[dict] | None = None,
 ) -> bool:
     """Bridge from the pipeline's SSE notifications to phone push.
 
@@ -164,6 +176,7 @@ async def notify_task_event(
             notification_type,
             title=title,
             message=f"{body}\n\nTask {task_id[:8]}" if body else f"Task {task_id[:8]}",
+            actions=actions,
         )
     except Exception as e:
         logger.warning("notify: task-event push failed (non-fatal): %s", e)

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Check, Copy, Loader2, Radio, Send, Smartphone } from 'lucide-react'
-import { apiFetch } from '../../api'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Check, Copy, Loader2, Radio, Send, Smartphone, Zap } from 'lucide-react'
+import { apiFetch, updatePlatformConfig } from '../../api'
 import { Button, Section, Toggle } from '../../components/ui'
 
 interface NotifyConfig {
@@ -9,6 +9,7 @@ interface NotifyConfig {
   server_url: string
   topic: string
   subscribe_hint: string
+  action_base_url: string
 }
 
 export function NotificationsSection() {
@@ -34,6 +35,7 @@ export function NotificationsSection() {
     }
   }
 
+  const qc = useQueryClient()
   const { data: pushConfig } = useQuery({
     queryKey: ['notify-config'],
     queryFn: () => apiFetch<NotifyConfig>('/api/v1/notify/config'),
@@ -41,6 +43,19 @@ export function NotificationsSection() {
 
   const testPush = useMutation({
     mutationFn: () => apiFetch<{ sent: boolean }>('/api/v1/notify/test', { method: 'POST' }),
+  })
+
+  // Lockscreen actions: base URL the phone can reach the dashboard on.
+  // null = untouched (show the server value); string = local edit in progress.
+  const [actionUrlEdit, setActionUrlEdit] = useState<string | null>(null)
+  const actionUrl = actionUrlEdit ?? pushConfig?.action_base_url ?? ''
+  const saveActionUrl = useMutation({
+    mutationFn: () =>
+      updatePlatformConfig('notify.action_base_url', JSON.stringify(actionUrl.trim())),
+    onSuccess: () => {
+      setActionUrlEdit(null)
+      qc.invalidateQueries({ queryKey: ['notify-config'] })
+    },
   })
 
   const copyTopic = async () => {
@@ -98,6 +113,39 @@ export function NotificationsSection() {
           </div>
         ) : (
           <p className="text-caption text-content-tertiary">Loading push configuration...</p>
+        )}
+      </div>
+
+      {/* ── Lockscreen actions ────────────────────────────────────────── */}
+      <div className="mt-5 space-y-2 border-t border-border-subtle pt-4">
+        <div className="flex items-center gap-2">
+          <Zap className="h-4 w-4 text-content-tertiary" />
+          <p className="text-compact font-medium text-content-primary">Lockscreen actions</p>
+        </div>
+        <p className="text-caption text-content-tertiary">
+          Add Approve/Deny buttons to approval and checkpoint pushes. Set the dashboard URL
+          your phone can reach (e.g. <span className="font-mono">http://192.168.1.20:3000</span> or
+          a tailnet name). Each button carries a signed one-shot link scoped to that single
+          decision. Leave empty to disable.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={actionUrl}
+            onChange={e => setActionUrlEdit(e.target.value)}
+            placeholder="http://<reachable-host>:3000"
+            className="flex-1 rounded-md border border-border-subtle bg-surface-input px-3 py-2 font-mono text-compact text-content-primary"
+          />
+          <Button
+            size="sm"
+            onClick={() => saveActionUrl.mutate()}
+            disabled={saveActionUrl.isPending || actionUrlEdit === null}
+          >
+            {saveActionUrl.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
+        {saveActionUrl.isError && (
+          <p className="text-caption text-red-500">{(saveActionUrl.error as Error).message}</p>
         )}
       </div>
 
