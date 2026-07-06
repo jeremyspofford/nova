@@ -162,10 +162,10 @@ class TestSandboxTierRename:
         self, orchestrator: httpx.AsyncClient, admin_headers: dict
     ):
         """Platform config should accept new tier names."""
-        # Set to 'home' (new name)
+        # Set to 'home' (new name). Key lives in the path; value is JSON-encoded.
         resp = await orchestrator.patch(
-            "/api/v1/config",
-            json={"key": "shell.sandbox", "value": "home"},
+            "/api/v1/config/shell.sandbox",
+            json={"value": '"home"'},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -180,8 +180,8 @@ class TestSandboxTierRename:
     ):
         """Old tier names ('nova', 'host') should still be accepted."""
         resp = await orchestrator.patch(
-            "/api/v1/config",
-            json={"key": "shell.sandbox", "value": "nova"},
+            "/api/v1/config/shell.sandbox",
+            json={"value": '"nova"'},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -191,8 +191,8 @@ class TestSandboxTierRename:
     ):
         """Clean up: reset sandbox to workspace."""
         resp = await orchestrator.patch(
-            "/api/v1/config",
-            json={"key": "shell.sandbox", "value": "workspace"},
+            "/api/v1/config/shell.sandbox",
+            json={"value": '"workspace"'},
             headers=admin_headers,
         )
         assert resp.status_code == 200
