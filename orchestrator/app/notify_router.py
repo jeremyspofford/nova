@@ -13,6 +13,7 @@ from uuid import UUID
 from app.auth import AdminDep
 from app.notifier import _invalidate_conf_cache, get_notify_config, notify
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,80 @@ async def notify_action_decide(
 
     logger.info("notify action: approval %s %sd via ntfy button", approval_id, decision)
     return {"status": "ok", "decision": decision}
+
+
+@router.get("/inbox")
+async def notify_inbox(
+    _: AdminDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    unread_only: bool = Query(default=False),
+):
+    """The operator's in-dashboard Inbox — full message bodies + read state.
+
+    Same rows as /log, but content-first: briefings and agent pushes are
+    readable here even when no push client is subscribed (the ntfy leg is
+    optional delivery, not the canonical surface). Always returns the
+    total unread count for nav badging.
+    """
+    from app.db import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, created_at, event, title, message, ok, detail, read_at "
+            "FROM notify_log "
+            + ("WHERE read_at IS NULL " if unread_only else "")
+            + "ORDER BY created_at DESC LIMIT $1",
+            limit,
+        )
+        unread = await conn.fetchval(
+            "SELECT COUNT(*) FROM notify_log WHERE read_at IS NULL"
+        )
+    return {
+        "unread": unread,
+        "items": [
+            {
+                "id": r["id"],
+                "created_at": r["created_at"].isoformat(),
+                "event": r["event"],
+                "title": r["title"],
+                "message": r["message"],
+                "ok": r["ok"],
+                "detail": r["detail"],
+                "read_at": r["read_at"].isoformat() if r["read_at"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+class InboxReadRequest(BaseModel):
+    ids: list[int] | None = None  # specific messages; None + all=True → everything
+    all: bool = False
+
+
+@router.post("/inbox/read")
+async def notify_inbox_read(req: InboxReadRequest, _: AdminDep):
+    """Mark inbox messages read. Body: {"ids": [..]} or {"all": true}."""
+    from app.db import get_pool
+
+    if not req.all and not req.ids:
+        raise HTTPException(status_code=422, detail="pass ids or all=true")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if req.all:
+            result = await conn.execute(
+                "UPDATE notify_log SET read_at = now() WHERE read_at IS NULL"
+            )
+        else:
+            result = await conn.execute(
+                "UPDATE notify_log SET read_at = now() "
+                "WHERE id = ANY($1::bigint[]) AND read_at IS NULL",
+                req.ids,
+            )
+    marked = int(result.split()[-1]) if result.startswith("UPDATE") else 0
+    return {"marked_read": marked}
 
 
 @router.post("/test")

@@ -24,6 +24,7 @@ import { Tasks } from './pages/Tasks'
 import { Pods } from './pages/Pods'
 import { Goals } from './pages/Goals'
 import { PendingApprovals } from './pages/PendingApprovals'
+import { InboxPage } from './pages/InboxPage'
 import { AuditLog } from './pages/AuditLog'
 import { Sources } from './pages/Sources'
 import { Recovery } from './pages/Recovery'
@@ -201,6 +202,7 @@ function RoutedContent() {
         <Route path="/usage" element={<MobileGuard><AppLayout><ErrorBoundary><Usage /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/goals" element={<MobileGuard><AppLayout><ErrorBoundary><Goals /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/approvals" element={<MobileGuard><AppLayout><ErrorBoundary><PendingApprovals /></ErrorBoundary></AppLayout></MobileGuard>} />
+        <Route path="/inbox" element={<AppLayout><ErrorBoundary><InboxPage /></ErrorBoundary></AppLayout>} />
         <Route path="/audit-log" element={<MobileGuard><AppLayout><ErrorBoundary><AuditLog /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/sources" element={<MobileGuard><AppLayout><ErrorBoundary><Sources /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/capture" element={<MobileGuard><AppLayout><ErrorBoundary><CapturePage /></ErrorBoundary></AppLayout></MobileGuard>} />

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   MessageSquare,
+  Inbox,
   ListTodo,
   Target,
   Ellipsis,
@@ -34,6 +35,7 @@ type NavItem = {
 
 const primaryTabs: NavItem[] = [
   { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
+  { to: '/inbox', label: 'Inbox', icon: Inbox, minRole: 'member' },
   { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
   { to: '/goals', label: 'Goals', icon: Target, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
 ]

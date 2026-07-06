@@ -138,6 +138,34 @@ async def test_delivery_receipts_recorded(orchestrator, admin_headers):
 
 
 @pytest.mark.asyncio
+async def test_inbox_carries_message_and_read_state(orchestrator, admin_headers):
+    """Messages are readable inside Nova (no push client needed) with unread tracking."""
+    resp = await orchestrator.post("/api/v1/notify/test", headers=admin_headers)
+    assert resp.status_code == 200
+
+    inbox = await orchestrator.get("/api/v1/notify/inbox?limit=20", headers=admin_headers)
+    assert inbox.status_code == 200
+    body = inbox.json()
+    assert body["unread"] >= 1
+    unread_tests = [m for m in body["items"] if m["event"] == "test" and m["read_at"] is None]
+    assert unread_tests, "test push missing from inbox"
+    assert "Push notifications are working" in unread_tests[0]["message"], (
+        "full message body must be readable in the inbox"
+    )
+
+    mark = await orchestrator.post(
+        "/api/v1/notify/inbox/read", headers=admin_headers,
+        json={"ids": [unread_tests[0]["id"]]},
+    )
+    assert mark.status_code == 200
+    assert mark.json()["marked_read"] == 1
+
+    again = await orchestrator.get("/api/v1/notify/inbox?limit=20", headers=admin_headers)
+    row = next(m for m in again.json()["items"] if m["id"] == unread_tests[0]["id"])
+    assert row["read_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_notify_config_reports_subscribers(orchestrator, admin_headers):
     """Settings can tell whether anything is actually listening."""
     resp = await orchestrator.get("/api/v1/notify/config", headers=admin_headers)

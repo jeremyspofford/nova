@@ -8,6 +8,16 @@ as the `ntfy` container) so autonomous work can reach you instead of waiting
 silently in a dashboard tab. No cloud account, no phone-number registration --
 your phone subscribes directly to your Nova instance.
 
+## The Inbox — no phone required
+
+Everything Nova sends you also lands in the dashboard **Inbox** (sidebar →
+Inbox, with an unread badge): morning briefings, agent messages, task
+outcomes, approval and checkpoint notices — full message bodies, read/unread
+state, mark-all-read. The push channel is an *optional delivery leg*; the
+Inbox is the canonical surface. If you never connect a phone, email, or ntfy
+client, nothing is lost — messages that couldn't be pushed are flagged
+"not pushed" but are fully readable there.
+
 ## What it costs
 
 Nothing. The bundled server is the open-source ntfy running on your machine,
@@ -134,6 +144,8 @@ Compose-level:
 |--------|------|------|-------------|
 | GET | `/api/v1/notify/config` | Admin | Current channel config + subscribe hint + connected subscriber count |
 | GET | `/api/v1/notify/log` | Admin | Recent delivery receipts (accepted / rejected / suppressed, with reason) |
+| GET | `/api/v1/notify/inbox` | Admin | Inbox: full message bodies + read state + unread count |
+| POST | `/api/v1/notify/inbox/read` | Admin | Mark messages read (`{"ids": [..]}` or `{"all": true}`) |
 | POST | `/api/v1/notify/test` | Admin | Send a test notification |
 | POST | `/api/v1/notify/actions/decide` | Signed token | Decide an approval from a push action button |
 

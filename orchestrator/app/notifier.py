@@ -101,20 +101,24 @@ async def get_notify_config() -> dict:
     return conf
 
 
-async def _record_delivery(event: str, title: str, ok: bool, detail: str) -> None:
-    """Write one delivery receipt (best-effort, never raises).
+async def _record_delivery(
+    event: str, title: str, ok: bool, detail: str, message: str = "",
+) -> None:
+    """Write one delivery receipt + the message body (best-effort, never raises).
 
     `ok` means the ntfy server ACCEPTED the publish — actual delivery still
-    depends on a device being subscribed. Surfaced in Settings → Notifications
-    so 'green' can't silently mean 'cached into the void'.
+    depends on a device being subscribed. Rows double as the operator's
+    in-dashboard Inbox (the message is readable in Nova regardless of
+    whether any push client is set up), so record on every attempt,
+    including suppressed ones.
     """
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO notify_log (event, title, ok, detail) "
-                "VALUES ($1, $2, $3, $4)",
-                event, title[:200], ok, detail[:300],
+                "INSERT INTO notify_log (event, title, ok, detail, message) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                event, title[:200], ok, detail[:300], message[:4000],
             )
             # Retention: receipts are operational breadcrumbs, not history.
             await conn.execute(
@@ -168,6 +172,7 @@ async def notify(
                 event, title, False,
                 "suppressed: notifications disabled" if not conf["enabled"]
                 else "suppressed: no topic seeded",
+                message=message or title,
             )
             return False
 
@@ -188,17 +193,24 @@ async def notify(
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(conf["url"], json=payload)
         if resp.status_code == 200:
-            await _record_delivery(event, title, True, "accepted by ntfy")
+            await _record_delivery(
+                event, title, True, "accepted by ntfy", message=payload["message"],
+            )
             return True
         logger.warning(
             "notify: ntfy rejected %s event: HTTP %d %s",
             event, resp.status_code, resp.text[:200],
         )
-        await _record_delivery(event, title, False, f"ntfy rejected: HTTP {resp.status_code}")
+        await _record_delivery(
+            event, title, False, f"ntfy rejected: HTTP {resp.status_code}",
+            message=payload["message"],
+        )
         return False
     except Exception as e:
         logger.warning("notify: push failed for %s (non-fatal): %s", event, e)
-        await _record_delivery(event, title, False, f"publish error: {e}")
+        await _record_delivery(
+            event, title, False, f"publish error: {e}", message=message or title,
+        )
         return False
 
 

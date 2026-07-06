@@ -3,6 +3,7 @@ import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import {
   MessageSquare,
   ListTodo,
+  Inbox,
   AlertTriangle,
   Target,
   Globe,
@@ -28,6 +29,7 @@ import { useDebug } from '../../stores/debug-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useAttentionCount } from '../../hooks/useAttentionCount'
 import { useApprovalsCount } from '../../hooks/useApprovalsCount'
+import { useInboxUnread } from '../../hooks/useInboxUnread'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useFeatureFlag } from '../../hooks/useFeatureFlag'
 
@@ -51,6 +53,7 @@ export const navSections: NavSection[] = [
     // Core — no label, always visible
     items: [
       { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
+      { to: '/inbox', label: 'Inbox', icon: Inbox, minRole: 'member' },
       { to: '/tasks', label: 'Tasks', icon: ListTodo, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
       { to: '/goals', label: 'Goals', icon: Target, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin', presetVisibility: ['advanced'] },
@@ -106,6 +109,7 @@ export function Sidebar({
   const { avatarUrl } = useNovaIdentity()
   const { data: attentionCount = 0 } = useAttentionCount()
   const { data: approvalsCount = 0 } = useApprovalsCount()
+  const { data: inboxUnread = 0 } = useInboxUnread()
   const { isDebug } = useDebug()
   const preset = useFeatureFlag<SurfacePreset>('ui.surface_preset', 'chat_only')
   const isActive = (to: string) => {
@@ -153,6 +157,7 @@ export function Sidebar({
                   const badge =
                     item.to === '/tasks' ? attentionCount
                     : item.to === '/approvals' ? approvalsCount
+                    : item.to === '/inbox' ? inboxUnread
                     : (item.badge ?? 0)
                   return (
                     <NavLink

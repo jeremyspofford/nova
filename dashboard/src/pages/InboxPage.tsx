@@ -1,0 +1,175 @@
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, CheckCheck, ChevronDown, ChevronRight, Inbox as InboxIcon } from 'lucide-react'
+import { apiFetch } from '../api'
+import { PageHeader } from '../components/layout/PageHeader'
+import { Badge, Button, Skeleton } from '../components/ui'
+
+interface InboxMessage {
+  id: number
+  created_at: string
+  event: string
+  title: string
+  message: string
+  ok: boolean
+  detail: string
+  read_at: string | null
+}
+
+interface InboxResponse {
+  unread: number
+  items: InboxMessage[]
+}
+
+const EVENT_LABEL: Record<string, string> = {
+  agent_push: 'from Nova',
+  task_complete: 'task done',
+  task_failed: 'task failed',
+  approval_requested: 'approval',
+  checkpoint_requested: 'checkpoint',
+  pending_human_review: 'review',
+  clarification_needed: 'question',
+  test: 'test',
+}
+
+const EVENT_COLOR: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  agent_push: 'info',
+  task_complete: 'success',
+  task_failed: 'danger',
+  approval_requested: 'warning',
+  checkpoint_requested: 'warning',
+  pending_human_review: 'warning',
+  clarification_needed: 'warning',
+  test: 'neutral',
+}
+
+function fmt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+export function InboxPage() {
+  const qc = useQueryClient()
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['inbox'],
+    queryFn: () => apiFetch<InboxResponse>('/api/v1/notify/inbox?limit=100'),
+    refetchInterval: 10_000,
+  })
+
+  const markRead = useMutation({
+    mutationFn: (body: { ids?: number[]; all?: boolean }) =>
+      apiFetch<{ marked_read: number }>('/api/v1/notify/inbox/read', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inbox'] })
+      qc.invalidateQueries({ queryKey: ['inbox-unread'] })
+    },
+  })
+
+  const toggle = (m: InboxMessage) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(m.id)) {
+        next.delete(m.id)
+      } else {
+        next.add(m.id)
+        if (!m.read_at) markRead.mutate({ ids: [m.id] })
+      }
+      return next
+    })
+  }
+
+  const items = data?.items ?? []
+  const unread = data?.unread ?? 0
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Inbox"
+        description="Everything Nova sends you — briefings, task outcomes, questions — readable here even with no phone or push client set up"
+        actions={
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => markRead.mutate({ all: true })}
+            disabled={unread === 0 || markRead.isPending}
+          >
+            <CheckCheck className="mr-1.5 h-4 w-4" />
+            Mark all read{unread > 0 ? ` (${unread})` : ''}
+          </Button>
+        }
+      />
+
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-lg border border-border-subtle py-12 text-center">
+          <InboxIcon className="mx-auto h-8 w-8 text-content-tertiary" />
+          <p className="mt-2 text-compact text-content-secondary">Nothing yet</p>
+          <p className="text-caption text-content-tertiary">
+            The morning briefing and anything Nova pushes will appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
+          {items.map(m => {
+            const isOpen = expanded.has(m.id)
+            const isUnread = !m.read_at
+            return (
+              <div key={m.id}>
+                <button
+                  onClick={() => toggle(m)}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-card"
+                >
+                  {isOpen
+                    ? <ChevronDown className="h-4 w-4 shrink-0 text-content-tertiary" />
+                    : <ChevronRight className="h-4 w-4 shrink-0 text-content-tertiary" />}
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${isUnread ? 'bg-accent' : 'bg-transparent'}`}
+                    title={isUnread ? 'Unread' : undefined}
+                  />
+                  <span className={`min-w-0 flex-1 truncate text-compact ${isUnread ? 'font-semibold text-content-primary' : 'text-content-secondary'}`}>
+                    {m.title}
+                  </span>
+                  <Badge color={EVENT_COLOR[m.event] ?? 'neutral'}>
+                    {EVENT_LABEL[m.event] ?? m.event}
+                  </Badge>
+                  {!m.ok && (
+                    <span className="flex shrink-0 items-center gap-1 text-caption text-amber-500" title={m.detail}>
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      not pushed
+                    </span>
+                  )}
+                  <span className="shrink-0 text-caption tabular-nums text-content-tertiary">
+                    {fmt(m.created_at)}
+                  </span>
+                </button>
+                {isOpen && (
+                  <div className="border-t border-border-subtle bg-surface-secondary px-4 py-3 pl-11">
+                    <p className="whitespace-pre-wrap text-compact text-content-primary">
+                      {m.message || m.title}
+                    </p>
+                    {!m.ok && (
+                      <p className="mt-2 text-caption text-amber-500">
+                        Push delivery: {m.detail} — the message is only here in the Inbox.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
