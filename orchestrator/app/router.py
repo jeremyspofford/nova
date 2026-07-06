@@ -936,31 +936,22 @@ async def update_platform_config(
 
 @router.get("/api/v1/tools")
 async def list_available_tools(_admin: AdminDep):
-    """Return all available tools grouped by category. Admin-only."""
-    from app.pipeline.tools.registry import get_tools_by_server
-    from app.tools.code_tools import CODE_TOOLS
-    from app.tools.config_tools import CONFIG_TOOLS
-    from app.tools.diagnosis_tools import DIAGNOSIS_TOOLS
-    from app.tools.git_tools import GIT_TOOLS
-    from app.tools.intel_tools import INTEL_TOOLS
-    from app.tools.introspect_tools import INTROSPECT_TOOLS
-    from app.tools.memory_tools import MEMORY_TOOLS
-    from app.tools.platform_tools import PLATFORM_TOOLS
-    from app.tools.web_tools import WEB_TOOLS
+    """Return all available tools grouped by category. Admin-only.
 
-    def _to_list(defs):
-        return [{"name": t.name, "description": t.description} for t in defs]
+    Derived from the tool registry so new groups appear here automatically —
+    this endpoint used to hand-list categories and silently drifted (Browser,
+    Checkpoint, Notify, GitHub were missing).
+    """
+    from app.pipeline.tools.registry import get_tools_by_server
+    from app.tools import get_registry
 
     categories = [
-        {"category": "Code Tools", "source": "builtin", "tools": _to_list(CODE_TOOLS)},
-        {"category": "Git Tools", "source": "builtin", "tools": _to_list(GIT_TOOLS)},
-        {"category": "Platform Tools", "source": "builtin", "tools": _to_list(PLATFORM_TOOLS)},
-        {"category": "Web Tools", "source": "builtin", "tools": _to_list(WEB_TOOLS)},
-        {"category": "Diagnosis Tools", "source": "builtin", "tools": _to_list(DIAGNOSIS_TOOLS)},
-        {"category": "Memory Tools", "source": "builtin", "tools": _to_list(MEMORY_TOOLS)},
-        {"category": "Introspection Tools", "source": "builtin", "tools": _to_list(INTROSPECT_TOOLS)},
-        {"category": "Intel Tools", "source": "builtin", "tools": _to_list(INTEL_TOOLS)},
-        {"category": "Config Tools", "source": "builtin", "tools": _to_list(CONFIG_TOOLS)},
+        {
+            "category": g.display_name,
+            "source": "builtin",
+            "tools": [{"name": t.name, "description": t.description} for t in g.tools],
+        }
+        for g in get_registry()
     ]
     categories.extend(get_tools_by_server())
     return categories
