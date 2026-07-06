@@ -335,12 +335,25 @@ _SYNTHETIC_ADMIN = AuthenticatedUser(
 async def require_user(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
+    x_admin_secret: Annotated[str | None, Header(alias="X-Admin-Secret")] = None,
 ) -> AuthenticatedUser:
     """Authenticate dashboard requests. Accepts:
     1. Trusted network (LAN, Tailscale, localhost) — returns synthetic admin
-    2. Bearer JWT token (user auth)
-    3. If REQUIRE_AUTH=false, returns synthetic admin user (dev bypass)
+    2. X-Admin-Secret (break-glass) — returns the synthetic owner identity
+    3. Bearer JWT token (user auth)
+    4. If REQUIRE_AUTH=false, returns synthetic admin user (dev bypass)
+
+    (2) exists because a credential that passes require_admin must also
+    confer an identity: without it, a secret-authenticated browser reaches
+    every admin endpoint yet /auth/me knows nobody — and role-derived UI
+    (invite roles, user management) silently degrades to 'viewer'.
     """
+    # Break-glass admin secret → owner identity (constant-time compare).
+    if x_admin_secret:
+        expected = await get_admin_secret()
+        if expected and hmac.compare_digest(x_admin_secret, expected):
+            return _SYNTHETIC_ADMIN
+
     # Trusted network bypass
     if getattr(request.state, "is_trusted_network", False):
         return _SYNTHETIC_ADMIN

@@ -228,6 +228,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch {
           // Backend not available
         }
+      } else {
+        // No JWT — trusted-network and break-glass-secret browsers still
+        // have a server-side identity (synthetic owner). Ask who we are so
+        // role-derived UI (invite roles, user management) doesn't silently
+        // degrade to 'viewer'. 401 here simply means anonymous.
+        try {
+          const secret = localStorage.getItem('nova_admin_secret')
+          const resp = await fetch('/api/v1/auth/me', {
+            headers: secret ? { 'X-Admin-Secret': secret } : {},
+          })
+          if (resp.ok && !cancelled) {
+            setUser(await resp.json())
+          }
+        } catch {
+          // Backend not available — stay anonymous
+        }
       }
 
       if (!cancelled) setLoading(false)
