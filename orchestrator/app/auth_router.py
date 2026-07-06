@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time as _time
 from uuid import UUID
 
 import bcrypt
@@ -88,6 +89,46 @@ def _hash_password(password: str) -> str:
 
 def _verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+# Constant bcrypt hash of an unguessable value, compared against on the
+# user-not-found path so login timing is identical whether or not the email
+# exists — otherwise the fast path is an email-enumeration oracle.
+_TIMING_EQUALIZER_HASH = bcrypt.hashpw(secrets.token_bytes(32), bcrypt.gensalt()).decode()
+
+# Login brute-force throttle: sliding window per client IP and per target
+# email (an attacker rotating emails burns the IP budget; one rotating IPs
+# burns the account budget). Same window mechanics as the admin-secret
+# throttle in app.auth. Failures only — successful logins never count.
+_LOGIN_FAIL_WINDOW_SECONDS = 300
+_LOGIN_FAIL_THRESHOLD = 10
+
+
+async def _login_throttled(ip: str, email: str) -> bool:
+    from app.store import get_redis
+    window = int(_time.time() / _LOGIN_FAIL_WINDOW_SECONDS)
+    try:
+        redis = get_redis()
+        counts = await asyncio.gather(
+            redis.get(f"nova:login-fail:ip:{ip}:{window}"),
+            redis.get(f"nova:login-fail:email:{email}:{window}"),
+        )
+        return any(int(c or 0) >= _LOGIN_FAIL_THRESHOLD for c in counts)
+    except Exception:
+        return False  # Redis down — never lock out logins on infra failure
+
+
+async def _record_login_failure(ip: str, email: str) -> None:
+    from app.store import get_redis
+    window = int(_time.time() / _LOGIN_FAIL_WINDOW_SECONDS)
+    try:
+        redis = get_redis()
+        for key in (f"nova:login-fail:ip:{ip}:{window}", f"nova:login-fail:email:{email}:{window}"):
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, _LOGIN_FAIL_WINDOW_SECONDS * 2)
+    except Exception:
+        pass
 
 def _safe_user(user: dict) -> dict:
     """Strip sensitive fields from user dict before returning to client."""
@@ -235,21 +276,34 @@ async def login(req: LoginRequest, request: Request):
     from app.users import get_user_by_email
 
     pool = get_pool()
-    ip = request.client.host if request.client else None
+    ip = request.client.host if request.client else "unknown"
+    email = req.email.lower()
 
-    user = await get_user_by_email(req.email.lower())
+    # Brute-force brake runs BEFORE any credential work.
+    if await _login_throttled(ip, email):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed sign-in attempts. Retry in {_LOGIN_FAIL_WINDOW_SECONDS // 60} minutes.",
+        )
+
+    user = await get_user_by_email(email)
     if not user or not user.get("password_hash"):
+        # Burn the same bcrypt time as a real check — identical timing
+        # whether the email exists or not.
+        _verify_password(req.password, _TIMING_EQUALIZER_HASH)
+        await _record_login_failure(ip, email)
         asyncio.create_task(audit_rbac(
             pool, None, "login_failed",
-            details={"email": req.email.lower(), "reason": "invalid_email"},
+            details={"email": email, "reason": "invalid_email"},
             ip=ip,
         ))
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not _verify_password(req.password, user["password_hash"]):
+        await _record_login_failure(ip, email)
         asyncio.create_task(audit_rbac(
             pool, user["id"], "login_failed",
-            details={"email": req.email.lower(), "reason": "bad_password"},
+            details={"email": email, "reason": "bad_password"},
             ip=ip, tenant_id=user.get("tenant_id"),
         ))
         raise HTTPException(status_code=401, detail="Invalid email or password")

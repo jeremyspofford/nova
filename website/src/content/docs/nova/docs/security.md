@@ -36,6 +36,13 @@ Authorization: Bearer sk-nova-...
 X-API-Key: sk-nova-...
 ```
 
+### Passwords & sessions
+
+- **Passwords** are hashed with bcrypt (per-password salt, cost 12) and verified in constant time. They are never stored or logged in plaintext.
+- **Sign-in is brute-force throttled** per client IP *and* per target email (sliding window), and the response time is identical whether or not an email exists — no account enumeration by timing.
+- **Sessions** are 15-minute JWTs signed with a random 256-bit secret generated at first boot. **Refresh tokens are stored only as SHA-256 hashes** with rotation — a database leak does not yield usable sessions. Role changes and deactivation revoke tokens immediately (Redis deny-list).
+- **Transport**: on a bare LAN, HTTP is plaintext — use [Tailscale or a Cloudflare Tunnel](/nova/docs/remote-access/) for any access beyond localhost; both give you encryption in transit.
+
 ### Trusted networks
 
 Requests from trusted CIDRs (**loopback only by default**; add your LAN or tailnet ranges in **Settings → System → Trusted Networks**) skip login for the *user surface* — dashboard viewing, chat, the Inbox.
