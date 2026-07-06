@@ -8,7 +8,13 @@ Scope decisions (PRIV-003, see docs/audits/2026-04-16-phase0/BACKLOG.md):
   platform config, auth, and backups are kept unless explicitly unchecked.
 - Everything routinely accumulated (chat, tasks, cortex, intel, knowledge,
   runtime caches) wiped by default.
-- schema_migrations and tenants are never in scope (would break reboot).
+- tenants is never in scope (would break reboot).
+- schema_migrations is CLEARED after any postgres wipe: truncating tables
+  orphans rows that already-applied migrations seeded (intel feeds, system
+  goals, default rules, the master-key config row — the 2026-07-05 audit's
+  §5·A failure class). Every migration is idempotent (guarded DDL +
+  WHERE NOT EXISTS / ON CONFLICT seeds), so a full re-run on the next
+  orchestrator start restores seeded state without touching kept data.
 """
 
 import logging
@@ -274,6 +280,26 @@ async def _wipe_postgres(categories_to_wipe: list[str]) -> dict[str, Any]:
     return {"per_category": per_category, "total_truncated": total_truncated}
 
 
+async def _clear_schema_migrations(had_truncations: bool) -> dict[str, Any]:
+    """Clear the migration ledger so the orchestrator re-runs all (idempotent)
+    migrations on next startup, restoring migration-seeded rows that the wipe
+    removed. No-op when the wipe touched no postgres tables."""
+    if not had_truncations:
+        return {"cleared": False, "error": None}
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM schema_migrations")
+        logger.info(
+            "Cleared schema_migrations — orchestrator re-runs migrations "
+            "(and re-seeds) on next start"
+        )
+        return {"cleared": True, "error": None}
+    except Exception as e:
+        logger.warning("Could not clear schema_migrations: %s", e)
+        return {"cleared": False, "error": str(e)}
+
+
 async def _wipe_redis_pattern(db: int, pattern: str) -> int:
     """Delete all keys matching pattern on the given Redis DB. Returns count."""
     r = await get_redis_for_db(db)
@@ -410,6 +436,7 @@ async def factory_reset(keep: set[str] | None = None) -> dict:
 
     redis_result = await _wipe_redis(wipe_list)
     pg_result = await _wipe_postgres(wipe_list)
+    reseed_result = await _clear_schema_migrations(pg_result["total_truncated"] > 0)
     fs_result = _wipe_filesystem(wipe_list)
     backup_result = (
         _wipe_backups() if "backups" in wipe_list else {"files_removed": 0, "bytes_reclaimed": 0}
@@ -436,9 +463,13 @@ async def factory_reset(keep: set[str] | None = None) -> dict:
         backup_result["files_removed"],
     )
 
+    if reseed_result.get("error"):
+        errors.append(f"[postgres/schema_migrations] {reseed_result['error']}")
+
     return {
         "wiped": wipe_list,
         "kept": kept_list,
+        "reseed": reseed_result,
         "errors": errors if errors else None,
         "stats": {
             "tables_truncated": pg_result["total_truncated"],

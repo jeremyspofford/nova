@@ -498,4 +498,18 @@ async def factory_reset_endpoint(
         )
     result = await factory_reset(keep=set(req.keep))
     result["safety_backup"] = safety_backup
+
+    # The wipe cleared schema_migrations (see factory_reset.py) — bounce the
+    # orchestrator now so its startup re-runs the idempotent migrations and
+    # the seeded state (intel feeds, system goals, default rules, master-key
+    # config row) comes back immediately instead of on the next manual restart.
+    if result.get("reseed", {}).get("cleared"):
+        try:
+            restart = restart_service("orchestrator")
+            result["reseed"]["orchestrator_restarted"] = bool(restart.get("ok"))
+            if not restart.get("ok"):
+                result["reseed"]["restart_error"] = restart.get("error")
+        except Exception as e:
+            result["reseed"]["orchestrator_restarted"] = False
+            result["reseed"]["restart_error"] = str(e)
     return result
