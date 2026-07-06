@@ -775,6 +775,44 @@ services:
           cpus: "0.25"
           memory: 64M
 
+  # ── Observability (optional profile) ────────────────────────────────────────
+  # Grafana with a provisioned Postgres datasource + Nova dashboards (autonomy,
+  # operations). Start with: docker compose --profile observability up -d grafana
+  # Loopback-bound like every non-essential port; login admin / GRAFANA_ADMIN_PASSWORD
+  # (defaults to the instance admin secret). Reads the same DB the stack uses —
+  # dashboards only SELECT.
+  grafana:
+    <<: *nova-common
+    image: grafana/grafana-oss:11.4.0
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-${NOVA_ADMIN_SECRET:-admin}}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      POSTGRES_USER: nova
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_dev_password}
+    # Deliberately stateless: everything (datasource, dashboards) is
+    # provisioned from these read-only mounts, so there is no Grafana state
+    # worth persisting — and no uid-472 bind-mount permission dance.
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1:}3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *nova-healthcheck
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
   # ── Bundled Local Inference (optional; multiple may run at once) ────────────
   # Started/stopped by the recovery service (Settings → Local Inference) or by
   # adding profiles to COMPOSE_PROFILES (e.g. inference-ollama). The gateway

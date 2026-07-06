@@ -92,6 +92,21 @@ For advanced use, backends can still be started manually via Docker Compose prof
 docker compose --profile local-vllm up -d nova-vllm
 ```
 
+## Observability (optional)
+
+Nova ships Grafana dashboards over its own Postgres as an opt-in compose profile:
+
+```bash
+docker compose --profile observability up -d grafana
+```
+
+Grafana serves on `http://localhost:3001` (loopback-bound; set `GRAFANA_BIND=0.0.0.0:` to expose). Log in as `admin` with `GRAFANA_ADMIN_PASSWORD` (defaults to your `NOVA_ADMIN_SECRET`). Two dashboards are provisioned under the **Nova** folder:
+
+- **Nova Autonomy** — active goals, standing schedules with next-fire times, tasks per hour by status, reflection outcomes, and the most recent lessons Nova recorded.
+- **Nova Operations** — task throughput and failures, pipeline spend per hour, push-delivery receipts (accepted vs not delivered), and Inbox unread count.
+
+The container is stateless — datasource and dashboards are provisioned from read-only files in `observability/grafana/`, so it can be stopped and removed at any time with nothing to migrate.
+
 ## Backup and restore
 
 ### Via the Recovery UI (recommended)
