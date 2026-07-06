@@ -687,8 +687,17 @@ async def _execute_serve(drive: DriveResult, plan: str, state: CycleState) -> st
 
     try:
         orch = get_orchestrator()
+        # The goal description is the operator's contract for HOW the goal is
+        # to be executed (standing goals like the morning briefing spell out
+        # exact steps and tools). The pipeline agent must see it verbatim —
+        # cortex's one-line plan is a lossy paraphrase, not a replacement.
+        desc = (goal.get("description") or "").strip()
+        user_input = f"[Cortex goal work] Goal: {goal['title']}."
+        if desc:
+            user_input += f"\n\nGoal instructions (follow them):\n{desc}"
+        user_input += f"\n\nCurrent plan: {plan}"
         body = {
-            "user_input": f"[Cortex goal work] Goal: {goal['title']}. Plan: {plan}",
+            "user_input": user_input,
             "goal_id": goal_id,
             "metadata": {"source": "cortex", "cycle": state.cycle_number, "drive": "serve"},
         }

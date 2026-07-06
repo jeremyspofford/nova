@@ -50,6 +50,17 @@ async def _filter_dep_blocked(goals: list[dict]) -> list[dict]:
 
 async def assess(ctx: DriveContext | None = None) -> DriveResult:
     """Assess serve drive urgency based on active goals and stimuli."""
+    # Cron-due goals must enter the work set regardless of staleness: the
+    # scheduler consumes the due event when it emits the stimulus, so if the
+    # goal isn't picked up THIS cycle the scheduled run is silently dropped
+    # until the goal goes stale (up to check_interval later).
+    scheduled_goal_ids: list[str] = []
+    if ctx:
+        for s in ctx.stimuli_of_type("goal.schedule_due"):
+            gid = (s.get("payload") or {}).get("goal_id")
+            if gid:
+                scheduled_goal_ids.append(gid)
+
     pool = get_pool()
     async with pool.acquire() as conn:
         active_count = await conn.fetchval(
@@ -70,12 +81,16 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
                  OR last_checked_at < NOW() - (check_interval_seconds || ' seconds')::interval)
                 -- OR has active maturation phase (not review — that waits for human)
                 OR maturation_status IN ('triaging', 'scoping', 'speccing', 'building', 'waiting', 'verifying')
+                -- OR its cron schedule just fired
+                OR id = ANY($1::uuid[])
               )
               AND (maturation_status IS NULL OR maturation_status != 'review')
               AND (max_iterations IS NULL OR iteration < max_iterations)
               AND (max_cost_usd IS NULL OR COALESCE(cost_so_far_usd, 0) < max_cost_usd)
             ORDER BY
-                -- Active maturation goals first regardless of priority
+                -- Schedule-due goals first — their trigger is consumed this cycle
+                CASE WHEN id = ANY($1::uuid[]) THEN 0 ELSE 1 END,
+                -- Then active maturation goals regardless of priority
                 CASE WHEN maturation_status IN ('triaging','scoping','speccing','building','waiting','verifying')
                      THEN 0 ELSE 1 END,
                 priority DESC,
@@ -83,6 +98,7 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
                 created_at DESC
             LIMIT 10
             """,
+            scheduled_goal_ids,
         )
 
         active_tasks = await conn.fetchval(
@@ -140,13 +156,6 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
          "maturation_status": g.get("maturation_status")}
         for g in stale_goals
     ]
-
-    scheduled_goal_ids = []
-    if ctx:
-        for s in ctx.stimuli_of_type("goal.schedule_due"):
-            gid = s.get("payload", {}).get("goal_id")
-            if gid:
-                scheduled_goal_ids.append(gid)
 
     return DriveResult(
         name="serve",

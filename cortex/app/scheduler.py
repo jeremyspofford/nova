@@ -27,6 +27,36 @@ async def check_schedules() -> list[dict]:
     now = datetime.now(timezone.utc)
 
     async with pool.acquire() as conn:
+        # Self-heal: migration-seeded (or hand-inserted) cron goals arrive with
+        # NULL schedule_next_at, which the due-query below skips forever. Give
+        # them a first fire time so seeding a goal is enough to schedule it.
+        uninitialized = await conn.fetch(
+            """
+            SELECT id, title, schedule_cron
+            FROM goals
+            WHERE status = 'active'
+              AND schedule_cron IS NOT NULL
+              AND schedule_next_at IS NULL
+            """
+        )
+        for row in uninitialized:
+            try:
+                first_at = croniter(row["schedule_cron"], now).get_next(datetime)
+            except (ValueError, KeyError):
+                log.warning(
+                    "Invalid cron for goal %s (%s): %s — cannot initialize",
+                    row["id"], row["title"], row["schedule_cron"],
+                )
+                continue
+            await conn.execute(
+                "UPDATE goals SET schedule_next_at = $1, updated_at = NOW() WHERE id = $2",
+                first_at, row["id"],
+            )
+            log.info(
+                "Initialized schedule for goal %s (%s): first fire %s",
+                row["id"], row["title"], first_at,
+            )
+
         rows = await conn.fetch(
             """
             SELECT id, title, priority, schedule_cron, max_completions, completion_count
