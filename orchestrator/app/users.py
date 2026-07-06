@@ -109,18 +109,44 @@ async def update_user(user_id: str | UUID, **fields) -> dict[str, Any] | None:
     return _user_dict(row) if row else None
 
 
+# Load-bearing identities, not people: admin@local anchors ambient/break-glass
+# sessions (fixed zero UUID); cortex@system.nova owns the brain's journal
+# conversation. Password-less by construction. They are excluded from user
+# counts and listings — counting them broke the first-user registration
+# exemption on fresh installs (seeded rows made count_users() start at 2),
+# and surfacing them in the Users page invited operators to break them.
+SYSTEM_USER_EMAILS = ("admin@local", "cortex@system.nova")
+
+
 async def count_users() -> int:
+    """Human accounts only — system identities don't count as users."""
     pool = get_pool()
     async with pool.acquire() as conn:
-        return await conn.fetchval("SELECT COUNT(*) FROM users")
+        return await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE email != ALL($1::text[])",
+            list(SYSTEM_USER_EMAILS),
+        )
 
 
 async def list_users(tenant_id: str = "00000000-0000-0000-0000-000000000001") -> list[dict[str, Any]]:
+    """Human accounts only — system identities are managed by Nova, not listed."""
     pool = get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM users WHERE tenant_id = $1 ORDER BY created_at", UUID(tenant_id)
+        "SELECT * FROM users WHERE tenant_id = $1 AND email != ALL($2::text[]) ORDER BY created_at",
+        UUID(tenant_id), list(SYSTEM_USER_EMAILS),
     )
     return [_user_dict(r) for r in rows]
+
+
+async def count_active_owners() -> int:
+    """Active human owners — the guard against demoting the last one."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active' "
+            "AND email != ALL($1::text[])",
+            list(SYSTEM_USER_EMAILS),
+        )
 
 
 async def update_user_role(user_id: str, role: str, actor_id: str | None = None) -> dict[str, Any] | None:

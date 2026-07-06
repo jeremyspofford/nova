@@ -68,11 +68,9 @@ class InviteCreate(BaseModel):
     role: str = "member"
     account_expires_in_hours: int | None = None
 
-# Load-bearing identities, not accounts: admin@local anchors ambient/break-
-# glass sessions (fixed zero UUID); cortex@system.nova owns the brain's
-# journal conversation (migration 021). Neither has a password. Editing or
-# deactivating them breaks FKs and /auth/me — refuse via API.
-SYSTEM_USER_EMAILS = {"admin@local", "cortex@system.nova"}
+# Load-bearing identities, not accounts — see app.users.SYSTEM_USER_EMAILS
+# (excluded from counts/listings there; PATCH/DELETE refused here).
+from app.users import SYSTEM_USER_EMAILS
 
 
 class AdminUpdateUser(BaseModel):
@@ -679,6 +677,16 @@ async def update_user_admin(user_id: str, body: AdminUpdateUser, user: UserDep):
             raise HTTPException(status_code=400, detail=f"Invalid role: {body.role}")
         if not can_assign_role(user.role, body.role):
             raise HTTPException(status_code=403, detail=f"Cannot assign role higher than your own ({user.role})")
+        # Owners may change any role including their own — but never below
+        # one active owner, or the instance loses its admin identity (the
+        # exact lockout class this whole day was about).
+        if target["role"] == "owner" and body.role != "owner":
+            from app.users import count_active_owners
+            if await count_active_owners() <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This is the only active owner. Make another user an owner first, then change this role.",
+                )
         await update_user_role(user_id, body.role, actor_id=user.id)
         # Revoke tokens to force re-auth with new role
         async with pool.acquire() as conn:

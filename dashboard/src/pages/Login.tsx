@@ -62,9 +62,12 @@ export function Login() {
       } else {
         await register(email, password, displayName || undefined, inviteCode || undefined)
       }
+      // Success must GO somewhere — without this the page just sat there
+      // with valid tokens stored ("the sign in flow doesn't work"). Full
+      // navigation so the auth bootstrap re-runs under the new session.
+      window.location.href = '/'
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
-    } finally {
       setSubmitting(false)
     }
   }

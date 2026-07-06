@@ -337,32 +337,17 @@ async def require_user(
     authorization: Annotated[str | None, Header()] = None,
     x_admin_secret: Annotated[str | None, Header(alias="X-Admin-Secret")] = None,
 ) -> AuthenticatedUser:
-    """Authenticate dashboard requests. Accepts:
-    1. Trusted network (LAN, Tailscale, localhost) — returns synthetic admin
-    2. X-Admin-Secret (break-glass) — returns the synthetic owner identity
-    3. Bearer JWT token (user auth)
-    4. If REQUIRE_AUTH=false, returns synthetic admin user (dev bypass)
-
-    (2) exists because a credential that passes require_admin must also
-    confer an identity: without it, a secret-authenticated browser reaches
-    every admin endpoint yet /auth/me knows nobody — and role-derived UI
-    (invite roles, user management) silently degrades to 'viewer'.
+    """Authenticate dashboard requests, most-explicit credential first:
+    1. Bearer JWT (a real user session) — ALWAYS wins. Ambient identity must
+       never shadow a logged-in user: with trusted-network checked first, a
+       LAN operator's own session resolved to the synthetic admin on every
+       request (their JWT was silently ignored server-side).
+    2. X-Admin-Secret (break-glass) — synthetic owner identity, so the
+       credential that passes require_admin also confers an identity.
+    3. Trusted network (LAN, Tailscale, localhost) — synthetic admin.
+    4. REQUIRE_AUTH=false — synthetic admin (dev bypass).
     """
-    # Break-glass admin secret → owner identity (constant-time compare).
-    if x_admin_secret:
-        expected = await get_admin_secret()
-        if expected and hmac.compare_digest(x_admin_secret, expected):
-            return _SYNTHETIC_ADMIN
-
-    # Trusted network bypass
-    if getattr(request.state, "is_trusted_network", False):
-        return _SYNTHETIC_ADMIN
-
-    # Dev bypass
-    if not await _get_require_auth():
-        return _SYNTHETIC_ADMIN
-
-    # Try JWT first
+    # Try JWT first — an explicit session outranks ambient identity.
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
         try:
@@ -447,7 +432,21 @@ async def require_user(
         except HTTPException:
             raise
         except Exception:
-            pass  # JWT invalid/expired — fall through to 401
+            pass  # JWT invalid/expired — fall through to the ambient methods
+
+    # Break-glass admin secret → owner identity (constant-time compare).
+    if x_admin_secret:
+        expected = await get_admin_secret()
+        if expected and hmac.compare_digest(x_admin_secret, expected):
+            return _SYNTHETIC_ADMIN
+
+    # Trusted network bypass
+    if getattr(request.state, "is_trusted_network", False):
+        return _SYNTHETIC_ADMIN
+
+    # Dev bypass
+    if not await _get_require_auth():
+        return _SYNTHETIC_ADMIN
 
     raise HTTPException(status_code=401, detail="Authentication required")
 

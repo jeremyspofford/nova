@@ -126,10 +126,6 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
               {users.map(u => {
                 const role = u.role as Role
                 const isOwner = role === 'owner'
-                // Load-bearing identities, not accounts: ambient/break-glass
-                // sessions (admin@local) and the brain's journal owner
-                // (cortex@system.nova). No password, not editable.
-                const isSystem = u.email === 'admin@local' || u.email === 'cortex@system.nova'
                 return (
                   <tr key={u.id} className="hover:bg-surface-card-hover transition-colors">
                     <td className="px-4 py-3">
@@ -142,16 +138,9 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <Badge color={ROLE_BADGE_COLORS[role] ?? 'neutral'}>
-                          {ROLE_LABELS[role] || role}
-                        </Badge>
-                        {isSystem && (
-                          <span title="Internal identity Nova relies on — no password, not editable">
-                            <Badge color="neutral">System</Badge>
-                          </span>
-                        )}
-                      </div>
+                      <Badge color={ROLE_BADGE_COLORS[role] ?? 'neutral'}>
+                        {ROLE_LABELS[role] || role}
+                      </Badge>
                     </td>
                     <td className="hidden sm:table-cell px-4 py-3 text-content-secondary text-caption capitalize">
                       {u.status}
@@ -165,30 +154,26 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                       {formatDistanceToNow(new Date(u.updated_at), { addSuffix: true })}
                     </td>
                     <td className="px-4 py-3">
-                      {isSystem ? (
-                        <span className="text-caption text-content-tertiary">Managed by Nova</span>
-                      ) : (
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={<Pencil size={14} />}
+                          onClick={() => setEditTarget(u)}
+                        >
+                          Edit
+                        </Button>
+                        {!isOwner && u.id !== currentUserId && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            icon={<Pencil size={14} />}
-                            onClick={() => setEditTarget(u)}
+                            className="text-danger"
+                            onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
                           >
-                            Edit
+                            Deactivate
                           </Button>
-                          {!isOwner && u.id !== currentUserId && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-danger"
-                              onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
-                            >
-                              Deactivate
-                            </Button>
-                          )}
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -234,7 +219,10 @@ function EditUserModal({ user, currentRole, currentUserId, saving, error, onClos
   onSave: (data: Parameters<typeof updateUser>[1]) => void
 }) {
   const role = user.role as Role
-  const roleLocked = role === 'owner' || user.id === currentUserId
+  // Editable when your role can assign the target's current role — including
+  // yourself. Demoting the last active owner is refused server-side (409)
+  // with instructions, so the lockout case can't happen from here.
+  const roleLocked = !canAssignRole(currentRole, role)
   const assignableRoles = ROLE_HIERARCHY.filter(r => canAssignRole(currentRole, r))
 
   const [name, setName] = useState(user.display_name ?? '')
@@ -306,7 +294,7 @@ function EditUserModal({ user, currentRole, currentUserId, saving, error, onClos
           </Select>
           <p className="mt-1.5 text-caption text-content-tertiary">
             {roleLocked
-              ? (role === 'owner' ? 'The owner role cannot be changed here.' : 'You cannot change your own role.')
+              ? "Your role can't modify this user's role."
               : ROLE_DESCRIPTIONS[newRole]}
           </p>
         </div>
