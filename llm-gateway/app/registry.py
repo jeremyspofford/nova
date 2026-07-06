@@ -52,6 +52,7 @@ from app.providers import (
     VLLMProvider,
     discover_chatgpt_token,
 )
+from app.providers.credential_guard import credential_invalid
 
 log = logging.getLogger(__name__)
 
@@ -117,11 +118,15 @@ _ollama = OllamaProvider(
     base_url=settings.ollama_base_url,
     default_model=settings.default_ollama_model,
 )
-_litellm = LiteLLMProvider()  # paid API fallback — model comes from request
-_groq = LiteLLMProvider(default_model=settings.default_groq_model)
-_cerebras = LiteLLMProvider(default_model=settings.default_cerebras_model)
-_openrouter = LiteLLMProvider(default_model=settings.default_openrouter_model)
-_github = LiteLLMProvider(default_model=settings.default_github_model)
+_litellm = LiteLLMProvider()  # generic last-resort adapter — model comes from request
+# Paid APIs get their own labeled instances so a credential rejection for one
+# never sidelines the other (the guard cooldown keys on provider.name).
+_anthropic = LiteLLMProvider(default_model="claude-sonnet-4-6", label="anthropic")
+_openai = LiteLLMProvider(default_model="gpt-4o", label="openai")
+_groq = LiteLLMProvider(default_model=settings.default_groq_model, label="groq")
+_cerebras = LiteLLMProvider(default_model=settings.default_cerebras_model, label="cerebras")
+_openrouter = LiteLLMProvider(default_model=settings.default_openrouter_model, label="openrouter")
+_github = LiteLLMProvider(default_model=settings.default_github_model, label="github")
 # Read GEMINI_API_KEY from os.environ — it's authoritative after _inject_litellm_env_keys
 # applied platform_secrets overrides on top of settings/.env values.
 _gemini = GeminiADCProvider(
@@ -177,8 +182,10 @@ def _build_cloud_fallback() -> FallbackProvider:
     if _chatgpt_subscription.is_available:
         chain.append(_chatgpt_subscription)
 
-    if settings.anthropic_api_key or settings.openai_api_key:
-        chain.append(_litellm)
+    if settings.anthropic_api_key:
+        chain.append(_anthropic)
+    if settings.openai_api_key:
+        chain.append(_openai)
 
     if not chain:
         # No cloud providers at all — use LiteLLM as a last resort (it'll error with no keys)
@@ -211,8 +218,10 @@ def _build_default_fallback() -> FallbackProvider:
     if _chatgpt_subscription.is_available:
         chain.append(_chatgpt_subscription)
 
-    if settings.anthropic_api_key or settings.openai_api_key:
-        chain.append(_litellm)
+    if settings.anthropic_api_key:
+        chain.append(_anthropic)
+    if settings.openai_api_key:
+        chain.append(_openai)
 
     log.info("Default fallback chain: %d provider(s)", len(chain))
     return FallbackProvider(providers=chain)
@@ -554,19 +563,19 @@ MODEL_REGISTRY: dict[str, ModelProvider] = {
     "github/meta-llama-3.1-70b-instruct": _github,
 
     # ── Paid Anthropic API (bare model names route here via ANTHROPIC_API_KEY) ──
-    "claude-sonnet-4-6":                  _litellm,
-    "claude-opus-4-6":                    _litellm,
-    "claude-haiku-4-5-20251001":          _litellm,
+    "claude-sonnet-4-6":                  _anthropic,
+    "claude-opus-4-6":                    _anthropic,
+    "claude-haiku-4-5-20251001":          _anthropic,
 
     # ── Paid OpenAI API ────────────────────────────────────────────────────────
     # Use chatgpt/* prefix to route to subscription instead.
-    "gpt-4o":                             _litellm,
-    "gpt-4o-mini":                        _litellm,
+    "gpt-4o":                             _openai,
+    "gpt-4o-mini":                        _openai,
 
     # ── Embedding models ──────────────────────────────────────────────────────
     "nomic-embed-text":                   _ollama,     # local, free, 768-dim
     "gemini-embedding-001":               _gemini,     # Gemini free tier
-    "text-embedding-3-small":             _litellm,    # OpenAI paid
+    "text-embedding-3-small":             _openai,     # OpenAI paid
 
     # ── Catch-all: smart fallback across all configured providers ──────────────
     DEFAULT_MODEL_KEY:                    _default_fallback,
@@ -622,9 +631,9 @@ def get_provider_catalog() -> list[dict]:
          "available": bool(settings.openrouter_api_key),  "default_model": settings.default_openrouter_model},
         {"slug": "github",      "name": "GitHub Models",       "type": "free",         "instance": _github,
          "available": bool(settings.github_token),        "default_model": settings.default_github_model},
-        {"slug": "anthropic",   "name": "Anthropic API",       "type": "paid",         "instance": _litellm,
+        {"slug": "anthropic",   "name": "Anthropic API",       "type": "paid",         "instance": _anthropic,
          "available": bool(settings.anthropic_api_key),   "default_model": "claude-sonnet-4-6"},
-        {"slug": "openai",      "name": "OpenAI API",          "type": "paid",         "instance": _litellm,
+        {"slug": "openai",      "name": "OpenAI API",          "type": "paid",         "instance": _openai,
          "available": bool(settings.openai_api_key),      "default_model": "gpt-4o"},
         {"slug": "vllm",        "name": "vLLM",                "type": "local",        "instance": _vllm,
          "default_model": None},
@@ -644,16 +653,8 @@ def get_provider_catalog() -> list[dict]:
         else:
             available = getattr(instance, "is_available", False)
 
-        # Special-case: anthropic/openai share _litellm but route by prefix
-        if slug == "anthropic":
-            count = sum(1 for k, v in MODEL_REGISTRY.items()
-                        if v is _litellm and k.startswith(("claude-", "claude_")))
-        elif slug == "openai":
-            count = sum(1 for k, v in MODEL_REGISTRY.items()
-                        if v is _litellm and k.startswith(("gpt-",)))
-        else:
-            count = sum(1 for k, v in MODEL_REGISTRY.items()
-                        if v is instance and k != DEFAULT_MODEL_KEY)
+        count = sum(1 for k, v in MODEL_REGISTRY.items()
+                    if v is instance and k != DEFAULT_MODEL_KEY)
 
         result.append({
             "slug": slug,
@@ -662,6 +663,9 @@ def get_provider_catalog() -> list[dict]:
             "available": available,
             "model_count": count,
             "default_model": meta["default_model"],
+            # True while the provider is sidelined after a credential
+            # rejection (dashboard Provider Status surfaces this).
+            "credential_invalid": credential_invalid(getattr(instance, "name", slug)),
         })
 
     return result
@@ -695,6 +699,8 @@ async def _resolve_embed_override() -> tuple[ModelProvider | None, str]:
         "ollama": _ollama,
         "gemini": _gemini,
         "litellm": _litellm,
+        "anthropic": _anthropic,
+        "openai": _openai,
         "groq": _groq,
         "cerebras": _cerebras,
         "openrouter": _openrouter,

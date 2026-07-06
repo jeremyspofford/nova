@@ -11,8 +11,14 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
+from app.config import settings
+from app.providers.credential_guard import (
+    credential_invalid,
+    is_credential_error,
+    mark_credential_invalid,
+)
 from app.rate_limiter import check_rate_limit
-from app.registry import get_embed_provider, get_provider
+from app.registry import get_embed_provider, get_provider, get_routing_strategy
 from app.response_cache import get_cached, set_cached
 from app.tier_resolver import BudgetExhaustedError, resolve_model
 from fastapi import APIRouter, HTTPException, Request
@@ -68,6 +74,36 @@ async def _resolve_request_model(request: CompleteRequest, raw_request: Request)
     return request
 
 
+async def _local_reroute(request: CompleteRequest, rejected_by: str):
+    """After a cloud provider rejects its credentials, retry once on the local
+    default model — unless the routing strategy forbids local. Returns
+    (provider, request) or None when rerouting isn't allowed/possible."""
+    strategy = await get_routing_strategy()
+    if strategy == "cloud-only":
+        return None
+    local_model = settings.default_ollama_model
+    provider = await get_provider(local_model)
+    if credential_invalid(provider.name):
+        return None
+    log.warning(
+        "Rerouting model=%s → local %s after credential rejection by %s (strategy=%s)",
+        request.model, local_model, rejected_by, strategy,
+    )
+    return provider, request.model_copy(update={"model": local_model})
+
+
+async def _run_complete(provider, request: CompleteRequest) -> CompleteResponse:
+    """provider.complete() with local-inflight bookkeeping."""
+    global _local_inflight
+    if provider.is_local:
+        _local_inflight += 1
+    try:
+        return await provider.complete(request)
+    finally:
+        if provider.is_local:
+            _local_inflight -= 1
+
+
 @router.post("/complete", response_model=CompleteResponse)
 async def complete(request: CompleteRequest, raw_request: Request):
     """Non-streaming LLM completion."""
@@ -90,16 +126,33 @@ async def complete(request: CompleteRequest, raw_request: Request):
             return CompleteResponse(**cached)
 
     provider = await get_provider(request.model)
-    is_local = provider.is_local
 
-    global _local_inflight
-    if is_local:
-        _local_inflight += 1
+    # Pre-flight: don't burn a call on a provider whose credentials were
+    # just rejected — reroute to local while the cooldown lasts.
+    if not provider.is_local and credential_invalid(provider.name):
+        rerouted = await _local_reroute(request, provider.name)
+        if rerouted is not None:
+            provider, request = rerouted
+
     try:
-        response = await provider.complete(request)
-    finally:
-        if is_local:
-            _local_inflight -= 1
+        response = await _run_complete(provider, request)
+    except Exception as e:
+        if not is_credential_error(e):
+            raise
+        mark_credential_invalid(provider.name)
+        rerouted = None if provider.is_local else await _local_reroute(request, provider.name)
+        if rerouted is None:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": "provider_credentials_invalid",
+                    "provider": provider.name,
+                    "model": request.model,
+                    "detail": str(e)[:300],
+                },
+            )
+        provider, request = rerouted
+        response = await _run_complete(provider, request)
 
     log.info(
         "complete model=%s in=%d out=%d cost=$%.4f",
@@ -128,6 +181,15 @@ async def stream(request: CompleteRequest, raw_request: Request):
 
     await _enforce_rate_limit(request.model)
     provider = await get_provider(request.model)
+
+    # Pre-flight credential-cooldown reroute (same rule as /complete). A
+    # mid-stream credential failure still marks the provider (below) so the
+    # NEXT request self-heals — auth errors surface on connect, not mid-body.
+    if not provider.is_local and credential_invalid(provider.name):
+        rerouted = await _local_reroute(request, provider.name)
+        if rerouted is not None:
+            provider, request = rerouted
+
     is_local = provider.is_local
 
     async def generate() -> AsyncIterator[bytes]:
@@ -139,6 +201,8 @@ async def stream(request: CompleteRequest, raw_request: Request):
                 yield f"data: {chunk.model_dump_json()}\n\n".encode()
             yield b"data: [DONE]\n\n"
         except Exception as e:
+            if is_credential_error(e):
+                mark_credential_invalid(provider.name)
             log.error("Stream error from %s (model=%s): %s", provider.name, request.model, e)
             # Nova internal SSE format — intentionally different from the OpenAI-compat
             # endpoint (/v1/chat/completions) which uses {"error": {"message": ..., "type": ...}}.

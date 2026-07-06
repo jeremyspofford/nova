@@ -8,6 +8,11 @@ import logging
 from typing import AsyncIterator
 
 from app.providers.base import ModelProvider
+from app.providers.credential_guard import (
+    credential_invalid,
+    is_credential_error,
+    mark_credential_invalid,
+)
 from nova_contracts import (
     CompleteRequest,
     CompleteResponse,
@@ -51,10 +56,15 @@ class FallbackProvider(ModelProvider):
     async def complete(self, request: CompleteRequest) -> CompleteResponse:
         last_error: Exception | None = None
         for provider in self._providers:
+            if credential_invalid(provider.name):
+                log.debug("Skipping %s — credentials in rejection cooldown", provider.name)
+                continue
             try:
                 log.debug("Attempting completion with provider: %s", provider.name)
                 return await provider.complete(request)
             except Exception as e:
+                if is_credential_error(e):
+                    mark_credential_invalid(provider.name)
                 log.warning("Provider %s failed: %s — trying next", provider.name, e)
                 last_error = e
 
@@ -63,11 +73,16 @@ class FallbackProvider(ModelProvider):
     async def stream(self, request: CompleteRequest) -> AsyncIterator[StreamChunk]:
         # Streaming fallback: try providers until one succeeds on first chunk
         for provider in self._providers:
+            if credential_invalid(provider.name):
+                log.debug("Skipping %s — credentials in rejection cooldown", provider.name)
+                continue
             try:
                 async for chunk in provider.stream(request):
                     yield chunk
                 return
             except Exception as e:
+                if is_credential_error(e):
+                    mark_credential_invalid(provider.name)
                 log.warning("Streaming provider %s failed: %s — trying next", provider.name, e)
 
         raise RuntimeError("All streaming providers failed")
@@ -77,9 +92,14 @@ class FallbackProvider(ModelProvider):
         for provider in self._providers:
             if not provider.supports(ModelCapability.embeddings):
                 continue
+            if credential_invalid(provider.name):
+                log.debug("Skipping %s — credentials in rejection cooldown", provider.name)
+                continue
             try:
                 return await provider.embed(request)
             except Exception as e:
+                if is_credential_error(e):
+                    mark_credential_invalid(provider.name)
                 log.warning("Embed provider %s failed: %s", provider.name, e)
                 last_error = e
 

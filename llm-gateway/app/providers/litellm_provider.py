@@ -33,12 +33,16 @@ class LiteLLMProvider(ModelProvider):
     Handles Anthropic, OpenAI, Gemini, Cohere, and 100+ others.
     """
 
-    def __init__(self, default_model: str = "claude-sonnet-4-6"):
+    def __init__(self, default_model: str = "claude-sonnet-4-6", label: str | None = None):
         self._default_model = default_model
+        # Distinguishes per-credential instances (groq, cerebras, ...) so a
+        # credential-rejection cooldown for one key never sidelines siblings
+        # that happen to share this adapter class.
+        self._label = label
 
     @property
     def name(self) -> str:
-        return "litellm"
+        return f"litellm-{self._label}" if self._label else "litellm"
 
     @property
     def capabilities(self) -> set[ModelCapability]:

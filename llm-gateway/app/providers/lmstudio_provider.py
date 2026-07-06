@@ -18,7 +18,7 @@ and never tries to swap them.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Set
+from typing import Optional
 
 from nova_contracts.llm import ModelCapability
 
@@ -61,6 +61,7 @@ class LMStudioProvider(OpenAICompatibleProvider):
         a 200 means the server is up and serving.
         """
         import time
+
         import httpx
 
         now = time.monotonic()
