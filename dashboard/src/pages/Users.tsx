@@ -126,6 +126,10 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
               {users.map(u => {
                 const role = u.role as Role
                 const isOwner = role === 'owner'
+                // Load-bearing identities, not accounts: ambient/break-glass
+                // sessions (admin@local) and the brain's journal owner
+                // (cortex@system.nova). No password, not editable.
+                const isSystem = u.email === 'admin@local' || u.email === 'cortex@system.nova'
                 return (
                   <tr key={u.id} className="hover:bg-surface-card-hover transition-colors">
                     <td className="px-4 py-3">
@@ -138,9 +142,16 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge color={ROLE_BADGE_COLORS[role] ?? 'neutral'}>
-                        {ROLE_LABELS[role] || role}
-                      </Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge color={ROLE_BADGE_COLORS[role] ?? 'neutral'}>
+                          {ROLE_LABELS[role] || role}
+                        </Badge>
+                        {isSystem && (
+                          <span title="Internal identity Nova relies on — no password, not editable">
+                            <Badge color="neutral">System</Badge>
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="hidden sm:table-cell px-4 py-3 text-content-secondary text-caption capitalize">
                       {u.status}
@@ -154,26 +165,30 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                       {formatDistanceToNow(new Date(u.updated_at), { addSuffix: true })}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          icon={<Pencil size={14} />}
-                          onClick={() => setEditTarget(u)}
-                        >
-                          Edit
-                        </Button>
-                        {!isOwner && u.id !== currentUserId && (
+                      {isSystem ? (
+                        <span className="text-caption text-content-tertiary">Managed by Nova</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="text-danger"
-                            onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
+                            icon={<Pencil size={14} />}
+                            onClick={() => setEditTarget(u)}
                           >
-                            Deactivate
+                            Edit
                           </Button>
-                        )}
-                      </div>
+                          {!isOwner && u.id !== currentUserId && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-danger"
+                              onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
+                            >
+                              Deactivate
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )

@@ -68,6 +68,13 @@ class InviteCreate(BaseModel):
     role: str = "member"
     account_expires_in_hours: int | None = None
 
+# Load-bearing identities, not accounts: admin@local anchors ambient/break-
+# glass sessions (fixed zero UUID); cortex@system.nova owns the brain's
+# journal conversation (migration 021). Neither has a password. Editing or
+# deactivating them breaks FKs and /auth/me — refuse via API.
+SYSTEM_USER_EMAILS = {"admin@local", "cortex@system.nova"}
+
+
 class AdminUpdateUser(BaseModel):
     role: str | None = None
     status: str | None = None  # 'active' | 'deactivated'
@@ -635,6 +642,9 @@ async def update_user_admin(user_id: str, body: AdminUpdateUser, user: UserDep):
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if target["email"] in SYSTEM_USER_EMAILS:
+        raise HTTPException(status_code=403, detail="System identity — managed by Nova, not editable")
+
     # Can't modify users with equal or higher role (unless self)
     if parse_role(target["role"]) >= parse_role(user.role) and user.id != user_id:
         raise HTTPException(status_code=403, detail="Cannot modify user with equal or higher role")
@@ -716,6 +726,8 @@ async def deactivate_user_endpoint(user_id: str, user: UserDep):
     target = await get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    if target["email"] in SYSTEM_USER_EMAILS:
+        raise HTTPException(status_code=403, detail="System identity — managed by Nova, not deactivatable")
     if target["role"] == "owner":
         raise HTTPException(status_code=403, detail="Cannot deactivate the owner")
     if parse_role(target["role"]) >= parse_role(user.role):
