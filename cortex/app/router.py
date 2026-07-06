@@ -1,6 +1,7 @@
 """Cortex control endpoints — status, pause, resume, drives, journal."""
 from __future__ import annotations
 
+import json
 import logging
 from uuid import UUID
 
@@ -44,28 +45,59 @@ async def get_status():
 
 @cortex_router.post("/trigger/{goal_id}")
 async def trigger_goal(goal_id: UUID):
-    """Directly dispatch a pipeline task for a goal, bypassing drive evaluation."""
+    """Directly dispatch a pipeline task for a goal, bypassing drive evaluation.
+
+    Mirrors the scheduled dispatch in cycle.py: the goal description reaches
+    the agent verbatim, and current_plan.pod is honored — a manual "run now"
+    must not behave differently from the cron fire (the briefing goal routes
+    to the Research pod; falling back to Quartet sends an informational
+    digest through the code-review gauntlet).
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, title, description FROM goals WHERE id = $1 AND status = 'active'",
+            "SELECT id, title, description, current_plan FROM goals "
+            "WHERE id = $1 AND status = 'active'",
             goal_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Goal not found or not active")
+
+    desc = (row["description"] or "").strip()
+    user_input = f"[Cortex goal work] Goal: {row['title']}."
+    if desc:
+        user_input += f"\n\nGoal instructions (follow them):\n{desc}"
+    user_input += (
+        "\n\nCurrent plan: Analyze the goal and take the next meaningful "
+        "step toward completion."
+    )
+
+    pod_hint: str | None = None
+    try:
+        cp = row["current_plan"]
+        if isinstance(cp, str):
+            cp = json.loads(cp)
+        if isinstance(cp, dict):
+            v = cp.get("pod")
+            if isinstance(v, str) and v.strip():
+                pod_hint = v.strip()
+    except Exception as e:
+        log.debug("Could not read pod hint for goal %s: %s", goal_id, e)
+
+    body: dict = {
+        "user_input": user_input,
+        "goal_id": str(goal_id),
+        "metadata": {"source": "cortex", "trigger": "manual", "drive": "serve"},
+    }
+    if pod_hint:
+        body["pod_name"] = pod_hint
 
     # Dispatch task directly to orchestrator
     try:
         orch = get_orchestrator()
         resp = await orch.post(
             "/api/v1/pipeline/tasks",
-            json={
-                "user_input": f"[Cortex goal work] Goal: {row['title']}."
-                              + (f" Description: {row['description']}" if row["description"] else "")
-                              + " Analyze the goal and take the next meaningful step toward completion.",
-                "goal_id": str(goal_id),
-                "metadata": {"source": "cortex", "trigger": "manual", "drive": "serve"},
-            },
+            json=body,
             headers={"Authorization": f"Bearer {settings.cortex_api_key}"},
         )
         if resp.status_code not in (200, 201, 202):
