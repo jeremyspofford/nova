@@ -19,6 +19,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from redis import exceptions as _redis_exceptions
+
 from .config import settings
 from .store import get_redis
 
@@ -168,6 +170,11 @@ async def queue_worker() -> None:
         except asyncio.CancelledError:
             logger.info("Task queue worker shutting down")
             break
+        except _redis_exceptions.TimeoutError:
+            # redis-py 8.x: an idle BRPOP can lose the race between its own
+            # socket read timeout and the server's nil reply at exactly the
+            # block timeout. It's an empty poll, not a failure — loop again.
+            continue
         except Exception:
             logger.exception("Unexpected error in queue worker — will retry in 1s")
             await asyncio.sleep(1)

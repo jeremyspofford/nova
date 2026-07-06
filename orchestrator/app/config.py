@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     clarification_max_rounds: int = 2
     clarification_timeout_hours: int = 24
 
+    # Human checkpoints: how long a waiting_human task waits for the operator
+    # before the reaper cancels it (also the approval row's expires_at)
+    checkpoint_timeout_hours: int = 24
+
     # User auth
     jwt_secret: str = ""  # Auto-generated if empty (stored in platform_config)
     google_client_id: str = ""

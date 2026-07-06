@@ -245,7 +245,7 @@ export const getWorkspaceFile = (path: string) =>
 export const deletePipelineTask = (task_id: string) =>
   apiFetch<void>(`/api/v1/pipeline/tasks/${task_id}?force=true`, { method: 'DELETE' })
 
-export const bulkDeletePipelineTasks = (statuses = 'complete,failed,cancelled,pending_human_review,clarification_needed') =>
+export const bulkDeletePipelineTasks = (statuses = 'complete,failed,cancelled,pending_human_review,clarification_needed,waiting_human') =>
   apiFetch<{ deleted: number; statuses: string[] }>(
     `/api/v1/pipeline/tasks?status=${encodeURIComponent(statuses)}&force=true`,
     { method: 'DELETE' },
@@ -1453,6 +1453,8 @@ export interface Approval {
   tool_name: string
   tool_kind: ToolKind
   blast_radius: BlastRadius
+  /** 'consent' = pended tool call; 'checkpoint' = parked task asking for operator input */
+  kind: 'consent' | 'checkpoint'
   args_redacted: Record<string, unknown>
   diff_preview: string | null
   status: ApprovalStatus
@@ -1462,12 +1464,15 @@ export interface Approval {
   rule_id: string | null
   created_at: string
   expires_at: string
+  response_text: string | null
 }
 
 export interface ApprovalDecisionPayload {
   decision: 'approve' | 'reject'
   remember?: boolean
   rule_scope?: Record<string, unknown>
+  /** Operator's free-text reply — returned to a parked task as the checkpoint tool result */
+  response_text?: string
 }
 
 export const listApprovals = () =>

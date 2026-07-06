@@ -21,6 +21,7 @@ Output schema:
 
 from __future__ import annotations
 
+import json
 import logging
 
 from ..prompt_safety import (
@@ -116,6 +117,32 @@ After completing your work, return ONLY valid JSON matching this exact schema:
             "When finished, return your structured JSON result."
         )
 
+        # Human-checkpoint resume: the task parked mid-tool-loop on
+        # request_human_checkpoint and the operator has since responded.
+        # Replay the saved conversation with the reply injected as the
+        # checkpoint call's tool result — the agent continues exactly where
+        # it stopped instead of re-running (and re-mutating) from scratch.
+        resume_messages = None
+        hc = state.completed.get("_human_checkpoint") or {}
+        if (
+            isinstance(hc.get("human_response"), dict)
+            and hc.get("stage") == self.ROLE
+            and hc.get("messages")
+            and hc.get("tool_call_id")
+        ):
+            from nova_contracts import Message
+            resume_messages = [Message(**m) for m in hc["messages"]]
+            resume_messages.append(Message(
+                role="tool",
+                name="request_human_checkpoint",
+                tool_call_id=hc["tool_call_id"],
+                content=json.dumps(hc["human_response"]),
+            ))
+            logger.info(
+                "[task] Resuming from human checkpoint %s (%s)",
+                hc.get("approval_id"), hc["human_response"].get("status"),
+            )
+
         effective, _ = await resolve_effective_tools(self.allowed_tools)
         raw_output, in_tokens, out_tokens, cost_usd = await run_agent_turn_raw(
             system_prompt=self.system_prompt,
@@ -126,6 +153,7 @@ After completing your work, return ONLY valid JSON matching this exact schema:
             max_tokens=self.max_tokens,
             return_usage=True,
             tool_context=self.tool_context,
+            initial_messages=resume_messages,
         )
         # Accumulate tool-loop usage into agent usage
         self._usage["input_tokens"] += in_tokens

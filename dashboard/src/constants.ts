@@ -89,4 +89,5 @@ export const TASK_STATUS_CONFIG: Record<string, { label: string; className: stri
   cancelled:           { label: 'Cancelled',     className: 'bg-neutral-400/30 dark:bg-neutral-600/30 text-neutral-500 dark:text-neutral-400' },
   pending_human_review:  { label: 'Needs Review',        className: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400', pulse: true },
   clarification_needed:  { label: 'Needs Clarification', className: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400', pulse: true },
+  waiting_human:         { label: 'Waiting on You',      className: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400', pulse: true },
 }

@@ -126,6 +126,9 @@ class ApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
     remember: bool = False
     rule_scope: dict | None = None
+    # Operator's free-text reply — injected into a parked task as the
+    # request_human_checkpoint tool result (kind='checkpoint' rows).
+    response_text: str | None = None
 
 
 @router.post("/approvals/{approval_id}/decide")
@@ -141,6 +144,7 @@ async def decide_approval(
         decided_via="dashboard",
         remember=payload.remember,
         rule_scope=payload.rule_scope,
+        response_text=payload.response_text,
     )
     ok = await consent_db.decide_approval(
         pool, tenant_id=ctx.tenant_id,

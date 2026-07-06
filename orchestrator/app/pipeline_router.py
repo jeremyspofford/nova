@@ -355,7 +355,7 @@ async def bulk_delete_pipeline_tasks(
     Bulk delete tasks — by status filter or by specific IDs.
     With force=true, active tasks are cancelled first then deleted. Admin-only.
     """
-    TERMINAL = {"complete", "failed", "cancelled", "pending_human_review", "clarification_needed"}
+    TERMINAL = {"complete", "failed", "cancelled", "pending_human_review", "clarification_needed", "waiting_human"}
     pool = get_pool()
 
     # Mode 1: delete by specific IDs
@@ -1176,6 +1176,7 @@ async def pipeline_stats(_admin: AdminDep) -> dict:
 async def trigger_reap_now(_admin: AdminDep) -> dict:
     """Admin-only: trigger one reaper cycle immediately (for testing)."""
     from .reaper import (
+        _reap_stale_checkpoints,
         _reap_stale_clarifications,
         _reap_stale_running_tasks,
         _reap_stuck_queued_tasks,
@@ -1185,6 +1186,7 @@ async def trigger_reap_now(_admin: AdminDep) -> dict:
     await _reap_stuck_queued_tasks()
     await _reap_timed_out_sessions()
     await _reap_stale_clarifications()
+    await _reap_stale_checkpoints()
     return {"status": "reaped"}
 
 

@@ -163,6 +163,7 @@ function statusToBadgeColor(status: TaskStatus): SemanticColor {
   if (status === 'cancelled') return 'neutral'
   if (status === 'pending_human_review') return 'info'
   if (status === 'clarification_needed') return 'warning'
+  if (status === 'waiting_human') return 'info'
   if (ACTIVE_TASK_STATUSES.has(status)) return 'warning'
   return 'neutral'
 }
@@ -173,6 +174,7 @@ function statusToStatusDot(status: TaskStatus): 'success' | 'warning' | 'danger'
   if (status === 'cancelled') return 'neutral'
   if (status === 'pending_human_review') return 'warning'
   if (status === 'clarification_needed') return 'warning'
+  if (status === 'waiting_human') return 'warning'
   if (ACTIVE_TASK_STATUSES.has(status)) return 'warning'
   return 'neutral'
 }
@@ -198,7 +200,7 @@ function matchesFilter(task: PipelineTask, filter: StatusFilter): boolean {
   if (filter === 'all') return true
   if (filter === 'running') return ACTIVE_TASK_STATUSES.has(task.status) && task.status !== 'queued'
   if (filter === 'queued') return task.status === 'queued'
-  if (filter === 'review') return task.status === 'pending_human_review' || task.status === 'clarification_needed'
+  if (filter === 'review') return task.status === 'pending_human_review' || task.status === 'clarification_needed' || task.status === 'waiting_human'
   if (filter === 'complete') return task.status === 'complete'
   if (filter === 'failed') return task.status === 'failed' || task.status === 'cancelled'
   return true

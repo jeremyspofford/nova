@@ -13,6 +13,7 @@ your phone subscribes directly to your Nova instance.
 | Event | Priority | When |
 |-------|----------|------|
 | Approval needed | High | A MUTATE/DESTRUCT action is waiting in Pending Approvals |
+| Nova needs you | High | A task hit a human checkpoint (CAPTCHA, verification code, judgment call) and parked until you respond in Pending Approvals |
 | Task failed | High | Any pipeline task fails |
 | Needs review | High | A task escalated to human review |
 | Needs clarification | High | A task is blocked on a question |

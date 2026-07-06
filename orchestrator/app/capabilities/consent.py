@@ -218,6 +218,7 @@ class ApprovalDecision:
     decided_via: str = "dashboard"
     remember: bool = False
     rule_scope: dict | None = None  # required if remember=True
+    response_text: str | None = None  # operator's free-text reply (checkpoints)
 
 
 async def decide_approval(
@@ -231,9 +232,15 @@ async def decide_approval(
     On approve, push approval_id onto the approved-execution queue so the
     approval-worker (running in the orchestrator lifespan) can pick it up
     and re-execute the originally-pended tool call.
+
+    Checkpoint rows (kind='checkpoint') enqueue on BOTH approve and reject —
+    either way the parked task must be resumed and told the outcome, with
+    decision.response_text injected as the checkpoint tool's result.
+
     Returns True if the row was decided; False if not found / already decided.
     """
     decided = False
+    is_checkpoint = False
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
@@ -242,9 +249,12 @@ async def decide_approval(
             )
             if not row or row["status"] != "pending":
                 return False
+            is_checkpoint = row["kind"] == "checkpoint"
             new_status = "approved" if decision.decision == "approve" else "rejected"
             rule_id = None
-            if decision.decision == "approve" and decision.remember:
+            # remember only applies to consent-gate approvals — checkpoints
+            # never pass through the gate, so a rule would never match.
+            if decision.decision == "approve" and decision.remember and not is_checkpoint:
                 if decision.rule_scope is None:
                     raise ValueError("remember=True requires rule_scope")
                 # Get the user_id from… well, v1 single-tenant — derive from tenant
@@ -270,17 +280,18 @@ async def decide_approval(
                 """
                 UPDATE approval_requests
                 SET status=$1, decided_by=$2, decided_via=$3,
-                    decided_at=now(), rule_id=$4
-                WHERE id=$5
+                    decided_at=now(), rule_id=$4, response_text=$5
+                WHERE id=$6
                 """,
                 new_status, decision.decided_by, decision.decided_via,
-                rule_id, approval_id,
+                rule_id, decision.response_text, approval_id,
             )
             decided = True
 
-    # After commit, enqueue for the approval-worker (only on approve).
+    # After commit, enqueue for the approval-worker: approvals to re-execute
+    # the pended tool; checkpoint decisions (either way) to resume the task.
     # Best-effort: a Redis hiccup must not roll back the DB decision.
-    if decided and decision.decision == "approve":
+    if decided and (decision.decision == "approve" or is_checkpoint):
         try:
             redis = _get_consent_redis()
             await redis.lpush(APPROVED_EXEC_QUEUE, str(approval_id))

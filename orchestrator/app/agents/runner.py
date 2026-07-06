@@ -24,6 +24,7 @@ from app.stimulus import emit_stimulus
 from app.store import get_redis
 from app.tool_permissions import resolve_effective_tools
 from app.tools import execute_tool, get_all_tools
+from app.tools.checkpoint_tools import CHECKPOINT_TOOL_NAME, HumanCheckpointPending
 from nova_contracts import (
     CompleteRequest,
     Message,
@@ -49,6 +50,21 @@ _REPLAY_DELAY_S = 0.015
 # This pulls (title, url) pairs so the UI can show where data came from.
 _SOURCE_TITLE_RE = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 _SOURCE_URL_RE = re.compile(r"https?://[^\s)]+")
+
+
+def _parse_checkpoint_pending(result: str) -> dict | None:
+    """Return the checkpoint payload if a tool result is a pending checkpoint."""
+    try:
+        data = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if (
+        isinstance(data, dict)
+        and data.get("status") == "checkpoint_pending"
+        and data.get("approval_id")
+    ):
+        return data
+    return None
 
 
 def _extract_web_sources(result: str, limit: int = 8) -> list[dict]:
@@ -1021,6 +1037,7 @@ async def run_agent_turn_raw(
     max_rounds: int = 10,
     return_usage: bool = False,
     tool_context: dict | None = None,
+    initial_messages: list[Message] | None = None,
 ) -> str | tuple[str, int, int, float | None]:
     """
     Lightweight agent turn for pipeline stages (ContextAgent, TaskAgent).
@@ -1041,14 +1058,21 @@ async def run_agent_turn_raw(
         max_tokens:     Max output tokens from pod_agents config
         max_rounds:     Max tool-use rounds before forcing a final answer
         return_usage:   If True, returns (content, in_tokens, out_tokens, cost_usd)
+        initial_messages: Resume a previously-parked conversation instead of
+                        building a fresh [system, user] pair — used by the
+                        human-checkpoint resume path. Must already contain a
+                        tool result for every tool_use.
 
     Returns:
         The final assistant text response, or a tuple with usage if return_usage=True.
     """
-    messages: list[Message] = [
-        Message(role="system", content=system_prompt),
-        Message(role="user",   content=user_message),
-    ]
+    if initial_messages is not None:
+        messages = list(initial_messages)
+    else:
+        messages = [
+            Message(role="system", content=system_prompt),
+            Message(role="user",   content=user_message),
+        ]
     content, in_tokens, out_tokens, cost_usd = await _run_tool_loop(
         messages=messages,
         model=model,
@@ -1134,7 +1158,7 @@ async def _run_tool_loop(
             ],
         ))
 
-        for tc in tool_calls:
+        for tc_idx, tc in enumerate(tool_calls):
             # Summarize arguments for the "running" status
             args_summary = ""
             args = tc.get("arguments", {})
@@ -1151,6 +1175,33 @@ async def _run_tool_loop(
             t0 = time.perf_counter()
             result = await execute_tool(tc["name"], tc.get("arguments", {}), context=tool_context)
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+            # Human checkpoint: the tool created a pending approval — stop the
+            # loop so the pipeline executor can park the task. The checkpoint
+            # call's own result is deliberately NOT appended: the operator's
+            # reply becomes that result on resume. Sibling calls later in this
+            # round get synthetic 'skipped' results so every other tool_use id
+            # stays answered when the conversation is replayed.
+            if tc["name"] == CHECKPOINT_TOOL_NAME:
+                pending = _parse_checkpoint_pending(result)
+                if pending is not None:
+                    for other in tool_calls[tc_idx + 1:]:
+                        current.append(Message(
+                            role="tool",
+                            name=other["name"],
+                            tool_call_id=other["id"],
+                            content=json.dumps({
+                                "status": "skipped",
+                                "message": "Not executed — task parked for a human checkpoint. Re-issue this call after resuming if still needed.",
+                            }),
+                        ))
+                    raise HumanCheckpointPending(
+                        approval_id=pending["approval_id"],
+                        tool_call_id=tc["id"],
+                        reason=pending.get("reason", ""),
+                        instructions=pending.get("instructions", ""),
+                        messages=current,
+                    )
 
             if on_tool_status:
                 done_status = {"step": tc["name"], "state": "done", "detail": args_summary or tc["name"], "elapsed_ms": elapsed_ms}

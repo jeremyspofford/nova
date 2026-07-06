@@ -55,10 +55,11 @@ submitted -> queued -> context_running -> task_running -> guardrail_running
   -> review_running -> pending_human_review -> completing -> complete
 ```
 
-Additional terminal/special states: `failed`, `cancelled`, `clarification_needed`.
+Additional terminal/special states: `failed`, `cancelled`, `clarification_needed`, `waiting_human`.
 
 - **`pending_human_review`** pauses the pipeline -- the task waits without failing
 - **`clarification_needed`** -- Context Agent detected ambiguity and paused with questions. The user answers via `POST /clarify`, and the pipeline resumes from its checkpoint with enriched input
+- **`waiting_human`** -- the Task Agent called `request_human_checkpoint` mid-flow (CAPTCHA, emailed verification code, judgment call). The conversation is snapshotted, a checkpoint card appears in Pending Approvals (and pushes to your phone), and your reply is injected back as the tool's result so the agent continues exactly where it stopped. Unanswered checkpoints are cancelled after 24h
 - Tasks can be cancelled from the dashboard at any state
 
 ## Pod presets

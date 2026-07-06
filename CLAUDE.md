@@ -30,7 +30,7 @@ Nova is a self-directed autonomous AI platform. Users define a goal; Nova breaks
 
 **Shared contracts:** `nova-contracts/` is a Pydantic-only package defining the API contract between services (chat, llm, memory, orchestrator models). Any service satisfying these models is a drop-in replacement.
 
-**Quartet Pipeline:** 5-stage agent chain — Context → Task → Guardrail → Code Review → Decision. Runs via Redis BRPOP task queue with heartbeat (30s) and stale reaper (150s timeout). Pipeline code lives in `orchestrator/app/pipeline/`.
+**Quartet Pipeline:** 5-stage agent chain — Context → Task → Guardrail → Code Review → Decision. Runs via Redis BRPOP task queue with heartbeat (30s) and stale reaper (150s timeout). Pipeline code lives in `orchestrator/app/pipeline/`. The task stage can park mid-flow on the `request_human_checkpoint` tool (status `waiting_human`; conversation snapshotted to `tasks.checkpoint._human_checkpoint`; kind='checkpoint' row in `approval_requests`); the operator's decide (+ free-text reply) resumes it through the approval worker with the reply injected as the tool result.
 
 **Redis DB allocation:** orchestrator=db2, llm-gateway=db1, chat-api=db3, memory-service=db0, db4=unused (was chat-bridge), cortex=db5, intel-worker=db6, recovery=db7, knowledge-worker=db8, voice-service=db9, screenpipe-bridge=db10, browser-worker=db11.
 

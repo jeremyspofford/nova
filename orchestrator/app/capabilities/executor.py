@@ -235,6 +235,13 @@ async def execute_approved(pool: asyncpg.Pool, approval_id: UUID) -> dict:
         logger.warning("execute_approved: approval %s not found", approval_id)
         return {"status": "not_found", "approval_id": str(approval_id)}
 
+    # Checkpoints resume the parked task on approve AND reject — route before
+    # the approved-only guard. No expiry refusal here either: the operator DID
+    # respond, and staleness of the parked task is the reaper's call (a swept
+    # task simply fails the waiting_human → queued transition below).
+    if row["kind"] == "checkpoint":
+        return await _resume_checkpoint_task(pool, row)
+
     if row["status"] != "approved":
         logger.info(
             "execute_approved: approval %s status=%s — skipping",
@@ -413,6 +420,120 @@ async def execute_approved(pool: asyncpg.Pool, approval_id: UUID) -> dict:
             duration_ms=duration_ms,
         )
         raise
+
+
+async def _resume_checkpoint_task(pool: asyncpg.Pool, row: asyncpg.Record) -> dict:
+    """Resume a task parked on a human checkpoint (task #8 milestone B).
+
+    Injects the operator's decision + reply into the task's saved
+    checkpoint['_human_checkpoint'] snapshot, flips waiting_human → queued,
+    and re-enqueues. The Task Agent replays its saved conversation with the
+    reply as the checkpoint tool's result.
+
+    Idempotent / stale-safe:
+      - task not in waiting_human (already resumed, swept, or cancelled) → skip
+      - approval_id doesn't match the task's current park (the task parked
+        again on a newer checkpoint) → skip
+    """
+    approval_id = row["id"]
+    task_id = row["task_id"]
+    status = row["status"]
+
+    if task_id is None:
+        logger.warning("checkpoint resume: approval %s has no task_id", approval_id)
+        return {"status": "skipped", "reason": "no_task"}
+    if status not in ("approved", "rejected"):
+        logger.info(
+            "checkpoint resume: approval %s status=%s — nothing to do",
+            approval_id, status,
+        )
+        return {"status": "skipped", "reason": status}
+
+    async with pool.acquire() as conn:
+        trow = await conn.fetchrow(
+            "SELECT status, checkpoint FROM tasks WHERE id=$1",
+            task_id,
+        )
+    if trow is None:
+        logger.warning("checkpoint resume: task %s not found", task_id)
+        return {"status": "not_found", "task_id": str(task_id)}
+
+    checkpoint = trow["checkpoint"]
+    if isinstance(checkpoint, str):
+        try:
+            checkpoint = json.loads(checkpoint)
+        except json.JSONDecodeError:
+            checkpoint = {}
+    hc = (checkpoint or {}).get("_human_checkpoint") or {}
+
+    if hc.get("approval_id") != str(approval_id):
+        logger.warning(
+            "checkpoint resume: approval %s is stale for task %s (current park: %s)",
+            approval_id, task_id, hc.get("approval_id"),
+        )
+        return {"status": "skipped", "reason": "stale_approval"}
+    if trow["status"] != "waiting_human":
+        logger.info(
+            "checkpoint resume: task %s is '%s', not waiting_human — skipping",
+            task_id, trow["status"],
+        )
+        return {"status": "skipped", "reason": trow["status"]}
+
+    # What the agent sees as the checkpoint tool's result.
+    human_response: dict = {
+        "status": status,
+        "operator_response": row["response_text"] or "",
+    }
+    if status == "rejected":
+        human_response["note"] = (
+            "The operator declined this checkpoint. Do not retry the blocked "
+            "action — wrap up gracefully and report what was completed."
+        )
+    hc["human_response"] = human_response
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE tasks
+            SET checkpoint = checkpoint || jsonb_build_object('_human_checkpoint', $2::jsonb)
+            WHERE id = $1
+            """,
+            task_id, hc,
+        )
+
+    from app.pipeline.state_machine import transition_task_status
+    ok = await transition_task_status(
+        str(task_id), "queued",
+        extra_sets=", queued_at = now()",
+    )
+    if not ok:
+        logger.warning(
+            "checkpoint resume: waiting_human → queued transition failed for task %s",
+            task_id,
+        )
+        return {"status": "skipped", "reason": "transition_failed"}
+
+    from app.queue import enqueue_task
+    await enqueue_task(str(task_id))
+
+    await audit.write_audit_event(
+        pool,
+        tenant_id=row["tenant_id"],
+        task_id=task_id,
+        actor_kind="human",
+        actor_id=row["decided_by"] or "operator",
+        event_type="consent_decision",
+        tool_name=row["tool_name"],
+        tool_kind="native",
+        blast_radius=row["blast_radius"],
+        response_status="success",
+        response_summary=f"checkpoint {status}; task {task_id} resumed",
+    )
+    logger.info(
+        "checkpoint resume: task %s re-queued (%s, reply=%d chars)",
+        task_id, status, len(row["response_text"] or ""),
+    )
+    return {"status": "resumed", "task_id": str(task_id), "decision": status}
 
 
 def _github_external_names() -> set[str]:

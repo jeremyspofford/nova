@@ -40,6 +40,10 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
         "guardrail_running", "code_review_running", "critique_acceptance_running",
         "decision_running", "documentation_running", "diagramming_running",
         "security_review_running", "memory_extraction_running",
+        # A resumed task whose every remaining stage is already checkpointed
+        # (e.g. crash after the final checkpoint, or a human-checkpoint resume
+        # near the end) goes straight to assembly without any *_running hop.
+        "completing",
         "cancelled", "failed",
     },
     "context_running": {
@@ -49,7 +53,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "task_running": {
         "critique_direction_running", "guardrail_running",
         "code_review_running", "critique_acceptance_running",
-        "completing", "failed", "cancelled",
+        "completing", "waiting_human", "failed", "cancelled",
     },
     "critique_direction_running": {
         "task_running", "guardrail_running", "code_review_running",
@@ -79,6 +83,9 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     # Non-running intermediate states
     "pending_human_review": {"task_running", "queued", "completing", "failed", "cancelled"},
     "clarification_needed": {"queued", "context_running", "task_running", "failed", "cancelled"},
+    # Parked mid-stage on a human checkpoint (request_human_checkpoint tool).
+    # Resume re-queues; the reaper cancels after checkpoint_timeout_hours.
+    "waiting_human": {"queued", "failed", "cancelled"},
     "completing": {"complete", "failed"},
     # Terminal states — no transitions allowed
     "complete": set(),
@@ -109,7 +116,7 @@ def _is_valid_transition(current: str, new: str) -> bool:
     if current.endswith(_RUNNING_SUFFIX):
         return (
             new.endswith(_RUNNING_SUFFIX)
-            or new in {"completing", "pending_human_review", "clarification_needed", "failed", "cancelled"}
+            or new in {"completing", "pending_human_review", "clarification_needed", "waiting_human", "failed", "cancelled"}
         )
 
     # Unknown non-running status — reject (conservative)

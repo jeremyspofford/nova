@@ -15,11 +15,9 @@ Sequenced plan approved by Jeremy 2026-07-05 (also tracked as tasks #1–15 in t
 
 ## Priority: Browser account-signup checkpoints (from the 2026-07-02 browser-worker work)
 
-**What:** Human-in-the-loop resume for CAPTCHAs and email verification during browser-driven account signups.
-**Why:** The browser-worker (port 8150) can navigate, fill forms, and submit — but real signups hit CAPTCHAs and email verification links. `browser_submit` is MUTATE so it pauses at the capability consent gate today, but there's no flow to hand Nova a pasted verification code and resume the same browser session.
-**How:** Add a `request_human_checkpoint(reason, instructions, screenshot?)` tool that creates a pending `approval_requests` row and parks the task in a `waiting_human` status; extend `decide_approval()` / `ApprovalDecision` with a `response_text` field; have `approval_worker.py` re-enqueue the parked task with the response injected as a tool result. Dashboard `PendingApprovals.tsx` / `ApprovalCard.tsx` get a screenshot + free-text reply box.
-**Effort:** 3-4 days.
-**Added:** 2026-07-02
+**Status (2026-07-06):** SHIPPED as task #8 milestone B — `request_human_checkpoint(reason, instructions, context?)` tool, `waiting_human` parking with conversation snapshot, `decide_approval().response_text`, approval-worker resume with reply injection, checkpoint-aware ApprovalCard with reply box, 24h reaper sweep, 4 integration tests (`tests/test_human_checkpoint.py`).
+**Remaining (task #8 milestone C):** ntfy action buttons → signed approve/deny webhooks (lockscreen decisions without opening the dashboard); screenshot capture/rendering on checkpoint cards; richer waiting_human panel in the task detail sheet.
+**Added:** 2026-07-02 · shipped 2026-07-06
 
 ## Priority: Cortex Autonomy Gaps
 

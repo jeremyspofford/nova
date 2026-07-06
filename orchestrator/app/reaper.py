@@ -50,6 +50,7 @@ async def reaper_loop() -> None:
             await _reap_stuck_queued_tasks()
             await _reap_timed_out_sessions()
             await _reap_stale_clarifications()
+            await _reap_stale_checkpoints()
             # Run task history cleanup once per ~60 cycles (~hourly at 60s interval)
             _cycle += 1
             if _cycle % 60 == 0:
@@ -275,6 +276,57 @@ async def _reap_stale_clarifications() -> None:
         async with pool.acquire() as audit_conn:
             await _audit(audit_conn, "task_cancelled", "warning", task_id=task_id,
                          data={"reason": "clarification_timeout"})
+
+
+# ── Reap stale human checkpoints ──────────────────────────────────────────────
+
+async def _reap_stale_checkpoints() -> None:
+    """Cancel waiting_human tasks whose human checkpoint went unanswered.
+
+    Mirrors _reap_stale_clarifications. Also flips the still-pending
+    checkpoint approval row to 'timeout' so it leaves Pending Approvals.
+    """
+    from .db import get_pool
+
+    timeout_hours = settings.checkpoint_timeout_hours
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        stale = await conn.fetch(
+            """
+            SELECT id, metadata->>'checkpoint_approval_id' AS approval_id
+            FROM tasks
+            WHERE status = 'waiting_human'
+              AND (metadata->>'checkpoint_requested_at')::timestamptz
+                  < now() - ($1 || ' hours')::interval
+            """,
+            str(timeout_hours),
+        )
+    from .pipeline.state_machine import transition_task_status
+
+    for task in stale:
+        task_id = str(task["id"])
+        logger.warning(
+            "Reaper: task %s human checkpoint unanswered after %dh — cancelling",
+            task_id, timeout_hours,
+        )
+        ok = await transition_task_status(
+            task_id, "cancelled",
+            extra_sets=", error = $4, completed_at = now()",
+            extra_args=["Timed out waiting for human checkpoint response"],
+        )
+        if not ok:
+            logger.info("Reaper: task %s cancellation rejected by state machine — skipping", task_id)
+            continue
+        if task["approval_id"]:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE approval_requests SET status='timeout' "
+                    "WHERE id=$1::uuid AND status='pending'",
+                    task["approval_id"],
+                )
+        async with pool.acquire() as audit_conn:
+            await _audit(audit_conn, "task_cancelled", "warning", task_id=task_id,
+                         data={"reason": "checkpoint_timeout"})
 
 
 # ── Auto-cleanup expired task history ─────────────────────────────────────────

@@ -143,6 +143,11 @@ async def approval_worker_loop() -> None:
                 _, approval_id_str = popped
             except asyncio.CancelledError:
                 raise
+            except aioredis.TimeoutError:
+                # redis-py 8.x: an idle BRPOP can lose the race between its
+                # own socket read timeout and the server's nil reply at the
+                # block timeout. Empty poll, not a failure — loop again.
+                continue
             except Exception:
                 logger.exception("approval-worker: BRPOP error — backing off 2s")
                 await asyncio.sleep(2)

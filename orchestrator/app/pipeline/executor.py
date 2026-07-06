@@ -27,6 +27,7 @@ from ..audit import write_audit_log
 from ..config import settings
 from ..db import get_pool
 from ..queue import clear_heartbeat, write_heartbeat
+from ..tools.checkpoint_tools import HumanCheckpointPending
 from .agents.base import PipelineState, should_agent_run
 from .checkpoint import (
     PIPELINE_STAGE_ORDER,
@@ -347,11 +348,17 @@ async def _run_pipeline(task_id: str, heartbeat_cancel_event: asyncio.Event | No
                     f"Task {task_id}: Running parallel group '{group_name}' "
                     f"({len(group_agents)} agents: {[a.role for a in group_agents]})"
                 )
-                abort = await _run_parallel_group(
-                    group_agents, task_id, state, pod, checkpoint,
-                    code_review_iterations, model_override, complexity=complexity,
-                    sandbox_override=sandbox_override,
-                )
+                try:
+                    abort = await _run_parallel_group(
+                        group_agents, task_id, state, pod, checkpoint,
+                        code_review_iterations, model_override, complexity=complexity,
+                        sandbox_override=sandbox_override,
+                    )
+                except HumanCheckpointPending as hcp:
+                    await _park_for_checkpoint(
+                        task_id, getattr(hcp, "stage_role", "task"), hcp,
+                    )
+                    return
                 if abort:
                     await mark_task_failed(task_id, f"Parallel group '{group_name}' had a fatal agent failure")
                     return
@@ -481,7 +488,11 @@ async def _run_pipeline(task_id: str, heartbeat_cancel_event: asyncio.Event | No
             continue
 
         # ── Run this agent ─────────────────────────────────────────────
-        result, session_id = await _run_agent(agent, task_id, state, pod, code_review_iterations, model_override=model_override, complexity=complexity, sandbox_override=sandbox_override)
+        try:
+            result, session_id = await _run_agent(agent, task_id, state, pod, code_review_iterations, model_override=model_override, complexity=complexity, sandbox_override=sandbox_override)
+        except HumanCheckpointPending as hcp:
+            await _park_for_checkpoint(task_id, agent.role, hcp)
+            return
 
         if result is None:
             # Agent failed with on_failure=abort → task fails
@@ -701,6 +712,11 @@ async def _run_parallel_group(
     # Process results — merge into state
     abort = False
     for i_result, outcome in enumerate(results):
+        if isinstance(outcome, HumanCheckpointPending):
+            # A parallel agent parked for operator input — propagate so
+            # _run_pipeline's checkpoint handler parks the task instead of
+            # this being swallowed as a non-critical failure.
+            raise outcome
         if isinstance(outcome, Exception):
             # Identify which agent this exception belongs to
             failed_agent = eligible[i_result]
@@ -972,6 +988,20 @@ async def _run_agent(
             logger.debug("Stage outcome scoring failed: %s", exc)
 
         return result, session_id
+
+    except HumanCheckpointPending as hcp:
+        # Not a failure — the stage is parking for operator input. Close the
+        # session cleanly (the resumed stage gets a fresh session row) and
+        # let _run_pipeline's checkpoint handler park the task.
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        hcp.stage_role = agent.role
+        await _complete_session(
+            session_id,
+            {"checkpoint_pending": hcp.approval_id, "reason": hcp.reason},
+            elapsed_ms,
+            usage=instance._usage,
+        )
+        raise
 
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1477,6 +1507,77 @@ async def _pause_for_human_review(
     await _audit(task_id, "task_escalated", "warning", {"message": escalation_message})
     logger.warning(f"Task {task_id} paused for human review: {escalation_message}")
     await _publish_notification("pending_human_review", task_id, "Task needs review", escalation_message)
+
+
+async def _park_for_checkpoint(
+    task_id: str, stage_role: str, hcp: HumanCheckpointPending,
+) -> None:
+    """Park the task on a human checkpoint (request_human_checkpoint tool).
+
+    Snapshots the stage's conversation under checkpoint['_human_checkpoint']
+    (the operator's reply is injected there by the approval worker), then
+    transitions {stage}_running → waiting_human. The checkpoint approval row
+    itself was already created by the tool.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    snapshot = {
+        "approval_id": hcp.approval_id,
+        "tool_call_id": hcp.tool_call_id,
+        "stage": stage_role,
+        "reason": hcp.reason,
+        "instructions": hcp.instructions,
+        "parked_at": datetime.now(timezone.utc).isoformat(),
+        "messages": [
+            m.model_dump(mode="json", exclude_none=True) for m in hcp.messages
+        ],
+    }
+    # Snapshot BEFORE the status flip: a task must never be resumable
+    # (waiting_human) without its conversation on disk.
+    await save_checkpoint(task_id, "_human_checkpoint", snapshot)
+
+    ok = await transition_task_status(
+        task_id, "waiting_human",
+        extra_sets=(
+            ", metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object("
+            "'checkpoint_requested_at', $4::text, "
+            "'checkpoint_reason', $5::text, "
+            "'checkpoint_approval_id', $6::text)"
+        ),
+        extra_args=[
+            datetime.now(timezone.utc).isoformat(),
+            hcp.reason[:500],
+            hcp.approval_id,
+        ],
+    )
+    if not ok:
+        # Task moved under us (cancelled?). Retire the orphan approval so it
+        # doesn't sit in Pending Approvals with nothing to resume.
+        logger.warning("_park_for_checkpoint: transition failed for task %s", task_id)
+        try:
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE approval_requests SET status='superseded' "
+                    "WHERE id=$1::uuid AND status='pending'",
+                    hcp.approval_id,
+                )
+        except Exception:
+            logger.warning("Could not supersede orphan checkpoint approval %s", hcp.approval_id)
+        return
+
+    await _audit(task_id, "task_checkpoint_parked", "info",
+                 {"approval_id": hcp.approval_id, "stage": stage_role, "reason": hcp.reason})
+    logger.info(
+        "Task %s parked for human checkpoint at stage '%s': %s",
+        task_id, stage_role, hcp.reason,
+    )
+    await _publish_notification(
+        "checkpoint_requested", task_id,
+        f"Nova needs you: {hcp.reason}"[:200],
+        hcp.instructions[:500],
+    )
 
 
 async def _pause_for_clarification(task_id: str, questions: list[str]) -> None:
