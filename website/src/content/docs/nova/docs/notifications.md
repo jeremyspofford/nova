@@ -8,6 +8,20 @@ as the `ntfy` container) so autonomous work can reach you instead of waiting
 silently in a dashboard tab. No cloud account, no phone-number registration --
 your phone subscribes directly to your Nova instance.
 
+## What it costs
+
+Nothing. The bundled server is the open-source ntfy running on your machine,
+and the ntfy phone apps are free. The paid plans you may see on ntfy.sh
+(ntfy Pro) are for **their hosted service** -- Nova doesn't use it, and you
+don't need an ntfy.sh account.
+
+One platform caveat: **iOS** can't hold background connections to arbitrary
+self-hosted servers, so instant delivery on iPhones requires relaying a
+wake-up ping through ntfy.sh. It's free and opt-in: set
+`NTFY_UPSTREAM_BASE_URL=https://ntfy.sh` in `.env` and restart. Message
+content never leaves your server -- the relay only tells the app "poll your
+server now." Android and desktop/web clients need nothing.
+
 ## What gets pushed
 
 | Event | Priority | When |
@@ -78,6 +92,7 @@ Compose-level:
 |-----|---------|---------|
 | `NTFY_BIND` | `127.0.0.1:` | Host bind prefix for port 8290 |
 | `NTFY_BASE_URL` | `http://localhost:8290` | Public base URL ntfy embeds in links |
+| `NTFY_UPSTREAM_BASE_URL` | empty (off) | Set to `https://ntfy.sh` for instant iOS delivery (free wake-up relay; content stays local) |
 
 ## API
 

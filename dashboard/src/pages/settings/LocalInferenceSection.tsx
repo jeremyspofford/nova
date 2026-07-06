@@ -283,7 +283,7 @@ function LMStudioCard({ entries, onSave, saving }: ConfigSectionProps) {
   );
 }
 
-export function LocalInferenceSection({ entries, onSave, saving, inline }: ConfigSectionProps & { inline?: boolean }) {
+export function LocalInferenceSection({ entries, onSave, saving }: ConfigSectionProps) {
   const queryClient = useQueryClient();
   const [selectedBackend, setSelectedBackend] = useState<string>("");
   const [showRemote, setShowRemote] = useState(false);
@@ -738,10 +738,8 @@ export function LocalInferenceSection({ entries, onSave, saving, inline }: Confi
     </>
   );
 
-  if (inline) return content;
-
   return (
-    <Section id="local-inference" icon={Cpu} title="Local Inference" description="Manage your local AI inference backend">
+    <Section icon={Cpu} title="Local Inference" description="Manage your local AI inference backend">
       {content}
     </Section>
   );

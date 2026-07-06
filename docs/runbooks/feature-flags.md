@@ -18,8 +18,7 @@ Two jobs. Everything in the flag system should map to one of them:
 
 2. **Capability / surface gates** — temporarily hide partially-built
    features or surfaces until they're ready. Exists for code that's
-   shipped but not yet meant to be visible. (`ui.surface_preset`,
-   `brain.enabled`)
+   shipped but not yet meant to be visible. (`ui.surface_preset`)
 
 What flags are **not** for:
 
@@ -92,7 +91,7 @@ Current `ui.*` flags:
 
 - `ui.surface_preset` (enum: `chat_only` | `standard` | `advanced`,
   default `chat_only`) — coarse dashboard surface visibility tier.
-  `chat_only` shows ~6 items; `standard` adds tasks/knowledge/brain;
+  `chat_only` shows ~6 items; `standard` adds tasks/knowledge;
   `advanced` exposes everything including admin internals.
 
 `ui.*` flags are in `PUBLIC_FLAGS` and readable by the browser without
@@ -109,7 +108,6 @@ requiring an admin secret. The allowlist lives in
 ```python
 PUBLIC_FLAGS: frozenset[str] = frozenset({
     "ui.surface_preset",
-    "brain.enabled",
 })
 ```
 
@@ -142,7 +140,7 @@ The only public read path for flags in the dashboard is the
 import { useFeatureFlag } from '@/hooks/useFeatureFlag'
 
 // Boolean flag — safe default is false (feature off)
-const brainEnabled = useFeatureFlag<boolean>('brain.enabled', false)
+const betaEnabled = useFeatureFlag<boolean>('feature.example.enabled', false)
 
 // Enum flag — safe default matches the server-side in-code default
 const preset = useFeatureFlag<'chat_only' | 'standard' | 'advanced'>(

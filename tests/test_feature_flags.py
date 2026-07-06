@@ -704,14 +704,15 @@ async def test_public_flags_endpoint_does_not_leak_kill_switches():
 
 
 @pytest.mark.asyncio
-async def test_brain_enabled_flag_is_public():
-    """brain.enabled is migrated from localStorage to a server flag and
-    must be readable via the public endpoint with default True."""
+async def test_brain_enabled_flag_is_gone():
+    """The former brain.enabled nav-visibility flag was removed 2026-07-06
+    (its consumers died with the engram/3D-brain cleanup, and its name
+    collided with the real switch, platform_config features.brain_enabled).
+    It must not resurface in the registry or the public endpoint."""
     async with httpx.AsyncClient(base_url=ORCH_URL) as client:
         r = await client.get("/api/v1/feature-flags/public")
         assert r.status_code == 200
-        body = r.json()
-        assert body.get("brain.enabled") is True
+        assert "brain.enabled" not in r.json()
 
 
 @pytest.mark.asyncio

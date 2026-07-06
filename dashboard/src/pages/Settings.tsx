@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bot, Wrench, Palette, Users, Bug, Database, Lock, Code,
-  CircleUser, Shield, Radio as RadioIcon, Globe,
+  CircleUser, Shield, Radio as RadioIcon, Globe, Cpu,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
   Link2, Bookmark, Monitor, Settings2, ToggleRight,
@@ -14,6 +14,7 @@ import { Tabs } from '../components/ui/Tabs'
 import { useTabHash } from '../hooks/useTabHash'
 import { ConfigField, useConfigValue } from './settings/shared'
 import { LLMRoutingSection } from './settings/LLMRoutingSection'
+import { LocalInferenceSection } from './settings/LocalInferenceSection'
 import { ProviderStatusSection } from './settings/ProviderStatusSection'
 import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
@@ -111,6 +112,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: RadioIcon,
     items: [
       { id: 'llm-routing', label: 'LLM Routing', icon: RadioIcon },
+      { id: 'local-inference', label: 'Local Inference', icon: Cpu },
       { id: 'provider-status', label: 'Provider Status', icon: Activity },
       { id: 'pipeline-models', label: 'Pipeline Models', icon: Layers },
       { id: 'context-budgets', label: 'Context Budgets', icon: Gauge },
@@ -392,6 +394,22 @@ export function Settings() {
     }
   }, []) // Only on initial mount
 
+  // In-page section links (e.g. Self-Modification → "#rules"): hash changes
+  // after mount must switch to the owning tab and scroll, same as deep links.
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.slice(1)
+      const tab = SECTION_TO_TAB[hash]
+      if (!tab) return
+      setActiveTab(tab)
+      requestAnimationFrame(() => {
+        document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   // Determine which sections match the search query
   const searchLower = search.toLowerCase().trim()
   const matchingGroups = useMemo(() => {
@@ -640,6 +658,12 @@ export function Settings() {
         {show('llm-routing') && (
           <div id="llm-routing">
             <LLMRoutingSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
+          </div>
+        )}
+
+        {show('local-inference') && (
+          <div id="local-inference">
+            <LocalInferenceSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
           </div>
         )}
 

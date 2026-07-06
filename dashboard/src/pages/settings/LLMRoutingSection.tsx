@@ -4,7 +4,6 @@ import { Save, RotateCcw, Radio, Wifi, WifiOff, Power } from 'lucide-react'
 import { getOllamaStatus, discoverModels, resolveModel, testProvider, type PlatformConfigEntry } from '../../api'
 import { Section, Button, Input, Select, Toggle, StatusDot, Card, Slider, Badge } from '../../components/ui'
 import { ConfigField, useConfigValue, EnvOverrideBadge, ConfigHistoryToggle } from './shared'
-import { LocalInferenceSection } from './LocalInferenceSection'
 
 // ── LLM Routing section ──────────────────────────────────────────────────────
 
@@ -551,11 +550,8 @@ export function LLMRoutingSection({
     <Section
       icon={Radio}
       title="LLM Routing"
-      description="Configure your inference backend and control how requests are routed between local and cloud providers."
+      description="Control how requests are routed between local and cloud providers. The local backend itself is configured under Local Inference."
     >
-      {/* Local inference backend */}
-      <LocalInferenceSection entries={entries} onSave={onSave} saving={saving} inline />
-
       {/* Strategy selector */}
       <div>
         <div className="mb-2 flex items-center gap-2">

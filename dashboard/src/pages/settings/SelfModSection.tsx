@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Shield, GitPullRequest, ShieldCheck, ExternalLink,
+  GitPullRequest, ExternalLink,
   AlertTriangle, CheckCircle,
 } from 'lucide-react'
-import { getSelfModStatus, getSelfModPRs, getRules, type SelfModPR } from '../../api'
+import { getSelfModStatus, getSelfModPRs, type SelfModPR } from '../../api'
 import { Section, Skeleton } from '../../components/ui'
 
 // ── Status Banner ────────────────────────────────────────────────────────────
@@ -197,61 +197,6 @@ function PRHistoryTable() {
   )
 }
 
-// ── Safety Rules ─────────────────────────────────────────────────────────────
-
-function SafetyRules() {
-  const { data: rules, isLoading } = useQuery({
-    queryKey: ['rules'],
-    queryFn: getRules,
-    staleTime: 5000,
-    retry: 1,
-  })
-
-  if (isLoading) return <Skeleton lines={3} />
-
-  // Filter to system safety rules with no- prefix
-  const safetyRules = (rules ?? []).filter(
-    (r: any) => r.category === 'safety' && r.is_system && r.name?.startsWith('no-'),
-  )
-
-  if (safetyRules.length === 0) {
-    return (
-      <p className="text-caption text-content-tertiary">
-        No system safety rules found. Safety rules are created when self-modification is enabled.
-      </p>
-    )
-  }
-
-  return (
-    <div className="space-y-2">
-      {safetyRules.map((rule: any) => (
-        <div
-          key={rule.id ?? rule.name}
-          className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface-card px-4 py-3"
-        >
-          <ShieldCheck size={16} className="text-emerald-500 mt-0.5 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-compact font-medium text-content-primary font-mono">
-                {rule.name}
-              </span>
-              <span className="text-micro text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                {rule.enforcement ?? 'block'}
-              </span>
-              <span className="text-micro text-stone-400 bg-stone-500/10 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
-                <Shield size={10} /> system
-              </span>
-            </div>
-            {rule.description && (
-              <p className="text-caption text-content-tertiary mt-1">{rule.description}</p>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 // ── Main Section ─────────────────────────────────────────────────────────────
 
 export function SelfModSection() {
@@ -269,10 +214,13 @@ export function SelfModSection() {
           <PRHistoryTable />
         </div>
 
-        <div>
-          <h4 className="text-compact font-semibold text-content-primary mb-3">Safety Rules</h4>
-          <SafetyRules />
-        </div>
+        {/* Safety rules have ONE home (Behavior → Rules) — no duplicate list
+            here to drift out of sync with the real enforcement config. */}
+        <p className="text-caption text-content-tertiary">
+          Self-modification is constrained by the system safety rules (no-force-push,
+          no-push-main, workspace-boundary, …) enforced on every tool call. Manage them
+          under <a href="#rules" className="text-accent hover:underline">Behavior → Rules</a>.
+        </p>
       </div>
     </Section>
   )
