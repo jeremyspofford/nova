@@ -15,3 +15,7 @@ Autonomous work is only useful if it can reach you when it matters. This release
 - Declining also resumes the task — the agent is told to wrap up gracefully instead of stranding. Unanswered checkpoints cancel after 24h.
 
 **Lockscreen decisions.** Set the dashboard URL your phone can reach (Settings → Notifications → Lockscreen actions) and approval/checkpoint pushes carry Approve/Deny buttons that decide directly from the notification. Each button is a signed one-shot link — an HMAC scoped to that single approval, decision, and expiry, minted with a server-side key that never leaves the machine. No admin secret on your phone, nothing to steal from the notification history, and a spent or tampered link is rejected.
+
+**A morning briefing, delivered.** The channel's first standing use: a seeded **Morning briefing** goal distills yesterday's journal and fresh intel into one push a day (11:00 UTC by default — it's a normal scheduled goal, edit it in Goals). It rides the new `send_push` tool: informational pushes any agent can send, storm-braked at 10/hour — the counterpart to `request_human_checkpoint` for messages that don't need an answer.
+
+**Scheduled goals actually fire now.** Two fixes surfaced while wiring the briefing: migration-seeded schedules (nightly memory curation, intel sweeps) were never armed — cortex now initializes any cron goal it finds unscheduled — and a scheduled goal's instructions now reach the executing agent verbatim instead of as a lossy one-line paraphrase.

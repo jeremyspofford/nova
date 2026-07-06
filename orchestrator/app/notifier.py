@@ -33,6 +33,7 @@ EVENT_PRIORITY: dict[str, int] = {
     "pending_human_review": 4,
     "clarification_needed": 4,
     "task_complete": 3,
+    "agent_push": 3,
     "test": 3,
 }
 EVENT_TAGS: dict[str, str] = {
@@ -42,6 +43,7 @@ EVENT_TAGS: dict[str, str] = {
     "pending_human_review": "eyes",
     "clarification_needed": "question",
     "task_complete": "white_check_mark",
+    "agent_push": "speech_balloon",
     "test": "wave",
 }
 

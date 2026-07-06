@@ -31,7 +31,24 @@ server now." Android and desktop/web clients need nothing.
 | Task failed | High | Any pipeline task fails |
 | Needs review | High | A task escalated to human review |
 | Needs clarification | High | A task is blocked on a question |
-| Task complete | Default | Autonomous work only (goal-linked or cortex-dispatched) -- interactive chat tasks don't buzz your phone |
+| Task complete | Default | Autonomous work only (goal-linked or cortex-dispatched), with the task's output in the body -- interactive chat tasks don't buzz your phone |
+| Agent message | Default | An agent explicitly sent you something via the `send_push` tool (the morning briefing arrives this way) |
+
+## The morning briefing
+
+Nova seeds a standing **Morning briefing** goal: once a day it distills
+yesterday's journal and fresh intel into a single push -- what happened, what
+needs your attention, and up to three notable ecosystem items. Quiet day, one
+line; never padding.
+
+- Fires at **11:00 UTC** by default (07:00 US Eastern in summer). Change the
+  schedule anytime in **Goals** -- it's a normal scheduled goal.
+- Requires the brain (cortex) to be enabled -- the briefing is composed by an
+  agent, not a template.
+- Delivery rides `send_push`, a tool any agent can use for informational
+  messages that don't need an answer (the counterpart to
+  `request_human_checkpoint`, which parks the task and waits for you).
+  Agent pushes are storm-braked at 10 per hour.
 
 ## Setup
 

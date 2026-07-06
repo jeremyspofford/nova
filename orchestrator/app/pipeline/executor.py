@@ -1458,7 +1458,13 @@ async def _complete_task(task_id: str, output: str, state: PipelineState) -> Non
         await emit_activity(pool, "task_completed", "pipeline", f"Task {task_id[:8]}... completed", metadata={"task_id": task_id, "flags": list(state.flags)})
     except Exception:
         pass
-    await _publish_notification("task_complete", task_id, "Task completed")
+    # Carry the task's own output in the push — "Task completed" with no body
+    # is useless on a lockscreen, and standing goals (morning briefing) rely
+    # on their output reaching the phone even when the agent skipped send_push.
+    await _publish_notification(
+        "task_complete", task_id, "Task completed",
+        body=(output or "").strip()[:1200],
+    )
 
     # Auto-close friction log entries when their fix task completes
     try:

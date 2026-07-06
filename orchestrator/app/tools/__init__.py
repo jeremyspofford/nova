@@ -38,6 +38,8 @@ from app.tools.introspect_tools import INTROSPECT_TOOLS
 from app.tools.introspect_tools import execute_tool as _exec_introspect
 from app.tools.memory_tools import MEMORY_TOOLS
 from app.tools.memory_tools import execute_tool as _exec_memory
+from app.tools.notify_tools import NOTIFY_TOOLS
+from app.tools.notify_tools import execute_tool as _exec_notify
 from app.tools.platform_tools import PLATFORM_TOOLS
 from app.tools.platform_tools import execute_tool as _exec_platform
 from app.tools.web_tools import WEB_TOOLS
@@ -61,6 +63,7 @@ _REGISTRY: list[ToolGroup] = [
     ToolGroup("Web",      "Internet Access",   "Search the internet and fetch web pages",        WEB_TOOLS,      _exec_web),
     ToolGroup("Browser",  "Browser Automation", "Drive a real browser: navigate, read, fill forms, sign up for accounts, store credentials", BROWSER_TOOLS, _exec_browser),
     ToolGroup("Checkpoint", "Human Checkpoint", "Park a task and ask the operator for input (CAPTCHAs, verification codes, judgment calls)", CHECKPOINT_TOOLS, _exec_checkpoint),
+    ToolGroup("Notify", "Phone Push", "Send informational push notifications to the operator's phone", NOTIFY_TOOLS, _exec_notify),
     ToolGroup("Diagnosis", "Self-Diagnosis",  "Diagnose task failures, check service health, analyse errors", DIAGNOSIS_TOOLS, _exec_diagnosis),
     ToolGroup("Introspect", "Platform Awareness", "Query platform config, knowledge sources, MCP servers, user profiles", INTROSPECT_TOOLS, _exec_introspect),
     ToolGroup("Memory", "Knowledge Retrieval", "Search, recall, and read from Nova's memory system", MEMORY_TOOLS, _exec_memory),
