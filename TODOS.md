@@ -48,6 +48,12 @@ These are the gaps preventing Nova from being truly self-directed. Ordered by im
 **Status (corrected 2026-07-05):** they exist (`test_cortex_*`, `test_maturation_*`, `test_decomposition_*`, `test_drive_scheduling`). Remaining: fix the two `test_drive_scheduling` tests that fail on `ModuleNotFoundError: app.drives` (import cortex internals not on the tests' pythonpath) and extend TRACK-phase feedback coverage.
 **Added:** 2026-03-27 · corrected 2026-07-05
 
+## Post-SEC2 follow-up: onboarding wizard credential bootstrap
+
+**What:** the first-boot wizard's non-flag writes (provider keys, engine/model selection via admin PATCHes) still require admin credentials. Pre-SEC2 the trusted-network bypass papered over this; post-SEC2 a fresh install accessed through the dashboard proxy (or from a non-loopback device) will 403 on those steps. The gate/skip path is fixed (public one-shot `/api/v1/onboarding/status` + `/complete`), so nobody gets trapped — but a full wizard run needs the operator's admin secret.
+**How:** during `completed=false`, either (a) the wizard prompts for the admin secret from `.env` up front (simplest, honest), or (b) a one-shot bootstrap token flow mints a session for the wizard. Prefer (a).
+**Added:** 2026-07-06
+
 ## Friction Log Enhancements
 
 ### Docker Log Auto-Attach

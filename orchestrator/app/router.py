@@ -762,6 +762,48 @@ def _config_row(row: dict) -> dict:
     return d
 
 
+# ── Onboarding bootstrap (deliberately UNAUTHENTICATED) ─────────────────────
+# The onboarding gate runs before any credential exists in the browser, so
+# these two endpoints cannot require auth (SEC2 removed the trusted-network
+# admin bypass that used to paper over this — a credential-less dashboard
+# 403'd on the config read and trapped the operator in an onboarding loop).
+# Exposure is deliberate and minimal: status leaks only "is this instance set
+# up", and complete is one-shot — it can only flip false→true (stopping the
+# wizard), never back, and changes nothing else.
+
+@router.get("/api/v1/onboarding/status")
+async def onboarding_status() -> dict:
+    """Whether first-boot onboarding has completed. Public by design."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value FROM platform_config WHERE key = 'onboarding.completed'"
+        )
+    val = row["value"] if row else None
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except json.JSONDecodeError:
+            pass
+    return {"completed": val is True or val == "true"}
+
+
+@router.post("/api/v1/onboarding/complete")
+async def onboarding_complete() -> dict:
+    """Mark onboarding done. One-shot: 409 once completed. Public by design."""
+    status = await onboarding_status()
+    if status["completed"]:
+        raise HTTPException(status_code=409, detail="onboarding already completed")
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO platform_config (key, value, description)
+               VALUES ('onboarding.completed', 'true'::jsonb, 'First-boot wizard finished')
+               ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = now()""",
+        )
+    return {"completed": True}
+
+
 @router.get("/api/v1/config")
 async def list_platform_config(_admin: AdminDep) -> list[dict]:
     """Return all platform config entries. Values are decoded from JSONB. Admin-only."""

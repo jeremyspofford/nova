@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import clsx from 'clsx'
 import { Check } from 'lucide-react'
-import { updatePlatformConfig } from '../../api'
 import type { HardwareInfo } from '../../api-recovery'
 import { Welcome } from './steps/Welcome'
 import { HardwareDetection } from './steps/HardwareDetection'
@@ -31,7 +30,9 @@ export function OnboardingWizard() {
 
   const completeOnboarding = useCallback(async () => {
     try {
-      await updatePlatformConfig('onboarding.completed', '"true"')
+      // Public one-shot bootstrap endpoint — works before any credential
+      // exists in the browser (409 on an already-completed instance is fine).
+      await fetch('/api/v1/onboarding/complete', { method: 'POST' })
     } catch {
       // Best-effort -- don't block the user
     }

@@ -256,6 +256,26 @@ async def test_admin_requires_credentials_even_from_trusted_network():
 
 
 @pytest.mark.asyncio
+async def test_onboarding_bootstrap_is_public_and_one_shot():
+    """The onboarding gate must work with zero credentials (bootstrap paradox).
+
+    SEC2 removed the network bypass that used to hide this: an admin-gated
+    status read trapped credential-less browsers in an onboarding loop.
+    Status is public; complete is one-shot (409 once completed).
+    """
+    async with httpx.AsyncClient(timeout=10) as c:
+        status = await c.get(f"{ORCHESTRATOR}/api/v1/onboarding/status")
+        assert status.status_code == 200
+        body = status.json()
+        assert isinstance(body.get("completed"), bool)
+
+        if body["completed"]:
+            # Completed instance: the public write must refuse to do anything.
+            resp = await c.post(f"{ORCHESTRATOR}/api/v1/onboarding/complete")
+            assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_admin_accepts_credentials():
     """The credentialed path still works after removing the bypass."""
     if not ADMIN_SECRET:

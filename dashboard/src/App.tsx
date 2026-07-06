@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react'
-import { getAuthHeaders, apiFetch } from './api'
+import { apiFetch } from './api'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useIsMobile } from './hooks/useIsMobile'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -111,10 +111,8 @@ function OnboardingGate({ children }: { children: React.ReactNode }) {
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
 
   // /recovery is the escape hatch when the orchestrator is down — it must reach
-  // its route even if the onboarding-config fetch fails. Without this bypass,
-  // the catch branch flips needsOnboarding=true and redirects to /onboarding,
-  // which then ALSO fails because onboarding talks to the same dead orchestrator.
-  // AuthGate has the matching bypass; the gates need to agree.
+  // its route even if the onboarding-status fetch fails. AuthGate has the
+  // matching bypass; the gates need to agree.
   const isRecoveryRoute = window.location.pathname === '/recovery'
 
   useEffect(() => {
@@ -122,16 +120,18 @@ function OnboardingGate({ children }: { children: React.ReactNode }) {
       setChecked(true)
       return
     }
-    fetch('/api/v1/config/onboarding.completed', {
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    })
+    // Public bootstrap endpoint — no credentials required. Redirect to the
+    // wizard ONLY on a positive "not completed" from the server: any error
+    // (orchestrator down, auth middleware misbehaving) fails OPEN so the
+    // operator can always reach /login and /recovery instead of being
+    // trapped in an onboarding loop they cannot complete.
+    fetch('/api/v1/onboarding/status')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        const completed = data?.value === true || data?.value === 'true'
-        setNeedsOnboarding(!completed)
+        setNeedsOnboarding(data ? data.completed === false : false)
         setChecked(true)
       })
-      .catch(() => { setNeedsOnboarding(true); setChecked(true) })
+      .catch(() => { setNeedsOnboarding(false); setChecked(true) })
   }, [isRecoveryRoute])
 
   if (!checked) return null
