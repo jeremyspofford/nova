@@ -26,7 +26,9 @@ export interface InviteItem {
 export interface InviteCreateRequest {
   role: string
   email?: string
-  expires_in_hours?: number
+  // null = the invite link never expires (always sent explicitly — an
+  // omitted field used to silently become a 72h server default)
+  expires_in_hours: number | null
   account_expires_in_hours?: number
 }
 
@@ -34,7 +36,10 @@ export async function fetchUsers(): Promise<UserListItem[]> {
   return apiFetch<UserListItem[]>('/api/v1/admin/users')
 }
 
-export async function updateUser(userId: string, data: { role?: string; status?: string; expires_at?: string | null }): Promise<UserListItem> {
+export async function updateUser(
+  userId: string,
+  data: { role?: string; status?: string; expires_at?: string | null; display_name?: string; email?: string },
+): Promise<UserListItem> {
   return apiFetch<UserListItem>(`/api/v1/admin/users/${userId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),

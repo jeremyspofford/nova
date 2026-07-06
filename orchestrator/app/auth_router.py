@@ -62,14 +62,18 @@ class MessageImport(BaseModel):
 
 class InviteCreate(BaseModel):
     email: str | None = None
-    expires_in_hours: int | None = 72
+    # None/0 = the link never expires. The UI always sends this explicitly —
+    # a silent 72h default here turned the "Never" option into 3 days.
+    expires_in_hours: int | None = None
     role: str = "member"
     account_expires_in_hours: int | None = None
 
 class AdminUpdateUser(BaseModel):
     role: str | None = None
     status: str | None = None  # 'active' | 'deactivated'
-    expires_at: str | None = None  # ISO datetime or null
+    expires_at: str | None = None  # ISO datetime; "" clears (never expires)
+    display_name: str | None = None
+    email: str | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -637,6 +641,27 @@ async def update_user_admin(user_id: str, body: AdminUpdateUser, user: UserDep):
 
     from app.db import get_pool
     pool = get_pool()
+
+    if body.display_name is not None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET display_name = $1, updated_at = NOW() WHERE id = $2",
+                body.display_name.strip() or None, UUID(user_id),
+            )
+
+    if body.email is not None:
+        new_email = body.email.strip().lower()
+        if not new_email or "@" not in new_email:
+            raise HTTPException(status_code=400, detail="Invalid email address")
+        from app.users import get_user_by_email
+        existing = await get_user_by_email(new_email)
+        if existing and str(existing["id"]) != user_id:
+            raise HTTPException(status_code=409, detail="Email already in use")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET email = $1, updated_at = NOW() WHERE id = $2",
+                new_email, UUID(user_id),
+            )
 
     if body.role is not None:
         from app.roles import VALID_ROLES

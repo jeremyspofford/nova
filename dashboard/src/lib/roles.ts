@@ -17,6 +17,14 @@ export const ROLE_LABELS: Record<Role, string> = {
   guest: 'Guest',
 }
 
+export const ROLE_DESCRIPTIONS: Record<Role, string> = {
+  owner: 'Full control of this instance, including managing admins. Cannot be demoted by others.',
+  admin: 'Manage users, invites, settings, approvals, and infrastructure. Everything except demoting the owner.',
+  member: 'Everyday use — chat, tasks, goals, knowledge, Inbox. No user management or settings changes.',
+  viewer: 'Look, do not touch — can browse dashboards and chat, but cannot create or modify anything.',
+  guest: 'Chat only, ideal for time-boxed access — pair with an account expiry.',
+}
+
 export const ROLE_COLORS: Record<Role, string> = {
   owner: 'text-amber-400 bg-amber-400/10',
   admin: 'text-teal-400 bg-teal-400/10',

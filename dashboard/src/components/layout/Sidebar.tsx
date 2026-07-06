@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
 import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import {
@@ -104,7 +105,17 @@ export function Sidebar({
 }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, authConfig } = useAuth()
+  const { user, authConfig, logout } = useAuth()
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+
+  const handleSignOut = async () => {
+    setUserMenuOpen(false)
+    // Covers both credential kinds: JWT session (logout revokes it) and the
+    // break-glass admin secret (clear it so the browser is truly signed out).
+    try { await logout() } catch { /* best-effort */ }
+    localStorage.removeItem('nova_admin_secret')
+    window.location.href = '/login'
+  }
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
   const { avatarUrl } = useNovaIdentity()
   const { data: attentionCount = 0 } = useAttentionCount()
@@ -195,21 +206,48 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* User card */}
+      {/* User card — expands upward into account actions */}
       {!collapsed && user && (
-        <div className="px-2 pb-2">
-          <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md hover:bg-surface-card transition-colors duration-fast cursor-pointer">
+        <div className="px-2 pb-2 relative">
+          {userMenuOpen && (
+            <div className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border-subtle bg-surface-card shadow-lg overflow-hidden z-20">
+              <div className="px-3 py-2 border-b border-border-subtle">
+                <p className="text-caption font-medium text-content-primary truncate">{user.display_name || user.email}</p>
+                <p className="text-micro text-content-tertiary truncate">{user.email} · <span className="capitalize">{user.role}</span></p>
+              </div>
+              {hasMinRole(userRole, 'admin') && (
+                <button
+                  onClick={() => { setUserMenuOpen(false); navigate('/users') }}
+                  className="w-full px-3 py-2 text-left text-compact text-content-secondary hover:bg-surface-card-hover hover:text-content-primary transition-colors"
+                >
+                  Manage users
+                </button>
+              )}
+              <button
+                onClick={handleSignOut}
+                className="w-full px-3 py-2 text-left text-compact text-content-secondary hover:bg-surface-card-hover hover:text-danger transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => setUserMenuOpen(v => !v)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md hover:bg-surface-card transition-colors duration-fast"
+          >
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-caption font-medium shrink-0">
               {getInitials(user.display_name || user.email || 'N')}
             </div>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 text-left">
               <div className="text-compact font-medium text-content-primary truncate">
                 {user.display_name || user.email || 'User'}
               </div>
               <div className="text-micro text-content-tertiary capitalize">{user.role}</div>
             </div>
-            <ChevronDown className="w-3.5 h-3.5 text-content-tertiary shrink-0" />
-          </div>
+            {userMenuOpen
+              ? <ChevronDown className="w-3.5 h-3.5 text-content-tertiary shrink-0 rotate-180 transition-transform" />
+              : <ChevronDown className="w-3.5 h-3.5 text-content-tertiary shrink-0 transition-transform" />}
+          </button>
         </div>
       )}
 

@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
-import { Plus, Trash2, Users as UsersIcon } from 'lucide-react'
-import { fetchUsers, updateUser, deactivateUser, createInvite, fetchInvites, revokeInvite, type InviteCreateRequest } from '../api/users'
+import { Pencil, Plus, Trash2, Users as UsersIcon } from 'lucide-react'
+import { fetchUsers, updateUser, deactivateUser, createInvite, fetchInvites, revokeInvite, type InviteCreateRequest, type UserListItem } from '../api/users'
 import { useTabHash } from '../hooks/useTabHash'
-import { ROLE_HIERARCHY, ROLE_LABELS, canAssignRole, type Role } from '../lib/roles'
+import { ROLE_DESCRIPTIONS, ROLE_HIERARCHY, ROLE_LABELS, canAssignRole, type Role } from '../lib/roles'
 import type { SemanticColor } from '../lib/design-tokens'
 import { useAuth } from '../stores/auth-store'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -72,10 +72,14 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
   const qc = useQueryClient()
   const { data: users = [], isLoading, error } = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; name: string } | null>(null)
+  const [editTarget, setEditTarget] = useState<UserListItem | null>(null)
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { role?: string } }) => updateUser(id, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    mutationFn: ({ id, data }: { id: string; data: Parameters<typeof updateUser>[1] }) => updateUser(id, data),
+    onSuccess: () => {
+      setEditTarget(null)
+      qc.invalidateQueries({ queryKey: ['users'] })
+    },
   })
 
   const deactivateMutation = useMutation({
@@ -113,6 +117,7 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                 <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">User</th>
                 <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Role</th>
                 <th className="hidden sm:table-cell px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Status</th>
+                <th className="hidden md:table-cell px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Expires</th>
                 <th className="hidden md:table-cell px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Last Updated</th>
                 <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Actions</th>
               </tr>
@@ -141,29 +146,23 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                       {u.status}
                     </td>
                     <td className="hidden md:table-cell px-4 py-3 text-content-tertiary text-caption">
+                      {u.expires_at
+                        ? formatDistanceToNow(new Date(u.expires_at), { addSuffix: true })
+                        : 'Never'}
+                    </td>
+                    <td className="hidden md:table-cell px-4 py-3 text-content-tertiary text-caption">
                       {formatDistanceToNow(new Date(u.updated_at), { addSuffix: true })}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <Select
-                          value={role}
-                          onChange={e => {
-                            const newRole = e.target.value
-                            if (newRole !== role) {
-                              updateMutation.mutate({ id: u.id, data: { role: newRole } })
-                            }
-                          }}
-                          disabled={isOwner || u.id === currentUserId}
-                          className="text-caption w-24"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={<Pencil size={14} />}
+                          onClick={() => setEditTarget(u)}
                         >
-                          {assignableRoles.map(r => (
-                            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
-                          ))}
-                          {!assignableRoles.includes(role) && (
-                            <option value={role}>{ROLE_LABELS[role] || role}</option>
-                          )}
-                        </Select>
-
+                          Edit
+                        </Button>
                         {!isOwner && u.id !== currentUserId && (
                           <Button
                             variant="ghost"
@@ -193,7 +192,136 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
         onConfirm={() => deactivateTarget && deactivateMutation.mutate(deactivateTarget.id)}
         destructive
       />
+
+      {editTarget && (
+        <EditUserModal
+          key={editTarget.id}
+          user={editTarget}
+          currentRole={currentRole}
+          currentUserId={currentUserId}
+          saving={updateMutation.isPending}
+          error={updateMutation.isError ? String(updateMutation.error) : null}
+          onClose={() => { setEditTarget(null); updateMutation.reset() }}
+          onSave={(data) => updateMutation.mutate({ id: editTarget.id, data })}
+        />
+      )}
     </>
+  )
+}
+
+function EditUserModal({ user, currentRole, currentUserId, saving, error, onClose, onSave }: {
+  user: UserListItem
+  currentRole: Role
+  currentUserId?: string
+  saving: boolean
+  error: string | null
+  onClose: () => void
+  onSave: (data: Parameters<typeof updateUser>[1]) => void
+}) {
+  const role = user.role as Role
+  const roleLocked = role === 'owner' || user.id === currentUserId
+  const assignableRoles = ROLE_HIERARCHY.filter(r => canAssignRole(currentRole, r))
+
+  const [name, setName] = useState(user.display_name ?? '')
+  const [email, setEmail] = useState(user.email)
+  const [newRole, setNewRole] = useState<Role>(role)
+  // datetime-local wants "YYYY-MM-DDTHH:mm" in local time
+  const toLocalInput = (iso: string) => {
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const [expiryMode, setExpiryMode] = useState<'never' | 'date'>(user.expires_at ? 'date' : 'never')
+  const [expiryDate, setExpiryDate] = useState(user.expires_at ? toLocalInput(user.expires_at) : '')
+
+  const handleSave = () => {
+    const data: Parameters<typeof updateUser>[1] = {}
+    if (name !== (user.display_name ?? '')) data.display_name = name
+    if (email.trim().toLowerCase() !== user.email.toLowerCase()) data.email = email.trim()
+    if (!roleLocked && newRole !== role) data.role = newRole
+    if (expiryMode === 'never') {
+      if (user.expires_at) data.expires_at = ''  // clear → never expires
+    } else if (expiryDate) {
+      const iso = new Date(expiryDate).toISOString()
+      if (iso !== user.expires_at) data.expires_at = iso
+    }
+    if (Object.keys(data).length === 0) { onClose(); return }
+    onSave(data)
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Edit ${user.display_name || user.email}`}
+      size="md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} loading={saving} disabled={saving}>Save</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Input
+          label="Display name"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Name"
+        />
+        <Input
+          label="Email"
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+        />
+        <div>
+          <label className="block text-caption font-medium text-content-secondary mb-1">Role</label>
+          <Select
+            value={newRole}
+            onChange={e => setNewRole(e.target.value as Role)}
+            disabled={roleLocked}
+          >
+            {assignableRoles.map(r => (
+              <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+            ))}
+            {!assignableRoles.includes(role) && (
+              <option value={role}>{ROLE_LABELS[role] || role}</option>
+            )}
+          </Select>
+          <p className="mt-1.5 text-caption text-content-tertiary">
+            {roleLocked
+              ? (role === 'owner' ? 'The owner role cannot be changed here.' : 'You cannot change your own role.')
+              : ROLE_DESCRIPTIONS[newRole]}
+          </p>
+        </div>
+        <div>
+          <label className="block text-caption font-medium text-content-secondary mb-1">Account expiry</label>
+          <div className="flex items-center gap-2">
+            <Select
+              value={expiryMode}
+              onChange={e => setExpiryMode(e.target.value as 'never' | 'date')}
+              className="w-28"
+            >
+              <option value="never">Never</option>
+              <option value="date">On date</option>
+            </Select>
+            {expiryMode === 'date' && (
+              <input
+                type="datetime-local"
+                value={expiryDate}
+                onChange={e => setExpiryDate(e.target.value)}
+                className="h-9 flex-1 rounded-sm border border-border bg-surface-input px-3 text-compact text-content-primary outline-none focus:border-border-focus"
+              />
+            )}
+          </div>
+          <p className="mt-1.5 text-caption text-content-tertiary">
+            Expired accounts are signed out and blocked until an admin extends them.
+          </p>
+        </div>
+        {error && <p className="text-caption text-danger">{error}</p>}
+      </div>
+    </Modal>
   )
 }
 
@@ -233,8 +361,10 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
   const handleGenerate = () => {
     const data: InviteCreateRequest = {
       role: inviteRole,
+      // Always explicit: null = never. Omitting the field used to fall into
+      // a silent 72h server default, turning "Never" into 3 days.
+      expires_in_hours: inviteExpiry > 0 ? inviteExpiry : null,
       ...(inviteEmail.trim() && { email: inviteEmail.trim() }),
-      ...(inviteExpiry > 0 && { expires_in_hours: inviteExpiry }),
       ...(inviteRole === 'guest' && accountExpiry > 0 && { account_expires_in_hours: accountExpiry }),
     }
     createMutation.mutate(data)
@@ -285,7 +415,7 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
         }
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
+          <div className="sm:col-span-2">
             <label className="block text-caption font-medium text-content-secondary mb-1">Role</label>
             <Select
               value={inviteRole}
@@ -295,6 +425,9 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
                 <option key={r} value={r}>{ROLE_LABELS[r]}</option>
               ))}
             </Select>
+            <p className="mt-1.5 text-caption text-content-tertiary">
+              {ROLE_DESCRIPTIONS[inviteRole]}
+            </p>
           </div>
 
           <div>
@@ -350,6 +483,7 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
                 <tr className="bg-surface-elevated">
                   <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Role</th>
                   <th className="hidden sm:table-cell px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Email</th>
+                  <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Invite link</th>
                   <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Expires</th>
                   <th className="hidden md:table-cell px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider">Created</th>
                   <th className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider"></th>
@@ -367,6 +501,9 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
                       </td>
                       <td className="hidden sm:table-cell px-4 py-3 text-content-tertiary text-caption">
                         {inv.email || '--'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <CopyableId id={`${window.location.origin}/invite/${inv.code}`} truncate={28} />
                       </td>
                       <td className="px-4 py-3 text-content-secondary text-caption">
                         {inv.expires_at
@@ -390,7 +527,7 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
                 })}
                 {invites.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-content-tertiary text-compact">
+                    <td colSpan={6} className="px-4 py-12 text-center text-content-tertiary text-compact">
                       No pending invitations
                     </td>
                   </tr>
