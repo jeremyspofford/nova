@@ -15,7 +15,7 @@ interface InviteInfo {
 export function Invite() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
-  const { isAuthenticated, register, logout } = useAuth()
+  const { accessToken, register, logout } = useAuth()
 
   const [inviteInfo, setInviteInfo] = useState<InviteInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -85,9 +85,12 @@ export function Invite() {
     )
   }
 
-  // Signed in (JWT session or break-glass secret): offer the handoff instead
-  // of a dead end — accepting an invite is a deliberate account switch.
-  if (isAuthenticated && !switching) {
+  // Only a REAL JWT session gets the switch prompt. Network-derived and
+  // break-glass identities are ambient — you can't sign out of your LAN
+  // position, so gating on them loops forever (the auth bootstrap re-adopts
+  // the synthetic identity on every reload). Registering from an ambient
+  // identity is fine: the new account's JWT takes precedence afterwards.
+  if (accessToken && !switching) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950 px-4">
         <div className="max-w-md w-full p-8 text-center space-y-4">
