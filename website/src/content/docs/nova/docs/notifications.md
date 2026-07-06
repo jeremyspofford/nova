@@ -50,6 +50,23 @@ line; never padding.
   `request_human_checkpoint`, which parks the task and waits for you).
   Agent pushes are storm-braked at 10 per hour.
 
+## Delivery status — how you know a push actually went somewhere
+
+"Sent" can mean two different things, and Nova shows you both:
+
+- **Accepted**: the ntfy server took the publish. Every attempt — including
+  suppressed ones (notifications disabled, no topic) — is recorded as a
+  delivery receipt, visible under **Settings → Notifications → Recent
+  deliveries** (and `GET /api/v1/notify/log`).
+- **Received**: a device subscribed to the topic actually got it. The
+  Settings page shows the live **connected subscriber count** (from ntfy's
+  metrics); when it's 0, a warning tells you pushes are being cached into
+  the void. iOS clients poll rather than hold a connection, so they don't
+  appear in the count.
+
+Agents get the same honesty: a successful `send_push` tool call reports
+"accepted by the ntfy server", not "delivered".
+
 ## Setup
 
 1. Install the **ntfy** app ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iOS](https://apps.apple.com/us/app/ntfy/id1625396347)).
@@ -115,7 +132,8 @@ Compose-level:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/notify/config` | Admin | Current channel config + subscribe hint |
+| GET | `/api/v1/notify/config` | Admin | Current channel config + subscribe hint + connected subscriber count |
+| GET | `/api/v1/notify/log` | Admin | Recent delivery receipts (accepted / rejected / suppressed, with reason) |
 | POST | `/api/v1/notify/test` | Admin | Send a test notification |
 | POST | `/api/v1/notify/actions/decide` | Signed token | Decide an approval from a push action button |
 

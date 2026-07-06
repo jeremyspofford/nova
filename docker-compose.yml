@@ -749,6 +749,10 @@ services:
     command: serve --cache-file /var/cache/ntfy/cache.db --behind-proxy
     environment:
       NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8290}
+      # Prometheus metrics on /metrics — the orchestrator reads the
+      # subscriber gauge so Settings can say whether any device is
+      # actually listening to the topic (in-network read only).
+      NTFY_ENABLE_METRICS: "true"
       # iOS instant delivery for self-hosted servers needs a wake-up ping
       # relayed through ntfy.sh (free; message content never leaves this
       # server — the relay only tells the app "poll your server"). Opt in

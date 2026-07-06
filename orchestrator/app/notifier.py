@@ -101,6 +101,51 @@ async def get_notify_config() -> dict:
     return conf
 
 
+async def _record_delivery(event: str, title: str, ok: bool, detail: str) -> None:
+    """Write one delivery receipt (best-effort, never raises).
+
+    `ok` means the ntfy server ACCEPTED the publish — actual delivery still
+    depends on a device being subscribed. Surfaced in Settings → Notifications
+    so 'green' can't silently mean 'cached into the void'.
+    """
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO notify_log (event, title, ok, detail) "
+                "VALUES ($1, $2, $3, $4)",
+                event, title[:200], ok, detail[:300],
+            )
+            # Retention: receipts are operational breadcrumbs, not history.
+            await conn.execute(
+                "DELETE FROM notify_log WHERE created_at < now() - interval '30 days'"
+            )
+    except Exception as e:
+        logger.debug("notify: receipt write failed (non-fatal): %s", e)
+
+
+async def connected_subscribers() -> int | None:
+    """Live subscriber count from ntfy's Prometheus metrics, or None.
+
+    Counts persistent connections (Android app, open web app). iOS clients
+    poll instead of holding a connection, so 0 does not strictly prove
+    nothing will ever arrive — but on a single-user box it's the honest
+    'is anyone actually listening' signal.
+    """
+    try:
+        conf = await get_notify_config()
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{conf['url']}/metrics")
+        if resp.status_code != 200:
+            return None
+        for line in resp.text.splitlines():
+            if line.startswith("ntfy_subscribers"):
+                return int(float(line.rsplit(None, 1)[-1]))
+        return None
+    except Exception:
+        return None
+
+
 async def notify(
     event: str,
     title: str,
@@ -119,6 +164,11 @@ async def notify(
     try:
         conf = await get_notify_config()
         if not conf["enabled"] or not conf["topic"]:
+            await _record_delivery(
+                event, title, False,
+                "suppressed: notifications disabled" if not conf["enabled"]
+                else "suppressed: no topic seeded",
+            )
             return False
 
         payload: dict = {
@@ -138,14 +188,17 @@ async def notify(
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(conf["url"], json=payload)
         if resp.status_code == 200:
+            await _record_delivery(event, title, True, "accepted by ntfy")
             return True
         logger.warning(
             "notify: ntfy rejected %s event: HTTP %d %s",
             event, resp.status_code, resp.text[:200],
         )
+        await _record_delivery(event, title, False, f"ntfy rejected: HTTP {resp.status_code}")
         return False
     except Exception as e:
         logger.warning("notify: push failed for %s (non-fatal): %s", event, e)
+        await _record_delivery(event, title, False, f"publish error: {e}")
         return False
 
 

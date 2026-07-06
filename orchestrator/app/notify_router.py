@@ -22,6 +22,8 @@ router = APIRouter(prefix="/api/v1/notify", tags=["notify"])
 @router.get("/config")
 async def notify_config(_: AdminDep):
     """Current push-notification config (topic is the subscription secret)."""
+    from app.notifier import connected_subscribers
+
     _invalidate_conf_cache()  # settings page should always see fresh values
     conf = await get_notify_config()
     return {
@@ -34,7 +36,39 @@ async def notify_config(_: AdminDep):
         # Lockscreen decide buttons: set to the dashboard URL your phone can
         # reach (LAN IP / tailnet). Empty = buttons disabled.
         "action_base_url": conf["action_base_url"],
+        # Persistent connections to the ntfy server right now (Android app,
+        # open web app). 0 = publishes are cached, nothing receives them.
+        # null = metrics unavailable. iOS polls, so it never shows here.
+        "connected_subscribers": await connected_subscribers(),
     }
+
+
+@router.get("/log")
+async def notify_log(_: AdminDep, limit: int = Query(default=50, ge=1, le=200)):
+    """Recent delivery receipts, newest first.
+
+    `ok` means the ntfy server accepted the publish — delivery to a device
+    still requires an active subscription to the topic.
+    """
+    from app.db import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT created_at, event, title, ok, detail FROM notify_log "
+            "ORDER BY created_at DESC LIMIT $1",
+            limit,
+        )
+    return [
+        {
+            "created_at": r["created_at"].isoformat(),
+            "event": r["event"],
+            "title": r["title"],
+            "ok": r["ok"],
+            "detail": r["detail"],
+        }
+        for r in rows
+    ]
 
 
 @router.post("/actions/decide")

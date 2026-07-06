@@ -108,7 +108,11 @@ async def execute_tool(name: str, args: dict) -> str:
 
     sent = await notify("agent_push", title=title, message=message, priority=priority)
     if sent:
-        return f"Push sent: {title!r}"
+        return (
+            f"Push sent: {title!r} — accepted by the ntfy server. Delivery to "
+            "the operator requires a device subscribed to the topic "
+            "(Settings → Notifications shows subscription status)."
+        )
     return (
         "Push not sent (notifications disabled or ntfy unreachable). "
         "Include the content in your task output instead."

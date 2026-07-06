@@ -122,6 +122,32 @@ async def test_send_push_requires_title_and_message():
 
 
 @pytest.mark.asyncio
+async def test_delivery_receipts_recorded(orchestrator, admin_headers):
+    """Every publish attempt lands in notify_log with its outcome."""
+    resp = await orchestrator.post("/api/v1/notify/test", headers=admin_headers)
+    assert resp.status_code == 200
+
+    log = await orchestrator.get("/api/v1/notify/log?limit=10", headers=admin_headers)
+    assert log.status_code == 200
+    rows = log.json()
+    assert rows, "no delivery receipts recorded"
+    tests = [r for r in rows if r["event"] == "test"]
+    assert tests, "test push missing from the delivery log"
+    assert isinstance(tests[0]["ok"], bool)
+    assert tests[0]["detail"], "receipt should say what happened"
+
+
+@pytest.mark.asyncio
+async def test_notify_config_reports_subscribers(orchestrator, admin_headers):
+    """Settings can tell whether anything is actually listening."""
+    resp = await orchestrator.get("/api/v1/notify/config", headers=admin_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "connected_subscribers" in body
+    assert body["connected_subscribers"] is None or isinstance(body["connected_subscribers"], int)
+
+
+@pytest.mark.asyncio
 async def test_morning_briefing_goal_seeded(pool):
     """Migration 095 seeds the standing goal; scheduler self-heal arms it."""
     async with pool.acquire() as conn:
