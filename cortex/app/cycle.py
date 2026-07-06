@@ -720,14 +720,22 @@ async def _execute_serve(drive: DriveResult, plan: str, state: CycleState) -> st
             # and ci_* metadata that downstream drives + dedup logic rely on.
             pool = get_pool()
             async with pool.acquire() as conn:
+                # NOTE: the pool's jsonb codec encodes dicts — pre-dumping here
+                # double-encodes into a jsonb *string*, and Postgres `||` on a
+                # non-object wraps both sides into arrays, poisoning the column
+                # for every later read (pod hints, dedup, progress). The CASE
+                # self-heals rows corrupted before this fix.
                 await conn.execute(
                     """UPDATE goals
                        SET last_checked_at = NOW(),
-                           current_plan = COALESCE(current_plan, '{}'::jsonb)
-                                          || $1::jsonb,
+                           current_plan = CASE
+                               WHEN jsonb_typeof(current_plan) = 'object'
+                               THEN current_plan || $1::jsonb
+                               ELSE $1::jsonb
+                           END,
                            updated_at = NOW()
                        WHERE id = $2::uuid""",
-                    json.dumps({"plan": plan, "cycle": state.cycle_number, "task_id": task_id, "consecutive_skips": 0}),
+                    {"plan": plan, "cycle": state.cycle_number, "task_id": task_id, "consecutive_skips": 0},
                     goal_id,
                 )
 
@@ -827,6 +835,15 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
         iteration = row["iteration"]
         max_iterations = row["max_iterations"] or 50
         current_plan = row["current_plan"] or {}
+        # Rows written before the double-encode fix hold a jsonb string or
+        # array here — normalize so the plan_update merges below can't crash.
+        if isinstance(current_plan, str):
+            try:
+                current_plan = json.loads(current_plan)
+            except ValueError:
+                current_plan = {}
+        if not isinstance(current_plan, dict):
+            current_plan = {}
 
         new_cost = float(row["cost_so_far_usd"] or 0) + outcome.total_cost_usd
 
@@ -857,7 +874,7 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
                    WHERE id = $4::uuid""",
                 new_iteration,
                 new_progress,
-                json.dumps(plan_update),
+                plan_update,
                 goal_id,
                 new_cost,
             )
@@ -897,7 +914,7 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
                        cost_so_far_usd = $3,
                        updated_at = NOW()
                    WHERE id = $2::uuid""",
-                json.dumps(plan_update),
+                plan_update,
                 goal_id,
                 new_cost,
             )
@@ -923,7 +940,7 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
                        cost_so_far_usd = $3,
                        updated_at = NOW()
                    WHERE id = $2::uuid""",
-                json.dumps(plan_update),
+                plan_update,
                 goal_id,
                 new_cost,
             )
@@ -942,7 +959,7 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
                        cost_so_far_usd = $3,
                        updated_at = NOW()
                    WHERE id = $2::uuid""",
-                json.dumps(plan_update),
+                plan_update,
                 goal_id,
                 new_cost,
             )
@@ -981,7 +998,7 @@ async def _update_goal_progress(goal_id: str, outcome: TaskOutcome, cycle: int) 
                 outcome.task_id if outcome.task_id != "unknown" else None,
                 outcome.status, headline,
                 outcome.total_cost_usd,
-                json.dumps(files), adjustment,
+                files, adjustment,
             )
         except Exception as e:
             log.debug("Failed to record goal iteration: %s", e)
@@ -1307,9 +1324,9 @@ async def _update_state(state: CycleState) -> None:
             """,
             state.cycle_number,
             state.action_taken if state.action_taken != "none" else None,
-            json.dumps({
+            {
                 "budget_tier": state.budget_tier,
                 "budget_pct": state.budget_pct,
                 "outcome": state.outcome[:500] if state.outcome else None,
-            }),
+            },
         )
