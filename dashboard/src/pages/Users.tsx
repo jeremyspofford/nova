@@ -417,17 +417,31 @@ export function InvitationsTab({ currentRole }: { currentRole: Role }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label className="block text-caption font-medium text-content-secondary mb-1">Role</label>
-            <Select
-              value={inviteRole}
-              onChange={e => setInviteRole(e.target.value as Role)}
-            >
+            <div className="space-y-1 rounded-md border border-border-subtle p-1">
               {assignableRoles.map(r => (
-                <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setInviteRole(r)}
+                  className={`w-full rounded px-2.5 py-1.5 text-left transition-colors ${
+                    inviteRole === r ? 'bg-accent-dim' : 'hover:bg-surface-card-hover'
+                  }`}
+                >
+                  <span className={`text-compact font-medium ${inviteRole === r ? 'text-accent' : 'text-content-primary'}`}>
+                    {ROLE_LABELS[r]}
+                  </span>
+                  <span className="ml-2 text-caption text-content-tertiary">
+                    {ROLE_DESCRIPTIONS[r]}
+                  </span>
+                </button>
               ))}
-            </Select>
-            <p className="mt-1.5 text-caption text-content-tertiary">
-              {ROLE_DESCRIPTIONS[inviteRole]}
-            </p>
+            </div>
+          </div>
+
+          <div className="sm:col-span-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-caption text-amber-600 dark:text-amber-400">
+            Heads up: today every user shares this instance's memory, goals, tasks, and
+            Inbox — roles gate management actions, not data. Invite only people you'd
+            share Nova's full context with. Per-user isolation is on the roadmap.
           </div>
 
           <div>

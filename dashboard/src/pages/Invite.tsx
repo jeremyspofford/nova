@@ -15,7 +15,7 @@ interface InviteInfo {
 export function Invite() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
-  const { isAuthenticated, register } = useAuth()
+  const { isAuthenticated, register, logout } = useAuth()
 
   const [inviteInfo, setInviteInfo] = useState<InviteInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -24,27 +24,18 @@ export function Invite() {
   const [displayName, setDisplayName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Set when the operator chooses to accept the invite from a signed-in
+  // browser: sign out (both credential kinds) and fall through to the form.
+  const [switching, setSwitching] = useState(false)
 
-  // If already authenticated, show message
-  if (isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
-        <div className="max-w-md w-full p-8 text-center space-y-4">
-          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-            You're already logged in
-          </h1>
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            This invite link is for new users. You already have an account.
-          </p>
-          <button
-            onClick={() => navigate('/')}
-            className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm px-4 py-2"
-          >
-            Go to Chat
-          </button>
-        </div>
-      </div>
-    )
+  const handleSignOutAndAccept = async () => {
+    setSwitching(true)
+    try { await logout() } catch { /* best-effort */ }
+    // The break-glass secret also counts as "signed in" — clear it, or the
+    // wall comes right back on reload. (This wall dead-ended the operator's
+    // own invite: break-glass identity made isAuthenticated true.)
+    localStorage.removeItem('nova_admin_secret')
+    window.location.reload()
   }
 
   // Validate invite on mount
@@ -90,6 +81,38 @@ export function Invite() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
         <Loader2 className="w-6 h-6 animate-spin text-teal-500" />
+      </div>
+    )
+  }
+
+  // Signed in (JWT session or break-glass secret): offer the handoff instead
+  // of a dead end — accepting an invite is a deliberate account switch.
+  if (isAuthenticated && !switching) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950 px-4">
+        <div className="max-w-md w-full p-8 text-center space-y-4">
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+            You're currently signed in
+          </h1>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            This invite creates a new account. To accept it, sign out of the current
+            session first — or keep your session and go back to chat.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={handleSignOutAndAccept}
+              className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm px-4 py-2 transition-colors"
+            >
+              Sign out & accept invite
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              className="rounded-lg bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 text-sm px-4 py-2 transition-colors"
+            >
+              Go to Chat
+            </button>
+          </div>
+        </div>
       </div>
     )
   }
