@@ -56,6 +56,14 @@ The Recovery Service intentionally has minimal dependencies. It connects directl
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/recovery/factory-reset/categories` | List data categories available for reset |
+| POST | `/api/v1/recovery/factory-reset` | Wipe categories not in the `keep` list (requires `confirm: "RESET"`; takes a safety backup first) |
+
+A reset that wipes any database category also clears the migration ledger and
+restarts the orchestrator. Nova's migrations are idempotent, so the automatic
+re-run restores everything migrations seed -- default intel feeds, system
+goals, default rules, and required config rows -- without touching the
+categories you kept. Seeded state is back within seconds of the reset
+completing; no manual restart is needed.
 
 ### Environment management
 

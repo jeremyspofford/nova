@@ -34,6 +34,22 @@ The routing strategy is configurable at runtime via the platform config:
 | `cloud-only` | Skip local inference, use cloud providers only. |
 | `cloud-first` | Try cloud first, use local backend as backup. |
 
+### Credential-rejection handling
+
+A provider whose API key is rejected (expired, revoked, or never configured)
+never takes a request down with it:
+
+- The failing provider is sidelined for a 10-minute cooldown and skipped by
+  the fallback chain; the request is retried once on the local default model
+  (unless the strategy is `cloud-only`, which returns a structured
+  `502 provider_credentials_invalid` instead of a raw error).
+- Paid providers are isolated per credential -- a dead Anthropic key never
+  sidelines OpenAI, and vice versa.
+- `GET /health/providers` reports `credential_invalid: true` for any provider
+  currently in cooldown, so a bad key is visible at a glance. Rotate keys in
+  **Settings → AI & Models → Provider Status** (a gateway restart applies the
+  new key and clears the cooldown).
+
 ## Provider types
 
 ### Local inference providers
