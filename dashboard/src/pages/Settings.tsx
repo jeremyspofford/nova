@@ -73,6 +73,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'identity', label: 'Nova Identity', icon: Bot },
       { id: 'appearance', label: 'Appearance', icon: Palette },
+      // "How Nova reaches you" belongs on the landing tab, not buried in
+      // Connections — phone push is core to the autonomy story.
+      { id: 'notifications', label: 'Notifications', icon: Bell },
       { id: 'account', label: 'Account', icon: CircleUser },
     ],
   },
@@ -136,7 +139,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'capture-privacy', label: 'Capture Privacy', icon: ShieldAlert },
       { id: 'capture-advanced', label: 'Capture Advanced', icon: Settings2 },
       { id: 'editor', label: 'Editor', icon: Code },
-      { id: 'notifications', label: 'Notifications', icon: Bell },
     ],
   },
   {
@@ -402,6 +404,8 @@ export function Settings() {
       .filter(group => group.items.length > 0)
   }, [searchLower])
 
+  const activeGroup = NAV_GROUPS.find(g => g.id === activeTab)
+
   // When searching, determine which sections to show
   const visibleSections = useMemo<Set<string>>(() => {
     if (matchingGroups) {
@@ -409,9 +413,8 @@ export function Settings() {
       return new Set(matchingGroups.flatMap(g => g.items.map(i => i.id)))
     }
     // Normal tab mode: show sections for active tab
-    const group = NAV_GROUPS.find(g => g.id === activeTab)
-    return new Set(group ? group.items.map(i => i.id) : [])
-  }, [matchingGroups, activeTab])
+    return new Set(activeGroup ? activeGroup.items.map(i => i.id) : [])
+  }, [matchingGroups, activeGroup])
 
   /** Render a section only if it's in the visible set. */
   const show = (id: string) => visibleSections.has(id)
@@ -448,6 +451,24 @@ export function Settings() {
         />
         {!searchLower && (
           <Tabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+        )}
+        {/* Section index for the active tab — every section is one click
+            away instead of an undiscoverable scroll. */}
+        {!searchLower && activeGroup && activeGroup.items.length > 1 && (
+          <div className="flex flex-wrap gap-1.5">
+            {activeGroup.items.map(item => (
+              <button
+                key={item.id}
+                onClick={() =>
+                  document.getElementById(item.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }
+                className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-card px-3 py-1 text-caption text-content-secondary transition-colors hover:bg-surface-card-hover hover:text-content-primary"
+              >
+                <item.icon size={12} />
+                {item.label}
+              </button>
+            ))}
+          </div>
         )}
         {searchLower && matchingGroups && matchingGroups.length === 0 && (
           <p className="text-compact text-content-tertiary py-4">
@@ -523,6 +544,12 @@ export function Settings() {
         {show('appearance') && (
           <div id="appearance">
             <AppearanceSection />
+          </div>
+        )}
+
+        {show('notifications') && (
+          <div id="notifications">
+            <NotificationsSection />
           </div>
         )}
 
@@ -767,12 +794,6 @@ export function Settings() {
         {show('editor') && (
           <div id="editor">
             <EditorSection />
-          </div>
-        )}
-
-        {show('notifications') && (
-          <div id="notifications">
-            <NotificationsSection />
           </div>
         )}
 
