@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from app.tools.browser_tools import BROWSER_TOOLS
+from app.tools.browser_tools import execute_tool as _exec_browser
 from app.tools.code_tools import CODE_TOOLS
 from app.tools.code_tools import execute_tool as _exec_code
 from app.tools.config_tools import CONFIG_TOOLS
@@ -32,8 +34,6 @@ from app.tools.intel_tools import INTEL_TOOLS
 from app.tools.intel_tools import execute_tool as _exec_intel
 from app.tools.introspect_tools import INTROSPECT_TOOLS
 from app.tools.introspect_tools import execute_tool as _exec_introspect
-from app.tools.browser_tools import BROWSER_TOOLS
-from app.tools.browser_tools import execute_tool as _exec_browser
 from app.tools.memory_tools import MEMORY_TOOLS
 from app.tools.memory_tools import execute_tool as _exec_memory
 from app.tools.platform_tools import PLATFORM_TOOLS

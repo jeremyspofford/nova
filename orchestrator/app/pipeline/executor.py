@@ -57,6 +57,12 @@ async def _publish_notification(notification_type: str, task_id: str, title: str
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         await redis.publish("nova:notifications", payload)
+
+        # Same event, second leg: push to the human's phone via ntfy.
+        # notify_task_event filters noise (completions only for goal-linked /
+        # cortex work) and never raises.
+        from ..notifier import notify_task_event
+        await notify_task_event(notification_type, str(task_id), title, body)
     except Exception as e:
         logger.warning(f"Notification publish failed (non-fatal): {e}")
 

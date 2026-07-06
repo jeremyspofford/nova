@@ -187,6 +187,27 @@ async def _bootstrap_platform_secrets_from_env() -> None:
         )
 
 
+async def _seed_notify_topic() -> None:
+    """First boot: seed a random ntfy topic. The topic name is the only
+    subscription secret, so it must be unguessable — never a fixed default."""
+    import secrets as _secrets
+
+    from app.db import get_pool
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO platform_config (key, value, description)
+                   VALUES ('notify.ntfy_topic', to_jsonb($1::text),
+                           'ntfy topic Nova publishes push notifications to — treat like a password')
+                   ON CONFLICT (key) DO NOTHING""",
+                f"nova-{_secrets.token_hex(4)}",
+            )
+    except Exception as e:
+        log.warning("notify topic seed failed (non-fatal): %s", e)
+
+
 async def _seed_config_from_env() -> None:
     """Seed platform_config from .env values for existing deployments.
 
@@ -353,6 +374,7 @@ async def lifespan(app: FastAPI):
 
     # Seed platform_config from .env for existing deployments
     await _seed_config_from_env()
+    await _seed_notify_topic()
 
     # Import-then-warn for runtime keys demoted from .env to platform_config,
     # so the Settings UI is the source of truth and stale .env overrides surface
@@ -555,6 +577,7 @@ app.add_middleware(
 )
 
 from app.capture_router import router as capture_router
+from app.notify_router import router as notify_router
 from app.quality_router import quality_router
 from app.secrets_router import router as secrets_router
 from app.webhooks_router import router as webhooks_router
@@ -576,4 +599,5 @@ app.include_router(workspace_router)
 app.include_router(quality_router)
 app.include_router(capture_router)
 app.include_router(secrets_router)
+app.include_router(notify_router)
 app.include_router(webhooks_router)

@@ -737,6 +737,31 @@ services:
           "import urllib.request; urllib.request.urlopen('http://localhost:8140/health/live', timeout=3)",
         ]
 
+  # ── ntfy — self-hosted push notifications ───────────────────────────────────
+  # Nova's delivery plane: approvals, checkpoints, failures, and finished goal
+  # work reach the operator's phone (ntfy app subscribed to the seeded topic —
+  # the topic name is the subscription secret, see Settings → Notifications).
+  # Loopback-bound by default; set NTFY_BIND=0.0.0.0: (or use Tailscale) so
+  # phones on your network can subscribe.
+  ntfy:
+    <<: *nova-common
+    image: binwiederhier/ntfy:latest
+    command: serve --cache-file /var/cache/ntfy/cache.db --behind-proxy
+    environment:
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8290}
+    volumes:
+      - ./data/ntfy:/var/cache/ntfy
+    ports:
+      - "${NTFY_BIND:-127.0.0.1:}8290:80"
+    healthcheck:
+      <<: *nova-healthcheck
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/v1/health"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
   # ── Bundled Local Inference (optional; multiple may run at once) ────────────
   # Started/stopped by the recovery service (Settings → Local Inference) or by
   # adding profiles to COMPOSE_PROFILES (e.g. inference-ollama). The gateway

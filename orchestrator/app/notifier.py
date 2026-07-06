@@ -1,0 +1,170 @@
+"""Push notifications to the human via the bundled self-hosted ntfy server.
+
+This is the delivery plane for autonomy: approvals, checkpoints, failures,
+and finished goal work reach the operator's phone (ntfy app / web app
+subscribed to the topic) instead of rotting in a dashboard tab.
+
+Config (platform_config → UI-editable, read here with a 30s cache):
+  notify.enabled     "true"/"false"           default true
+  notify.ntfy_url    in-network server URL    default http://ntfy
+  notify.ntfy_topic  seeded nova-<hex> at first boot — the topic name is the
+                     only subscription secret; treat it like a password.
+
+Design contract: nothing in this module ever raises — a push failure must
+never break consent, the pipeline, or a request path. `notify()` returns
+False and logs a WARNING instead.
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+import httpx
+
+from .db import get_pool
+
+logger = logging.getLogger(__name__)
+
+# Events worth a phone buzz, with ntfy priority (1 min … 5 max) and tag emoji.
+EVENT_PRIORITY: dict[str, int] = {
+    "approval_requested": 4,
+    "checkpoint_requested": 4,
+    "task_failed": 4,
+    "pending_human_review": 4,
+    "clarification_needed": 4,
+    "task_complete": 3,
+    "test": 3,
+}
+EVENT_TAGS: dict[str, str] = {
+    "approval_requested": "raised_hand",
+    "checkpoint_requested": "raised_hand",
+    "task_failed": "rotating_light",
+    "pending_human_review": "eyes",
+    "clarification_needed": "question",
+    "task_complete": "white_check_mark",
+    "test": "wave",
+}
+
+_conf_cache: dict | None = None
+_conf_fetched_at: float = 0.0
+_CONF_TTL_SECONDS = 30.0
+
+
+def _invalidate_conf_cache() -> None:
+    """Test/config-change hook."""
+    global _conf_cache
+    _conf_cache = None
+
+
+async def get_notify_config() -> dict:
+    """Read notify.* from platform_config with a short in-process cache."""
+    global _conf_cache, _conf_fetched_at
+    now = time.monotonic()
+    if _conf_cache is not None and now - _conf_fetched_at < _CONF_TTL_SECONDS:
+        return _conf_cache
+
+    conf = {"enabled": True, "url": "http://ntfy", "topic": ""}
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, value #>> '{}' AS val FROM platform_config "
+                "WHERE key = ANY($1::text[])",
+                ["notify.enabled", "notify.ntfy_url", "notify.ntfy_topic"],
+            )
+        for r in rows:
+            val = (r["val"] or "").strip()
+            if r["key"] == "notify.enabled" and val:
+                conf["enabled"] = val.lower() != "false"
+            elif r["key"] == "notify.ntfy_url" and val:
+                conf["url"] = val.rstrip("/")
+            elif r["key"] == "notify.ntfy_topic" and val:
+                conf["topic"] = val
+    except Exception as e:
+        logger.warning("notify: config read failed (using defaults): %s", e)
+
+    _conf_cache = conf
+    _conf_fetched_at = now
+    return conf
+
+
+async def notify(
+    event: str,
+    title: str,
+    message: str = "",
+    *,
+    priority: int | None = None,
+    tags: str | None = None,
+    click: str | None = None,
+    actions: list[dict] | None = None,
+) -> bool:
+    """Publish one push notification. Never raises; False on any failure.
+
+    Uses ntfy's JSON publish endpoint (POST to the server root) — handles
+    UTF-8 titles/bodies cleanly where raw PUT headers would not.
+    """
+    try:
+        conf = await get_notify_config()
+        if not conf["enabled"] or not conf["topic"]:
+            return False
+
+        payload: dict = {
+            "topic": conf["topic"],
+            "title": title[:200],
+            "message": (message or title)[:1500],
+            "priority": priority or EVENT_PRIORITY.get(event, 3),
+        }
+        tag = tags or EVENT_TAGS.get(event)
+        if tag:
+            payload["tags"] = tag.split(",")
+        if click:
+            payload["click"] = click
+        if actions:
+            payload["actions"] = actions
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(conf["url"], json=payload)
+        if resp.status_code == 200:
+            return True
+        logger.warning(
+            "notify: ntfy rejected %s event: HTTP %d %s",
+            event, resp.status_code, resp.text[:200],
+        )
+        return False
+    except Exception as e:
+        logger.warning("notify: push failed for %s (non-fatal): %s", event, e)
+        return False
+
+
+async def notify_task_event(
+    notification_type: str, task_id: str, title: str, body: str = ""
+) -> bool:
+    """Bridge from the pipeline's SSE notifications to phone push.
+
+    Filters noise: failures / review / clarification always push;
+    completions push only for autonomous work (goal-linked or cortex-sourced)
+    — interactive chat tasks are already on the user's screen.
+    """
+    try:
+        if notification_type not in EVENT_PRIORITY:
+            return False
+
+        if notification_type == "task_complete":
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT goal_id, metadata->>'source' AS source "
+                    "FROM tasks WHERE id = $1::uuid",
+                    task_id,
+                )
+            if row is None or (row["goal_id"] is None and row["source"] != "cortex"):
+                return False
+
+        return await notify(
+            notification_type,
+            title=title,
+            message=f"{body}\n\nTask {task_id[:8]}" if body else f"Task {task_id[:8]}",
+        )
+    except Exception as e:
+        logger.warning("notify: task-event push failed (non-fatal): %s", e)
+        return False

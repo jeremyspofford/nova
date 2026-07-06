@@ -29,6 +29,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { slug: 'nova/docs/notifications' },
             { slug: 'nova/docs/inference-backends' },
             { slug: 'nova/docs/deployment' },
             { slug: 'nova/docs/remote-access' },

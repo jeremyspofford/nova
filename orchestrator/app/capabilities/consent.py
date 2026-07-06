@@ -124,6 +124,20 @@ async def gate(
             tool_name, tool_kind, blast_radius.value,
             args, diff_preview, provider_kind, expires_at, ctx,
         )
+
+    # Reach the human: pending approvals otherwise sit silently in the
+    # dashboard. notify() never raises (delivery is best-effort).
+    from ..notifier import notify
+    await notify(
+        "approval_requested",
+        title=f"Approval needed: {tool_name}",
+        message=(
+            f"{blast_radius.value.upper()} action"
+            + (f" via {provider_kind}" if provider_kind else "")
+            + " is waiting for your decision in Pending Approvals."
+        ),
+    )
+
     return ConsentDecision(action="pending", approval_id=approval_id)
 
 
