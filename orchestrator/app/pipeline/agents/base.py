@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -252,33 +253,44 @@ class BaseAgent:
             try:
                 parsed = json.loads(cleaned)
             except json.JSONDecodeError as exc:
-                if attempt + 1 >= THINK_JSON_MAX_ATTEMPTS:
-                    logger.error(
-                        f"[{self.ROLE}] think_json failed after {THINK_JSON_MAX_ATTEMPTS} "
-                        f"attempts{' ('+purpose+')' if purpose else ''}: {exc}"
+                # Local models' most common JSON defect is an invalid escape —
+                # a bare backslash from a path, regex, or code fragment. Escape
+                # those sequences and re-parse before burning an LLM correction
+                # round-trip (small models tend to repeat the mistake verbatim
+                # on retry, exhausting all attempts).
+                try:
+                    parsed = json.loads(re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", cleaned))
+                    logger.info(
+                        f"[{self.ROLE}] JSON accepted after invalid-escape repair"
                     )
-                    # Store raw LLM output for post-mortem debugging
-                    self._last_raw_output = raw
-                    raise ValueError(
-                        f"Agent {self.ROLE} could not produce valid JSON: {exc}"
-                    ) from exc
+                except json.JSONDecodeError:
+                    if attempt + 1 >= THINK_JSON_MAX_ATTEMPTS:
+                        logger.error(
+                            f"[{self.ROLE}] think_json failed after {THINK_JSON_MAX_ATTEMPTS} "
+                            f"attempts{' ('+purpose+')' if purpose else ''}: {exc}"
+                        )
+                        # Store raw LLM output for post-mortem debugging
+                        self._last_raw_output = raw
+                        raise ValueError(
+                            f"Agent {self.ROLE} could not produce valid JSON: {exc}"
+                        ) from exc
 
-                logger.warning(
-                    f"[{self.ROLE}] JSON parse error on attempt {attempt + 1}, retrying with feedback"
-                )
-                # Append bad output + corrective message before retry
-                messages = messages + [
-                    {"role": "assistant", "content": raw},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Your previous response was not valid JSON ({exc}). "
-                            "Please respond ONLY with valid JSON — no markdown fences, "
-                            "no preamble, no explanation. Just the JSON object."
-                        ),
-                    },
-                ]
-                continue
+                    logger.warning(
+                        f"[{self.ROLE}] JSON parse error on attempt {attempt + 1}, retrying with feedback"
+                    )
+                    # Append bad output + corrective message before retry
+                    messages = messages + [
+                        {"role": "assistant", "content": raw},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Your previous response was not valid JSON ({exc}). "
+                                "Please respond ONLY with valid JSON — no markdown fences, "
+                                "no preamble, no explanation. Just the JSON object."
+                            ),
+                        },
+                    ]
+                    continue
 
             # ── Schema validation (if provided) ──────────────────────────
             if output_schema is None:
