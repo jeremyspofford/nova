@@ -88,7 +88,17 @@ async def execute_tool(name: str, args: dict) -> str:
     title = (args.get("title") or "").strip()
     message = (args.get("message") or "").strip()
     if not title or not message:
-        return "Error: title and message are both required."
+        # Observability for small-model arg fumbles: the 2026-07-07 briefing
+        # composed its content but called this with missing params, and
+        # nothing recorded WHAT it actually sent.
+        log.warning(
+            "send_push missing params: keys=%s title_len=%d message_len=%d",
+            sorted(args.keys()), len(title), len(message),
+        )
+        return (
+            "Error: title and message are both required. Call again exactly as: "
+            'send_push(title="...", message="...").'
+        )
 
     priority = args.get("priority")
     if priority is not None:

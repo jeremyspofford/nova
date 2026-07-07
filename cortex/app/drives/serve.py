@@ -76,9 +76,14 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
             FROM goals
             WHERE status = 'active'
               AND (
-                -- Normal stale check
-                (last_checked_at IS NULL
-                 OR last_checked_at < NOW() - (check_interval_seconds || ' seconds')::interval)
+                -- Normal stale check — but cron-scheduled goals are dispatched
+                -- by their schedule ALONE. Letting staleness also dispatch them
+                -- double-fired every standing goal (once at ~24h staleness via
+                -- the default pod, once at its cron time), burning tokens and
+                -- parking review-noise from the wrong pipeline.
+                ((last_checked_at IS NULL
+                  OR last_checked_at < NOW() - (check_interval_seconds || ' seconds')::interval)
+                 AND schedule_cron IS NULL)
                 -- OR has active maturation phase (not review — that waits for human)
                 OR maturation_status IN ('triaging', 'scoping', 'speccing', 'building', 'waiting', 'verifying')
                 -- OR its cron schedule just fired

@@ -25,7 +25,8 @@ Steps:
 
 Rules:
 - Do NOT create, modify, or delete any goals — this standing goal already exists and repeats daily on its own schedule.
-- Send exactly one push per run via send_push; nothing else.',
+- Send exactly one push per run via send_push; nothing else.
+- If send_push fails for ANY reason, your final output must be the FULL briefing text itself (not a summary of what went wrong) — the completion notice delivers your output to the operator, so the briefing still arrives.',
     'active',
     3,
     '0 11 * * *',
