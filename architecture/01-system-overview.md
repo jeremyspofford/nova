@@ -18,8 +18,7 @@ product pillars:
    builds via a 5-stage agent pipeline, and verifies the result.
 2. **Memory-backed personal assistant** — a chat agent with durable, human-editable
    memory stored as a folder of markdown files (OKF frontmatter + BM25 retrieval),
-   fed by ingestion workers (chat exchanges, RSS/Reddit feeds, web crawls,
-   desktop screen capture).
+   fed by ingestion workers (chat exchanges, RSS/Reddit feeds, web crawls).
 
 Deployment target is a single machine running Docker Compose. There are **no
 users yet** (pre-release); breaking changes are acceptable and no migration
@@ -45,7 +44,6 @@ servers, or cloud APIs).
 | **cortex** | 8100 | 36 / 5,856 | Autonomous brain: BRPOP-driven thinking loop, 7 drives, goal maturation state machine, budget tracking |
 | **recovery** | 8888 | 20 / 3,117 | Backup/restore, factory reset, service + bundled-inference lifecycle. Depends only on postgres/redis — survives platform crashes |
 | **intel-worker** | 8110 | 12 / 576 | RSS/Reddit/GitHub-trending feed poller → orchestrator API + memory ingestion queue |
-| **screenpipe-bridge** | 8140 | 27 / 1,799 | Subscribes to a user-installed screenpipe daemon; aggregates focus sessions; privacy denylist; → memory ingestion queue |
 | **dashboard** | 3000 | 188 ts files / 38,306 loc | React admin UI: 32 pages, 33 settings sections, 38 shared UI components |
 | **docker-socket-proxy** | — | image | SEC-006b: allowlisted Docker API (containers list/inspect/logs/restart only) for recovery's SDK path |
 | **postgres** | 5432 | pgvector/pg16 | 66 live tables (62 from migrations + legacy orphans, see 03) |
@@ -100,7 +98,7 @@ removed services), and `browser` is missing even though browser-worker is runnin
    Ollama / LM Studio     ├── chat exchanges (orchestrator)
    cloud: Anthropic,      ├── intel-worker :8110  (RSS/Reddit/GitHub)
    OpenAI, Groq, Gemini,  ├── knowledge-worker :8120 (crawler, optional)
-   Cerebras, OpenRouter,  ├── screenpipe-bridge :8140 (desktop capture)
+   Cerebras, OpenRouter,  
    GitHub, ChatGPT-sub    └── cortex reflections
                                      ▲
         ┌────────────────────────────┴──────────────────────┐
@@ -186,7 +184,7 @@ loop.py: BRPOP cortex stimulus queue (timeout = adaptive 30s…1800s)
 ### 4. Memory ingestion & retrieval (memory pillar)
 
 ```
-producers (chat, intel, knowledge, screenpipe, cortex)
+producers (chat, intel, knowledge, cortex)
   → LPUSH memory:ingestion:queue (redis db0)
   → memory-service ingestion loop → active backend .write()
       OKF backend: explicit okf metadata → topics|people|projects|preferences/<slug>.md
@@ -229,7 +227,6 @@ survive restarts; debugging inference issues starts with
 | Docker daemon | recovery only | via socket-proxy (SDK) + raw socket (compose CLI) |
 | Cloud LLM APIs | llm-gateway | Anthropic, OpenAI, Groq, Gemini (+ADC), Cerebras, OpenRouter, GitHub Models, ChatGPT subscription (codex token) |
 | Local inference | llm-gateway | bundled ollama/vllm/sglang/llamacpp containers OR external host servers (Ollama, LM Studio, any OpenAI-compatible) |
-| screenpipe daemon | screenpipe-bridge | user-installed, workstation-side, WS + HTTP-poll fallback |
 | GitHub API | orchestrator (capabilities, webhooks, self-mod), intel-worker | PATs stored AES-256-GCM encrypted |
 
 ---

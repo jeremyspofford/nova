@@ -5,7 +5,7 @@ Write routing:
 - Explicit concept writes (the agent `remember` tool) pass an `okf`
   metadata dict {type, title, description?, tags?, target?, resource?}
   and land as topic/person/project/... files.
-- Everything else (chat exchanges, screenpipe sessions, intel items —
+- Everything else (chat exchanges, intel items —
   the high-volume queue producers) is appended as a digest entry to
   journal/YYYY-MM-DD.md, to be distilled by the nightly curation goal.
 
@@ -42,7 +42,6 @@ TRUST_BY_SOURCE = {
     "intel": 0.70,
     "knowledge": 0.70,
     "external": 0.70,
-    "screenpipe": 0.80,
 }
 
 _CHARS_PER_TOKEN = 4  # cheap budget estimate

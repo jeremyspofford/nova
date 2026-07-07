@@ -199,8 +199,8 @@ exists — verify it hard-fails rather than warns).
 | Write-only tables | `audit_log`, `conversation_outcomes` inserted, never SELECTed | either build the reader (audit UI / outcome analytics) or stop writing |
 | `pipeline_training_logs` | populated, no consumer pipeline | same decision |
 | Dashboard has zero tests | only `tsc -b` gate; 38k loc of TS | add typegen from Pydantic (removes the biggest error class) before adding test infra |
-| Per-service unit tests uneven | orchestrator 18, screenpipe 15, everything else 0-3 files | rely on the integration suite (it's real coverage) + fill gaps only where logic is pure (index/BM25, denylists, state machine) |
-| Docs missing for newer services | no `website` docs for cortex, intel, knowledge, screenpipe, browser | write after consolidation decision (06), not before |
+| Per-service unit tests uneven | orchestrator 18, everything else 0-3 files | rely on the integration suite (it's real coverage) + fill gaps only where logic is pure (index/BM25, denylists, state machine) |
+| Docs missing for newer services | no `website` docs for cortex, intel, knowledge, browser | write after consolidation decision (06), not before |
 
 ---
 
@@ -289,7 +289,7 @@ Two small fixes (A: reseed-on-reset, B2: provider-skip on invalid creds +
 key rotation) would repair ~26 of 58 failures; ~12 more are tests to delete or
 rewrite for removed surfaces; ~8 are auth-posture decisions; the rest are
 test-hardening. **No failure indicates a broken core feature** — chat, memory,
-capability platform, flags, recovery, capture, CRUD surfaces all passed.
+capability platform, flags, recovery, CRUD surfaces all passed.
 
 ---
 

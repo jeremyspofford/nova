@@ -5,7 +5,7 @@ import {
   CircleUser, Shield, Radio as RadioIcon, Globe, Cpu,
   FileCode, Layers, Gauge, Activity, RotateCcw, HeartPulse, Bell, Mic,
   Brain, GitMerge, Wand2, ShieldAlert, Key, Target, GitPullRequest,
-  Link2, Bookmark, Monitor, Settings2, ToggleRight,
+  Link2, Bookmark, ToggleRight,
 } from 'lucide-react'
 import { getPlatformConfig, updatePlatformConfig, type PlatformConfigEntry } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -18,9 +18,6 @@ import { LocalInferenceSection } from './settings/LocalInferenceSection'
 import { ProviderStatusSection } from './settings/ProviderStatusSection'
 import { ContextBudgetSection } from './settings/ContextBudgetSection'
 import { RemoteAccessSection } from './settings/RemoteAccessSection'
-import { ScreenpipeConnectionSection } from './settings/ScreenpipeConnectionSection'
-import { CapturePrivacySection } from './settings/CapturePrivacySection'
-import { CaptureAdvancedSection } from './settings/CaptureAdvancedSection'
 import { ConnectedServicesSection } from './settings/ConnectedServicesSection'
 import { AutoApproveRulesSection } from './settings/AutoApproveRulesSection'
 import { RecoverySection } from './settings/RecoverySection'
@@ -137,9 +134,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'connected-services', label: 'Connected Services', icon: Link2 },
       { id: 'remote-access', label: 'Remote Access', icon: Globe },
-      { id: 'screenpipe', label: 'Screenpipe', icon: Monitor },
-      { id: 'capture-privacy', label: 'Capture Privacy', icon: ShieldAlert },
-      { id: 'capture-advanced', label: 'Capture Advanced', icon: Settings2 },
       { id: 'editor', label: 'Editor', icon: Code },
     ],
   },
@@ -794,24 +788,6 @@ export function Settings() {
         {show('remote-access') && (
           <div id="remote-access">
             <RemoteAccessSection />
-          </div>
-        )}
-
-        {show('screenpipe') && (
-          <div id="screenpipe">
-            <ScreenpipeConnectionSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
-          </div>
-        )}
-
-        {show('capture-privacy') && (
-          <div id="capture-privacy">
-            <CapturePrivacySection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
-          </div>
-        )}
-
-        {show('capture-advanced') && (
-          <div id="capture-advanced">
-            <CaptureAdvancedSection entries={entries} onSave={handleSave} saving={saveMutation.isPending} />
           </div>
         )}
 

@@ -36,10 +36,6 @@ export const features: Feature[] = [
     description: 'Cortex watches GitHub webhooks; failing CI dispatches a goal that proposes a fix PR. Per-cycle cost budget; nothing merges without your approval.',
   },
   {
-    title: 'Personal Context Capture',
-    description: 'Optional screenpipe-bridge ingests your screen activity into Nova\'s memory with a privacy denylist (apps, URL patterns, window titles) and pause-without-disconnect.',
-  },
-  {
     title: 'Markdown Memory',
     description: 'Memory as a folder of markdown files with OKF frontmatter — human-readable, git-trackable, BM25 retrieval with no embeddings required. Edit it with any editor; the index self-heals.',
   },

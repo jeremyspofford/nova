@@ -119,9 +119,7 @@ incident; destructive recovery endpoints now require explicit admin creds.
 **Status: ✅ working** — RSS/Reddit/GitHub trending+releases → intel tables +
 memory journal; recommendations surface in dashboard Sources.
 
-### F12. Screen capture memory (screenpipe)
-**Status: ✅ working (needs external daemon)** — focus sessions, privacy
-denylists, pause switch, buffer backpressure; the best-tested worker.
+---
 
 ### F13. Browser automation
 **Status: ✅ working (profile)** — sessions, numbered-element snapshots, act,

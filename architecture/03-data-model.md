@@ -114,7 +114,7 @@ dropping all nine, plus removing the `embedding_cache` entry from factory reset.
 | DB | Owner | Contents |
 |---|---|---|
 | 0 | memory-service | `memory:ingestion:queue` (List, BRPOP) |
-| 1 | llm-gateway (+ runtime config plane) | `nova:config:*` (inference.*, llm.*, screenpipe.*, capture.*, memory.backend, features.*), rate-limit windows, response cache, budget tier |
+| 1 | llm-gateway (+ runtime config plane) | `nova:config:*` (inference.*, llm.*, memory.backend, features.*), rate-limit windows, response cache, budget tier |
 | 2 | orchestrator | `nova:queue:tasks` (List), `nova:heartbeat:{task_id}` (30s TTL), agent state hashes, `nova:notifications` pubsub, `nova:flags:invalidate` pubsub |
 | 3 | chat-api | WS session state |
 | 4 | — | **unused** (was chat-bridge; service deleted 2026-07-01) |
@@ -123,7 +123,6 @@ dropping all nine, plus removing the `embedding_cache` entry from factory reset.
 | 7 | recovery | backup scheduler state |
 | 8 | knowledge-worker | crawl state |
 | 9 | voice-service | provider state |
-| 10 | screenpipe-bridge | session buffer, capture state |
 | 11 | browser-worker | session registry |
 
 ---
@@ -159,7 +158,7 @@ description: …
 tags: […]
 timestamp: <ISO — last meaningful change>
 resource: <optional source URI>
-nova_source_kind: chat|tool|pipeline|cortex|journal|intel|knowledge|screenpipe|…
+nova_source_kind: chat|tool|pipeline|cortex|journal|intel|knowledge|…
 nova_trust: 0.70–0.95        # defaulted per source kind (TRUST_BY_SOURCE)
 nova_session_id: …
 nova_source_id: …
@@ -218,11 +217,11 @@ subscriber, `registry_clear` (test-only module — production must not import).
 - **`.env`** (~100 keys, documented in `.env.example` 9.3 KB): infra knobs
   (`COMPOSE_PROFILES`, `POSTGRES_DATA_DIR`, binds), bootstrap secrets
   (mirrored to `platform_secrets` on first boot), `NOVA_WORKSPACE`,
-  `REQUIRE_AUTH`, cortex budget/interval, voice/screenpipe keys.
+  `REQUIRE_AUTH`, cortex budget/interval, voice keys.
 - **Runtime config** (`platform_config` → Redis `nova:config:*`): the table in
   CLAUDE.md is accurate — inference.{backend,state,url,lmstudio_*},
   llm.{routing_strategy,embed_provider,default_chat_model,cloud_fallback_model},
-  screenpipe.*, capture.*, memory.provider_url, features.brain_enabled.
+  memory.provider_url, features.brain_enabled.
 - **Feature flags** (separate system): naming taxonomy `kill.*`,
   `<system>.<behavior>`, `feature.*.enabled`, `ui.*`;
   CRITICAL_FLAGS denylist requires `confirm:` on PATCH

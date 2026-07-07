@@ -23,7 +23,6 @@ import {
   Users,
   ShieldCheck,
   ScrollText,
-  Camera,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
@@ -66,7 +65,6 @@ export const navSections: NavSection[] = [
     label: 'Knowledge',
     items: [
       { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
-      { to: '/capture', label: 'Capture', icon: Camera, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
     ],
   },
   {

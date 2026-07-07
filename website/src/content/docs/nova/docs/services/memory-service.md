@@ -26,7 +26,7 @@ The Memory Service provides Nova's long-term memory behind a backend-agnostic AP
 | `journal/YYYY-MM-DD.md` | High-volume inbox for raw ingested digests |
 | `.nova/` | BM25 index + retrieval log (regenerated, safe to delete) |
 
-Producers (chat, intel-worker, knowledge-worker, screenpipe-bridge, cortex) push raw text to the Redis ingestion queue; the consumer appends digests to the journal. A nightly curation goal distills journals into concept files, and a 45-day journal-retention backstop runs regardless.
+Producers (chat, intel-worker, knowledge-worker, cortex) push raw text to the Redis ingestion queue; the consumer appends digests to the journal. A nightly curation goal distills journals into concept files, and a 45-day journal-retention backstop runs regardless.
 
 ## API
 

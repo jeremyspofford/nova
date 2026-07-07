@@ -692,54 +692,6 @@ services:
           "import urllib.request; urllib.request.urlopen('http://localhost:8130/health/live', timeout=3)",
         ]
 
-  # ── Screenpipe Bridge ───────────────────────────────────────────────────────
-  screenpipe-bridge:
-    <<: *nova-common
-    build:
-      context: .
-      dockerfile: screenpipe-bridge/Dockerfile
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8140",
-        "--reload",
-      ]
-    develop:
-      watch:
-        - action: sync
-          path: ./screenpipe-bridge/app
-          target: /app/app
-          ignore:
-            - __pycache__
-            - "*.pyc"
-        - action: rebuild
-          path: ./screenpipe-bridge/pyproject.toml
-    environment:
-      REDIS_URL: redis://redis:6379/10
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      NOVA_ADMIN_SECRET: ${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
-    ports:
-      - "${SCREENPIPE_BRIDGE_BIND:-127.0.0.1:}8140:8140"
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      <<: *nova-healthcheck
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8140/health/live', timeout=3)",
-        ]
-
   # ── ntfy — self-hosted push notifications ───────────────────────────────────
   # Nova's delivery plane: approvals, checkpoints, failures, and finished goal
   # work reach the operator's phone (ntfy app subscribed to the seeded topic —

@@ -1602,57 +1602,6 @@ export const countAudit = (filters: { from_ts?: string; to_ts?: string } = {}) =
   )
 }
 
-// ── Screenpipe ─────────────────────────────────────────────────────────────────
-
-export interface ScreenpipeConnectionTest {
-  ok: boolean
-  message?: string
-  sample_event_count?: number
-  error?: string
-}
-
-export async function testScreenpipeConnection(): Promise<ScreenpipeConnectionTest> {
-  return apiFetch<ScreenpipeConnectionTest>('/screenpipe-api/test-connection')
-}
-
-export interface CaptureSession {
-  id: string
-  source_kind: string
-  uri: string
-  title: string
-  metadata: Record<string, any>
-  trust_score: number
-  ingested_at: string
-}
-
-export interface CaptureTodayStats {
-  sessions_count: number
-  captured_seconds: number
-  dropped_count: number
-  top_apps: Array<{ app: string; captured_seconds: number }>
-}
-
-export async function getCaptureSessions(limit = 50): Promise<{ sessions: CaptureSession[] }> {
-  return apiFetch<{ sessions: CaptureSession[] }>(`/api/v1/capture/sessions?limit=${limit}`)
-}
-
-export async function getCaptureTodayStats(): Promise<CaptureTodayStats> {
-  return apiFetch<CaptureTodayStats>('/api/v1/capture/today-stats')
-}
-
-export type ExcludeScope = 'app' | 'url_pattern' | 'window_title'
-
-export async function addCaptureExclude(scope: ExcludeScope, value: string): Promise<{
-  ok: boolean
-  added: boolean
-  items: string[]
-}> {
-  return apiFetch('/api/v1/capture/exclude', {
-    method: 'POST',
-    body: JSON.stringify({ scope, value }),
-  })
-}
-
 // ── Platform secrets (SEC-006a) ──────────────────────────────────────────────
 // Encrypted at-rest store for instance-level secrets (provider keys, bridge
 // tokens, OAuth secrets, GitHub PAT). Replaces the recovery /env path —

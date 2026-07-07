@@ -50,12 +50,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/voice-api/, ''),
       },
-      // Screenpipe Bridge — screen capture ingestion
-      '/screenpipe-api': {
-        target: 'http://localhost:8140',
-        changeOrigin: true,
-        rewrite: (path: string) => path.replace(/^\/screenpipe-api/, ''),
-      },
       // Embedded Editors
       // VS Code: proxy health probe to localhost:8443 (iframe loads direct)
       '/editor-vscode': {

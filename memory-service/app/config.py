@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     okf_context_max_chars: int = 16000  # ≈4k tokens
     okf_journal_retention_days: int = 45
 
-    # Ingestion queue (producers: chat, intel, knowledge, screenpipe, cortex)
+    # Ingestion queue (producers: chat, intel, knowledge, cortex)
     ingestion_enabled: bool = True
     ingestion_queue: str = "memory:ingestion:queue"
     ingestion_batch_timeout: float = 1.0  # BLMOVE timeout in seconds

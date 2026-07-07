@@ -413,7 +413,6 @@ async def lifespan(app: FastAPI):
         sync_llm_config_to_redis,
         sync_quality_config_to_redis,
         sync_retrieval_config_to_redis,
-        sync_screenpipe_config_to_redis,
         sync_voice_config_to_redis,
     )
     await sync_llm_config_to_redis()
@@ -422,7 +421,6 @@ async def lifespan(app: FastAPI):
     await sync_features_config_to_redis()
     await sync_retrieval_config_to_redis()
     await sync_quality_config_to_redis()
-    await sync_screenpipe_config_to_redis()
 
     # Guarantee one canonical Nova agent exists; prune any duplicates
     primary = await ensure_primary_agent()
@@ -567,8 +565,6 @@ async def lifespan(app: FastAPI):
     await close_stimulus_redis()
     from app.knowledge_router import close_ingestion_redis
     await close_ingestion_redis()
-    from app.capture_router import close_capture_redis
-    await close_capture_redis()
     # Close the admin-secret config Redis connection (lazy-opened in app.auth)
     from app import auth as _auth
     if _auth._config_redis is not None:
@@ -601,7 +597,6 @@ app.add_middleware(
     proxy_header=settings.trusted_proxy_header,
 )
 
-from app.capture_router import router as capture_router
 from app.notify_router import router as notify_router
 from app.quality_router import quality_router
 from app.secrets_router import router as secrets_router
@@ -622,7 +617,6 @@ app.include_router(knowledge_router)
 app.include_router(capabilities_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
-app.include_router(capture_router)
 app.include_router(secrets_router)
 app.include_router(notify_router)
 app.include_router(webhooks_router)

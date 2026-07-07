@@ -35,9 +35,6 @@ import { Users } from './pages/Users'
 import { Invite } from './pages/Invite'
 import { Expired } from './pages/Expired'
 import Friction from './pages/Friction'
-import CapturePage from './pages/CapturePage'
-import MeetingsPlaceholder from './pages/capture/MeetingsPlaceholder'
-import JournalsPlaceholder from './pages/capture/JournalsPlaceholder'
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
 import ComponentGallery from './pages/dev/ComponentGallery'
 
@@ -207,9 +204,6 @@ function RoutedContent() {
         <Route path="/inbox" element={<AppLayout><ErrorBoundary><InboxPage /></ErrorBoundary></AppLayout>} />
         <Route path="/audit-log" element={<MobileGuard><AppLayout><ErrorBoundary><AuditLog /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/sources" element={<MobileGuard><AppLayout><ErrorBoundary><Sources /></ErrorBoundary></AppLayout></MobileGuard>} />
-        <Route path="/capture" element={<MobileGuard><AppLayout><ErrorBoundary><CapturePage /></ErrorBoundary></AppLayout></MobileGuard>} />
-        <Route path="/capture/meetings" element={<MobileGuard><AppLayout><ErrorBoundary><MeetingsPlaceholder /></ErrorBoundary></AppLayout></MobileGuard>} />
-        <Route path="/capture/journals" element={<MobileGuard><AppLayout><ErrorBoundary><JournalsPlaceholder /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/integrations" element={<MobileGuard><AppLayout><ErrorBoundary><Integrations /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/models" element={<MobileGuard><AppLayout><ErrorBoundary><Models /></ErrorBoundary></AppLayout></MobileGuard>} />
         <Route path="/editor" element={<MobileGuard><AppLayout fullWidth><ErrorBoundary><Suspense fallback={null}><Editor /></Suspense></ErrorBoundary></AppLayout></MobileGuard>} />

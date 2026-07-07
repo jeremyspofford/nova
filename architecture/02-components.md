@@ -39,7 +39,6 @@ a satellite.
 | friction | `friction_router.py` (381) | 9 | friction log CRUD + screenshots + "Fix This" task dispatch |
 | flags | `feature_flags_router.py` (403) | 8 | admin CRUD + audit + public allowlisted subset (`/public`, no auth) |
 | secrets | `secrets_router.py` (74) | 4 | platform secrets list/upsert/revoke/resolve (SEC-006a) |
-| capture | `capture_router.py` (187) | 3 | screenpipe capture config proxy |
 | webhooks | `webhooks_router.py` (244) | 3 | GitHub webhook receive + CI-triage stimulus emit |
 | workspace | `workspace_router.py` (49) | 1 | workspace file listing |
 | health | `health.py` | 2 | `/health/live`, `/health/ready` |
@@ -228,13 +227,6 @@ LLM-guided crawler: seeds from `knowledge_sources`, relevance-scores pages via
 gateway `/complete`, GitHub API extraction, encrypted credentials, page cache.
 Redis db8. Tests exist (`test_knowledge.py`).
 
-### screenpipe-bridge — `screenpipe-bridge/app/` (27 files, 1,799 loc) ✅
-WS subscribe (HTTP-poll fallback) to a user-run screenpipe daemon; aggregates
-raw OCR/window events into ≤30-min focus sessions; two-layer privacy denylist
-(apps / URL regexes / window titles); backpressure buffer; pushes session
-digests to memory ingestion. Runtime config under `nova:config:capture.*` +
-`screenpipe.*`. Redis db10. Has the most granular unit tests of any worker.
-
 ---
 
 ## 8. Interaction workers
@@ -257,15 +249,15 @@ STT/TTS proxy — **OpenAI only** (Whisper + TTS). Deepgram/ElevenLabs removed
 
 - **32 pages:** Chat, Tasks, Pods, Goals (+ maturation detail/badges/stages),
   Friction, Keys, Users, Skills, Rules, MCP, Models, Sources, Usage, AIQuality,
-  AuditLog, Recovery, Capture, Editor(s), Integrations, AgentEndpoints,
+  AuditLog, Recovery, Editor(s), Integrations, AgentEndpoints,
   PendingApprovals, Login/Invite/Expired, About, Settings + subtrees
-  (capture/, chat/, dev/, editors/, onboarding/, quality/, settings/).
+  (chat/, dev/, editors/, onboarding/, quality/, settings/).
 - **33 settings sections** (`pages/settings/`): Account, AdminSecret,
-  Appearance, AutoApproveRules, Brain, CaptureAdvanced, CapturePrivacy,
+  Appearance, AutoApproveRules, Brain,
   ConnectedServices, ContextBudget, Debug, DeveloperResources, Editor,
   FeatureFlags, GoalCreation, GuestAccess, Keys, LLMRouting, LocalInference,
   Maintenance, MemoryProvider, Notifications, PipelineModels, ProviderStatus,
-  Recovery, RemoteAccess, Rules, Sandbox, ScreenpipeConnection, SelfMod,
+  Recovery, RemoteAccess, Rules, Sandbox, SelfMod,
   Skills, ToolPermissions, TrustedNetworks, Users, Vaultwarden.
 - 38 shared UI components (`components/ui/`); TanStack Query (staleTime 5s);
   `apiFetch<T>()` in `src/api.ts`; nginx proxies `/api`, `/v1`,

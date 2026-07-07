@@ -62,13 +62,15 @@ dashboard `/voice-api` nginx proxy to the gateway.
 **Effort: S-M (1 day).** Deletes: 1 container + the dead Deepgram/ElevenLabs
 compose vars (05·D5) in the same stroke.
 
-### C4. screenpipe-bridge + knowledge-worker → one optional `ingest-worker` — **recommended, second wave**
-Both are optional, external-IO-heavy memory producers with real internal
-logic. One container, two asyncio subsystems, each gated by its existing
-runtime config (`screenpipe.enabled`) / profile. Preserves the "not part of
-core" property without two images.
-**Effort: M (2-3 days; screenpipe's 15 unit tests port as-is).**
-Deletes: 1 container, merges redis db8+db10.
+### C4. knowledge-worker — **keep optional, standalone** (screenpipe-bridge removed 2026-07-06)
+With screenpipe-bridge deleted outright (licensing/abstraction mismatch — see
+`docs/superpowers/specs/2026-07-06-generalized-ingestion-endpoint.md`), the
+original "merge two external-IO producers into one ingest-worker" rationale
+dissolves. knowledge-worker is the only remaining optional external-IO
+producer; keep it as its own profile-gated service. External-source ingestion
+now routes through the generalized HTTP ingestion endpoint (new, additive)
+rather than per-source bridge services.
+**Effort: 0 (decision, not work).** Frees redis db10.
 
 ### C5. browser-worker — **keep separate.** The Playwright image (~1.5 GB) is
 the reason it exists as a profile; merging would bloat the orchestrator image
@@ -177,7 +179,7 @@ and test). Phase 4 is the product work — it lands on a smaller, safer base.
 | intel→orchestrator | S-M | Phase 0 |
 | chat-api→orchestrator | M | none |
 | voice→gateway | S-M | none |
-| screenpipe+knowledge merge | M | after C1-C3 |
+| knowledge-worker: keep standalone (screenpipe removed) | — | none |
 | Human checkpoint | M | none (design in TODOS.md) |
 | Learning from failures | S-M | none |
 | Curation decoupling | M | none |
