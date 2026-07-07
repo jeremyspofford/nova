@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, LineChart } from 'lucide-react'
 import { useAuth } from '../stores/auth-store'
@@ -23,6 +23,18 @@ type BoardUid = (typeof BOARDS)[number]['uid']
 export function Monitoring() {
   const { accessToken } = useAuth()
   const [board, setBoard] = useState<BoardUid>('nova-autonomy')
+
+  // Hand the session to Grafana via a same-origin cookie scoped to /grafana —
+  // nginx injects it as the JWT header on every proxied request, so the
+  // grafana app (XHRs, session rotation) stays authenticated, not just the
+  // initial page load. Refreshes with the token; cleared on leave.
+  useEffect(() => {
+    if (!accessToken) return
+    document.cookie = `nova_grafana_jwt=${accessToken}; path=/grafana; max-age=900; SameSite=Strict`
+    return () => {
+      document.cookie = 'nova_grafana_jwt=; path=/grafana; max-age=0; SameSite=Strict'
+    }
+  }, [accessToken])
 
   const { data: grafanaUp, isLoading: probing } = useQuery({
     queryKey: ['grafana-health'],
@@ -91,7 +103,7 @@ export function Monitoring() {
         <iframe
           key={board}
           title={`Nova ${board}`}
-          src={`/grafana/d/${board}?kiosk&auth_token=${accessToken}`}
+          src={`/grafana/d/${board}?kiosk`}
           className="w-full flex-1 rounded-lg border border-border-subtle bg-surface-card"
         />
       )}
