@@ -60,3 +60,5 @@ website/.astro/
 
 # Audit security reports stay local-only (public repo)
 docs/audits/*/security.md
+observability/grafana/.jwt-secret
+observability/grafana/.jwt-jwks.json

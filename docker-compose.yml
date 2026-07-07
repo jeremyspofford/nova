@@ -793,12 +793,32 @@ services:
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       POSTGRES_USER: nova
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_dev_password}
+      # Embedded in Nova's dashboard at /grafana (nginx proxy) — served from
+      # the sub-path and iframe-embeddable.
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      # SSO with Nova accounts: Grafana validates Nova's own JWTs (shared
+      # HS256 secret — `make observability` extracts it to a key file).
+      # Owners/admins land as Grafana Admins; everyone else Viewer.
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "X-JWT-Assertion"
+      GF_AUTH_JWT_URL_LOGIN: "true"
+      GF_AUTH_JWT_EMAIL_CLAIM: "email"
+      GF_AUTH_JWT_USERNAME_CLAIM: "email"
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      # HS256 shared secret must be delivered as a JWKS oct key — Grafana's
+      # key_file is PEM/asymmetric only.
+      GF_AUTH_JWT_JWK_SET_FILE: /etc/grafana/jwt-jwks.json
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "contains(['owner','admin'], role) && 'Admin' || 'Viewer'"
     # Deliberately stateless: everything (datasource, dashboards) is
     # provisioned from these read-only mounts, so there is no Grafana state
     # worth persisting — and no uid-472 bind-mount permission dance.
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Nova's JWT signing secret as a JWKS (gitignored; `make observability`)
+      - ./observability/grafana/.jwt-jwks.json:/etc/grafana/jwt-jwks.json:ro
     ports:
       - "${GRAFANA_BIND:-127.0.0.1:}3001:3000"
     depends_on:

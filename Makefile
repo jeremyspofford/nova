@@ -1,4 +1,4 @@
-.PHONY: help install start up dev build down logs ps watch migrate backup restore website test test-quick benchmark-quality prune prune-all uninstall
+.PHONY: help install start up dev build down logs ps watch migrate backup restore website test test-quick benchmark-quality prune prune-all uninstall observability
 
 DASHBOARD    = dashboard
 
@@ -80,6 +80,19 @@ test-quick: ## Smoke test (health endpoints only)
 benchmark-quality: ## Kick off the in-process AI quality benchmark (requires services running)
 	@curl -sf -X POST -H "X-Admin-Secret: $${NOVA_ADMIN_SECRET:-nova-admin-secret-change-me}" \
 	  http://localhost:8000/api/v1/quality/benchmarks/run | python3 -m json.tool
+
+# ── Observability ─────────────────────────────────────────────────────────────
+observability: ## Start Grafana (embedded at /monitoring) — extracts the JWT key first
+	@docker compose exec -T postgres psql -U nova -d nova -tAc \
+	  "SELECT value #>> '{}' FROM platform_config WHERE key='auth.jwt_secret'" \
+	  | tr -d '"' | tr -d '[:space:]' > observability/grafana/.jwt-secret
+	@python3 -c "import base64, json; s = open('observability/grafana/.jwt-secret').read().strip(); \
+	  json.dump({'keys': [{'kty': 'oct', 'alg': 'HS256', 'use': 'sig', \
+	  'k': base64.urlsafe_b64encode(s.encode()).decode().rstrip('=')}]}, \
+	  open('observability/grafana/.jwt-jwks.json', 'w'))"
+	@chmod 644 observability/grafana/.jwt-secret observability/grafana/.jwt-jwks.json  # grafana runs as uid 472
+	@docker compose --profile observability up -d grafana
+	@echo "Grafana up — embedded at /monitoring (direct: http://localhost:3001)"
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 backup: ## Create a database backup (emergency — normally use the Recovery UI)

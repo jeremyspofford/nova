@@ -5,6 +5,7 @@ import {
   MessageSquare,
   ListTodo,
   Inbox,
+  LineChart,
   AlertTriangle,
   Target,
   Globe,
@@ -71,6 +72,7 @@ export const navSections: NavSection[] = [
   {
     label: 'Infrastructure',
     items: [
+      { to: '/monitoring', label: 'Monitoring', icon: LineChart, minRole: 'admin', presetVisibility: ['standard', 'advanced'] },
       { to: '/pods', label: 'Pods', icon: Boxes, minRole: 'admin', presetVisibility: ['advanced'] },
       { to: '/models', label: 'Models', icon: Monitor, minRole: 'member' },
       { to: '/editor', label: 'Editor', icon: Code, minRole: 'member', presetVisibility: ['advanced'] },

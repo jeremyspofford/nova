@@ -97,10 +97,12 @@ docker compose --profile local-vllm up -d nova-vllm
 Nova ships Grafana dashboards over its own Postgres as an opt-in compose profile:
 
 ```bash
-docker compose --profile observability up -d grafana
+make observability
 ```
 
-Grafana serves on `http://localhost:3001` (loopback-bound; set `GRAFANA_BIND=0.0.0.0:` to expose). Log in as `admin` with `GRAFANA_ADMIN_PASSWORD` (defaults to your `NOVA_ADMIN_SECRET`). Two dashboards are provisioned under the **Nova** folder:
+(The target extracts Nova's JWT signing key into a local JWKS file, then starts Grafana.) Once running, the boards are **embedded in the dashboard at Infrastructure → Monitoring** — authenticated with your own Nova account session, no separate Grafana login. Owners and admins land as Grafana Admins; everyone else views.
+
+Grafana is also reachable directly on `http://localhost:3001` (loopback-bound; set `GRAFANA_BIND=0.0.0.0:` to expose). The native `admin` login with `GRAFANA_ADMIN_PASSWORD` (defaults to your `NOVA_ADMIN_SECRET`) remains as break-glass. Two dashboards are provisioned under the **Nova** folder:
 
 - **Nova Autonomy** — active goals, standing schedules with next-fire times, tasks per hour by status, reflection outcomes, and the most recent lessons Nova recorded.
 - **Nova Operations** — task throughput and failures, pipeline spend per hour, push-delivery receipts (accepted vs not delivered), and Inbox unread count.
