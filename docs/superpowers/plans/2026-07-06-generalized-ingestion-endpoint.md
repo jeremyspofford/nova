@@ -43,7 +43,7 @@
 - Create: `orchestrator/app/migrations/099_ingestion_sources.sql`
 - Test: `tests/test_ingestion_endpoints.py` (source registration round-trip)
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 Create `orchestrator/app/migrations/099_ingestion_sources.sql`:
 
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_sources_active ON ingestion_sources (ac
 CREATE INDEX IF NOT EXISTS idx_ingestion_sources_key ON ingestion_sources (api_key_hash) WHERE api_key_hash IS NOT NULL;
 ```
 
-- [ ] **Step 2: Verify the migration runs idempotently**
+- [x] **Step 2: Verify the migration runs idempotently**
 
 ```bash
 docker compose restart orchestrator
@@ -78,7 +78,7 @@ docker compose exec postgres psql -U nova -d nova -c "\d ingestion_sources"
 
 Expected: table exists with the columns above.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add orchestrator/app/migrations/099_ingestion_sources.sql
@@ -94,7 +94,7 @@ git commit -m "feat(ingestion): add ingestion_sources table (migration 099)"
 - Modify: `orchestrator/app/main.py`
 - Test: `tests/test_ingestion_endpoints.py`
 
-- [ ] **Step 1: Write failing endpoint tests**
+- [x] **Step 1: Write failing endpoint tests**
 
 Create `tests/test_ingestion_endpoints.py`:
 
@@ -143,12 +143,12 @@ async def test_ingest_requires_auth():
         assert r.status_code in (401, 403)
 ```
 
-- [ ] **Step 2: Run, confirm failure**
+- [x] **Step 2: Run, confirm failure**
 
 Run: `pytest tests/test_ingestion_endpoints.py -v`
 Expected: FAIL (no router).
 
-- [ ] **Step 3: Implement the router**
+- [x] **Step 3: Implement the router**
 
 Create `orchestrator/app/ingestion_router.py`. Core shape:
 
@@ -213,16 +213,16 @@ async def ingest(payload: dict):
 
 Auth: mount under the existing `RoleDep` / admin-secret middleware (reuse the app's auth, do not invent a new model). Per-source token auth (via `ingestion_sources.api_key_hash`) is Task 4.
 
-- [ ] **Step 4: Mount the router + close_redis in lifespan**
+- [x] **Step 4: Mount the router + close_redis in lifespan**
 
 Edit `orchestrator/app/main.py`: import + `app.include_router(ingestion_router)`; add `close_ingestion_redis()` to the shutdown block alongside the other `close_*_redis()` calls.
 
-- [ ] **Step 5: Run tests, PASS**
+- [x] **Step 5: Run tests, PASS**
 
 Run: `pytest tests/test_ingestion_endpoints.py -v`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add orchestrator/app/ingestion_router.py orchestrator/app/main.py tests/test_ingestion_endpoints.py
@@ -237,19 +237,19 @@ git commit -m "feat(ingestion): generalized POST /api/v1/ingest endpoint"
 - Modify: `orchestrator/app/ingestion_router.py`
 - Test: `tests/test_ingestion_endpoints.py`
 
-- [ ] **Step 1: Write failing rate-limit test**
+- [x] **Step 1: Write failing rate-limit test**
 
 Append a test that fires >N requests in one minute from one source and asserts a `429` past the limit.
 
-- [ ] **Step 2: Implement per-source sliding-window rate limit**
+- [x] **Step 2: Implement per-source sliding-window rate limit**
 
 Reuse the existing Redis sliding-window pattern (see `app/auth.py` API-key rate limit). Key: `nova:ingest:ratelimit:{source_name}`. Limit from `ingestion_sources.rate_limit_per_minute` (default 120).
 
-- [ ] **Step 3: Backpressure — 503 when queue is saturated**
+- [x] **Step 3: Backpressure — 503 when queue is saturated**
 
 Before LPUSH, check `LLEN memory:ingestion:queue`; if above a threshold (e.g. 10_000, configurable via `ingestion.max_queue_depth`), return `503` with `Retry-After` rather than growing the queue unbounded.
 
-- [ ] **Step 4: Tests PASS; commit**
+- [x] **Step 4: Tests PASS; commit**
 
 ```bash
 git add orchestrator/app/ingestion_router.py tests/test_ingestion_endpoints.py
@@ -264,17 +264,17 @@ git commit -m "feat(ingestion): per-source rate limit + queue backpressure"
 - Modify: `orchestrator/app/ingestion_router.py`
 - Test: `tests/test_ingestion_endpoints.py`
 
-- [ ] **Step 1: Source CRUD endpoints**
+- [x] **Step 1: Source CRUD endpoints**
 
 - `POST /api/v1/ingest/sources` (admin-only) — register a source: name, source_type, trust, rate_limit, denylists. Returns a generated `sk-nova-ingest-<hash>` token (store SHA-256).
 - `GET /api/v1/ingest/sources` (admin-only) — list sources (no tokens).
 - `DELETE /api/v1/ingest/sources/{id}` (admin-only) — revoke (set `active=false`, clear `api_key_hash`).
 
-- [ ] **Step 2: Per-source token auth**
+- [x] **Step 2: Per-source token auth**
 
 When the caller presents `Authorization: Bearer sk-nova-ingest-*`, look up by `api_key_hash` (not the user API-key table). Active source → accept; else 401. Admin-secret header still works for operator pushes.
 
-- [ ] **Step 3: Tests for register/auth/revoke; commit**
+- [x] **Step 3: Tests for register/auth/revoke; commit**
 
 ```bash
 git add orchestrator/app/ingestion_router.py tests/test_ingestion_endpoints.py
@@ -287,8 +287,8 @@ git commit -m "feat(ingestion): source registration + per-source token auth"
 
 **Why:** The deleted `screenpipe-bridge` had genuinely source-agnostic logic worth keeping for sources that emit a stream of raw events needing focus-session aggregation: the `SessionAggregator` (30-min cap, dedup, <30s drop) and the `Denylist` (apps / url_patterns / window_titles). Not all ingestion sources need this (a meeting exporter pushes one transcript per call), but capture-style sources do.
 
-- [ ] **Step 1: Decide the seam.** Either (a) the endpoint accepts only finalized payloads and aggregation is the source's problem, or (b) expose an optional `POST /api/v1/ingest/events` streaming-aggregation mode backed by a salvaged `CaptureSource` adapter interface. Recommend (a) for v1 — keep the endpoint dumb; revisit (b) when a real capture source exists and proves (a) insufficient.
-- [ ] **Step 2 (if b):** Reintroduce `session_aggregator.py` + `denylist.py` as a `capture/` module under the orchestrator (not a separate service), with a `CaptureSource` Protocol so each source adapts its event shape to a normalized internal type. This is the "homegrown screenpipe replacement" path the roadmap anticipated — but generalized and source-agnostic.
+- [x] **Step 1: Decide the seam.** Either (a) the endpoint accepts only finalized payloads and aggregation is the source's problem, or (b) expose an optional `POST /api/v1/ingest/events` streaming-aggregation mode backed by a salvaged `CaptureSource` adapter interface. Recommend (a) for v1 — keep the endpoint dumb; revisit (b) when a real capture source exists and proves (a) insufficient.
+- [x] **Step 2 (if b):** Reintroduce `session_aggregator.py` + `denylist.py` as a `capture/` module under the orchestrator (not a separate service), with a `CaptureSource` Protocol so each source adapts its event shape to a normalized internal type. This is the "homegrown screenpipe replacement" path the roadmap anticipated — but generalized and source-agnostic.
 
 ---
 
@@ -299,10 +299,10 @@ git commit -m "feat(ingestion): source registration + per-source token auth"
 - Modify: `docs/roadmap.md`
 - Modify: `architecture/02-components.md`
 
-- [ ] **Step 1: CLAUDE.md** — add `/api/v1/ingest` to the orchestrator endpoints list; add runtime config keys (`ingestion.max_queue_depth`, per-source rate limits) to the runtime-config table; note the API surface in "Inter-service communication."
-- [ ] **Step 2: roadmap.md** — reference under a new "External Ingestion" bullet in the Priority Backlog, linking this plan.
-- [ ] **Step 3: architecture/02-components.md** — add `| ingestion | ingestion_router.py | 4 | generalized external-source HTTP ingestion → memory queue |` to the routers table.
-- [ ] **Step 4: Commit**
+- [x] **Step 1: CLAUDE.md** — add `/api/v1/ingest` to the orchestrator endpoints list; add runtime config keys (`ingestion.max_queue_depth`, per-source rate limits) to the runtime-config table; note the API surface in "Inter-service communication."
+- [x] **Step 2: roadmap.md** — reference under a new "External Ingestion" bullet in the Priority Backlog, linking this plan.
+- [x] **Step 3: architecture/02-components.md** — add `| ingestion | ingestion_router.py | 4 | generalized external-source HTTP ingestion → memory queue |` to the routers table.
+- [x] **Step 4: Commit**
 
 ```bash
 git add CLAUDE.md docs/roadmap.md architecture/02-components.md
@@ -335,3 +335,34 @@ docker compose exec redis redis-cli -n 0 LLEN memory:ingestion:queue
 - **Not** an MCP server (that's the capabilities-surface spec).
 - **Not** a capture-source aggregator in v1 (Task 5 is opt-in, only if a real source needs it).
 - **Not** per-source bridge services — the whole point is one endpoint for all sources.
+
+---
+
+## Execution log — 2026-07-07 (Claude, completed)
+
+All tasks delivered; deviations from the plan text, with reasons:
+
+- **Payload contract corrected against the real consumer.** The plan's msg
+  sketch included top-level `source_name/source_title/source_uri/source_trust`,
+  which `memory-service app/ingestion.py:_dispatch_event` never reads. The
+  endpoint emits the consumer's exact contract (`raw_text, source_type,
+  source_id, session_id, occurred_at, metadata, tenant_id`) and carries
+  provenance inside `metadata`. (OKF derives trust from `source_type` today;
+  per-source trust rides `metadata.source_trust` for future consumers.)
+- **Tasks 2–4 landed as one commit** (`e2f7afb`): the router's auth, rate
+  limit, backpressure, and CRUD share every code path — splitting them would
+  have produced broken-at-commit intermediate states. Migration is its own
+  commit (`40d54bf`).
+- **Queue-inspection tests replaced with end-to-end retrieval polling**: the
+  live consumer BLMOVEs items within milliseconds, so LRANGE races and loses.
+  Tests now poll memory retrieval until the ingested marker is findable —
+  a strictly stronger assertion (queued AND consumed AND written AND indexed).
+- **Task 3 `Retry-After`** must ride `HTTPException(headers=...)`, not an
+  injected `Response` — the plan sketch's approach drops the header.
+- **Task 5 seam decision: (a)** — the endpoint accepts finalized payloads
+  only; aggregation is the source's job. (b) stays parked until a real
+  capture source proves (a) insufficient, exactly as the plan recommends.
+- **Verification**: the end-to-end block is covered by
+  `tests/test_ingestion_endpoints.py` (7 green): register → token push →
+  marker retrievable from memory; revoked token 401; denylist drop; 429 at
+  the per-source limit; 503 + Retry-After at `ingestion.max_queue_depth`.

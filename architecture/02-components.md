@@ -35,6 +35,7 @@ a satellite.
 | quality | `quality_router.py` (837) | 17 | AI-quality scores, benchmark runs, quality-loop sessions, config snapshots |
 | goals | `goals_router.py` (581) | 16 | goal CRUD, maturation approve/reject, schedules (cron), decomposition views |
 | knowledge | `knowledge_router.py` (622) | 15 | knowledge sources CRUD, crawl-log ingest (proxies for knowledge-worker) |
+| ingestion | `ingestion_router.py` | 4 | generalized external-source HTTP ingestion → memory queue (per-source tokens, rate limit, denylist, backpressure) |
 | intel | `intel_router.py` (657) | 14 | feeds CRUD, content ingest, recommendations, feed status |
 | friction | `friction_router.py` (381) | 9 | friction log CRUD + screenshots + "Fix This" task dispatch |
 | flags | `feature_flags_router.py` (403) | 8 | admin CRUD + audit + public allowlisted subset (`/public`, no auth) |

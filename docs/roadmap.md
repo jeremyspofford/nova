@@ -444,6 +444,10 @@ Source tracking, richer decomposition, and agent-driven memory retrieval. Delive
 
 Ordered by dependency and impact on the autonomy vision. Detailed design specs for items marked with `[spec]` are preserved in `docs/roadmap-archive-2026-03.md`.
 
+### ✅ External Ingestion — Delivered 2026-07-07
+
+One source-agnostic authenticated door into Nova's memory: `POST /api/v1/ingest` (validate → auth → per-source rate limit → denylist → backpressure → `memory:ingestion:queue`), with per-source registration + `sk-nova-ingest-*` tokens at `POST /api/v1/ingest/sources`. Replaces per-source bridge services. Plan: `docs/superpowers/plans/2026-07-06-generalized-ingestion-endpoint.md`.
+
 ### ✅ P0: Pipeline Reliability Hardening `[spec]` — Delivered 2026-03-25
 
 **Delivered in commits `f990eb8` (Tier 1) and `d0e30fc` (Tier 2).**

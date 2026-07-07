@@ -128,7 +128,7 @@ Memory-service exposes a **backend-agnostic API at `/api/v1/memory/*`**. Backend
 - Retrieval is BM25 over `.nova/index.json` (no embeddings, no LLM calls); self-heals on file mtime drift so direct human/agent edits are supported. Links between files are untyped graph edges. Frontmatter maps Nova provenance onto OKF core fields + `nova_*` extensions.
 - Queue producers (chat, intel, knowledge, cortex) append digests to the journal; a seeded **"Nightly memory curation"** cron goal (03:00) distills journals into topics. A 45-day journal-retention backstop runs in memory-service regardless of the brain.
 
-**Ingestion queue:** producers push raw text to Redis `memory:ingestion:queue` (db0); the memory-service consumer routes each payload to the active backend's `write`.
+**Ingestion queue:** producers push raw text to Redis `memory:ingestion:queue` (db0); the memory-service consumer routes each payload to the active backend's `write`. External apps push through **`POST /api/v1/ingest`** (orchestrator, `app/ingestion_router.py`) — validates, auths (per-source `sk-nova-ingest-*` Bearer tokens minted at `POST /api/v1/ingest/sources`, or operator credentials), rate-limits per source, applies the source's denylist, enforces backpressure (503 + Retry-After past `ingestion.max_queue_depth` in platform_config, default 10k), then LPUSHes the consumer's exact contract. One endpoint for every source — replaces per-source bridge services.
 
 **Orchestrator integration:** `run_agent_turn()` calls `POST /api/v1/memory/context`; memory tool retrievals pass `mark_used=true` (the agent asking IS the usage signal).
 
