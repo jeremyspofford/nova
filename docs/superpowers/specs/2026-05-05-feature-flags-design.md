@@ -430,8 +430,6 @@ Migration roadmap (Phase 2 candidates, prioritized by how often they cause stale
 | `nova:config:inference.backend` | `inference.backend` flag | enum: `ollama`, `vllm`, `sglang`, `none` |
 | `nova:config:llm.routing_strategy` | `llm.routing_strategy` flag | enum: `local-first`, `local-only`, `cloud-first`, `cloud-only` |
 | `.env: memory_retrieval_mode` | `memory.retrieval_mode` flag | enum: `inject`, `tools` |
-| `nova:config:capture.paused` | `kill.screenpipe.capture` flag | bool |
-| `nova:config:screenpipe.enabled` | `screenpipe.enabled` flag | bool |
 | `.env: REQUIRE_AUTH` | (NOT migrated — security bootstrap, must remain in `.env`) | — |
 
 `REQUIRE_AUTH` deliberately stays in `.env` because the flag system itself is admin-secret-gated, which depends on auth being bootstrapped. Migrating it would create a circular dependency.

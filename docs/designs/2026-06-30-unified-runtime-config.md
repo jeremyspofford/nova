@@ -22,7 +22,7 @@ The stores today:
 | Store | Read by | Written by | Lifecycle |
 |---|---|---|---|
 | `.env` | every service (pydantic `Settings`) at startup | human / `install` | restart to apply |
-| Redis `nova:config:*` (db1, +5/6/8) | gateway, memory, cortex, intel, knowledge, voice, screenpipe | `config_sync.py`, recovery service, gateway migration | bind-mounted dump persists |
+| Redis `nova:config:*` (db1, +5/6/8) | gateway, memory, cortex, intel, knowledge, voice | `config_sync.py`, recovery service, gateway migration | bind-mounted dump persists |
 | Postgres `platform_config` | orchestrator + `config_sync` | dashboard (admin API) | durable |
 | Postgres `platform_secrets` | gateway, chat-bridge, orchestrator | dashboard | durable, encrypted |
 | `feature_flags` (PG + Redis pubsub) | all services | dashboard | durable + live invalidate |

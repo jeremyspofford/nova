@@ -34,7 +34,7 @@ Source: deep-read of all 9 services + roadmap + audits directory in worktree `en
 | 1 | Self-modification (GitHub PR by agents) | `orchestrator/app/tools/github_tools.py:172`, `config.py:124`, `.env.example:181` | env-var (`SELFMOD_ENABLED=false`) | feature-complete-but-risky | **Keep env-var; do NOT migrate to flag system in v1** (security advisor blocker) |
 | 2 | Cortex autonomous brain loop | `cortex/app/config.py:36`, `docker-compose.yml:576`, `dashboard/.../BrainSection.tsx:13` | env-var (`CORTEX_ENABLED`) + redis-config (`features.brain_enabled`) | partial | Kill switch flag; default-off for resource-limited installs |
 | 3 | Neural Router ML re-ranker | `memory-service/app/config.py:79-92`, `engram/neural_router/train.py`, `docker-compose.yml:300-322` | hardcoded (activates after 200+ obs; trainer container always-on) | experimental | Flag the trainer-container start + the router switch-in |
-| 4 | Screenpipe bridge | `screenpipe-bridge/app/main.py`, `docker-compose.yml:763-808`, redis (`screenpipe.enabled`) | redis-config + **no compose profile** (service starts unconditionally) | experimental | **Most acute issue:** add compose profile or gate at startup; today it runs for every install |
+| 4 | ~~Screenpipe bridge~~ (removed 2026-07-06) | — | — | resolved | Service deleted; external ingestion now via generalized HTTP ingestion endpoint |
 | 5 | Memory tools retrieval mode | `orchestrator/app/config.py:30`, `agents/runner.py:101` | env-var (`memory_retrieval_mode`) | partial | Phase-2 candidate per existing spec; high-priority migrate |
 | 6 | Cortex goal maturation | `cortex/app/maturation/triage.py`, `drives/maintain.py:34` | unguarded (triage fires; executor missing) | partial | Flag triage dispatch separately from missing executor |
 | 7 | LLM intelligent routing | `llm-gateway/app/`, redis (`llm.intelligent_routing=false`) | redis-config | partial | Existing toggle correct; formalize as named flag |
@@ -262,7 +262,7 @@ If this memo is approved, the next session produces `docs/superpowers/plans/2026
 
 **Phase C — Audit-cleanup tasks (parallel; not blocked on flag system):**
 
-- Add compose profile for `screenpipe-bridge` (audit row #4 — most acute issue).
+- ~~Add compose profile for `screenpipe-bridge`~~ (audit row #4) — RESOLVED: service removed 2026-07-06.
 - Document `selfmod.*` and `sandbox.*` exclusion from v1 flags in CLAUDE.md and `.env.example`.
 - Add `data/flag-cache/` to `.gitignore` and to recovery's backup-exclusion list.
 

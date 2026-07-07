@@ -23,7 +23,7 @@ Two jobs. Everything in the flag system should map to one of them:
 What flags are **not** for:
 
 - **`nova:config:*` runtime config** (inference backend, routing
-  strategy, screenpipe URL) — those belong in Redis `nova:config:*`
+  strategy, voice settings) — those belong in Redis `nova:config:*`
   and are surfaced via Settings UI already.
 - **User preferences** that vary per user — those belong in
   `user_settings` (Postgres) once multi-tenant SaaS lands. A flag is a
@@ -76,8 +76,8 @@ register_flag(
     key="feature.capture.enabled",
     type="bool",
     default=False,
-    description="Show Capture surfaces in the dashboard. "
-                "Delete-by: 2026-Q3 (post-screenpipe-bridge GA).",
+    description="Show ingestion/audit surfaces in the dashboard. "
+                "Delete-by: 2026-Q3 (post-ingestion-endpoint GA).",
 )
 ```
 

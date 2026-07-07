@@ -385,17 +385,9 @@ These are the existing v1 plan's task numbers, run in order, with the overrides 
 
 These tasks are flagged in the audit but don't depend on the flag system landing. They can be done in parallel by separate worktrees.
 
-### C1. Add compose profile for `screenpipe-bridge` (audit row #4 — most acute issue)
+### C1. ~~Add compose profile for `screenpipe-bridge`~~ — RESOLVED (service removed 2026-07-06)
 
-**Files:**
-- Modify: `docker-compose.yml`
-- Modify: `.env.example` (document the new profile)
-- Modify: `CLAUDE.md` (note the profile)
-
-- [ ] Add `profiles: ["screenpipe"]` to the `screenpipe-bridge` service block.
-- [ ] Add a deny test that confirms `docker compose config` doesn't show `screenpipe-bridge` for default invocation.
-- [ ] Verify with `docker compose --profile screenpipe up -d screenpipe-bridge`.
-- [ ] Commit: `chore(compose): gate screenpipe-bridge behind screenpipe profile`.
+The `screenpipe-bridge` service was deleted outright (licensing/abstraction mismatch — see `docs/superpowers/specs/2026-07-06-generalized-ingestion-endpoint.md`). This task is obsolete. External-source ingestion now routes through the generalized HTTP ingestion endpoint rather than per-source bridge services.
 
 ### C2. Document `selfmod.*` and `sandbox.*` exclusion from v1 flags
 

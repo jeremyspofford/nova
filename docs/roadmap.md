@@ -26,7 +26,7 @@
 
 ## What's Shipped
 
-Everything below is deployed and functional. Nova runs as a 13-service Docker Compose stack (plus optional profiles for Ollama, chat-bridge, knowledge-worker, voice-service, screenpipe-bridge)
+Everything below is deployed and functional. Nova runs as a 12-service Docker Compose stack (plus optional profiles for Ollama, chat-bridge, knowledge-worker, voice-service)
 with PostgreSQL (pgvector), Redis, and optional profiles for bridges, knowledge, and inference backends.
 
 ### Recent major releases
@@ -35,7 +35,6 @@ See the [changelog](https://arialabs.ai/changelog/) for full notes:
 
 - **2026-05-06** — Memory subsystem hardening (P1 + P2 cliff queries fixed; 214 unit tests on real Postgres + pgvector)
 - **2026-05-05** — Platform secrets store (provider keys + bridge tokens move out of writable `.env`; recovery's Docker SDK gated behind socket-proxy)
-- **2026-05-02** — Personal context capture (`screenpipe-bridge` service + Capture top-level dashboard nav)
 - **2026-05-01** — Capability Platform (consent gate, encrypted credential vault, hash-chained audit log, autonomous CI triage drive — v1 release gate)
 
 ### Core Platform & Orchestrator (Port 8000)
@@ -747,6 +746,43 @@ Extend chat-bridge adapter pattern. Each adapter is a module in the existing cha
 
 **Effort:** ~1 week
 
+### P2: Nova as an MCP Server (Capabilities Surface)
+
+**Why:** Nova consumes external MCP servers as tools but doesn't expose itself as one. External agents and IDEs that speak MCP (Cursor, Claude Code, Continue, Zed) cannot reach Nova's memory or goals without bespoke HTTP integration. Exposing Nova as an MCP server makes Nova a composable tool in the broader agent ecosystem — a Cursor agent can `search_memory` or `recall_topic` from Nova's knowledge graph mid-edit.
+
+**Critical distinction:** this is *capabilities outward* (request/response tool invocation — the correct MCP shape), NOT push ingestion (which is plain HTTP — see "Generalized Ingestion Endpoint" below). MCP is the wrong abstraction for moving data into Nova; it's the right one for letting agents call into Nova.
+
+**Deliverables:**
+- Streamable-HTTP MCP server at `POST /api/v1/mcp` on the orchestrator (no new container — reuses the existing app)
+- Curated v1 tools: `search_memory`, `recall_topic`, `what_do_i_know`, `read_memory`, `list_goals`, `get_goal_status`, `create_task` (role-gated)
+- API-key auth (existing `sk-nova-*` keys + role gating + audit log) — no new auth model
+- Integration tests with at least one real MCP client
+
+**Deliberately deferred:** write tools that modify memory (needs consent model), self-modification tools, OAuth federation.
+
+**Spec:** `docs/superpowers/specs/2026-07-06-nova-mcp-server-capabilities-design.md`
+
+**Effort:** S-M (3–5 days — backing calls all exist; work is MCP JSON-RPC server framing + tool adapters)
+
+### P2: Generalized Ingestion Endpoint
+
+**Why:** Replaces the per-source bridge pattern (the deleted `screenpipe-bridge` was one dedicated service babysitting one external app — that doesn't scale). One source-agnostic authenticated HTTP endpoint: any external app (a capture tool, a CLI, a webhook, a meeting-transcript exporter) `POST /api/v1/ingest` and it lands in Nova's memory ingestion queue. Adding a source becomes "implement `POST` from your app," not "build a Nova service."
+
+**Critical distinction:** this is *inward* data movement — plain HTTP, the correct abstraction. Not MCP (request/response tool invocation is the wrong shape for push ingestion).
+
+**Deliverables:**
+- `POST /api/v1/ingest` → validates + auths + rate-limits + `LPUSH` to existing `memory:ingestion:queue` (db0, same queue chat/intel/knowledge/cortex use)
+- `ingestion_sources` table: registered sources with per-source tokens, trust scores, denylists, rate limits
+- Per-source sliding-window rate limiting + queue-depth backpressure (503 + Retry-After when saturated)
+- Source CRUD (admin-only): register / list / revoke
+
+**Salvaged from the deleted bridge:** the `SessionAggregator` (30-min cap, dedup, <30s drop) and `Denylist` (apps / url_patterns / window_titles) are reusable, source-agnostic logic — re-introduced as a `capture/` module only if a real capture source proves the dumb endpoint insufficient (Task 5 is opt-in).
+
+**Plan:** `docs/superpowers/plans/2026-07-06-generalized-ingestion-endpoint.md`
+**Supersedes:** refactor plan C4 (`architecture/06-refactor-plan.md`) — knowledge-worker stays standalone; external sources route through this endpoint, not per-source bridges.
+
+**Effort:** M (4–6 days across 6 tasks)
+
 ---
 
 ## Future Vision
@@ -880,7 +916,7 @@ Comprehensive 5-discipline review (architecture, backend, frontend, security, te
 - Admin secret default (`nova-admin-secret-change-me`) accepted without warning in production
 - Dead letter queue grows unbounded — no TTL, no cleanup, no archival
 - Episodic memory partitions hardcoded through 2026-04 — need auto-creation
-- `IngestionSourceType` contract drift — `nova-contracts/engram.py` enum lists 8 types (`chat`, `pipeline`, `tool`, `consolidation`, `cortex`, `journal`, `external`, `self_reflection`) but memory-service `_map_source_type_to_kind` runtime handles 11 (adds `intel`, `knowledge`, `screenpipe`). Producers (intel-worker, knowledge-worker, screenpipe-bridge) push strings not in the formal contract. Either tighten the enum to match runtime reality, or formally support custom `source_type` strings and document the extension path so future workers (e.g. a homegrown screenpipe replacement) know the contract surface.
+- `IngestionSourceType` contract drift — `nova-contracts/engram.py` enum lists 8 types (`chat`, `pipeline`, `tool`, `consolidation`, `cortex`, `journal`, `external`, `self_reflection`) but memory-service `_map_source_type_to_kind` runtime handles 10 (adds `intel`, `knowledge`). Producers (intel-worker, knowledge-worker) push strings not in the formal contract. Either tighten the enum to match runtime reality, or formally support custom `source_type` strings and document the extension path so future external sources (via the generalized ingestion endpoint — see `docs/superpowers/plans/2026-07-06-generalized-ingestion-endpoint.md`) know the contract surface.
 
 **Cortex — partially resolved (2026-03-25, updated 2026-03-28):**
 - Partial test coverage — `test_cortex_goals.py` covers cost tracking + goal schema. Thinking loop tests still needed.
