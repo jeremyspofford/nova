@@ -62,7 +62,17 @@ Direction locked in conversation; first tranche shipped same day (owner account 
 - **Email invites (blocked on the mailbox track):** "Create invite" should offer *send by email* once Nova has an outbound mail identity (Gmail/IMAP-SMTP track above). Until then the copyable invite-link column is the flow.
 - **Export/import (design, not built):** encrypted instance bundle (user passphrase, age/AES-GCM) = pg_dump + OKF memory folder + key material (`CREDENTIAL_MASTER_KEY` — without it, restored platform_secrets are undecryptable). Import allowed on first-boot instances or with admin + typed confirmation. Builds on the recovery service's existing backup/restore. Security posture: fine if encrypted + authz-gated; refuse plaintext export.
 
-## Post-SEC2 follow-up: onboarding wizard credential bootstrap
+## Model-loaded visibility (Jeremy, 2026-07-07)
+
+**What:** show whether a local model is actually LOADED (and loading progress) — LM Studio evicts models, Ollama cold-starts, and the operator can't tell a warming model from a hang. The plumbing largely exists: gateway `GET /health/providers/lmstudio/status` (reachability + loaded models) and Ollama `/api/ps` (loaded models + VRAM) are already probed.
+**How:** (1) small aggregated gateway endpoint `GET /health/inference/loaded` → `{backend, healthy, loaded_models[]}`; (2) Models page: "Loaded now" badge per local model; (3) Chat: when the selected model is local and NOT in the loaded set, show a "model is cold — first response may take a while" hint instead of silence. Note: chat already streams heartbeats + activity steps during long waits, so cold loads show progress, not errors.
+**Added:** 2026-07-07
+
+## Post-SEC2 follow-up: onboarding wizard credential bootstrap — RESOLVED 2026-07-07 (obsolete)
+
+The throwaway first-boot walk proved the wizard needs no admin-secret prompt: the Account step's registration mints the owner JWT, and the wizard's admin writes (verified: `PATCH /api/v1/config/*` with only that Bearer token) ride it. Full walk green on a pristine stack: onboarding status public → invite-exempt first registration → owner role → JWT-authorized wizard write → one-shot complete → gate closes → login round-trip. (The same walk caught migration 088 aborting fresh boots on the missing legacy `engrams` table — fix decision pending: table-existence guard vs deleting 088 outright.)
+
+## (superseded) Post-SEC2 follow-up: onboarding wizard credential bootstrap
 
 **What:** the first-boot wizard's non-flag writes (provider keys, engine/model selection via admin PATCHes) still require admin credentials. Pre-SEC2 the trusted-network bypass papered over this; post-SEC2 a fresh install accessed through the dashboard proxy (or from a non-loopback device) will 403 on those steps. The gate/skip path is fixed (public one-shot `/api/v1/onboarding/status` + `/complete`), so nobody gets trapped — but a full wizard run needs the operator's admin secret.
 **How:** during `completed=false`, either (a) the wizard prompts for the admin secret from `.env` up front (simplest, honest), or (b) a one-shot bootstrap token flow mints a session for the wizard. Prefer (a).
