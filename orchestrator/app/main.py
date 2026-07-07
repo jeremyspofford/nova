@@ -20,6 +20,8 @@ from app.pipeline_router import router as pipeline_router
 from app.queue import queue_worker
 from app.reaper import cleanup_stale_running_on_startup, reaper_loop
 from app.router import router
+from app.ingestion_router import close_ingestion_redis
+from app.ingestion_router import router as ingestion_router
 from app.stimulus import close_redis as close_stimulus_redis
 from app.store import close_redis, ensure_primary_agent, recover_stale_agents
 from fastapi import FastAPI
@@ -563,6 +565,7 @@ async def lifespan(app: FastAPI):
     await close_clients()
     await close_redis()
     await close_stimulus_redis()
+    await close_ingestion_redis()
     from app.knowledge_router import close_ingestion_redis
     await close_ingestion_redis()
     # Close the admin-secret config Redis connection (lazy-opened in app.auth)
@@ -614,6 +617,7 @@ app.include_router(friction_router)
 app.include_router(goals_router)
 app.include_router(intel_router)
 app.include_router(knowledge_router)
+app.include_router(ingestion_router)
 app.include_router(capabilities_router)
 app.include_router(workspace_router)
 app.include_router(quality_router)
