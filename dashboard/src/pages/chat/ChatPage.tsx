@@ -235,7 +235,7 @@ export function Chat() {
     return () => el.removeEventListener('scroll', onScroll)
   }, [setNavHidden, isMobile])
 
-  const handleSubmit = useCallback(async (text: string, fromQueue = false) => {
+  const handleSubmit = useCallback(async (text: string, fromQueue = false, retriedStaleConversation = false) => {
     if (isStreaming && !fromQueue) {
       // Show user message immediately, queue for sequential processing
       const queuedMsg: Message = {
@@ -417,12 +417,19 @@ export function Chat() {
       )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      // Self-heal a stale/orphaned conversation: if the backend can't find the
-      // conversation we sent (e.g. it was reset, or belongs to another user),
-      // drop the id so the ChatPage re-creates a fresh one for the next send.
+      // Self-heal a stale/orphaned conversation: if the backend can't find
+      // the conversation we sent (it was reset, or belongs to a previous
+      // identity — e.g. conversations created on the ambient/trusted-network
+      // identity before the operator signed in), drop the id and RESEND once
+      // into a fresh thread instead of surfacing the raw 404 to the user.
       if (msg.includes('Conversation not found') || msg.startsWith('404')) {
         localStorage.removeItem('nova_active_conversation')
         setConversationId(null)
+        if (!retriedStaleConversation) {
+          // Remove the errored assistant placeholder; the retry adds its own.
+          setMessages(prev => prev.filter(m => m.id !== assistantMsgId))
+          return handleSubmit(text, true, true)
+        }
       }
       setError(msg)
       setMessages(prev =>
