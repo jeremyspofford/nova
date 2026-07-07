@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  apiFetch,
   discoverModels,
   getOllamaPulled,
   getOllamaStatus,
@@ -148,6 +149,23 @@ function GPUStatsCard() {
 // ── Provider Card ─────────────────────────────────────────────────────────────
 
 function ProviderCard({ provider }: { provider: ProviderModelList }) {
+  // "In memory" truth for local models — backends evict/lazy-load, and a
+  // pulled model is not a loaded model. One shared query across all cards.
+  const { data: loadedInfo } = useQuery({
+    queryKey: ['inference-loaded'],
+    queryFn: () => apiFetch<{ backend: string; healthy: boolean; loaded_models: string[] }>(
+      '/v1/health/inference/loaded'
+    ),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    retry: 0,
+    enabled: provider.type === 'local',
+  })
+  const loadedModels = loadedInfo?.loaded_models ?? []
+  const isModelLoaded = (id: string) => {
+    const base = id.includes('/') ? id.split('/').pop()! : id
+    return loadedModels.some(l => l === id || l === base || l.startsWith(base) || base.startsWith(l))
+  }
   const navigate = useNavigate()
   const badge = TYPE_BADGE[provider.type] ?? TYPE_BADGE.free
   const configured = provider.available
@@ -214,7 +232,10 @@ function ProviderCard({ provider }: { provider: ProviderModelList }) {
                     title={m.id}
                   >
                     {m.registered && <Check className="h-3 w-3 text-success shrink-0" />}
-                    {m.id}
+                    <span className="truncate">{m.id}</span>
+                    {provider.type === 'local' && isModelLoaded(m.id) && (
+                      <Badge color="success" size="sm">in memory</Badge>
+                    )}
                   </li>
                 ))}
               </ul>

@@ -75,6 +75,30 @@ export function Chat() {
     staleTime: 30_000,
   })
 
+  // Cold-model awareness: local backends evict/lazy-load models, and a cold
+  // first token can take minutes — say so up front instead of looking hung.
+  const { data: loadedInfo } = useQuery({
+    queryKey: ['inference-loaded'],
+    queryFn: () => apiFetch<{ backend: string; healthy: boolean; loaded_models: string[] }>(
+      '/v1/health/inference/loaded'
+    ),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    retry: 0,
+  })
+  const coldModelHint = (() => {
+    if (!modelId || !loadedInfo?.healthy) return null
+    const prov = (providers ?? []).find(p => p.models.some(m => m.id === modelId))
+    if (!prov || prov.type !== 'local') return null
+    const base = modelId.includes('/') ? modelId.split('/').pop()! : modelId
+    const isLoaded = loadedInfo.loaded_models.some(
+      l => l === modelId || l === base || l.startsWith(base) || base.startsWith(l)
+    )
+    return isLoaded
+      ? null
+      : `${base} isn't loaded in ${loadedInfo.backend} yet — the first response may take a while.`
+  })()
+
   // Default to the resolved model when no explicit model has been selected,
   // or when the current selection has been hidden
   useEffect(() => {
@@ -551,6 +575,9 @@ export function Chat() {
             </div>
             <div className="shrink-0 w-full px-2 md:px-8 pb-[env(safe-area-inset-bottom)] md:pb-4">
               <div className="mx-auto max-w-none md:max-w-3xl xl:max-w-4xl">
+                {coldModelHint && (
+                  <p className="mb-1.5 px-1 text-caption text-amber-500">{coldModelHint}</p>
+                )}
                 <ChatInput {...chatInputProps} />
               </div>
             </div>
@@ -602,6 +629,9 @@ export function Chat() {
 
             <div className="shrink-0 w-full px-2 md:px-8 pb-[env(safe-area-inset-bottom)] md:pb-4">
               <div className="mx-auto max-w-none md:max-w-3xl xl:max-w-4xl">
+                {coldModelHint && (
+                  <p className="mb-1.5 px-1 text-caption text-amber-500">{coldModelHint}</p>
+                )}
                 <ChatInput {...chatInputProps} />
               </div>
             </div>

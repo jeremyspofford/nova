@@ -161,6 +161,59 @@ async def lmstudio_status():
     }
 
 
+@health_router.get("/inference/loaded")
+async def inference_loaded():
+    """Which local models are resident in memory RIGHT NOW.
+
+    The truth behind cold-start waits: local backends evict/lazy-load models
+    (LM Studio evicts on single-model mode; Ollama unloads after idle), and
+    without this the operator can't tell a warming model from a hang.
+    Aggregates the ACTIVE backend only. Consumed by the Models page "Loaded"
+    badge and the chat cold-model hint (exposed at /v1/health/... for the
+    dashboard proxy).
+    """
+    from app.registry import _get_redis_config, get_ollama_base_url
+
+    backend = await _get_redis_config("inference.backend", "ollama") or "ollama"
+    out: dict = {"backend": backend, "healthy": False, "loaded_models": []}
+
+    try:
+        if backend == "none":
+            out["healthy"] = True  # deliberately no local inference — nothing to load
+
+        elif backend == "lmstudio":
+            st = await lmstudio_status()
+            out["healthy"] = bool(st.get("healthy"))
+            out["loaded_models"] = st.get("models", [])
+
+        elif backend == "ollama":
+            url = await get_ollama_base_url()
+            async with httpx.AsyncClient(base_url=url, timeout=3.0) as c:
+                r = await c.get("/api/ps")
+            if r.status_code == 200:
+                out["healthy"] = True
+                out["loaded_models"] = [
+                    m["name"] for m in r.json().get("models", []) if m.get("name")
+                ]
+
+        else:
+            # vllm / sglang / llamacpp / custom: single-model OpenAI-compatible
+            # servers — if the server answers, its served model IS loaded.
+            url = await _get_redis_config("inference.url", "")
+            if url:
+                async with httpx.AsyncClient(base_url=url, timeout=3.0) as c:
+                    r = await c.get("/v1/models")
+                if r.status_code == 200:
+                    out["healthy"] = True
+                    out["loaded_models"] = [
+                        m["id"] for m in r.json().get("data", []) if m.get("id")
+                    ]
+    except Exception as e:
+        log.debug("inference/loaded probe failed for %s: %s", backend, e)
+
+    return out
+
+
 @health_router.get("/inflight")
 async def health_inflight():
     """Return count of in-flight requests to local inference backends."""
