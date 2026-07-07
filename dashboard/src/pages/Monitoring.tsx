@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, LineChart } from 'lucide-react'
 import { useAuth } from '../stores/auth-store'
@@ -25,13 +25,24 @@ export function Monitoring() {
   const [board, setBoard] = useState<BoardUid>('nova-autonomy')
 
   // Hand the session to Grafana via a same-origin cookie scoped to /grafana —
-  // nginx injects it as the JWT header on every proxied request, so the
-  // grafana app (XHRs, session rotation) stays authenticated, not just the
-  // initial page load. Refreshes with the token; cleared on leave.
-  useEffect(() => {
+  // nginx injects it as the JWT header on every proxied request. ORDERING
+  // MATTERS: the iframe fires its request at commit, before passive effects
+  // run — writing the cookie in useEffect loses that race and Grafana's
+  // first load 401s onto its login page. So: layout effect (runs before
+  // paint) + gate the iframe on cookieReady. Re-stamped every minute so the
+  // cookie never outlives the token; cleared on leave.
+  const [cookieReady, setCookieReady] = useState(false)
+  useLayoutEffect(() => {
     if (!accessToken) return
-    document.cookie = `nova_grafana_jwt=${accessToken}; path=/grafana; max-age=900; SameSite=Strict`
+    const stamp = () => {
+      document.cookie = `nova_grafana_jwt=${accessToken}; path=/grafana; max-age=900; SameSite=Strict`
+    }
+    stamp()
+    setCookieReady(true)
+    const interval = setInterval(stamp, 60_000)
     return () => {
+      clearInterval(interval)
+      setCookieReady(false)
       document.cookie = 'nova_grafana_jwt=; path=/grafana; max-age=0; SameSite=Strict'
     }
   }, [accessToken])
@@ -99,7 +110,7 @@ export function Monitoring() {
             <span className="font-mono">localhost:3001</span>.
           </p>
         </Card>
-      ) : (
+      ) : !cookieReady ? null : (
         <iframe
           key={board}
           title={`Nova ${board}`}
