@@ -57,23 +57,15 @@ def _category(name: str, caps: set[str]) -> str:
     return "general"
 
 
-async def popular_models(limit: int = 36) -> list[dict]:
-    now = time.time()
-    if _cache["entries"] and now - _cache["at"] < _TTL_SECONDS:
-        return _cache["entries"][:limit]
+def parse_library(page: str, limit: int = 36) -> list[dict]:
+    """Parse the ollama.com/library HTML into catalog entries (no network).
 
-    async with httpx.AsyncClient(
-        timeout=8.0,
-        follow_redirects=True,
-        headers={"User-Agent": "nova-recovery/1.0 (+https://arialabs.ai)"},
-    ) as client:
-        r = await client.get(LIBRARY_URL)
-        r.raise_for_status()
-        page = r.text
-
+    Split into its own pure function so a markup drift is caught by a unit
+    test against a captured fixture (TD-14) rather than silently degrading the
+    live source to the curated fallback. One block per model link; per-block
+    regexes tolerate markup drift better than one page-wide pattern.
+    """
     entries: list[dict] = []
-    # One block per model link; per-block regexes tolerate markup drift better
-    # than one page-wide pattern.
     for block in re.split(r'href="/library/', page)[1:]:
         m = re.match(r'([a-zA-Z0-9._\-]+)"', block)
         if not m:
@@ -115,7 +107,24 @@ async def popular_models(limit: int = 36) -> list[dict]:
         })
         if len(entries) >= limit:
             break
+    return entries
 
+
+async def popular_models(limit: int = 36) -> list[dict]:
+    now = time.time()
+    if _cache["entries"] and now - _cache["at"] < _TTL_SECONDS:
+        return _cache["entries"][:limit]
+
+    async with httpx.AsyncClient(
+        timeout=8.0,
+        follow_redirects=True,
+        headers={"User-Agent": "nova-recovery/1.0 (+https://arialabs.ai)"},
+    ) as client:
+        r = await client.get(LIBRARY_URL)
+        r.raise_for_status()
+        page = r.text
+
+    entries = parse_library(page, limit)
     if not entries:
         raise RuntimeError("ollama.com library parse produced no entries")
 

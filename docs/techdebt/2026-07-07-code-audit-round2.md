@@ -13,6 +13,25 @@ Phase B merge (the trusted-network auth tests).
 
 ---
 
+## Resolution status
+
+- **TD-10** ✅ — trusted-network requests resolve to a synthetic **member**
+  (user surface only), never the synthetic owner; role-gated management
+  endpoints now reject network position. Verified: `/admin/users` → 403
+  without creds, 200 with the admin secret.
+- **TD-11** ✅ — under `local-first`, an unrecognized model triggers a
+  throttled local re-sync before falling to cloud (closes the sync-stale
+  cloud-prefix window; genuine cloud models unaffected).
+- **TD-12** ✅ — api-reference memory section rewritten to the current
+  `/api/v1/memory/*` OKF API.
+- **TD-13** ✅ — trusted-network tests rewritten to the current posture.
+- **TD-14** ✅ — parser extracted to `parse_library()` with a fixture-based
+  unit test.
+- **TD-16** ✅ — memory graph cached on a (file-count, max-mtime) signature.
+- **TD-17** ✅ — cloud pricing shows a staleness warning past ~6 months.
+- **TD-15** ⏸ deferred — Models.tsx split; pure refactor, schedule with
+  regression headroom.
+
 ## Findings index
 
 | ID | Sev | Area | Title | Effort |

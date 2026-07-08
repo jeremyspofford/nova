@@ -7,7 +7,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Cloud, MessageSquare, KeyRound } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Cloud, MessageSquare, KeyRound } from 'lucide-react'
 import { getRecommendedCloudModels, type CloudModelRec } from '../../api-recovery'
 import { useChatStore } from '../../stores/chat-store'
 import { Badge, Button, Card } from '../../components/ui'
@@ -34,6 +34,15 @@ export function CloudRecommendations({ configured }: { configured: Set<string> }
 
   if (!data || data.models.length === 0) return null
 
+  // Curated prices drift; flag when the snapshot is more than ~6 months old (TD-17).
+  const monthsOld = (() => {
+    const m = /^(\d{4})-(\d{2})$/.exec(data.updated ?? '')
+    if (!m) return 0
+    const updated = new Date(Number(m[1]), Number(m[2]) - 1, 1)
+    return (Date.now() - updated.getTime()) / (1000 * 60 * 60 * 24 * 30)
+  })()
+  const stale = monthsOld > 6
+
   const use = (m: CloudModelRec) => {
     if (configured.has(m.provider)) {
       setModelId(m.model)
@@ -58,8 +67,9 @@ export function CloudRecommendations({ configured }: { configured: Set<string> }
           <h3 className="text-compact font-medium text-content-primary">Recommended cloud models</h3>
         </span>
         {data.updated && (
-          <span className="font-mono text-micro text-content-tertiary">
-            prices curated · {data.updated}
+          <span className={`flex items-center gap-1 font-mono text-micro ${stale ? 'text-warning' : 'text-content-tertiary'}`}>
+            {stale && <AlertTriangle className="h-3 w-3" />}
+            prices curated · {data.updated}{stale ? ' · may be stale, verify' : ''}
           </span>
         )}
       </button>

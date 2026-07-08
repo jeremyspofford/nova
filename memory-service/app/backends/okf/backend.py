@@ -59,6 +59,8 @@ class OkfBackend(MemoryBackend):
         self.store.ensure_bundle()
         self.index = OkfIndex(self.store)
         self._retrievals_path = self.store.nova_dir / "retrievals.jsonl"
+        self._graph_cache: dict | None = None
+        self._graph_sig: tuple | None = None
 
     # ── write ────────────────────────────────────────────────────────────
 
@@ -161,8 +163,14 @@ class OkfBackend(MemoryBackend):
     async def graph(self) -> dict[str, Any]:
         """Whole-bundle nodes + resolved link edges — the Brain page's data.
 
-        Cheap enough to compute per request at bundle scale (one read per
-        file); edges dedupe as undirected index pairs."""
+        Cached on a cheap (file-count, max-mtime) signature so repeated Brain
+        loads don't re-read + re-parse the whole bundle (TD-16); a write bumps
+        an mtime, so the cache self-invalidates."""
+        files = self.store.concept_files()
+        sig = (len(files), max((p.stat().st_mtime for p in files), default=0.0))
+        if self._graph_cache is not None and self._graph_sig == sig:
+            return self._graph_cache
+
         nodes: list[dict[str, Any]] = []
         idx: dict[str, int] = {}
         bodies: list[tuple[str, str]] = []
@@ -205,11 +213,14 @@ class OkfBackend(MemoryBackend):
         for a, b in edges:
             nodes[a]["degree"] += 1
             nodes[b]["degree"] += 1
-        return {
+        result = {
             "nodes": nodes,
             "edges": edges,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
+        self._graph_cache = result
+        self._graph_sig = sig
+        return result
 
     # ── context ──────────────────────────────────────────────────────────
 

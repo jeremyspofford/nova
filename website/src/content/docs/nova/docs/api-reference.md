@@ -286,49 +286,31 @@ curl http://localhost:8001/health/ready
 
 ## Memory Service (port 8002)
 
+The backend-agnostic surface is `/api/v1/memory/*` (backed by the OKF markdown bundle — see [memory-service](/nova/docs/services/memory-service/)). Memory ids are bundle-relative paths, e.g. `topics/gpu-setup.md`.
+
 ```bash
-# Store a memory
-curl -X POST http://localhost:8002/api/v1/memories \
+# Retrieve formatted context for a query (main read path; empty query -> root index)
+curl -X POST http://localhost:8002/api/v1/memory/context \
   -H "Content-Type: application/json" \
-  -d '{
-    "content": "Always use parameterized queries for SQL",
-    "tier": "procedural",
-    "agent_id": "optional-agent-id"
-  }'
+  -d '{"query": "authentication patterns"}'
 
-# Search memories (hybrid semantic + keyword)
-curl -X POST http://localhost:8002/api/v1/memories/search \
+# Write a durable memory (the `remember` tool path — okf metadata routes the file)
+curl -X POST http://localhost:8002/api/v1/memory/ingest \
   -H "Content-Type: application/json" \
-  -d '{"query": "SQL injection prevention", "limit": 10}'
+  -d '{"raw_text": "The auth module uses bcrypt.",
+       "source_type": "chat",
+       "metadata": {"okf": {"type": "topic", "title": "auth-hashing"}}}'
 
-# Save a fact (upserts on project_id + category + key)
-curl -X POST http://localhost:8002/api/v1/memories/facts \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "The auth module uses bcrypt",
-    "project_id": "nova",
-    "category": "architecture",
-    "key": "auth-hashing"
-  }'
+# Read / edit / delete one item (id is a bundle path)
+curl http://localhost:8002/api/v1/memory/item/topics/auth-hashing.md
+curl -X DELETE http://localhost:8002/api/v1/memory/item/topics/auth-hashing.md
 
-# Browse memories with pagination
-curl "http://localhost:8002/api/v1/memories/browse?tier=semantic&limit=50&offset=0"
-
-# Get a specific memory
-curl http://localhost:8002/api/v1/memories/{memory_id}
-
-# Delete a memory
-curl -X DELETE http://localhost:8002/api/v1/memories/{memory_id}
-
-# Build agent context
-curl -X POST http://localhost:8002/api/v1/memories/{agent_id}/context \
-  -H "Content-Type: application/json" \
-  -d '{"query": "authentication patterns", "max_tokens": 2000}'
+# Provenance and store stats
+curl http://localhost:8002/api/v1/memory/provenance/topics/auth-hashing.md
+curl http://localhost:8002/api/v1/memory/stats
 ```
 
-> **Note:** the current backend-agnostic surface is `/api/v1/memory/*` (OKF markdown bundle) — see [memory-service](/nova/docs/services/memory-service/). The `/api/v1/memories` examples above are from the retired engram backend and are being revised.
-
-The dashboard **Brain** page (`/brain`) is powered by three endpoints on the current API:
+The dashboard **Brain** page (`/brain`) is powered by three more endpoints on the same API:
 
 ```bash
 # Whole-bundle graph: nodes + wiki-link edges (the Brain page's dataset)
