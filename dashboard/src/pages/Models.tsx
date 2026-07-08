@@ -33,6 +33,7 @@ import {
   type BackendStatus, type ModelSearchResult, type RecommendedModel,
 } from '../api-recovery'
 import { LocalModelsTable, localCounts, type LocalModelRow } from './models/LocalModelsTable'
+import { CloudRecommendations } from './models/CloudRecommendations'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Badge, Button, Card, EmptyState, Metric, ProgressBar,
@@ -1404,6 +1405,8 @@ export function Models() {
           <h2 className="text-compact font-semibold text-content-primary">Cloud Providers</h2>
         </div>
         <p className="text-caption text-content-tertiary">Remote AI services accessed via API key — requests are billed per token by the provider.</p>
+
+        <CloudRecommendations configured={new Set(cloudProviders.filter(p => p.available).map(p => p.slug))} />
 
         {catalog.isLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

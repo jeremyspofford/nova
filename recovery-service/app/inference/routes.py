@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/recovery/inference", tags=["inference"])
 
 RECOMMENDED_MODELS_PATH = Path("/app/data/recommended_models.json")
+RECOMMENDED_CLOUD_PATH = Path("/app/data/recommended_cloud_models.json")
 
 # Supported inference server types, for the Settings UI to offer. `bundled`
 # means Nova can also run it as a compose-profile container; every backend can
@@ -163,3 +164,15 @@ async def get_recommended_models(
         models = [m for m in models if m.get("min_vram_gb", 0) <= max_vram_gb]
 
     return models
+
+
+@router.get("/models/recommended-cloud")
+async def get_recommended_cloud_models(_: None = Depends(_check_admin)):
+    """Curated cloud model picks with representative per-Mtok pricing.
+
+    Static curation (no provider exposes uniform pricing) — the dashboard
+    cross-references live provider availability to show which are usable."""
+    try:
+        return json.loads(RECOMMENDED_CLOUD_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"updated": None, "note": None, "models": []}

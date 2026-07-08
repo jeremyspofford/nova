@@ -313,6 +313,27 @@ export interface RecommendedModel {
   url?: string
 }
 
+export interface CloudModelRec {
+  provider: string
+  model: string
+  name: string
+  job: string
+  input_per_mtok: number
+  output_per_mtok: number
+  free_tier?: boolean
+  context?: string
+  note?: string
+}
+
+export interface CloudRecommendations {
+  updated: string | null
+  note: string | null
+  models: CloudModelRec[]
+}
+
+export const getRecommendedCloudModels = () =>
+  recoveryFetch<CloudRecommendations>('/api/v1/recovery/inference/models/recommended-cloud')
+
 export const getRecommendedModels = (backend?: string, maxVramGb?: number, source?: 'popular' | 'curated') => {
   const params = new URLSearchParams()
   if (backend) params.set('backend', backend)

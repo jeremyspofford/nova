@@ -40,6 +40,7 @@ backups/
 # Machine-specific runtime data (hardware detection output, etc.)
 data/*
 !data/recommended_models.json
+!data/recommended_cloud_models.json
 data/sources/
 
 # OS
