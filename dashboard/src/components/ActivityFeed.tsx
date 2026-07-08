@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Check, Loader2, ChevronRight, FileText, Globe } from 'lucide-react'
 import type { ActivityStep } from '../stores/chat-store'
+import { MemoryDetailModal } from './MemoryDetailModal'
 
 interface Props {
   steps: ActivityStep[]
@@ -29,8 +30,10 @@ function StepRow({ step }: { step: ActivityStep }) {
   const label = stepLabels[step.step] ?? step.step
   const memHits = step.memory_summaries ?? []
   const webSources = step.sources ?? []
+  const [openMem, setOpenMem] = useState<{ id: string; title: string } | null>(null)
 
   return (
+    <>
     <div className="py-0.5">
       <div className="flex items-center gap-1.5">
         {isDone ? (
@@ -57,15 +60,21 @@ function StepRow({ step }: { step: ActivityStep }) {
       {(memHits.length > 0 || webSources.length > 0) && (
         <div className="ml-[18px] mt-0.5 flex flex-col gap-0.5">
           {memHits.map(h => (
-            <span key={h.id} className="flex items-center gap-1.5 text-content-tertiary" title={h.id}>
+            <button
+              key={h.id}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setOpenMem({ id: h.id, title: h.title }) }}
+              className="flex items-center gap-1.5 text-left text-content-tertiary hover:text-accent transition-colors"
+              title={`Open ${h.id}`}
+            >
               <FileText size={10} className="shrink-0 text-content-tertiary/70" />
-              <span className="min-w-0 truncate">{h.title}</span>
+              <span className="min-w-0 truncate underline decoration-content-tertiary/30 underline-offset-2">{h.title}</span>
               {h.score != null && (
                 <span className="font-mono text-mono-sm text-content-tertiary/50 tabular-nums">
                   {h.score.toFixed(1)}
                 </span>
               )}
-            </span>
+            </button>
           ))}
           {webSources.map((s, i) => (
             <a
@@ -83,6 +92,12 @@ function StepRow({ step }: { step: ActivityStep }) {
         </div>
       )}
     </div>
+    <MemoryDetailModal
+      memoryId={openMem?.id ?? null}
+      title={openMem?.title}
+      onClose={() => setOpenMem(null)}
+    />
+    </>
   )
 }
 

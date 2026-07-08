@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronRight, ChevronDown, Activity, Brain, Terminal, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
 import type { ActivityStep, Message, MemorySummary } from '../../stores/chat-store'
+import { MemoryDetailModal } from '../MemoryDetailModal'
 
 interface Props {
   messages: Message[]
@@ -12,6 +13,7 @@ interface Props {
 
 function MemoryRow({ memory }: { memory: MemorySummary }) {
   const [expanded, setExpanded] = useState(false)
+  const [open, setOpen] = useState(false)
 
   return (
     <div className="border-t border-border-subtle/20 first:border-0">
@@ -42,8 +44,12 @@ function MemoryRow({ memory }: { memory: MemorySummary }) {
               <span className="text-micro text-content-secondary">{memory.score.toFixed(2)}</span>
             </div>
           )}
+          <button onClick={() => setOpen(true)} className="text-micro text-accent hover:underline">
+            Open memory &rarr;
+          </button>
         </div>
       )}
+      <MemoryDetailModal memoryId={open ? memory.id : null} title={memory.title} onClose={() => setOpen(false)} />
     </div>
   )
 }
