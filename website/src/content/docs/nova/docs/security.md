@@ -41,6 +41,7 @@ X-API-Key: sk-nova-...
 - **Passwords** are hashed with bcrypt (per-password salt, cost 12) and verified in constant time. They are never stored or logged in plaintext.
 - **Sign-in is brute-force throttled** per client IP *and* per target email (sliding window), and the response time is identical whether or not an email exists — no account enumeration by timing.
 - **Sessions** are 15-minute JWTs signed with a random 256-bit secret generated at first boot. **Refresh tokens are stored only as SHA-256 hashes** with rotation — a database leak does not yield usable sessions. Role changes and deactivation revoke tokens immediately (Redis deny-list).
+- **Removing a user** has two levels: **Deactivate** (reversible — signs them out and blocks access, keeps their data) via `PATCH /api/v1/admin/users/{id}` with `status`, and **Delete** (permanent) via `DELETE /api/v1/admin/users/{id}`. A hard delete cascades their chat conversations and sessions but keeps tasks, invites, and audit rows with a NULL user reference (so history survives, unattributed). Owners and Nova's system identities are protected from both; every action is written to the RBAC audit log.
 - **Transport**: on a bare LAN, HTTP is plaintext — use [Tailscale or a Cloudflare Tunnel](/nova/docs/remote-access/) for any access beyond localhost; both give you encryption in transit.
 
 ### Trusted networks

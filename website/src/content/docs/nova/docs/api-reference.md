@@ -326,6 +326,23 @@ curl -X POST http://localhost:8002/api/v1/memories/{agent_id}/context \
   -d '{"query": "authentication patterns", "max_tokens": 2000}'
 ```
 
+> **Note:** the current backend-agnostic surface is `/api/v1/memory/*` (OKF markdown bundle) — see [memory-service](/nova/docs/services/memory-service/). The `/api/v1/memories` examples above are from the retired engram backend and are being revised.
+
+The dashboard **Brain** page (`/brain`) is powered by three endpoints on the current API:
+
+```bash
+# Whole-bundle graph: nodes + wiki-link edges (the Brain page's dataset)
+curl http://localhost:8002/api/v1/memory/graph
+
+# Edit one memory in place (frontmatter shallow-merge; type is fixed)
+curl -X PUT http://localhost:8002/api/v1/memory/item/topics/gpu-setup.md \
+  -H "Content-Type: application/json" \
+  -d '{"frontmatter": {"tags": ["gpu","wsl"]}, "content": "..."}'
+
+# SSE stream of retrieval events — powers the Brain page's live glow
+curl -N http://localhost:8002/api/v1/memory/events
+```
+
 ### Health
 
 ```bash
@@ -388,6 +405,14 @@ curl http://localhost:8888/api/v1/recovery/backups
 
 # Restore from backup (admin)
 curl -X POST http://localhost:8888/api/v1/recovery/backups/{filename}/restore \
+  -H "X-Admin-Secret: your-secret"
+
+# Recommended local models (admin) — curated file or live ollama.com ranking
+curl "http://localhost:8888/api/v1/recovery/inference/models/recommended?backend=ollama&source=popular" \
+  -H "X-Admin-Secret: your-secret"
+
+# Recommended cloud models with per-Mtok pricing (admin)
+curl http://localhost:8888/api/v1/recovery/inference/models/recommended-cloud \
   -H "X-Admin-Secret: your-secret"
 
 # Read env vars (admin, secrets masked)

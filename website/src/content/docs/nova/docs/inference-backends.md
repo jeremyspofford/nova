@@ -104,6 +104,39 @@ The dashboard uses these results to recommend a backend:
 | CPU only | Ollama |
 | No local hardware | Cloud providers |
 
+## Managing models (dashboard → Models)
+
+The **Models** page groups everything under a **Local Inference** heading, with **one section per local backend that is active or reachable** — so an Ollama store and an LM Studio store show side by side, each labeled **Active — serving Nova** or **Available**. This is deliberate: switching the active backend no longer looks like "the same models", because each store is named and badged separately.
+
+### On disk / in memory
+
+Every backend renders the same table: each model shows its size, a **state** (`on disk` / `in memory`), and a **Load/Unload** control. Local backends lazily load and evict models, so "downloaded" and "resident" are different facts — the table surfaces both. Ollama gains explicit Load/Unload (via `/api/generate` warm-up and `keep_alive=0` eviction) to match LM Studio's JIT load/unload; loaded state comes from Ollama's `/api/ps` and LM Studio's `/api/v0/models` (`state == "loaded"`).
+
+Each backend differs only in how you **acquire** models: Ollama pulls from its registry in-app; LM Studio has no download API, so you download in the LM Studio desktop app and the models appear here once present.
+
+### Recommended models
+
+The "Add models" area offers a recommendation grid with two sources:
+
+- **Popular on Ollama** (default) — the live `ollama.com/library` popularity ranking, enriched with real download sizes from the Ollama registry manifest, parameter variants, and a deep link per model (6-hour cache).
+- **Curated** — Nova's opinionated picks (including the `openbmb/minicpm5` starter), the offline fallback when the live scrape is unavailable.
+
+Recommendations default to **models that fit this machine, plus all cloud models** — the size cap is the GPU's VRAM (or system RAM on CPU-only hosts); a "show all sizes" link lifts it. The filter compares each model's **default-tag** size.
+
+### Recommended cloud models
+
+The Cloud Providers section leads with a curated **Recommended cloud models** panel grouped by job (frontier / cheap / code / free), each showing input+output **$/Mtok**, context window, and a note. Configured providers get a one-click **Use** (sets the chat model); unconfigured ones link to add a key. Prices are curated estimates (no provider exposes a uniform pricing API) and dated.
+
+### Serving endpoints
+
+Recovery serves the curated data (bind-mounted, editable without a rebuild):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /inference/models/recommended?backend=&source=popular\|curated` | Local recommendations (curated file or live ollama.com) |
+| `GET /inference/models/recommended-cloud` | Curated cloud picks with pricing |
+| `GET /inference/hardware` | Detected GPU/RAM/disk (drives the GPU-fit filter) |
+
 ## Backend lifecycle
 
 The recovery service manages the full lifecycle of inference containers using Docker Compose profiles.
