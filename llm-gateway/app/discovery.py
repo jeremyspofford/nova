@@ -104,6 +104,7 @@ class OllamaPulledModel(BaseModel):
     quantization_level: str
     digest: str
     modified_at: str
+    loaded: bool = False  # currently resident in memory (from /api/ps)
 
 
 class PullRequest(BaseModel):
@@ -721,6 +722,14 @@ async def get_ollama_pulled() -> list[OllamaPulledModel]:
             resp = await client.get("/api/tags")
             resp.raise_for_status()
             data = resp.json()
+            # Which models are resident in memory right now (best-effort).
+            loaded_names: set[str] = set()
+            try:
+                ps = await client.get("/api/ps")
+                if ps.status_code == 200:
+                    loaded_names = {m.get("name", "") for m in ps.json().get("models", [])}
+            except Exception:
+                pass
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
 
@@ -734,9 +743,42 @@ async def get_ollama_pulled() -> list[OllamaPulledModel]:
             quantization_level=details.get("quantization_level", ""),
             digest=m.get("digest", "")[:12],
             modified_at=m.get("modified_at", ""),
+            loaded=m["name"] in loaded_names,
         ))
 
     return models
+
+
+@discovery_router.post("/ollama/load")
+async def load_ollama_model(req: PullRequest):
+    """Warm a pulled model into memory (empty generate honors keep_alive)."""
+    from app.registry import get_ollama_base_url, get_ollama_keep_alive
+    try:
+        ollama_url = await get_ollama_base_url()
+        keep_alive = await get_ollama_keep_alive()
+        body: dict = {"model": req.name}
+        if keep_alive:
+            body["keep_alive"] = keep_alive
+        async with httpx.AsyncClient(base_url=ollama_url, timeout=_PULL_TIMEOUT) as client:
+            resp = await client.post("/api/generate", json=body)
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama load failed: {e}")
+    return {"status": "ok", "model": req.name, "loaded": True}
+
+
+@discovery_router.post("/ollama/unload")
+async def unload_ollama_model(req: PullRequest):
+    """Evict a model from memory now (keep_alive=0 frees it immediately)."""
+    from app.registry import get_ollama_base_url
+    try:
+        ollama_url = await get_ollama_base_url()
+        async with httpx.AsyncClient(base_url=ollama_url, timeout=30.0) as client:
+            resp = await client.post("/api/generate", json={"model": req.name, "keep_alive": 0})
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama unload failed: {e}")
+    return {"status": "ok", "model": req.name, "loaded": False}
 
 
 @discovery_router.post("/ollama/pull")

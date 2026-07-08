@@ -137,9 +137,21 @@ async def stop_bundled_container(backend_name: str, _: None = Depends(_check_adm
 async def get_recommended_models(
     backend: str | None = None,
     max_vram_gb: float | None = None,
+    source: str | None = None,
     _: None = Depends(_check_admin),
 ):
-    """Return curated recommended models (advisory — load them on your server)."""
+    """Recommended models. ``source=popular`` serves the live ollama.com
+    popularity ranking (6h in-process cache); the default serves the curated
+    data/recommended_models.json. Live fetch failures fall back to curated."""
+    if source == "popular" and backend in (None, "ollama"):
+        try:
+            from app.inference.catalog import popular_models
+            return await popular_models()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "live ollama catalog unavailable — serving curated file", exc_info=True
+            )
+
     try:
         models = json.loads(RECOMMENDED_MODELS_PATH.read_text())
     except (FileNotFoundError, json.JSONDecodeError):

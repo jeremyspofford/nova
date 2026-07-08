@@ -155,6 +155,25 @@ class OllamaProvider(ModelProvider):
         """Current cached health status."""
         return self._healthy
 
+    async def probe(self, timeout: float = 2.5) -> bool:
+        """Live reachability check for status surfaces (cheap /api/version).
+
+        The cached flag starts False and only updates when real traffic routes
+        through this provider — so with no recent Ollama-bound requests the
+        dashboard read "Unreachable" while the server was fine. Status reads
+        deserve a fresh answer; unlike _ensure_healthy this never fires WoL.
+        """
+        base_url = await self._get_base_url()
+        try:
+            async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+                r = await client.get("/api/version")
+                r.raise_for_status()
+            self._healthy = True
+        except Exception:
+            self._healthy = False
+        self._last_health_check = time.monotonic()
+        return self._healthy
+
     async def _ensure_healthy(self) -> None:
         """
         Fast health gate: check if Ollama is reachable before sending real requests.

@@ -91,7 +91,7 @@ async def ollama_status():
     wol_mac = await get_wol_mac()
 
     result = {
-        "healthy": ollama.healthy,
+        "healthy": await ollama.probe(),
         "base_url": ollama_url,
         "routing_strategy": strategy,
         "wol_configured": bool(wol_mac),

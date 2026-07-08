@@ -127,12 +127,14 @@ async def _gateway_backend_status(backend: str) -> dict:
     except Exception as e:
         logger.warning("Failed to probe %s via gateway: %s", backend, e)
         return {"backend": backend, "state": "error", "container_status": None,
-                "error": f"gateway probe failed: {e}"}
+                "external": True, "error": f"gateway probe failed: {e}"}
 
     result: dict = {
         "backend": backend,
         "state": "ready" if data.get("healthy") else "stopped",
         "container_status": None,
+        # not a bundled container — a server the user runs (Windows/LAN/etc.)
+        "external": True,
     }
     if data.get("active_model"):
         result["active_model"] = data["active_model"]

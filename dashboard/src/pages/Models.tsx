@@ -8,6 +8,8 @@ import {
   getOllamaStatus,
   pullOllamaModel,
   deleteOllamaModel,
+  loadOllamaModel,
+  unloadOllamaModel,
   getProviderStatus,
   testProvider,
   getRoutingStats,
@@ -17,7 +19,7 @@ import {
   unloadLMStudioModel,
 } from '../api'
 import type { ProviderModelList, OllamaPulledModel, OllamaStatus, LMStudioStatus, LMStudioDownloadedModel } from '../api'
-import { RECOMMENDED_OLLAMA_MODELS, CLOUD_PROVIDER_ORDER } from '../constants'
+import { CLOUD_PROVIDER_ORDER } from '../constants'
 import {
   RefreshCw, Trash2, Download, Check, HardDrive, Cloud, Loader2,
   AlertTriangle, ExternalLink, Server, X, Info, Play, Cpu, Thermometer,
@@ -27,9 +29,10 @@ import clsx from 'clsx'
 import { formatBytes } from '../lib/format'
 import { recoveryFetch } from '../api-recovery'
 import {
-  getBackendStatus, searchModels, switchModel, getRecommendedModels, getGPUStats,
+  getBackendStatus, searchModels, switchModel, getRecommendedModels, getGPUStats, getHardwareInfo,
   type BackendStatus, type ModelSearchResult, type RecommendedModel,
 } from '../api-recovery'
+import { LocalModelsTable, localCounts, type LocalModelRow } from './models/LocalModelsTable'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Badge, Button, Card, EmptyState, Metric, ProgressBar,
@@ -271,13 +274,22 @@ function ProviderCard({ provider }: { provider: ProviderModelList }) {
 
 // ── Pulled model row ──────────────────────────────────────────────────────────
 
-const REQUIRED_MODELS = new Set(RECOMMENDED_OLLAMA_MODELS.filter(m => m.required).map(m => m.name))
-
-function isRequiredModel(name: string): boolean {
-  if (REQUIRED_MODELS.has(name)) return true
+function isRequiredModel(name: string, required: Set<string>): boolean {
+  if (required.has(name)) return true
   const base = name.split(':')[0]
-  return REQUIRED_MODELS.has(base)
+  return required.has(base)
 }
+
+/** Max-size filter chips for the recommended grid. */
+const SIZE_FILTERS = [
+  { label: 'All', value: 0 },
+  { label: '<= 5 GB', value: 5 },
+  { label: '<= 10 GB', value: 10 },
+  { label: '<= 24 GB', value: 24 },
+  { label: '<= 48 GB', value: 48 },
+  { label: '<= 64 GB', value: 64 },
+  { label: '<= 96 GB', value: 96 },
+]
 
 // Ollama treats `name` and `name:latest` as identical. Strip the implicit tag
 // so a catalog entry of `nomic-embed-text` matches an installed `nomic-embed-text:latest`.
@@ -367,7 +379,7 @@ function LMStudioStatusBadge({ status }: { status: LMStudioStatus | undefined })
   )
 }
 
-function LMStudioLibrarySection() {
+function LMStudioLibrarySection({ isActive = false }: { isActive?: boolean }) {
   const qc = useQueryClient()
   const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set())
   const [unloadingModels, setUnloadingModels] = useState<Set<string>>(new Set())
@@ -423,12 +435,24 @@ function LMStudioLibrarySection() {
     <section className="space-y-4">
       <div className="flex items-center gap-3">
         <HardDrive className="h-5 w-5 text-accent" />
-        <h2 className="text-compact font-semibold text-content-primary">LM Studio Models</h2>
+        <h2 className="text-compact font-semibold text-content-primary">LM Studio</h2>
+        <Badge color={isActive ? 'success' : 'neutral'} size="sm">
+          {isActive ? 'Active — serving Nova' : 'Available'}
+        </Badge>
         <LMStudioStatusBadge status={status.data} />
         {models.length > 0 && (
-          <Badge color="neutral" size="sm">{models.length} downloaded · {loadedCount} loaded</Badge>
+          <span className="font-mono text-caption text-content-tertiary">
+            on disk {models.length} · in memory {loadedCount}
+          </span>
         )}
       </div>
+      {healthy && (
+        <p className="text-caption text-content-tertiary flex items-center gap-1.5">
+          <Info className="h-3 w-3 shrink-0" />
+          Add models: download them in the LM Studio app — they appear here once downloaded.
+          (LM Studio has no download API, so Nova loads/unloads them but can't pull them for you.)
+        </p>
+      )}
 
       {!healthy && (
         <EmptyState
@@ -457,102 +481,48 @@ function LMStudioLibrarySection() {
         </Card>
       )}
 
-      {models.length > 0 && (
-        <Card>
-          <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-            <h3 className="text-compact font-medium text-content-primary">Downloaded Models</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<RefreshCw className={`h-3.5 w-3.5 ${downloaded.isFetching ? 'animate-spin' : ''}`} />}
-              onClick={() => qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })}
-            >
-              Refresh
-            </Button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-compact">
-              <thead>
-                <tr className="text-caption text-content-tertiary border-b border-border-subtle">
-                  <th className="text-left px-4 py-2 font-medium">Model</th>
-                  <th className="hidden md:table-cell text-left px-4 py-2 font-medium">Params</th>
-                  <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Quant</th>
-                  <th className="hidden lg:table-cell text-left px-4 py-2 font-medium">Context</th>
-                  <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Capabilities</th>
-                  <th className="text-right px-4 py-2 font-medium">Size</th>
-                  <th className="text-right px-4 py-2 font-medium">Status</th>
-                  <th className="w-28" />
-                </tr>
-              </thead>
-              <tbody>
-                {models.map(m => {
-                  const isLoading = loadingModels.has(m.key)
-                  const primaryInstance = m.loaded_instances[0] ?? m.key
-                  const isUnloading = unloadingModels.has(primaryInstance)
-                  return (
-                    <tr key={m.key} className="border-b border-border-subtle last:border-0 hover:bg-surface-card-hover transition-colors">
-                      <td className="px-4 py-2.5">
-                        <div className="font-mono text-content-primary truncate max-w-[220px]">{m.display_name}</div>
-                        <div className="text-caption text-content-tertiary font-mono truncate max-w-[220px]">{m.key}</div>
-                      </td>
-                      <td className="hidden md:table-cell px-4 py-2.5 text-content-secondary">{m.params_string || '--'}</td>
-                      <td className="hidden sm:table-cell px-4 py-2.5 text-content-secondary">{m.quantization || '--'}</td>
-                      <td className="hidden lg:table-cell px-4 py-2.5 text-content-secondary">
-                        {m.max_context_length ? `${Math.round(m.max_context_length / 1024)}K` : '--'}
-                      </td>
-                      <td className="hidden sm:table-cell px-4 py-2.5">
-                        <div className="flex gap-1 flex-wrap">
-                          {m.type === 'embedding' && <Badge color="neutral" size="sm">embed</Badge>}
-                          {m.supports_vision && <Badge color="info" size="sm"><Eye className="h-2.5 w-2.5 inline mr-1" />vision</Badge>}
-                          {m.supports_tools && <Badge color="info" size="sm"><Wrench className="h-2.5 w-2.5 inline mr-1" />tools</Badge>}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-content-secondary">{formatBytes(m.size_bytes)}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        {m.loaded ? (
-                          <Badge color="success" size="sm"><Check className="h-2.5 w-2.5 inline mr-1" />loaded</Badge>
-                        ) : (
-                          <Badge color="neutral" size="sm">disk</Badge>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">
-                        {m.loaded ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            icon={isUnloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
-                            onClick={() => unloadModel.mutate(primaryInstance)}
-                            disabled={isUnloading}
-                            title="Unload from memory"
-                          >
-                            Unload
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            icon={isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
-                            onClick={() => loadModel.mutate(m.key)}
-                            disabled={isLoading}
-                            title="Load into memory"
-                          >
-                            Load
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          {models.some(m => !m.loaded && m.loaded_instances.length === 0) && (
-            <div className="px-4 py-2 border-t border-border-subtle text-caption text-content-tertiary">
-              Tip: loaded models are immediately routable from Nova. Use Load to bring a model into memory.
+      {models.length > 0 && (() => {
+        const rows: LocalModelRow[] = models.map(m => ({
+          id: m.key,
+          name: m.display_name,
+          sizeBytes: m.size_bytes,
+          params: m.params_string,
+          quant: m.quantization,
+          context: m.max_context_length ? `${Math.round(m.max_context_length / 1024)}K` : null,
+          caps: [
+            ...(m.type === 'embedding' ? ['embed'] : []),
+            ...(m.supports_vision ? ['vision'] : []),
+            ...(m.supports_tools ? ['tools'] : []),
+          ],
+          loaded: m.loaded,
+        }))
+        const instanceOf = new Map(models.map(m => [m.key, m.loaded_instances[0] ?? m.key]))
+        return (
+          <Card>
+            <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
+              <h3 className="text-compact font-medium text-content-primary">Models</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<RefreshCw className={`h-3.5 w-3.5 ${downloaded.isFetching ? 'animate-spin' : ''}`} />}
+                onClick={() => qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })}
+              >
+                Refresh
+              </Button>
             </div>
-          )}
-        </Card>
-      )}
+            <LocalModelsTable
+              rows={rows}
+              busyIds={new Set([
+                ...[...loadingModels],
+                ...models.filter(m => unloadingModels.has(m.loaded_instances[0] ?? m.key)).map(m => m.key),
+              ])}
+              onLoad={(id) => loadModel.mutate(id)}
+              onUnload={(id) => unloadModel.mutate(instanceOf.get(id) ?? id)}
+              emptyText="No models downloaded in LM Studio yet."
+            />
+          </Card>
+        )
+      })()}
     </section>
   )
 }
@@ -567,6 +537,14 @@ export function Models() {
   const [deletingModels, setDeletingModels] = useState<Set<string>>(new Set())
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [sizeFilter, setSizeFilter] = useState<number>(0)
+  const [sizeFilterTouched, setSizeFilterTouched] = useState(false)
+  // Installed models expanded by default (the whole point of the page);
+  // collapsible so a big multi-backend machine can tuck a list away.
+  const [installedOpen, setInstalledOpen] = useState(() => localStorage.getItem('models.installedOpen') !== '0')
+  // Recommendation source: live ollama.com popularity (default) or the curated file
+  const [recSource, setRecSource] = useState<'popular' | 'curated'>(
+    () => (localStorage.getItem('models.recSource') as 'popular' | 'curated') ?? 'popular'
+  )
   const [onboardingDismissed, setOnboardingDismissed] = useState(
     () => localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true'
   )
@@ -578,6 +556,43 @@ export function Models() {
     staleTime: 60_000,
   })
 
+  // Curated pull recommendations — data/recommended_models.json via recovery.
+  const ollamaCatalog = useQuery({
+    queryKey: ['recommended-models', 'ollama'],
+    queryFn: () => getRecommendedModels('ollama'),
+    staleTime: 300_000,
+  })
+  const recModels = ollamaCatalog.data ?? []
+  const requiredModels = new Set(
+    recModels.filter(m => m.required).map(m => m.ollama_id ?? m.id)
+  )
+
+  const popularCatalog = useQuery({
+    queryKey: ['recommended-models', 'ollama', 'popular'],
+    queryFn: () => getRecommendedModels('ollama', undefined, 'popular'),
+    staleTime: 300_000,
+    enabled: recSource === 'popular',
+  })
+  const gridModels = recSource === 'popular' ? (popularCatalog.data ?? []) : recModels
+  const gridQuery = recSource === 'popular' ? popularCatalog : ollamaCatalog
+
+  const hardware = useQuery({
+    queryKey: ['hardware-info'],
+    queryFn: getHardwareInfo,
+    staleTime: 300_000,
+    retry: 0,
+  })
+  const detectedVram = Math.max(0, ...(hardware.data?.gpus?.map(g => g.vram_gb) ?? [0]))
+
+  // Default the size filter to the detected GPU until the user picks one.
+  // (hardware.json can be stale/absent — e.g. LM Studio setups — so 0 means
+  // "no opinion", never "hide everything".)
+  useEffect(() => {
+    if (sizeFilterTouched || !detectedVram) return
+    const fit = SIZE_FILTERS.filter(o => o.value > 0 && o.value <= detectedVram).pop()
+    if (fit) setSizeFilter(fit.value)
+  }, [detectedVram, sizeFilterTouched])
+
   const pulled = useQuery({
     queryKey: ['ollama-pulled'],
     queryFn: () => getOllamaPulled().catch(() => [] as OllamaPulledModel[]),
@@ -588,6 +603,15 @@ export function Models() {
     queryKey: ['ollama-status'],
     queryFn: getOllamaStatus,
     staleTime: 15_000,
+  })
+
+  // Parent-level LM Studio reachability so its section can show alongside
+  // Ollama's (both are separate model stores; either can be reachable).
+  const lmstudioStatus = useQuery({
+    queryKey: ['lmstudio-status'],
+    queryFn: getLMStudioStatus,
+    staleTime: 15_000,
+    retry: 0,
   })
 
   const providers = useQuery({
@@ -636,6 +660,20 @@ export function Models() {
       qc.invalidateQueries({ queryKey: ['model-catalog'] })
     },
   })
+
+  // Load/unload = warm into / evict from memory (Ollama /api/ps state).
+  const [ollamaBusy, setOllamaBusy] = useState<Set<string>>(new Set())
+  const ollamaLoadUnload = async (name: string, load: boolean) => {
+    setOllamaBusy(s => new Set(s).add(name))
+    try {
+      await (load ? loadOllamaModel(name) : unloadOllamaModel(name))
+      qc.invalidateQueries({ queryKey: ['ollama-pulled'] })
+      qc.invalidateQueries({ queryKey: ['inference-loaded'] })
+    } catch { /* surfaced by the row's disabled state resetting */ }
+    finally {
+      setOllamaBusy(s => { const n = new Set(s); n.delete(name); return n })
+    }
+  }
 
   const startOllama = useMutation({
     mutationFn: () =>
@@ -790,6 +828,9 @@ export function Models() {
               </div>
               <p className="text-xl font-bold tracking-tight text-content-primary">
                 {activeBackend === 'ollama' ? 'Ollama' : activeBackend.toUpperCase()}
+                {backendStatus.data?.external && (
+                  <span className="ml-2 text-caption font-normal text-content-tertiary">external server</span>
+                )}
                 {backendStatus.data?.active_model && (
                   <span className="ml-2 text-base font-mono font-normal text-content-secondary">
                     {backendStatus.data.active_model}
@@ -818,31 +859,70 @@ export function Models() {
         </Card>
       )}
 
-      {/* Section A: Local Models (Ollama) */}
-      {activeBackend === 'ollama' && (
+      {/* ── Local Inference: one section per backend that's active or reachable ──
+          Each local backend is a separate model store. Showing them side by
+          side (each labeled Active/Available) is why switching Ollama↔LM Studio
+          no longer looks like "the same models" — you see both, clearly named. */}
+      {(ollamaHealthy || lmstudioStatus.data?.healthy || activeBackend !== 'none') && (
+        <div className="flex items-center gap-2 pt-2">
+          <Cpu className="h-4 w-4 text-content-tertiary" />
+          <h2 className="text-caption font-semibold uppercase tracking-wider text-content-tertiary">
+            Local Inference
+          </h2>
+        </div>
+      )}
+
+      {/* Ollama — reachable model store, active or not */}
+      {(activeBackend === 'ollama' || ollamaHealthy) && (() => {
+        const rows: LocalModelRow[] = (pulled.data ?? []).map(m => ({
+          id: m.name,
+          name: m.name,
+          sizeBytes: m.size,
+          params: m.parameter_size || null,
+          quant: m.quantization_level || null,
+          loaded: m.loaded,
+          required: isRequiredModel(m.name, requiredModels),
+        }))
+        const { onDisk, inMemory } = localCounts(rows)
+        const totalBytes = rows.reduce((n, r) => n + r.sizeBytes, 0)
+        return (
         <section className="space-y-4">
           <div className="flex items-center gap-3">
             <HardDrive className="h-5 w-5 text-accent" />
-            <h2 className="text-compact font-semibold text-content-primary">Local Models</h2>
+            <h2 className="text-compact font-semibold text-content-primary">Ollama</h2>
+            <Badge color={activeBackend === 'ollama' ? 'success' : 'neutral'} size="sm">
+              {activeBackend === 'ollama' ? 'Active — serving Nova' : 'Available'}
+            </Badge>
             <OllamaStatusBadge status={ollamaStatus.data} />
           </div>
 
           {/* GPU Stats */}
           {gpuStats.data && <GPUStatsCard />}
 
-          {/* Pulled models table */}
+          {/* Models on disk / in memory */}
           <Card>
-            <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-              <h3 className="text-compact font-medium text-content-primary">Installed Models</h3>
-              {pulled.data && (
-                <Badge color="neutral" size="sm">{pulled.data.length} model(s)</Badge>
-              )}
-            </div>
-
-            {pulled.isLoading && (
-              <div className="p-4"><Skeleton lines={3} /></div>
-            )}
-            {!pulled.isLoading && pulled.data && pulled.data.length === 0 && !ollamaHealthy && (
+            <button
+              className={`w-full px-4 py-3 flex items-center justify-between text-left ${(installedOpen || !ollamaHealthy) ? 'border-b border-border-subtle' : ''}`}
+              onClick={() => {
+                const v = !installedOpen
+                setInstalledOpen(v)
+                localStorage.setItem('models.installedOpen', v ? '1' : '0')
+              }}
+              aria-expanded={installedOpen}
+            >
+              <span className="flex items-center gap-2">
+                {installedOpen
+                  ? <ChevronDown className="h-4 w-4 text-content-tertiary" />
+                  : <ChevronRight className="h-4 w-4 text-content-tertiary" />}
+                <h3 className="text-compact font-medium text-content-primary">Models</h3>
+              </span>
+              <span className="flex items-center gap-2 font-mono text-caption text-content-tertiary">
+                {pulled.data && <span>on disk {onDisk} · in memory {inMemory}</span>}
+                {totalBytes > 0 && <Badge color="neutral" size="sm" className="font-mono">{formatBytes(totalBytes)}</Badge>}
+              </span>
+            </button>
+            {/* down-warning outside the collapse so it can't hide or pin-open */}
+            {!ollamaHealthy && !pulled.isLoading && (
               <div className="px-4 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-compact text-warning">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -859,67 +939,29 @@ export function Models() {
                 </Button>
               </div>
             )}
-            {!pulled.isLoading && pulled.data && pulled.data.length === 0 && ollamaHealthy && (
-              <div className="px-4 py-6 text-compact text-content-tertiary text-center">
-                No models pulled yet. Pull a model below to get started.
-              </div>
-            )}
-            {pulled.data && pulled.data.length > 0 && (
-              <table className="w-full text-compact">
-                <thead>
-                  <tr className="text-caption text-content-tertiary border-b border-border-subtle">
-                    <th className="text-left px-4 py-2 font-medium">Model</th>
-                    <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Parameters</th>
-                    <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Quant</th>
-                    <th className="text-right px-4 py-2 font-medium">Size</th>
-                    <th className="w-10" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {pulled.data.map(m => {
-                    const required = isRequiredModel(m.name)
-                    const deleting = deletingModels.has(m.name)
-                    return (
-                      <tr
-                        key={m.name}
-                        className="border-b border-border-subtle last:border-0 hover:bg-surface-card-hover transition-colors"
-                      >
-                        <td className="px-4 py-2.5 font-mono text-content-primary">
-                          {m.name}
-                          {required && (
-                            <Badge color="warning" size="sm" className="ml-2">required</Badge>
-                          )}
-                        </td>
-                        <td className="hidden sm:table-cell px-4 py-2.5 text-content-secondary">
-                          {m.parameter_size || '--'}
-                        </td>
-                        <td className="hidden sm:table-cell px-4 py-2.5 text-content-secondary">
-                          {m.quantization_level || '--'}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-content-secondary">
-                          {formatBytes(m.size)}
-                        </td>
-                        <td className="px-2 py-2.5">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            icon={deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                            onClick={() => handleDelete(m.name)}
-                            disabled={deleting || required}
-                            title={required ? 'Required by Nova' : 'Delete model'}
-                          />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+            {installedOpen && (
+              pulled.isLoading
+                ? <div className="p-4"><Skeleton lines={3} /></div>
+                : <LocalModelsTable
+                    rows={rows}
+                    busyIds={new Set([...ollamaBusy, ...deletingModels])}
+                    onLoad={ollamaHealthy ? (id) => ollamaLoadUnload(id, true) : undefined}
+                    onUnload={ollamaHealthy ? (id) => ollamaLoadUnload(id, false) : undefined}
+                    onDelete={ollamaHealthy ? (id) => handleDelete(id) : undefined}
+                    emptyText="No models pulled yet. Add one below to get started."
+                  />
             )}
           </Card>
 
-          {/* Pull new model */}
+          {/* Add models — Ollama pulls from its registry */}
           <Card className="p-4 space-y-4">
-            <h3 className="text-compact font-medium text-content-primary">Pull New Model</h3>
+            <div>
+              <h3 className="text-compact font-medium text-content-primary">Add models</h3>
+              <p className="text-caption text-content-tertiary mt-0.5">
+                Pull from the Ollama registry by name, or pick a recommendation below.
+                Pulled models load into memory automatically on first use.
+              </p>
+            </div>
 
             <div className="flex gap-2">
               <div className="flex-1">
@@ -945,6 +987,15 @@ export function Models() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 flex-wrap">
                     <p className="text-caption text-content-tertiary">Recommended models</p>
+                    <div className="flex gap-1">
+                      {(['popular', 'curated'] as const).map(src => (
+                        <button key={src} onClick={() => { setRecSource(src); localStorage.setItem('models.recSource', src) }}>
+                          <Badge color={recSource === src ? 'info' : 'neutral'} size="sm" className="cursor-pointer">
+                            {src === 'popular' ? 'Popular on Ollama' : 'Curated'}
+                          </Badge>
+                        </button>
+                      ))}
+                    </div>
                     <div className="flex gap-1 flex-wrap">
                       {['all', 'general', 'reasoning', 'code', 'vision', 'embedding'].map(cat => (
                         <button key={cat} onClick={() => setCategoryFilter(cat)}>
@@ -968,20 +1019,14 @@ export function Models() {
                     Browse all <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
-                <div className="flex items-center gap-2">
+                {/* Size filter — both sources carry sizes now, so filter
+                    out models that won't fit your GPU on either. */}
+                <div className="flex items-center gap-2 flex-wrap">
                   <HardDrive className="h-3 w-3 text-content-tertiary" />
                   <span className="text-micro text-content-tertiary">Max size:</span>
                   <div className="flex gap-1">
-                    {[
-                      { label: 'All', value: 0 },
-                      { label: '<= 5 GB', value: 5 },
-                      { label: '<= 10 GB', value: 10 },
-                      { label: '<= 24 GB', value: 24 },
-                      { label: '<= 48 GB', value: 48 },
-                      { label: '<= 64 GB', value: 64 },
-                      { label: '<= 96 GB', value: 96 },
-                    ].map(opt => (
-                      <button key={opt.value} onClick={() => setSizeFilter(opt.value)}>
+                    {SIZE_FILTERS.map(opt => (
+                      <button key={opt.value} onClick={() => { setSizeFilter(opt.value); setSizeFilterTouched(true) }}>
                         <Badge
                           color={sizeFilter === opt.value ? 'warning' : 'neutral'}
                           size="sm"
@@ -992,60 +1037,118 @@ export function Models() {
                       </button>
                     ))}
                   </div>
+                  {!sizeFilterTouched && detectedVram > 0 && sizeFilter > 0 && (
+                    <span className="text-micro text-content-tertiary font-mono">
+                      matched to your GPU ({detectedVram} GB VRAM)
+                    </span>
+                  )}
                 </div>
               </div>
+              {gridQuery.isLoading && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} variant="rect" height="92px" />)}
+                </div>
+              )}
+              {gridQuery.isError && (
+                <p className="text-caption text-content-tertiary py-4 text-center">
+                  Couldn't load the model catalog from the recovery service — pull by name above, or browse ollama.com/library.
+                </p>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                {RECOMMENDED_OLLAMA_MODELS
+                {gridModels
                   .filter(rec => categoryFilter === 'all' || rec.category === categoryFilter)
-                  .filter(rec => sizeFilter === 0 || rec.cloud || rec.sizeGB <= sizeFilter)
+                  .filter(rec => sizeFilter === 0 || rec.cloud || (rec.size_gb ?? 0) <= sizeFilter)
                   .map(rec => {
-                    const isPulled = pulledNames.has(normalizeOllamaName(rec.name))
-                    const isPulling = pullingModels.has(rec.name)
-                    const isDeleting = deletingModels.has(rec.name)
+                    const pullName = rec.ollama_id ?? rec.id
+                    const sizeGB = rec.size_gb ?? 0
+                    const isPulled = pulledNames.has(normalizeOllamaName(pullName))
+                    const isPulling = pullingModels.has(pullName)
+                    const isDeleting = deletingModels.has(pullName)
+                    // Deep link to the source registry: explicit url (popular),
+                    // else HF for slash-ids, else the Ollama library page.
+                    const modelUrl = rec.url
+                      ?? (rec.id.includes('/')
+                        ? `https://huggingface.co/${rec.id}`
+                        : `https://ollama.com/library/${pullName.split(':')[0]}`)
                     return (
                       <div
-                        key={rec.name}
-                        className={`relative rounded-lg border px-3 py-2.5 text-caption transition-colors ${
+                        key={pullName}
+                        className={`relative flex min-h-[150px] flex-col rounded-lg border px-3 py-2.5 text-caption transition-colors ${
                           isPulled
                             ? 'border-accent bg-accent-dim/30'
                             : isPulling
                               ? 'border-warning-dim bg-warning-dim/30'
-                              : 'border-border-subtle'
+                              : 'border-border-subtle hover:border-border'
                         }`}
                       >
+                        {/* line 1: name + registry link + status glyph */}
                         <div className="flex items-center gap-1.5">
                           {rec.cloud && <Cloud className="h-3.5 w-3.5 text-info shrink-0" />}
-                          <span className="font-mono font-medium text-content-primary">
-                            {rec.name}
+                          <span className="font-mono font-medium text-content-primary truncate">
+                            {pullName}
                           </span>
-                          {rec.required && (
-                            <Badge color="warning" size="sm">required</Badge>
-                          )}
-                          {isPulled && <Check className="h-3.5 w-3.5 text-success ml-auto" />}
-                          {isPulling && <Loader2 className="h-3.5 w-3.5 text-warning ml-auto animate-spin" />}
+                          <a
+                            href={modelUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            title="View on registry"
+                            className="shrink-0 text-content-tertiary hover:text-accent"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          {rec.starter && <Badge color="accent" size="sm">starter</Badge>}
+                          {rec.required && <Badge color="warning" size="sm">required</Badge>}
+                          <span className="ml-auto shrink-0">
+                            {isPulled && <Check className="h-3.5 w-3.5 text-success" />}
+                            {isPulling && <Loader2 className="h-3.5 w-3.5 text-warning animate-spin" />}
+                          </span>
                         </div>
-                        <p className="mt-1 text-content-tertiary leading-tight">{rec.description}</p>
-                        <div className="mt-2 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <Badge color="neutral" size="sm">{rec.category}</Badge>
-                            {rec.cloud ? (
-                              <Badge color="info" size="sm" className="font-mono">Cloud</Badge>
-                            ) : (
-                              <Badge
-                                color={rec.sizeGB <= 2 ? 'success' : rec.sizeGB <= 5 ? 'accent' : rec.sizeGB <= 10 ? 'warning' : 'danger'}
-                                size="sm"
-                                className="font-mono"
-                              >
-                                {rec.sizeGB < 1 ? `${Math.round(rec.sizeGB * 1000)} MB` : `${rec.sizeGB} GB`}
-                              </Badge>
-                            )}
+
+                        {/* line 2: size (prominent) + params + capability, pulls muted */}
+                        <div className="mt-1 flex items-center gap-2">
+                          {rec.cloud ? (
+                            <span className="font-mono text-content-secondary">Cloud</span>
+                          ) : rec.size_gb != null ? (
+                            <span className={`font-mono font-medium ${
+                              sizeGB <= 2 ? 'text-success' : sizeGB <= 5 ? 'text-accent' : sizeGB <= 10 ? 'text-warning' : 'text-danger'
+                            }`}>
+                              {sizeGB < 1 ? `${Math.round(sizeGB * 1000)} MB` : `${sizeGB} GB`}
+                            </span>
+                          ) : null}
+                          <span className="text-content-tertiary">{rec.category}</span>
+                          {!rec.cloud && rec.min_vram_gb === 0 && (
+                            <span className="text-success font-mono">CPU OK</span>
+                          )}
+                          {!rec.cloud && (rec.min_vram_gb ?? 0) > 0 && detectedVram > 0 && (rec.min_vram_gb ?? 0) > detectedVram && (
+                            <Tooltip content={`Needs ~${rec.min_vram_gb} GB VRAM; ${detectedVram} GB detected`}>
+                              <span className="text-danger font-mono">&gt; your GPU</span>
+                            </Tooltip>
+                          )}
+                          {rec.pulls && (
+                            <span className="ml-auto text-micro text-content-tertiary font-mono">{rec.pulls} pulls</span>
+                          )}
+                        </div>
+
+                        {/* line 3: parameter variants (popular source) */}
+                        {rec.param_sizes && rec.param_sizes.length > 0 && (
+                          <div className="mt-1 flex items-center gap-1 text-micro text-content-tertiary font-mono">
+                            <span className="text-content-tertiary/70">params</span>
+                            <span className="truncate">{rec.param_sizes.join(' · ')}</span>
                           </div>
+                        )}
+
+                        {/* description — clamped so every card is the same height */}
+                        <p className="mt-1.5 text-content-tertiary leading-tight line-clamp-2">{rec.description}</p>
+
+                        {/* action pinned to the bottom */}
+                        <div className="mt-auto pt-2 flex justify-end">
                           {isPulled ? (
                             <Button
                               variant="ghost"
                               size="sm"
                               icon={isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                              onClick={() => handleDelete(rec.name)}
+                              onClick={() => handleDelete(pullName)}
                               disabled={isDeleting || rec.required}
                               title={rec.required ? 'Required by Nova' : rec.cloud ? 'Remove cloud model registration' : 'Delete model'}
                               className="text-danger"
@@ -1063,7 +1166,7 @@ export function Models() {
                                     ? <Cloud className="h-3 w-3" />
                                     : <Download className="h-3 w-3" />
                               }
-                              onClick={() => handlePull(rec.name)}
+                              onClick={() => handlePull(pullName)}
                               disabled={isPulling}
                               title={rec.cloud ? 'Enable cloud model (no download)' : 'Download model'}
                               className="text-accent"
@@ -1079,14 +1182,16 @@ export function Models() {
             </div>
           </Card>
         </section>
-      )}
+        )
+      })()}
 
-      {/* Section A: Local Models (vLLM/SGLang) */}
+      {/* vLLM / SGLang — bundled single-model backend (shown only when active) */}
       {(activeBackend === 'vllm' || activeBackend === 'sglang') && (
         <section className="space-y-4">
           <div className="flex items-center gap-3">
             <HardDrive className="h-5 w-5 text-accent" />
-            <h2 className="text-compact font-semibold text-content-primary">Local Models</h2>
+            <h2 className="text-compact font-semibold text-content-primary">{activeBackend.toUpperCase()}</h2>
+            <Badge color="success" size="sm">Active — serving Nova</Badge>
             <Badge
               color={backendState === 'ready' || backendState === 'running' ? 'success' : backendState === 'switching' || backendState === 'starting' ? 'warning' : 'danger'}
               dot
@@ -1247,13 +1352,13 @@ export function Models() {
         </section>
       )}
 
-      {/* Section A: Local Models (LM Studio) */}
-      {activeBackend === 'lmstudio' && (
-        <LMStudioLibrarySection />
+      {/* LM Studio — reachable model store, active or not */}
+      {(activeBackend === 'lmstudio' || lmstudioStatus.data?.healthy) && (
+        <LMStudioLibrarySection isActive={activeBackend === 'lmstudio'} />
       )}
 
-      {/* Section A: No backend configured */}
-      {activeBackend === 'none' && (
+      {/* No local backend at all (and nothing reachable) */}
+      {activeBackend === 'none' && !ollamaHealthy && !lmstudioStatus.data?.healthy && (
         <section className="space-y-4">
           <div className="flex items-center gap-3">
             <HardDrive className="h-5 w-5 text-content-tertiary" />

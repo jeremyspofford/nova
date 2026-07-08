@@ -229,6 +229,8 @@ export const getRemoteAccessStatus = () =>
 export interface BackendStatus {
   backend: string
   state: string
+  /** true when the backend is a server the user runs, not a bundled container */
+  external?: boolean
   active_model?: string | null
   container_status: { status: string; health?: string; running?: boolean } | null
   switch_progress?: {
@@ -293,15 +295,29 @@ export interface RecommendedModel {
   ollama_id?: string
   name: string
   category: string
-  min_vram_gb: number
+  /** absent on live-popularity entries (sizes aren't published on the list page) */
+  min_vram_gb?: number
   backends: string[]
   description: string
+  /** ollama.com pull count label, e.g. "5.4M" — live-popularity entries only */
+  pulls?: string | null
+  /** Download size in GB (default tag); 0 for Ollama Cloud models. */
+  size_gb?: number
+  required?: boolean
+  cloud?: boolean
+  starter?: boolean
+  gated?: boolean
+  /** parameter variants available, e.g. ["8B","70B","405B"] (popular source) */
+  param_sizes?: string[]
+  /** deep link to the model on its registry (ollama.com / huggingface) */
+  url?: string
 }
 
-export const getRecommendedModels = (backend?: string, maxVramGb?: number) => {
+export const getRecommendedModels = (backend?: string, maxVramGb?: number, source?: 'popular' | 'curated') => {
   const params = new URLSearchParams()
   if (backend) params.set('backend', backend)
   if (maxVramGb) params.set('max_vram_gb', String(maxVramGb))
+  if (source) params.set('source', source)
   const qs = params.toString()
   return recoveryFetch<RecommendedModel[]>(`/api/v1/recovery/inference/models/recommended${qs ? '?' + qs : ''}`)
 }

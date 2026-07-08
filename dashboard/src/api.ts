@@ -119,7 +119,12 @@ export async function getOrCreateActiveConversation(): Promise<string> {
   if (conversations.length > 0) {
     return conversations[0].id
   }
-  const newConv = await apiFetch<any>('/api/v1/conversations', { method: 'POST' })
+  const newConv = await apiFetch<any>('/api/v1/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // ConversationCreate requires a JSON body even when every field is optional
+    body: JSON.stringify({}),
+  })
   return newConv.id
 }
 
@@ -724,6 +729,7 @@ export interface OllamaPulledModel {
   quantization_level: string
   digest: string
   modified_at: string
+  loaded: boolean
 }
 
 export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v1'
@@ -767,6 +773,18 @@ export const pullOllamaModel = (name: string) =>
 export const deleteOllamaModel = (name: string) =>
   apiFetch<{ status: string; model: string }>(`/v1/models/ollama/${encodeURIComponent(name)}`, {
     method: 'DELETE',
+  })
+
+export const loadOllamaModel = (name: string) =>
+  apiFetch<{ status: string; model: string; loaded: boolean }>('/v1/models/ollama/load', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+
+export const unloadOllamaModel = (name: string) =>
+  apiFetch<{ status: string; model: string; loaded: boolean }>('/v1/models/ollama/unload', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
   })
 
 // ── LM Studio downloaded-model library ───────────────────────────────────────
