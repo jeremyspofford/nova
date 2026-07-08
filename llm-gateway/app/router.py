@@ -104,6 +104,19 @@ async def _run_complete(provider, request: CompleteRequest) -> CompleteResponse:
             _local_inflight -= 1
 
 
+def _all_providers_failed_response(request: CompleteRequest, provider, e: Exception) -> JSONResponse:
+    """Structured 502 for a total provider failure — keeps a raw 500 out of chat."""
+    return JSONResponse(
+        status_code=502,
+        content={
+            "error": "all_providers_failed",
+            "provider": provider.name,
+            "model": request.model,
+            "detail": str(e)[:300],
+        },
+    )
+
+
 @router.post("/complete", response_model=CompleteResponse)
 async def complete(request: CompleteRequest, raw_request: Request):
     """Non-streaming LLM completion."""
@@ -138,7 +151,12 @@ async def complete(request: CompleteRequest, raw_request: Request):
         response = await _run_complete(provider, request)
     except Exception as e:
         if not is_credential_error(e):
-            raise
+            # No provider could satisfy the request — the active local backend
+            # rejected the model and every cloud fallback failed. Return a
+            # structured 502 so callers (chat) show a clean message instead of a
+            # raw 500 with an httpx stack string.
+            log.error("complete failed model=%s via %s: %s", request.model, provider.name, e)
+            return _all_providers_failed_response(request, provider, e)
         mark_credential_invalid(provider.name)
         rerouted = None if provider.is_local else await _local_reroute(request, provider.name)
         if rerouted is None:
@@ -152,7 +170,11 @@ async def complete(request: CompleteRequest, raw_request: Request):
                 },
             )
         provider, request = rerouted
-        response = await _run_complete(provider, request)
+        try:
+            response = await _run_complete(provider, request)
+        except Exception as e2:
+            log.error("complete failed after reroute model=%s via %s: %s", request.model, provider.name, e2)
+            return _all_providers_failed_response(request, provider, e2)
 
     log.info(
         "complete model=%s in=%d out=%d cost=$%.4f",
