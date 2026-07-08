@@ -82,6 +82,16 @@
     "description": "Nous Research, Llama-tuned, function calling."
   },
   {
+    "id": "ornith:9b",
+    "ollama_id": "ornith:9b",
+    "name": "Ornith 9B",
+    "category": "general",
+    "size_gb": 5.6,
+    "min_vram_gb": 8,
+    "backends": ["ollama"],
+    "description": "Community 9B, tool-capable general model."
+  },
+  {
     "id": "ministral-3:latest",
     "ollama_id": "ministral-3:latest",
     "name": "Ministral 3",
