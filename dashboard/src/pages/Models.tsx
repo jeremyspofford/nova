@@ -11,19 +11,14 @@ import {
   loadOllamaModel,
   unloadOllamaModel,
   getProviderStatus,
-  testProvider,
-  getRoutingStats,
   getLMStudioStatus,
-  getLMStudioDownloaded,
-  loadLMStudioModel,
-  unloadLMStudioModel,
 } from '../api'
-import type { ProviderModelList, OllamaPulledModel, OllamaStatus, LMStudioStatus, LMStudioDownloadedModel } from '../api'
+import type { ProviderModelList, OllamaPulledModel, OllamaStatus } from '../api'
 import { CLOUD_PROVIDER_ORDER } from '../constants'
 import {
   RefreshCw, Trash2, Download, Check, HardDrive, Cloud, Loader2,
-  AlertTriangle, ExternalLink, Server, X, Info, Play, Cpu, Thermometer,
-  Activity, Layers, Zap, ChevronDown, ChevronRight, Power, Eye, Wrench,
+  AlertTriangle, ExternalLink, Server, X, Info, Play, Cpu,
+  ChevronDown, ChevronRight, Power, Eye, Wrench,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatBytes } from '../lib/format'
@@ -34,22 +29,18 @@ import {
 } from '../api-recovery'
 import { LocalModelsTable, localCounts, type LocalModelRow } from './models/LocalModelsTable'
 import { CloudRecommendations } from './models/CloudRecommendations'
+import { GPUStatsCard } from './models/GPUStatsCard'
+import { ProviderCard } from './models/ProviderCard'
+import { RoutingStatsSection } from './models/RoutingStatsSection'
+import { LMStudioLibrarySection } from './models/LMStudioLibrarySection'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Badge, Button, Card, EmptyState, Metric, ProgressBar,
   SearchInput, Select, Skeleton, StatusDot, Table, Tooltip,
 } from '../components/ui'
 import type { TableColumn } from '../components/ui'
-import type { SemanticColor } from '../lib/design-tokens'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const TYPE_BADGE: Record<string, { label: string; color: SemanticColor }> = {
-  local:        { label: 'Local',        color: 'accent' },
-  subscription: { label: 'Subscription', color: 'info' },
-  free:         { label: 'Free Tier',    color: 'success' },
-  paid:         { label: 'Paid API',     color: 'warning' },
-}
 
 const ONBOARDING_DISMISSED_KEY = 'nova_onboarding_dismissed'
 
@@ -102,177 +93,6 @@ function OllamaStatusBadge({ status }: { status: OllamaStatus | undefined }) {
   )
 }
 
-// ── GPU Stats Card ──────────────────────────────────────────────────────────
-
-function GPUStatsCard() {
-  const { data: gpuStats } = useQuery({
-    queryKey: ['gpu-stats'],
-    queryFn: getGPUStats,
-    refetchInterval: 10_000,
-  })
-
-  if (!gpuStats) return null
-
-  return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        <Cpu size={16} className="text-accent" />
-        <span className="text-compact font-semibold text-content-primary">GPU</span>
-      </div>
-      <div className="grid grid-cols-3 gap-4">
-        <div>
-          <span className="text-caption text-content-tertiary flex items-center gap-1">
-            <Activity size={10} /> Utilization
-          </span>
-          <p className="text-display font-mono text-content-primary mt-1">{gpuStats.gpu_utilization_pct}%</p>
-        </div>
-        <div>
-          <span className="text-caption text-content-tertiary flex items-center gap-1">
-            <Layers size={10} /> VRAM
-          </span>
-          <p className="text-display font-mono text-content-primary mt-1">
-            {gpuStats.vram_used_gb}/{gpuStats.vram_total_gb} GB
-          </p>
-          <ProgressBar
-            value={(gpuStats.vram_used_gb / gpuStats.vram_total_gb) * 100}
-            size="sm"
-            className="mt-1"
-          />
-        </div>
-        <div>
-          <span className="text-caption text-content-tertiary flex items-center gap-1">
-            <Thermometer size={10} /> Temp
-          </span>
-          <p className="text-display font-mono text-content-primary mt-1">{gpuStats.temperature_c}&deg;C</p>
-        </div>
-      </div>
-    </Card>
-  )
-}
-
-// ── Provider Card ─────────────────────────────────────────────────────────────
-
-function ProviderCard({ provider }: { provider: ProviderModelList }) {
-  // "In memory" truth for local models — backends evict/lazy-load, and a
-  // pulled model is not a loaded model. One shared query across all cards.
-  const { data: loadedInfo } = useQuery({
-    queryKey: ['inference-loaded'],
-    queryFn: () => apiFetch<{ backend: string; healthy: boolean; loaded_models: string[] }>(
-      '/v1/health/inference/loaded'
-    ),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-    retry: 0,
-    enabled: provider.type === 'local',
-  })
-  const loadedModels = loadedInfo?.loaded_models ?? []
-  const isModelLoaded = (id: string) => {
-    const base = id.includes('/') ? id.split('/').pop()! : id
-    return loadedModels.some(l => l === id || l === base || l.startsWith(base) || base.startsWith(l))
-  }
-  const navigate = useNavigate()
-  const badge = TYPE_BADGE[provider.type] ?? TYPE_BADGE.free
-  const configured = provider.available
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms?: number; error?: string } | null>(null)
-  const dotStatus = testResult ? (testResult.ok ? 'success' : 'danger') : configured ? 'neutral' : 'neutral'
-
-  const handleTest = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const result = await testProvider(provider.slug)
-      setTestResult(result)
-    } catch (err) {
-      setTestResult({ ok: false, error: String(err) })
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  return (
-    <Card
-      className={clsx(
-        configured ? 'border-accent-dim' : 'opacity-55 hover:opacity-75 transition-opacity',
-      )}
-    >
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <StatusDot status={dotStatus} />
-            <h3 className="text-compact font-semibold text-content-primary">{provider.name}</h3>
-            <Badge color={badge.color} size="sm">{badge.label}</Badge>
-            {provider.models.length > 0 && configured && (
-              <Badge color="neutral" size="sm">{provider.models.length} models</Badge>
-            )}
-          </div>
-          {configured && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleTest}
-              loading={testing}
-            >
-              Test
-            </Button>
-          )}
-        </div>
-
-        {/* Test result */}
-        {testResult && (
-          <div className={`mb-3 rounded-sm px-3 py-2 text-caption ${testResult.ok ? 'bg-success-dim text-success' : 'bg-danger-dim text-danger'}`}>
-            {testResult.ok ? `OK -- ${testResult.latency_ms}ms` : `Failed: ${testResult.error}`}
-          </div>
-        )}
-
-        {configured ? (
-          <div className="space-y-1.5">
-            {provider.models.length > 0 ? (
-              <ul className="space-y-1 max-h-32 overflow-y-auto">
-                {provider.models.map(m => (
-                  <li
-                    key={m.id}
-                    className="flex items-center gap-1.5 text-mono-sm text-content-secondary truncate"
-                    title={m.id}
-                  >
-                    {m.registered && <Check className="h-3 w-3 text-success shrink-0" />}
-                    <span className="truncate">{m.id}</span>
-                    {provider.type === 'local' && isModelLoaded(m.id) && (
-                      <Badge color="success" size="sm">in memory</Badge>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-caption text-content-tertiary italic">
-                Connected -- models loaded from provider config
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-caption text-content-tertiary">Not configured. To enable:</p>
-            <ul className="space-y-1">
-              {provider.auth_methods.map((method, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-caption text-content-tertiary">
-                  <span className="text-content-tertiary mt-0.5">--</span>
-                  <code className="text-mono-sm text-content-secondary">{method}</code>
-                </li>
-              ))}
-            </ul>
-            <button
-              onClick={() => navigate('/settings#provider-status')}
-              className="inline-flex items-center gap-1 text-caption text-accent hover:underline"
-            >
-              Configure in Settings <ExternalLink className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-      </div>
-    </Card>
-  )
-}
-
 // ── Pulled model row ──────────────────────────────────────────────────────────
 
 function isRequiredModel(name: string, required: Set<string>): boolean {
@@ -298,66 +118,6 @@ function normalizeOllamaName(name: string): string {
   return name.endsWith(':latest') ? name.slice(0, -7) : name
 }
 
-// ── Routing Stats section ─────────────────────────────────────────────────────
-
-function RoutingStatsSection() {
-  const [open, setOpen] = useState(false)
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['routing-stats'],
-    queryFn: () => getRoutingStats(),
-    staleTime: 30_000,
-  })
-
-  if (isLoading) return <Skeleton variant="rect" height="120px" />
-  if (!stats || stats.by_model.length === 0) return null
-
-  return (
-    <Card className="overflow-hidden">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-surface-card-hover transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          <Zap size={16} className="text-accent" />
-          <span className="text-compact font-semibold text-content-primary">Routing Stats (7d)</span>
-          <Tooltip content="Percentage of requests where the primary model failed and a fallback was used.">
-            <Badge color={stats.fallback_rate_pct > 20 ? 'warning' : 'success'} size="sm">
-              {stats.fallback_rate_pct.toFixed(1)}% fallback
-            </Badge>
-          </Tooltip>
-        </div>
-        {open ? <ChevronDown size={14} className="text-content-tertiary" /> : <ChevronRight size={14} className="text-content-tertiary" />}
-      </button>
-      {open && (
-        <div className="px-4 pb-4 overflow-x-auto border-t border-border-subtle pt-3">
-          <table className="w-full text-caption">
-            <thead>
-              <tr className="text-content-tertiary">
-                <th className="text-left py-1.5 pr-3 font-medium">Model</th>
-                <th className="text-right py-1.5 px-3 font-medium">Requests</th>
-                <th className="text-right py-1.5 px-3 font-medium">Avg Tokens</th>
-                <th className="text-right py-1.5 px-3 font-medium">Avg Latency</th>
-                <th className="text-right py-1.5 pl-3 font-medium">Cost</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-subtle">
-              {stats.by_model.map(m => (
-                <tr key={m.model}>
-                  <td className="py-1.5 pr-3 font-mono text-content-primary">{m.model}</td>
-                  <td className="py-1.5 px-3 text-right text-content-secondary">{m.requests.toLocaleString()}</td>
-                  <td className="py-1.5 px-3 text-right text-content-secondary">{m.avg_tokens.toLocaleString()}</td>
-                  <td className="py-1.5 px-3 text-right text-content-secondary">{(m.avg_latency_ms / 1000).toFixed(1)}s</td>
-                  <td className="py-1.5 pl-3 text-right font-mono text-content-secondary">${m.cost_usd.toFixed(4)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
-  )
-}
-
 // ── Help entries ─────────────────────────────────────────────────────────────
 
 const HELP_ENTRIES = [
@@ -367,166 +127,6 @@ const HELP_ENTRIES = [
   { term: 'Pulled Models', definition: 'AI models downloaded and cached locally in Ollama, ready for immediate inference.' },
   { term: 'LM Studio', definition: 'A desktop app that runs local models via an OpenAI-compatible server. Nova discovers loaded models and (on LM Studio 0.4.0+) can load/unload models from your downloaded library.' },
 ]
-
-// ── LM Studio Library Section ─────────────────────────────────────────────────
-
-function LMStudioStatusBadge({ status }: { status: LMStudioStatus | undefined }) {
-  const healthy = status?.healthy ?? false
-  return (
-    <Badge color={healthy ? 'success' : 'danger'} size="sm">
-      <StatusDot status={healthy ? 'success' : 'danger'} pulse={healthy} />
-      {healthy ? 'Connected' : 'Not reachable'}
-    </Badge>
-  )
-}
-
-function LMStudioLibrarySection({ isActive = false }: { isActive?: boolean }) {
-  const qc = useQueryClient()
-  const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set())
-  const [unloadingModels, setUnloadingModels] = useState<Set<string>>(new Set())
-  const [error, setError] = useState<string | null>(null)
-
-  const status = useQuery({
-    queryKey: ['lmstudio-status'],
-    queryFn: getLMStudioStatus,
-    refetchInterval: 10_000,
-  })
-
-  const downloaded = useQuery({
-    queryKey: ['lmstudio-downloaded'],
-    queryFn: () => getLMStudioDownloaded().catch(() => [] as LMStudioDownloadedModel[]),
-    refetchInterval: 15_000,
-    enabled: status.data?.healthy ?? false,
-  })
-
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })
-    qc.invalidateQueries({ queryKey: ['lmstudio-status'] })
-    qc.invalidateQueries({ queryKey: ['model-catalog'] })
-    qc.fetchQuery({ queryKey: ['model-catalog'], queryFn: () => discoverModels(true) })
-  }
-
-  const loadModel = useMutation({
-    mutationFn: (key: string) => loadLMStudioModel(key),
-    onMutate: (key) => {
-      setError(null)
-      setLoadingModels(prev => new Set(prev).add(key))
-    },
-    onSuccess: () => invalidateAll(),
-    onError: (e: Error) => setError(e.message || 'Failed to load model'),
-    onSettled: () => setLoadingModels(prev => { const n = new Set(prev); n.clear(); return n }),
-  })
-
-  const unloadModel = useMutation({
-    mutationFn: (instanceId: string) => unloadLMStudioModel(instanceId),
-    onMutate: (instanceId) => {
-      setError(null)
-      setUnloadingModels(prev => new Set(prev).add(instanceId))
-    },
-    onSuccess: () => invalidateAll(),
-    onError: (e: Error) => setError(e.message || 'Failed to unload model'),
-    onSettled: () => setUnloadingModels(prev => { const n = new Set(prev); n.clear(); return n }),
-  })
-
-  const healthy = status.data?.healthy ?? false
-  const models = downloaded.data ?? []
-  const loadedCount = models.filter(m => m.loaded).length
-
-  return (
-    <section className="space-y-4">
-      <div className="flex items-center gap-3">
-        <HardDrive className="h-5 w-5 text-accent" />
-        <h2 className="text-compact font-semibold text-content-primary">LM Studio</h2>
-        <Badge color={isActive ? 'success' : 'neutral'} size="sm">
-          {isActive ? 'Active — serving Nova' : 'Available'}
-        </Badge>
-        <LMStudioStatusBadge status={status.data} />
-        {models.length > 0 && (
-          <span className="font-mono text-caption text-content-tertiary">
-            on disk {models.length} · in memory {loadedCount}
-          </span>
-        )}
-      </div>
-      {healthy && (
-        <p className="text-caption text-content-tertiary flex items-center gap-1.5">
-          <Info className="h-3 w-3 shrink-0" />
-          Add models: download them in the LM Studio app — they appear here once downloaded.
-          (LM Studio has no download API, so Nova loads/unloads them but can't pull them for you.)
-        </p>
-      )}
-
-      {!healthy && (
-        <EmptyState
-          icon={Server}
-          title="LM Studio is not reachable"
-          description="Start LM Studio, open the Developer tab, and click Start Server (default port 1234). Then set inference.lmstudio_url in Settings if it isn't on your host."
-          action={{ label: 'Configure in Settings', onClick: () => window.location.hash = '#/settings#local-inference' }}
-        />
-      )}
-
-      {error && (
-        <div className="flex items-center gap-2 text-compact text-danger">
-          <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
-        </div>
-      )}
-
-      {healthy && downloaded.isLoading && (
-        <Card><div className="p-4"><Skeleton lines={3} /></div></Card>
-      )}
-
-      {healthy && !downloaded.isLoading && models.length === 0 && (
-        <Card>
-          <div className="px-4 py-6 text-compact text-content-tertiary text-center">
-            No models downloaded in LM Studio yet. Download models in the LM Studio app to see them here.
-          </div>
-        </Card>
-      )}
-
-      {models.length > 0 && (() => {
-        const rows: LocalModelRow[] = models.map(m => ({
-          id: m.key,
-          name: m.display_name,
-          sizeBytes: m.size_bytes,
-          params: m.params_string,
-          quant: m.quantization,
-          context: m.max_context_length ? `${Math.round(m.max_context_length / 1024)}K` : null,
-          caps: [
-            ...(m.type === 'embedding' ? ['embed'] : []),
-            ...(m.supports_vision ? ['vision'] : []),
-            ...(m.supports_tools ? ['tools'] : []),
-          ],
-          loaded: m.loaded,
-        }))
-        const instanceOf = new Map(models.map(m => [m.key, m.loaded_instances[0] ?? m.key]))
-        return (
-          <Card>
-            <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-              <h3 className="text-compact font-medium text-content-primary">Models</h3>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<RefreshCw className={`h-3.5 w-3.5 ${downloaded.isFetching ? 'animate-spin' : ''}`} />}
-                onClick={() => qc.invalidateQueries({ queryKey: ['lmstudio-downloaded'] })}
-              >
-                Refresh
-              </Button>
-            </div>
-            <LocalModelsTable
-              rows={rows}
-              busyIds={new Set([
-                ...[...loadingModels],
-                ...models.filter(m => unloadingModels.has(m.loaded_instances[0] ?? m.key)).map(m => m.key),
-              ])}
-              onLoad={(id) => loadModel.mutate(id)}
-              onUnload={(id) => unloadModel.mutate(instanceOf.get(id) ?? id)}
-              emptyText="No models downloaded in LM Studio yet."
-            />
-          </Card>
-        )
-      })()}
-    </section>
-  )
-}
 
 // ── Main Component ───────────────────────────────────────────────────────────
 
