@@ -85,6 +85,8 @@ def _inject_litellm_env_keys() -> None:
         os.environ["OPENROUTER_API_KEY"] = settings.openrouter_api_key
     if settings.github_token:
         os.environ["GITHUB_TOKEN"] = settings.github_token
+    if settings.nvidia_api_key:
+        os.environ["NVIDIA_NIM_API_KEY"] = settings.nvidia_api_key
     if settings.chatgpt_access_token:
         os.environ["CHATGPT_ACCESS_TOKEN"] = settings.chatgpt_access_token
 
@@ -127,6 +129,7 @@ _groq = LiteLLMProvider(default_model=settings.default_groq_model, label="groq")
 _cerebras = LiteLLMProvider(default_model=settings.default_cerebras_model, label="cerebras")
 _openrouter = LiteLLMProvider(default_model=settings.default_openrouter_model, label="openrouter")
 _github = LiteLLMProvider(default_model=settings.default_github_model, label="github")
+_nvidia = LiteLLMProvider(default_model=settings.default_nvidia_model, label="nvidia")
 # Read GEMINI_API_KEY from os.environ — it's authoritative after _inject_litellm_env_keys
 # applied platform_secrets overrides on top of settings/.env values.
 _gemini = GeminiADCProvider(
@@ -177,6 +180,8 @@ def _build_cloud_fallback() -> FallbackProvider:
         chain.append(_openrouter)
     if settings.github_token:
         chain.append(_github)
+    if settings.nvidia_api_key:
+        chain.append(_nvidia)
 
     # Subscription providers come before paid API to prefer zero-cost
     if _chatgpt_subscription.is_available:
@@ -213,6 +218,8 @@ def _build_default_fallback() -> FallbackProvider:
         chain.append(_openrouter)
     if settings.github_token:
         chain.append(_github)
+    if settings.nvidia_api_key:
+        chain.append(_nvidia)
 
     # Subscription providers come before paid API to prefer zero-cost
     if _chatgpt_subscription.is_available:
@@ -562,6 +569,13 @@ MODEL_REGISTRY: dict[str, ModelProvider] = {
     "github/gpt-4o-mini":                 _github,
     "github/meta-llama-3.1-70b-instruct": _github,
 
+    # ── NVIDIA NIM — integrate.api.nvidia.com (free credits, then paid) ────────
+    "nvidia_nim/meta/llama-3.3-70b-instruct":            _nvidia,
+    "nvidia_nim/meta/llama-3.1-8b-instruct":             _nvidia,
+    "nvidia_nim/nvidia/llama-3.1-nemotron-70b-instruct": _nvidia,
+    "nvidia_nim/deepseek-ai/deepseek-r1":                _nvidia,
+    "nvidia_nim/qwen/qwen2.5-coder-32b-instruct":        _nvidia,
+
     # ── Paid Anthropic API (bare model names route here via ANTHROPIC_API_KEY) ──
     "claude-sonnet-4-6":                  _anthropic,
     "claude-opus-4-6":                    _anthropic,
@@ -631,6 +645,8 @@ def get_provider_catalog() -> list[dict]:
          "available": bool(settings.openrouter_api_key),  "default_model": settings.default_openrouter_model},
         {"slug": "github",      "name": "GitHub Models",       "type": "free",         "instance": _github,
          "available": bool(settings.github_token),        "default_model": settings.default_github_model},
+        {"slug": "nvidia",      "name": "NVIDIA NIM",          "type": "free",         "instance": _nvidia,
+         "available": bool(settings.nvidia_api_key),      "default_model": settings.default_nvidia_model},
         {"slug": "anthropic",   "name": "Anthropic API",       "type": "paid",         "instance": _anthropic,
          "available": bool(settings.anthropic_api_key),   "default_model": "claude-sonnet-4-6"},
         {"slug": "openai",      "name": "OpenAI API",          "type": "paid",         "instance": _openai,

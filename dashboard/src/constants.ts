@@ -5,7 +5,7 @@
 /** Provider display order for the Models page. */
 export const CLOUD_PROVIDER_ORDER = [
   'claude-max', 'anthropic', 'openai', 'chatgpt',
-  'groq', 'gemini', 'cerebras', 'openrouter', 'github',
+  'groq', 'gemini', 'cerebras', 'openrouter', 'github', 'nvidia',
 ]
 
 // ── Task Pipeline ────────────────────────────────────────────────────────────

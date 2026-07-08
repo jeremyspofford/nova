@@ -129,6 +129,7 @@ services:
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       # ── Paid API keys ─────────────────────────────────────────────────────────
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

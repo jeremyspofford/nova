@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     default_cerebras_model: str = "cerebras/llama3.1-8b"   # llama3.3-70b was retired
     default_openrouter_model: str = "openrouter/meta-llama/llama-3.1-8b-instruct:free"
     default_github_model: str = "github/gpt-4o-mini"
+    default_nvidia_model: str = "nvidia_nim/meta/llama-3.3-70b-instruct"
     default_chatgpt_model: str = "chatgpt/gpt-4o"
 
     # Anthropic (production) — api.anthropic.com API key, separate from claude.ai subscription
@@ -93,6 +94,10 @@ class Settings(BaseSettings):
     # GitHub Models: 50-150 req/day free — use your GitHub PAT
     # https://github.com/marketplace/models
     github_token: str = ""
+
+    # NVIDIA NIM: free credits then paid — get key at build.nvidia.com
+    # OpenAI-compatible at https://integrate.api.nvidia.com/v1 (litellm nvidia_nim/*)
+    nvidia_api_key: str = ""
 
     # ── Subscription providers (quota from existing subscriptions) ─────────────
     # ChatGPT Plus/Pro subscription — no api.openai.com billing
