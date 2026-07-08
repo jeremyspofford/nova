@@ -112,7 +112,7 @@ export function ContextPanel({ messages, isStreaming, collapsed, onToggle }: Pro
           {steps.map((step, i) => (
             <div key={i} className="py-2.5 border-t border-border-subtle/30 first:border-0">
               <div className="flex items-center justify-between">
-                <span className="text-compact font-medium text-content-primary truncate">
+                <span className="min-w-0 text-compact font-medium text-content-primary truncate">
                   {stepLabel(step)}
                 </span>
                 <span
@@ -181,7 +181,7 @@ export function ContextPanel({ messages, isStreaming, collapsed, onToggle }: Pro
                 )}
                 <span className="text-caption font-mono text-content-secondary">{step.step}</span>
                 {step.detail && (
-                  <span className="text-caption font-mono text-content-tertiary truncate flex-1">
+                  <span className="min-w-0 flex-1 text-caption font-mono text-content-tertiary truncate">
                     {step.detail}
                   </span>
                 )}

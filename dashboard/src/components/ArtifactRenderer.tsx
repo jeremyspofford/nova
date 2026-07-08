@@ -180,7 +180,7 @@ export default function ArtifactCard({
 
         <span className="text-content-tertiary shrink-0">{typeIcon(artifact.artifact_type)}</span>
 
-        <span className="text-compact text-content-primary font-medium truncate">
+        <span className="min-w-0 text-compact text-content-primary font-medium truncate">
           {artifact.name}
         </span>
 
@@ -192,7 +192,7 @@ export default function ArtifactCard({
           <button
             type="button"
             onClick={() => onFileClick?.(artifact.file_path!)}
-            className="font-mono text-mono-sm text-content-tertiary hover:text-content-primary hover:underline truncate transition-colors"
+            className="min-w-0 font-mono text-mono-sm text-content-tertiary hover:text-content-primary hover:underline truncate transition-colors"
             title={artifact.file_path}
           >
             {artifact.file_path}

@@ -71,7 +71,7 @@ export default function FileViewer({ path, onClose }: FileViewerProps) {
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-3 border-b border-border-subtle shrink-0">
           <FileText className="w-4 h-4 text-content-tertiary shrink-0" />
-          <span className="font-mono text-mono-sm text-content-primary truncate flex-1">
+          <span className="min-w-0 flex-1 font-mono text-mono-sm text-content-primary truncate">
             {path}
           </span>
           {data && (

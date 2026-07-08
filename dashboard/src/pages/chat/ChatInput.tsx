@@ -275,7 +275,7 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
                 <>
                   <Mic size={14} className="text-red-400 shrink-0 animate-pulse" />
                   <AudioLevelIndicator level={audioLevel} bars={4} className="h-3.5 shrink-0" />
-                  <span className="text-content-secondary truncate">{liveTranscript || 'Listening...'}</span>
+                  <span className="min-w-0 text-content-secondary truncate">{liveTranscript || 'Listening...'}</span>
                   <span className="text-content-tertiary shrink-0 ml-auto text-xs">{Math.floor(voice.recordingDuration / 1000)}s</span>
                 </>
               )}
@@ -303,7 +303,7 @@ export function ChatInput({ onSubmit, isStreaming, aiName, models, modelId, onMo
           <div className="mx-3 mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-danger-dim/50 border border-danger/20 text-sm">
             <Mic size={14} className="text-danger shrink-0 animate-pulse" />
             <AudioLevelIndicator level={audioLevel} bars={4} className="h-3.5 shrink-0" />
-            <span className="text-content-secondary truncate">{liveTranscript || 'Listening...'}</span>
+            <span className="min-w-0 text-content-secondary truncate">{liveTranscript || 'Listening...'}</span>
             <span className="text-content-tertiary shrink-0 ml-auto text-xs">{Math.floor(voice.recordingDuration / 1000)}s</span>
           </div>
         )}

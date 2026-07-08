@@ -203,7 +203,7 @@ function AuditRow({ row }: { row: FeatureFlagAuditRow }) {
         <span>by {row.actor}</span>
         {row.actor_ip && <span>· {row.actor_ip}</span>}
         {row.actor_user_agent && (
-          <span className="truncate" title={row.actor_user_agent}>
+          <span className="min-w-0 truncate" title={row.actor_user_agent}>
             · {row.actor_user_agent.slice(0, 30)}
             {row.actor_user_agent.length > 30 ? '…' : ''}
           </span>

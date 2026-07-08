@@ -265,7 +265,7 @@ function FrictionEntryCard({
               ? <ChevronDown size={14} className="shrink-0 text-content-tertiary" />
               : <ChevronRight size={14} className="shrink-0 text-content-tertiary" />}
             <StatusDot status={STATUS_COLOR[entry.status] ?? 'neutral'} />
-            <span className={`text-compact font-medium text-content-primary ${expanded ? '' : 'truncate'}`}>
+            <span className={`min-w-0 text-compact font-medium text-content-primary ${expanded ? '' : 'truncate'}`}>
               {entry.description}
             </span>
           </div>

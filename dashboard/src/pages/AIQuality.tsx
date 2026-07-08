@@ -741,7 +741,7 @@ function BenchmarkRunRow({
                     className="rounded-md border border-border-subtle bg-surface-card p-3 glass-card dark:border-white/[0.08]"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-caption font-medium text-content-primary truncate" title={c.name}>
+                      <span className="min-w-0 text-caption font-medium text-content-primary truncate" title={c.name}>
                         {c.name}
                       </span>
                       <span className={clsx('font-mono text-caption font-bold', compositeColor(c.composite))}>
@@ -753,7 +753,7 @@ function BenchmarkRunRow({
                       <div className="mt-2 space-y-1">
                         {Object.entries(c.scores).map(([dim, score]) => (
                           <div key={dim} className="flex items-center justify-between">
-                            <span className="text-micro text-content-tertiary truncate mr-2">
+                            <span className="min-w-0 text-micro text-content-tertiary truncate mr-2">
                               {formatDimension(dim)}
                             </span>
                             <span className={clsx('font-mono text-micro', scoreColor(score))}>

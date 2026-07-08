@@ -59,7 +59,7 @@ function StepRow({ step }: { step: ActivityStep }) {
           {memHits.map(h => (
             <span key={h.id} className="flex items-center gap-1.5 text-content-tertiary" title={h.id}>
               <FileText size={10} className="shrink-0 text-content-tertiary/70" />
-              <span className="truncate">{h.title}</span>
+              <span className="min-w-0 truncate">{h.title}</span>
               {h.score != null && (
                 <span className="font-mono text-mono-sm text-content-tertiary/50 tabular-nums">
                   {h.score.toFixed(1)}

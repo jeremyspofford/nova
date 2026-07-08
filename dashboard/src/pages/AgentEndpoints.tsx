@@ -310,7 +310,7 @@ function EndpointCard({
         <div className="border-t border-border-subtle bg-surface-elevated px-4 py-3 space-y-2">
           <div className="text-caption flex items-center gap-1">
             <span className="text-content-tertiary">URL:</span>
-            <code className="text-content-secondary font-mono text-mono-sm flex-1 truncate">{endpoint.url}</code>
+            <code className="min-w-0 flex-1 text-content-secondary font-mono text-mono-sm truncate">{endpoint.url}</code>
             <a
               href={endpoint.url}
               target="_blank"
