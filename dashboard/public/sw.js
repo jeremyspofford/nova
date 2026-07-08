@@ -18,7 +18,7 @@
  * any leftover broken cache from that strategy.
  */
 
-const CACHE_NAME = 'nova-shell-v3'
+const CACHE_NAME = 'nova-shell-v4'
 
 // Static media we want available offline. Notably absent: '/' and HTML —
 // those go network-first so the chunk-hash references stay current.
@@ -70,7 +70,10 @@ self.addEventListener('fetch', (event) => {
   const isHTML = event.request.headers.get('accept')?.includes('text/html')
   if (isNavigation || isHTML) {
     event.respondWith(
-      fetch(event.request)
+      // cache:'no-store' — a plain fetch(request) may be answered by the HTTP
+      // cache, resurrecting a stale shell despite "network-first". Fetch by
+      // URL: re-wrapping a mode:'navigate' Request throws in Chromium.
+      fetch(event.request.url, { cache: 'no-store', credentials: 'same-origin' })
         .then((resp) => {
           const clone = resp.clone()
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone))
