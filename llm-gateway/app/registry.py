@@ -734,6 +734,36 @@ async def get_embed_provider(model: str) -> ModelProvider:
     return MODEL_REGISTRY[DEFAULT_MODEL_KEY]
 
 
+_last_local_resync = 0.0
+_LOCAL_RESYNC_INTERVAL = 30.0  # seconds — throttle the on-miss re-sync
+
+
+async def _maybe_resync_local(model: str) -> bool:
+    """Re-sync the active local backend's model set (throttled) and re-check
+    whether *model* is local. Closes the sync-stale window in which a local
+    model whose name collides with a cloud prefix (e.g. LM Studio's
+    "openai/gpt-oss-20b") would otherwise route to the cloud provider. A
+    genuine cloud model never appears in the local set, so this can't
+    misdirect real cloud traffic."""
+    global _last_local_resync
+    now = time.monotonic()
+    if now - _last_local_resync < _LOCAL_RESYNC_INTERVAL:
+        return False
+    _last_local_resync = now
+    backend = await _get_redis_config("inference.backend", "ollama")
+    try:
+        if backend == "lmstudio":
+            await sync_lmstudio_models()
+        elif backend == "ollama":
+            await sync_ollama_models()
+        else:
+            return False
+    except Exception as e:
+        log.debug("local model re-sync on miss failed: %s", e)
+        return False
+    return _is_local_model(model)
+
+
 async def get_provider(model: str) -> ModelProvider:
     """
     Look up the provider for a model ID, applying the routing strategy.
@@ -761,7 +791,13 @@ async def get_provider(model: str) -> ModelProvider:
         # Fall through to normal cloud provider lookup below
 
     # ── Local model — apply strategy ──────────────────────────────────
-    if _is_local_model(model):
+    is_local = _is_local_model(model)
+    # TD-11: under local-first, an unrecognized model may be a freshly-added
+    # local model whose name carries a cloud prefix (LM Studio's
+    # "openai/gpt-oss-20b"). Re-sync once before handing it to a cloud provider.
+    if not is_local and strategy == "local-first":
+        is_local = await _maybe_resync_local(model)
+    if is_local:
         if strategy == "local-first":
             return OllamaCloudFallback(ollama=_local, cloud=_cloud_fallback)
         elif strategy == "cloud-first":
