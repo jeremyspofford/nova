@@ -17,6 +17,7 @@ from uuid import UUID
 
 import httpx
 from nova_contracts import BlastRadius, ToolDefinition
+from nova_worker_common.url_validator import validate_url
 
 log = logging.getLogger(__name__)
 
@@ -207,8 +208,12 @@ async def execute_tool(name: str, arguments: dict) -> str:
 
 
 async def _open(args: dict) -> str:
+    url = args.get("url", "")
+    ssrf_error = validate_url(url)
+    if ssrf_error:
+        return f"Blocked: {ssrf_error}"
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        r = await c.post(f"{BROWSER_BASE}/sessions", json={"url": args.get("url", "")})
+        r = await c.post(f"{BROWSER_BASE}/sessions", json={"url": url})
         r.raise_for_status()
         d = r.json()
     return f"Opened session {d['session_id']} at {d['url']}. Take a browser_snapshot to see the page."
@@ -232,6 +237,9 @@ async def _snapshot(args: dict) -> str:
 
 async def _navigate(args: dict) -> str:
     sid = args["session_id"]
+    ssrf_error = validate_url(args["url"])
+    if ssrf_error:
+        return f"Blocked: {ssrf_error}"
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
         r = await c.post(f"{BROWSER_BASE}/sessions/{sid}/navigate", json={"url": args["url"]})
         r.raise_for_status()
