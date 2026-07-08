@@ -146,8 +146,10 @@ async def run_agent_turn(
                 "session_id": session_id,
                 "preview": query[:100] if query else "",
             })
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort side channel — but log so a broken stimulus bus
+            # (which silences the live brain view + cortex reactions) leaves a trace.
+            log.debug("stimulus emit failed: %s", e)
 
         # 1. Resolve tool permissions (fast DB read — before the gather)
         effective_tools, disabled_groups = await resolve_effective_tools()
@@ -285,8 +287,8 @@ async def run_agent_turn_streaming(
             "session_id": session_id,
             "preview": query[:100] if query else "",
         })
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("stimulus emit failed: %s", e)
 
     category = None
     _memory_ids: list[str] = []

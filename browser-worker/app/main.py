@@ -39,6 +39,12 @@ async def lifespan(app: FastAPI):
     if _reaper_task:
         _reaper_task.cancel()
     await manager.stop()
+    # Close the admin-auth Redis connection (db11) — otherwise it leaks across
+    # restarts, the exact pattern CLAUDE.md warns about (TD-09).
+    try:
+        await _admin_resolver.close()
+    except Exception as e:
+        log.debug("admin resolver close failed: %s", e)
     log.info("Browser Worker shutdown complete")
 
 

@@ -110,9 +110,12 @@ class TrustedNetworkMiddleware(BaseHTTPMiddleware):
             self._cached_proxy_header = proxy_header.strip() if proxy_header else self._fallback_proxy_header
             self._cache_ts = now
         except Exception:
-            # DB unavailable — keep using previous cached or fallback values
+            # DB unavailable — keep using previous cached or fallback values.
+            # WARNING, not DEBUG: this is a security-adjacent config (the
+            # trusted-network bypass) silently falling back to possibly-more-
+            # permissive CIDRs, and CLAUDE.md forbids hiding that at DEBUG.
             self._cache_ts = now  # avoid hammering DB on every request
-            log.debug("Failed to refresh trusted network config from DB, using cached/fallback values")
+            log.warning("Failed to refresh trusted network config from DB, using cached/fallback values")
 
     def _get_client_ip(self, request: Request, proxy_header: str) -> str:
         """Determine the real client IP.
