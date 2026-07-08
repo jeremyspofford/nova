@@ -210,7 +210,7 @@ async def list_pending(pool: asyncpg.Pool, *, tenant_id: UUID) -> list[asyncpg.R
         return await conn.fetch(
             "SELECT * FROM approval_requests "
             "WHERE tenant_id=$1 AND status='pending' AND expires_at > now() "
-            "ORDER BY created_at DESC",
+            "ORDER BY created_at DESC LIMIT 500",
             tenant_id,
         )
 

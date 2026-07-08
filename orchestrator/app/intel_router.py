@@ -487,6 +487,7 @@ async def get_recommendation(rec_id: UUID, _user: UserDep):
             SELECT * FROM comments
             WHERE entity_type = 'recommendation' AND entity_id = $1
             ORDER BY created_at ASC
+            LIMIT 500
             """,
             rec_id,
         )

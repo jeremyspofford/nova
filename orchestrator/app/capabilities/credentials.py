@@ -297,14 +297,14 @@ async def list_credentials(
         if provider_kind:
             rows = await conn.fetch(
                 "SELECT * FROM capability_credentials "
-                "WHERE tenant_id=$1 AND provider_kind=$2 ORDER BY created_at DESC",
+                "WHERE tenant_id=$1 AND provider_kind=$2 ORDER BY created_at DESC LIMIT 500",
                 tenant_id,
                 provider_kind,
             )
         else:
             rows = await conn.fetch(
                 "SELECT * FROM capability_credentials "
-                "WHERE tenant_id=$1 ORDER BY created_at DESC",
+                "WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 500",
                 tenant_id,
             )
     return [_row_to_model(r) for r in rows]
