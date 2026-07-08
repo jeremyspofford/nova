@@ -49,10 +49,24 @@ async def provider_status():
     return get_provider_catalog()
 
 
+async def _pick_local_test_model() -> str | None:
+    """A model to smoke-test the active local backend: prefer one already
+    resident (no cold-load), else the first available."""
+    info = await inference_loaded()
+    loaded = info.get("loaded_models") or []
+    if loaded:
+        return loaded[0]
+    if info.get("backend") == "lmstudio":
+        st = await lmstudio_status()
+        models = st.get("models") or []
+        return models[0] if models else None
+    return None
+
+
 @health_router.post("/providers/{slug}/test")
 async def test_provider(slug: str):
     """Send a minimal completion to a provider and report latency."""
-    from app.registry import get_provider, get_provider_catalog
+    from app.registry import get_local_provider, get_provider, get_provider_catalog
     from nova_contracts import CompleteRequest, Message
 
     catalog = get_provider_catalog()
@@ -64,7 +78,18 @@ async def test_provider(slug: str):
 
     model = entry["default_model"]
     try:
-        provider = await get_provider(model)
+        # Local providers (LM Studio, Ollama, …) route to the local backend
+        # directly — routing by model name sends an LM Studio model named
+        # "openai/gpt-oss-20b" to cloud OpenAI, which fails with a key error.
+        if entry.get("type") == "local":
+            provider = get_local_provider()
+            if not model:
+                model = await _pick_local_test_model()
+            if not model:
+                return {"ok": False, "latency_ms": 0,
+                        "error": "No model is loaded — load one from the list above, then test."}
+        else:
+            provider = await get_provider(model)
         req = CompleteRequest(
             model=model,
             messages=[Message(role="user", content="Say hi")],
@@ -182,9 +207,26 @@ async def inference_loaded():
             out["healthy"] = True  # deliberately no local inference — nothing to load
 
         elif backend == "lmstudio":
-            st = await lmstudio_status()
-            out["healthy"] = bool(st.get("healthy"))
-            out["loaded_models"] = st.get("models", [])
+            # /v1/models lists everything downloaded; only /api/v0/models
+            # carries per-model state, so filter to actually-resident ones
+            # (else every downloaded model wrongly reads "in memory").
+            from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+            url = await _refresh_lmstudio_runtime_url()
+            _lmstudio._last_health_check = 0.0
+            out["healthy"] = await _lmstudio.check_health()
+            if out["healthy"]:
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=5.0, headers=_lmstudio._extra_headers
+                    ) as c:
+                        r = await c.get(f"{url}/api/v0/models")
+                    if r.status_code == 200:
+                        out["loaded_models"] = [
+                            m["id"] for m in r.json().get("data", [])
+                            if m.get("state") == "loaded" and m.get("id")
+                        ]
+                except Exception as e:
+                    log.debug("LM Studio loaded-state probe failed: %s", e)
 
         elif backend == "ollama":
             url = await get_ollama_base_url()
