@@ -537,7 +537,6 @@ export function Models() {
   const [deletingModels, setDeletingModels] = useState<Set<string>>(new Set())
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [sizeFilter, setSizeFilter] = useState<number>(0)
-  const [sizeFilterTouched, setSizeFilterTouched] = useState(false)
   // Installed models expanded by default (the whole point of the page);
   // collapsible so a big multi-backend machine can tuck a list away.
   const [installedOpen, setInstalledOpen] = useState(() => localStorage.getItem('models.installedOpen') !== '0')
@@ -584,14 +583,18 @@ export function Models() {
   })
   const detectedVram = Math.max(0, ...(hardware.data?.gpus?.map(g => g.vram_gb) ?? [0]))
 
-  // Default the size filter to the detected GPU until the user picks one.
-  // (hardware.json can be stale/absent — e.g. LM Studio setups — so 0 means
-  // "no opinion", never "hide everything".)
-  useEffect(() => {
-    if (sizeFilterTouched || !detectedVram) return
-    const fit = SIZE_FILTERS.filter(o => o.value > 0 && o.value <= detectedVram).pop()
-    if (fit) setSizeFilter(fit.value)
-  }, [detectedVram, sizeFilterTouched])
+  // What this machine can actually run: VRAM if there's a GPU, else system
+  // RAM (CPU inference). 0 = hardware unknown → can't judge fit, show all.
+  const machineCapacityGB = detectedVram > 0
+    ? detectedVram
+    : Math.floor(hardware.data?.ram_gb ?? 0)
+  const capacityLabel = detectedVram > 0
+    ? `${detectedVram} GB GPU`
+    : machineCapacityGB > 0 ? `${machineCapacityGB} GB RAM` : ''
+
+  // Recommendations default to models that fit this machine (+ all cloud).
+  // "Show all sizes" lifts the cap for the curious.
+  const [showAllSizes, setShowAllSizes] = useState(false)
 
   const pulled = useQuery({
     queryKey: ['ollama-pulled'],
@@ -1019,28 +1022,39 @@ export function Models() {
                     Browse all <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
-                {/* Size filter — both sources carry sizes now, so filter
-                    out models that won't fit your GPU on either. */}
+                {/* Size filter — default hides models that won't fit this
+                    machine (cloud always shown); further-narrow chips below. */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <HardDrive className="h-3 w-3 text-content-tertiary" />
-                  <span className="text-micro text-content-tertiary">Max size:</span>
+                  {machineCapacityGB > 0 && !showAllSizes ? (
+                    <span className="text-micro text-content-tertiary">
+                      Fits your <span className="font-mono text-content-secondary">{capacityLabel}</span>, plus cloud
+                    </span>
+                  ) : (
+                    <span className="text-micro text-content-tertiary">Max size:</span>
+                  )}
                   <div className="flex gap-1">
-                    {SIZE_FILTERS.map(opt => (
-                      <button key={opt.value} onClick={() => { setSizeFilter(opt.value); setSizeFilterTouched(true) }}>
+                    {SIZE_FILTERS
+                      .filter(opt => showAllSizes || machineCapacityGB === 0 || opt.value === 0 || opt.value < machineCapacityGB)
+                      .map(opt => (
+                      <button key={opt.value} onClick={() => setSizeFilter(opt.value)}>
                         <Badge
                           color={sizeFilter === opt.value ? 'warning' : 'neutral'}
                           size="sm"
                           className="cursor-pointer font-mono"
                         >
-                          {opt.label}
+                          {opt.value === 0 && machineCapacityGB > 0 && !showAllSizes ? 'Any that fit' : opt.label}
                         </Badge>
                       </button>
                     ))}
                   </div>
-                  {!sizeFilterTouched && detectedVram > 0 && sizeFilter > 0 && (
-                    <span className="text-micro text-content-tertiary font-mono">
-                      matched to your GPU ({detectedVram} GB VRAM)
-                    </span>
+                  {machineCapacityGB > 0 && (
+                    <button
+                      onClick={() => setShowAllSizes(v => !v)}
+                      className="text-micro text-accent hover:underline font-mono ml-1"
+                    >
+                      {showAllSizes ? 'fit to machine' : 'show all sizes'}
+                    </button>
                   )}
                 </div>
               </div>
@@ -1057,7 +1071,14 @@ export function Models() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 {gridModels
                   .filter(rec => categoryFilter === 'all' || rec.category === categoryFilter)
-                  .filter(rec => sizeFilter === 0 || rec.cloud || (rec.size_gb ?? 0) <= sizeFilter)
+                  .filter(rec => {
+                    if (rec.cloud) return true          // cloud LLMs always shown
+                    const size = rec.size_gb ?? 0
+                    // hard cap at what the machine can run, unless "show all"
+                    const cap = showAllSizes || machineCapacityGB === 0 ? Infinity : machineCapacityGB
+                    const userMax = sizeFilter > 0 ? sizeFilter : Infinity
+                    return size <= Math.min(cap, userMax)
+                  })
                   .map(rec => {
                     const pullName = rec.ollama_id ?? rec.id
                     const sizeGB = rec.size_gb ?? 0
