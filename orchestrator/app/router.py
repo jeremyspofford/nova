@@ -80,6 +80,41 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["orchestrator"])
 
 
+def _humanize_chat_error(e: Exception) -> str:
+    """Convert an internal exception into a message safe to show in chat.
+
+    The llm-gateway returns structured errors ({"error", "detail", "model"}) —
+    surface those instead of a raw httpx string like
+    "Server error '502 Bad Gateway' for url http://llm-gateway:8001/complete".
+    """
+    try:
+        import httpx
+        if isinstance(e, httpx.HTTPStatusError):
+            body: dict = {}
+            try:
+                body = e.response.json()
+            except Exception:
+                pass
+            kind = body.get("error") or ""
+            detail = (body.get("detail") or "").strip()
+            model = body.get("model") or ""
+            if kind == "all_providers_failed":
+                base = (f"No model could handle this request — the active local backend "
+                        f"rejected '{model}' and every cloud fallback failed.")
+                return f"{base} {detail}" if detail else base + " Check Settings → AI & Models."
+            if kind == "provider_credentials_invalid":
+                return (f"The provider for '{model}' rejected its credentials. "
+                        f"Update the key in Settings → AI & Models → Provider Status.")
+            if kind == "budget_exhausted":
+                return "Daily budget exceeded — it resets at midnight UTC."
+            if detail:
+                return detail[:240]
+            return f"The model service returned an error (HTTP {e.response.status_code})."
+    except Exception:
+        pass
+    return "Something went wrong while generating a response. Please try again."
+
+
 async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sandbox_token=None,
                       conversation_id: str | None = None, user_message: str | None = None,
                       session_id: str | None = None, message_metadata: dict | None = None):
@@ -144,7 +179,7 @@ async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sa
         yield b"data: [DONE]\n\n"
     except Exception as e:
         log.error("%s error (agent=%s): %s", error_label, agent_id, e)
-        yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+        yield f"data: {json.dumps({'error': _humanize_chat_error(e)})}\n\n".encode()
         yield b"data: [DONE]\n\n"
     finally:
         if not pump_task.done():
