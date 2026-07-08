@@ -3,7 +3,6 @@ Shared audit log writer — single source of truth for the audit_log INSERT.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -35,7 +34,10 @@ async def write_audit_log(
             task_id,
             agent_session_id,
             message or event_type,
-            json.dumps(data or {}),
+            # Dict, not json.dumps — the pool's jsonb codec (db.py) encodes.
+            # Pre-dumping double-encodes: the column ends up a jsonb string,
+            # unqueryable with ->> (the cortex reflection bug class).
+            data or {},
         )
     except Exception:
         log.warning("Failed to write audit log: %s", event_type, exc_info=True)
@@ -65,7 +67,7 @@ async def audit_rbac(
         _actor = UUID(str(actor_id)) if actor_id else None
         _target = UUID(str(target_id)) if target_id else None
         _tenant = UUID(str(tenant_id)) if tenant_id else UUID("00000000-0000-0000-0000-000000000001")
-        _details = json.dumps(details) if details else None
+        _details = details if details else None  # dict — jsonb codec encodes (see above)
 
         await pool.execute(
             "INSERT INTO rbac_audit_log (actor_id, action, target_id, details, ip_address, tenant_id) "

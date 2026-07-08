@@ -186,3 +186,24 @@ async def deactivate_user(user_id: str, actor_id: str) -> bool:
     from app.auth import deny_user_token
     await deny_user_token(user_id, reason="deactivated")
     return "UPDATE 1" in result
+
+
+async def delete_user(user_id: str, actor_id: str, target_email: str | None = None) -> bool:
+    """Hard delete. Conversations and refresh tokens cascade away; tasks,
+    invites, tenants, and audit rows survive with a NULL user reference
+    (migration 100). The audit row carries the email because the user row
+    is gone by the time anyone reads it.
+    """
+    pool = get_pool()
+    from app.audit import audit_rbac
+    await audit_rbac(
+        pool, actor_id, "user_deleted",
+        target_id=user_id,
+        details={"email": target_email} if target_email else None,
+        tenant_id=None,  # will use default
+    )
+    # Deny live tokens before the row disappears.
+    from app.auth import deny_user_token
+    await deny_user_token(user_id, reason="deleted")
+    result = await pool.execute("DELETE FROM users WHERE id = $1", UUID(user_id))
+    return "DELETE 1" in result

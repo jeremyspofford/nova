@@ -136,3 +136,73 @@ class TestGuestAllowedModels:
             # Find guest_allowed_models in config entries
             guest_config = [c for c in config if c.get("key") == "guest_allowed_models"]
             assert len(guest_config) == 1
+
+
+class TestUserLifecycle:
+    """Deactivate (PATCH status) / reactivate / hard delete (DELETE)."""
+
+    @pytest.fixture
+    async def temp_user(self, client, headers):
+        """Create a throwaway member; hard-delete it on teardown if it survives."""
+        resp = await client.post(
+            "/api/v1/admin/users",
+            json={"email": "nova-test-lifecycle@test.local", "role": "member"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        user = resp.json()
+        yield user
+        await client.delete(f"/api/v1/admin/users/{user['id']}", headers=headers)
+
+    @pytest.mark.asyncio
+    async def test_deactivate_reactivate_roundtrip(self, client, headers, temp_user):
+        resp = await client.patch(
+            f"/api/v1/admin/users/{temp_user['id']}",
+            json={"status": "deactivated"}, headers=headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deactivated"
+
+        resp = await client.patch(
+            f"/api/v1/admin/users/{temp_user['id']}",
+            json={"status": "active"}, headers=headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_hard_delete_removes_user(self, client, headers, temp_user):
+        resp = await client.delete(f"/api/v1/admin/users/{temp_user['id']}", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "deleted"}
+
+        # Gone from the list — not a soft-delete
+        resp = await client.get("/api/v1/admin/users", headers=headers)
+        assert temp_user["id"] not in [u["id"] for u in resp.json()]
+
+        # Email is reusable, proving the row (not just the status) is gone
+        resp = await client.post(
+            "/api/v1/admin/users",
+            json={"email": "nova-test-lifecycle@test.local", "role": "member"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        recreated = resp.json()
+        assert recreated["id"] != temp_user["id"]
+        await client.delete(f"/api/v1/admin/users/{recreated['id']}", headers=headers)
+
+    @pytest.mark.asyncio
+    async def test_delete_owner_forbidden(self, client, headers):
+        resp = await client.get("/api/v1/admin/users", headers=headers)
+        owners = [u for u in resp.json() if u["role"] == "owner"]
+        if not owners:
+            pytest.skip("no owner account on this instance")
+        resp = await client.delete(f"/api/v1/admin/users/{owners[0]['id']}", headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_user_404(self, client, headers):
+        resp = await client.delete(
+            "/api/v1/admin/users/00000000-0000-0000-0000-00000000dead", headers=headers,
+        )
+        assert resp.status_code == 404

@@ -47,6 +47,16 @@ export async function updateUser(
 }
 
 export async function deactivateUser(userId: string): Promise<void> {
+  await updateUser(userId, { status: 'deactivated' })
+}
+
+export async function reactivateUser(userId: string): Promise<void> {
+  await updateUser(userId, { status: 'active' })
+}
+
+/** Hard delete — permanent. Conversations go with the user; tasks and audit
+ * history are kept without attribution. */
+export async function deleteUser(userId: string): Promise<void> {
   await apiFetch(`/api/v1/admin/users/${userId}`, { method: 'DELETE' })
 }
 

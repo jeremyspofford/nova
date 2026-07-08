@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Pencil, Plus, Trash2, Users as UsersIcon } from 'lucide-react'
-import { fetchUsers, updateUser, deactivateUser, createInvite, fetchInvites, revokeInvite, type InviteCreateRequest, type UserListItem } from '../api/users'
+import { fetchUsers, updateUser, deactivateUser, reactivateUser, deleteUser, createInvite, fetchInvites, revokeInvite, type InviteCreateRequest, type UserListItem } from '../api/users'
 import { useTabHash } from '../hooks/useTabHash'
 import { ROLE_DESCRIPTIONS, ROLE_HIERARCHY, ROLE_LABELS, canAssignRole, type Role } from '../lib/roles'
 import type { SemanticColor } from '../lib/design-tokens'
@@ -72,6 +72,7 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
   const qc = useQueryClient()
   const { data: users = [], isLoading, error } = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [editTarget, setEditTarget] = useState<UserListItem | null>(null)
 
   const updateMutation = useMutation({
@@ -86,6 +87,19 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
     mutationFn: deactivateUser,
     onSuccess: () => {
       setDeactivateTarget(null)
+      qc.invalidateQueries({ queryKey: ['users'] })
+    },
+  })
+
+  const reactivateMutation = useMutation({
+    mutationFn: reactivateUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteUser,
+    onSuccess: () => {
+      setDeleteTarget(null)
       qc.invalidateQueries({ queryKey: ['users'] })
     },
   })
@@ -164,14 +178,35 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
                           Edit
                         </Button>
                         {!isOwner && u.id !== currentUserId && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-danger"
-                            onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
-                          >
-                            Deactivate
-                          </Button>
+                          <>
+                            {u.status === 'deactivated' ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                loading={reactivateMutation.isPending && reactivateMutation.variables === u.id}
+                                onClick={() => reactivateMutation.mutate(u.id)}
+                              >
+                                Reactivate
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeactivateTarget({ id: u.id, name: u.display_name || u.email })}
+                              >
+                                Deactivate
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-danger"
+                              icon={<Trash2 size={14} />}
+                              onClick={() => setDeleteTarget({ id: u.id, name: u.display_name || u.email })}
+                            >
+                              Delete
+                            </Button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -187,9 +222,19 @@ export function UsersTab({ currentRole, currentUserId }: { currentRole: Role; cu
         open={!!deactivateTarget}
         onClose={() => setDeactivateTarget(null)}
         title="Deactivate User"
-        description={`Are you sure you want to deactivate "${deactivateTarget?.name}"? They will lose access to this Nova instance.`}
+        description={`Deactivate "${deactivateTarget?.name}"? They are signed out and blocked until reactivated. Their data is kept.`}
         confirmLabel="Deactivate"
         onConfirm={() => deactivateTarget && deactivateMutation.mutate(deactivateTarget.id)}
+        destructive
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete User Permanently"
+        description={`Permanently delete "${deleteTarget?.name}"? Their account and chat conversations are erased; tasks and audit history are kept without attribution. This cannot be undone — to block access temporarily, use Deactivate instead.`}
+        confirmLabel="Delete Permanently"
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         destructive
       />
 

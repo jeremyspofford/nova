@@ -749,15 +749,17 @@ async def update_user_admin(user_id: str, body: AdminUpdateUser, user: UserDep):
     if body.status is not None:
         if body.status not in ("active", "deactivated"):
             raise HTTPException(status_code=400, detail="Status must be 'active' or 'deactivated'")
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2",
-                body.status, UUID(user_id),
-            )
-            if body.status == "deactivated":
-                await conn.execute("DELETE FROM refresh_tokens WHERE user_id = $1", UUID(user_id))
-                from app.auth import deny_user_token
-                await deny_user_token(user_id, reason="deactivated")
+        if body.status == "deactivated":
+            from app.users import deactivate_user
+            await deactivate_user(user_id, user.id)
+        else:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1",
+                    UUID(user_id),
+                )
+            from app.audit import audit_rbac
+            await audit_rbac(pool, user.id, "user_reactivated", target_id=user_id)
 
     if body.expires_at is not None:
         from datetime import datetime
@@ -778,25 +780,30 @@ async def update_user_admin(user_id: str, body: AdminUpdateUser, user: UserDep):
 
 
 @router.delete("/api/v1/admin/users/{user_id}")
-async def deactivate_user_endpoint(user_id: str, user: UserDep):
-    """Deactivate a user (soft delete). Requires admin role."""
+async def delete_user_endpoint(user_id: str, user: UserDep):
+    """Permanently delete a user. Requires admin role.
+
+    Hard delete: their conversations and sessions are removed; tasks,
+    invites, and audit history are kept without attribution. Reversible
+    blocking is PATCH status='deactivated'.
+    """
     from app.roles import has_min_role, parse_role
     if not has_min_role(user.role, "admin"):
         raise HTTPException(status_code=403, detail="Requires admin role")
 
-    from app.users import deactivate_user, get_user_by_id
+    from app.users import delete_user, get_user_by_id
     target = await get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     if target["email"] in SYSTEM_USER_EMAILS:
-        raise HTTPException(status_code=403, detail="System identity — managed by Nova, not deactivatable")
+        raise HTTPException(status_code=403, detail="System identity — managed by Nova, not deletable")
     if target["role"] == "owner":
-        raise HTTPException(status_code=403, detail="Cannot deactivate the owner")
+        raise HTTPException(status_code=403, detail="Cannot delete an owner. Change their role first.")
     if parse_role(target["role"]) >= parse_role(user.role):
-        raise HTTPException(status_code=403, detail="Cannot deactivate user with equal or higher role")
+        raise HTTPException(status_code=403, detail="Cannot delete user with equal or higher role")
 
-    await deactivate_user(user_id, user.id)
-    return {"status": "deactivated"}
+    await delete_user(user_id, user.id, target_email=target["email"])
+    return {"status": "deleted"}
 
 
 # ── Conversations ────────────────────────────────────────────────────────────
