@@ -331,6 +331,21 @@ _SYNTHETIC_ADMIN = AuthenticatedUser(
     tenant_id="00000000-0000-0000-0000-000000000001",
 )
 
+# Trusted-network requests get a *user-surface* identity, never admin. Network
+# position may confer a working chat/view session but must not satisfy an
+# admin-role management check — TD-10: the July-1 hole class (require_admin was
+# fixed for network position, but UserDep+role endpoints like /admin/users
+# still accepted the synthetic owner). Same admin@local id so conversation FKs
+# still resolve; role is capped to member so has_min_role(..,"admin") fails.
+_TRUSTED_NETWORK_USER = AuthenticatedUser(
+    id="00000000-0000-0000-0000-000000000000",
+    email="admin@local",
+    display_name="Trusted network",
+    is_admin=False,
+    role="member",
+    tenant_id="00000000-0000-0000-0000-000000000001",
+)
+
 
 async def require_user(
     request: Request,
@@ -344,7 +359,8 @@ async def require_user(
        request (their JWT was silently ignored server-side).
     2. X-Admin-Secret (break-glass) — synthetic owner identity, so the
        credential that passes require_admin also confers an identity.
-    3. Trusted network (LAN, Tailscale, localhost) — synthetic admin.
+    3. Trusted network (LAN, Tailscale, localhost) — synthetic MEMBER only
+       (user surface: chat/view). Never satisfies an admin-role check (TD-10).
     4. REQUIRE_AUTH=false — synthetic admin (dev bypass).
     """
     # Try JWT first — an explicit session outranks ambient identity.
@@ -440,11 +456,11 @@ async def require_user(
         if expected and hmac.compare_digest(x_admin_secret, expected):
             return _SYNTHETIC_ADMIN
 
-    # Trusted network bypass
+    # Trusted network → user-surface identity only (never admin — TD-10).
     if getattr(request.state, "is_trusted_network", False):
-        return _SYNTHETIC_ADMIN
+        return _TRUSTED_NETWORK_USER
 
-    # Dev bypass
+    # Dev bypass (REQUIRE_AUTH=false) → full admin, local dev convenience.
     if not await _get_require_auth():
         return _SYNTHETIC_ADMIN
 

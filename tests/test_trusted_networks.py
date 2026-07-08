@@ -37,44 +37,46 @@ class TestAuthProvidersTrustedField:
         assert data["trusted_network"] is True
 
 
-class TestTrustedNetworkAuthBypass:
-    """Trusted network requests should bypass auth — no credentials needed."""
+class TestTrustedNetworkAuthPosture:
+    """Trust by network is capped at the USER surface. Admin/management always
+    requires credentials (SEC2 for require_admin; TD-10 for role-gated
+    management endpoints)."""
 
-    async def test_admin_endpoint_no_credentials(self, orchestrator: httpx.AsyncClient):
-        """Config endpoint requires admin auth, but trusted network bypasses it."""
+    async def test_admin_config_requires_credentials(self, orchestrator: httpx.AsyncClient, admin_headers):
+        """require_admin refuses network position — 401 without creds, 200 with."""
         resp = await orchestrator.get("/api/v1/config")
+        assert resp.status_code == 401
+        resp = await orchestrator.get("/api/v1/config", headers=admin_headers)
         assert resp.status_code == 200
         assert isinstance(resp.json(), (list, dict))
 
-    async def test_agent_list_no_credentials(self, orchestrator: httpx.AsyncClient):
-        """Agent list requires API key auth, but trusted network bypasses it."""
-        resp = await orchestrator.get("/api/v1/agents")
+    async def test_user_management_requires_admin(self, orchestrator: httpx.AsyncClient, admin_headers):
+        """TD-10: role-gated management (list users) rejects the trusted-network
+        member identity, but works with real admin credentials."""
+        resp = await orchestrator.get("/api/v1/admin/users")
+        assert resp.status_code in (401, 403)
+        resp = await orchestrator.get("/api/v1/admin/users", headers=admin_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
 
-    async def test_user_endpoint_no_credentials(self, orchestrator: httpx.AsyncClient):
-        """User-scoped endpoints accept trusted network requests (auth dep passes).
-
-        /auth/me returns 404 because the synthetic admin has no DB record,
-        but the auth dependency itself passes — it doesn't return 401.
-        We verify with /conversations which also uses UserDep.
-        """
+    async def test_user_surface_accepts_trusted_network(self, orchestrator: httpx.AsyncClient):
+        """The user surface (conversations) still accepts a trusted-network
+        request — it resolves to a synthetic member identity."""
         resp = await orchestrator.get("/api/v1/conversations")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
 
 class TestTrustedNetworkConfigSeeded:
-    """Migration 015 seeds platform_config with trusted network keys."""
+    """platform_config seeds trusted-network keys (read with admin creds)."""
 
-    async def test_trusted_networks_key_exists(self, orchestrator: httpx.AsyncClient):
-        resp = await orchestrator.get("/api/v1/config")
+    async def test_trusted_networks_key_exists(self, orchestrator: httpx.AsyncClient, admin_headers):
+        resp = await orchestrator.get("/api/v1/config", headers=admin_headers)
         assert resp.status_code == 200
         keys = {entry["key"] for entry in resp.json()}
         assert "trusted_networks" in keys
 
-    async def test_trusted_proxy_header_key_exists(self, orchestrator: httpx.AsyncClient):
-        resp = await orchestrator.get("/api/v1/config")
+    async def test_trusted_proxy_header_key_exists(self, orchestrator: httpx.AsyncClient, admin_headers):
+        resp = await orchestrator.get("/api/v1/config", headers=admin_headers)
         assert resp.status_code == 200
         keys = {entry["key"] for entry in resp.json()}
         assert "trusted_proxy_header" in keys
