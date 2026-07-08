@@ -1095,7 +1095,7 @@ export function Models() {
                     return (
                       <div
                         key={pullName}
-                        className={`relative flex min-h-[150px] flex-col rounded-lg border px-3 py-2.5 text-caption transition-colors ${
+                        className={`relative flex min-h-[150px] flex-col overflow-hidden rounded-lg border px-3 py-2.5 text-caption transition-colors ${
                           isPulled
                             ? 'border-accent bg-accent-dim/30'
                             : isPulling
@@ -1106,7 +1106,7 @@ export function Models() {
                         {/* line 1: name + registry link + status glyph */}
                         <div className="flex items-center gap-1.5">
                           {rec.cloud && <Cloud className="h-3.5 w-3.5 text-info shrink-0" />}
-                          <span className="font-mono font-medium text-content-primary truncate">
+                          <span className="min-w-0 truncate font-mono font-medium text-content-primary">
                             {pullName}
                           </span>
                           <a
@@ -1119,8 +1119,8 @@ export function Models() {
                           >
                             <ExternalLink className="h-3 w-3" />
                           </a>
-                          {rec.starter && <Badge color="accent" size="sm">starter</Badge>}
-                          {rec.required && <Badge color="warning" size="sm">required</Badge>}
+                          {rec.starter && <Badge color="accent" size="sm" className="shrink-0">starter</Badge>}
+                          {rec.required && <Badge color="warning" size="sm" className="shrink-0">required</Badge>}
                           <span className="ml-auto shrink-0">
                             {isPulled && <Check className="h-3.5 w-3.5 text-success" />}
                             {isPulling && <Loader2 className="h-3.5 w-3.5 text-warning animate-spin" />}
@@ -1128,7 +1128,7 @@ export function Models() {
                         </div>
 
                         {/* line 2: size (prominent) + params + capability, pulls muted */}
-                        <div className="mt-1 flex items-center gap-2">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                           {rec.cloud ? (
                             <span className="font-mono text-content-secondary">Cloud</span>
                           ) : rec.size_gb != null ? (
@@ -1155,8 +1155,8 @@ export function Models() {
                         {/* line 3: parameter variants (popular source) */}
                         {rec.param_sizes && rec.param_sizes.length > 0 && (
                           <div className="mt-1 flex items-center gap-1 text-micro text-content-tertiary font-mono">
-                            <span className="text-content-tertiary/70">params</span>
-                            <span className="truncate">{rec.param_sizes.join(' · ')}</span>
+                            <span className="shrink-0 text-content-tertiary/70">params</span>
+                            <span className="min-w-0 truncate" title={rec.param_sizes.join(' · ')}>{rec.param_sizes.join(' · ')}</span>
                           </div>
                         )}
 
@@ -1341,16 +1341,16 @@ export function Models() {
                 {recommended.data.map(rec => (
                   <div
                     key={rec.id}
-                    className="rounded-lg border border-border-subtle px-3 py-2.5 text-caption"
+                    className="overflow-hidden rounded-lg border border-border-subtle px-3 py-2.5 text-caption"
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className="font-mono font-medium text-content-primary">
+                      <span className="min-w-0 truncate font-mono font-medium text-content-primary">
                         {rec.name}
                       </span>
                     </div>
                     <p className="mt-1 text-content-tertiary leading-tight">{rec.description}</p>
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                         <Badge color="neutral" size="sm">{rec.category}</Badge>
                         <Badge color="warning" size="sm" className="font-mono">
                           {rec.min_vram_gb} GB+
@@ -1359,6 +1359,7 @@ export function Models() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="shrink-0"
                         icon={switchModelMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
                         onClick={() => handleSwitchModel(rec.id)}
                         disabled={isSwitching || switchModelMutation.isPending}
