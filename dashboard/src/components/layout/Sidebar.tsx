@@ -23,6 +23,7 @@ import {
   Users,
   ShieldCheck,
   ScrollText,
+  BrainCircuit,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
@@ -64,6 +65,7 @@ export const navSections: NavSection[] = [
   {
     label: 'Knowledge',
     items: [
+      { to: '/brain', label: 'Brain', icon: BrainCircuit, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
       { to: '/sources', label: 'Knowledge', icon: Globe, minRole: 'member', presetVisibility: ['standard', 'advanced'] },
     ],
   },

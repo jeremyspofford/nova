@@ -293,6 +293,25 @@ class OkfStore:
             path.write_text(serialize_document(fm, body), encoding="utf-8")
             return self.rel(path)
 
+    async def update_file(self, memory_id: str, frontmatter: dict, body: str) -> bool:
+        """Replace a concept file's frontmatter + body in place (edit flow).
+
+        Reserved files are refused. The file must already exist — creation
+        goes through write_concept so type→directory routing stays in one
+        place. Returns False if the file doesn't exist.
+        """
+        async with self._lock:
+            path = self.abs(memory_id)
+            rel = self.rel(path)
+            if rel in ("index.md", "log.md"):
+                raise ValueError(f"{rel} is a reserved bundle file")
+            if not path.exists() or not path.is_file():
+                return False
+            path.write_text(serialize_document(frontmatter, body), encoding="utf-8")
+            self._append_log(f"**Edit** [{frontmatter.get('title', rel)}](/{rel})")
+            self._regenerate_indices(path.parent)
+            return True
+
     async def delete_file(self, memory_id: str) -> bool:
         """Delete a bundle file by its bundle-relative id.
 

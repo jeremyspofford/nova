@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { streamChat, discoverModels, resolveModel, apiFetch, getOrCreateActiveConversation, readCachedModelCatalog, type ChatMessage, type ContentBlock, type StreamEvent, type ProviderModelList } from '../../api'
-import { useChatStore, type Message } from '../../stores/chat-store'
+import { newMsgId, useChatStore, type Message } from '../../stores/chat-store'
 import { cleanToolArtifacts } from '../../utils/cleanToolArtifacts'
 import { useNovaIdentity } from '../../hooks/useNovaIdentity'
 import { useVoiceChat } from '../../hooks/useVoiceChat'
@@ -263,7 +263,7 @@ export function Chat() {
     if (isStreaming && !fromQueue) {
       // Show user message immediately, queue for sequential processing
       const queuedMsg: Message = {
-        id: crypto.randomUUID(),
+        id: newMsgId(),
         role: 'user',
         content: text,
         timestamp: new Date(),
@@ -279,7 +279,7 @@ export function Chat() {
     const attachments = (!fromQueue && pendingFiles.length > 0) ? [...pendingFiles] : undefined
     if (attachments) setPendingFiles([])
 
-    const assistantMsgId = crypto.randomUUID()
+    const assistantMsgId = newMsgId()
     const assistantMsg: Message = {
       id: assistantMsgId,
       role: 'assistant',
@@ -295,7 +295,7 @@ export function Chat() {
       setMessages(prev => [...prev, assistantMsg])
     } else {
       const userMsg: Message = {
-        id: crypto.randomUUID(),
+        id: newMsgId(),
         role: 'user',
         content: text,
         timestamp: new Date(),
@@ -322,7 +322,7 @@ export function Chat() {
     }
 
     const currentSessionId = activeConversationId ?? sessionId ?? (() => {
-      const newId = crypto.randomUUID()
+      const newId = newMsgId()
       setSessionId(newId)
       return newId
     })()

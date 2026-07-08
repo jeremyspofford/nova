@@ -23,6 +23,7 @@ import { Models } from './pages/Models'
 import { Tasks } from './pages/Tasks'
 import { Pods } from './pages/Pods'
 import { Goals } from './pages/Goals'
+import { Brain } from './pages/Brain'
 import { PendingApprovals } from './pages/PendingApprovals'
 import { InboxPage } from './pages/InboxPage'
 import { Monitoring } from './pages/Monitoring'
@@ -216,7 +217,7 @@ function RoutedContent() {
 
         {/* Redirects for old routes */}
         <Route path="/intelligence" element={<Navigate to="/sources#recommendations" replace />} />
-        <Route path="/brain" element={<Navigate to="/goals" replace />} />
+        <Route path="/brain" element={<AppLayout fullWidth><ErrorBoundary><Brain /></ErrorBoundary></AppLayout>} />
         <Route path="/profile" element={<Navigate to="/settings" replace />} />
         <Route path="/mcp" element={<Navigate to="/integrations" replace />} />
         <Route path="/agents" element={<Navigate to="/integrations#agents" replace />} />

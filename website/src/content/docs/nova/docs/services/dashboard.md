@@ -30,7 +30,7 @@ The Dashboard is Nova's web-based admin interface. Built with React, it provides
 | **MCP** | `/mcp` | MCP server management -- add from catalog, configure, reload |
 | **Memory Inspector** | `/memory` | Browse, search, and delete stored memories across all tiers |
 | **Agent Endpoints** | `/agent-endpoints` | External agent delegation configuration |
-| **Brain** | `/brain` | 3D knowledge graph with voice-enabled chat panel, conversation mode |
+| **Brain** | `/brain` | Live 3D view of the OKF memory bundle — three lenses (Galaxy, Orrery, Singularity), retrieval glow streamed over SSE, click-to-inspect frontmatter with edit/delete |
 | **Settings** | `/settings` | Platform configuration (see below) |
 | **Recovery** | `/recovery` | Backup/restore, factory reset, service management |
 | **Remote Access** | `/remote-access` | Cloudflare Tunnel and Tailscale setup wizards |

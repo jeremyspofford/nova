@@ -35,7 +35,10 @@ Producers (chat, intel-worker, knowledge-worker, cortex) push raw text to the Re
 | `POST /api/v1/memory/context` | Formatted context for prompt assembly (empty query → root index) |
 | `POST /api/v1/memory/ingest` | Direct write (bypasses the queue) |
 | `GET /api/v1/memory/item/{id}` | Full content of one memory file |
+| `PUT /api/v1/memory/item/{id}` | Edit one file in place — frontmatter keys shallow-merge, `content` replaces the body (`type` is fixed; it routes the file's directory) |
 | `DELETE /api/v1/memory/item/{id}` | Delete one memory file (refuses `index.md`/`log.md`) |
+| `GET /api/v1/memory/graph` | Whole-bundle nodes + link edges — the dashboard Brain page's dataset |
+| `GET /api/v1/memory/events` | SSE stream of retrieval events (tails `.nova/retrievals.jsonl`) — powers the Brain page's live glow |
 | `POST /api/v1/memory/mark-used` | Usage feedback for retrieved items |
 | `POST /api/v1/memory/feedback` | Outcome score for a memory item |
 | `GET /api/v1/memory/stats` | File/link counts |

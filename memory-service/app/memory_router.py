@@ -9,9 +9,12 @@ memory.provider_url on the orchestrator side).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from nova_contracts.memory import (
     ContextRequest,
     ContextResponse,
@@ -120,6 +123,35 @@ async def read_item(memory_id: str):
     return result
 
 
+class ItemUpdate(BaseModel):
+    """Edit payload for one item. Dashboard-facing (Brain page Edit flow),
+    not an inter-service contract — hence local, not in nova-contracts.
+    frontmatter keys shallow-merge (None deletes a key); content replaces
+    the body when provided."""
+
+    frontmatter: dict | None = None
+    content: str | None = None
+
+
+@memory_router.put("/item/{memory_id:path}")
+async def update_item(memory_id: str, req: ItemUpdate):
+    """Edit one memory item in place (the previously missing verb)."""
+    backend = await get_backend()
+    try:
+        result = await backend.update_item(
+            memory_id, frontmatter=req.frontmatter, content=req.content
+        )
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501, detail=f"backend '{backend.name}' does not support update"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"memory {memory_id} not found")
+    return result
+
+
 @memory_router.delete("/item/{memory_id:path}", status_code=204)
 async def delete_item(memory_id: str):
     """Delete one memory item (benchmark teardown, curation)."""
@@ -178,6 +210,71 @@ async def reindex():
     """Rebuild retrieval indices (no-op for backends without one)."""
     backend = await get_backend()
     return await backend.reindex()
+
+
+@memory_router.get("/graph")
+async def graph():
+    """Whole-store nodes + link edges (the Brain page's dataset)."""
+    backend = await get_backend()
+    try:
+        return await backend.graph()
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501, detail=f"backend '{backend.name}' does not support graph"
+        )
+
+
+@memory_router.get("/events")
+async def events():
+    """SSE stream of retrieval events — the Brain page's glow feed.
+
+    Tails the backend's retrieval log (`.nova/retrievals.jsonl` for OKF);
+    each appended line becomes one `retrieval` event. Best-effort: the
+    stream starts at end-of-file, so only new retrievals are emitted.
+    """
+    backend = await get_backend()
+    path = getattr(backend, "_retrievals_path", None)
+    if path is None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"backend '{backend.name}' does not emit retrieval events",
+        )
+
+    async def gen():
+        pos = path.stat().st_size if path.exists() else 0
+        quiet = 0
+        yield "retry: 3000\n\n"
+        while True:
+            await asyncio.sleep(1.0)
+            try:
+                size = path.stat().st_size if path.exists() else 0
+            except OSError:
+                size = 0
+            if size < pos:
+                pos = 0  # log truncated/rotated — restart from the top
+            if size > pos:
+                with path.open("r", encoding="utf-8") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                for line in chunk.strip().splitlines():
+                    yield f"event: retrieval\ndata: {line}\n\n"
+                quiet = 0
+            else:
+                quiet += 1
+                if quiet >= 15:
+                    quiet = 0
+                    yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # nginx (the dashboard proxy) must not buffer the stream
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @memory_router.get("/backend")

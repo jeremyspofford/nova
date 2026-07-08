@@ -126,6 +126,91 @@ class OkfBackend(MemoryBackend):
             self.index.refresh()
         return deleted
 
+    async def update_item(
+        self,
+        memory_id: str,
+        *,
+        frontmatter: dict[str, Any] | None = None,
+        content: str | None = None,
+    ) -> dict[str, Any] | None:
+        doc = self.store.read(memory_id)
+        if doc is None:
+            return None
+        fm, body = doc
+        if frontmatter:
+            if "type" in frontmatter and frontmatter["type"] != fm.get("type"):
+                raise ValueError(
+                    "type is fixed after creation — it routes the file's directory"
+                )
+            for k, v in frontmatter.items():
+                if k == "type":
+                    continue
+                if v is None:
+                    fm.pop(k, None)
+                else:
+                    fm[k] = v
+        fm["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        ok = await self.store.update_file(
+            memory_id, fm, content if content is not None else body
+        )
+        if not ok:
+            return None
+        self.index.refresh()
+        return await self.read_item(memory_id)
+
+    async def graph(self) -> dict[str, Any]:
+        """Whole-bundle nodes + resolved link edges — the Brain page's data.
+
+        Cheap enough to compute per request at bundle scale (one read per
+        file); edges dedupe as undirected index pairs."""
+        nodes: list[dict[str, Any]] = []
+        idx: dict[str, int] = {}
+        bodies: list[tuple[str, str]] = []
+        for p in self.store.concept_files():
+            mid = self.store.rel(p)
+            doc = self.store.read(mid)
+            if doc is None:
+                continue
+            fm, body = doc
+            tags = fm.get("tags") or []
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
+            idx[mid] = len(nodes)
+            bodies.append((mid, body))
+            nodes.append({
+                "id": mid,
+                "title": str(fm.get("title") or p.stem),
+                "type": str(fm.get("type") or "note"),
+                "tags": tags,
+                "description": str(fm.get("description") or ""),
+                "trust": fm.get("nova_trust"),
+                "source_kind": fm.get("nova_source_kind"),
+                "created": str(fm.get("timestamp") or ""),
+                "degree": 0,
+            })
+        edges: list[list[int]] = []
+        seen: set[tuple[int, int]] = set()
+        for mid, body in bodies:
+            i = idx[mid]
+            for target in extract_links(body):
+                resolved = self.store.resolve_link(mid, target)
+                j = idx.get(resolved) if resolved else None
+                if j is None or i == j:
+                    continue
+                key = (i, j) if i < j else (j, i)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append([key[0], key[1]])
+        for a, b in edges:
+            nodes[a]["degree"] += 1
+            nodes[b]["degree"] += 1
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+
     # ── context ──────────────────────────────────────────────────────────
 
     async def context(

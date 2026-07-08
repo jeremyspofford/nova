@@ -267,6 +267,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/** Message id that also works outside secure contexts —
+ * crypto.randomUUID() is undefined on plain-http origins (Tailscale, LAN). */
+export function newMsgId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function useChatStore(): ChatStore {
   const ctx = useContext(ChatContext)
   if (!ctx) throw new Error('useChatStore must be used within ChatProvider')

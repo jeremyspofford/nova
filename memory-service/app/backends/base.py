@@ -114,6 +114,23 @@ class MemoryBackend(ABC):
         Default: unsupported."""
         raise NotImplementedError
 
+    async def update_item(
+        self,
+        memory_id: str,
+        *,
+        frontmatter: dict[str, Any] | None = None,
+        content: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Replace fields/body of one item (None if missing). Powers the
+        Brain page's Edit flow. Default: unsupported."""
+        raise NotImplementedError
+
+    async def graph(self) -> dict[str, Any]:
+        """{nodes, edges} of the whole store for graph visualizations.
+        Nodes carry id/title/type/tags/trust/degree; edges are index pairs.
+        Default: unsupported."""
+        raise NotImplementedError
+
     async def explain(self, memory_id: str, query: str) -> dict[str, Any]:
         """Why did this memory match? Default: unsupported."""
         return {
