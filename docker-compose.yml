@@ -482,6 +482,8 @@ services:
       CORTEX_REFLECT_TO_MEMORY: ${CORTEX_REFLECT_TO_MEMORY:-true}
       CORTEX_IDLE_CONSOLIDATION: ${CORTEX_IDLE_CONSOLIDATION:-true}
       CORTEX_TEST_MODE: ${CORTEX_TEST_MODE:-false}
+      CORTEX_PLANNING_MODEL: ${CORTEX_PLANNING_MODEL:-openbmb/minicpm5:latest}
+      CORTEX_REFLECTION_MODEL: ${CORTEX_REFLECTION_MODEL:-openbmb/minicpm5:latest}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       # Loopback-only by default (SEC-004). Override with CORTEX_BIND if needed.
