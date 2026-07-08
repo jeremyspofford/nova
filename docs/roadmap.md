@@ -840,6 +840,98 @@ Prerequisites: all current roadmap items complete. This is the capstone feature.
 
 ---
 
+## Optional Surface Clients (Desktop & Mobile)
+
+> Added 2026-07-07. These are **optional** and lower-priority than the capstone items above.
+> The brain (cortex, memory, pipeline, scheduled goals) stays server-hosted; these items
+> address *interaction surface* and *install friction*, not autonomy. Both defer to the
+> existing PWA + ntfy push channel (shipped 2026-07-06) as the primary cross-platform
+> client — a native app duplicates that for ~5% more polish and is not justified until a
+> capability the PWA genuinely can't do (biometric vault, background sync, on-device model)
+> becomes a headline feature.
+
+### Optional: Tauri Tray Control Panel
+
+**Why:** Self-hosting friction is the #1 adoption barrier. Today a new user runs `./install`,
+`./start`, `make logs`, and keeps a browser tab open. A ~15MB native tray app wraps the
+existing Docker Compose lifecycle and embeds the dashboard — turning "tinkerer setup" into
+"install an app." It does **not** reimplement the dashboard; the embedded webview IS the
+dashboard. The brain stays in Docker on the same machine (or a remote box you point it at).
+
+**Scope (v1):**
+- **First-run wizard** (replaces `./install`): Docker detect → GPU detect (reuses
+  `detect_hardware.sh`) → mode selection → model pull → `.env` generation → `docker compose
+  up`. Resumable if closed mid-pull.
+- **Stack lifecycle:** start / stop / restart / drain via `docker compose` (shell out for v1;
+  `bollard` Rust SDK as v2). Maps to existing `make up` / `make down`.
+- **Health surface:** tray icon color = aggregate health (polls each service `/health/ready`).
+  Degraded → tooltip names the failing service. Click → dashboard.
+- **Logs:** "Open logs" tails `docker compose logs` in a native window, filterable by service.
+  (Later: deep-link into the planned dashboard Log Viewer instead of shelling out.)
+- **Updates:** `docker compose pull` + restart; notify on new image availability.
+- **Backup/restore:** wraps the recovery service (port 8888) endpoints; native file picker for
+  restore source. One-click "Back up now" in the tray menu.
+- **Auto-start on login:** LaunchAgent (macOS) / systemd user unit (Linux) / Windows login
+  item. Graceful shutdown signal on logout.
+- **Remote pointer:** settings can repoint the embedded webview at any Nova URL (cloud box,
+  Tailscale hostname) — same app, different brain. Bridge to the bundled-app item below.
+
+**Deliberately out of scope:** no reimplemented chat/tasks/memory UI (the webview IS the
+dashboard), no agent logic, no bundled Postgres/Redis.
+
+**Stack:** Tauri 2.x (Rust core + OS webview: WebView2 on Windows, WKWebView on macOS,
+WebKitGTK on Linux), a tiny Svelte/React control panel for lifecycle controls only, GitHub
+Releases + Tauri updater (signed manifests), OS-native notifications (complement ntfy — tray
+for local lifecycle events like "stack healthy" / "backup done," ntfy for phone push).
+
+**Distribution:** `.msi`/`.exe`, `.dmg`/`.app` (signed + notarized), `.deb`/`.AppImage`.
+~15MB. Bundles nothing but itself.
+
+**Effort:** ~2-3 weeks for v1 (wizard + lifecycle + health + logs + auto-start). Backup
+wrapper ~2 days. Auto-updater + macOS notarization ~1 week of platform pain.
+
+**Prerequisites:** None hard. Nice-to-have: dashboard Log Viewer + `.env` editor so the tray
+app can deep-link instead of shell out.
+
+**Risks:** Linux WebKitGTK rendering quirks (acceptable for v1; dashboard is Tailwind +
+standard CSS); macOS codesigning/notarization is a recurring time sink; Docker Desktop vs
+Docker Engine detection on Windows/Mac (detect and guide, don't require Docker Desktop).
+
+### Optional: Bundled "Install Like An App" Nova
+
+**Why:** The tray app still requires Docker. This item asks: can a user install Nova the way
+they install any desktop app — no Docker, no terminal — and get a working local AI assistant?
+
+**Critical framing (must stay in the entry):** Nova's autonomous value requires always-on.
+A desktop-app-embedded brain sleeps when the laptop sleeps. So this is a **different
+product** — a personal local assistant — not a replacement for the server-hosted autonomous
+Nova. It trades autonomy for zero-setup convenience. Scheduled goals, nightly memory
+curation, and cortex's idle thinking loop will NOT fire reliably when the host sleeps.
+
+**Architecture — open decision (scope blocked on choosing one):**
+
+| Option | What ships | Pros | Cons |
+|---|---|---|---|
+| **A. Docker-bundled Tauri** | Tray app + a hidden container runtime in the installer | Reuses existing stack verbatim | ~500MB+ download, still needs a runtime, "like a normal app" is a stretch |
+| **B. Single-binary Nova** | One binary; Postgres→SQLite (sqlite-vec), Redis→in-process, supervisor spawns services | True single binary ~100-200MB; works offline | Massive refactor; loses container isolation; recursive-CTE spreading activation + JSONB need rework |
+| **C. Bundled Ollama + cloud brain** | Tauri shell + bundled Ollama + one small model; brain is hosted Nova (Phase 14 SaaS) | Small download; real autonomy (brain always-on in cloud); local privacy for inference | Depends on Phase 14 (SaaS); not fully offline; composes the tray app above + SaaS + 2026-07-03 bundled inference |
+
+**Recommendation:** Option C is the most coherent with the roadmap (composes the tray app +
+Phase 14 SaaS + bundled-inference work shipped 2026-07-03). Option B is the most ambitious
+and most divergent. Pick before scoping.
+
+**Capabilities beyond the tray app:** bundled local model (zero cloud keys to start); OS
+keychain integration for the credential vault (biometric unlock — the one thing the PWA
+can't do); system-tray quick-chat (Spotlight/Alfred-style); native file watchers for the
+pending IDE Activity Monitoring design; offline chat with cloud sync when online.
+
+**Prerequisites:** Option C → Phase 14 (SaaS) + bundled-inference maturity (largely shipped
+2026-07-03). Option B → ~3-4 month refactor. Option A → ~2 weeks but strategically weak.
+
+**Effort:** Option C ~4-6 weeks post-SaaS. Option B ~3-4 months. Option A ~2 weeks.
+
+---
+
 ## Platform Review Findings (2026-03-26)
 
 Comprehensive 5-discipline review (architecture, backend, frontend, security, testing). Full spec with per-finding remediation: `docs/specs/2026-03-26-platform-review-findings.md`.
@@ -1023,3 +1115,60 @@ Those three close the biggest capability gap. Nova's cognitive architecture (eng
 - "Agents That Matter" — arxiv.org/abs/2407.01502 (cost-accuracy tradeoff)
 - Generative Agents — arxiv.org/abs/2304.03442 (memory + reflection)
 - Voyager — arxiv.org/abs/2305.16291 (skill library + self-verification)
+
+---
+
+## Local Inference: Containerize + Multi-Backend (planned)
+
+> Added 2026-07-08. Goal: users shouldn't need host Ollama/LM Studio apps — Nova
+> bundles equivalent containers — and Nova can route across multiple local
+> backends at once instead of one active backend at a time.
+
+### B1 — Bundled local inference as the recommended path
+- Promote the existing `inference-*` compose profiles (Ollama / vLLM / SGLang /
+  llama.cpp) to first-class, and make "bundled containers" the default over
+  external host apps.
+- **Port-collision fix:** the bundled Ollama binds `127.0.0.1:11434`, which
+  shadows a host Ollama on the same port (observed 2026-07-08 — Nova only saw
+  the container's models, not the 29 on the Windows app). Install wizard must
+  either not publish 11434 when a host Ollama is chosen, or use a distinct port.
+- Optional migration tool: pull a user's existing host models into the bundled
+  container so they can retire the host app.
+
+### B2 — Multi-backend routing (serve Ollama AND LM Studio simultaneously)
+- Today the gateway resolves against ONE active local backend
+  (`inference.backend` in Redis); `get_provider` / `_is_local_model` assume a
+  single `_local` wrapper (`llm-gateway/app/registry.py`).
+- Change: register each connected local backend as its own provider with its own
+  model set, and route each request to whichever backend actually has the model
+  (falling back across them). Kills the "picked an Ollama model while LM Studio
+  is active → fails" footgun, and lets the chat model picker honestly list every
+  local backend's models (see `ChatPage` model list + `ModelPicker`).
+- Prereqs: per-backend model catalogs in the registry; an `inference.backends`
+  (plural) config; migrate the single-backend Settings → Local Inference UI to a
+  list.
+
+### Findings + concrete design (from the 2026-07-08 session)
+
+Much of this is **already built** — the focused session is mostly surfacing +
+fixing, not building from scratch:
+- **Lifecycle already works:** `recovery-service/app/inference/controller.py`
+  `start_bundled_backend` adds the compose profile → starts the container →
+  writes `inference.url`; `stop_bundled_backend` reverses it (removes the
+  profile, clears url). Toggling off already prevents auto-restart.
+- **Toggle UI already exists but is buried:** `BundledContainersCard` in
+  `dashboard/src/pages/settings/LocalInferenceSection.tsx` (Settings → AI &
+  Pipeline). Per-backend status dot, active badge, GPU-gating, Play/Stop.
+  Backends API: `GET/POST /api/v1/recovery/inference/backends|backend/{n}/start|backend/stop`.
+
+**Do-it-right tasks:**
+1. **Surface** bundled start/stop + active status on the **Models page**
+   (`/models`, top-level) alongside the models they serve; leave only
+   external-server config (LM Studio / custom URL) in Settings.
+2. **Toggle = single source of truth:** stop `./install` seeding
+   `inference-ollama` into `COMPOSE_PROFILES` (the one auto-start path); a
+   stopped backend never silently restarts.
+3. **First-start pull progress** (images are 1–10GB) instead of a bare
+   "starting…".
+4. **Bump the bundled Ollama image** — the pinned version is too old to pull
+   current models (`ornith:9b` → `412: requires a newer version of Ollama`).

@@ -116,6 +116,22 @@ User isolation for multi-person deployments: separate chat histories, memory spa
 
 Nova Cloud at `nova.arialabs.ai` -- a hosted version where users sign up and use Nova without self-hosting. Three tiers (Free, Pro, Enterprise), Stripe billing, Kubernetes infrastructure, and full data portability between SaaS and self-hosted. Builds on Phase 12 (concurrent inference) and Phase 13 (multi-tenancy).
 
+### Phase 15 -- Desktop Control Panel (optional, planned)
+
+A ~15MB native tray app (Tauri) that wraps Nova's Docker Compose lifecycle and embeds the existing dashboard -- turning `./install` + `./start` + `make logs` + a browser tab into "install an app." It does not reimplement the dashboard; the embedded webview IS the dashboard. The brain (cortex, memory, pipeline, scheduled goals) stays in Docker on your machine (or a remote box you point it at).
+
+The first-run wizard replaces `./install` (Docker + GPU detect, mode selection, model pull, `.env` generation). Tray icon color reflects stack health. Start/stop/restart, log tail, one-click backup/restore via the recovery service, auto-start on login, and a "connect to remote Nova" setting so the same app drives a cloud-hosted brain. OS-native notifications complement the existing ntfy push channel (tray for local lifecycle events, ntfy for phone push).
+
+**Why optional / why now:** self-hosting friction is the #1 adoption barrier, but the existing PWA + ntfy push already covers mobile and installable-desktop use. This item targets the install/runtime gap specifically -- small surface, high ROI, no autonomy impact. Effort: ~2-3 weeks for v1.
+
+### Phase 16 -- Bundled "Install Like An App" Nova (optional, exploratory)
+
+A single-download desktop app that runs Nova with **no Docker and no terminal** -- install it like any desktop app, get a working local AI assistant. This is a different product from server-hosted autonomous Nova: a desktop-app brain sleeps when the laptop sleeps, so scheduled goals, nightly memory curation, and the cortex idle loop won't fire reliably. It trades autonomy for zero-setup convenience.
+
+Three architecture paths are on the table (decision needed before scoping): (A) bundle a hidden container runtime inside the Tauri installer -- reuses the stack but ~500MB+; (B) single-binary Nova with Postgres→SQLite and Redis→in-process -- true single binary, but a large refactor; (C) bundle Ollama + a local model and use a hosted Nova brain (Phase 14 SaaS) for everything else -- small download, real autonomy, local inference privacy. Option C is the most coherent with the roadmap; Option B is the most ambitious.
+
+Adds beyond the tray app: bundled local model (zero cloud keys to start), OS keychain integration for the credential vault with biometric unlock, system-tray quick-chat, native file watchers, and offline-capable chat with cloud sync. Prerequisites: Phase 14 (SaaS) for Option C; bundled-inference maturity (shipped 2026-07-03) for all options. Effort: Option C ~4-6 weeks post-SaaS; Option B ~3-4 months; Option A ~2 weeks.
+
 ## Contributing
 
 Nova is open source. Check the full [roadmap](https://github.com/jeremyspofford/nova/blob/main/docs/roadmap.md) for detailed implementation plans, or dive into the codebase to start contributing.
