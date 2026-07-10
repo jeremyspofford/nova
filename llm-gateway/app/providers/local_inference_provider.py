@@ -18,6 +18,7 @@ from nova_contracts.llm import (
 
 from .base import ModelProvider
 from .ollama_provider import OllamaProvider
+from .utils import is_cloud_model_name
 from .vllm_provider import VLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -36,15 +37,6 @@ DEFAULT_URLS = {
 }
 
 READY_STATES = {"ready"}
-
-# Cloud provider prefixes. A request for one of these is never a local model, so
-# when the local provider is used as a fallback for it we substitute the local
-# default rather than 404 — otherwise a broken/misconfigured cloud model takes
-# the whole local-first chain down with it.
-_CLOUD_PREFIXES = frozenset({
-    "gemini", "gemini-adc", "cerebras", "openrouter", "openai", "anthropic",
-    "groq", "nvidia", "github", "chatgpt",
-})
 
 
 class LocalInferenceProvider(ModelProvider):
@@ -208,7 +200,7 @@ class LocalInferenceProvider(ModelProvider):
             return default if default in self._local_models else sorted(self._local_models)[0]
         # No discovery data yet: only override an obvious cloud model, so a valid
         # local name we simply haven't indexed still passes through.
-        if requested.split("/", 1)[0] in _CLOUD_PREFIXES:
+        if is_cloud_model_name(requested):
             return default
         return requested
 

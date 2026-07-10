@@ -10,11 +10,70 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from ..db import get_pool
 from . import DriveContext, DriveResult
 
 log = logging.getLogger(__name__)
+
+
+async def _record_fire_skips(goal_ids: list[str]) -> None:
+    """Make consumed-but-filtered schedule fires visible (audit bug 3).
+
+    The scheduler consumes a goal.schedule_due fire when it emits the
+    stimulus; if the dispatch filters below drop the goal, that scheduled run
+    is gone. The drop is often correct (review gate, caps) — but silently
+    losing a cron fire looks identical to the scheduler being broken, so the
+    reason is logged, written to the goal's journal, and stamped onto
+    current_plan.last_fire_skip for the goal card.
+    """
+    from ..journal import emit_journal
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, title, status, maturation_status, iteration,
+                      max_iterations, cost_so_far_usd, max_cost_usd
+               FROM goals WHERE id = ANY($1::uuid[])""",
+            goal_ids,
+        )
+        by_id = {str(r["id"]): r for r in rows}
+        for gid in goal_ids:
+            r = by_id.get(gid)
+            if r is None:
+                reason = "goal no longer exists"
+            elif r["status"] != "active":
+                reason = f"goal status is '{r['status']}'"
+            elif r["maturation_status"] == "review":
+                reason = "maturation 'review' — waiting for human input"
+            elif r["max_iterations"] is not None and (r["iteration"] or 0) >= r["max_iterations"]:
+                reason = f"iteration cap reached ({r['iteration']}/{r['max_iterations']})"
+            elif r["max_cost_usd"] is not None and float(r["cost_so_far_usd"] or 0) >= float(r["max_cost_usd"]):
+                reason = (
+                    f"cost cap reached (${float(r['cost_so_far_usd'] or 0):.2f}"
+                    f"/${float(r['max_cost_usd']):.2f})"
+                )
+            else:
+                reason = "dropped by dispatch filters (unmet dependencies)"
+            log.warning(
+                "Scheduled fire skipped for goal %s ('%s'): %s",
+                gid, r["title"] if r else "?", reason,
+            )
+            if r is not None:
+                await conn.execute(
+                    """UPDATE goals
+                       SET current_plan = jsonb_set(
+                             CASE WHEN jsonb_typeof(current_plan) = 'object'
+                                  THEN current_plan ELSE '{}'::jsonb END,
+                             '{last_fire_skip}', $1::jsonb),
+                           updated_at = NOW()
+                       WHERE id = $2::uuid""",
+                    {"reason": reason,
+                     "at": datetime.now(timezone.utc).isoformat()},
+                    gid,
+                )
+            await emit_journal(gid, "fire.skipped", {"reason": reason})
 
 
 async def _filter_dep_blocked(goals: list[dict]) -> list[dict]:
@@ -117,6 +176,17 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
     # Filter dep-blocked children outside the connection scope
     stale_goals = await _filter_dep_blocked([dict(g) for g in stale_goals])
 
+    # Fires the filters above (or the dep filter) dropped — record why.
+    fire_skips: list[str] = []
+    if scheduled_goal_ids:
+        surviving = {str(g["id"]) for g in stale_goals}
+        fire_skips = [gid for gid in scheduled_goal_ids if gid not in surviving]
+        if fire_skips:
+            try:
+                await _record_fire_skips(fire_skips)
+            except Exception as e:
+                log.warning("fire-skip bookkeeping failed: %s", e)
+
     if active_count == 0 and (ctx is None or not ctx.stimuli_of_type(
         "message.received", "goal.created", "goal.schedule_due",
         "goal.spec_approved", "recommendation.approved"
@@ -172,5 +242,8 @@ async def assess(ctx: DriveContext | None = None) -> DriveResult:
             "stale_goals": goal_summaries,
             "active_tasks": active_tasks,
             "scheduled_goal_ids": scheduled_goal_ids,
+            # Already recorded by _record_fire_skips — the cycle-level
+            # bookkeeping excludes these to avoid double journal entries.
+            "fire_skips": fire_skips,
         },
     )

@@ -13,3 +13,4 @@ fastapi>=0.115
 pydantic-settings>=2.0
 cryptography>=42.0
 croniter>=1.0
+litellm>=1.55

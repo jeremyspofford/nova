@@ -34,7 +34,20 @@ logger = logging.getLogger(__name__)
 # function also handles dynamic *_running statuses that aren't listed explicitly.
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "submitted": {"queued", "cancelled", "failed"},
+    # 'submitted' can start running stages directly: if a submitted task lands
+    # on the queue (crash between INSERT and the queued write, or a producer
+    # that skipped it), the worker executes it regardless — refusing the
+    # transition doesn't stop execution, it just zombifies the row while every
+    # later write is rejected (2026-07-10 audit bug 2).
+    "submitted": {
+        "queued",
+        "context_running", "task_running", "critique_direction_running",
+        "guardrail_running", "code_review_running", "critique_acceptance_running",
+        "decision_running", "documentation_running", "diagramming_running",
+        "security_review_running", "memory_extraction_running",
+        "completing",
+        "cancelled", "failed",
+    },
     "queued": {
         "context_running", "task_running", "critique_direction_running",
         "guardrail_running", "code_review_running", "critique_acceptance_running",
@@ -170,6 +183,16 @@ async def transition_task_status(
             return False
 
         current_status = row["status"]
+
+        # Already in the requested terminal state — idempotent no-op, not an
+        # error. Failure paths legitimately double-mark (stage handler + the
+        # pipeline-level guard both call failed); the first write recorded the
+        # error, so rejecting the second is pure log noise.
+        if new_status == current_status and current_status in TERMINAL_STATES:
+            logger.debug(
+                "Task %s already '%s' — idempotent no-op", task_id, new_status,
+            )
+            return True
 
         # Step 2: Validate transition
         if not _is_valid_transition(current_status, new_status):

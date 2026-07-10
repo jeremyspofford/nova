@@ -4,6 +4,7 @@ Exposes /complete, /stream, /embed endpoints backed by ModelProvider abstraction
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time as _time
@@ -12,11 +13,13 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 from app.config import settings
+from app.providers import FallbackProvider
 from app.providers.credential_guard import (
     credential_invalid,
     is_credential_error,
     mark_credential_invalid,
 )
+from app.providers.retry_hints import MAX_RETRY_HINT_SECONDS, rate_limit_retry_delay
 from app.rate_limiter import check_rate_limit
 from app.registry import get_embed_provider, get_provider, get_routing_strategy
 from app.response_cache import get_cached, set_cached
@@ -104,6 +107,29 @@ async def _run_complete(provider, request: CompleteRequest) -> CompleteResponse:
             _local_inflight -= 1
 
 
+async def _complete_with_hint_retry(provider, request: CompleteRequest) -> CompleteResponse:
+    """_run_complete that honors a short 429 retry hint for direct providers.
+
+    Fallback chains already honor hints per member; for a request pinned to a
+    single provider (e.g. a parallel review group all on gemini/*), one short
+    wait beats failing the whole group on a burst.
+    """
+    try:
+        return await _run_complete(provider, request)
+    except Exception as e:
+        if isinstance(provider, FallbackProvider):
+            raise
+        delay = rate_limit_retry_delay(e)
+        if delay is None or delay > MAX_RETRY_HINT_SECONDS:
+            raise
+        log.info(
+            "Provider %s rate-limited (hint %.1fs) — waiting, then retrying once",
+            provider.name, delay,
+        )
+        await asyncio.sleep(delay)
+        return await _run_complete(provider, request)
+
+
 def _all_providers_failed_response(request: CompleteRequest, provider, e: Exception) -> JSONResponse:
     """Structured 502 for a total provider failure — keeps a raw 500 out of chat."""
     return JSONResponse(
@@ -148,7 +174,7 @@ async def complete(request: CompleteRequest, raw_request: Request):
             provider, request = rerouted
 
     try:
-        response = await _run_complete(provider, request)
+        response = await _complete_with_hint_retry(provider, request)
     except Exception as e:
         if not is_credential_error(e):
             # No provider could satisfy the request — the active local backend
@@ -171,7 +197,7 @@ async def complete(request: CompleteRequest, raw_request: Request):
             )
         provider, request = rerouted
         try:
-            response = await _run_complete(provider, request)
+            response = await _complete_with_hint_retry(provider, request)
         except Exception as e2:
             log.error("complete failed after reroute model=%s via %s: %s", request.model, provider.name, e2)
             return _all_providers_failed_response(request, provider, e2)

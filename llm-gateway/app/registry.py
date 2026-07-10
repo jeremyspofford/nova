@@ -46,7 +46,6 @@ from app.providers import (
     LMStudioProvider,
     LocalInferenceProvider,
     ModelProvider,
-    OllamaCloudFallback,
     OllamaProvider,
     VLLMProvider,
     discover_chatgpt_token,
@@ -196,6 +195,11 @@ def _build_default_fallback() -> FallbackProvider:
 
 _default_fallback = _build_default_fallback()
 
+# cloud-first mirror of the default chain: same members, local backend last.
+_cloud_first_fallback = FallbackProvider(
+    providers=(_cloud_chain_members() or [_litellm]) + [_local]
+)
+
 
 # ── FU-009: platform-secret hot-reload ────────────────────────────────────────
 
@@ -255,6 +259,7 @@ async def refresh_platform_secrets(key_hint: str = "") -> list[str] | None:
 
     _cloud_fallback.replace_providers(_cloud_chain_members() or [_litellm])
     _default_fallback.replace_providers([_local] + _cloud_chain_members())
+    _cloud_first_fallback.replace_providers((_cloud_chain_members() or [_litellm]) + [_local])
 
     for env_key in changed:
         provider = _KEY_PROVIDER.get(env_key)
@@ -843,11 +848,16 @@ async def get_provider(model: str) -> ModelProvider:
     # "openai/gpt-oss-20b"). Re-sync once before handing it to a cloud provider.
     if not is_local and strategy == "local-first":
         is_local = await _maybe_resync_local(model)
+    # The fallback chains substitute model names per member: the local member
+    # maps cloud names to its default (LocalInferenceProvider._localize), and
+    # cloud members map local names to llm.cloud_fallback_model / their own
+    # default (FallbackProvider._leg_request) — so a missing local model no
+    # longer takes the whole chain down by being forwarded raw to the cloud.
     if is_local:
         if strategy == "local-first":
-            return OllamaCloudFallback(ollama=_local, cloud=_cloud_fallback)
+            return _default_fallback
         elif strategy == "cloud-first":
-            return OllamaCloudFallback(ollama=_cloud_fallback, cloud=_local)
+            return _cloud_first_fallback
         else:
             return _local
 

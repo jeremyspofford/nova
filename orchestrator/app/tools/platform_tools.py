@@ -417,10 +417,14 @@ async def _execute_create_task(
     task_id = str(uuid4())
     metadata = _json.dumps({"source": "chat"})
 
+    # Inserted as 'queued' (not the schema default 'submitted') because the
+    # task is enqueued immediately below — a 'submitted' row picked up by the
+    # worker has every stage transition rejected by the state machine and
+    # zombifies while the pipeline actually runs (2026-07-10 audit bug 2).
     await pool.execute(
         """
         INSERT INTO tasks (id, user_input, pod_id, status, metadata, created_at)
-        VALUES ($1::uuid, $2, $3::uuid, 'submitted', $4::jsonb, now())
+        VALUES ($1::uuid, $2, $3::uuid, 'queued', $4::jsonb, now())
         """,
         task_id,
         user_input,
