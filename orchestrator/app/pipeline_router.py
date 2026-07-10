@@ -953,6 +953,76 @@ async def list_mcp_servers(_admin: AdminDep) -> list[dict]:
     return result
 
 
+class MCPInstallRequest(BaseModel):
+    template_id: str
+    name: str | None = None           # display name; slugified for mcp_servers.name
+    fields: dict[str, str] = {}        # user-supplied values keyed by catalog field key
+    enabled: bool = True
+
+
+@router.get("/api/v1/mcp-servers/catalog")
+async def mcp_integration_catalog(_admin: AdminDep) -> list[dict]:
+    """Curated one-click MCP integration templates (Home Assistant, n8n, Pi-hole, …). Admin-only."""
+    from app.mcp_catalog import list_catalog
+    return list_catalog()
+
+
+@router.post("/api/v1/mcp-servers/install", status_code=201)
+async def install_mcp_server(req: MCPInstallRequest, _admin: AdminDep) -> dict:
+    """Install an MCP server from a catalog template.
+
+    Secret fields are stored in platform_secrets (encrypted); mcp_servers.env holds
+    only ``${secret:...}`` references, resolved at connect time. Admin-only.
+    """
+    from app.mcp_catalog import get_template, render_install, slugify
+    from app.secrets_store import set_secret
+
+    tpl = get_template(req.template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail=f"Unknown integration template '{req.template_id}'")
+
+    server_name = slugify(req.name or tpl["name"])
+    try:
+        payload, secrets = render_install(tpl, server_name, req.fields)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if await conn.fetchval("SELECT 1 FROM mcp_servers WHERE name=$1", server_name):
+            raise HTTPException(
+                status_code=409,
+                detail=f"An MCP server named '{server_name}' already exists",
+            )
+
+    # Persist secrets (encrypted) before inserting the row that references them.
+    for skey, sval in secrets:
+        await set_secret(pool, skey, sval)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO mcp_servers
+                (name, description, transport, command, args, env, url, enabled, metadata)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::jsonb)
+            RETURNING *
+            """,
+            payload["name"], payload["description"], payload["transport"],
+            payload["command"], payload["args"], payload["env"], payload["url"],
+            req.enabled, payload["metadata"],
+        )
+    d = _mcp_row_to_dict(row)
+
+    if req.enabled:
+        from app.pipeline.tools.registry import reload_mcp_server
+        d["connected"] = await reload_mcp_server(server_name)
+    else:
+        d["connected"] = False
+    d["tool_count"] = 0
+    d["active_tools"] = []
+    return d
+
+
 @router.post("/api/v1/mcp-servers", status_code=201)
 async def create_mcp_server(req: MCPServerRequest, _admin: AdminDep) -> dict:
     """Register a new MCP server and immediately attempt to connect if enabled. Admin-only."""

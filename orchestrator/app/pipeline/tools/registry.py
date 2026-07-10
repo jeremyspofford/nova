@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from nova_contracts import ToolDefinition
@@ -37,6 +38,37 @@ _active_clients: dict[str, "StdioMCPClient | HTTPMCPClient"] = {}
 # so the consent gate can classify an MCP tool's blast radius (app.tools.mcp_classify)
 # without a DB round-trip on every call. Mutated only under _registry_lock.
 _server_meta: dict[str, dict] = {}
+
+# Catalog-installed servers store secrets as ${secret:KEY} references in env (the
+# plaintext lives encrypted in platform_secrets). Resolve them to real values at
+# connect time so nothing sensitive is ever written to mcp_servers.env (JSONB).
+_SECRET_REF = re.compile(r"^\$\{secret:([^}]+)\}$")
+
+
+async def _resolve_secret_refs(env: dict) -> dict:
+    """Replace ${secret:KEY} env values with the decrypted platform secret.
+
+    Non-reference values pass through unchanged. A reference to a missing secret
+    is dropped (with a WARNING) rather than passed literally to the subprocess.
+    """
+    if not any(isinstance(v, str) and v.startswith("${secret:") for v in env.values()):
+        return env
+    from app import secrets_store
+    from app.db import get_pool
+
+    pool = get_pool()
+    out: dict = {}
+    for key, val in env.items():
+        match = _SECRET_REF.match(val) if isinstance(val, str) else None
+        if match:
+            secret_val = await secrets_store.get_secret(pool, match.group(1))
+            if secret_val is None:
+                log.warning("MCP env %r references missing secret %s — dropping", key, match.group(1))
+                continue
+            out[key] = secret_val
+        else:
+            out[key] = val
+    return out
 
 # Protects _active_clients against concurrent mutation (reload/disconnect racing
 # with tool execution and discovery). Acquire around all dict mutations.
@@ -164,6 +196,7 @@ async def _connect_server(cfg: dict) -> bool:
             log.warning("Error disconnecting MCP server '%s': %s", name, e)
 
     try:
+        resolved_env = await _resolve_secret_refs(dict(cfg.get("env") or {}))
         if transport == "http":
             from .http_mcp_client import HTTPMCPClient
 
@@ -175,7 +208,7 @@ async def _connect_server(cfg: dict) -> bool:
             client = HTTPMCPClient(
                 name=name,
                 url=url,
-                env=dict(cfg.get("env") or {}),
+                env=resolved_env,
             )
         else:
             from .mcp_client import StdioMCPClient
@@ -188,7 +221,7 @@ async def _connect_server(cfg: dict) -> bool:
                 name=name,
                 command=cfg["command"],
                 args=list(cfg.get("args") or []),
-                env=dict(cfg.get("env") or {}),
+                env=resolved_env,
             )
 
         await client.start()
