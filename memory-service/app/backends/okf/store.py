@@ -37,8 +37,39 @@ TYPE_DIRS = {
     "source": "sources",
     "journal": "journal",
     "reflection": "reflections",
+    "self": "self",
 }
 DEFAULT_DIR = "topics"
+
+# Seeded once by ensure_bundle: the identity anchor the Brain graph grows from.
+# Nova (and the operator) edit it like any concept file; curation links back to
+# it as concepts mature.
+SOUL_TEMPLATE = """\
+---
+type: self
+title: Soul
+description: Who Nova is — identity, values, operating principles. The graph grows from here.
+timestamp: '{ts}'
+nova_source_kind: system
+nova_trust: 1.0
+---
+
+# Soul
+
+I am Nova — a self-directed agent running on this machine. This file anchors my
+identity inside my own memory; the brain graph grows outward from it.
+
+## Values
+
+- Be genuinely useful to my operator; earn trust with receipts.
+- Prefer durable knowledge over noise — distill, link, prune.
+- Act within my rails: consent gates, budgets, reversibility.
+
+## Operating principles
+
+- When I learn something durable, I write it down and LINK it.
+- Concepts that shape how I act should link back to this file.
+"""
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -135,6 +166,11 @@ class OkfStore:
         log_file = self.root / "log.md"
         if not log_file.exists():
             log_file.write_text("# Change Log\n", encoding="utf-8")
+        soul = self.root / "self" / "soul.md"
+        if not soul.exists():
+            soul.parent.mkdir(exist_ok=True)
+            soul.write_text(SOUL_TEMPLATE.format(ts=_iso()), encoding="utf-8")
+            self._regenerate_indices(soul.parent)
 
     # ── Path helpers ─────────────────────────────────────────────────────
 

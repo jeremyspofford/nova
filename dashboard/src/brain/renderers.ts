@@ -36,7 +36,7 @@ export interface FrameCtx {
   search: Set<number> | null
 }
 
-const GOLDW: [number, number, number] = [255, 214, 140]
+export const GOLDW: [number, number, number] = [255, 214, 140]
 
 // ── Shared background: debanded nebula + film-grain dither ───────────────────
 // Canvas radial gradients posterize badly on dark surfaces — a 2-stop teal→black
@@ -119,10 +119,13 @@ function drawNodes(
       : n.near * f.respondAmp * (0.22 + 0.88 * heart)
     const breathe = f.reduceMotion ? 0 : Math.sin(f.simT * 0.9 + n.phase) * 0.09
     const glow = Math.min(1, Math.max(n.act, wave, n.rim * (0.26 + 0.24 * heart)))
-    const rgb = f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
+    const isSoul = i === scene.soulIdx
+    const rgb = isSoul ? mix(GOLDW, [255, 255, 255], 0.25)
+      : f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
     const col = glow > 0.02 ? mix(rgb, AMBER, glow * 0.9) : rgb
-    // journals are the secondary tier: smaller and quieter than concepts
-    const tier = n.cat.key === 'episode' ? 0.72 : 1
+    // journals are the secondary tier: smaller and quieter than concepts;
+    // the soul is the identity anchor and reads a step brighter
+    const tier = isSoul ? 1.5 : n.cat.key === 'episode' ? 0.72 : 1
     const sDim = !f.search || f.search.has(i) ? 1 : 0.15
 
     const r = baseR * tier * (1 + breathe) * (1 + glow * 0.7)
@@ -146,6 +149,17 @@ function drawNodes(
   }
   ctx.globalCompositeOperation = 'source-over'
 
+  // the soul wears a fine double ring — identity, not activity
+  if (scene.soulIdx >= 0 && P[scene.soulIdx]) {
+    const p = P[scene.soulIdx]!
+    const rr = nodeRadius(scene.nodes[scene.soulIdx].degree, p.s) * 1.5
+    ctx.strokeStyle = css(GOLDW, 0.5)
+    ctx.lineWidth = 1
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, rr + 7, 0, 7); ctx.stroke()
+    ctx.strokeStyle = css(GOLDW, 0.16)
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, rr + 11, 0, 7); ctx.stroke()
+  }
+
   // selection ring only — retrieval results pulse instead of getting a circle
   if (f.selected >= 0 && P[f.selected]) {
     const p = P[f.selected]!
@@ -163,7 +177,7 @@ function drawNodes(
       const hit = f.search?.has(i) ?? false
       // journals never join the bulk label pass — hover/select/search only
       const show = (f.showLabels && n.cat.key !== 'episode' && (n.degree >= 5 || n.act > 0.25))
-        || i === f.hovered || i === f.selected || n.rim > 0.3 || hit
+        || i === f.hovered || i === f.selected || n.rim > 0.3 || hit || i === scene.soulIdx
       if (!show) continue
       const a = Math.max(0.4, 1.05 - p.z * 0.0016) * (!f.search || hit ? 1 : 0.15)
       ctx.fillStyle = `rgba(250,250,249,${i === f.hovered || i === f.selected || hit ? 0.95 : a * 0.62})`
@@ -331,8 +345,9 @@ export function drawOrrery(
     }
   }
 
-  // center: index.md — beats amber while responding
-  const c0 = project(0, 0, 0, cam, f.W, f.H)
+  // center: the soul node holds the dial's centre when present; otherwise
+  // index.md marks it — beats amber while responding
+  const c0 = scene.soulIdx >= 0 ? null : project(0, 0, 0, cam, f.W, f.H)
   if (c0) {
     const beat = f.reduceMotion ? 0 : heart * f.respondAmp
     const coreCol = beat > 0 ? mix(TEAL_BRIGHT, AMBER, beat * 0.7) : TEAL_BRIGHT

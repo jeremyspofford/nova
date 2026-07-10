@@ -119,6 +119,8 @@ export interface Scene {
   nodes: BrainNode[]
   edges: [number, number][]
   byId: Map<string, number>
+  /** index of the self/soul node, pinned at the origin in every layout; -1 if absent */
+  soulIdx: number
   relaxDone: boolean
   orreryDone: boolean
   spiralCount: number
@@ -192,9 +194,19 @@ export function buildScene(graph: MemGraph): Scene {
     n.x = n.gx; n.y = n.gy; n.z = n.gz
   }
 
+  // the soul (self/soul.md) is the graph's centre of identity — pin it at the
+  // origin so every layout (and the resting camera) grows outward from it
+  const soulIdx = nodes.findIndex(n => (n.type || '').toLowerCase() === 'self')
+  if (soulIdx >= 0) {
+    const s = nodes[soulIdx]
+    s.gx = s.gy = s.gz = 0
+    s.x = s.y = s.z = 0
+  }
+
   return {
     nodes, edges,
     byId: new Map(nodes.map(n => [n.id, n.idx])),
+    soulIdx,
     relaxDone: false,
     orreryDone: false,
     spiralCount: 0,
@@ -249,6 +261,10 @@ export function relaxStep(scene: Scene, iters = 20): void {
       n.gy += Math.max(-6, Math.min(6, fy[i] * step))
       n.gz += Math.max(-6, Math.min(6, fz[i] * step))
     }
+    if (scene.soulIdx >= 0) {
+      const s = N[scene.soulIdx]
+      s.gx = s.gy = s.gz = 0 // the soul does not move
+    }
   }
   if (relaxIter >= RELAX_TOTAL) scene.relaxDone = true
 }
@@ -296,6 +312,10 @@ export function layoutOrrery(scene: Scene): void {
     n.yy = 2 + k * 1.4
     n.w = 0.012
   })
+  if (scene.soulIdx >= 0) {
+    const s = scene.nodes[scene.soulIdx]
+    s.a0 = 0; s.rad = 0; s.yy = 0; s.w = 0 // soul holds the centre of the dial
+  }
   scene.spiralCount = spiral.length
   scene.orreryDone = true
 }

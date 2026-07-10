@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Brain as BrainIcon, MessageSquare, Pencil, Sparkles, Trash2 } from 'lucide-react'
-import { apiFetch } from '../api'
+import { apiFetch, getCortexDrives, getGoals, type CortexDrive, type Goal } from '../api'
+import { drawSatellites, type SatHit } from '../brain/satellites'
 import {
   BrainMode, Camera, CATS, MemGraph, Retrieval, RetrievalEvent, Scene,
   applyRetrieval, buildScene, heartOf, panWorld, relaxStep, resetRelax,
@@ -43,6 +45,7 @@ const chip = (on: boolean) =>
 
 export function Brain() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const reduceMotion = useMemo(
     () => window.matchMedia('(prefers-reduced-motion: reduce)').matches, [])
 
@@ -50,6 +53,16 @@ export function Brain() {
     queryKey: ['memory-graph'],
     queryFn: () => apiFetch<MemGraph>('/mem/api/v1/memory/graph'),
     staleTime: 60_000,
+  })
+
+  // live state for the soul's satellites (read-only overlay, never blocks)
+  const drivesQ = useQuery({
+    queryKey: ['brain-drives'], queryFn: getCortexDrives,
+    refetchInterval: 10_000, staleTime: 5_000, retry: 1,
+  })
+  const goalsQ = useQuery({
+    queryKey: ['brain-goals-active'], queryFn: () => getGoals('active'),
+    refetchInterval: 30_000, staleTime: 15_000, retry: 1,
   })
 
   // ── UI state (mirrored into refs for the render loop) ──────────────────
@@ -97,6 +110,10 @@ export function Brain() {
   const searchStateRef = useRef<{ q: string; scene: Scene | null; set: Set<number> | null }>(
     { q: '', scene: null, set: null })
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const satDataRef = useRef<{ drives: CortexDrive[]; goals: Goal[] }>({ drives: [], goals: [] })
+  satDataRef.current = { drives: drivesQ.data?.drives ?? [], goals: goalsQ.data ?? [] }
+  const satHitsRef = useRef<SatHit[]>([])
+  const hoveredSatRef = useRef(-1)
   const chatOpenRef = useRef(chatOpen)
   chatOpenRef.current = chatOpen
   const chatWidthRef = useRef(chatWidth)
@@ -233,10 +250,12 @@ export function Brain() {
 
       if (scene) {
         if (!scene.relaxDone) relaxStep(scene, 12)
-        // rest the orbit pivot on the layout's centre of mass until the user
-        // pans somewhere — rotation then spins around the current view centre
+        // rest the orbit pivot on the soul when there is one (it holds the
+        // origin), else the layout's centre of mass — until the user pans;
+        // rotation then spins around the current view centre
         if (!pannedRef.current && (v === 'galaxy' || v === 'orrery')) {
-          const c = v === 'orrery' ? { x: 0, y: 0, z: 0 } : sceneCentroid(scene)
+          const c = v === 'orrery' || scene.soulIdx >= 0
+            ? { x: 0, y: 0, z: 0 } : sceneCentroid(scene)
           const e = Math.min(1, dt * 2.5)
           cam.tx += (c.x - cam.tx) * e
           cam.ty += (c.y - cam.ty) * e
@@ -279,6 +298,23 @@ export function Brain() {
       } else {
         ctx.clearRect(0, 0, W, H)
       }
+
+      // soul satellites: live drives/goals orbiting the identity anchor
+      const sIdx = scene?.soulIdx ?? -1
+      let satDrawn = false
+      if (scene && sIdx >= 0 && v !== 'singularity') {
+        const sp = v === 'graph'
+          ? graphRef.current!.screenOf(sIdx)
+          : projRef.current[sIdx]
+            ? { x: projRef.current[sIdx]!.sx, y: projRef.current[sIdx]!.sy }
+            : null
+        if (sp) {
+          drawSatellites(ctx, sp, satDataRef.current.drives, satDataRef.current.goals,
+            simT, hoveredSatRef.current, reduceMotion, satHitsRef.current)
+          satDrawn = true
+        }
+      }
+      if (!satDrawn) satHitsRef.current.length = 0
     }
     raf = requestAnimationFrame(loop)
     return () => { cancelAnimationFrame(raf); ro.disconnect() }
@@ -342,7 +378,15 @@ export function Brain() {
       if (v === 'singularity') singRef.current?.stir()
     } else {
       const { x, y } = localXY(e)
-      hoveredRef.current = v === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
+      // satellites sit above the graph — they win the hover
+      let sat = -1
+      const hits = satHitsRef.current
+      for (let k = 0; k < hits.length; k++) {
+        if (Math.hypot(hits[k].x - x, hits[k].y - y) < hits[k].r) { sat = k; break }
+      }
+      hoveredSatRef.current = sat
+      hoveredRef.current = sat >= 0 ? -1
+        : v === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
     }
   }
   const onPointerUp = (e: React.PointerEvent) => {
@@ -350,6 +394,10 @@ export function Brain() {
     ds.dragging = false
     if (ds.moved < 6 && ds.button === 0) {
       const { x, y } = localXY(e)
+      // satellites are deep links, not memory nodes
+      for (const h of satHitsRef.current) {
+        if (Math.hypot(h.x - x, h.y - y) < h.r) { navigate(h.link); return }
+      }
       const i = viewRef.current === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
       setSelectedIdx(i)
       if (i >= 0) setDetailFull(false)

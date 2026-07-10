@@ -230,7 +230,7 @@ class TestProvenanceStats:
                           metadata={"okf": {"type": "note", "title": "S1"}}))
         stats = run(backend.stats())
         assert stats["provider_name"] == "okf"
-        assert stats["total_items"] == 1
+        assert stats["total_items"] == 2  # the written note + the seeded soul
 
     def test_explain(self, backend: OkfBackend):
         run(backend.write("the mitochondria is the powerhouse of the cell",
@@ -256,6 +256,16 @@ class TestMaintenance:
         out = run(backend.consolidate())
         assert out["journals_archived"] == 1
         assert (backend.store.root / "journal" / "archive" / journal.name).exists()
+
+
+class TestSoulSeed:
+    def test_soul_seeded_and_in_graph(self, backend: OkfBackend):
+        assert (backend.store.root / "self" / "soul.md").exists()
+        g = run(backend.graph())
+        souls = [n for n in g["nodes"] if n["type"] == "self"]
+        assert len(souls) == 1
+        assert souls[0]["title"] == "Soul"
+        assert souls[0]["id"] == "self/soul.md"
 
 
 class TestJournalNoiseGate:
