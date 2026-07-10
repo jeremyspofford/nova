@@ -178,13 +178,13 @@ async def execute_tool(
         import logging
         logging.getLogger(__name__).warning("Rule check failed: %s", e)
 
-    # MCP tools are namespaced as mcp__{server}__{tool}
+    # MCP tools are namespaced as mcp__{server}__{tool}. Route through the
+    # consent gate so MUTATE/DESTRUCT MCP actions (unlock a door, fire an n8n
+    # workflow, flush a DNS blocklist) require approval — READ MCP tools (sensor
+    # reads, searches) stay on the fast path. Before Slice 0 these bypassed
+    # consent entirely.
     if name.startswith("mcp__"):
-        try:
-            from app.pipeline.tools.registry import execute_mcp_tool
-            return await execute_mcp_tool(name, arguments)
-        except Exception as e:
-            return f"MCP dispatch error: {e}"
+        return await _dispatch_mcp_via_consent(name, arguments, context)
 
     # github_external tools require a credential. Route through the capability
     # platform (consent gate + secret resolution + audit) instead of calling
@@ -216,6 +216,105 @@ async def execute_tool(
 
     all_names = [t.name for t in ALL_TOOLS]
     return f"Unknown tool '{name}'. Available: {all_names}"
+
+
+async def _dispatch_mcp_via_consent(
+    name: str, arguments: dict, context: dict | None,
+) -> str:
+    """Dispatch an MCP tool through the capability consent gate.
+
+    MCP calls used to bypass consent entirely. Now: classify the tool's blast
+    radius (``mcp_classify``); READ/PROPOSE run immediately (parity with native
+    read tools — no nagging on sensor reads), MUTATE/DESTRUCT flow through
+    ``capabilities.executor.execute_tool`` so they create a pending approval +
+    capability_audit row and only run once the operator (or a matching consent
+    rule) approves. On approval the approval worker re-executes the call via
+    ``executor.execute_approved``'s ``mcp__`` branch.
+    """
+    from nova_contracts import BlastRadius
+
+    from app.pipeline.tools.registry import execute_mcp_tool, get_server_meta
+    from app.tools import mcp_classify
+
+    parts = name.split("__", 2)
+    server_name = parts[1] if len(parts) == 3 else ""
+    meta_entry = get_server_meta(server_name)
+    server_metadata = meta_entry.get("metadata") or {}
+    transport = meta_entry.get("transport", "stdio")
+    blast = mcp_classify.classify(name, server_metadata)
+
+    async def _run() -> str:
+        try:
+            return await execute_mcp_tool(name, arguments)
+        except Exception as e:  # noqa: BLE001 — surface as tool text, never crash the turn
+            return f"MCP dispatch error: {e}"
+
+    # Fast path: read-only tools don't gate.
+    if blast in (BlastRadius.READ, BlastRadius.PROPOSE):
+        return await _run()
+
+    # MUTATE / DESTRUCT → consent gate + audit via the capability platform.
+    import json as _json
+    from uuid import UUID as _UUID
+
+    from app.capabilities.executor import execute_tool as cap_execute_tool
+    from app.db import get_pool
+
+    ctx = context or {}
+    default_tenant = _UUID("00000000-0000-0000-0000-000000000001")
+
+    def _uuid(value: object) -> _UUID | None:
+        if not value:
+            return None
+        try:
+            return _UUID(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    async def _underlying(args: dict, secret: str | None) -> dict:
+        # Runs only if the gate allowed (or a rule auto-approved). The MCP
+        # server holds its own credentials via env/secrets, so `secret` is None.
+        return {"result": await _run()}
+
+    result = await cap_execute_tool(
+        get_pool(),
+        tenant_id=_uuid(ctx.get("tenant_id")) or default_tenant,
+        user_id=_uuid(ctx.get("user_id")),
+        task_id=_uuid(ctx.get("task_id")),
+        actor_kind=ctx.get("actor_kind", "agent"),
+        actor_id=str(ctx.get("actor_id") or "mcp"),
+        tool_name=name,
+        tool_kind="mcp_http" if transport == "http" else "mcp_stdio",
+        blast_radius=blast,
+        reversible=(blast == BlastRadius.MUTATE),
+        provider_kind=mcp_classify.provider_kind_of(server_name, server_metadata),
+        target=mcp_classify.target_of(arguments),
+        credential_id=None,
+        args=arguments,
+        underlying=_underlying,
+    )
+
+    if isinstance(result, dict):
+        status = result.get("status")
+        if status == "consent_pending":
+            return _json.dumps({
+                "status": "consent_pending",
+                "approval_id": result.get("approval_id"),
+                "message": (
+                    f"'{name}' is a {blast.value.upper()} action and needs your "
+                    "approval before it runs. It's waiting in Pending Approvals."
+                ),
+            })
+        if status == "user_rejected":
+            return _json.dumps({
+                "status": "user_rejected",
+                "message": f"'{name}' was denied and did not run.",
+            })
+        inner = result.get("result")
+        if isinstance(inner, str):
+            return inner
+        return _json.dumps(result)
+    return str(result)
 
 
 async def _dispatch_github_external_via_capabilities(

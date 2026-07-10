@@ -370,6 +370,11 @@ async def execute_approved(pool: asyncpg.Pool, approval_id: UUID) -> dict:
             )
             if not isinstance(result, dict):
                 result = {"result": result}
+        elif tool_kind in ("mcp_http", "mcp_stdio") or tool_name.startswith("mcp__"):
+            # Re-execute the originally-pended MCP call now that it's approved.
+            # Runs in the orchestrator process where the MCP client is connected.
+            from app.pipeline.tools.registry import execute_mcp_tool
+            result = {"result": await execute_mcp_tool(tool_name, args)}
         else:
             raise NotImplementedError(
                 f"execute_approved does not yet route tool {tool_name!r} "
