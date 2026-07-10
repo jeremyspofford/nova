@@ -13,6 +13,12 @@ workspace/
 # Superpowers brainstorm sessions
 .superpowers/
 
+# docs/superpowers/ holds tracked planning + spec docs. A global gitignore
+# (~/.gitignore_global) ignores any dir named `superpowers/`, which silently
+# blocks NEW files here — re-include this repo's copy so plans get committed.
+!docs/superpowers/
+!docs/superpowers/**
+
 # Python
 __pycache__/
 *.pyc
