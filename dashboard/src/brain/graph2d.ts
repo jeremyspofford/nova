@@ -219,6 +219,21 @@ export function createGraph2D(): Graph2D {
         const p = screen[i]
         if (!p) continue
         const n = scene.nodes[i]
+        if (n.satKind) {
+          // live-state satellite: hollow ring, part of the layout like any node
+          const hot = n.satKind === 'drive' ? Math.max(0, Math.min(1, n.satHot ?? 0)) : 0
+          const scol = n.satKind === 'drive' ? mix(AMBER, GOLDW, 0.35) : TEAL_BRIGHT
+          const dd = dim(i)
+          const rr = Math.max(2.2, p.r * 0.8) * (i === f.hovered ? 1.35 : 1)
+          if (hot > 0.02) {
+            ctx.fillStyle = css(scol, 0.3 * hot * dd)
+            ctx.beginPath(); ctx.arc(p.x, p.y, rr * 0.7, 0, 7); ctx.fill()
+          }
+          ctx.strokeStyle = css(scol, (0.45 + hot * 0.45) * dd)
+          ctx.lineWidth = i === f.hovered ? 1.8 : 1.2
+          ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, 7); ctx.stroke()
+          continue
+        }
         const wave = f.reduceMotion ? n.near * 0.45 * f.respondAmp
           : n.near * f.respondAmp * (0.22 + 0.88 * heart)
         const glow = Math.min(1, Math.max(n.act, wave, n.rim * (0.26 + 0.24 * heart)))

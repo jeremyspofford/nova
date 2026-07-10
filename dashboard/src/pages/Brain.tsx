@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Brain as BrainIcon, MessageSquare, Pencil, Sparkles, Trash2 } from 'lucide-react'
-import { apiFetch, getCortexDrives, getGoals, type CortexDrive, type Goal } from '../api'
-import { drawSatellites, type SatHit } from '../brain/satellites'
+import { apiFetch, getCortexDrives, getGoals } from '../api'
 import {
   BrainMode, Camera, CATS, MemGraph, Retrieval, RetrievalEvent, Scene,
   applyRetrieval, buildScene, heartOf, panWorld, relaxStep, resetRelax,
@@ -110,10 +109,8 @@ export function Brain() {
   const searchStateRef = useRef<{ q: string; scene: Scene | null; set: Set<number> | null }>(
     { q: '', scene: null, set: null })
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const satDataRef = useRef<{ drives: CortexDrive[]; goals: Goal[] }>({ drives: [], goals: [] })
-  satDataRef.current = { drives: drivesQ.data?.drives ?? [], goals: goalsQ.data ?? [] }
-  const satHitsRef = useRef<SatHit[]>([])
-  const hoveredSatRef = useRef(-1)
+  const driveMapRef = useRef<Map<string, number>>(new Map())
+  driveMapRef.current = new Map((drivesQ.data?.drives ?? []).map(d => [d.name, d.urgency]))
   const chatOpenRef = useRef(chatOpen)
   chatOpenRef.current = chatOpen
   const chatWidthRef = useRef(chatWidth)
@@ -121,14 +118,21 @@ export function Brain() {
   const pannedRef = useRef(false)
   selectedRef.current = selectedIdx
 
-  // build scene when the graph arrives
+  // build scene when the graph arrives, or when the live-node SET changes
+  // (urgency refreshes are applied in place — no rebuild)
+  const driveKey = (drivesQ.data?.drives ?? []).map(d => d.name).sort().join('|')
+  const goalKey = (goalsQ.data ?? []).map(g => g.id).join('|')
   useEffect(() => {
     if (!graphQuery.data) return
     resetRelax()
-    sceneRef.current = buildScene(graphQuery.data)
+    sceneRef.current = buildScene(graphQuery.data, {
+      drives: (drivesQ.data?.drives ?? []).map(d => ({ name: d.name, urgency: d.urgency })),
+      goals: (goalsQ.data ?? []).map(g => ({ id: g.id, title: g.title })),
+    })
     pannedRef.current = false
     setSelectedIdx(-1)
-  }, [graphQuery.data])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphQuery.data, driveKey, goalKey])
 
   const transition = useCallback((m: BrainMode) => {
     modeRef.current = m
@@ -261,6 +265,10 @@ export function Brain() {
           cam.ty += (c.y - cam.ty) * e
           cam.tz += (c.z - cam.tz) * e
         }
+        // live urgency onto drive satellites — applied in place, no rebuild
+        for (const n of scene.nodes) {
+          if (n.satKind === 'drive') n.satHot = driveMapRef.current.get(n.title) ?? n.satHot
+        }
         const r = retrievalRef.current
         if (r && applyRetrieval(scene, r, simT)) {
           centroidRef.current = resultCentroid(scene, r)
@@ -299,22 +307,6 @@ export function Brain() {
         ctx.clearRect(0, 0, W, H)
       }
 
-      // soul satellites: live drives/goals orbiting the identity anchor
-      const sIdx = scene?.soulIdx ?? -1
-      let satDrawn = false
-      if (scene && sIdx >= 0 && v !== 'singularity') {
-        const sp = v === 'graph'
-          ? graphRef.current!.screenOf(sIdx)
-          : projRef.current[sIdx]
-            ? { x: projRef.current[sIdx]!.sx, y: projRef.current[sIdx]!.sy }
-            : null
-        if (sp) {
-          drawSatellites(ctx, sp, satDataRef.current.drives, satDataRef.current.goals,
-            simT, hoveredSatRef.current, reduceMotion, satHitsRef.current)
-          satDrawn = true
-        }
-      }
-      if (!satDrawn) satHitsRef.current.length = 0
     }
     raf = requestAnimationFrame(loop)
     return () => { cancelAnimationFrame(raf); ro.disconnect() }
@@ -378,15 +370,7 @@ export function Brain() {
       if (v === 'singularity') singRef.current?.stir()
     } else {
       const { x, y } = localXY(e)
-      // satellites sit above the graph — they win the hover
-      let sat = -1
-      const hits = satHitsRef.current
-      for (let k = 0; k < hits.length; k++) {
-        if (Math.hypot(hits[k].x - x, hits[k].y - y) < hits[k].r) { sat = k; break }
-      }
-      hoveredSatRef.current = sat
-      hoveredRef.current = sat >= 0 ? -1
-        : v === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
+      hoveredRef.current = v === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
     }
   }
   const onPointerUp = (e: React.PointerEvent) => {
@@ -394,11 +378,10 @@ export function Brain() {
     ds.dragging = false
     if (ds.moved < 6 && ds.button === 0) {
       const { x, y } = localXY(e)
-      // satellites are deep links, not memory nodes
-      for (const h of satHitsRef.current) {
-        if (Math.hypot(h.x - x, h.y - y) < h.r) { navigate(h.link); return }
-      }
       const i = viewRef.current === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
+      // satellites are live state, not memory: deep-link instead of the modal
+      const node = i >= 0 ? sceneRef.current?.nodes[i] : undefined
+      if (node?.satKind) { navigate(node.link ?? '/goals'); return }
       setSelectedIdx(i)
       if (i >= 0) setDetailFull(false)
     }
@@ -477,7 +460,10 @@ export function Brain() {
   const stats = graphQuery.data
   const legendCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const n of sceneRef.current?.nodes ?? []) counts[n.cat.key] = (counts[n.cat.key] ?? 0) + 1
+    for (const n of sceneRef.current?.nodes ?? []) {
+      if (n.satKind) continue // live-state nodes aren't memories
+      counts[n.cat.key] = (counts[n.cat.key] ?? 0) + 1
+    }
     return counts
   }, [graphQuery.data]) // eslint-disable-line react-hooks/exhaustive-deps
 

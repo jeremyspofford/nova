@@ -113,6 +113,23 @@ function drawNodes(
   ctx.globalCompositeOperation = 'lighter'
   for (const i of order) {
     const n = scene.nodes[i], p = P[i]!
+    if (n.satKind) {
+      // live-state satellite: hollow ring, in-scene (depth-faded like a node),
+      // drives glow an ember by real urgency
+      const hot = n.satKind === 'drive' ? Math.max(0, Math.min(1, n.satHot ?? 0)) : 0
+      const scol = n.satKind === 'drive' ? mix(AMBER, GOLDW, 0.35) : TEAL_BRIGHT
+      const satDim = (!f.search || f.search.has(i) ? 1 : 0.15)
+        * Math.max(0.3, 1.1 - p.z * 0.0016)
+      const rr = Math.max(2, 3.1 * p.s * 0.55) * (i === f.hovered ? 1.35 : 1)
+      if (hot > 0.02) {
+        ctx.fillStyle = css(scol, 0.28 * hot * satDim)
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, rr * 0.7, 0, 7); ctx.fill()
+      }
+      ctx.strokeStyle = css(scol, (0.4 + hot * 0.5) * satDim)
+      ctx.lineWidth = i === f.hovered ? 1.8 : 1.2
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, rr, 0, 7); ctx.stroke()
+      continue
+    }
     const baseR = nodeRadius(n.degree, p.s)
     const wave = f.reduceMotion
       ? n.near * 0.45 * f.respondAmp
