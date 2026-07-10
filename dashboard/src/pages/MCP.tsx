@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Plus, Trash2, RefreshCw, CheckCircle2, XCircle,
-  ChevronDown, ChevronRight, Pencil, ExternalLink, Search, Puzzle,
+  Plus, Trash2, RefreshCw,
+  ChevronDown, ChevronRight, Pencil, ExternalLink, Puzzle, ShieldCheck,
 } from 'lucide-react'
 import {
   getMCPServers,
@@ -10,13 +10,16 @@ import {
   updateMCPServer,
   deleteMCPServer,
   reloadMCPServer,
+  getMCPCatalog,
+  installMCPServer,
   type MCPServer,
+  type MCPCatalogTemplate,
+  type BlastRadius,
 } from '../api'
-import { MCP_CATALOG, ALL_TAGS, type CatalogEntry } from '../lib/mcp-catalog'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Card, Button, Input, Label, Select, Badge, StatusDot,
-  ConfirmDialog, EmptyState, SearchInput,
+  ConfirmDialog, EmptyState, SearchInput, Modal, Tooltip,
 } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -411,6 +414,16 @@ function ServerCard({
             </div>
           )}
 
+          {(() => {
+            const radii = distinctRadii(server.metadata?.tool_blast_radius as Record<string, BlastRadius> | undefined)
+            return radii.length > 0 ? (
+              <div className="flex items-center gap-1.5 pt-1">
+                <span className="text-caption text-content-tertiary">Actions:</span>
+                {radii.map(r => <BlastBadge key={r} radius={r} />)}
+              </div>
+            ) : null
+          })()}
+
           {server.active_tools && server.active_tools.length > 0 && (
             <div className="pt-1">
               <p className="mb-1.5 text-caption text-content-tertiary">Available tools:</p>
@@ -435,21 +448,47 @@ function ServerCard({
 
 // ── Catalog card ─────────────────────────────────────────────────────────────
 
+const BLAST: Record<BlastRadius, { label: string; color: 'neutral' | 'warning' | 'danger'; hint: string }> = {
+  read: { label: 'read', color: 'neutral', hint: 'Read-only — runs without approval.' },
+  propose: { label: 'propose', color: 'neutral', hint: 'Generates output only — no external side effects.' },
+  mutate: { label: 'write', color: 'warning', hint: 'Changes state — requires your approval before it runs.' },
+  destruct: { label: 'destructive', color: 'danger', hint: 'Irreversible — requires your approval before it runs.' },
+}
+
+function BlastBadge({ radius }: { radius: BlastRadius }) {
+  const b = BLAST[radius]
+  return (
+    <Tooltip content={b.hint}>
+      <span className="inline-flex"><Badge color={b.color} size="sm">{b.label}</Badge></span>
+    </Tooltip>
+  )
+}
+
+/** Distinct blast radii present in a tool_blast_radius map, worst-first. */
+function distinctRadii(map: Record<string, BlastRadius> | undefined): BlastRadius[] {
+  const present = new Set(Object.values(map ?? {}))
+  return (['destruct', 'mutate', 'read'] as BlastRadius[]).filter(r => present.has(r))
+}
+
 function CatalogCard({
-  entry,
+  tpl,
   onInstall,
 }: {
-  entry: CatalogEntry
-  onInstall: (entry: CatalogEntry) => void
+  tpl: MCPCatalogTemplate
+  onInstall: (tpl: MCPCatalogTemplate) => void
 }) {
+  const radii = distinctRadii(tpl.tool_blast_radius)
   return (
     <Card variant="hoverable" className="p-4 flex flex-col">
       <div className="flex-1">
         <div className="flex items-start justify-between gap-2">
-          <span className="text-compact font-medium text-content-primary">{entry.displayName}</span>
-          {entry.docs && (
+          <span className="flex items-center gap-1.5 text-compact font-medium text-content-primary">
+            {tpl.icon && <span aria-hidden>{tpl.icon}</span>}
+            {tpl.name}
+          </span>
+          {tpl.docs_url && (
             <a
-              href={entry.docs}
+              href={tpl.docs_url}
               target="_blank"
               rel="noopener noreferrer"
               onClick={e => e.stopPropagation()}
@@ -460,17 +499,115 @@ function CatalogCard({
             </a>
           )}
         </div>
-        <p className="mt-1 text-caption text-content-secondary leading-relaxed">{entry.description}</p>
-        <div className="mt-2 flex flex-wrap gap-1">
-          {entry.tags.map(tag => (
-            <Badge key={tag} color="neutral" size="sm">{tag}</Badge>
-          ))}
+        <p className="mt-1 text-caption text-content-secondary leading-relaxed">{tpl.description}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <Badge color="neutral" size="sm">{tpl.category}</Badge>
+          {radii.map(r => <BlastBadge key={r} radius={r} />)}
         </div>
       </div>
-      <Button size="sm" className="w-full mt-4" onClick={() => onInstall(entry)}>
+      <Button size="sm" className="w-full mt-4" onClick={() => onInstall(tpl)}>
         Install
       </Button>
     </Card>
+  )
+}
+
+// ── Secure install modal (secrets → encrypted vault) ──────────────────────────
+
+function InstallModal({
+  tpl,
+  onClose,
+  onInstalled,
+}: {
+  tpl: MCPCatalogTemplate | null
+  onClose: () => void
+  onInstalled: () => void
+}) {
+  const [name, setName] = useState(tpl?.name ?? '')
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries((tpl?.fields ?? []).map(f => [f.key, f.default ?? ''])),
+  )
+  const [enabled, setEnabled] = useState(true)
+
+  const install = useMutation({
+    mutationFn: () =>
+      installMCPServer({ template_id: tpl!.id, name: name.trim() || undefined, fields: values, enabled }),
+    onSuccess: onInstalled,
+  })
+
+  if (!tpl) return null
+
+  const missing = tpl.fields
+    .filter(f => (f.required ?? true) && !(values[f.key] ?? '').trim())
+    .map(f => f.label)
+  const hasSecret = tpl.fields.some(f => f.secret)
+
+  return (
+    <Modal
+      open={!!tpl}
+      onClose={onClose}
+      size="md"
+      title={`Install ${tpl.name}`}
+      footer={
+        <div className="flex w-full items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-caption text-content-secondary cursor-pointer">
+            <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="rounded" />
+            Connect immediately
+          </label>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button
+              icon={<Plus size={13} />}
+              onClick={() => install.mutate()}
+              disabled={missing.length > 0}
+              loading={install.isPending}
+            >
+              Install
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-left">
+        <p className="text-caption text-content-secondary">{tpl.description}</p>
+
+        <div>
+          <Label>Name</Label>
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder={tpl.name} />
+        </div>
+
+        {tpl.fields.map(f => (
+          <div key={f.key}>
+            <Label>{f.label}{(f.required ?? true) ? ' *' : ''}</Label>
+            <Input
+              type={f.secret ? 'password' : 'text'}
+              value={values[f.key] ?? ''}
+              onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
+              placeholder={f.placeholder}
+              autoComplete={f.secret ? 'new-password' : undefined}
+            />
+            {f.help && <p className="mt-0.5 text-caption text-content-tertiary">{f.help}</p>}
+          </div>
+        ))}
+
+        {hasSecret && (
+          <div className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface-elevated px-3 py-2">
+            <ShieldCheck size={14} className="mt-0.5 shrink-0 text-success" />
+            <p className="text-caption text-content-tertiary">
+              Secrets are stored encrypted in Nova's vault — only a reference is written to the server config, never the value itself.
+            </p>
+          </div>
+        )}
+
+        {tpl.requires && (
+          <p className="text-caption text-content-tertiary">Requires: {tpl.requires}</p>
+        )}
+
+        {install.isError && (
+          <p className="text-caption text-danger">{String(install.error)}</p>
+        )}
+      </div>
+    </Modal>
   )
 }
 
@@ -488,17 +625,22 @@ const HELP_ENTRIES = [
 export function MCPContent() {
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
-  const [prefill, setPrefill] = useState<PrefillValues | null>(null)
   const [formKey, setFormKey] = useState(0)
-  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null)
-  const formRef = useRef<HTMLDivElement>(null)
+  const [installTarget, setInstallTarget] = useState<MCPCatalogTemplate | null>(null)
 
   const { data: servers = [], isLoading, error } = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: getMCPServers,
     refetchInterval: 15_000,
+  })
+
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['mcp-catalog'],
+    queryFn: getMCPCatalog,
+    staleTime: 5 * 60_000,
   })
 
   const deleteMutation = useMutation({
@@ -516,75 +658,43 @@ export function MCPContent() {
 
   const handleFormDone = () => {
     setShowForm(false)
-    setPrefill(null)
     qc.invalidateQueries({ queryKey: ['mcp-servers'] })
   }
 
-  const handleInstall = (entry: CatalogEntry) => {
-    const envPairs: EnvPair[] = entry.env.map(e => ({
-      key: e.key,
-      value: e.default ?? '',
-      required: e.required,
-      label: e.label,
-      hint: e.description,
-    }))
-    const pf: PrefillValues = {
-      name: entry.name,
-      description: entry.description,
-      transport: 'stdio',
-      command: entry.command,
-      args: entry.args.join(' '),
-      url: '',
-      enabled: true,
-      envPairs,
-      note: entry.note,
-    }
-    setPrefill(pf)
-    setFormKey(k => k + 1)
-    setShowForm(true)
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  const handleInstalled = () => {
+    setInstallTarget(null)
+    qc.invalidateQueries({ queryKey: ['mcp-servers'] })
   }
 
   const installedNames = new Set(servers.map(s => s.name.toLowerCase()))
+  const categories = Array.from(new Set(catalog.map(t => t.category))).sort()
 
-  const filteredCatalog = MCP_CATALOG.filter(entry => {
-    if (installedNames.has(entry.name.toLowerCase())) return false
-    const matchesTag = !tagFilter || entry.tags.includes(tagFilter)
+  const filteredCatalog = catalog.filter(tpl => {
+    if (installedNames.has(tpl.name.toLowerCase())) return false
+    if (categoryFilter && tpl.category !== categoryFilter) return false
     const q = search.toLowerCase()
-    const matchesSearch = !q ||
-      entry.displayName.toLowerCase().includes(q) ||
-      entry.description.toLowerCase().includes(q) ||
-      entry.tags.some(t => t.includes(q))
-    return matchesTag && matchesSearch
+    return !q ||
+      tpl.name.toLowerCase().includes(q) ||
+      tpl.description.toLowerCase().includes(q) ||
+      tpl.category.includes(q)
   })
 
   return (
     <div className="space-y-5">
       {/* Actions */}
-      <div className="flex items-center justify-between">
-        <div />
+      <div className="flex items-center justify-end">
         <Button
           icon={<Plus size={14} />}
-          onClick={() => {
-            setPrefill(null)
-            setFormKey(k => k + 1)
-            setShowForm(v => !v)
-          }}
+          variant="secondary"
+          onClick={() => { setFormKey(k => k + 1); setShowForm(v => !v) }}
         >
-          {showForm ? 'Cancel' : 'Add Server'}
+          {showForm ? 'Cancel' : 'Add manually'}
         </Button>
       </div>
 
-      {/* Add / edit server form */}
+      {/* Manual add form (custom / advanced servers) */}
       {showForm && (
-        <div ref={formRef}>
-          <ServerForm
-            key={formKey}
-            initialValues={prefill ?? undefined}
-            onDone={handleFormDone}
-            title={prefill ? `Install: ${prefill.name}` : 'New MCP Server'}
-          />
-        </div>
+        <ServerForm key={formKey} onDone={handleFormDone} title="New MCP Server" />
       )}
 
       {/* Server list */}
@@ -606,72 +716,74 @@ export function MCPContent() {
           <Card className="py-8">
             <EmptyState
               icon={Puzzle}
-              title="No MCP servers registered"
-              description="Browse the catalog below or add a server manually to extend Nova's capabilities."
+              title="No integrations yet"
+              description="Pick one from the catalog below, or add a custom MCP server manually."
             />
           </Card>
         )}
       </div>
 
-      {/* MCP Catalog */}
+      {/* Integration catalog */}
       <Card className="overflow-hidden">
         <div className="px-5 py-3">
           <p className="text-caption font-medium text-content-tertiary uppercase tracking-wider">
-            Browse MCP Catalog
+            Add an integration
           </p>
         </div>
 
         <div className="border-t border-border-subtle p-4 space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="flex-1">
-                <SearchInput
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="Search servers..."
-                />
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1">
+              <SearchInput value={search} onChange={setSearch} placeholder="Search integrations..." />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => setCategoryFilter(null)}
+                className={`rounded-full px-2.5 py-0.5 text-caption transition-colors ${
+                  categoryFilter === null
+                    ? 'bg-accent text-neutral-950'
+                    : 'bg-surface-elevated text-content-tertiary hover:text-content-secondary'
+                }`}
+              >
+                all
+              </button>
+              {categories.map(cat => (
                 <button
-                  onClick={() => setTagFilter(null)}
+                  key={cat}
+                  onClick={() => setCategoryFilter(c => (c === cat ? null : cat))}
                   className={`rounded-full px-2.5 py-0.5 text-caption transition-colors ${
-                    tagFilter === null
+                    categoryFilter === cat
                       ? 'bg-accent text-neutral-950'
                       : 'bg-surface-elevated text-content-tertiary hover:text-content-secondary'
                   }`}
                 >
-                  all
+                  {cat}
                 </button>
-                {ALL_TAGS.map(tag => (
-                  <button
-                    key={tag}
-                    onClick={() => setTagFilter(t => (t === tag ? null : tag))}
-                    className={`rounded-full px-2.5 py-0.5 text-caption transition-colors ${
-                      tagFilter === tag
-                        ? 'bg-accent text-neutral-950'
-                        : 'bg-surface-elevated text-content-tertiary hover:text-content-secondary'
-                    }`}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
+              ))}
             </div>
-
-            {filteredCatalog.length === 0 ? (
-              <p className="text-compact text-content-tertiary text-center py-4">No matching servers.</p>
-            ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredCatalog.map(entry => (
-                  <CatalogCard
-                    key={entry.id}
-                    entry={entry}
-                    onInstall={handleInstall}
-                  />
-                ))}
-              </div>
-            )}
           </div>
+
+          {filteredCatalog.length === 0 ? (
+            <p className="text-compact text-content-tertiary text-center py-4">
+              {catalog.length === 0 ? 'Catalog unavailable.' : 'No matching integrations.'}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {filteredCatalog.map(tpl => (
+                <CatalogCard key={tpl.id} tpl={tpl} onInstall={setInstallTarget} />
+              ))}
+            </div>
+          )}
+        </div>
       </Card>
+
+      {/* Secure install modal */}
+      <InstallModal
+        key={installTarget?.id ?? 'none'}
+        tpl={installTarget}
+        onClose={() => setInstallTarget(null)}
+        onInstalled={handleInstalled}
+      />
 
       {/* Delete confirmation */}
       <ConfirmDialog

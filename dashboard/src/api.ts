@@ -499,6 +499,53 @@ export const updateMCPServer = (id: string, data: Partial<MCPServer>) =>
 export const deleteMCPServer = (id: string) =>
   apiFetch<void>(`/api/v1/mcp-servers/${id}`, { method: 'DELETE' })
 
+export interface MCPCatalogField {
+  key: string
+  label: string
+  placeholder?: string
+  secret?: boolean
+  required?: boolean
+  help?: string
+  default?: string
+}
+
+export interface MCPCatalogTemplate {
+  id: string
+  name: string
+  category: string
+  description: string
+  transport: 'stdio' | 'http'
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  env_template?: Record<string, string>
+  fields: MCPCatalogField[]
+  tool_blast_radius?: Record<string, BlastRadius>
+  provider_kind?: string
+  requires?: string
+  icon?: string
+  docs_url?: string
+}
+
+/** Curated one-click integration templates (secure install — secrets encrypted). */
+export const getMCPCatalog = () =>
+  apiFetch<MCPCatalogTemplate[]>('/api/v1/mcp-servers/catalog')
+
+export interface MCPInstallRequest {
+  template_id: string
+  name?: string
+  fields?: Record<string, string>
+  enabled?: boolean
+}
+
+/** Install a server from a catalog template. Secret fields go to the encrypted
+ *  vault; only ${secret:...} references are written to the server's env. */
+export const installMCPServer = (data: MCPInstallRequest) =>
+  apiFetch<MCPServer & { connected: boolean }>('/api/v1/mcp-servers/install', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+
 export const reloadMCPServer = (id: string) =>
   apiFetch<{ name: string; connected: boolean; tool_count: number; tools: string[] }>(
     `/api/v1/mcp-servers/${id}/reload`,
