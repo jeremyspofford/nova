@@ -233,6 +233,16 @@ def get_code_tools(tier: "SandboxTier") -> list[ToolDefinition]:
 
 # ─── Path helpers ─────────────────────────────────────────────────────────────
 
+def _is_within(candidate: Path, root: Path) -> bool:
+    """True if `candidate` is `root` itself or a descendant of it.
+
+    Path-containment check, NOT a string prefix: `str(p).startswith(str(root))`
+    would accept a sibling like `/workspace-backup` as inside `/workspace`
+    (NEW-01). `root in candidate.parents` compares path components, closing that.
+    """
+    return candidate == root or root in candidate.parents
+
+
 def _resolve_path(relative: str) -> Path:
     """Resolve a path within the current sandbox tier's root.
 
@@ -254,7 +264,7 @@ def _resolve_path(relative: str) -> Path:
             candidate = Path(relative).resolve()
         else:
             candidate = (root / relative).resolve()
-        if not str(candidate).startswith(str(root)):
+        if not _is_within(candidate, root):
             raise ValueError(
                 f"Path '{relative}' resolves outside home directory '{root}'. "
                 "Access denied in home sandbox tier."
@@ -263,14 +273,13 @@ def _resolve_path(relative: str) -> Path:
 
     # Workspace tier (default)
     candidate = (root / relative).resolve()
-    if not str(candidate).startswith(str(root)):
+    if not _is_within(candidate, root):
         # Check self-modification overlay: allow /nova paths
         from app.tools.sandbox import NOVA_SOURCE_ROOT, is_self_modification_enabled
         if is_self_modification_enabled():
-            nova_root = str(NOVA_SOURCE_ROOT)
             if relative.startswith("/nova") or relative.startswith("nova"):
                 nova_candidate = Path(relative if relative.startswith("/") else f"/nova/{relative.removeprefix('nova/')}").resolve()
-                if str(nova_candidate).startswith(nova_root):
+                if _is_within(nova_candidate, NOVA_SOURCE_ROOT):
                     return nova_candidate
         raise ValueError(
             f"Path '{relative}' resolves outside sandbox root '{root}'. "
