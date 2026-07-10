@@ -73,6 +73,18 @@ const TYPE_TO_CAT: Record<string, string> = {
 export const catFor = (type: string): CatStyle =>
   CATS[TYPE_TO_CAT[(type || '').toLowerCase()] ?? 'topic']
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const DATE_RE = /(\d{4})-(\d{2})-(\d{2})/
+
+/** Journals are secondary in every view: "Journal 2026-07-09" reads as "Jul 9". */
+export function displayLabel(title: string, id: string, cat: CatStyle): string {
+  if (cat.key !== 'episode') return title
+  const m = DATE_RE.exec(title) ?? DATE_RE.exec(id)
+  if (!m) return title
+  const short = `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}`
+  return Number(m[1]) === new Date().getFullYear() ? short : `${short} ’${m[1].slice(2)}`
+}
+
 export const TEAL = hex2rgb('#19A89E')
 export const TEAL_BRIGHT = hex2rgb('#5CE8D0')
 export const AMBER: [number, number, number] = [251, 191, 36]
@@ -87,6 +99,8 @@ export const mix = (a: readonly number[], b: readonly number[], t: number): [num
 export interface BrainNode extends MemGraphNode {
   idx: number
   cat: CatStyle
+  /** display label — journals shorten to "Jul 9", concepts keep their title */
+  label: string
   out: number[]
   // live coordinates — the ACTIVE renderer writes these every frame
   x: number; y: number; z: number
@@ -139,10 +153,12 @@ export function buildScene(graph: MemGraph): Scene {
 
   const nodes: BrainNode[] = keep.map((orig, idx) => {
     const n = graph.nodes[orig]
+    const cat = catFor(n.type)
     return {
       ...n,
       idx,
-      cat: catFor(n.type),
+      cat,
+      label: displayLabel(n.title, n.id, cat),
       out: [],
       x: 0, y: 0, z: 0,
       gx: 0, gy: 0, gz: 0,

@@ -30,6 +30,10 @@ export interface FrameCtx {
   rotT: number
   /** respond envelope 0..1 — eases in/out so the heartbeat never snaps */
   respondAmp: number
+  /** hide journal/reflection episodes (the secondary tier) */
+  hideJournals: boolean
+  /** search hits — everything outside the set dims away; null = no search */
+  search: Set<number> | null
 }
 
 const GOLDW: [number, number, number] = [255, 214, 140]
@@ -117,11 +121,15 @@ function drawNodes(
     const glow = Math.min(1, Math.max(n.act, wave, n.rim * (0.26 + 0.24 * heart)))
     const rgb = f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
     const col = glow > 0.02 ? mix(rgb, AMBER, glow * 0.9) : rgb
+    // journals are the secondary tier: smaller and quieter than concepts
+    const tier = n.cat.key === 'episode' ? 0.72 : 1
+    const sDim = !f.search || f.search.has(i) ? 1 : 0.15
 
-    const r = baseR * (1 + breathe) * (1 + glow * 0.7)
+    const r = baseR * tier * (1 + breathe) * (1 + glow * 0.7)
       * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1)
     const haloR = r * (3.2 + glow * 2.4)
     const depthFade = Math.max(0.25, 1.1 - p.z * 0.0016)
+      * (n.cat.key === 'episode' ? 0.6 : 1) * sDim
 
     const g = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, haloR)
     g.addColorStop(0, css(col, (0.55 + glow * 0.4) * depthFade))
@@ -145,17 +153,19 @@ function drawNodes(
     ctx.beginPath(); ctx.arc(p.sx, p.sy, baseR * 2.6 + 5, 0, 7); ctx.stroke()
   }
 
-  if (f.showLabels || f.hovered >= 0 || f.selected >= 0) {
+  if (f.showLabels || f.hovered >= 0 || f.selected >= 0 || f.search) {
     ctx.font = '10.5px "Geist Mono Variable", "Geist Mono", monospace'
     ctx.textAlign = 'left'
     for (const i of order) {
       const n = scene.nodes[i], p = P[i]!
-      const show = (f.showLabels && (n.degree >= 5 || n.act > 0.25))
-        || i === f.hovered || i === f.selected || n.rim > 0.3
+      const hit = f.search?.has(i) ?? false
+      // journals never join the bulk label pass — hover/select/search only
+      const show = (f.showLabels && n.cat.key !== 'episode' && (n.degree >= 5 || n.act > 0.25))
+        || i === f.hovered || i === f.selected || n.rim > 0.3 || hit
       if (!show) continue
-      const a = Math.max(0.4, 1.05 - p.z * 0.0016)
-      ctx.fillStyle = `rgba(250,250,249,${i === f.hovered || i === f.selected ? 0.95 : a * 0.62})`
-      ctx.fillText(n.title, p.sx + 9, p.sy + 3.5)
+      const a = Math.max(0.4, 1.05 - p.z * 0.0016) * (!f.search || hit ? 1 : 0.15)
+      ctx.fillStyle = `rgba(250,250,249,${i === f.hovered || i === f.selected || hit ? 0.95 : a * 0.62})`
+      ctx.fillText(n.label, p.sx + 9, p.sy + 3.5)
     }
   }
 }
@@ -168,13 +178,14 @@ function drawEdges(
   for (const [i, j] of scene.edges) {
     const a = P[i], b = P[j]
     if (!a || !b) continue
+    const sDim = !f.search || f.search.has(i) || f.search.has(j) ? 1 : 0.15
     const depth = (a.z + b.z) / 2
-    const base = baseAlpha(depth)
+    const base = baseAlpha(depth) * sDim
     const flow = edgeFlow(f.retrieval, i, j, f.simT)
     const beat = heart * f.respondAmp * Math.min(scene.nodes[i].near, scene.nodes[j].near) * 0.55
     const act = Math.max(Math.min(scene.nodes[i].act, scene.nodes[j].act), flow, beat)
     if (act > 0.02) {
-      ctx.strokeStyle = css(AMBER, Math.min(0.8, base + act * 0.75))
+      ctx.strokeStyle = css(AMBER, Math.min(0.8, base + act * 0.75 * sDim))
       ctx.lineWidth = 1 + act * 1.3
     } else {
       ctx.strokeStyle = css(TEAL, base)
@@ -206,7 +217,8 @@ export function drawGalaxy(
 
   for (let i = 0; i < scene.nodes.length; i++) {
     const n = scene.nodes[i]
-    P[i] = project(n.x, n.y, n.z, cam, f.W, f.H)
+    P[i] = f.hideJournals && n.cat.key === 'episode'
+      ? null : project(n.x, n.y, n.z, cam, f.W, f.H)
   }
   drawEdges(ctx, scene, P, f, depth => Math.max(0.03, 0.16 - depth * 0.00022))
   drawNodes(ctx, scene, P, f)
@@ -257,7 +269,7 @@ export function drawOrrery(
     }
   }
   // journal spiral guide
-  if (scene.spiralCount > 0) {
+  if (!f.hideJournals && scene.spiralCount > 0) {
     ctx.beginPath()
     let started = false
     for (let k = 0; k <= scene.spiralCount * 10; k++) {
@@ -325,7 +337,8 @@ export function drawOrrery(
 
   for (let i = 0; i < scene.nodes.length; i++) {
     const n = scene.nodes[i]
-    P[i] = project(n.x, n.y, n.z, cam, f.W, f.H)
+    P[i] = f.hideJournals && n.cat.key === 'episode'
+      ? null : project(n.x, n.y, n.z, cam, f.W, f.H)
   }
   drawEdges(ctx, scene, P, f, depth => Math.max(0.025, 0.11 - depth * 0.00016))
   drawNodes(ctx, scene, P, f)

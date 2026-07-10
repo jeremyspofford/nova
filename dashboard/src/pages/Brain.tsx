@@ -56,6 +56,8 @@ export function Brain() {
   const [view, setView] = useState<ViewKind>(() => ls.get('brain.view', 'graph') as ViewKind)
   const [colorByType, setColorByType] = useState(() => ls.get('brain.colorByType', '0') === '1')
   const [showLabels, setShowLabels] = useState(() => ls.get('brain.labels', '0') === '1')
+  const [showJournals, setShowJournals] = useState(() => ls.get('brain.journals', '1') === '1')
+  const [search, setSearch] = useState('')
   const [drift, setDrift] = useState(() => !reduceMotion && ls.get('brain.drift', '1') === '1')
   const [modeUi, setModeUi] = useState<BrainMode>('idle')
   const [lastQuery, setLastQuery] = useState('')
@@ -77,7 +79,7 @@ export function Brain() {
   const modeRef = useRef<BrainMode>('idle')
   const retrievalRef = useRef<Retrieval | null>(null)
   const centroidRef = useRef<{ x: number; y: number; z: number } | null>(null)
-  const flagsRef = useRef({ colorByType, showLabels, drift })
+  const flagsRef = useRef({ colorByType, showLabels, drift, showJournals })
   const selectedRef = useRef(-1)
   const hoveredRef = useRef(-1)
   const simTRef = useRef(0)
@@ -89,7 +91,12 @@ export function Brain() {
   const respondAmpRef = useRef(0)
 
   viewRef.current = view
-  flagsRef.current = { colorByType, showLabels, drift }
+  flagsRef.current = { colorByType, showLabels, drift, showJournals }
+  const searchQRef = useRef('')
+  searchQRef.current = search
+  const searchStateRef = useRef<{ q: string; scene: Scene | null; set: Set<number> | null }>(
+    { q: '', scene: null, set: null })
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const chatOpenRef = useRef(chatOpen)
   chatOpenRef.current = chatOpen
   const chatWidthRef = useRef(chatWidth)
@@ -137,6 +144,19 @@ export function Brain() {
     })
     return () => es.close()
   }, [transition])
+
+  // "/" focuses search from anywhere on the page
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/') return
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      e.preventDefault()
+      searchInputRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // "Pulse" fires a REAL retrieval through the pipe — the SSE echo lights it
   const pulse = useMutation({
@@ -193,6 +213,24 @@ export function Brain() {
       const ampRate = ampTarget > respondAmpRef.current ? 3.5 : 0.8
       respondAmpRef.current += (ampTarget - respondAmpRef.current) * Math.min(1, dt * ampRate)
 
+      // recompute search hits when the query or scene changes (loop-owned so
+      // it always sees the freshly built scene)
+      const q = searchQRef.current.trim().toLowerCase()
+      const ss = searchStateRef.current
+      if (ss.q !== q || ss.scene !== scene) {
+        ss.q = q; ss.scene = scene
+        if (!q || !scene) ss.set = null
+        else {
+          const hits = new Set<number>()
+          for (const n of scene.nodes) {
+            if (n.title.toLowerCase().includes(q) || n.label.toLowerCase().includes(q)
+              || n.description.toLowerCase().includes(q) || n.type.toLowerCase().includes(q)
+              || n.tags.some(t => t.toLowerCase().includes(q))) hits.add(n.idx)
+          }
+          ss.set = hits
+        }
+      }
+
       if (scene) {
         if (!scene.relaxDone) relaxStep(scene, 12)
         // rest the orbit pivot on the layout's centre of mass until the user
@@ -224,6 +262,8 @@ export function Brain() {
         reduceMotion,
         rotT: rotTRef.current,
         respondAmp: respondAmpRef.current,
+        hideJournals: !flags.showJournals,
+        search: searchStateRef.current.set,
       }
 
       if (v === 'singularity') {
@@ -423,6 +463,29 @@ export function Brain() {
             </button>
           ))}
         </div>
+        {view !== 'singularity' && (
+          <input
+            ref={searchInputRef}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() }
+              if (e.key === 'Enter') {
+                const hits = searchStateRef.current.set
+                const scene = sceneRef.current
+                if (!hits?.size || !scene) return
+                let best = -1, bd = -1 // open the best-connected hit
+                for (const i of hits) if (scene.nodes[i].degree > bd) { bd = scene.nodes[i].degree; best = i }
+                if (best >= 0) { setSelectedIdx(best); setDetailFull(false) }
+              }
+            }}
+            placeholder="search  /"
+            aria-label="Search memories"
+            className="h-7 w-44 rounded-full border border-border bg-black/30 px-3 font-mono text-[11px]
+                       text-content-primary placeholder:text-content-tertiary outline-none transition-colors
+                       focus:border-teal-400/50 focus:shadow-[0_0_12px_rgba(36,201,184,0.25)]"
+          />
+        )}
         <div className="flex-1" />
         <div className="flex gap-1.5 items-center">
           {view !== 'singularity' && (
@@ -432,6 +495,9 @@ export function Brain() {
               </button>
               <button className={chip(showLabels)} onClick={() => { setShowLabels(!showLabels); ls.set('brain.labels', showLabels ? '0' : '1') }}>
                 Labels
+              </button>
+              <button className={chip(showJournals)} onClick={() => { setShowJournals(!showJournals); ls.set('brain.journals', showJournals ? '0' : '1') }}>
+                Journals
               </button>
             </>
           )}
@@ -509,6 +575,14 @@ export function Brain() {
               journals into connected topics.
             </p>
           </div>
+        </div>
+      )}
+      {stats && stats.nodes.length >= 3 && stats.edges.length === 0 && view !== 'singularity' && (
+        <div className="absolute inset-x-0 bottom-20 z-10 grid place-items-center pointer-events-none px-6">
+          <p className="max-w-md text-center text-caption text-content-tertiary">
+            {stats.nodes.length} memories, no links yet — connections appear when nightly curation
+            distills journals into topics that link back to their sources.
+          </p>
         </div>
       )}
 

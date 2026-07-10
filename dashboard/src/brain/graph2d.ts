@@ -57,7 +57,7 @@ export function createGraph2D(): Graph2D {
   let scale = 1, tx = 0, ty = 0
   let ox = 0                    // eased horizontal offset (chat drawer)
   let wantFit = true
-  const screen: { x: number; y: number; r: number }[] = []
+  const screen: ({ x: number; y: number; r: number } | null)[] = []
 
   function build(scene: Scene) {
     bound = scene
@@ -147,10 +147,12 @@ export function createGraph2D(): Graph2D {
       if (screen.length !== nodes.length) screen.length = nodes.length
       for (let k = 0; k < nodes.length; k++) {
         const sn = nodes[k]
-        screen[sn.i] = {
+        const n = scene.nodes[sn.i]
+        screen[sn.i] = f.hideJournals && n.cat.key === 'episode' ? null : {
           x: tx + ox + sn.x * scale,
           y: ty + sn.y * scale,
-          r: Math.max(1.4, nodeR(scene.nodes[sn.i].degree) * scale),
+          // journals are the secondary tier: visibly smaller than concepts
+          r: Math.max(1.4, nodeR(n.degree) * (n.cat.key === 'episode' ? 0.7 : 1) * scale),
         }
       }
 
@@ -158,8 +160,11 @@ export function createGraph2D(): Graph2D {
       const focus = f.hovered >= 0 ? f.hovered : f.selected
       const near = new Set<number>()
       if (focus >= 0) { near.add(focus); for (const j of scene.nodes[focus].out) near.add(j) }
-      const dim = (i: number, j?: number) =>
-        focus < 0 ? 1 : (near.has(i) && (j === undefined || near.has(j)) ? 1 : 0.12)
+      const dim = (i: number, j?: number) => {
+        const spot = focus < 0 ? 1 : (near.has(i) && (j === undefined || near.has(j)) ? 1 : 0.12)
+        const hit = !f.search || f.search.has(i) || (j !== undefined && f.search.has(j)) ? 1 : 0.15
+        return spot * hit
+      }
 
       const heart = heartOf(f.simT)
 
@@ -192,7 +197,7 @@ export function createGraph2D(): Graph2D {
         const glow = Math.min(1, Math.max(n.act, wave, n.rim * (0.26 + 0.24 * heart)))
         const rgb = f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
         const col = glow > 0.02 ? mix(rgb, AMBER, glow * 0.9) : rgb
-        const d = dim(i)
+        const d = dim(i) * (n.cat.key === 'episode' ? 0.65 : 1)
         const r = p.r * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1) * (1 + glow * 0.5)
 
         // soft halo
@@ -213,16 +218,16 @@ export function createGraph2D(): Graph2D {
       }
 
       // selection ring
-      if (f.selected >= 0 && screen[f.selected]) {
-        const p = screen[f.selected]
+      const selP = f.selected >= 0 ? screen[f.selected] : null
+      if (selP) {
         ctx.strokeStyle = css(TEAL_BRIGHT, 0.9)
         ctx.lineWidth = 1.4
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 6, 0, 7); ctx.stroke()
+        ctx.beginPath(); ctx.arc(selP.x, selP.y, selP.r + 6, 0, 7); ctx.stroke()
       }
 
-      // ── labels: zoom-gated, plus always for hover/selection/hubs ──
+      // ── labels: zoom-gated, plus always for hover/selection/hubs/hits ──
       const labelAlpha = Math.max(0, Math.min(1, (scale - 0.55) / 0.5))
-      if (labelAlpha > 0.02 || f.showLabels || f.hovered >= 0 || f.selected >= 0) {
+      if (labelAlpha > 0.02 || f.showLabels || f.hovered >= 0 || f.selected >= 0 || f.search) {
         ctx.font = '11px "Geist Mono Variable", "Geist Mono", monospace'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
@@ -234,12 +239,15 @@ export function createGraph2D(): Graph2D {
           if (!p) continue
           const n = scene.nodes[i]
           const focused = i === f.hovered || i === f.selected
-          const show = focused
-            || ((f.showLabels || labelAlpha > 0.02) && (n.degree >= 4 || labelAlpha > 0.6))
+          const hit = f.search?.has(i) ?? false
+          // journals join the bulk label pass only when fully zoomed in
+          const bulk = (f.showLabels || labelAlpha > 0.02)
+            && (n.cat.key === 'episode' ? labelAlpha > 0.85 : (n.degree >= 4 || labelAlpha > 0.6))
+          const show = focused || hit || bulk
           if (!show) continue
-          const a = focused ? 0.96 : labelAlpha * (n.degree >= 6 ? 0.85 : 0.6) * dim(i)
+          const a = focused || hit ? 0.96 : labelAlpha * (n.degree >= 6 ? 0.85 : 0.6) * dim(i)
           if (a < 0.03) continue
-          const label = n.title.length > 26 ? n.title.slice(0, 25) + '…' : n.title
+          const label = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label
           ctx.fillStyle = STONE + a + ')'
           ctx.fillText(label, p.x, p.y + p.r + 4)
         }
