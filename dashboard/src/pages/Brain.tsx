@@ -8,10 +8,11 @@ import {
   startRetrieval, tickNodes, Projected,
 } from '../brain/engine'
 import { createSingularity, drawGalaxy, drawOrrery, FrameCtx, Singularity } from '../brain/renderers'
+import { createGraph2D, Graph2D } from '../brain/graph2d'
 import { Badge, Button, ConfirmDialog, Input, Modal, Textarea } from '../components/ui'
 import { BrainChat } from '../brain/BrainChat'
 
-type ViewKind = 'galaxy' | 'orrery' | 'singularity'
+type ViewKind = 'graph' | 'galaxy' | 'orrery' | 'singularity'
 
 interface MemoryItem {
   memory_id: string
@@ -22,6 +23,7 @@ interface MemoryItem {
 }
 
 const VIEWS: { key: ViewKind; label: string }[] = [
+  { key: 'graph', label: 'Graph' },
   { key: 'galaxy', label: 'Galaxy' },
   { key: 'orrery', label: 'Orrery' },
   { key: 'singularity', label: 'Singularity' },
@@ -51,7 +53,7 @@ export function Brain() {
   })
 
   // ── UI state (mirrored into refs for the render loop) ──────────────────
-  const [view, setView] = useState<ViewKind>(() => ls.get('brain.view', 'galaxy') as ViewKind)
+  const [view, setView] = useState<ViewKind>(() => ls.get('brain.view', 'graph') as ViewKind)
   const [colorByType, setColorByType] = useState(() => ls.get('brain.colorByType', '0') === '1')
   const [showLabels, setShowLabels] = useState(() => ls.get('brain.labels', '0') === '1')
   const [drift, setDrift] = useState(() => !reduceMotion && ls.get('brain.drift', '1') === '1')
@@ -78,6 +80,7 @@ export function Brain() {
   const rotTRef = useRef(0)
   const projRef = useRef<(Projected | null)[]>([])
   const singRef = useRef<Singularity | null>(null)
+  const graphRef = useRef<Graph2D | null>(null)
   const respondTimer = useRef<ReturnType<typeof setTimeout>>()
   const respondAmpRef = useRef(0)
 
@@ -156,6 +159,7 @@ export function Brain() {
     ro.observe(wrap)
 
     if (!singRef.current) singRef.current = createSingularity()
+    if (!graphRef.current) graphRef.current = createGraph2D()
 
     let raf = 0
     let last = performance.now()
@@ -207,6 +211,8 @@ export function Brain() {
 
       if (v === 'singularity') {
         singRef.current!.draw(ctx, f, cam, flags.drift)
+      } else if (v === 'graph' && scene) {
+        graphRef.current!.draw(ctx, scene, f, flags.drift, chatOpenRef.current ? -200 : 0)
       } else if (scene) {
         if (projRef.current.length !== scene.nodes.length) {
           projRef.current = new Array(scene.nodes.length).fill(null)
@@ -249,12 +255,17 @@ export function Brain() {
   }
   const onPointerMove = (e: React.PointerEvent) => {
     const ds = dragState.current
+    const v = viewRef.current
     if (ds.dragging) {
       const dx = e.clientX - ds.px, dy = e.clientY - ds.py
       ds.px = e.clientX; ds.py = e.clientY
       ds.moved += Math.abs(dx) + Math.abs(dy)
+      if (v === 'graph') {
+        // flat view: any drag pans (no rotation)
+        graphRef.current?.pan(dx, dy)
+        return
+      }
       const cam = camRef.current
-      const v = viewRef.current
       if (ds.button === 2 || ds.button === 1) {
         // right (or middle) drag: pan the view
         cam.cx += dx
@@ -267,7 +278,7 @@ export function Brain() {
       if (v === 'singularity') singRef.current?.stir()
     } else {
       const { x, y } = localXY(e)
-      hoveredRef.current = pick(x, y)
+      hoveredRef.current = v === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
     }
   }
   const onPointerUp = (e: React.PointerEvent) => {
@@ -275,12 +286,17 @@ export function Brain() {
     ds.dragging = false
     if (ds.moved < 6 && ds.button === 0) {
       const { x, y } = localXY(e)
-      const i = pick(x, y)
+      const i = viewRef.current === 'graph' ? (graphRef.current?.pick(x, y) ?? -1) : pick(x, y)
       setSelectedIdx(i)
       if (i >= 0) setDetailFull(false)
     }
   }
   const onWheel = (e: React.WheelEvent) => {
+    const { x, y } = localXY(e)
+    if (viewRef.current === 'graph') {
+      graphRef.current?.zoomAt(x, y, e.deltaY)
+      return
+    }
     const cam = camRef.current
     // proportional zoom that can fly all the way through the nodes
     cam.dist = Math.max(12, Math.min(900, cam.dist + e.deltaY * (0.1 + cam.dist * 0.0015)))
@@ -340,7 +356,11 @@ export function Brain() {
     },
   })
 
-  const setViewPersist = (v: ViewKind) => { setView(v); ls.set('brain.view', v); singRef.current?.reset() }
+  const setViewPersist = (v: ViewKind) => {
+    setView(v); ls.set('brain.view', v)
+    singRef.current?.reset()
+    if (v === 'graph') graphRef.current?.requestFit()
+  }
 
   const stats = graphQuery.data
   const legendCounts = useMemo(() => {
@@ -356,7 +376,9 @@ export function Brain() {
       <canvas
         ref={canvasRef}
         className="absolute inset-0 block h-full w-full cursor-grab active:cursor-grabbing"
-        aria-label="Nova's memory as an interactive 3D graph. Left-drag rotates, right-drag pans, scroll zooms. Click a node to inspect the memory."
+        aria-label={view === 'graph'
+          ? "Nova's memory as a 2D graph. Drag to pan, scroll to zoom, click a node to inspect the memory."
+          : "Nova's memory as an interactive 3D graph. Left-drag rotates, right-drag pans, scroll zooms. Click a node to inspect the memory."}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

@@ -170,6 +170,8 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
 
 **Brain page — HUD ambient tier:** The Brain's HUD widgets (SystemStatus, ActiveTopics) use a denser, darker glass (`rgba(12,10,9,0.88)`, blur 20px) to stay readable over the bright 3D graph without competing with it. This is defined as a local `glassPanel` constant in `HudWidgets.tsx`, not a global CSS class. All other Brain overlays (HUD bar, Topics panel, Settings panel, BrainChat, Memory Detail Modal) use the standard `.glass-overlay` class.
 
+**Brain page — views + backdrop:** The Brain hosts four canvas-2D renderers over one shared scene (`dashboard/src/brain/`): **Graph** (default — flat, Obsidian-style force-directed layout, `graph2d.ts`), plus the 3D **Galaxy**, **Orrery**, and **Singularity** (`renderers.ts`). Graph uses d3-force, pan/zoom (drag pans, scroll zooms), a hover spotlight that dims everything outside the focused node's neighbourhood, and zoom-gated labels with a dark text-shadow for legibility. Teal = steady state, amber = cognition, as everywhere. **Backdrop debanding:** all non-singularity views paint via `paintNebula()` (opaque warm-black base + 10-stop *smootherstep* teal radial) then `applyGrain()` (128px noise tile in `overlay` blend at 0.55α) — the 8-bit banding of the old 2-stop radial is dithered away without visibly texturing the scene.
+
 **Usage rules:**
 - Overlays (modals, sheets, popovers, toasts) always use `.glass-overlay`
 - Persistent navigation always uses `.glass-nav`
@@ -195,3 +197,4 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
 | 2026-03-30 | Keep Plus Jakarta Sans + Geist Mono | Already better than 90% of the space. Humanist warmth differentiates from Inter/Geist monoculture. |
 | 2026-03-30 | Keep stone neutrals | Warm enough for long sessions, neutral enough for data density. No change needed. |
 | 2026-03-31 | Document liquid glass tier system | 5-tier glass system (surface/card/nav/overlay + HUD ambient) evolved organically. Teal-tinted glass on nav/overlay creates warmth; neutral glass on cards stays recessive. Brain HUD uses a custom denser tier for readability over 3D. |
+| 2026-07-09 | Add 2D "Graph" view (default) + debanded backdrop | The 3D views are striking but hard to read as an actual knowledge graph; a flat Obsidian-style force layout (`graph2d.ts`, d3-force) is the legible default with a hover spotlight. Backdrop banding on dark teal fixed with a smootherstep multi-stop ramp + film-grain dither rather than adding stops alone. (Category "group" hulls were tried and rejected — visually noisy.) Bundled / River explored as future views. |

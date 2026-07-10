@@ -34,6 +34,66 @@ export interface FrameCtx {
 
 const GOLDW: [number, number, number] = [255, 214, 140]
 
+// ── Shared background: debanded nebula + film-grain dither ───────────────────
+// Canvas radial gradients posterize badly on dark surfaces — a 2-stop teal→black
+// ramp shows concentric bands. Two fixes, applied together:
+//   1. smootherstep alpha over 10 stops → the falloff has no hard steps
+//   2. a low-amplitude grain pattern in `overlay` blend → dithers the residual
+//      8-bit banding away without visibly texturing the scene.
+
+const NEB_TEAL: [number, number, number] = [8, 45, 42]
+
+let grainTile: HTMLCanvasElement | null = null
+function grain(): HTMLCanvasElement {
+  if (grainTile) return grainTile
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')!
+  const img = g.createImageData(128, 128)
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 118 + Math.random() * 20 // centered on 128 (overlay identity), ±10
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v
+    img.data[i + 3] = 255
+  }
+  g.putImageData(img, 0, 0)
+  grainTile = c
+  return c
+}
+
+/** Opaque warm-black base + eased teal glow. No banding, no transparency seams. */
+export function paintNebula(
+  ctx: CanvasRenderingContext2D, W: number, H: number, peak = 0.28, rad = 0.72,
+): void {
+  const base = ctx.createLinearGradient(0, 0, 0, H)
+  base.addColorStop(0, '#0C0A09')
+  base.addColorStop(1, '#080F0E') // faint teal-black floor for depth
+  ctx.fillStyle = base
+  ctx.fillRect(0, 0, W, H)
+
+  const R = Math.max(W, H) * rad
+  const g = ctx.createRadialGradient(W / 2, H * 0.46, 0, W / 2, H * 0.46, R)
+  const N = 10
+  for (let k = 0; k <= N; k++) {
+    const t = k / N
+    const s = t * t * t * (t * (t * 6 - 15) + 10) // smootherstep
+    g.addColorStop(t, css(NEB_TEAL, peak * (1 - s)))
+  }
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, W, H)
+}
+
+/** Dither pass — call right after the background, before bright content. */
+export function applyGrain(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+  const pat = ctx.createPattern(grain(), 'repeat')
+  if (!pat) return
+  ctx.save()
+  ctx.globalCompositeOperation = 'overlay'
+  ctx.globalAlpha = 0.55
+  ctx.fillStyle = pat
+  ctx.fillRect(0, 0, W, H)
+  ctx.restore()
+}
+
 // ── Shared node sprite ──────────────────────────────────────────────────────
 
 function nodeRadius(nDeg: number, s: number): number {
@@ -137,11 +197,8 @@ export function drawGalaxy(
 ): void {
   for (const n of scene.nodes) { n.x = n.gx; n.y = n.gy; n.z = n.gz }
 
-  ctx.clearRect(0, 0, f.W, f.H)
-  const neb = ctx.createRadialGradient(f.W / 2, f.H / 2, 0, f.W / 2, f.H / 2, Math.max(f.W, f.H) * 0.62)
-  neb.addColorStop(0, 'rgba(8,45,42,0.28)')
-  neb.addColorStop(1, 'rgba(12,10,9,0)')
-  ctx.fillStyle = neb; ctx.fillRect(0, 0, f.W, f.H)
+  paintNebula(ctx, f.W, f.H, 0.30, 0.70)
+  applyGrain(ctx, f.W, f.H)
   for (const s of STARS) {
     ctx.fillStyle = `rgba(250,250,249,${s.a})`
     ctx.fillRect(s.x * f.W, s.y * f.H, s.r, s.r)
@@ -167,11 +224,8 @@ export function drawOrrery(
     n.x = Math.cos(a) * n.rad; n.z = Math.sin(a) * n.rad; n.y = n.yy
   }
 
-  ctx.clearRect(0, 0, f.W, f.H)
-  const neb = ctx.createRadialGradient(f.W / 2, f.H / 2, 0, f.W / 2, f.H / 2, Math.max(f.W, f.H) * 0.65)
-  neb.addColorStop(0, 'rgba(8,45,42,0.16)')
-  neb.addColorStop(1, 'rgba(10,10,9,0)')
-  ctx.fillStyle = neb; ctx.fillRect(0, 0, f.W, f.H)
+  paintNebula(ctx, f.W, f.H, 0.16, 0.74)
+  applyGrain(ctx, f.W, f.H)
 
   const heart = heartOf(f.simT)
   const ringPath = (rad: number) => {
