@@ -13,6 +13,15 @@ class Settings(BaseSettings):
     # models whose Ollama template lacks tool support (e.g. some qwen2.5-coder
     # builds emit tool calls as plain text) — they silently never act.
     default_model: str = "qwen2.5:7b"
+
+    # Execute at most ONE tool call per agent round. Many local chat templates
+    # (MiniCPM 5, several GGUF builds) can only RENDER a single tool call per
+    # assistant turn — replaying a multi-call turn 400s every later request in
+    # the conversation. Sequential execution is universally safe (the model
+    # re-requests remaining tools next round) at the cost of extra rounds for
+    # models that batch calls. Set AGENT_SINGLE_TOOL_CALL=false to allow
+    # parallel tool calls again.
+    agent_single_tool_call: bool = True
     default_system_prompt: str = (
         "You are a helpful AI assistant with persistent memory. "
         "You remember previous conversations and can use tools to help users."
