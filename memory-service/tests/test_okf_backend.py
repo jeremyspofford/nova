@@ -258,6 +258,44 @@ class TestMaintenance:
         assert (backend.store.root / "journal" / "archive" / journal.name).exists()
 
 
+class TestJournalNoiseGate:
+    """Near-identical digests (same text modulo numbers) must not flood the
+    journal — cortex no-op cycles are the canonical offender."""
+
+    def _entries(self, backend: OkfBackend, memory_id: str) -> int:
+        body = backend.store.abs(memory_id).read_text()
+        return body.count("\n## ")
+
+    def test_repeat_modulo_digits_suppressed(self, backend: OkfBackend):
+        first = run(backend.write(
+            "Cortex cycle #28673: Drive 'serve' won (urgency 0.20). No stale goals.",
+            source_type="cortex"))
+        second = run(backend.write(
+            "Cortex cycle #28674: Drive 'serve' won (urgency 0.21). No stale goals.",
+            source_type="cortex"))
+        assert first.item_ids and not second.item_ids
+        assert self._entries(backend, first.item_ids[0]) == 1
+
+    def test_novel_text_not_suppressed(self, backend: OkfBackend):
+        first = run(backend.write("Decided to use pgvector for search.",
+                                  source_type="cortex"))
+        second = run(backend.write("User prefers the galaxy view by default.",
+                                   source_type="cortex"))
+        assert first.item_ids and second.item_ids
+        assert self._entries(backend, first.item_ids[0]) == 2
+
+    def test_sources_keyed_separately(self, backend: OkfBackend):
+        run(backend.write("status: 3 items processed", source_type="cortex"))
+        other = run(backend.write("status: 3 items processed", source_type="intel"))
+        assert other.item_ids
+
+    def test_concept_writes_never_suppressed(self, backend: OkfBackend):
+        meta = {"okf": {"type": "note", "title": "Same title"}}
+        first = run(backend.write("identical body 1", source_type="chat", metadata=meta))
+        second = run(backend.write("identical body 1", source_type="chat", metadata=meta))
+        assert first.item_ids and second.item_ids
+
+
 def test_slugify():
     assert slugify("Hello, World!") == "hello-world"
     assert slugify("  ") == "untitled"
