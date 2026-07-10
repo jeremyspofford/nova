@@ -131,14 +131,14 @@ async def gate(
     # Approve/Deny buttons so the decision works from the lockscreen.
     from ..notifier import notify
     from ..notify_actions import build_decide_actions
+    summary = diff_preview or (
+        f"{blast_radius.value.upper()} action"
+        + (f" via {provider_kind}" if provider_kind else "")
+    )
     await notify(
         "approval_requested",
         title=f"Approval needed: {tool_name}",
-        message=(
-            f"{blast_radius.value.upper()} action"
-            + (f" via {provider_kind}" if provider_kind else "")
-            + " is waiting for your decision in Pending Approvals."
-        ),
+        message=f"{summary} — waiting for your decision in Pending Approvals.",
         actions=await build_decide_actions(str(approval_id), kind="consent"),
     )
 

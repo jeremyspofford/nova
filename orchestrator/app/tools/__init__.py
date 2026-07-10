@@ -276,6 +276,14 @@ async def _dispatch_mcp_via_consent(
         # server holds its own credentials via env/secrets, so `secret` is None.
         return {"result": await _run()}
 
+    provider_kind = mcp_classify.provider_kind_of(server_name, server_metadata)
+    target = mcp_classify.target_of(arguments)
+    from app.capabilities.preview import build_action_preview
+    preview = build_action_preview(
+        tool_name=name, provider_kind=provider_kind, target=target,
+        args=arguments, blast_radius=blast,
+    )
+
     result = await cap_execute_tool(
         get_pool(),
         tenant_id=_uuid(ctx.get("tenant_id")) or default_tenant,
@@ -287,11 +295,12 @@ async def _dispatch_mcp_via_consent(
         tool_kind="mcp_http" if transport == "http" else "mcp_stdio",
         blast_radius=blast,
         reversible=(blast == BlastRadius.MUTATE),
-        provider_kind=mcp_classify.provider_kind_of(server_name, server_metadata),
-        target=mcp_classify.target_of(arguments),
+        provider_kind=provider_kind,
+        target=target,
         credential_id=None,
         args=arguments,
         underlying=_underlying,
+        diff_preview=preview,
     )
 
     if isinstance(result, dict):
