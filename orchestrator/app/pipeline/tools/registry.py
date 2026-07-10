@@ -33,6 +33,11 @@ log = logging.getLogger(__name__)
 # Values are StdioMCPClient or HTTPMCPClient — both share the same public interface
 _active_clients: dict[str, "StdioMCPClient | HTTPMCPClient"] = {}
 
+# name → {"transport": str, "metadata": dict}. Kept in lockstep with _active_clients
+# so the consent gate can classify an MCP tool's blast radius (app.tools.mcp_classify)
+# without a DB round-trip on every call. Mutated only under _registry_lock.
+_server_meta: dict[str, dict] = {}
+
 # Protects _active_clients against concurrent mutation (reload/disconnect racing
 # with tool execution and discovery). Acquire around all dict mutations.
 # Sync functions (get_mcp_tool_definitions, get_tools_by_server, list_connected_servers)
@@ -87,6 +92,7 @@ async def stop_all_servers() -> None:
     async with _registry_lock:
         clients = list(_active_clients.items())
         _active_clients.clear()
+        _server_meta.clear()
 
     async def _stop_one(name: str, client: "StdioMCPClient | HTTPMCPClient") -> None:
         try:
@@ -127,6 +133,7 @@ async def disconnect_server(name: str) -> None:
     """Disconnect and remove a specific MCP server from the active registry."""
     async with _registry_lock:
         client = _active_clients.pop(name, None)
+        _server_meta.pop(name, None)
     if client:
         try:
             await client.stop()
@@ -149,6 +156,7 @@ async def _connect_server(cfg: dict) -> bool:
     # disconnect, potentially leaking the first client).
     async with _registry_lock:
         old_client = _active_clients.pop(name, None)
+        _server_meta.pop(name, None)
     if old_client:
         try:
             await old_client.stop()
@@ -187,6 +195,10 @@ async def _connect_server(cfg: dict) -> bool:
         await client.list_tools()
         async with _registry_lock:
             _active_clients[name] = client
+            _server_meta[name] = {
+                "transport": transport,
+                "metadata": dict(cfg.get("metadata") or {}),
+            }
         log.info(
             "MCP server '%s' connected via %s (%d tools)",
             name, transport, len(client.tools),
@@ -336,6 +348,15 @@ async def _log_mcp_activity(
 
 
 # ── Status / health ───────────────────────────────────────────────────────────
+
+def get_server_meta(name: str) -> dict:
+    """Transport + metadata for a connected MCP server ({} if unknown/disconnected).
+
+    Consumed by the consent-gate dispatch (app.tools._dispatch_mcp_via_consent) to
+    classify an MCP tool's blast radius without hitting Postgres on every call.
+    """
+    return _server_meta.get(name, {})
+
 
 def list_connected_servers() -> list[dict]:
     """
