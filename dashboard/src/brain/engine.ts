@@ -101,6 +101,12 @@ export interface BrainNode extends MemGraphNode {
   cat: CatStyle
   /** display label — journals shorten to "Jul 9", concepts keep their title */
   label: string
+  /** synthetic live-state node (cortex drive / active goal): first-class in the
+   *  layout, hollow read-only rendering, click deep-links instead of the modal */
+  satKind?: 'drive' | 'goal'
+  link?: string
+  /** live drive urgency 0..1 — refreshed in place, no scene rebuild */
+  satHot?: number
   out: number[]
   // live coordinates — the ACTIVE renderer writes these every frame
   x: number; y: number; z: number
@@ -138,7 +144,12 @@ export function mulberry32(a: number) {
 
 const NODE_CAP = 600
 
-export function buildScene(graph: MemGraph): Scene {
+export interface SatInput {
+  drives: { name: string; urgency: number }[]
+  goals: { id: string; title: string }[]
+}
+
+export function buildScene(graph: MemGraph, sats?: SatInput): Scene {
   const rnd = mulberry32(20260707)
 
   // Cap pathological bundles: keep the best-connected / newest files.
@@ -203,6 +214,36 @@ export function buildScene(graph: MemGraph): Scene {
     s.x = s.y = s.z = 0
   }
 
+  // live state joins the scene as real nodes edged to the soul — laid out,
+  // rotated, and occluded like every other node (never a screen overlay)
+  if (soulIdx >= 0 && sats) {
+    const addSat = (
+      id: string, title: string, satKind: 'drive' | 'goal', satHot: number,
+    ) => {
+      const idx = nodes.length
+      const a = rnd() * Math.PI * 2
+      const rad = 14 + rnd() * 10
+      const node: BrainNode = {
+        id, title, type: 'sat', tags: [], description: '', trust: null,
+        source_kind: null, created: '', degree: 1,
+        idx, cat: CATS.topic, label: title, satKind, link: '/goals', satHot,
+        out: [soulIdx],
+        x: Math.cos(a) * rad, y: (rnd() - 0.5) * 8, z: Math.sin(a) * rad,
+        gx: 0, gy: 0, gz: 0,
+        a0: 0, rad: 0, yy: 0, w: 0,
+        phase: rnd() * Math.PI * 2,
+        act: 0, rim: 0, near: 0,
+      }
+      node.gx = node.x; node.gy = node.y; node.gz = node.z
+      nodes.push(node)
+      edges.push([soulIdx, idx])
+      nodes[soulIdx].out.push(idx)
+      nodes[soulIdx].degree += 1
+    }
+    for (const d of sats.drives) addSat(`sat:drive:${d.name}`, d.name, 'drive', d.urgency)
+    for (const g of sats.goals.slice(0, 8)) addSat(`sat:goal:${g.id}`, g.title, 'goal', 0)
+  }
+
   return {
     nodes, edges,
     byId: new Map(nodes.map(n => [n.id, n.idx])),
@@ -241,7 +282,8 @@ export function relaxStep(scene: Scene, iters = 20): void {
         fx[i] += dx * f; fy[i] += dy * f; fz[i] += dz * f
         fx[j] -= dx * f; fy[j] -= dy * f; fz[j] -= dz * f
       }
-      const an = anchors[a.cat.key]
+      // satellites anchor on the soul at the origin, not their category ring
+      const an = a.satKind ? [0, 0, 0] : anchors[a.cat.key]
       fx[i] += (an[0] - a.gx) * ANCH - a.gx * CTR
       fy[i] += (an[1] - a.gy) * ANCH - a.gy * CTR
       fz[i] += (an[2] - a.gz) * ANCH - a.gz * CTR
@@ -289,7 +331,7 @@ export function layoutOrrery(scene: Scene): void {
   const placed = new Set<number>()
   RINGS.forEach((ring, ri) => {
     const members = scene.nodes
-      .filter(n => n.cat.key === ring.cat)
+      .filter(n => n.cat.key === ring.cat && !n.satKind)
       .sort((a, b) => b.degree - a.degree)
     members.forEach((n, k) => {
       let vx = 0, vy = 0, found = 0
@@ -315,6 +357,15 @@ export function layoutOrrery(scene: Scene): void {
   if (scene.soulIdx >= 0) {
     const s = scene.nodes[scene.soulIdx]
     s.a0 = 0; s.rad = 0; s.yy = 0; s.w = 0 // soul holds the centre of the dial
+  }
+  // satellites take the two innermost rings, inside person-rad 30
+  let dk = 0, gk = 0
+  for (const n of scene.nodes) {
+    if (!n.satKind) continue
+    if (n.satKind === 'drive') { n.a0 = dk++ * GOLD; n.rad = 13 }
+    else { n.a0 = gk++ * GOLD + 0.45; n.rad = 21 }
+    n.yy = 0
+    n.w = n.satKind === 'drive' ? 0.034 : 0.024
   }
   scene.spiralCount = spiral.length
   scene.orreryDone = true
