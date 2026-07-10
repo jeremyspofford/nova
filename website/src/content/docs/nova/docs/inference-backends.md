@@ -79,6 +79,14 @@ LM Studio is a desktop app and **Custom** is any OpenAI-compatible URL — both 
 
 Users do not set `COMPOSE_PROFILES` manually for inference backends. The recovery service starts and stops profiled services via its Docker Compose integration.
 
+### Starting and stopping bundled containers
+
+Bundled engines are controlled with a **Start/Stop toggle** in two places — the **Models** page (under *Local Inference*, next to where you pull and manage models) and **Settings → AI & Models → Local Inference**. Both surface the same control: each backend shows a health dot, an *active* badge for the one the gateway is routing to, and a *needs GPU* badge for vLLM/SGLang on CPU-only hosts. Starting a container routes Nova's local inference to it; several can run at once.
+
+The toggle is the **source of truth** for which bundled engines run. Re-running `./install` no longer overrides it — the deployment mode only seeds the default (bundled Ollama) on a *fresh* install, and your other enabled profiles (browser, voice, knowledge, observability) are preserved across re-runs.
+
+Because the bundled images are pinned to `:latest`, starting a backend does a **best-effort image pull first** so a stale cached engine can't block current models (e.g. Ollama's `412: requires a newer version` error). The pull is non-fatal — an offline host simply starts from the cached image.
+
 LM Studio is also a first-class backend but is **not** container-managed -- see [LM Studio](#lm-studio).
 
 ## Hardware detection
