@@ -18,16 +18,17 @@ import {
   reviewPipelineTask, getQueueStats, getPods, discoverModels,
   deletePipelineTask, bulkDeletePipelineTasks, bulkDeletePipelineTasksByIds,
   getTaskFindings, getTaskReviews, getTaskSessions, getTaskArtifacts,
-  getPipelineStats, getPipelineLatency,
+  getPipelineStats, getPipelineLatency, getDeadLetter, clearDeadLetter,
   clarifyPipelineTask,
 } from '../api'
-import type { TaskSummary, Artifact } from '../api'
+import type { TaskSummary, Artifact, DeadLetterEntry } from '../api'
 import ArtifactCard, { MermaidDiagram } from '../components/ArtifactRenderer'
 import { CheckpointDecide } from '../components/CheckpointDecide'
 import FileViewer from '../components/FileViewer'
 import type { PipelineTask, TaskStatus, GuardrailFinding, CodeReviewVerdict, AgentSession } from '../types'
 import { ACTIVE_TASK_STATUSES, TASK_STATUS_CONFIG } from '../constants'
 import { useChatStore } from '../stores/chat-store'
+import { useToast } from '../components/ToastProvider'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Badge, Button, Card, Checkbox, CopyableId, ConfirmDialog, EmptyState,
@@ -1070,12 +1071,20 @@ function TaskRow({
         isTerminal && !selected && 'opacity-60 hover:opacity-80',
       )}
     >
-      {/* Selection checkbox */}
-      <div onClick={e => e.stopPropagation()}>
+      {/* Selection checkbox — the wrapper captures the real mouse event so
+          shift-click range selection works (Checkbox.onChange only gives a bool). */}
+      <div
+        className="cursor-pointer"
+        title="Click to select · Shift-click to select a range"
+        onClick={e => {
+          e.stopPropagation()
+          onToggleSelect(task.id, e.shiftKey)
+        }}
+      >
         <Checkbox
           checked={selected}
-          onChange={() => onToggleSelect(task.id, false)}
-          className="mr-0"
+          onChange={() => {}}
+          className="mr-0 pointer-events-none"
         />
       </div>
 
@@ -1244,6 +1253,111 @@ function StatsRow() {
   )
 }
 
+// ── Dead-letter modal ────────────────────────────────────────────────────────
+
+function DeadLetterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: ['dead-letter'],
+    queryFn: getDeadLetter,
+    enabled: open,
+    staleTime: 5_000,
+  })
+
+  const clear = useMutation({
+    mutationFn: () => clearDeadLetter(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dead-letter'] })
+      qc.invalidateQueries({ queryKey: ['queue-stats'] })
+      setConfirmClear(false)
+      onClose()
+    },
+  })
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Dead-letter queue"
+      footer={
+        <div className="flex w-full items-center justify-between">
+          <span className="text-caption text-content-tertiary">
+            {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
+          </span>
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<Trash2 size={14} />}
+            onClick={() => setConfirmClear(true)}
+            disabled={entries.length === 0 || clear.isPending}
+          >
+            Clear dead letter
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-left">
+        <p className="text-caption text-content-secondary">
+          Tasks that failed and exhausted every retry are recorded here (in Redis) so a
+          crash loop can't silently swallow work. Clearing only discards these failure
+          records — it does not re-run anything.
+        </p>
+
+        {isLoading ? (
+          <Skeleton lines={4} />
+        ) : entries.length === 0 ? (
+          <p className="text-compact text-content-tertiary">The dead-letter queue is empty.</p>
+        ) : (
+          <div className="space-y-2">
+            {entries.map((e: DeadLetterEntry, i) => (
+              <div key={`${e.task_id ?? 'unknown'}-${i}`} className="rounded-md border border-border-subtle bg-surface-elevated p-3 space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge color="danger" size="sm">failed</Badge>
+                  {e.task_id && <CopyableId id={e.task_id} />}
+                  {e.retry_count != null && e.max_retries != null && (
+                    <span className="text-caption text-content-tertiary">
+                      {e.retry_count}/{e.max_retries} retries
+                    </span>
+                  )}
+                  {!e.exists && (
+                    <span className="text-caption text-content-tertiary italic">task row deleted</span>
+                  )}
+                  {e.timestamp && (
+                    <span className="ml-auto text-caption text-content-tertiary">
+                      {formatDistanceToNow(new Date(e.timestamp), { addSuffix: true })}
+                    </span>
+                  )}
+                </div>
+                {e.user_input && (
+                  <p className="text-compact text-content-primary truncate">{e.user_input}</p>
+                )}
+                {(e.reason || e.error) && (
+                  <pre className="whitespace-pre-wrap break-words rounded-sm bg-danger-dim p-2 text-mono-sm text-danger max-h-32 overflow-y-auto">
+                    {e.error || e.reason}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Clear dead-letter queue"
+        description={`Permanently discard all ${entries.length} dead-letter record${entries.length === 1 ? '' : 's'}. This does not re-run any task.`}
+        confirmLabel={clear.isPending ? 'Clearing...' : 'Clear'}
+        onConfirm={() => clear.mutate()}
+        destructive
+      />
+    </Modal>
+  )
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export function Tasks() {
@@ -1254,11 +1368,13 @@ export function Tasks() {
   const [selectedTask, setSelectedTask] = useState<PipelineTask | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+  const [showDeadLetter, setShowDeadLetter] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const lastClickedRef = useRef<string | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const { addToast } = useToast()
 
   const { data: tasks = [], isFetching } = useQuery({
     queryKey: ['pipeline-tasks'],
@@ -1291,18 +1407,33 @@ export function Tasks() {
 
   const bulkDelete = useMutation({
     mutationFn: () => bulkDeletePipelineTasks(),
-    onSuccess: async () => {
+    onSuccess: async (res) => {
       await qc.invalidateQueries({ queryKey: ['pipeline-tasks'] })
       setConfirmClear(false)
+      addToast({
+        variant: 'success',
+        message: res.deleted > 0
+          ? `Cleared ${res.deleted} task${res.deleted === 1 ? '' : 's'}.`
+          : 'No non-running tasks to clear.',
+      })
+    },
+    onError: (e) => {
+      setConfirmClear(false)
+      addToast({ variant: 'error', message: `Couldn't clear history: ${String(e)}` })
     },
   })
 
   const bulkDeleteByIds = useMutation({
     mutationFn: (ids: string[]) => bulkDeletePipelineTasksByIds(ids),
-    onSuccess: async () => {
+    onSuccess: async (res) => {
       await qc.invalidateQueries({ queryKey: ['pipeline-tasks'] })
       setSelectedIds(new Set())
       setConfirmBulkDelete(false)
+      addToast({ variant: 'success', message: `Deleted ${res.deleted} task${res.deleted === 1 ? '' : 's'}.` })
+    },
+    onError: (e) => {
+      setConfirmBulkDelete(false)
+      addToast({ variant: 'error', message: `Couldn't delete tasks: ${String(e)}` })
     },
   })
 
@@ -1317,18 +1448,19 @@ export function Tasks() {
     setSelectedIds(prev => {
       const next = new Set(prev)
 
-      if (shiftKey && lastClickedRef.current) {
-        // Shift-click: select range between last clicked and current
+      if (shiftKey && lastClickedRef.current && lastClickedRef.current !== taskId) {
+        // Shift-click: select the whole range between last-clicked and current.
+        // Any status is selectable — bulk delete uses force=true, which cancels
+        // active tasks before deleting.
         const ids = filteredTasks.map(t => t.id)
         const lastIdx = ids.indexOf(lastClickedRef.current)
         const curIdx = ids.indexOf(taskId)
         if (lastIdx !== -1 && curIdx !== -1) {
           const [start, end] = lastIdx < curIdx ? [lastIdx, curIdx] : [curIdx, lastIdx]
+          const selecting = !next.has(taskId)
           for (let i = start; i <= end; i++) {
-            const t = filteredTasks[i]
-            if (['complete', 'failed', 'cancelled'].includes(t.status)) {
-              next.add(ids[i])
-            }
+            if (selecting) next.add(ids[i])
+            else next.delete(ids[i])
           }
         }
       } else {
@@ -1358,8 +1490,16 @@ export function Tasks() {
           <div className="flex items-center gap-3">
             {queueStats && (
               <div className="hidden sm:flex gap-3 text-caption text-content-tertiary">
-                <Tooltip content="Tasks waiting in the Redis queue to be picked up."><span>Queue: <strong className="text-content-primary">{queueStats.queue_depth}</strong></span></Tooltip>
-                <Tooltip content="Tasks that failed repeatedly and were moved out of the queue."><span>Dead letter: <strong className={queueStats.dead_letter_depth > 0 ? 'text-danger' : 'text-content-primary'}>{queueStats.dead_letter_depth}</strong></span></Tooltip>
+                <Tooltip content="Tasks waiting in the Redis queue to be picked up by a worker."><span>Queue: <strong className="text-content-primary">{queueStats.queue_depth}</strong></span></Tooltip>
+                <Tooltip content="Tasks that failed and exhausted every retry. Click to view or clear.">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeadLetter(true)}
+                    className="transition-colors hover:text-content-primary"
+                  >
+                    Dead letter: <strong className={queueStats.dead_letter_depth > 0 ? 'text-danger' : 'text-content-primary'}>{queueStats.dead_letter_depth}</strong>
+                  </button>
+                </Tooltip>
               </div>
             )}
             <Button
@@ -1536,6 +1676,9 @@ export function Tasks() {
         onConfirm={() => bulkDelete.mutate()}
         destructive
       />
+
+      {/* Dead-letter queue viewer */}
+      <DeadLetterModal open={showDeadLetter} onClose={() => setShowDeadLetter(false)} />
 
       {/* Confirm bulk delete selected */}
       <ConfirmDialog

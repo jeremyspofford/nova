@@ -198,6 +198,34 @@ async def notify_inbox_read(req: InboxReadRequest, _: AdminDep):
     return {"marked_read": marked}
 
 
+@router.delete("/inbox")
+async def notify_inbox_delete(
+    _: AdminDep,
+    ids: str = Query(default="", description="Comma-separated message ids to delete"),
+    all_: bool = Query(default=False, alias="all", description="Delete every message"),
+):
+    """Delete inbox messages. `?all=true` clears everything; `?ids=1,2` deletes some.
+
+    Note: the Inbox shares the notify_log table with delivery receipts, so
+    clearing the Inbox also clears the notification delivery history.
+    """
+    from app.db import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if all_:
+            result = await conn.execute("DELETE FROM notify_log")
+        else:
+            id_list = [int(i) for i in ids.split(",") if i.strip().lstrip("-").isdigit()]
+            if not id_list:
+                raise HTTPException(status_code=422, detail="pass ids or all=true")
+            result = await conn.execute(
+                "DELETE FROM notify_log WHERE id = ANY($1::bigint[])", id_list
+            )
+    deleted = int(result.split()[-1]) if result.startswith("DELETE") else 0
+    return {"deleted": deleted}
+
+
 @router.post("/test")
 async def notify_test(_: AdminDep):
     """Send a test notification to the configured topic."""

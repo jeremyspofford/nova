@@ -35,7 +35,13 @@ from typing import Any
 from app.auth import AdminDep, ApiKeyDep
 from app.config import settings
 from app.db import get_pool
-from app.queue import dead_letter_depth, enqueue_task, queue_depth
+from app.queue import (
+    clear_dead_letter,
+    dead_letter_depth,
+    dead_letter_items,
+    enqueue_task,
+    queue_depth,
+)
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -346,17 +352,38 @@ async def bulk_delete_pipeline_tasks(
         default="",
         description="Comma-separated task UUIDs to delete",
     ),
+    all_: bool = Query(
+        default=False,
+        alias="all",
+        description="Clear history: delete every task that isn't actively running",
+    ),
     force: bool = Query(
         default=False,
         description="Cancel active tasks before deleting",
     ),
 ) -> dict:
     """
-    Bulk delete tasks — by status filter or by specific IDs.
+    Bulk delete tasks — by all-non-running (clear history), status filter, or IDs.
     With force=true, active tasks are cancelled first then deleted. Admin-only.
     """
     TERMINAL = {"complete", "failed", "cancelled", "pending_human_review", "clarification_needed", "waiting_human"}
     pool = get_pool()
+
+    # Mode 0: clear history — delete everything that isn't actively in-flight.
+    # Keeps queued / completing / *_running; removes submitted orphans, terminal,
+    # and human-waiting tasks. Status-agnostic so new terminal states are covered.
+    if all_:
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE status NOT IN ('queued', 'completing')
+                  AND status NOT LIKE '%running'
+                """
+            )
+        deleted = int(result.split()[-1])
+        log.info("Cleared task history: deleted %d non-running tasks", deleted)
+        return {"deleted": deleted, "mode": "all"}
 
     # Mode 1: delete by specific IDs
     if ids:
@@ -610,25 +637,57 @@ async def queue_stats(_admin: AdminDep) -> dict:
 @router.get("/api/v1/pipeline/dead-letter")
 async def get_dead_letter_tasks(
     _admin: AdminDep,
-    limit: int = Query(default=50, le=200),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, le=200),
 ) -> list[dict]:
-    """List tasks in the dead-letter queue (exhausted all retries)."""
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT t.id, t.status, t.user_input, t.error,
-                   t.retry_count, t.max_retries,
-                   t.queued_at, t.completed_at
-            FROM tasks t
-            WHERE t.status = 'failed'
-            ORDER BY t.completed_at DESC
-            LIMIT $1 OFFSET $2
-            """,
-            limit, offset,
-        )
-    return [dict(r) for r in rows]
+    """List entries in the dead-letter queue (tasks that exhausted all retries).
+
+    Reads the Redis dead-letter list — the same source as the `dead_letter_depth`
+    counter — and enriches each entry with the task's input/status from Postgres
+    when the row still exists.
+    """
+    entries = await dead_letter_items(limit)
+    if not entries:
+        return []
+
+    task_ids = [e["task_id"] for e in entries if e.get("task_id")]
+    detail_by_id: dict[str, dict] = {}
+    if task_ids:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, status, user_input, error,
+                       retry_count, max_retries, queued_at, completed_at
+                FROM tasks
+                WHERE id = ANY($1::uuid[])
+                """,
+                task_ids,
+            )
+        detail_by_id = {str(r["id"]): dict(r) for r in rows}
+
+    result: list[dict] = []
+    for e in entries:
+        detail = detail_by_id.get(str(e.get("task_id")), {})
+        result.append({
+            "task_id": e.get("task_id"),
+            "reason": e.get("reason"),
+            "timestamp": e.get("timestamp"),
+            "exists": bool(detail),
+            "status": detail.get("status"),
+            "user_input": detail.get("user_input"),
+            "error": detail.get("error"),
+            "retry_count": detail.get("retry_count"),
+            "max_retries": detail.get("max_retries"),
+        })
+    return result
+
+
+@router.delete("/api/v1/pipeline/dead-letter")
+async def clear_dead_letter_queue(_admin: AdminDep) -> dict:
+    """Flush the dead-letter queue. Admin-only."""
+    removed = await clear_dead_letter()
+    log.info("Cleared dead-letter queue: removed %d entries", removed)
+    return {"cleared": removed}
 
 
 # ── Pod endpoints ──────────────────────────────────────────────────────────────

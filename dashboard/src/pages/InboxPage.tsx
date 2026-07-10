@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCheck, ChevronDown, ChevronRight, Inbox as InboxIcon } from 'lucide-react'
+import { AlertTriangle, CheckCheck, ChevronDown, ChevronRight, Inbox as InboxIcon, Trash2 } from 'lucide-react'
 import { apiFetch } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
-import { Badge, Button, Skeleton } from '../components/ui'
+import { useToast } from '../components/ToastProvider'
+import { Badge, Button, ConfirmDialog, Skeleton } from '../components/ui'
 
 interface InboxMessage {
   id: number
@@ -51,7 +52,9 @@ function fmt(iso: string): string {
 
 export function InboxPage() {
   const qc = useQueryClient()
+  const { addToast } = useToast()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [confirmClear, setConfirmClear] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['inbox'],
@@ -68,6 +71,21 @@ export function InboxPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inbox'] })
       qc.invalidateQueries({ queryKey: ['inbox-unread'] })
+    },
+  })
+
+  const deleteAll = useMutation({
+    mutationFn: () =>
+      apiFetch<{ deleted: number }>('/api/v1/notify/inbox?all=true', { method: 'DELETE' }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['inbox'] })
+      qc.invalidateQueries({ queryKey: ['inbox-unread'] })
+      setConfirmClear(false)
+      addToast({ variant: 'success', message: `Deleted ${res.deleted} message${res.deleted === 1 ? '' : 's'}.` })
+    },
+    onError: (e) => {
+      setConfirmClear(false)
+      addToast({ variant: 'error', message: `Couldn't delete messages: ${String(e)}` })
     },
   })
 
@@ -93,16 +111,37 @@ export function InboxPage() {
         title="Inbox"
         description="Everything Nova sends you — briefings, task outcomes, questions — readable here even with no phone or push client set up"
         actions={
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => markRead.mutate({ all: true })}
-            disabled={unread === 0 || markRead.isPending}
-          >
-            <CheckCheck className="mr-1.5 h-4 w-4" />
-            Mark all read{unread > 0 ? ` (${unread})` : ''}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => markRead.mutate({ all: true })}
+              disabled={unread === 0 || markRead.isPending}
+            >
+              <CheckCheck className="mr-1.5 h-4 w-4" />
+              Mark all read{unread > 0 ? ` (${unread})` : ''}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirmClear(true)}
+              disabled={items.length === 0 || deleteAll.isPending}
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              Delete all
+            </Button>
+          </div>
         }
+      />
+
+      <ConfirmDialog
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Delete all inbox messages"
+        description="Permanently delete every message in your Inbox. This also clears the notification delivery history in Settings → Notifications, since they share the same log."
+        confirmLabel={deleteAll.isPending ? 'Deleting...' : 'Delete all'}
+        onConfirm={() => deleteAll.mutate()}
+        destructive
       />
 
       {isLoading ? (

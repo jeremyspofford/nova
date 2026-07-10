@@ -250,11 +250,31 @@ export const getWorkspaceFile = (path: string) =>
 export const deletePipelineTask = (task_id: string) =>
   apiFetch<void>(`/api/v1/pipeline/tasks/${task_id}?force=true`, { method: 'DELETE' })
 
-export const bulkDeletePipelineTasks = (statuses = 'complete,failed,cancelled,pending_human_review,clarification_needed,waiting_human') =>
-  apiFetch<{ deleted: number; statuses: string[] }>(
-    `/api/v1/pipeline/tasks?status=${encodeURIComponent(statuses)}&force=true`,
+/** Clear History: delete every task that isn't actively running (incl. orphaned
+ *  `submitted` tasks the old status-list approach silently skipped). */
+export const bulkDeletePipelineTasks = () =>
+  apiFetch<{ deleted: number; mode: string }>(
+    `/api/v1/pipeline/tasks?all=true`,
     { method: 'DELETE' },
   )
+
+export interface DeadLetterEntry {
+  task_id: string | null
+  reason: string | null
+  timestamp: string | null
+  exists: boolean
+  status: string | null
+  user_input: string | null
+  error: string | null
+  retry_count: number | null
+  max_retries: number | null
+}
+
+export const getDeadLetter = () =>
+  apiFetch<DeadLetterEntry[]>('/api/v1/pipeline/dead-letter')
+
+export const clearDeadLetter = () =>
+  apiFetch<{ cleared: number }>('/api/v1/pipeline/dead-letter', { method: 'DELETE' })
 
 export const bulkDeletePipelineTasksByIds = (ids: string[]) =>
   apiFetch<{ deleted: number; ids: string[] }>(

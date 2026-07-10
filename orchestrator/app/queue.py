@@ -129,6 +129,27 @@ async def dead_letter_depth() -> int:
     return await redis.llen(DEAD_LETTER_KEY)
 
 
+async def dead_letter_items(limit: int = 100) -> list[dict]:
+    """Return the dead-letter entries (task_id, reason, timestamp), newest first."""
+    redis = get_redis()
+    raw = await redis.lrange(DEAD_LETTER_KEY, 0, max(0, limit - 1))
+    items: list[dict] = []
+    for r in raw:
+        try:
+            items.append(json.loads(r))
+        except (ValueError, TypeError):
+            items.append({"task_id": None, "reason": str(r), "timestamp": None})
+    return items
+
+
+async def clear_dead_letter() -> int:
+    """Flush the dead-letter queue. Returns the number of entries removed."""
+    redis = get_redis()
+    removed = await redis.llen(DEAD_LETTER_KEY)
+    await redis.delete(DEAD_LETTER_KEY)
+    return removed
+
+
 # ── Consumer (queue worker) ────────────────────────────────────────────────────
 
 async def queue_worker() -> None:
