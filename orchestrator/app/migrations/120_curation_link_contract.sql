@@ -19,6 +19,7 @@ Contract for every run:
    - End text with a "## Sources" section containing a markdown link to EVERY journal file the item was distilled from, using bundle-root paths: [Journal 2026-07-09](/journal/2026-07-09.md).
    - Where the item relates to an existing concept, link it inline the same way: [Nova inference setup](/projects/nova-inference-setup.md). Use search_memory/read_memory to find exact ids. These body links are what connect the Brain graph.
    - Merge into an existing concept (target=…) instead of creating a near-duplicate.
+   - Where an item changes how Nova should operate (identity, values, standing behavior), also link [Soul](/self/soul.md).
 5. Report: journals reviewed, concepts written/updated, links added. If nothing durable was found, say so explicitly.$curation$,
     updated_at = NOW()
 WHERE title = 'Nightly memory curation';
