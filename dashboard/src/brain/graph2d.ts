@@ -168,7 +168,7 @@ export function createGraph2D(): Graph2D {
 
       const heart = heartOf(f.simT)
 
-      // ── edges ──
+      // ── edges: endpoint-tinted gradients with a gentle bow ──
       ctx.lineCap = 'round'
       for (const [i, j] of scene.edges) {
         const a = screen[i], b = screen[j]
@@ -181,10 +181,23 @@ export function createGraph2D(): Graph2D {
           ctx.strokeStyle = css(AMBER, Math.min(0.85, (0.12 + act * 0.75)) * d)
           ctx.lineWidth = (1 + act * 1.4)
         } else {
-          ctx.strokeStyle = css(TEAL, 0.16 * d)
+          const ca = f.colorByType ? scene.nodes[i].cat.rgb : (scene.nodes[i].degree > 6 ? TEAL_BRIGHT : TEAL)
+          const cb = f.colorByType ? scene.nodes[j].cat.rgb : (scene.nodes[j].degree > 6 ? TEAL_BRIGHT : TEAL)
+          const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y)
+          g.addColorStop(0, css(ca, 0.26 * d))
+          g.addColorStop(0.5, css(mix(ca, cb, 0.5), 0.07 * d))
+          g.addColorStop(1, css(cb, 0.26 * d))
+          ctx.strokeStyle = g
           ctx.lineWidth = 1
         }
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+        const ddx = b.x - a.x, ddy = b.y - a.y
+        const len = Math.hypot(ddx, ddy) || 1
+        const bow = Math.min(12, len * 0.06)
+        ctx.beginPath()
+        ctx.moveTo(a.x, a.y)
+        ctx.quadraticCurveTo(mx - (ddy / len) * bow, my + (ddx / len) * bow, b.x, b.y)
+        ctx.stroke()
       }
 
       // ── nodes ──
@@ -200,11 +213,11 @@ export function createGraph2D(): Graph2D {
         const d = dim(i) * (n.cat.key === 'episode' ? 0.65 : 1)
         const r = p.r * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1) * (1 + glow * 0.5)
 
-        // soft halo
-        const haloR = r * (2.6 + glow * 3)
+        // soft halo — tight at rest; the big glow is earned by cognition
+        const haloR = r * (1.7 + glow * 3.2) * (n.degree > 6 ? 1.15 : 1)
         const hg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR)
-        hg.addColorStop(0, css(col, (0.28 + glow * 0.5) * d))
-        hg.addColorStop(0.5, css(col, 0.10 * d))
+        hg.addColorStop(0, css(col, (0.22 + glow * 0.5) * d))
+        hg.addColorStop(0.4, css(col, 0.07 * d))
         hg.addColorStop(1, css(col, 0))
         ctx.fillStyle = hg
         ctx.beginPath(); ctx.arc(p.x, p.y, haloR, 0, 7); ctx.fill()

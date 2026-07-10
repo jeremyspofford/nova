@@ -127,13 +127,15 @@ function drawNodes(
 
     const r = baseR * tier * (1 + breathe) * (1 + glow * 0.7)
       * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1)
-    const haloR = r * (3.2 + glow * 2.4)
+    // resting halos stay tight — the big soft glow is EARNED by cognition
+    // (amber activation) and hub status, otherwise everything reads as candy
+    const haloR = r * (1.9 + glow * 3.4) * (n.degree > 6 ? 1.15 : 1)
     const depthFade = Math.max(0.25, 1.1 - p.z * 0.0016)
       * (n.cat.key === 'episode' ? 0.6 : 1) * sDim
 
     const g = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, haloR)
-    g.addColorStop(0, css(col, (0.55 + glow * 0.4) * depthFade))
-    g.addColorStop(0.25, css(col, 0.22 * depthFade))
+    g.addColorStop(0, css(col, (0.36 + glow * 0.5) * depthFade))
+    g.addColorStop(0.35, css(col, 0.13 * depthFade))
     g.addColorStop(1, css(col, 0))
     ctx.fillStyle = g
     ctx.beginPath(); ctx.arc(p.sx, p.sy, haloR, 0, 7); ctx.fill()
@@ -188,19 +190,61 @@ function drawEdges(
       ctx.strokeStyle = css(AMBER, Math.min(0.8, base + act * 0.75 * sDim))
       ctx.lineWidth = 1 + act * 1.3
     } else {
-      ctx.strokeStyle = css(TEAL, base)
+      // endpoint-tinted gradient, near-transparent midpoint — links read as
+      // belonging to their nodes instead of a flat wireframe
+      const ca = f.colorByType ? scene.nodes[i].cat.rgb : (scene.nodes[i].degree > 6 ? TEAL_BRIGHT : TEAL)
+      const cb = f.colorByType ? scene.nodes[j].cat.rgb : (scene.nodes[j].degree > 6 ? TEAL_BRIGHT : TEAL)
+      const g = ctx.createLinearGradient(a.sx, a.sy, b.sx, b.sy)
+      g.addColorStop(0, css(ca, Math.min(0.5, base * 1.6)))
+      g.addColorStop(0.5, css(mix(ca, cb, 0.5), base * 0.4))
+      g.addColorStop(1, css(cb, Math.min(0.5, base * 1.6)))
+      ctx.strokeStyle = g
       ctx.lineWidth = 1
     }
-    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke()
+    // gentle bow perpendicular to the chord — dense regions weave, not clutter
+    const mx = (a.sx + b.sx) / 2, my = (a.sy + b.sy) / 2
+    const ddx = b.sx - a.sx, ddy = b.sy - a.sy
+    const len = Math.hypot(ddx, ddy) || 1
+    const bow = Math.min(12, len * 0.06)
+    ctx.beginPath()
+    ctx.moveTo(a.sx, a.sy)
+    ctx.quadraticCurveTo(mx - (ddy / len) * bow, my + (ddx / len) * bow, b.sx, b.sy)
+    ctx.stroke()
   }
 }
 
 // ── Galaxy ──────────────────────────────────────────────────────────────────
 
+// Three parallax depths that drift with the camera; sizes/brightness follow an
+// exponential distribution (many faint, few bright) and stars are round —
+// uniform square pixels are what made the old field read as noise.
 const starRnd = mulberry32(7)
-const STARS = Array.from({ length: 130 }, () => ({
-  x: starRnd(), y: starRnd(), r: starRnd() * 0.9 + 0.2, a: starRnd() * 0.35 + 0.08,
+const STAR_LAYERS = [0.35, 0.7, 1.15].map(depth => ({
+  depth,
+  stars: Array.from({ length: 70 }, () => ({
+    x: starRnd(), y: starRnd(),
+    r: 0.35 + Math.pow(starRnd(), 2.2) * 1.1,
+    a: 0.05 + Math.pow(starRnd(), 2.6) * 0.42,
+    tw: 0.3 + starRnd() * 1.1, ph: starRnd() * Math.PI * 2,
+  })),
 }))
+
+function drawStarfield(
+  ctx: CanvasRenderingContext2D, W: number, H: number, cam: Camera,
+  simT: number, reduceMotion: boolean,
+): void {
+  for (const layer of STAR_LAYERS) {
+    const oxs = cam.yaw * 0.035 * layer.depth
+    const oys = cam.pitch * 0.05 * layer.depth
+    for (const s of layer.stars) {
+      const x = (((s.x - oxs) % 1) + 1) % 1 * W
+      const y = (((s.y - oys) % 1) + 1) % 1 * H
+      const tw = reduceMotion ? 1 : 0.75 + 0.25 * Math.sin(simT * s.tw + s.ph)
+      ctx.fillStyle = `rgba(250,250,249,${s.a * tw})`
+      ctx.beginPath(); ctx.arc(x, y, s.r * (0.7 + 0.45 * layer.depth), 0, 7); ctx.fill()
+    }
+  }
+}
 
 export function drawGalaxy(
   ctx: CanvasRenderingContext2D, scene: Scene, cam: Camera, f: FrameCtx,
@@ -210,10 +254,7 @@ export function drawGalaxy(
 
   paintNebula(ctx, f.W, f.H, 0.30, 0.70)
   applyGrain(ctx, f.W, f.H)
-  for (const s of STARS) {
-    ctx.fillStyle = `rgba(250,250,249,${s.a})`
-    ctx.fillRect(s.x * f.W, s.y * f.H, s.r, s.r)
-  }
+  drawStarfield(ctx, f.W, f.H, cam, f.simT, f.reduceMotion)
 
   for (let i = 0; i < scene.nodes.length; i++) {
     const n = scene.nodes[i]
@@ -347,18 +388,47 @@ export function drawOrrery(
 // ── Singularity (stateful: trail-fade + own particle field) ─────────────────
 
 const CYAN: [number, number, number] = [92, 232, 208]
-const VIOLET: [number, number, number] = [139, 92, 246]
-const FUCHSIA: [number, number, number] = [217, 70, 239]
-const PINK: [number, number, number] = [240, 141, 225]
+const ICE: [number, number, number] = [214, 240, 235]
 const WHITE: [number, number, number] = [240, 250, 250]
-const SWATCH = [CYAN, CYAN, TEAL, CYAN, VIOLET, FUCHSIA, VIOLET, PINK]
+
+// Thin-disk temperature falls with radius (T ∝ r^-3/4): white-gold inner edge
+// through amber to a cool teal rim, bridged by a pale stop so the blend never
+// passes through muddy green. Nova palette only — no synthwave violet/pink.
+const DISK_STOPS: [number, [number, number, number]][] = [
+  [0.00, [255, 244, 214]],
+  [0.20, [255, 214, 140]],  // gold
+  [0.45, [251, 191, 36]],   // amber
+  [0.62, ICE],              // bridge
+  [0.80, CYAN],             // teal-300
+  [1.00, [25, 168, 158]],   // teal-500
+]
+
+function diskColor(u: number, jitter: number): [number, number, number] {
+  const t = Math.max(0, Math.min(1, u + jitter * 0.08))
+  for (let k = 1; k < DISK_STOPS.length; k++) {
+    if (t <= DISK_STOPS[k][0]) {
+      const [t0, c0] = DISK_STOPS[k - 1], [t1, c1] = DISK_STOPS[k]
+      return mix(c0, c1, (t - t0) / (t1 - t0))
+    }
+  }
+  return DISK_STOPS[DISK_STOPS.length - 1][1]
+}
 
 const RHW = 50, RMINW = RHW * 1.22, RMAXW = 235
 const ROLL = -0.13
 const cosR = Math.cos(ROLL), sinR = Math.sin(ROLL)
 
+// Backdrop stars for the singularity: the shadow is visible by what it does
+// to the light behind it — occlusion inside, deflection just outside.
+const singStarRnd = mulberry32(11)
+const SING_STARS = Array.from({ length: 110 }, () => ({
+  x: singStarRnd(), y: singStarRnd(),
+  r: 0.3 + Math.pow(singStarRnd(), 2) * 1.0,
+  a: 0.05 + Math.pow(singStarRnd(), 2.4) * 0.5,
+}))
+
 interface DiskP {
-  u: number; a: number; col: [number, number, number]
+  u: number; a: number; spark: boolean
   size: number; alpha: number; tw: number; ph: number; scat: number
   p0: { x: number; y: number; front: boolean } | null
   p1: { x: number; y: number; front: boolean } | null
@@ -375,12 +445,8 @@ export function createSingularity(): Singularity {
   const disk: DiskP[] = []
   for (let i = 0; i < 820; i++) {
     const t = Math.pow(rnd(), 1.8)
-    const band = Math.sin(t * Math.PI * 3 + rnd()) * 0.5
-    let col = SWATCH[(rnd() * SWATCH.length) | 0]
-    if (band > 0.2 && rnd() < 0.5) col = rnd() < 0.5 ? VIOLET : FUCHSIA
-    if (rnd() < 0.04) col = WHITE
     disk.push({
-      u: t, a: rnd() * Math.PI * 2, col,
+      u: t, a: rnd() * Math.PI * 2, spark: rnd() < 0.04,
       size: 0.5 + rnd() * 1.2, alpha: 0.035 + rnd() * 0.07,
       tw: 0.4 + rnd() * 1.2, ph: rnd() * Math.PI * 2, scat: rnd() - 0.5,
       p0: null, p1: null,
@@ -440,6 +506,24 @@ export function createSingularity(): Singularity {
         ctx.fillRect(0, 0, W, H)
       }
 
+      // background stars: swallowed inside the shadow, pushed outward just
+      // beyond it (weak-field deflection) — the hole shows as pure absence
+      const trailComp = f.reduceMotion ? 1 : 0.11 // equilibrium vs the fade veil
+      const DEFL = RH * RH * 0.8
+      const deflEdge = DEFL / (RH * 2.4)
+      for (const st of SING_STARS) {
+        let x = st.x * W, y = st.y * H
+        const dx = x - CX, dy = y - CY
+        const d = Math.hypot(dx, dy)
+        if (d < RH * 1.02) continue
+        if (d < RH * 2.4) {
+          const k = DEFL / d - deflEdge
+          x += (dx / d) * k; y += (dy / d) * k
+        }
+        ctx.fillStyle = `rgba(235,248,246,${st.a * trailComp})`
+        ctx.beginPath(); ctx.arc(x, y, st.r, 0, 7); ctx.fill()
+      }
+
       if (amp > 0.5 && !f.reduceMotion && simT - lastBeat > 1.35) {
         lastBeat = simT
         if (pulses.length < 2) pulses.push({ r: RHW + 3 })
@@ -467,7 +551,7 @@ export function createSingularity(): Singularity {
         const fr = (k - 4) / 4
         const rw = RMINW + (RMAXW - RMINW) * (0.34 + fr * 0.16)
         const al = 0.028 * Math.exp(-fr * fr * 2.2) * brightD
-        ctx.strokeStyle = css(k % 3 === 1 ? VIOLET : CYAN, al)
+        ctx.strokeStyle = css(k % 3 === 1 ? GOLDW : CYAN, al)
         ctx.lineWidth = RHW * S0 * 0.16
         ctx.beginPath()
         ctx.ellipse(CX, CY, rw * S0, Math.max(0.02, rw * S0 * Math.abs(Math.sin(cam.pitch))), ROLL, 0, Math.PI * 2)
@@ -475,31 +559,28 @@ export function createSingularity(): Singularity {
       }
       ctx.lineCap = 'round'
 
-      // back half of the disk
+      // back half of the disk — anything projecting into the shadow is
+      // captured or lensed (the arcs below carry that light), never drawn
       ctx.globalCompositeOperation = 'lighter'
+      const shadow2 = RH * RH * 1.30
       for (const p of disk) {
         if (!p.p0 || !p.p1 || p.p1.front) continue
+        const bdx = p.p1.x - CX, bdy = p.p1.y - CY
+        if (bdx * bdx + bdy * bdy < shadow2) continue
         const twk = 0.6 + 0.4 * Math.sin(simT * p.tw + p.ph)
         const dop = 1 + 0.30 * Math.sin(p.a + cam.yaw)
-        ctx.strokeStyle = css(p.col, p.alpha * twk * brightD * dop)
+        const col = p.spark ? WHITE : diskColor(p.u, p.scat)
+        ctx.strokeStyle = css(col, p.alpha * twk * brightD * dop * 0.85)
         ctx.lineWidth = p.size
         ctx.beginPath(); ctx.moveTo(p.p0.x, p.p0.y); ctx.lineTo(p.p1.x, p.p1.y); ctx.stroke()
       }
       ctx.globalCompositeOperation = 'source-over'
 
-      // lensed far-side loop
-      ctx.strokeStyle = css(VIOLET, 0.13 * brightD)
-      ctx.lineWidth = 2.2
-      ctx.beginPath(); ctx.ellipse(CX, CY + RH * 0.42, RH * 0.9, RH * 0.5, ROLL, Math.PI * 0.12, Math.PI * 0.88); ctx.stroke()
-      ctx.strokeStyle = css(CYAN, 0.09 * brightD)
-      ctx.lineWidth = 1.1
-      ctx.beginPath(); ctx.ellipse(CX, CY + RH * 0.42, RH * 0.86, RH * 0.46, ROLL, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke()
-
       // glow crown
       const domeA = 0.09 + 0.07 * heart * amp
       const dome = ctx.createRadialGradient(CX, CY - RH * 0.35, 0, CX, CY - RH * 0.35, RH * 1.6)
-      dome.addColorStop(0, css(CYAN, domeA))
-      dome.addColorStop(0.55, css(VIOLET, domeA * 0.3))
+      dome.addColorStop(0, css(ICE, domeA))
+      dome.addColorStop(0.55, css(TEAL, domeA * 0.35))
       dome.addColorStop(1, css(CYAN, 0))
       ctx.fillStyle = dome
       ctx.beginPath(); ctx.arc(CX, CY - RH * 0.35, RH * 1.6, 0, 7); ctx.fill()
@@ -525,9 +606,24 @@ export function createSingularity(): Singularity {
         ctx.beginPath(); ctx.arc(CX, CY, RH + 2, 0, 7); ctx.stroke()
       }
       ctx.restore()
-      ctx.strokeStyle = css(VIOLET, 0.09 * ringPulse)
+      ctx.strokeStyle = css(TEAL, 0.09 * ringPulse)
       ctx.lineWidth = 3.5
       ctx.beginPath(); ctx.arc(CX, CY, RH + 6.5, 0, 7); ctx.stroke()
+
+      // gravitational lensing: the far side of the disk reappears wrapped
+      // around the shadow — a bright arc over the top, a fainter mirror below
+      const arcCol = mix(diskColor(0.30, 0), WHITE, 0.15)
+      const arcA = (0.13 + 0.05 * heart * amp) * brightD
+      ctx.save()
+      ctx.shadowColor = css(arcCol, 0.6)
+      ctx.shadowBlur = 10
+      ctx.strokeStyle = css(arcCol, arcA)
+      ctx.lineWidth = 2.6
+      ctx.beginPath(); ctx.ellipse(CX, CY, RH * 1.10, RH * 1.10, ROLL, Math.PI * 1.06, Math.PI * 1.94); ctx.stroke()
+      ctx.strokeStyle = css(mix(arcCol, CYAN, 0.5), arcA * 0.4)
+      ctx.lineWidth = 1.6
+      ctx.beginPath(); ctx.ellipse(CX, CY, RH * 1.16, RH * 1.10, ROLL, Math.PI * 0.10, Math.PI * 0.90); ctx.stroke()
+      ctx.restore()
 
       ctx.globalCompositeOperation = 'lighter'
       // heartbeat halos
@@ -565,7 +661,8 @@ export function createSingularity(): Singularity {
         if (!p.p0 || !p.p1 || !p.p1.front) continue
         const twk = 0.6 + 0.4 * Math.sin(simT * p.tw + p.ph)
         const dop = 1 + 0.30 * Math.sin(p.a + cam.yaw)
-        ctx.strokeStyle = css(p.col, p.alpha * 1.2 * twk * brightD * dop)
+        const col = p.spark ? WHITE : diskColor(p.u, p.scat)
+        ctx.strokeStyle = css(col, p.alpha * 1.2 * twk * brightD * dop)
         ctx.lineWidth = p.size
         ctx.beginPath(); ctx.moveTo(p.p0.x, p.p0.y); ctx.lineTo(p.p1.x, p.p1.y); ctx.stroke()
       }
