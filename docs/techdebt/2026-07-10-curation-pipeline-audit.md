@@ -54,14 +54,18 @@ Watch: `~/.nova/workspace/memory/topics/` for new files; `GET :8002/api/v1/memor
 
 ## Open bugs found (autonomy lane)
 
-1. **Gateway fallback forwards raw local model names to cloud providers** instead of substituting `llm.cloud_fallback_model` → local-first with a missing local model has no working fallback at all (total, silent outage).
-2. **State-machine CAS race**: pipeline executes while every status write is rejected (`submitted → context_running` refused); task rows zombify as `submitted`, then get mis-reaped. Also `failed → failed` rejection noise.
-3. **Consumed-but-skipped fires are invisible**: cortex acks a `goal.schedule_due` fire, then serve-drive filters (open-task dedupe, maturation `review`, cost cap) silently drop it. Log the skip reason; surface on the goal.
-4. **Stuck-detector escalation is silent**: goal → maturation `review` disables its cron until a human visits /goals; nobody is told (should notify + show on the goal card).
-5. **Gateway returns 200 + empty content on some provider failures** (cerebras model-not-found path) instead of an error — callers see "" and can't tell why.
-6. Gateway doesn't honor 429 `retry_delay` hints (gemini's 6s) — one burst kills a parallel review group.
-7. `llm.default_chat_model` was runtime-set to `openrouter/tencent/hy3:free` (dead key) during provider-status work — **chat/cortex/briefings fail through the dead chain while it stays**. Reset when that experiment concludes.
-8. Cortex thinking loop generates ~3k tokens/cycle every ~80s on the local model — permanent background load worth revisiting.
+> **Update 2026-07-10 (later same day):** bugs 1–6 fixed in PR #44; bug 7's
+> runtime overrides were reset live (`llm.default_chat_model` → `"auto"`,
+> `llm.cloud_fallback_model` → groq default). Only bug 8 remains open.
+
+1. ~~**Gateway fallback forwards raw local model names to cloud providers**~~ **FIXED (#44)** — `FallbackProvider` substitutes per member (`llm.cloud_fallback_model` runtime value, else member default); `OllamaCloudFallback` deleted.
+2. ~~**State-machine CAS race**~~ **FIXED (#44)** — `create_task` inserts `queued`; `submitted → *_running` allowed as defense; terminal same-status transitions are idempotent no-ops.
+3. ~~**Consumed-but-skipped fires are invisible**~~ **FIXED (#44)** — `fire.skipped` journal events with concrete reasons; `current_plan.last_fire_skip` shown on the goal card.
+4. ~~**Stuck-detector escalation is silent**~~ **FIXED (#44)** — SSE toast + phone push via new `POST /api/v1/notify/publish`; both cycle-level and verifying-phase escalations.
+5. ~~**Gateway returns 200 + empty content on some provider failures**~~ **FIXED (#44)** — empty-content provider responses raise; the chain moves on or a structured 502 surfaces.
+6. ~~Gateway doesn't honor 429 `retry_delay` hints~~ **FIXED (#44)** — hints parsed (`retry_hints.py`), one bounded retry ≤15s; quota-scale hints fail over.
+7. ~~`llm.default_chat_model` runtime-set to dead openrouter model~~ **RESET 2026-07-10** — back to `"auto"`; `llm.cloud_fallback_model` un-pinned from retired cerebras model.
+8. Cortex thinking loop generates ~3k tokens/cycle every ~80s on the local model — permanent background load worth revisiting. **Still open.**
 
 ## Timeline of the twelve attempts (for the curious)
 
