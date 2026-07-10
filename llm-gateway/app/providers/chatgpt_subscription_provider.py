@@ -124,6 +124,11 @@ class ChatGPTSubscriptionProvider(ModelProvider):
                 "Run `codex login` or set CHATGPT_ACCESS_TOKEN."
             )
 
+    def refresh_token(self) -> None:
+        """Re-discover the access token (FU-009 — CHATGPT_ACCESS_TOKEN in the
+        environment, or the codex auth file, may have changed at runtime)."""
+        self._access_token = discover_chatgpt_token()
+
     @property
     def name(self) -> str:
         return "chatgpt-subscription"

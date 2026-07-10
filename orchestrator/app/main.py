@@ -159,7 +159,7 @@ async def _bootstrap_platform_secrets_from_env() -> None:
     BOOTSTRAP_KEYS = [
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
         "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
-        "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN",
+        "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN", "NVIDIA_NIM_API_KEY",
         "GOOGLE_CLIENT_SECRET", "NOVA_GITHUB_PAT",
     ]
 

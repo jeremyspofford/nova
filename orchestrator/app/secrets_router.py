@@ -16,12 +16,33 @@ from app.secrets_store import (
     list_secrets,
     set_secret,
 )
+from app.store import get_redis
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# FU-009 — mirrors the feature-flags invalidation channel
+# (nova:flags:invalidate). Subscribers (llm-gateway) re-resolve their
+# platform secrets on every message; payload is the key name.
+SECRETS_INVALIDATE_CHANNEL = "nova:secrets:invalidate"
+
+
+async def _publish_invalidation_safe(key: str) -> None:
+    """Post-commit notification — a Redis hiccup must never roll back or
+    fail a committed secret change; subscribers stay stale until their
+    next reconnect catch-up instead."""
+    try:
+        await get_redis().publish(SECRETS_INVALIDATE_CHANNEL, key)
+    except Exception:  # noqa: BLE001 — best-effort post-commit notification
+        logger.warning(
+            "secret_publish_invalidation_failed key=%s — DB is authoritative; "
+            "subscribers stale until reconnect",
+            key,
+            exc_info=True,
+        )
 
 
 class SecretsPatchRequest(BaseModel):
@@ -47,6 +68,8 @@ async def patch_admin_secrets(req: SecretsPatchRequest, _admin: AdminDep) -> dic
     pool = get_pool()
     for k, v in req.updates.items():
         await set_secret(pool, k, v)
+    for k in req.updates:
+        await _publish_invalidation_safe(k)
     return {"updated": sorted(req.updates.keys())}
 
 
@@ -72,3 +95,4 @@ async def delete_admin_secret(key: str, _admin: AdminDep) -> None:
     removed = await delete_secret(get_pool(), key)
     if not removed:
         raise HTTPException(status_code=404, detail=f"secret {key!r} not found")
+    await _publish_invalidation_safe(key)

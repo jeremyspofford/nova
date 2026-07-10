@@ -123,6 +123,45 @@ async def lifespan(app: FastAPI):
     await _flag_subscriber.start()
     log.info("Feature-flags pubsub subscriber started")
 
+    # FU-009: platform-secret hot-reload. The orchestrator publishes every
+    # dashboard key change on nova:secrets:invalidate; the handler re-resolves
+    # and applies the overlay live. catch_up_on_subscribe also refreshes after
+    # every (re)connect, so changes made while Redis was down are reconciled.
+    from app.registry import refresh_platform_secrets
+    from nova_worker_common.platform_secrets import SECRETS_INVALIDATE_CHANNEL
+
+    async def _on_secrets_invalidate(key_hint: str) -> None:
+        await refresh_platform_secrets(key_hint)
+
+    _secrets_subscriber = PubsubSubscriber(
+        redis_url=settings.redis_url,
+        channel=SECRETS_INVALIDATE_CHANNEL,
+        handler=_on_secrets_invalidate,
+        catch_up_on_subscribe=True,
+    )
+    await _secrets_subscriber.start()
+    log.info("Platform-secrets pubsub subscriber started (hot-reload)")
+
+    # The gateway can win the boot race against the orchestrator: the
+    # module-load fetch and the subscribe catch-up both fail silently and only
+    # .env-layer keys apply until the next dashboard key change. Retry until
+    # one resolve succeeds so the platform_secrets layer always lands.
+    import asyncio as _asyncio
+
+    async def _secrets_boot_reconcile() -> None:
+        for _ in range(60):
+            if await refresh_platform_secrets("boot-reconcile") is not None:
+                return
+            await _asyncio.sleep(5)
+        log.warning(
+            "platform_secrets boot reconcile never succeeded — running on "
+            ".env-layer keys until the next key change"
+        )
+
+    _secrets_reconcile_task = _asyncio.create_task(
+        _secrets_boot_reconcile(), name="secrets-boot-reconcile"
+    )
+
     log.info("LLM Gateway ready")
     yield
     log.info("LLM Gateway shutting down")
@@ -132,6 +171,11 @@ async def lifespan(app: FastAPI):
         await _flag_subscriber.stop()
     except Exception:
         log.warning("Feature-flags subscriber stop failed", exc_info=True)
+    try:
+        await _secrets_subscriber.stop()
+    except Exception:
+        log.warning("Platform-secrets subscriber stop failed", exc_info=True)
+    _secrets_reconcile_task.cancel()
     try:
         await _flag_http_client.aclose()
     except Exception:

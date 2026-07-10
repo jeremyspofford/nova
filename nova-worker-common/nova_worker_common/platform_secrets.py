@@ -153,3 +153,33 @@ def fetch_platform_secrets_sync(
     except Exception as e:
         log.debug("fetch_platform_secrets_sync failed (%s) — caller will fall through", e)
         return {}
+
+
+# FU-009 — channel the orchestrator publishes secret key names on after every
+# PATCH/DELETE (see orchestrator/app/secrets_router.py). Subscribers re-resolve
+# and re-apply their secrets on each message.
+SECRETS_INVALIDATE_CHANNEL = "nova:secrets:invalidate"
+
+
+async def fetch_platform_secrets(
+    *,
+    orchestrator_url: str,
+    admin_secret: str,
+    keys: list[str],
+    timeout: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, str]:
+    """Async batch fetch of platform secrets — for runtime hot-reload (FU-009).
+
+    Unlike :func:`fetch_platform_secrets_sync` this RAISES on failure instead
+    of returning ``{}``: a runtime refresh that mistakes "orchestrator briefly
+    unreachable" for "all secrets deleted" would wipe live credentials from the
+    caller's environment. Callers catch, log WARNING, and keep current values.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(
+            f"{orchestrator_url.rstrip('/')}/api/v1/admin/secrets/resolve",
+            headers={"X-Admin-Secret": admin_secret},
+            json={"keys": keys},
+        )
+        r.raise_for_status()
+        return r.json().get("values", {}) or {}

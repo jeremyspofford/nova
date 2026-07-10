@@ -249,8 +249,12 @@ Google OAuth client secret, and the GitHub PAT used for self-modification.
   on every startup if (and only if) the entry is missing. Idempotent —
   user-rotated values are never overwritten.
 - **Rotation UX:** Settings → AI & Models → Provider Status (writes via
-  `patchPlatformSecrets`). Service restart is required for now —
-  hot-reload is FU-009.
+  `patchPlatformSecrets`). Changes apply live (FU-009): the orchestrator
+  publishes on `nova:secrets:invalidate` after every PATCH/DELETE and the
+  llm-gateway re-resolves + reapplies its key overlay
+  (`llm-gateway/app/secrets_runtime.py`) without a restart. Availability
+  checks read the post-overlay environment — never key material from the
+  import-frozen `settings` object.
 - **Caveat:** the `.env` mount stays `:rw` until FU-010 migrates infra-only
   keys to `platform_config`; the security boundary is enforced today by
   the recovery whitelist refusing any secret-bearing keys.

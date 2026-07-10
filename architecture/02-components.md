@@ -114,7 +114,11 @@ nova-worker-common.
 
 **Deps:** redis (db1), provider APIs. Reads platform secrets at module load
 via `nova_worker_common.platform_secrets` (sync, because adapters capture
-tokens at construction) — **secret rotation requires container restart** (FU-009).
+tokens at construction) and **hot-reloads them at runtime** (FU-009, shipped
+2026-07-10): the orchestrator publishes on `nova:secrets:invalidate` after
+every dashboard key change; the gateway re-resolves, recomputes the env
+overlay (`app/secrets_runtime.py`), re-keys Gemini/ChatGPT in place, rebuilds
+fallback chains, and lifts credential-guard cooldowns — no restart.
 
 ---
 
