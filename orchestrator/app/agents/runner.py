@@ -1141,6 +1141,14 @@ async def _run_tool_loop(
         if not tool_calls:
             break
 
+        if settings.agent_single_tool_call and len(tool_calls) > 1:
+            # Local templates that render only one tool call per turn would
+            # 400 on replaying this history — keep the first call, the model
+            # re-requests the rest next round.
+            log.info("Truncating %d parallel tool calls to 1 (agent_single_tool_call)",
+                     len(tool_calls))
+            tool_calls = tool_calls[:1]
+
         used_tools = True
         log.info("Tool-use round %d: %d tool call(s)", round_num + 1, len(tool_calls))
 
