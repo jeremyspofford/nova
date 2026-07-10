@@ -1118,57 +1118,148 @@ Those three close the biggest capability gap. Nova's cognitive architecture (eng
 
 ---
 
-## Local Inference: Containerize + Multi-Backend (planned)
+## Models, Providers & Inference — Unified Plan
 
-> Added 2026-07-08. Goal: users shouldn't need host Ollama/LM Studio apps — Nova
-> bundles equivalent containers — and Nova can route across multiple local
-> backends at once instead of one active backend at a time.
+> Rewritten 2026-07-09 from a design session. The original "Containerize +
+> Multi-Backend" scope is folded in here as Phases 0–1. The full arc: turn the
+> single-active-backend model into a **pool of named backends**, wire **role →
+> ordered (provider, model) fallback chains** on top of it, de-duplicate the UI,
+> then let **chat summon capability pods** (the Quartet is the first pod) that
+> can run **supervised iterative loops**, gated by a **local-resource capacity
+> meter** and improved over time by **learned intent routing**.
 
-### B1 — Bundled local inference as the recommended path
-- Promote the existing `inference-*` compose profiles (Ollama / vLLM / SGLang /
-  llama.cpp) to first-class, and make "bundled containers" the default over
-  external host apps.
-- **Port-collision fix:** the bundled Ollama binds `127.0.0.1:11434`, which
-  shadows a host Ollama on the same port (observed 2026-07-08 — Nova only saw
-  the container's models, not the 29 on the Windows app). Install wizard must
-  either not publish 11434 when a host Ollama is chosen, or use a distinct port.
-- Optional migration tool: pull a user's existing host models into the bundled
-  container so they can retire the host app.
+```
+chat (intent classifier, learns from outcomes) ──▶ pod
+                                                    ├─ Coordinator (hub: checklist,
+                                                    │    context routing, done-check, loop)
+                                                    ├─ workers (Context, Task, Guardrail,
+                                                    │    Review, …) each w/ (provider,model) chain
+                                                    ├─ linear | iterative(max_iters, budget, acceptance)
+                                                    └─ capacity meter (fits concurrent /
+                                                         must serialize / won't run)
 
-### B2 — Multi-backend routing (serve Ollama AND LM Studio simultaneously)
-- Today the gateway resolves against ONE active local backend
-  (`inference.backend` in Redis); `get_provider` / `_is_local_model` assume a
-  single `_local` wrapper (`llm-gateway/app/registry.py`).
-- Change: register each connected local backend as its own provider with its own
-  model set, and route each request to whichever backend actually has the model
-  (falling back across them). Kills the "picked an Ollama model while LM Studio
-  is active → fails" footgun, and lets the chat model picker honestly list every
-  local backend's models (see `ChatPage` model list + `ModelPicker`).
-- Prereqs: per-backend model catalogs in the registry; an `inference.backends`
-  (plural) config; migrate the single-backend Settings → Local Inference UI to a
-  list.
+POOL (Models page) — cloud providers + bundled containers + named remote backends
+CHAINS (Settings)  — per role: ordered (provider, model), unlimited, drawn from POOL
+```
 
-### Findings + concrete design (from the 2026-07-08 session)
+### Phase 0 — Bundled controls (✅ delivered 2026-07-09)
+- Bundled start/stop + status surfaced on the **Models page** (shared
+  `BundledContainersCard`, `dashboard/src/pages/models/`). Commit `21ab3c5`.
+- **Toggle is authoritative:** `./install` no longer clobbers runtime-owned
+  `COMPOSE_PROFILES` on re-run — the UI toggle owns bundled inference; worker
+  profiles (browser/voice/knowledge/observability) are preserved.
+- **Stale-image fix:** `start_bundled_backend` does a best-effort image pull
+  first (Ollama `412` class). `recovery-service/app/compose_client.py`.
+- Docs updated (`inference-backends.md`), commit `84d160e`.
+- **Deferred:** first-start pull-progress streaming (images are 1–10 GB; still a
+  bare "starting…"). Own focused pass — needs a progress endpoint.
 
-Much of this is **already built** — the focused session is mostly surfacing +
-fixing, not building from scratch:
-- **Lifecycle already works:** `recovery-service/app/inference/controller.py`
-  `start_bundled_backend` adds the compose profile → starts the container →
-  writes `inference.url`; `stop_bundled_backend` reverses it (removes the
-  profile, clears url). Toggling off already prevents auto-restart.
-- **Toggle UI already exists but is buried:** `BundledContainersCard` in
-  `dashboard/src/pages/settings/LocalInferenceSection.tsx` (Settings → AI &
-  Pipeline). Per-backend status dot, active badge, GPU-gating, Play/Stop.
-  Backends API: `GET/POST /api/v1/recovery/inference/backends|backend/{n}/start|backend/stop`.
+### Phase 1 — Backend inventory (the pool)
+Turn the single active local backend into a **list of named backend instances**.
+- Today: gateway resolves ONE active local backend — a single `_local`
+  wrapper reads `inference.backend` + `inference.url` from Redis at request time
+  (`llm-gateway/app/registry.py`). Remotes are one-off per type (`inference.url`,
+  `inference.lmstudio_url`, `inference.custom_url`).
+- Change: a pool where each entry is `{ id, kind: cloud|container|remote, url,
+  models[], enabled }`. **User-named remotes** (`remote-vllm-a`,
+  `remote-vllm-b`) so two of the same engine are distinguishable. Multiple
+  containers + multiple remotes coexist.
+- Gateway: per-backend model catalogs; `get_provider`/`_is_local_model` stop
+  assuming one `_local`. Config: `inference.backends` (plural) replaces the
+  scalar `inference.backend`/`inference.url`.
+- Managed on the **Models page** (add/remove/enable remotes, start/stop
+  containers, health, GPU). This is the pool everything else draws from.
 
-**Do-it-right tasks:**
-1. **Surface** bundled start/stop + active status on the **Models page**
-   (`/models`, top-level) alongside the models they serve; leave only
-   external-server config (LM Studio / custom URL) in Settings.
-2. **Toggle = single source of truth:** stop `./install` seeding
-   `inference-ollama` into `COMPOSE_PROFILES` (the one auto-start path); a
-   stopped backend never silently restarts.
-3. **First-start pull progress** (images are 1–10GB) instead of a bare
-   "starting…".
-4. **Bump the bundled Ollama image** — the pinned version is too old to pull
-   current models (`ornith:9b` → `412: requires a newer version of Ollama`).
+### Phase 2 — Role → (provider, model) chains
+Unify the scattered per-role model keys into one abstraction.
+- Today, role→model already exists but is **single-valued and scattered**:
+  `llm.default_chat_model`, `llm.classifier_model`, one global
+  `llm.cloud_fallback_model`, `pipeline.stage_model.{role}`, and
+  `pipeline.complexity_model_map`. Provider is implied by model name.
+- Change: every **role** maps to an **ordered, unlimited chain of explicit
+  `(provider, model)` pairs**, drawn from the Phase-1 pool. First
+  healthy/available wins; fall through on failure. Enforced at edit time — you
+  can only pick a configured provider + an installed/approved model.
+- Generalizes the gateway's `FallbackProvider` chain (today `[_local, ...cloud]`
+  from a strategy) into an explicit per-role, provider-pinned chain.
+- **Roll out on `chat` first** (highest value, simplest), then migrate the 5
+  Quartet stages (retiring `stage_model.*`, folding in the complexity dimension).
+- Configured in **Settings → AI** (a unified "Model Routing" editor replacing the
+  one-off pickers).
+
+### Phase 3 — UI de-duplication (#2)
+- **Root cause:** no division of labor between the Models page and Settings →
+  Local Inference. "Ollama running" renders in ≥3 AI-tab sections (LLM Routing
+  status dot, Local Inference's bundled card + selector + status card, Provider
+  Status as a local provider), and the Models page overlaps Local Inference.
+- **Decision:** Models page = **operations/inventory** (pool, start/stop,
+  models, GPU, health — a live console). Settings → AI = **policy** (routing
+  strategy, role chains, budgets, embeddings). They share a data dependency
+  (chain editor's options come from the pool), not a merge.
+- **One canonical backend-status component**, rendered once per page. Settings
+  stops re-deriving Ollama status; it links to Models for live state.
+- Models page stays — it does not fold into Settings.
+
+### Phase 4 — Pods, Coordinator loops & capacity meter (the big one)
+Refactors Nova's core execution model: chat and the task pipeline are separate
+paths today; this unifies them behind **chat as the front door**.
+- **Pods = capability bundles** chat summons on demand. The **Quartet becomes the
+  first pod** (`code` pod: Context → Task → Guardrail → Review → Decision). Add
+  user-defined pods (`research`, etc.). Each pod = a set of roles, each role
+  with its Phase-2 chain.
+- **Coordinator role** (new, distinct from Context): the hub of an *iterative*
+  pod. Owns the checklist/plan, routes context to each worker, collects status
+  back, runs the **done-check**, and **loops with feedback** when unresolved.
+  **Subsumes today's Decision agent** (promotes "escalate to human" → "loop the
+  pod, escalate only when stuck"). Context stays a *worker* the Coordinator calls.
+  - Today only a **one-hop** feedback loop exists (Guardrail/Review set
+    `feedback` → Task rerun via `_needs_rerun`, `pipeline/executor.py`). The
+    Coordinator generalizes that single hop into a bounded loop.
+- **Pods are linear (one pass) or iterative (Coordinator + loop).** Iterative
+  pods carry `max_iterations`, a budget, and an acceptance/checklist definition.
+- **Loop safety (non-negotiable, this is where agent loops fail):**
+  1. **Termination** = max-iterations **and** budget cap **and** *progress
+     detection* (compare checklist state across iterations; bail on stall — no
+     infinite "almost there" loops).
+  2. **Objective done-check** — anchor checklist items to verifiable signals
+     (tests pass, tool succeeded, file exists, endpoint 200s); LLM self-judgment
+     only as fallback for open-ended items.
+  3. **Loops multiply resource cost** (iterations × agents) → the capacity meter
+     is mandatory, and the iteration cap doubles as a resource guard.
+- **Capacity meter:** before a pod runs, project its model footprint vs.
+  hardware. Inputs already exist — model sizes (inventory) + VRAM/RAM
+  (`data/hardware.json` → Redis). Verdict: **fits concurrent / must serialize /
+  won't run**. Cloud pods = unconstrained (budget/rate only). Local pods on one
+  GPU are inherently **serial** (load → run role → evict → next), so an iterative
+  local pod feels every iteration. Pod config carries an execution mode.
+
+### Phase 5 (cross-cutting) — Intent classifier + learned routing
+- **Chat is the front door:** an intent-classification step decides "answer
+  directly" vs. "summon pod X." This is the desired end state (not
+  explicit-invocation) — Nova should learn what to do.
+- **Learn from outcomes:** the classifier and Coordinator emit signals (request →
+  pod → resolved in N iters / failed / escalated). Feed them back so routing
+  improves (which pod fits which request; realistic iteration budgets per task
+  type). Refinement, but **design the telemetry now** so the signal exists later.
+
+### Open decisions
+- **Pods = the 5 Quartet stages themselves, or user-defined groups distinct from
+  the Quartet?** (Affects whether Phase-2 migration replaces or nests under the
+  complexity dimension.)
+- **Chat model picker semantics** once the pool is plural — list every backend's
+  models, or list roles/chains?
+- **Learned routing storage** — where outcome signals live and how the classifier
+  consumes them (Postgres table + periodic re-fit vs. online).
+
+### Key code touchpoints
+- Gateway routing/registry: `llm-gateway/app/registry.py` (`_local`,
+  `_build_default_fallback`, `FallbackProvider`), `router.py`, `discovery.py`.
+- Backend lifecycle: `recovery-service/app/inference/controller.py`,
+  `compose_client.py`. Bundled defs in `BUNDLED_BACKENDS`.
+- Per-role model config: `orchestrator/app/pipeline/stage_model_resolver.py`,
+  `complexity_model_map.py`; Settings `LLMRoutingSection.tsx`,
+  `PipelineModelsSection.tsx`, `LocalInferenceSection.tsx`.
+- Pipeline/loop: `orchestrator/app/pipeline/executor.py` (`_apply_adaptive_skips`,
+  `_needs_rerun`, DecisionAgent), `state_machine.py`, `checkpoint.py`.
+- Hardware/capacity inputs: `recovery-service/app/inference/hardware.py`,
+  `data/hardware.json`, Redis `nova:system:hardware`.
