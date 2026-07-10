@@ -46,6 +46,7 @@ async def execute_tool(
     credential_id: UUID | None,
     args: dict,
     underlying: ToolCallable,
+    diff_preview: str | None = None,
 ) -> dict:
     """Single boundary for every external tool call.
 
@@ -80,6 +81,7 @@ async def execute_tool(
         reversible=reversible,
         actor_kind=actor_kind, actor_id=actor_id,
         tool_context=tool_context,
+        diff_preview=diff_preview,
     )
 
     if decision.action == "pending":
