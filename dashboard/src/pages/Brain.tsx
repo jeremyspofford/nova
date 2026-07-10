@@ -4,8 +4,8 @@ import { Activity, Brain as BrainIcon, MessageSquare, Pencil, Sparkles, Trash2 }
 import { apiFetch } from '../api'
 import {
   BrainMode, Camera, CATS, MemGraph, Retrieval, RetrievalEvent, Scene,
-  applyRetrieval, buildScene, heartOf, relaxStep, resetRelax, resultCentroid,
-  startRetrieval, tickNodes, Projected,
+  applyRetrieval, buildScene, heartOf, panWorld, relaxStep, resetRelax,
+  resultCentroid, sceneCentroid, startRetrieval, tickNodes, Projected,
 } from '../brain/engine'
 import { createSingularity, drawGalaxy, drawOrrery, FrameCtx, Singularity } from '../brain/renderers'
 import { createGraph2D, Graph2D } from '../brain/graph2d'
@@ -62,13 +62,17 @@ export function Brain() {
   const [selectedIdx, setSelectedIdx] = useState(-1)
   const [detailFull, setDetailFull] = useState(false)
   const [chatOpen, setChatOpen] = useState(() => ls.get('brain.chat', '0') === '1')
+  const [chatWidth, setChatWidth] = useState(() => {
+    const w = Number(ls.get('brain.chatWidth', '400'))
+    return Number.isFinite(w) ? Math.max(320, Math.min(720, w)) : 400
+  })
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<Scene | null>(null)
-  const camRef = useRef<Camera>({ yaw: 0.6, pitch: 0.32, dist: 300, fov: 640, auto: true, cx: 0, cy: 0, ox: 0 })
+  const camRef = useRef<Camera>({ yaw: 0.6, pitch: 0.32, dist: 300, fov: 640, auto: true, cx: 0, cy: 0, ox: 0, tx: 0, ty: 0, tz: 0 })
   const viewRef = useRef(view)
   const modeRef = useRef<BrainMode>('idle')
   const retrievalRef = useRef<Retrieval | null>(null)
@@ -88,6 +92,9 @@ export function Brain() {
   flagsRef.current = { colorByType, showLabels, drift }
   const chatOpenRef = useRef(chatOpen)
   chatOpenRef.current = chatOpen
+  const chatWidthRef = useRef(chatWidth)
+  chatWidthRef.current = chatWidth
+  const pannedRef = useRef(false)
   selectedRef.current = selectedIdx
 
   // build scene when the graph arrives
@@ -95,6 +102,7 @@ export function Brain() {
     if (!graphQuery.data) return
     resetRelax()
     sceneRef.current = buildScene(graphQuery.data)
+    pannedRef.current = false
     setSelectedIdx(-1)
   }, [graphQuery.data])
 
@@ -179,7 +187,7 @@ export function Brain() {
         if (v === 'orrery') rotTRef.current += dt
       }
       // keep the scene centered in the space the chat drawer leaves free
-      cam.ox += ((chatOpenRef.current ? -200 : 0) - cam.ox) * Math.min(1, dt * 6)
+      cam.ox += ((chatOpenRef.current ? -chatWidthRef.current / 2 : 0) - cam.ox) * Math.min(1, dt * 6)
       // respond envelope: ease in fast, fade out slow — no visible reset
       const ampTarget = modeRef.current === 'respond' ? 1 : 0
       const ampRate = ampTarget > respondAmpRef.current ? 3.5 : 0.8
@@ -187,6 +195,15 @@ export function Brain() {
 
       if (scene) {
         if (!scene.relaxDone) relaxStep(scene, 12)
+        // rest the orbit pivot on the layout's centre of mass until the user
+        // pans somewhere — rotation then spins around the current view centre
+        if (!pannedRef.current && (v === 'galaxy' || v === 'orrery')) {
+          const c = v === 'orrery' ? { x: 0, y: 0, z: 0 } : sceneCentroid(scene)
+          const e = Math.min(1, dt * 2.5)
+          cam.tx += (c.x - cam.tx) * e
+          cam.ty += (c.y - cam.ty) * e
+          cam.tz += (c.z - cam.tz) * e
+        }
         const r = retrievalRef.current
         if (r && applyRetrieval(scene, r, simT)) {
           centroidRef.current = resultCentroid(scene, r)
@@ -212,7 +229,7 @@ export function Brain() {
       if (v === 'singularity') {
         singRef.current!.draw(ctx, f, cam, flags.drift)
       } else if (v === 'graph' && scene) {
-        graphRef.current!.draw(ctx, scene, f, flags.drift, chatOpenRef.current ? -200 : 0)
+        graphRef.current!.draw(ctx, scene, f, flags.drift, chatOpenRef.current ? -chatWidthRef.current / 2 : 0)
       } else if (scene) {
         if (projRef.current.length !== scene.nodes.length) {
           projRef.current = new Array(scene.nodes.length).fill(null)
@@ -267,9 +284,16 @@ export function Brain() {
       }
       const cam = camRef.current
       if (ds.button === 2 || ds.button === 1) {
-        // right (or middle) drag: pan the view
-        cam.cx += dx
-        cam.cy += dy
+        // right (or middle) drag: pan. The singularity pans in screen space;
+        // the world views move the orbit target so the rotation pivot always
+        // follows the current view centre.
+        if (v === 'singularity') {
+          cam.cx += dx
+          cam.cy += dy
+        } else {
+          panWorld(cam, dx, dy)
+          pannedRef.current = true
+        }
       } else {
         // left drag: free rotation — no pitch stops, flip right over the poles
         cam.yaw += dx * 0.005
@@ -488,7 +512,12 @@ export function Brain() {
         </div>
       )}
 
-      <BrainChat open={chatOpen} onClose={() => { setChatOpen(false); ls.set('brain.chat', '0') }} />
+      <BrainChat
+        open={chatOpen}
+        width={chatWidth}
+        onWidthChange={w => { setChatWidth(w); ls.set('brain.chatWidth', String(w)) }}
+        onClose={() => { setChatOpen(false); ls.set('brain.chat', '0') }}
+      />
 
       {/* ── Memory modal: click = summary, "All details" = everything ── */}
       <Modal

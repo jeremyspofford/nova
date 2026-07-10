@@ -391,7 +391,9 @@ export function createSingularity(): Singularity {
     return {
       x: W / 2 + cam.cx + cam.ox + px * cosR - py * sinR,
       y: H * 0.52 + cam.cy + px * sinR + py * cosR,
-      front: Zc > 0,
+      // camera-space depth grows away from the viewer: Zc < 0 is NEARER than
+      // the hole — only that half of the disk may draw over the event horizon
+      front: Zc < 0,
     }
   }
   const diskXYZ = (a: number, u: number, scat: number): [number, number, number] => {
@@ -536,7 +538,7 @@ export function createSingularity(): Singularity {
           if (c.u <= 0.005) { comets.splice(k, 1); ringFlash = 1; continue }
           const q0 = diskXYZ(c.a - c.w * 0.12, c.u, 0), q1 = diskXYZ(c.a, c.u, 0)
           const a = projS(q0[0], q0[1], q0[2], cam, W, H), b = projS(q1[0], q1[1], q1[2], cam, W, H)
-          if (!a || !b) continue
+          if (!a || !b || !b.front) continue // far-side comets pass BEHIND the horizon
           ctx.strokeStyle = css(AMBER, 0.45)
           ctx.lineWidth = 1.8
           ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()

@@ -292,11 +292,15 @@ export interface Camera {
   dist: number
   fov: number
   auto: boolean
-  /** screen-space pan offset in CSS px (right-drag moves the view) */
+  /** screen-space pan offset in CSS px (singularity view only — world views pan the target) */
   cx: number
   cy: number
   /** layout offset: the page shifts the scene center when side panels open */
   ox: number
+  /** world-space orbit target — yaw/pitch rotate and zoom pivots around this point */
+  tx: number
+  ty: number
+  tz: number
 }
 
 export interface Projected { sx: number; sy: number; s: number; z: number }
@@ -306,13 +310,36 @@ export function project(
 ): Projected | null {
   const sy = Math.sin(cam.yaw), cy = Math.cos(cam.yaw)
   const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch)
-  const X = x * cy - z * sy
-  let Z = x * sy + z * cy
-  const Y = y * cp - Z * sp
-  Z = y * sp + Z * cp + cam.dist
+  const rx = x - cam.tx, ry = y - cam.ty, rz = z - cam.tz
+  const X = rx * cy - rz * sy
+  let Z = rx * sy + rz * cy
+  const Y = ry * cp - Z * sp
+  Z = ry * sp + Z * cp + cam.dist
   if (Z < 40) return null
   const s = cam.fov / Z
   return { sx: W / 2 + cam.cx + cam.ox + X * s, sy: H / 2 + cam.cy + Y * s, s, z: Z }
+}
+
+/** Right-drag pan for the 3D views: move the orbit target in the camera plane
+ *  so the scene follows the cursor and rotation always pivots around whatever
+ *  is currently centred in the view. */
+export function panWorld(cam: Camera, dx: number, dy: number): void {
+  const sy = Math.sin(cam.yaw), cy = Math.cos(cam.yaw)
+  const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch)
+  const k = cam.dist / cam.fov // world units per CSS px at the target depth
+  // screen-right and screen-down expressed in world space (inverse rotation)
+  cam.tx -= (cy * dx - sy * sp * dy) * k
+  cam.ty -= cp * dy * k
+  cam.tz -= (-sy * dx - cy * sp * dy) * k
+}
+
+/** Centre of mass of the galaxy layout — the natural resting orbit target. */
+export function sceneCentroid(scene: Scene): { x: number; y: number; z: number } {
+  const n = scene.nodes.length
+  if (!n) return { x: 0, y: 0, z: 0 }
+  let x = 0, y = 0, z = 0
+  for (const nd of scene.nodes) { x += nd.gx; y += nd.gy; z += nd.gz }
+  return { x: x / n, y: y / n, z: z / n }
 }
 
 // ── Cognition state: smooth wavefront + heartbeat ───────────────────────────
