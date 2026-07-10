@@ -37,6 +37,15 @@ DEFAULT_URLS = {
 
 READY_STATES = {"ready"}
 
+# Cloud provider prefixes. A request for one of these is never a local model, so
+# when the local provider is used as a fallback for it we substitute the local
+# default rather than 404 — otherwise a broken/misconfigured cloud model takes
+# the whole local-first chain down with it.
+_CLOUD_PREFIXES = frozenset({
+    "gemini", "gemini-adc", "cerebras", "openrouter", "openai", "anthropic",
+    "groq", "nvidia", "github", "chatgpt",
+})
+
 
 class LocalInferenceProvider(ModelProvider):
     """
@@ -180,15 +189,48 @@ class LocalInferenceProvider(ModelProvider):
             logger.warning("Unknown backend: %s", backend)
             return None
 
+    def _resolve_local_model(self, requested: str) -> str:
+        """Map a requested model to one the active local backend can actually serve.
+
+        The local provider sits first in the local-first fallback chain, so it
+        receives whatever model the caller asked for — often a cloud model
+        (e.g. 'cerebras/llama-3.3-70b') that isn't pulled locally. Rather than
+        404 and force the whole chain to fail, serve the configured local default
+        so local-first always returns an answer.
+        """
+        default = settings.default_ollama_model
+        if not requested:
+            return default
+        if self._local_models:
+            if requested in self._local_models:
+                return requested
+            # Discovery knows the local models and this isn't one → substitute.
+            return default if default in self._local_models else sorted(self._local_models)[0]
+        # No discovery data yet: only override an obvious cloud model, so a valid
+        # local name we simply haven't indexed still passes through.
+        if requested.split("/", 1)[0] in _CLOUD_PREFIXES:
+            return default
+        return requested
+
+    def _localize(self, request: CompleteRequest) -> CompleteRequest:
+        model = self._resolve_local_model(request.model)
+        if model != request.model:
+            logger.info(
+                "Local backend can't serve '%s'; using local default '%s'",
+                request.model, model,
+            )
+            return request.model_copy(update={"model": model})
+        return request
+
     async def complete(self, request: CompleteRequest) -> CompleteResponse:
         await self.refresh_config()
         self._assert_available()
-        return await self._delegate.complete(request)
+        return await self._delegate.complete(self._localize(request))
 
     async def stream(self, request: CompleteRequest) -> AsyncIterator[StreamChunk]:
         await self.refresh_config()
         self._assert_available()
-        async for chunk in self._delegate.stream(request):
+        async for chunk in self._delegate.stream(self._localize(request)):
             yield chunk
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
