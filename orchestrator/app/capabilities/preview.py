@@ -21,7 +21,7 @@ _PROVIDER_LABELS = {
     "github": "GitHub",
     "gitlab": "GitLab",
     "n8n": "n8n",
-    "pihole": "Pi-hole",
+    "adguard_home": "AdGuard Home",
     "docker": "Docker",
     "brave": "Brave Search",
     "cloudflare": "Cloudflare",

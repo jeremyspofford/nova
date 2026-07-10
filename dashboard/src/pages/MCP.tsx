@@ -10,9 +10,11 @@ import {
   updateMCPServer,
   deleteMCPServer,
   reloadMCPServer,
+  getMCPCatalog,
+  installMCPServer,
   type MCPServer,
+  type MCPCatalogEntry,
 } from '../api'
-import { MCP_CATALOG, ALL_TAGS, type CatalogEntry } from '../lib/mcp-catalog'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Card, Button, Input, Label, Select, Badge, StatusDot,
@@ -50,6 +52,13 @@ const DEFAULT_FORM: PrefillValues = {
   url: '',
   enabled: true,
   envPairs: [],
+}
+
+// Mirror of app.mcp_catalog.slugify — keeps the "hide installed entries" check
+// consistent with the server-side slug used as mcp_servers.name.
+function slugify(name: string): string {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || 'integration'
 }
 
 // ── Server form (add or edit) ─────────────────────────────────────────────────
@@ -439,17 +448,17 @@ function CatalogCard({
   entry,
   onInstall,
 }: {
-  entry: CatalogEntry
-  onInstall: (entry: CatalogEntry) => void
+  entry: MCPCatalogEntry
+  onInstall: (entry: MCPCatalogEntry) => void
 }) {
   return (
     <Card variant="hoverable" className="p-4 flex flex-col">
       <div className="flex-1">
         <div className="flex items-start justify-between gap-2">
-          <span className="text-compact font-medium text-content-primary">{entry.displayName}</span>
-          {entry.docs && (
+          <span className="text-compact font-medium text-content-primary">{entry.name}</span>
+          {entry.docs_url && (
             <a
-              href={entry.docs}
+              href={entry.docs_url}
               target="_blank"
               rel="noopener noreferrer"
               onClick={e => e.stopPropagation()}
@@ -462,14 +471,116 @@ function CatalogCard({
         </div>
         <p className="mt-1 text-caption text-content-secondary leading-relaxed">{entry.description}</p>
         <div className="mt-2 flex flex-wrap gap-1">
-          {entry.tags.map(tag => (
-            <Badge key={tag} color="neutral" size="sm">{tag}</Badge>
-          ))}
+          <Badge color="neutral" size="sm">{entry.category}</Badge>
+          {entry.transport === 'http' && <Badge color="neutral" size="sm">http</Badge>}
         </div>
       </div>
       <Button size="sm" className="w-full mt-4" onClick={() => onInstall(entry)}>
         Install
       </Button>
+    </Card>
+  )
+}
+
+// ── Install dialog (driven by a backend catalog template's fields) ────────────
+
+function InstallDialog({
+  entry,
+  onDone,
+}: {
+  entry: MCPCatalogEntry
+  onDone: () => void
+}) {
+  const qc = useQueryClient()
+  const fields = entry.fields ?? []
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {}
+    for (const f of fields) init[f.key] = f.default ?? ''
+    return init
+  })
+  const [connectNow, setConnectNow] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: () => installMCPServer({
+      template_id: entry.id,
+      name: entry.name,
+      fields: values,
+      enabled: connectNow,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mcp-servers'] })
+      onDone()
+    },
+  })
+
+  const missingRequired = fields.filter(f => (f.required ?? true) && !values[f.key].trim())
+
+  return (
+    <Card className="p-5 space-y-4">
+      <p className="text-compact font-medium text-content-primary">Install {entry.name}</p>
+      <p className="text-caption text-content-tertiary">{entry.description}</p>
+
+      {fields.length === 0 && (
+        <p className="text-caption text-content-tertiary">No configuration required.</p>
+      )}
+
+      {fields.map(f => (
+        <div key={f.key}>
+          <Label>
+            {f.label}
+            {f.secret && <span className="ml-1 text-caption text-content-tertiary">(stored encrypted)</span>}
+            {(f.required ?? true) && <span className="ml-0.5 text-danger">*</span>}
+          </Label>
+          <Input
+            type={f.secret ? 'password' : 'text'}
+            value={values[f.key]}
+            onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
+            placeholder={f.placeholder ?? ''}
+            className="font-mono text-caption"
+          />
+          {f.help && <p className="mt-0.5 text-caption text-content-tertiary">{f.help}</p>}
+        </div>
+      ))}
+
+      {entry.requires && (
+        <p className="text-caption text-content-tertiary">Requires: {entry.requires}</p>
+      )}
+
+      {missingRequired.length > 0 && (
+        <div className="rounded-lg border border-warning/20 bg-warning-dim px-3 py-2">
+          <p className="text-caption text-amber-700 dark:text-amber-400">
+            Fill in required fields:{' '}
+            <span className="font-mono font-medium">{missingRequired.map(f => f.key).join(', ')}</span>
+          </p>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-t border-border-subtle pt-3">
+        <label className="flex items-center gap-2 text-caption text-content-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={connectNow}
+            onChange={e => setConnectNow(e.target.checked)}
+            className="rounded"
+          />
+          Connect immediately after installing
+        </label>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onDone}>Cancel</Button>
+          <Button
+            icon={<Plus size={13} />}
+            onClick={() => mutation.mutate()}
+            disabled={missingRequired.length > 0}
+            loading={mutation.isPending}
+          >
+            Install
+          </Button>
+        </div>
+      </div>
+
+      {mutation.isError && (
+        <p className="text-caption text-danger">{String(mutation.error)}</p>
+      )}
     </Card>
   )
 }
@@ -488,17 +599,23 @@ const HELP_ENTRIES = [
 export function MCPContent() {
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
-  const [prefill, setPrefill] = useState<PrefillValues | null>(null)
   const [formKey, setFormKey] = useState(0)
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null)
+  const [installTarget, setInstallTarget] = useState<MCPCatalogEntry | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
 
   const { data: servers = [], isLoading, error } = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: getMCPServers,
     refetchInterval: 15_000,
+  })
+
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['mcp-catalog'],
+    queryFn: getMCPCatalog,
+    staleTime: 5 * 60_000,
   })
 
   const deleteMutation = useMutation({
@@ -516,45 +633,23 @@ export function MCPContent() {
 
   const handleFormDone = () => {
     setShowForm(false)
-    setPrefill(null)
     qc.invalidateQueries({ queryKey: ['mcp-servers'] })
   }
 
-  const handleInstall = (entry: CatalogEntry) => {
-    const envPairs: EnvPair[] = entry.env.map(e => ({
-      key: e.key,
-      value: e.default ?? '',
-      required: e.required,
-      label: e.label,
-      hint: e.description,
-    }))
-    const pf: PrefillValues = {
-      name: entry.name,
-      description: entry.description,
-      transport: 'stdio',
-      command: entry.command,
-      args: entry.args.join(' '),
-      url: '',
-      enabled: true,
-      envPairs,
-      note: entry.note,
-    }
-    setPrefill(pf)
-    setFormKey(k => k + 1)
-    setShowForm(true)
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
-  }
+  const handleInstall = (entry: MCPCatalogEntry) => setInstallTarget(entry)
 
-  const installedNames = new Set(servers.map(s => s.name.toLowerCase()))
+  const allTags = Array.from(new Set(catalog.map(c => c.category))).sort()
 
-  const filteredCatalog = MCP_CATALOG.filter(entry => {
-    if (installedNames.has(entry.name.toLowerCase())) return false
-    const matchesTag = !tagFilter || entry.tags.includes(tagFilter)
+  const installedNames = new Set(servers.map(s => slugify(s.name)))
+
+  const filteredCatalog = catalog.filter(entry => {
+    if (installedNames.has(slugify(entry.name))) return false
+    const matchesTag = !tagFilter || entry.category === tagFilter
     const q = search.toLowerCase()
     const matchesSearch = !q ||
-      entry.displayName.toLowerCase().includes(q) ||
+      entry.name.toLowerCase().includes(q) ||
       entry.description.toLowerCase().includes(q) ||
-      entry.tags.some(t => t.includes(q))
+      entry.category.includes(q)
     return matchesTag && matchesSearch
   })
 
@@ -566,7 +661,6 @@ export function MCPContent() {
         <Button
           icon={<Plus size={14} />}
           onClick={() => {
-            setPrefill(null)
             setFormKey(k => k + 1)
             setShowForm(v => !v)
           }}
@@ -580,9 +674,18 @@ export function MCPContent() {
         <div ref={formRef}>
           <ServerForm
             key={formKey}
-            initialValues={prefill ?? undefined}
             onDone={handleFormDone}
-            title={prefill ? `Install: ${prefill.name}` : 'New MCP Server'}
+            title="New MCP Server"
+          />
+        </div>
+      )}
+
+      {/* Install-from-catalog dialog */}
+      {installTarget && (
+        <div ref={formRef}>
+          <InstallDialog
+            entry={installTarget}
+            onDone={() => setInstallTarget(null)}
           />
         </div>
       )}
@@ -641,7 +744,7 @@ export function MCPContent() {
                 >
                   all
                 </button>
-                {ALL_TAGS.map(tag => (
+                {allTags.map(tag => (
                   <button
                     key={tag}
                     onClick={() => setTagFilter(t => (t === tag ? null : tag))}

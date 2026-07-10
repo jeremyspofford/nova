@@ -505,6 +505,49 @@ export const reloadMCPServer = (id: string) =>
     { method: 'POST' },
   )
 
+// ── MCP integration catalog (one-click installs, backend-curated) ─────────────
+
+export interface MCPCatalogField {
+  key: string
+  label: string
+  placeholder?: string
+  secret?: boolean
+  required?: boolean
+  help?: string
+  default?: string
+}
+
+export interface MCPCatalogEntry {
+  id: string
+  name: string
+  category: string
+  description: string
+  transport: 'stdio' | 'http'
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  env_template?: Record<string, string>
+  fields?: MCPCatalogField[]
+  tool_blast_radius?: Record<string, 'read' | 'mutate' | 'destruct'>
+  provider_kind?: string
+  requires?: string
+  docs_url?: string
+}
+
+export const getMCPCatalog = () =>
+  apiFetch<MCPCatalogEntry[]>('/api/v1/mcp-servers/catalog')
+
+export const installMCPServer = (payload: {
+  template_id: string
+  name?: string
+  fields: Record<string, string>
+  enabled?: boolean
+}) =>
+  apiFetch<MCPServer & { connected: boolean }>('/api/v1/mcp-servers/install', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
 // ── Agent Endpoints (ACP/A2A outbound delegation) ────────────────────────────
 
 export interface AgentEndpoint {

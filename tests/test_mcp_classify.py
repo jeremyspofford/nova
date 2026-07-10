@@ -43,7 +43,7 @@ def test_write_verbs_require_consent(clf):
 def test_destructive_verbs(clf):
     for name in (
         "mcp__ha__lock.unlock",
-        "mcp__pihole__flush_blocklist",
+        "mcp__adguard__flush_blocklist",
         "mcp__fs__delete_file",
         "mcp__x__get_and_delete",  # destruct beats read when both tokens present
     ):

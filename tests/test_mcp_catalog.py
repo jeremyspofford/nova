@@ -98,3 +98,38 @@ def test_get_template_is_isolated_copy(cat):
     a["name"] = "MUTATED"
     b = cat.get_template("n8n")
     assert b["name"] == "n8n"
+
+
+def test_optional_field_default_is_applied(cat):
+    # gitlab api_url is optional with default https://gitlab.com
+    tpl = cat.get_template("gitlab")
+    payload, _ = cat.render_install(tpl, "gitlab", {"token": "glpat_x"})
+    assert payload["env"]["GITLAB_API_URL"] == "https://gitlab.com"
+    # and an explicit value overrides the default
+    payload, _ = cat.render_install(tpl, "gitlab", {"token": "glpat_x", "api_url": "https://git.example.com"})
+    assert payload["env"]["GITLAB_API_URL"] == "https://git.example.com"
+
+
+def test_optional_field_no_value_no_default_drops_env(cat):
+    # firecrawl's two fields are optional with no default — omitting both
+    # must produce no env vars (and not the string "None").
+    tpl = cat.get_template("firecrawl")
+    payload, secrets = cat.render_install(tpl, "firecrawl", {})
+    assert payload["env"] == {}
+    assert secrets == []
+    # providing only the URL keeps just that var
+    payload, _ = cat.render_install(tpl, "firecrawl", {"api_url": "http://localhost:3002"})
+    assert payload["env"] == {"FIRECRAWL_API_URL": "http://localhost:3002"}
+
+
+def test_ported_entries_cover_legacy_catalog(cat):
+    # Every integration that used to live only in the client-side catalog is now
+    # in the backend catalog — one source of truth.
+    legacy = {
+        "git", "github", "gitlab", "fetch", "firecrawl", "puppeteer",
+        "postgres", "sqlite", "memory", "sequential-thinking",
+        "slack", "cloudflare", "tailscale",
+    }
+    present = {t["id"] for t in cat.list_catalog()}
+    missing = legacy - present
+    assert not missing, f"Ported entries missing from backend catalog: {missing}"

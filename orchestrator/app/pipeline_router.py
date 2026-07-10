@@ -962,7 +962,7 @@ class MCPInstallRequest(BaseModel):
 
 @router.get("/api/v1/mcp-servers/catalog")
 async def mcp_integration_catalog(_admin: AdminDep) -> list[dict]:
-    """Curated one-click MCP integration templates (Home Assistant, n8n, Pi-hole, …). Admin-only."""
+    """Curated one-click MCP integration templates (Home Assistant, n8n, AdGuard Home, …). Admin-only."""
     from app.mcp_catalog import list_catalog
     return list_catalog()
 

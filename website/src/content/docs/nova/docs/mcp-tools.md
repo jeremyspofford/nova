@@ -29,12 +29,26 @@ Nova ships with a built-in catalog of pre-configured MCP servers. You can add an
 | **Git** | Inspect and operate on Git repositories -- log, diff, status, commit | `mcp-server-git` (uvx) |
 | **Memory** | Persistent key-value memory store that survives across sessions | `@modelcontextprotocol/server-memory` |
 
+### Smart home and automation
+
+| Server | Description | Package |
+|--------|-------------|---------|
+| **Home Assistant** | Read sensor state and control lights, climate, covers, and locks | `hass-mcp` (uvx) |
+| **n8n** | List, inspect, create, and run n8n workflows | `n8n-mcp` |
+
+### Network
+
+| Server | Description | Package |
+|--------|-------------|---------|
+| **AdGuard Home** | Query DNS stats and manage filtering, clients, and blocked services | `@samik081/mcp-adguard-home` |
+
 ### Development
 
 | Server | Description | Package |
 |--------|-------------|---------|
 | **GitHub** | Manage repos, issues, pull requests, and code search | `@modelcontextprotocol/server-github` |
 | **GitLab** | Interact with GitLab projects, merge requests, and issues | `@modelcontextprotocol/server-gitlab` |
+| **Docker** | List, inspect, and manage containers and images on the host | `docker-mcp` (uvx) |
 
 ### Web and search
 
@@ -42,6 +56,7 @@ Nova ships with a built-in catalog of pre-configured MCP servers. You can add an
 |--------|-------------|---------|
 | **Brave Search** | Web and local search via the Brave Search API | `@modelcontextprotocol/server-brave-search` |
 | **Fetch** | Fetch URLs and convert web pages to Markdown | `mcp-server-fetch` (uvx) |
+| **Firecrawl** | Web scraping, crawling, and search with JS rendering | `firecrawl-mcp` |
 | **Puppeteer** | Browser automation -- screenshot, click, fill forms, scrape | `@modelcontextprotocol/server-puppeteer` |
 
 ### Databases
@@ -117,9 +132,12 @@ Some MCP servers require API keys or configuration via environment variables. Th
 
 | Server | Required variables |
 |--------|--------------------|
+| AdGuard Home | `ADGUARD_URL`, `ADGUARD_USERNAME`, `ADGUARD_PASSWORD` |
 | Brave Search | `BRAVE_API_KEY` |
 | GitHub | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | GitLab | `GITLAB_PERSONAL_ACCESS_TOKEN`, optionally `GITLAB_API_URL` |
+| Home Assistant | `HA_URL`, `HA_TOKEN` |
+| n8n | `N8N_API_URL`, `N8N_API_KEY` |
 | Slack | `SLACK_BOT_TOKEN`, `SLACK_TEAM_ID` |
 | Cloudflare | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 | Tailscale | `TAILSCALE_API_KEY`, `TAILSCALE_TAILNET` |
