@@ -31,6 +31,31 @@ logger = logging.getLogger(__name__)
 THINK_JSON_MAX_ATTEMPTS = 2
 
 
+def extract_first_json(text: str) -> Any | None:
+    """First complete JSON object/array embedded in text, or None.
+
+    Local models' second-most-common JSON defect (after invalid escapes):
+    a perfectly valid JSON value wrapped in prose — a preamble before it,
+    an explanation after it ("Extra data"), or two values concatenated.
+    Scan for the first '{'/'[' that raw_decode accepts and take that value.
+    """
+    dec = json.JSONDecoder()
+    idx = 0
+    while True:
+        starts = [p for p in (text.find("{", idx), text.find("[", idx)) if p != -1]
+        if not starts:
+            return None
+        start = min(starts)
+        try:
+            obj, _end = dec.raw_decode(text, start)
+        except json.JSONDecodeError:
+            idx = start + 1
+            continue
+        if isinstance(obj, (dict, list)):
+            return obj
+        idx = start + 1
+
+
 # ── Pipeline state ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -274,7 +299,16 @@ class BaseAgent:
                         f"[{self.ROLE}] JSON accepted after invalid-escape repair"
                     )
                 except json.JSONDecodeError:
-                    if attempt + 1 >= THINK_JSON_MAX_ATTEMPTS:
+                    # Valid JSON buried in prose (preamble / trailing chatter /
+                    # concatenated values) — salvage the first complete value
+                    # before burning an LLM correction round-trip.
+                    salvaged = extract_first_json(cleaned)
+                    if salvaged is not None:
+                        logger.info(
+                            f"[{self.ROLE}] JSON accepted after extracting first value"
+                        )
+                        parsed = salvaged
+                    elif attempt + 1 >= THINK_JSON_MAX_ATTEMPTS:
                         logger.error(
                             f"[{self.ROLE}] think_json failed after {THINK_JSON_MAX_ATTEMPTS} "
                             f"attempts{' ('+purpose+')' if purpose else ''}: {exc}"
@@ -284,23 +318,23 @@ class BaseAgent:
                         raise ValueError(
                             f"Agent {self.ROLE} could not produce valid JSON: {exc}"
                         ) from exc
-
-                    logger.warning(
-                        f"[{self.ROLE}] JSON parse error on attempt {attempt + 1}, retrying with feedback"
-                    )
-                    # Append bad output + corrective message before retry
-                    messages = messages + [
-                        {"role": "assistant", "content": raw},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Your previous response was not valid JSON ({exc}). "
-                                "Please respond ONLY with valid JSON — no markdown fences, "
-                                "no preamble, no explanation. Just the JSON object."
-                            ),
-                        },
-                    ]
-                    continue
+                    else:
+                        logger.warning(
+                            f"[{self.ROLE}] JSON parse error on attempt {attempt + 1}, retrying with feedback"
+                        )
+                        # Append bad output + corrective message before retry
+                        messages = messages + [
+                            {"role": "assistant", "content": raw},
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Your previous response was not valid JSON ({exc}). "
+                                    "Please respond ONLY with valid JSON — no markdown fences, "
+                                    "no preamble, no explanation. Just the JSON object."
+                                ),
+                            },
+                        ]
+                        continue
 
             # ── Schema validation (if provided) ──────────────────────────
             if output_schema is None:
