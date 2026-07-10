@@ -20,7 +20,7 @@ import {
 import {
   AMBER, Scene, TEAL, TEAL_BRIGHT, css, edgeFlow, heartOf, mix,
 } from './engine'
-import { FrameCtx, applyGrain, paintNebula } from './renderers'
+import { FrameCtx, GOLDW, applyGrain, paintNebula } from './renderers'
 
 interface SimNode {
   i: number
@@ -42,6 +42,8 @@ export interface Graph2D {
   zoomAt(mx: number, my: number, deltaY: number): void
   /** node index under the cursor, or -1 */
   pick(mx: number, my: number): number
+  /** current screen position of a node (for overlays), or null */
+  screenOf(i: number): { x: number; y: number } | null
   /** re-fit the whole graph into view on the next frame */
   requestFit(): void
   reset(): void
@@ -57,7 +59,7 @@ export function createGraph2D(): Graph2D {
   let scale = 1, tx = 0, ty = 0
   let ox = 0                    // eased horizontal offset (chat drawer)
   let wantFit = true
-  const screen: { x: number; y: number; r: number }[] = []
+  const screen: ({ x: number; y: number; r: number } | null)[] = []
 
   function build(scene: Scene) {
     bound = scene
@@ -67,6 +69,13 @@ export function createGraph2D(): Graph2D {
       x: n.gx * 1.7 + (n.phase - Math.PI) * 2,
       y: n.gz * 1.7,
     }))
+    if (scene.soulIdx >= 0) {
+      // the soul anchors the layout: fixed at the origin, everything grows around it
+      nodes[scene.soulIdx].x = 0
+      nodes[scene.soulIdx].y = 0
+      nodes[scene.soulIdx].fx = 0
+      nodes[scene.soulIdx].fy = 0
+    }
     links = scene.edges.map(([a, b]) => ({ source: a, target: b }))
 
     sim = forceSimulation(nodes)
@@ -111,6 +120,11 @@ export function createGraph2D(): Graph2D {
       ty = my - w.y * scale
     },
 
+    screenOf(i) {
+      const p = screen[i]
+      return p ? { x: p.x, y: p.y } : null
+    },
+
     pick(mx, my) {
       let best = -1, bd = 16
       for (let i = 0; i < screen.length; i++) {
@@ -147,10 +161,12 @@ export function createGraph2D(): Graph2D {
       if (screen.length !== nodes.length) screen.length = nodes.length
       for (let k = 0; k < nodes.length; k++) {
         const sn = nodes[k]
-        screen[sn.i] = {
+        const n = scene.nodes[sn.i]
+        screen[sn.i] = f.hideJournals && n.cat.key === 'episode' ? null : {
           x: tx + ox + sn.x * scale,
           y: ty + sn.y * scale,
-          r: Math.max(1.4, nodeR(scene.nodes[sn.i].degree) * scale),
+          // journals are the secondary tier: visibly smaller than concepts
+          r: Math.max(1.4, nodeR(n.degree) * (n.cat.key === 'episode' ? 0.7 : 1) * scale),
         }
       }
 
@@ -158,12 +174,15 @@ export function createGraph2D(): Graph2D {
       const focus = f.hovered >= 0 ? f.hovered : f.selected
       const near = new Set<number>()
       if (focus >= 0) { near.add(focus); for (const j of scene.nodes[focus].out) near.add(j) }
-      const dim = (i: number, j?: number) =>
-        focus < 0 ? 1 : (near.has(i) && (j === undefined || near.has(j)) ? 1 : 0.12)
+      const dim = (i: number, j?: number) => {
+        const spot = focus < 0 ? 1 : (near.has(i) && (j === undefined || near.has(j)) ? 1 : 0.12)
+        const hit = !f.search || f.search.has(i) || (j !== undefined && f.search.has(j)) ? 1 : 0.15
+        return spot * hit
+      }
 
       const heart = heartOf(f.simT)
 
-      // ── edges ──
+      // ── edges: endpoint-tinted gradients with a gentle bow ──
       ctx.lineCap = 'round'
       for (const [i, j] of scene.edges) {
         const a = screen[i], b = screen[j]
@@ -176,10 +195,23 @@ export function createGraph2D(): Graph2D {
           ctx.strokeStyle = css(AMBER, Math.min(0.85, (0.12 + act * 0.75)) * d)
           ctx.lineWidth = (1 + act * 1.4)
         } else {
-          ctx.strokeStyle = css(TEAL, 0.16 * d)
+          const ca = f.colorByType ? scene.nodes[i].cat.rgb : (scene.nodes[i].degree > 6 ? TEAL_BRIGHT : TEAL)
+          const cb = f.colorByType ? scene.nodes[j].cat.rgb : (scene.nodes[j].degree > 6 ? TEAL_BRIGHT : TEAL)
+          const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y)
+          g.addColorStop(0, css(ca, 0.26 * d))
+          g.addColorStop(0.5, css(mix(ca, cb, 0.5), 0.07 * d))
+          g.addColorStop(1, css(cb, 0.26 * d))
+          ctx.strokeStyle = g
           ctx.lineWidth = 1
         }
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+        const ddx = b.x - a.x, ddy = b.y - a.y
+        const len = Math.hypot(ddx, ddy) || 1
+        const bow = Math.min(12, len * 0.06)
+        ctx.beginPath()
+        ctx.moveTo(a.x, a.y)
+        ctx.quadraticCurveTo(mx - (ddy / len) * bow, my + (ddx / len) * bow, b.x, b.y)
+        ctx.stroke()
       }
 
       // ── nodes ──
@@ -190,16 +222,19 @@ export function createGraph2D(): Graph2D {
         const wave = f.reduceMotion ? n.near * 0.45 * f.respondAmp
           : n.near * f.respondAmp * (0.22 + 0.88 * heart)
         const glow = Math.min(1, Math.max(n.act, wave, n.rim * (0.26 + 0.24 * heart)))
-        const rgb = f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
+        const isSoul = i === scene.soulIdx
+        const rgb = isSoul ? mix(GOLDW, [255, 255, 255], 0.25)
+          : f.colorByType ? n.cat.rgb : (n.degree > 6 ? TEAL_BRIGHT : TEAL)
         const col = glow > 0.02 ? mix(rgb, AMBER, glow * 0.9) : rgb
-        const d = dim(i)
-        const r = p.r * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1) * (1 + glow * 0.5)
+        const d = dim(i) * (n.cat.key === 'episode' ? 0.65 : 1)
+        const r = p.r * (isSoul ? 1.5 : 1)
+          * (i === f.selected ? 1.35 : 1) * (i === f.hovered ? 1.2 : 1) * (1 + glow * 0.5)
 
-        // soft halo
-        const haloR = r * (2.6 + glow * 3)
+        // soft halo — tight at rest; the big glow is earned by cognition
+        const haloR = r * (1.7 + glow * 3.2) * (n.degree > 6 ? 1.15 : 1)
         const hg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR)
-        hg.addColorStop(0, css(col, (0.28 + glow * 0.5) * d))
-        hg.addColorStop(0.5, css(col, 0.10 * d))
+        hg.addColorStop(0, css(col, (0.22 + glow * 0.5) * d))
+        hg.addColorStop(0.4, css(col, 0.07 * d))
         hg.addColorStop(1, css(col, 0))
         ctx.fillStyle = hg
         ctx.beginPath(); ctx.arc(p.x, p.y, haloR, 0, 7); ctx.fill()
@@ -212,17 +247,27 @@ export function createGraph2D(): Graph2D {
         ctx.stroke()
       }
 
-      // selection ring
-      if (f.selected >= 0 && screen[f.selected]) {
-        const p = screen[f.selected]
-        ctx.strokeStyle = css(TEAL_BRIGHT, 0.9)
-        ctx.lineWidth = 1.4
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 6, 0, 7); ctx.stroke()
+      // the soul wears a fine double ring — identity, not activity
+      const soulP = bound && bound.soulIdx >= 0 ? screen[bound.soulIdx] : null
+      if (soulP) {
+        ctx.strokeStyle = css(GOLDW, 0.5)
+        ctx.lineWidth = 1
+        ctx.beginPath(); ctx.arc(soulP.x, soulP.y, soulP.r * 1.5 + 6, 0, 7); ctx.stroke()
+        ctx.strokeStyle = css(GOLDW, 0.16)
+        ctx.beginPath(); ctx.arc(soulP.x, soulP.y, soulP.r * 1.5 + 10, 0, 7); ctx.stroke()
       }
 
-      // ── labels: zoom-gated, plus always for hover/selection/hubs ──
+      // selection ring
+      const selP = f.selected >= 0 ? screen[f.selected] : null
+      if (selP) {
+        ctx.strokeStyle = css(TEAL_BRIGHT, 0.9)
+        ctx.lineWidth = 1.4
+        ctx.beginPath(); ctx.arc(selP.x, selP.y, selP.r + 6, 0, 7); ctx.stroke()
+      }
+
+      // ── labels: zoom-gated, plus always for hover/selection/hubs/hits ──
       const labelAlpha = Math.max(0, Math.min(1, (scale - 0.55) / 0.5))
-      if (labelAlpha > 0.02 || f.showLabels || f.hovered >= 0 || f.selected >= 0) {
+      if (labelAlpha > 0.02 || f.showLabels || f.hovered >= 0 || f.selected >= 0 || f.search) {
         ctx.font = '11px "Geist Mono Variable", "Geist Mono", monospace'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
@@ -234,12 +279,15 @@ export function createGraph2D(): Graph2D {
           if (!p) continue
           const n = scene.nodes[i]
           const focused = i === f.hovered || i === f.selected
-          const show = focused
-            || ((f.showLabels || labelAlpha > 0.02) && (n.degree >= 4 || labelAlpha > 0.6))
+          const hit = f.search?.has(i) ?? false
+          // journals join the bulk label pass only when fully zoomed in
+          const bulk = (f.showLabels || labelAlpha > 0.02)
+            && (n.cat.key === 'episode' ? labelAlpha > 0.85 : (n.degree >= 4 || labelAlpha > 0.6))
+          const show = focused || hit || bulk || i === scene.soulIdx
           if (!show) continue
-          const a = focused ? 0.96 : labelAlpha * (n.degree >= 6 ? 0.85 : 0.6) * dim(i)
+          const a = focused || hit ? 0.96 : labelAlpha * (n.degree >= 6 ? 0.85 : 0.6) * dim(i)
           if (a < 0.03) continue
-          const label = n.title.length > 26 ? n.title.slice(0, 25) + '…' : n.title
+          const label = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label
           ctx.fillStyle = STONE + a + ')'
           ctx.fillText(label, p.x, p.y + p.r + 4)
         }

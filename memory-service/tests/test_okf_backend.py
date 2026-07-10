@@ -230,7 +230,7 @@ class TestProvenanceStats:
                           metadata={"okf": {"type": "note", "title": "S1"}}))
         stats = run(backend.stats())
         assert stats["provider_name"] == "okf"
-        assert stats["total_items"] == 1
+        assert stats["total_items"] == 2  # the written note + the seeded soul
 
     def test_explain(self, backend: OkfBackend):
         run(backend.write("the mitochondria is the powerhouse of the cell",
@@ -256,6 +256,54 @@ class TestMaintenance:
         out = run(backend.consolidate())
         assert out["journals_archived"] == 1
         assert (backend.store.root / "journal" / "archive" / journal.name).exists()
+
+
+class TestSoulSeed:
+    def test_soul_seeded_and_in_graph(self, backend: OkfBackend):
+        assert (backend.store.root / "self" / "soul.md").exists()
+        g = run(backend.graph())
+        souls = [n for n in g["nodes"] if n["type"] == "self"]
+        assert len(souls) == 1
+        assert souls[0]["title"] == "Soul"
+        assert souls[0]["id"] == "self/soul.md"
+
+
+class TestJournalNoiseGate:
+    """Near-identical digests (same text modulo numbers) must not flood the
+    journal — cortex no-op cycles are the canonical offender."""
+
+    def _entries(self, backend: OkfBackend, memory_id: str) -> int:
+        body = backend.store.abs(memory_id).read_text()
+        return body.count("\n## ")
+
+    def test_repeat_modulo_digits_suppressed(self, backend: OkfBackend):
+        first = run(backend.write(
+            "Cortex cycle #28673: Drive 'serve' won (urgency 0.20). No stale goals.",
+            source_type="cortex"))
+        second = run(backend.write(
+            "Cortex cycle #28674: Drive 'serve' won (urgency 0.21). No stale goals.",
+            source_type="cortex"))
+        assert first.item_ids and not second.item_ids
+        assert self._entries(backend, first.item_ids[0]) == 1
+
+    def test_novel_text_not_suppressed(self, backend: OkfBackend):
+        first = run(backend.write("Decided to use pgvector for search.",
+                                  source_type="cortex"))
+        second = run(backend.write("User prefers the galaxy view by default.",
+                                   source_type="cortex"))
+        assert first.item_ids and second.item_ids
+        assert self._entries(backend, first.item_ids[0]) == 2
+
+    def test_sources_keyed_separately(self, backend: OkfBackend):
+        run(backend.write("status: 3 items processed", source_type="cortex"))
+        other = run(backend.write("status: 3 items processed", source_type="intel"))
+        assert other.item_ids
+
+    def test_concept_writes_never_suppressed(self, backend: OkfBackend):
+        meta = {"okf": {"type": "note", "title": "Same title"}}
+        first = run(backend.write("identical body 1", source_type="chat", metadata=meta))
+        second = run(backend.write("identical body 1", source_type="chat", metadata=meta))
+        assert first.item_ids and second.item_ids
 
 
 def test_slugify():

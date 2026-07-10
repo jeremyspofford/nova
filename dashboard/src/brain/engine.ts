@@ -73,6 +73,18 @@ const TYPE_TO_CAT: Record<string, string> = {
 export const catFor = (type: string): CatStyle =>
   CATS[TYPE_TO_CAT[(type || '').toLowerCase()] ?? 'topic']
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const DATE_RE = /(\d{4})-(\d{2})-(\d{2})/
+
+/** Journals are secondary in every view: "Journal 2026-07-09" reads as "Jul 9". */
+export function displayLabel(title: string, id: string, cat: CatStyle): string {
+  if (cat.key !== 'episode') return title
+  const m = DATE_RE.exec(title) ?? DATE_RE.exec(id)
+  if (!m) return title
+  const short = `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}`
+  return Number(m[1]) === new Date().getFullYear() ? short : `${short} ’${m[1].slice(2)}`
+}
+
 export const TEAL = hex2rgb('#19A89E')
 export const TEAL_BRIGHT = hex2rgb('#5CE8D0')
 export const AMBER: [number, number, number] = [251, 191, 36]
@@ -87,6 +99,8 @@ export const mix = (a: readonly number[], b: readonly number[], t: number): [num
 export interface BrainNode extends MemGraphNode {
   idx: number
   cat: CatStyle
+  /** display label — journals shorten to "Jul 9", concepts keep their title */
+  label: string
   out: number[]
   // live coordinates — the ACTIVE renderer writes these every frame
   x: number; y: number; z: number
@@ -105,6 +119,8 @@ export interface Scene {
   nodes: BrainNode[]
   edges: [number, number][]
   byId: Map<string, number>
+  /** index of the self/soul node, pinned at the origin in every layout; -1 if absent */
+  soulIdx: number
   relaxDone: boolean
   orreryDone: boolean
   spiralCount: number
@@ -139,10 +155,12 @@ export function buildScene(graph: MemGraph): Scene {
 
   const nodes: BrainNode[] = keep.map((orig, idx) => {
     const n = graph.nodes[orig]
+    const cat = catFor(n.type)
     return {
       ...n,
       idx,
-      cat: catFor(n.type),
+      cat,
+      label: displayLabel(n.title, n.id, cat),
       out: [],
       x: 0, y: 0, z: 0,
       gx: 0, gy: 0, gz: 0,
@@ -176,9 +194,19 @@ export function buildScene(graph: MemGraph): Scene {
     n.x = n.gx; n.y = n.gy; n.z = n.gz
   }
 
+  // the soul (self/soul.md) is the graph's centre of identity — pin it at the
+  // origin so every layout (and the resting camera) grows outward from it
+  const soulIdx = nodes.findIndex(n => (n.type || '').toLowerCase() === 'self')
+  if (soulIdx >= 0) {
+    const s = nodes[soulIdx]
+    s.gx = s.gy = s.gz = 0
+    s.x = s.y = s.z = 0
+  }
+
   return {
     nodes, edges,
     byId: new Map(nodes.map(n => [n.id, n.idx])),
+    soulIdx,
     relaxDone: false,
     orreryDone: false,
     spiralCount: 0,
@@ -233,6 +261,10 @@ export function relaxStep(scene: Scene, iters = 20): void {
       n.gy += Math.max(-6, Math.min(6, fy[i] * step))
       n.gz += Math.max(-6, Math.min(6, fz[i] * step))
     }
+    if (scene.soulIdx >= 0) {
+      const s = N[scene.soulIdx]
+      s.gx = s.gy = s.gz = 0 // the soul does not move
+    }
   }
   if (relaxIter >= RELAX_TOTAL) scene.relaxDone = true
 }
@@ -280,6 +312,10 @@ export function layoutOrrery(scene: Scene): void {
     n.yy = 2 + k * 1.4
     n.w = 0.012
   })
+  if (scene.soulIdx >= 0) {
+    const s = scene.nodes[scene.soulIdx]
+    s.a0 = 0; s.rad = 0; s.yy = 0; s.w = 0 // soul holds the centre of the dial
+  }
   scene.spiralCount = spiral.length
   scene.orreryDone = true
 }

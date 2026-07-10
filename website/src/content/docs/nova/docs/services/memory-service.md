@@ -23,10 +23,11 @@ The Memory Service provides Nova's long-term memory behind a backend-agnostic AP
 | `index.md` | Auto-maintained root index — always injected into agent context |
 | `log.md` | Dated change log of memory writes |
 | `topics/`, `people/`, `projects/`, `preferences/` | Concept files (`<slug>.md`) |
+| `self/soul.md` | Seeded identity anchor — who Nova is; the Brain graph grows from it |
 | `journal/YYYY-MM-DD.md` | High-volume inbox for raw ingested digests |
 | `.nova/` | BM25 index + retrieval log (regenerated, safe to delete) |
 
-Producers (chat, intel-worker, knowledge-worker, cortex) push raw text to the Redis ingestion queue; the consumer appends digests to the journal. A nightly curation goal distills journals into concept files, and a 45-day journal-retention backstop runs regardless.
+Producers (chat, intel-worker, knowledge-worker, cortex) push raw text to the Redis ingestion queue; the consumer appends digests to the journal — near-identical digests (same text modulo numbers, e.g. repeated no-op cortex cycles) are suppressed before they reach the journal. A nightly curation goal distills journals into concept files that link back to their source journals, and a 45-day journal-retention backstop runs regardless.
 
 ## API
 

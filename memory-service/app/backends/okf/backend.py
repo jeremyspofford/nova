@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,23 @@ def _est_tokens(text: str) -> int:
     return len(text) // _CHARS_PER_TOKEN
 
 
+# ── Journal noise gate ──────────────────────────────────────────────────────
+# High-frequency producers (cortex above all) emit near-identical digests that
+# differ only in counters/timestamps ("Cortex cycle #28674 … no stale goals").
+# They drown the journal and give nightly curation nothing durable to distill.
+# A digest whose digit-normalized text matches a recently written one is
+# dropped before it reaches the journal. In-memory by design: a restart lets
+# one duplicate through, which is harmless.
+
+_NOISE_DIGITS_RE = re.compile(r"\d+")
+_NOISE_KEY_LEN = 400
+_NOISE_LRU_CAP = 128
+
+
+def _noise_key(source_type: str, text: str) -> str:
+    return f"{source_type}:{_NOISE_DIGITS_RE.sub('#', text.strip())[:_NOISE_KEY_LEN]}"
+
+
 class OkfBackend(MemoryBackend):
     name = "okf"
 
@@ -61,6 +80,7 @@ class OkfBackend(MemoryBackend):
         self._retrievals_path = self.store.nova_dir / "retrievals.jsonl"
         self._graph_cache: dict | None = None
         self._graph_sig: tuple | None = None
+        self._recent_journal_keys: OrderedDict[str, None] = OrderedDict()
 
     # ── write ────────────────────────────────────────────────────────────
 
@@ -101,6 +121,14 @@ class OkfBackend(MemoryBackend):
                 target=okf.get("target"),
             )
         else:
+            key = _noise_key(source_type, raw_text)
+            if key in self._recent_journal_keys:
+                self._recent_journal_keys.move_to_end(key)
+                log.debug("journal digest suppressed as repeat (source=%s)", source_type)
+                return WriteResult()
+            self._recent_journal_keys[key] = None
+            while len(self._recent_journal_keys) > _NOISE_LRU_CAP:
+                self._recent_journal_keys.popitem(last=False)
             ts = None
             if occurred_at:
                 try:
