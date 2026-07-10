@@ -603,6 +603,43 @@ write_env() {
       ;;
   esac
 
+  # ── Preserve runtime-owned profile slices across re-runs ───────────────────
+  # COMPOSE_PROFILES is regenerated from the deployment mode, but the Nova UI
+  # owns two slices of it at runtime and we must not clobber them on re-install:
+  #   • bundled inference — Settings/Models → Local Inference start/stop writes
+  #     inference-* profiles; the toggle is the source of truth.
+  #   • optional workers  — browser / voice / knowledge / observability, etc.
+  # The mode still decides the local-vs-cloud DIRECTION (mode 1 = bundled,
+  # modes 2/3/4 = none), but within "bundled" the toggle's current selection
+  # wins over re-seeding inference-ollama.
+  local existing_profiles_now preserved_other="" existing_inference="" _oldifs="${IFS}"
+  existing_profiles_now="$(get_existing COMPOSE_PROFILES "")"
+  IFS=','
+  for _p in ${existing_profiles_now}; do
+    _p="$(echo "${_p}" | tr -d '[:space:]')"
+    case "${_p}" in
+      ''|cloudflare-tunnel|tailscale) ;;                                   # remote-access: recomputed below
+      inference-*) existing_inference="${existing_inference:+${existing_inference},}${_p}" ;;
+      *) preserved_other="${preserved_other:+${preserved_other},}${_p}" ;; # browser/voice/knowledge/…
+    esac
+  done
+  IFS="${_oldifs}"
+
+  # If the mode wants bundled inference and the toggle already picked something,
+  # honor the toggle instead of forcing the mode default (inference-ollama).
+  case "${compose_profiles}" in
+    *inference-*)
+      if [ -n "${existing_inference}" ]; then
+        compose_profiles="${existing_inference}"
+      fi
+      ;;
+  esac
+
+  # Always carry forward non-inference worker profiles the user enabled at runtime.
+  if [ -n "${preserved_other}" ]; then
+    compose_profiles="${compose_profiles:+${compose_profiles},}${preserved_other}"
+  fi
+
   # Append remote access profile
   if [ "${CFG_REMOTE_ACCESS}" = "cloudflare-tunnel" ] || [ "${CFG_REMOTE_ACCESS}" = "tailscale" ]; then
     if [ -n "${compose_profiles}" ]; then

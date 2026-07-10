@@ -33,6 +33,7 @@ import { GPUStatsCard } from './models/GPUStatsCard'
 import { ProviderCard } from './models/ProviderCard'
 import { RoutingStatsSection } from './models/RoutingStatsSection'
 import { LMStudioLibrarySection } from './models/LMStudioLibrarySection'
+import { BundledContainersCard } from './models/BundledContainersCard'
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Badge, Button, Card, EmptyState, Metric, ProgressBar,
@@ -467,14 +468,18 @@ export function Models() {
           Each local backend is a separate model store. Showing them side by
           side (each labeled Active/Available) is why switching Ollama↔LM Studio
           no longer looks like "the same models" — you see both, clearly named. */}
-      {(ollamaHealthy || lmstudioStatus.data?.healthy || activeBackend !== 'none') && (
-        <div className="flex items-center gap-2 pt-2">
-          <Cpu className="h-4 w-4 text-content-tertiary" />
-          <h2 className="text-caption font-semibold uppercase tracking-wider text-content-tertiary">
-            Local Inference
-          </h2>
-        </div>
-      )}
+      {/* Local Inference — always shown so the bundled-container controls have a
+          home even on a cloud-only box (starting one is how you go local). */}
+      <div className="flex items-center gap-2 pt-2">
+        <Cpu className="h-4 w-4 text-content-tertiary" />
+        <h2 className="text-caption font-semibold uppercase tracking-wider text-content-tertiary">
+          Local Inference
+        </h2>
+      </div>
+
+      {/* Bundled inference containers — start/stop the engines Nova runs itself,
+          right where you manage models (mirrors Settings → Local Inference). */}
+      <BundledContainersCard hasGpu={(hardware.data?.gpus?.length ?? 0) > 0} />
 
       {/* Ollama — reachable model store, active or not */}
       {(activeBackend === 'ollama' || ollamaHealthy) && (() => {

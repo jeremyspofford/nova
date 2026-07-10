@@ -18,6 +18,7 @@ import httpx
 
 from app.compose_client import (
     profiled_service_status,
+    pull_profiled_image,
     start_profiled_service,
     stop_profiled_service,
 )
@@ -198,6 +199,9 @@ async def start_bundled_backend(name: str) -> dict:
             }
 
     add_compose_profile(spec["profile"])
+    # Refresh the :latest image first so a stale cached engine binary can't
+    # block current models. Best-effort — proceeds on the cache if offline.
+    await pull_profiled_image(spec["profile"], spec["service"])
     result = await start_profiled_service(spec["profile"], spec["service"])
     if not result.get("ok"):
         remove_compose_profile(spec["profile"])

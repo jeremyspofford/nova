@@ -89,6 +89,29 @@ async def start_profiled_service(profile: str, service: str) -> dict:
     return {"ok": True, "output": stdout.strip() or stderr.strip()}
 
 
+async def pull_profiled_image(profile: str, service: str, timeout: float = 600.0) -> dict:
+    """Best-effort pull of a profiled service's image before starting it.
+
+    Bundled engines are pinned to :latest, so a months-old cached image can be
+    too stale to run current models (e.g. Ollama's `412: requires a newer
+    version of Ollama`). Refreshing on start keeps them current; unchanged
+    layers are a cheap manifest check. Never fatal — an offline or slow host
+    logs a warning and proceeds on the cached image.
+    """
+    try:
+        code, stdout, stderr = await asyncio.wait_for(
+            _run_compose("--profile", profile, "pull", service),
+            timeout=timeout,
+        )
+    except Exception as e:  # timeout, docker missing, registry unreachable
+        logger.warning("Image pull for '%s' skipped (%s); using cached image", service, e)
+        return {"ok": False, "error": str(e)}
+    if code != 0:
+        logger.warning("Image pull for '%s' failed: %s; using cached image", service, stderr.strip())
+        return {"ok": False, "error": stderr.strip()}
+    return {"ok": True, "output": stdout.strip() or stderr.strip()}
+
+
 async def stop_profiled_service(profile: str, service: str) -> dict:
     """Stop and remove a profiled service."""
     code, stdout, stderr = await _run_compose(
