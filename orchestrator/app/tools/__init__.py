@@ -200,6 +200,18 @@ async def execute_tool(
 
     executor = _DISPATCH.get(name)
     if executor:
+        # Idempotency guard for irreversible, outward-facing tools. Nova's
+        # recovery paths (reaper re-enqueue, checkpoint stage resume) can replay
+        # a tool call that already fired its side effect; the ledger makes such
+        # a replay return the cached result instead of acting twice. Only
+        # applied when we have a task scope to key on — unscoped calls (no
+        # task_id in context) fall through to a normal execute.
+        from app.tool_idempotency import IDEMPOTENT_TOOLS, run_idempotent
+        task_id = (context or {}).get("task_id")
+        if name in IDEMPOTENT_TOOLS and task_id:
+            return await run_idempotent(
+                str(task_id), name, arguments, lambda: executor(name, arguments),
+            )
         return await executor(name, arguments)
 
     all_names = [t.name for t in ALL_TOOLS]

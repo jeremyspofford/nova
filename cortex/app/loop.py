@@ -99,6 +99,17 @@ async def _loop() -> None:
 
             # Run one cycle with stimuli
             state = await run_cycle(stimuli=stimuli)
+
+            # Ack durable scheduled fires only after a non-error cycle. On error
+            # (or crash before we reach here) the fire stays 'pending' in the
+            # outbox and is redelivered next drain — at-least-once delivery.
+            if state.fire_ids and not state.error:
+                try:
+                    from .scheduler import ack_fires
+                    await ack_fires(state.fire_ids)
+                except Exception as e:
+                    log.warning("Failed to ack scheduled fires %s: %s", state.fire_ids, e)
+
             log.info(
                 "Cycle %d complete: drive=%s, outcome=%s",
                 state.cycle_number,

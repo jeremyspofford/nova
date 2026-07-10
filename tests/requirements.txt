@@ -12,3 +12,4 @@ uvicorn[standard]>=0.32
 fastapi>=0.115
 pydantic-settings>=2.0
 cryptography>=42.0
+croniter>=1.0

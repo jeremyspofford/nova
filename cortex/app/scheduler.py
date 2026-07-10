@@ -1,8 +1,22 @@
-"""Goal schedule checker — queries due goals and emits stimuli.
+"""Scheduled-goal firing via a transactional outbox (cron durability).
 
-Called during Cortex's PERCEIVE phase each cycle. Finds goals where
-schedule_next_at <= now(), emits goal.schedule_due stimuli, and
-advances schedule_next_at to the next fire time.
+Two phases, called from Cortex's PERCEIVE:
+
+  enqueue_due_fires()  — for each goal whose schedule_next_at is due, record a
+                         durable fire in goal_fire_outbox AND advance the clock
+                         (schedule_next_at, completion_count) in the SAME
+                         transaction. The clock never advances without a durable
+                         fire, so a crash can't silently drop a scheduled run.
+
+  drain_outbox()       — return stimuli for pending fires WITHOUT marking them
+                         done. The caller acks (ack_fires) only after the cycle
+                         has processed them, so a crash mid-cycle redelivers.
+                         At-least-once: a missed briefing is worse than a rare
+                         duplicate, and duplicate side effects are bounded by
+                         the tool-idempotency ledger (migration 103).
+
+Replaces the old check_schedules(), which advanced the clock before the work
+was durable — at-most-once with a data-loss window.
 """
 from __future__ import annotations
 
@@ -16,50 +30,63 @@ from .stimulus import GOAL_SCHEDULE_DUE
 
 log = logging.getLogger(__name__)
 
+# A fire that keeps coming back without being acked (cycle crashes each time it
+# is processed) is parked as 'failed' after this many attempts so it stops
+# redelivering forever and becomes visible for inspection.
+MAX_FIRE_ATTEMPTS = 5
 
-async def check_schedules() -> list[dict]:
-    """Find due scheduled goals and return stimuli dicts.
 
-    Also advances schedule_next_at and increments completion_count.
-    Returns stimulus dicts (not pushed to Redis — caller merges into cycle).
+async def _initialize_uninitialized_schedules(conn, now: datetime) -> None:
+    """Self-heal: migration-seeded (or hand-inserted) cron goals arrive with
+    NULL schedule_next_at, which the due-query skips forever. Give them a first
+    fire time so seeding a goal is enough to schedule it.
+    """
+    uninitialized = await conn.fetch(
+        """
+        SELECT id, title, schedule_cron
+        FROM goals
+        WHERE status = 'active'
+          AND schedule_cron IS NOT NULL
+          AND schedule_next_at IS NULL
+        """
+    )
+    for row in uninitialized:
+        try:
+            first_at = croniter(row["schedule_cron"], now).get_next(datetime)
+        except (ValueError, KeyError):
+            log.warning(
+                "Invalid cron for goal %s (%s): %s — cannot initialize",
+                row["id"], row["title"], row["schedule_cron"],
+            )
+            continue
+        await conn.execute(
+            "UPDATE goals SET schedule_next_at = $1, updated_at = NOW() WHERE id = $2",
+            first_at, row["id"],
+        )
+        log.info(
+            "Initialized schedule for goal %s (%s): first fire %s",
+            row["id"], row["title"], first_at,
+        )
+
+
+async def enqueue_due_fires() -> int:
+    """Record a durable fire + advance the clock for each due scheduled goal.
+
+    Returns the number of fires newly enqueued. Each goal is handled in its own
+    transaction: the outbox INSERT and the goals UPDATE commit together or not
+    at all, so the clock never advances past a fire that wasn't persisted.
     """
     pool = get_pool()
     now = datetime.now(timezone.utc)
+    enqueued = 0
 
     async with pool.acquire() as conn:
-        # Self-heal: migration-seeded (or hand-inserted) cron goals arrive with
-        # NULL schedule_next_at, which the due-query below skips forever. Give
-        # them a first fire time so seeding a goal is enough to schedule it.
-        uninitialized = await conn.fetch(
-            """
-            SELECT id, title, schedule_cron
-            FROM goals
-            WHERE status = 'active'
-              AND schedule_cron IS NOT NULL
-              AND schedule_next_at IS NULL
-            """
-        )
-        for row in uninitialized:
-            try:
-                first_at = croniter(row["schedule_cron"], now).get_next(datetime)
-            except (ValueError, KeyError):
-                log.warning(
-                    "Invalid cron for goal %s (%s): %s — cannot initialize",
-                    row["id"], row["title"], row["schedule_cron"],
-                )
-                continue
-            await conn.execute(
-                "UPDATE goals SET schedule_next_at = $1, updated_at = NOW() WHERE id = $2",
-                first_at, row["id"],
-            )
-            log.info(
-                "Initialized schedule for goal %s (%s): first fire %s",
-                row["id"], row["title"], first_at,
-            )
+        await _initialize_uninitialized_schedules(conn, now)
 
-        rows = await conn.fetch(
+        # Candidate ids without a lock; each is re-checked under FOR UPDATE below.
+        candidates = await conn.fetch(
             """
-            SELECT id, title, priority, schedule_cron, max_completions, completion_count
+            SELECT id
             FROM goals
             WHERE status = 'active'
               AND schedule_cron IS NOT NULL
@@ -72,46 +99,141 @@ async def check_schedules() -> list[dict]:
             now,
         )
 
-        stimuli = []
-        for row in rows:
-            goal_id = str(row["id"])
-            cron_expr = row["schedule_cron"]
-
-            # Compute next fire time
-            try:
-                next_at = croniter(cron_expr, now).get_next(datetime)
-            except (ValueError, KeyError):
-                log.warning("Invalid cron for goal %s: %s — skipping", goal_id, cron_expr)
-                continue
-
-            # Advance schedule and increment count
-            new_count = row["completion_count"] + 1
-            await conn.execute(
-                """
-                UPDATE goals
-                SET schedule_next_at = $1,
-                    schedule_last_ran_at = $2,
-                    completion_count = $3,
-                    updated_at = NOW()
-                WHERE id = $4
-                """,
-                next_at, now, new_count, row["id"],
-            )
-
-            # Auto-complete one-shot goals
-            if row["max_completions"] is not None and new_count >= row["max_completions"]:
-                await conn.execute(
-                    "UPDATE goals SET status = 'completed', updated_at = NOW() WHERE id = $1",
-                    row["id"],
+        for cand in candidates:
+            async with conn.transaction():
+                # Lock the row and re-check the due condition. SKIP LOCKED means
+                # a second cortex replica can't double-fire the same goal.
+                goal = await conn.fetchrow(
+                    """
+                    SELECT id, title, priority, schedule_cron, schedule_next_at,
+                           max_completions, completion_count
+                    FROM goals
+                    WHERE id = $1
+                      AND status = 'active'
+                      AND schedule_cron IS NOT NULL
+                      AND schedule_next_at IS NOT NULL
+                      AND schedule_next_at <= $2
+                      AND (max_completions IS NULL OR completion_count < max_completions)
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    cand["id"], now,
                 )
-                log.info("Goal %s completed (max_completions=%d reached)", goal_id, row["max_completions"])
+                if goal is None:
+                    continue  # taken by another worker, or no longer due
 
-            stimuli.append({
-                "type": GOAL_SCHEDULE_DUE,
-                "source": "cortex",
-                "payload": {"goal_id": goal_id, "title": row["title"]},
-                "priority": row["priority"],
-            })
-            log.info("Schedule due: goal %s (%s), next at %s", goal_id, row["title"], next_at)
+                goal_id = str(goal["id"])
+                fire_at = goal["schedule_next_at"]  # the instant that came due
+                cron_expr = goal["schedule_cron"]
 
-        return stimuli
+                # Compute the NEXT fire time from now (not from fire_at) so a
+                # cortex that was down for a while fires once and catches up,
+                # rather than replaying every missed interval.
+                try:
+                    next_at = croniter(cron_expr, now).get_next(datetime)
+                except (ValueError, KeyError):
+                    log.warning("Invalid cron for goal %s: %s — skipping", goal_id, cron_expr)
+                    continue
+
+                # Durable fire. Idempotent on (goal_id, fire_at): if this exact
+                # scheduled instant was already enqueued, don't duplicate it.
+                ins = await conn.execute(
+                    """
+                    INSERT INTO goal_fire_outbox (goal_id, title, priority, fire_at)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (goal_id, fire_at) DO NOTHING
+                    """,
+                    goal["id"], goal["title"], goal["priority"], fire_at,
+                )
+
+                new_count = goal["completion_count"] + 1
+                await conn.execute(
+                    """
+                    UPDATE goals
+                    SET schedule_next_at = $1,
+                        schedule_last_ran_at = $2,
+                        completion_count = $3,
+                        updated_at = NOW()
+                    WHERE id = $4
+                    """,
+                    next_at, now, new_count, goal["id"],
+                )
+
+                # Auto-complete one-shot goals once they hit their cap.
+                if goal["max_completions"] is not None and new_count >= goal["max_completions"]:
+                    await conn.execute(
+                        "UPDATE goals SET status = 'completed', updated_at = NOW() WHERE id = $1",
+                        goal["id"],
+                    )
+                    log.info("Goal %s completed (max_completions=%d reached)",
+                             goal_id, goal["max_completions"])
+
+                if ins.endswith(" 1"):  # a row was actually inserted (not ON CONFLICT skip)
+                    enqueued += 1
+                    log.info("Enqueued fire for goal %s (%s), fire_at=%s, next_at=%s",
+                             goal_id, goal["title"], fire_at, next_at)
+
+    return enqueued
+
+
+async def drain_outbox(limit: int = 10) -> tuple[list[dict], list[str]]:
+    """Return (stimuli, outbox_ids) for up to `limit` pending fires.
+
+    Does NOT mark fires done — the caller acks via ack_fires() only after the
+    cycle has processed them. Increments attempts; fires that exceed
+    MAX_FIRE_ATTEMPTS are parked as 'failed' rather than redelivered forever.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Park poison fires (processed-but-never-acked past the cap).
+            await conn.execute(
+                "UPDATE goal_fire_outbox SET status = 'failed' "
+                "WHERE status = 'pending' AND attempts >= $1",
+                MAX_FIRE_ATTEMPTS,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT id, goal_id, title, priority
+                FROM goal_fire_outbox
+                WHERE status = 'pending'
+                ORDER BY fire_at
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+                """,
+                limit,
+            )
+            ids = [str(r["id"]) for r in rows]
+            if ids:
+                await conn.execute(
+                    "UPDATE goal_fire_outbox SET attempts = attempts + 1 "
+                    "WHERE id = ANY($1::uuid[])",
+                    ids,
+                )
+
+    stimuli = [
+        {
+            "type": GOAL_SCHEDULE_DUE,
+            "source": "cortex",
+            "payload": {
+                "goal_id": str(r["goal_id"]),
+                "title": r["title"],
+                "outbox_id": str(r["id"]),
+            },
+            "priority": r["priority"],
+        }
+        for r in rows
+    ]
+    return stimuli, ids
+
+
+async def ack_fires(ids: list[str]) -> None:
+    """Mark fires 'done' after the cycle successfully processed them."""
+    if not ids:
+        return
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE goal_fire_outbox SET status = 'done', dispatched_at = NOW() "
+            "WHERE id = ANY($1::uuid[])",
+            ids,
+        )

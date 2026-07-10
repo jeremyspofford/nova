@@ -49,7 +49,7 @@ from .reflections import (
     query_reflections,
     record_reflection,
 )
-from .scheduler import check_schedules
+from .scheduler import drain_outbox, enqueue_due_fires
 from .stimulus import CI_WORKFLOW_RUN_FAILURE
 from .task_tracker import TaskOutcome
 
@@ -126,6 +126,7 @@ class CycleState:
     winner: DriveWinner | None = None
     user_messages: list[dict] = field(default_factory=list)
     stimuli: list[dict] = field(default_factory=list)
+    fire_ids: list[str] = field(default_factory=list)  # goal_fire_outbox ids to ack on success
     memory_context: str = ""
     memory_ids: list[str] = field(default_factory=list)
     retrieval_log_id: str | None = None
@@ -189,14 +190,20 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
         last_cycle_at = row["last_cycle_at"] if row and row["last_cycle_at"] else datetime(2020, 1, 1, tzinfo=timezone.utc)
         state.user_messages = await read_user_replies_since(last_cycle_at)
 
-        # Check for due scheduled goals (self-inject stimuli)
+        # Scheduled goals via the durable outbox: enqueue_due_fires advances the
+        # clock and records fires atomically; drain_outbox surfaces pending fires
+        # as stimuli WITHOUT acking. We ack (loop.py) only after a non-error
+        # cycle, so a crash mid-cycle redelivers the fire instead of losing it.
         try:
-            schedule_stimuli = await check_schedules()
-            if schedule_stimuli:
-                state.stimuli.extend(schedule_stimuli)
-                log.info("Injected %d schedule stimuli", len(schedule_stimuli))
+            enqueued = await enqueue_due_fires()
+            fire_stimuli, fire_ids = await drain_outbox(limit=10)
+            if fire_stimuli:
+                state.stimuli.extend(fire_stimuli)
+                state.fire_ids = fire_ids
+                log.info("Scheduled fires: %d enqueued, %d drained this cycle",
+                         enqueued, len(fire_stimuli))
         except Exception as e:
-            log.warning("Schedule check failed: %s", e)
+            log.warning("Schedule outbox step failed: %s", e)
 
         # Periodic zombie goal cleanup
         if state.cycle_number % 100 == 0:
