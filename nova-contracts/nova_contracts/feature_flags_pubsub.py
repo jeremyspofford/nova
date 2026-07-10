@@ -6,6 +6,12 @@ On every message received on `nova:flags:invalidate`, the subscriber
 triggers a fresh `warm_cache_from_http` call, which repopulates the
 in-process cache and persists to the per-service cache file.
 
+The class is invalidation-channel generic: pass `channel` and an async
+`handler` to reuse the same reconnect loop for other invalidation
+streams (FU-009 uses it for `nova:secrets:invalidate` in the
+llm-gateway). Without a `handler` it keeps its original feature-flags
+behavior.
+
 Design notes:
 
 - **Why full re-warm on every invalidate, not per-key refetch?** Flag
@@ -26,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 
 import httpx
 from redis.asyncio import Redis as AsyncRedis
@@ -49,16 +56,27 @@ class PubsubSubscriber:
         self,
         *,
         redis_url: str,
-        http_client: httpx.AsyncClient,
-        base_url: str,
+        http_client: httpx.AsyncClient | None = None,
+        base_url: str = "",
         channel: str = INVALIDATE_CHANNEL,
         reconnect_delay: float = RECONNECT_DELAY_SECONDS,
+        handler: Callable[[str], Awaitable[None]] | None = None,
+        catch_up_on_subscribe: bool = False,
     ) -> None:
+        """`handler` (async, receives the published key hint) replaces the
+        default feature-flags re-warm; `http_client` + `base_url` are only
+        required without one. `catch_up_on_subscribe` runs the handler once
+        after every (re)subscribe so messages missed while disconnected are
+        reconciled rather than lost (pubsub is fire-and-forget)."""
+        if handler is None and http_client is None:
+            raise ValueError("PubsubSubscriber needs a handler or an http_client")
         self._redis_url = redis_url
         self._http_client = http_client
         self._base_url = base_url
         self._channel = channel
         self._reconnect_delay = reconnect_delay
+        self._handler = handler
+        self._catch_up_on_subscribe = catch_up_on_subscribe
 
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
@@ -80,7 +98,7 @@ class PubsubSubscriber:
         self._stopping = False
         self._task = asyncio.create_task(
             self._listen_with_reconnect(),
-            name="feature-flags-pubsub",
+            name=f"invalidation-pubsub:{self._channel}",
         )
 
     async def stop(self) -> None:
@@ -134,6 +152,8 @@ class PubsubSubscriber:
                     "flag_pubsub_subscribed channel=%s base_url=%s",
                     self._channel, self._base_url,
                 )
+                if self._catch_up_on_subscribe:
+                    await self._invoke_handler("__subscribe_catch_up__")
                 async for message in pubsub.listen():
                     if message.get("type") != "message":
                         continue
@@ -146,9 +166,9 @@ class PubsubSubscriber:
                     await pubsub.aclose()
 
     async def _handle_invalidation(self, message: dict) -> None:
-        """Invalidation handler. Logs the source, then triggers a full
-        re-warm of the cache. Re-warm failures are non-fatal — the cache
-        keeps its current values until the next successful warm."""
+        """Invalidation handler. Logs the source, then runs the handler
+        (custom, or the default flags cache re-warm). Handler failures are
+        non-fatal — state keeps its current values until the next success."""
         raw = message.get("data")
         key_hint = (
             raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
@@ -157,8 +177,14 @@ class PubsubSubscriber:
             "flag_invalidation_received channel=%s key_hint=%r",
             self._channel, key_hint,
         )
+        await self._invoke_handler(key_hint)
+
+    async def _invoke_handler(self, key_hint: str) -> None:
         try:
-            await warm_cache_from_http(self._http_client, self._base_url)
+            if self._handler is not None:
+                await self._handler(key_hint)
+            else:
+                await warm_cache_from_http(self._http_client, self._base_url)
         except Exception:
             logger.exception(
                 "flag_invalidation_rewarm_failed channel=%s key_hint=%r",

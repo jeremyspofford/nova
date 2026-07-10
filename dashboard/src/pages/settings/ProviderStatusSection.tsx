@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Eye, EyeOff, Save, AlertTriangle, Trash2 } from 'lucide-react'
+import { Activity, Eye, EyeOff, Save, AlertTriangle, Trash2, CheckCircle2 } from 'lucide-react'
 import {
   getProviderStatus,
   testProvider,
@@ -37,9 +37,15 @@ const PROVIDER_SECRET_KEY: Record<string, string> = {
   cerebras:     'CEREBRAS_API_KEY',
   openrouter:   'OPENROUTER_API_KEY',
   github:       'GITHUB_TOKEN',
+  nvidia:       'NVIDIA_NIM_API_KEY',
   'claude-max': 'CLAUDE_CODE_OAUTH_TOKEN',
   chatgpt:      'CHATGPT_ACCESS_TOKEN',
 }
+
+/** The gateway hot-reloads secrets via pubsub within ~a second of a save;
+ *  refetch provider status after that window so availability dots flip
+ *  without a manual reload. */
+const HOT_RELOAD_REFETCH_MS = 1500
 
 export function ProviderStatusSection() {
   const queryClient = useQueryClient()
@@ -64,7 +70,15 @@ export function ProviderStatusSection() {
   const [saving, setSaving] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
-  const [restartHint, setRestartHint] = useState(false)
+  const [applyNote, setApplyNote] = useState<string | null>(null)
+
+  const refetchAfterHotReload = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['platform-secrets'] })
+    queryClient.invalidateQueries({ queryKey: ['provider-status'] })
+    window.setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ['provider-status'] })
+    }, HOT_RELOAD_REFETCH_MS)
+  }, [queryClient])
 
   const handleTest = useCallback(async (slug: string) => {
     setTesting(slug)
@@ -89,38 +103,35 @@ export function ProviderStatusSection() {
       await patchPlatformSecrets({ [secretKey]: value })
       setEditing(null)
       setDrafts(prev => { const n = { ...prev }; delete n[slug]; return n })
-      setRestartHint(true)
-      queryClient.invalidateQueries({ queryKey: ['platform-secrets'] })
-      queryClient.invalidateQueries({ queryKey: ['provider-status'] })
+      setApplyNote(`${secretKey} saved — applied live, no restart needed.`)
+      refetchAfterHotReload()
     } catch (e) {
       setSaveError(`Failed to save ${slug} key: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSaving(null)
     }
-  }, [drafts, queryClient])
+  }, [drafts, refetchAfterHotReload])
 
   const handleDeleteKey = useCallback(async (slug: string) => {
     const secretKey = PROVIDER_SECRET_KEY[slug]
     if (!secretKey) return
     if (!window.confirm(
       `Remove the ${secretKey} secret? The provider will stop working until ` +
-      `you set a new value. (Restart of services may be required for the ` +
-      `removal to take effect.)`
+      `you set a new value.`
     )) return
 
     setSaving(slug)
     setSaveError(null)
     try {
       await deletePlatformSecret(secretKey)
-      setRestartHint(true)
-      queryClient.invalidateQueries({ queryKey: ['platform-secrets'] })
-      queryClient.invalidateQueries({ queryKey: ['provider-status'] })
+      setApplyNote(`${secretKey} removed — applied live, no restart needed.`)
+      refetchAfterHotReload()
     } catch (e) {
       setSaveError(`Failed to remove ${slug} key: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSaving(null)
     }
-  }, [queryClient])
+  }, [refetchAfterHotReload])
 
   return (
     <Section
@@ -134,10 +145,10 @@ export function ProviderStatusSection() {
           <span>{saveError}</span>
         </div>
       )}
-      {restartHint && (
-        <div className="flex items-start gap-2 rounded-sm border border-amber-200 dark:border-amber-800 bg-warning-dim px-3 py-2 text-compact text-amber-700 dark:text-amber-400">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>API key changes require a service restart to take effect. Restart services from the Recovery section or via <code className="text-caption bg-surface-elevated px-1 rounded-xs">make restart</code>.</span>
+      {applyNote && (
+        <div className="flex items-start gap-2 rounded-sm border border-success/30 bg-success-dim px-3 py-2 text-compact text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+          <span>{applyNote}</span>
         </div>
       )}
 

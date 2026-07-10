@@ -37,6 +37,14 @@ class FallbackProvider(ModelProvider):
         self._providers = providers
         self._timeout = timeout_seconds
 
+    def replace_providers(self, providers: list[ModelProvider]) -> None:
+        """Swap the failover chain in place (FU-009 secret hot-reload) —
+        MODEL_REGISTRY holds references to this instance, so mutate rather
+        than rebuild."""
+        if not providers:
+            raise ValueError("FallbackProvider requires at least one provider")
+        self._providers = providers
+
     @property
     def name(self) -> str:
         return f"fallback({','.join(p.name for p in self._providers)})"

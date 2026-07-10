@@ -19,9 +19,9 @@ log = logging.getLogger(__name__)
 # provider.name → monotonic deadline until which the provider is sidelined.
 _invalid_until: dict[str, float] = {}
 
-# Long enough to stop a dead key from being re-tried on every request, short
-# enough that a key rotated via Settings (gateway restart, FU-009 pending)
-# never waits on this cache.
+# Long enough to stop a dead key from being re-tried on every request. A key
+# rotated via Settings never waits on this: the FU-009 hot-reload path calls
+# clear() for the affected provider the moment the new key applies.
 CREDENTIAL_COOLDOWN_SECONDS = 600.0
 
 _AUTH_ERROR_CLASSES = ("AuthenticationError", "PermissionDeniedError")
@@ -75,8 +75,8 @@ def credential_invalid(provider_name: str) -> bool:
 
 
 def clear(provider_name: str | None = None) -> None:
-    """Drop cooldown state (all providers when name is None). Test helper +
-    hook point for future secret hot-reload (FU-009)."""
+    """Drop cooldown state (all providers when name is None). Called by the
+    FU-009 secret hot-reload for each changed key; also a test helper."""
     if provider_name is None:
         _invalid_until.clear()
     else:

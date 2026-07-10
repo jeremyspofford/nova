@@ -43,6 +43,12 @@ class GeminiADCProvider(ModelProvider):
         self._use_adc = use_adc
         self._client = None
 
+    def rekey(self, api_key: str) -> None:
+        """Apply a rotated API key (FU-009). Drops the memoized client so the
+        next call re-runs genai.configure with the new key."""
+        self._api_key = api_key
+        self._client = None
+
     def _get_client(self):
         if self._client is None:
             try:

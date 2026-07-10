@@ -73,8 +73,7 @@ bundled containers (ollama/vllm/sglang/llamacpp) start/stop via recovery with
 `inference.url` handshake; embed-provider override; WoL for a remote GPU box;
 response cache; rate limits.
 **Gaps:** ChatGPT-subscription provider needs a manual `codex login`;
-secret rotation needs a gateway restart (FU-009); model catalog quality varies
-by provider.
+model catalog quality varies by provider.
 
 ### F5. Admin dashboard
 **Story:** every platform capability is operable from a web UI.
@@ -101,8 +100,8 @@ checkpoint gap).
 
 ### F8. Platform secrets (SEC-006a)
 **Status: ✅ working** — encrypted at rest, first-boot `.env` mirror,
-UI rotation. **Gaps:** rotation requires restart (FU-009); `.env` mount still
-`:rw` pending FU-010.
+UI rotation with live hot-reload in the gateway (FU-009, 2026-07-10).
+**Gaps:** `.env` mount still `:rw` pending FU-010.
 
 ### F9. Feature flags
 **Status: ✅ working** — SDK + pubsub invalidation + partition-fallback cache +

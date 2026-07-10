@@ -47,8 +47,10 @@ never takes a request down with it:
   sidelines OpenAI, and vice versa.
 - `GET /health/providers` reports `credential_invalid: true` for any provider
   currently in cooldown, so a bad key is visible at a glance. Rotate keys in
-  **Settings → AI & Models → Provider Status** (a gateway restart applies the
-  new key and clears the cooldown).
+  **Settings → AI & Models → Provider Status** — the new key applies live
+  (no restart): the gateway hot-reloads its credentials the moment a key is
+  saved or removed, rebuilds its failover chains, and clears the cooldown so
+  a fixed key is retried immediately.
 
 ## Provider types
 

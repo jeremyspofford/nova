@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import redis.asyncio as aioredis
 from app.config import settings
+from app.secrets_runtime import effective_key
 
 if TYPE_CHECKING:
     from app.providers.base import ModelProvider
@@ -249,13 +250,13 @@ async def _discover_lmstudio() -> list[DiscoveredModel]:
 
 async def _discover_groq() -> list[DiscoveredModel]:
     """List available Groq models via OpenAI-compatible /models endpoint."""
-    if not settings.groq_api_key:
+    if not effective_key("GROQ_API_KEY"):
         return []
     try:
         async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                headers={"Authorization": f"Bearer {effective_key('GROQ_API_KEY')}"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -275,14 +276,14 @@ async def _discover_groq() -> list[DiscoveredModel]:
 
 async def _discover_anthropic() -> list[DiscoveredModel]:
     """List available Anthropic models."""
-    if not settings.anthropic_api_key:
+    if not effective_key("ANTHROPIC_API_KEY"):
         return []
     try:
         async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.anthropic.com/v1/models",
                 headers={
-                    "x-api-key": settings.anthropic_api_key,
+                    "x-api-key": effective_key("ANTHROPIC_API_KEY"),
                     "anthropic-version": "2023-06-01",
                 },
             )
@@ -302,13 +303,13 @@ async def _discover_anthropic() -> list[DiscoveredModel]:
 
 async def _discover_openai() -> list[DiscoveredModel]:
     """List available OpenAI models."""
-    if not settings.openai_api_key:
+    if not effective_key("OPENAI_API_KEY"):
         return []
     try:
         async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                headers={"Authorization": f"Bearer {effective_key('OPENAI_API_KEY')}"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -354,12 +355,12 @@ async def _discover_openrouter() -> list[DiscoveredModel]:
 
 async def _discover_gemini() -> list[DiscoveredModel]:
     """List available Gemini models."""
-    if not settings.gemini_api_key:
+    if not effective_key("GEMINI_API_KEY"):
         return []
     try:
         async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
             resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={settings.gemini_api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={effective_key('GEMINI_API_KEY')}",
             )
             resp.raise_for_status()
             data = resp.json()
@@ -379,13 +380,13 @@ async def _discover_gemini() -> list[DiscoveredModel]:
 
 async def _discover_github() -> list[DiscoveredModel]:
     """List available GitHub Models."""
-    if not settings.github_token:
+    if not effective_key("GITHUB_TOKEN"):
         return []
     try:
         async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
             resp = await client.get(
                 "https://models.github.com/v1/models",
-                headers={"Authorization": f"Bearer {settings.github_token}"},
+                headers={"Authorization": f"Bearer {effective_key('GITHUB_TOKEN')}"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -400,6 +401,58 @@ async def _discover_github() -> list[DiscoveredModel]:
             return models
     except Exception as e:
         log.debug("GitHub Models discovery failed: %s", e)
+        return []
+
+
+async def _discover_cerebras() -> list[DiscoveredModel]:
+    """List available Cerebras models via the OpenAI-compatible /models endpoint.
+
+    Replaces the hardcoded map, which named a retired model (llama-3.3-70b) and
+    couldn't reflect what a given account actually has access to.
+    """
+    if not effective_key("CEREBRAS_API_KEY"):
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.cerebras.ai/v1/models",
+                headers={"Authorization": f"Bearer {effective_key('CEREBRAS_API_KEY')}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            from app.registry import _cerebras
+            models = []
+            for m in data.get("data", []):
+                model_id = f"cerebras/{m['id']}"
+                _ensure_registered(model_id, _cerebras)
+                models.append(DiscoveredModel(id=model_id, registered=True))
+            return models
+    except Exception as e:
+        log.debug("Cerebras discovery failed: %s", e)
+        return []
+
+
+async def _discover_nvidia() -> list[DiscoveredModel]:
+    """List available NVIDIA NIM models via the OpenAI-compatible /models endpoint."""
+    if not effective_key("NVIDIA_NIM_API_KEY"):
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+            resp = await client.get(
+                "https://integrate.api.nvidia.com/v1/models",
+                headers={"Authorization": f"Bearer {effective_key('NVIDIA_NIM_API_KEY')}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            from app.registry import _nvidia
+            models = []
+            for m in data.get("data", []):
+                model_id = f"nvidia_nim/{m['id']}"
+                _ensure_registered(model_id, _nvidia)
+                models.append(DiscoveredModel(id=model_id, registered=True))
+            return models
+    except Exception as e:
+        log.debug("NVIDIA discovery failed: %s", e)
         return []
 
 
@@ -437,6 +490,7 @@ _PROVIDER_META = [
     {"slug": "groq",        "name": "Groq",             "type": "free"},
     {"slug": "gemini",      "name": "Gemini",           "type": "free"},
     {"slug": "cerebras",    "name": "Cerebras",         "type": "free"},
+    {"slug": "nvidia",      "name": "NVIDIA NIM",       "type": "free"},
     {"slug": "openrouter",  "name": "OpenRouter",       "type": "free"},
     {"slug": "github",      "name": "GitHub Models",    "type": "free"},
 ]
@@ -452,9 +506,10 @@ _DISCOVERY_FNS: dict[str, Any] = {
     "openrouter": _discover_openrouter,
     "gemini": _discover_gemini,
     "github": _discover_github,
-    # These use _MODEL_MAP instead of API calls
+    "cerebras": _discover_cerebras,
+    "nvidia": _discover_nvidia,
+    # ChatGPT subscription has no models API — use the static map
     "chatgpt": lambda: _discover_from_model_map("chatgpt"),
-    "cerebras": lambda: _discover_from_model_map("cerebras"),
 }
 
 
@@ -481,13 +536,14 @@ async def _is_provider_available(slug: str) -> bool:
     checks = {
         "ollama": lambda: True,
         "chatgpt": lambda: bool(discover_chatgpt_token()),
-        "groq": lambda: bool(settings.groq_api_key),
-        "gemini": lambda: bool(settings.gemini_api_key or settings.gemini_use_adc),
-        "cerebras": lambda: bool(settings.cerebras_api_key),
-        "openrouter": lambda: bool(settings.openrouter_api_key),
-        "github": lambda: bool(settings.github_token),
-        "anthropic": lambda: bool(settings.anthropic_api_key),
-        "openai": lambda: bool(settings.openai_api_key),
+        "groq": lambda: bool(effective_key("GROQ_API_KEY")),
+        "gemini": lambda: bool(effective_key("GEMINI_API_KEY") or settings.gemini_use_adc),
+        "cerebras": lambda: bool(effective_key("CEREBRAS_API_KEY")),
+        "nvidia": lambda: bool(effective_key("NVIDIA_NIM_API_KEY")),
+        "openrouter": lambda: bool(effective_key("OPENROUTER_API_KEY")),
+        "github": lambda: bool(effective_key("GITHUB_TOKEN")),
+        "anthropic": lambda: bool(effective_key("ANTHROPIC_API_KEY")),
+        "openai": lambda: bool(effective_key("OPENAI_API_KEY")),
     }
     try:
         return checks.get(slug, lambda: False)()

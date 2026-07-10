@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 
 import redis.asyncio as aioredis
@@ -52,7 +51,9 @@ from app.providers import (
     VLLMProvider,
     discover_chatgpt_token,
 )
+from app.providers.credential_guard import clear as clear_credential_cooldown
 from app.providers.credential_guard import credential_invalid
+from app.secrets_runtime import SECRET_ENV_KEYS, apply_env_overlay, effective_key
 
 log = logging.getLogger(__name__)
 
@@ -69,41 +70,16 @@ def _inject_litellm_env_keys() -> None:
     platform_secrets pass returns empty and only .env values apply — gateway
     still starts cleanly.
     """
-    # Layer 1 — settings/.env (preserves behavior for installs that haven't
-    # migrated to platform_secrets yet).
-    if settings.anthropic_api_key:
-        os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
-    if settings.openai_api_key:
-        os.environ["OPENAI_API_KEY"] = settings.openai_api_key
-    if settings.groq_api_key:
-        os.environ["GROQ_API_KEY"] = settings.groq_api_key
-    if settings.gemini_api_key:
-        os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
-    if settings.cerebras_api_key:
-        os.environ["CEREBRAS_API_KEY"] = settings.cerebras_api_key
-    if settings.openrouter_api_key:
-        os.environ["OPENROUTER_API_KEY"] = settings.openrouter_api_key
-    if settings.github_token:
-        os.environ["GITHUB_TOKEN"] = settings.github_token
-    if settings.nvidia_api_key:
-        os.environ["NVIDIA_NIM_API_KEY"] = settings.nvidia_api_key
-    if settings.chatgpt_access_token:
-        os.environ["CHATGPT_ACCESS_TOKEN"] = settings.chatgpt_access_token
-
-    # Layer 2 — platform_secrets (overrides .env when the orchestrator has
-    # an entry). Sync because providers below construct at module load.
+    # Sync fetch because providers below construct at module load. Both layers
+    # (settings/.env, then platform_secrets on top) are applied by
+    # apply_env_overlay — the same recompute the FU-009 hot-reload path runs.
     from nova_worker_common.platform_secrets import fetch_platform_secrets_sync
     resolved = fetch_platform_secrets_sync(
         orchestrator_url=settings.orchestrator_url,
         admin_secret=settings.nova_admin_secret,
-        keys=[
-            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
-            "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
-            "GITHUB_TOKEN", "CHATGPT_ACCESS_TOKEN",
-        ],
+        keys=list(SECRET_ENV_KEYS),
     )
-    for k, v in resolved.items():
-        os.environ[k] = v
+    apply_env_overlay(resolved)
     if resolved:
         log.info("platform_secrets: applied %d key(s) at startup: %s",
                  len(resolved), sorted(resolved.keys()))
@@ -133,7 +109,7 @@ _nvidia = LiteLLMProvider(default_model=settings.default_nvidia_model, label="nv
 # Read GEMINI_API_KEY from os.environ — it's authoritative after _inject_litellm_env_keys
 # applied platform_secrets overrides on top of settings/.env values.
 _gemini = GeminiADCProvider(
-    api_key=os.environ.get("GEMINI_API_KEY", ""),
+    api_key=effective_key("GEMINI_API_KEY"),
     use_adc=settings.gemini_use_adc,
 )
 
@@ -164,38 +140,46 @@ _lmstudio = LMStudioProvider()
 _local = LocalInferenceProvider()
 
 
-# ── Cloud fallback chain (without Ollama) ────────────────────────────────────
+# ── Fallback chains (cloud-only, and Ollama + cloud) ─────────────────────────
+# Availability reads the post-overlay environment (effective_key), never the
+# import-frozen settings — a key added via the dashboard joins the chains at
+# boot AND on FU-009 hot-reload (refresh_platform_secrets below).
 
-def _build_cloud_fallback() -> FallbackProvider:
-    """Build a fallback chain of all cloud providers (no Ollama)."""
+def _cloud_chain_members() -> list[ModelProvider]:
+    """Cloud providers with a live credential, in failover order."""
     chain: list[ModelProvider] = []
 
-    if settings.groq_api_key:
+    if effective_key("GROQ_API_KEY"):
         chain.append(_groq)
-    if settings.gemini_api_key or settings.gemini_use_adc:
+    if effective_key("GEMINI_API_KEY") or settings.gemini_use_adc:
         chain.append(_gemini)
-    if settings.cerebras_api_key:
+    if effective_key("CEREBRAS_API_KEY"):
         chain.append(_cerebras)
-    if settings.openrouter_api_key:
+    if effective_key("OPENROUTER_API_KEY"):
         chain.append(_openrouter)
-    if settings.github_token:
+    if effective_key("GITHUB_TOKEN"):
         chain.append(_github)
-    if settings.nvidia_api_key:
+    if effective_key("NVIDIA_NIM_API_KEY"):
         chain.append(_nvidia)
 
     # Subscription providers come before paid API to prefer zero-cost
     if _chatgpt_subscription.is_available:
         chain.append(_chatgpt_subscription)
 
-    if settings.anthropic_api_key:
+    if effective_key("ANTHROPIC_API_KEY"):
         chain.append(_anthropic)
-    if settings.openai_api_key:
+    if effective_key("OPENAI_API_KEY"):
         chain.append(_openai)
 
+    return chain
+
+
+def _build_cloud_fallback() -> FallbackProvider:
+    """Build a fallback chain of all cloud providers (no Ollama)."""
+    chain = _cloud_chain_members()
     if not chain:
         # No cloud providers at all — use LiteLLM as a last resort (it'll error with no keys)
         chain.append(_litellm)
-
     log.info("Cloud fallback chain: %d provider(s)", len(chain))
     return FallbackProvider(providers=chain)
 
@@ -203,38 +187,84 @@ def _build_cloud_fallback() -> FallbackProvider:
 _cloud_fallback = _build_cloud_fallback()
 
 
-# ── Default fallback chain (Ollama + cloud) ──────────────────────────────────
-
 def _build_default_fallback() -> FallbackProvider:
     chain: list[ModelProvider] = [_local]  # always local-first
-
-    if settings.groq_api_key:
-        chain.append(_groq)
-    if settings.gemini_api_key or settings.gemini_use_adc:
-        chain.append(_gemini)
-    if settings.cerebras_api_key:
-        chain.append(_cerebras)
-    if settings.openrouter_api_key:
-        chain.append(_openrouter)
-    if settings.github_token:
-        chain.append(_github)
-    if settings.nvidia_api_key:
-        chain.append(_nvidia)
-
-    # Subscription providers come before paid API to prefer zero-cost
-    if _chatgpt_subscription.is_available:
-        chain.append(_chatgpt_subscription)
-
-    if settings.anthropic_api_key:
-        chain.append(_anthropic)
-    if settings.openai_api_key:
-        chain.append(_openai)
-
+    chain.extend(_cloud_chain_members())
     log.info("Default fallback chain: %d provider(s)", len(chain))
     return FallbackProvider(providers=chain)
 
 
 _default_fallback = _build_default_fallback()
+
+
+# ── FU-009: platform-secret hot-reload ────────────────────────────────────────
+
+# env key → the provider instance whose credential it is; used to lift the
+# credential-guard cooldown when a key changes so a fixed key is retried
+# immediately instead of waiting out a stale rejection.
+_KEY_PROVIDER: dict[str, ModelProvider] = {
+    "ANTHROPIC_API_KEY": _anthropic,
+    "OPENAI_API_KEY": _openai,
+    "GROQ_API_KEY": _groq,
+    "GEMINI_API_KEY": _gemini,
+    "CEREBRAS_API_KEY": _cerebras,
+    "OPENROUTER_API_KEY": _openrouter,
+    "GITHUB_TOKEN": _github,
+    "NVIDIA_NIM_API_KEY": _nvidia,
+    "CHATGPT_ACCESS_TOKEN": _chatgpt_subscription,
+}
+
+
+async def refresh_platform_secrets(key_hint: str = "") -> list[str] | None:
+    """Re-resolve platform secrets and apply them to the running gateway.
+
+    Invoked by the nova:secrets:invalidate subscriber (main.py) on every
+    dashboard key change, once per (re)subscribe as catch-up, and by the
+    boot-reconcile retry loop. Idempotent and safe to call any time.
+    Returns the env keys whose value changed, or None when the resolve
+    failed (current keys kept; callers may retry).
+
+    LiteLLM providers read os.environ per request, so the overlay recompute
+    alone re-keys them; Gemini and ChatGPT capture credentials at construction
+    and are re-keyed in place (MODEL_REGISTRY holds their instances, so the
+    instances must survive). Chains are swapped in place for the same reason.
+    """
+    from nova_worker_common.platform_secrets import fetch_platform_secrets
+
+    try:
+        resolved = await fetch_platform_secrets(
+            orchestrator_url=settings.orchestrator_url,
+            admin_secret=settings.nova_admin_secret,
+            keys=list(SECRET_ENV_KEYS),
+        )
+    except Exception as e:
+        log.warning(
+            "Secret refresh skipped (hint=%s): resolve failed (%s) — keeping current keys",
+            key_hint or "-", e,
+        )
+        return None
+
+    changed = apply_env_overlay(resolved)
+    if not changed:
+        return []
+
+    if "GEMINI_API_KEY" in changed:
+        _gemini.rekey(effective_key("GEMINI_API_KEY"))
+    if "CHATGPT_ACCESS_TOKEN" in changed:
+        _chatgpt_subscription.refresh_token()
+
+    _cloud_fallback.replace_providers(_cloud_chain_members() or [_litellm])
+    _default_fallback.replace_providers([_local] + _cloud_chain_members())
+
+    for env_key in changed:
+        provider = _KEY_PROVIDER.get(env_key)
+        if provider is not None:
+            clear_credential_cooldown(provider.name)
+
+    # Names only — never log key material.
+    log.info("platform_secrets: hot-reloaded %d key(s): %s",
+             len(changed), sorted(changed))
+    return changed
 
 
 # ── Routing strategy from Redis ──────────────────────────────────────────────
@@ -636,21 +666,21 @@ def get_provider_catalog() -> list[dict]:
         {"slug": "chatgpt",     "name": "ChatGPT Plus/Pro",    "type": "subscription", "instance": _chatgpt_subscription,
          "available": _chatgpt_subscription.is_available, "default_model": settings.default_chatgpt_model},
         {"slug": "groq",        "name": "Groq",                "type": "free",         "instance": _groq,
-         "available": bool(settings.groq_api_key),        "default_model": settings.default_groq_model},
+         "available": bool(effective_key("GROQ_API_KEY")),       "default_model": settings.default_groq_model},
         {"slug": "gemini",      "name": "Gemini",              "type": "free",         "instance": _gemini,
-         "available": bool(settings.gemini_api_key or settings.gemini_use_adc), "default_model": settings.default_gemini_model},
+         "available": bool(effective_key("GEMINI_API_KEY") or settings.gemini_use_adc), "default_model": settings.default_gemini_model},
         {"slug": "cerebras",    "name": "Cerebras",            "type": "free",         "instance": _cerebras,
-         "available": bool(settings.cerebras_api_key),    "default_model": settings.default_cerebras_model},
+         "available": bool(effective_key("CEREBRAS_API_KEY")),   "default_model": settings.default_cerebras_model},
         {"slug": "openrouter",  "name": "OpenRouter",          "type": "free",         "instance": _openrouter,
-         "available": bool(settings.openrouter_api_key),  "default_model": settings.default_openrouter_model},
+         "available": bool(effective_key("OPENROUTER_API_KEY")), "default_model": settings.default_openrouter_model},
         {"slug": "github",      "name": "GitHub Models",       "type": "free",         "instance": _github,
-         "available": bool(settings.github_token),        "default_model": settings.default_github_model},
+         "available": bool(effective_key("GITHUB_TOKEN")),       "default_model": settings.default_github_model},
         {"slug": "nvidia",      "name": "NVIDIA NIM",          "type": "free",         "instance": _nvidia,
-         "available": bool(settings.nvidia_api_key),      "default_model": settings.default_nvidia_model},
+         "available": bool(effective_key("NVIDIA_NIM_API_KEY")), "default_model": settings.default_nvidia_model},
         {"slug": "anthropic",   "name": "Anthropic API",       "type": "paid",         "instance": _anthropic,
-         "available": bool(settings.anthropic_api_key),   "default_model": "claude-sonnet-4-6"},
+         "available": bool(effective_key("ANTHROPIC_API_KEY")),  "default_model": "claude-sonnet-4-6"},
         {"slug": "openai",      "name": "OpenAI API",          "type": "paid",         "instance": _openai,
-         "available": bool(settings.openai_api_key),      "default_model": "gpt-4o"},
+         "available": bool(effective_key("OPENAI_API_KEY")),     "default_model": "gpt-4o"},
         {"slug": "vllm",        "name": "vLLM",                "type": "local",        "instance": _vllm,
          "default_model": None},
         {"slug": "lmstudio",    "name": "LM Studio",           "type": "local",        "instance": _lmstudio,
