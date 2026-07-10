@@ -13,6 +13,32 @@ from nova_contracts import ToolCall
 
 log = logging.getLogger(__name__)
 
+# First path segment of prefixed cloud model names (groq/…, nvidia_nim/…).
+CLOUD_MODEL_PREFIXES = frozenset({
+    "gemini", "gemini-adc", "cerebras", "openrouter", "openai", "anthropic",
+    "groq", "nvidia", "nvidia_nim", "github", "chatgpt",
+})
+
+# Bare (unprefixed) names that are always cloud models.
+_CLOUD_BARE_PREFIXES = ("claude-", "gpt-", "gemini-", "o1-", "o3-", "o4-")
+
+
+def is_cloud_model_name(model: str | None) -> bool:
+    """True when a model name unambiguously belongs to a cloud provider.
+
+    Used on both sides of the local↔cloud fallback seam: the local leg
+    substitutes its own default for cloud names (LocalInferenceProvider),
+    and the cloud legs substitute the configured cloud fallback model for
+    local names (FallbackProvider). A name that is neither (bare Ollama-style
+    like "llama3.2" or "openbmb/minicpm5:latest") is treated as local.
+    """
+    if not model:
+        return False
+    if "/" in model and model.split("/", 1)[0] in CLOUD_MODEL_PREFIXES:
+        return True
+    return model.startswith(_CLOUD_BARE_PREFIXES)
+
+
 # Standard: <tool_call> {json} </tool_call>
 _TOOL_CALL_TAG_RE = re.compile(r"<\|?tool_call\|?>\s*(.*?)\s*<\|?/?tool_call\|?>", re.DOTALL)
 _FENCE_RE = re.compile(r"```(?:json|tool_call)?", re.IGNORECASE)

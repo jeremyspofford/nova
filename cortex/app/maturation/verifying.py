@@ -273,6 +273,14 @@ async def _escalate(goal_id, goal, attempt, reason: str) -> str:
             )
         await emit_notification(goal_id, "goal_stuck",
             title=f"Goal '{goal['title']}' stuck — needs review")
+        from ..journal import push_notification
+        await push_notification(
+            "goal_stuck",
+            f"Goal stuck: {goal['title']}",
+            f"Verification exhausted after {goal['max_retries']} retries ({reason}). "
+            f"Paused until you review it on the Goals page.",
+            link="/goals",
+        )
         await emit_journal(goal_id, "verify.escalate.human", {"reason": reason, "attempt": attempt})
         return f"Verification exhausted → escalated to human ({reason})"
 

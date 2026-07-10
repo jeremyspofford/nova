@@ -120,6 +120,20 @@ function SpawnedChildrenLine({ goalId, count }: { goalId: string; count: number 
   )
 }
 
+/** Why the last cron fire didn't run — written by cortex to current_plan.last_fire_skip. */
+function FireSkipLine({ plan }: { plan: unknown }) {
+  const skip = (plan as { last_fire_skip?: { reason?: string; at?: string } } | null)
+    ?.last_fire_skip
+  if (!skip?.reason) return null
+  return (
+    <p className="mt-0.5 text-caption text-amber-600 dark:text-amber-400">
+      Last scheduled run skipped
+      {skip.at ? ` ${formatDistanceToNow(new Date(skip.at), { addSuffix: true })}` : ''}
+      {' — '}{skip.reason}
+    </p>
+  )
+}
+
 type StatusFilter = 'all' | 'active' | 'paused' | 'completed' | 'failed'
 
 const STATUS_FILTERS: { id: StatusFilter; label: string; color: SemanticColor }[] = [
@@ -707,6 +721,7 @@ function GoalCard({ goal }: { goal: Goal }) {
                 {goal.description}
               </p>
             )}
+            <FireSkipLine plan={goal.current_plan} />
             {goal.spec_children && goal.spec_children.length > 0 && (
               <div className="mt-1.5">
                 <SpawnedChildrenLine goalId={goal.id} count={goal.spec_children.length} />

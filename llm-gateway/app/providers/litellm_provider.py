@@ -93,6 +93,17 @@ class LiteLLMProvider(ModelProvider):
                     arguments=json.loads(tc.function.arguments or "{}"),
                 ))
 
+        # Some providers (Cerebras' model-not-found path, notably) answer 200
+        # with a null message instead of an HTTP error. Returning "" here turns
+        # a provider failure into a silent empty completion the caller can't
+        # diagnose — raise so the fallback chain moves on and a total failure
+        # surfaces as a real error.
+        if not message.content and not tool_calls:
+            raise RuntimeError(
+                f"{self.name} returned an empty response for model="
+                f"{kwargs['model']} (finish_reason={choice.finish_reason!r})"
+            )
+
         usage = response.usage
         cost = None
         if usage:

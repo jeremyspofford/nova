@@ -44,6 +44,29 @@ async def notify_config(_: AdminDep):
     }
 
 
+class PublishRequest(BaseModel):
+    event: str = "agent_push"
+    title: str
+    message: str = ""
+    click: str | None = None
+    priority: int | None = None
+
+
+@router.post("/publish")
+async def notify_publish(req: PublishRequest, _: AdminDep):
+    """Internal publish seam for sibling services (cortex escalations).
+
+    Routes through notifier.notify so the push gets delivery receipts and an
+    Inbox row like every orchestrator-originated notification. Best-effort by
+    design — `accepted` reflects the ntfy publish, not device delivery.
+    """
+    ok = await notify(
+        req.event, req.title, req.message,
+        click=req.click, priority=req.priority,
+    )
+    return {"accepted": ok}
+
+
 @router.get("/log")
 async def notify_log(_: AdminDep, limit: int = Query(default=50, ge=1, le=200)):
     """Recent delivery receipts, newest first.

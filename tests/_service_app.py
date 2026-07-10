@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 _SERVICE_DIRS = {
     "orchestrator", "cortex", "memory-service", "chat-api", "recovery",
     "knowledge-worker", "voice-service", "intel-worker", "browser-worker",
+    "llm-gateway",
 }
 _EXTRA_PATHS = ("nova-contracts", "nova-worker-common")
 

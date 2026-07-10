@@ -204,3 +204,29 @@ async def emit_notification(
         await redis.publish("nova:notifications", json.dumps(payload))
     except Exception as e:
         log.warning("emit_notification failed (kind=%s goal=%s): %s", kind, goal_id, e)
+
+
+async def push_notification(
+    event: str,
+    title: str,
+    message: str = "",
+    link: str | None = None,
+) -> None:
+    """Phone push via the orchestrator's notifier (ntfy + Inbox + receipts).
+
+    emit_notification only reaches an open dashboard tab (SSE); escalations
+    that park a goal until a human acts must reach the operator's phone.
+    Best-effort — never raises, never blocks the thinking loop.
+    """
+    from .config import settings
+
+    try:
+        from .clients import get_orchestrator
+        orch = get_orchestrator()
+        await orch.post(
+            "/api/v1/notify/publish",
+            json={"event": event, "title": title, "message": message, "click": link},
+            headers={"X-Admin-Secret": settings.admin_secret},
+        )
+    except Exception as e:
+        log.warning("push_notification failed (event=%s): %s", event, e)

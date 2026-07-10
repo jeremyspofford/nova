@@ -291,6 +291,7 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
         if state.winner is None:
             state.action_taken = "idle"
             state.outcome = "No drives have urgency — nothing to do"
+            await _record_undispatched_fires(state)
 
             # Use idle time for memory consolidation
             if state.budget_tier != "none":
@@ -319,6 +320,11 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
         # ── ACT ───────────────────────────────────────────────────────────
         state.action_taken = drive.name
         state.outcome = await _execute_action(drive, plan, state)
+
+        # Schedule fires are consumed this cycle whether or not their goal was
+        # dispatched — journal any that weren't, so a "missing" cron run is
+        # explainable from the goal's history (2026-07-10 audit bug 3).
+        await _record_undispatched_fires(state)
 
         # ── TRACK ────────────────────────────────────────────────────────
         # Background monitor handles task polling — results collected in PERCEIVE.
@@ -383,6 +389,40 @@ async def run_cycle(stimuli: list[dict] | None = None) -> CycleState:
             await _report_outcome(state, state.resolved_model, 0.2, 0.9)
 
     return state
+
+
+async def _record_undispatched_fires(state: CycleState) -> None:
+    """Journal schedule fires this cycle consumed without dispatching.
+
+    serve.assess records fires its own filters dropped (context.fire_skips);
+    this covers the rest: the fired goal lost goal selection, another drive
+    won the cycle, or the cycle went idle. Best-effort — never raises.
+    """
+    try:
+        serve_res = next((r for r in state.drive_results if r.name == "serve"), None)
+        if serve_res is None:
+            return
+        fired = serve_res.context.get("scheduled_goal_ids") or []
+        if not fired:
+            return
+        already_recorded = set(serve_res.context.get("fire_skips") or [])
+        from .journal import emit_journal
+        winner = state.winner.result.name if state.winner else None
+        for gid in fired:
+            if gid in already_recorded or (state.goal_id and gid == str(state.goal_id)):
+                continue
+            if winner == "serve" and state.goal_id:
+                reason = f"cycle worked goal {state.goal_id} instead"
+            elif winner is None:
+                reason = "cycle went idle (no drive urgency or budget exhausted)"
+            else:
+                reason = f"drive '{winner}' won this cycle"
+            log.warning(
+                "Scheduled fire consumed without dispatch for goal %s: %s", gid, reason,
+            )
+            await emit_journal(gid, "fire.skipped", {"reason": reason})
+    except Exception as e:
+        log.debug("undispatched-fire bookkeeping failed: %s", e)
 
 
 async def _plan_action(drive: DriveResult, state: CycleState) -> str:
@@ -1223,6 +1263,21 @@ async def _record_cycle_reflection(state: CycleState) -> None:
             await emit(GOAL_STUCK, "cortex",
                        payload={"goal_id": state.goal_id, "title": goal_title,
                                 "failure_count": failure_count, "approaches_tried": approaches_tried[:5]})
+            # Escalation parks the goal (cron stops firing while maturation is
+            # 'review') — the operator must be TOLD, not left to discover it
+            # on the next /goals visit (2026-07-10 audit bug 4).
+            from .journal import emit_notification, push_notification
+            await emit_notification(
+                state.goal_id, "goal_stuck",
+                title=f"Goal '{goal_title}' stuck — moved to review",
+            )
+            await push_notification(
+                "goal_stuck",
+                f"Goal stuck: {goal_title}",
+                f"{failure_count} consecutive failures. Scheduled runs are paused "
+                f"until you review it on the Goals page.",
+                link="/goals",
+            )
     except Exception as e:
         log.warning("Stuck detection failed for goal %s: %s", state.goal_id, e)
 
