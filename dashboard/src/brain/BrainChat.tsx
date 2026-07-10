@@ -19,7 +19,16 @@ import { newMsgId, useChatStore, type Message } from '../stores/chat-store'
 import { MessageBubble } from '../pages/chat/MessageBubble'
 import { Button, Select, Textarea } from '../components/ui'
 
-export function BrainChat({ open, onClose }: { open: boolean; onClose: () => void }) {
+const MIN_W = 320
+const MAX_W = 720
+const clampW = (w: number) => Math.max(MIN_W, Math.min(MAX_W, Math.round(w)))
+
+export function BrainChat({ open, width, onWidthChange, onClose }: {
+  open: boolean
+  width: number
+  onWidthChange: (w: number) => void
+  onClose: () => void
+}) {
   const { name: aiName } = useNovaIdentity()
   const {
     messages, setMessages,
@@ -44,6 +53,7 @@ export function BrainChat({ open, onClose }: { open: boolean; onClose: () => voi
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -115,13 +125,49 @@ export function BrainChat({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <aside
-      className={`absolute top-12 right-0 bottom-0 z-30 flex w-[400px] max-w-[calc(100%-16px)] flex-col
+      className={`absolute top-12 right-0 bottom-0 z-30 flex max-w-[calc(100%-16px)] flex-col
                   border-l border-white/[0.10] bg-[rgba(10,22,21,0.85)] backdrop-blur-2xl
                   shadow-[0_8px_40px_rgba(0,0,0,0.5)] transition-transform duration-200
                   ${open ? 'translate-x-0' : 'translate-x-full'}`}
+      style={{ width }}
       aria-label={`Chat with ${aiName}`}
       aria-hidden={!open}
     >
+      {/* drag handle: resize the drawer — double-click resets, arrow keys nudge */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chat drawer"
+        aria-valuemin={MIN_W}
+        aria-valuemax={MAX_W}
+        aria-valuenow={width}
+        tabIndex={0}
+        title="Drag to resize · double-click to reset"
+        className="absolute inset-y-0 -left-1 z-10 w-2.5 cursor-col-resize outline-none
+                   hover:bg-teal-400/25 active:bg-teal-400/40 focus-visible:bg-teal-400/40"
+        onPointerDown={e => {
+          e.preventDefault()
+          resizeRef.current = { startX: e.clientX, startW: width }
+          e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={e => {
+          const r = resizeRef.current
+          if (r) onWidthChange(clampW(r.startW + r.startX - e.clientX))
+        }}
+        onPointerUp={e => {
+          resizeRef.current = null
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+        }}
+        onPointerCancel={e => {
+          resizeRef.current = null
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+        }}
+        onDoubleClick={() => onWidthChange(400)}
+        onKeyDown={e => {
+          if (e.key === 'ArrowLeft') { e.preventDefault(); onWidthChange(clampW(width + 24)) }
+          if (e.key === 'ArrowRight') { e.preventDefault(); onWidthChange(clampW(width - 24)) }
+        }}
+      />
       <div className="flex items-center gap-2 border-b border-white/[0.08] px-4 py-2.5">
         <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-content-secondary">
           Chat · <span className="text-teal-400">{aiName}</span>
