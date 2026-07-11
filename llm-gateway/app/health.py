@@ -44,9 +44,36 @@ async def readiness():
 
 @health_router.get("/providers")
 async def provider_status():
-    """Return availability and model count for each configured LLM provider."""
+    """Return availability and model count for each configured LLM provider.
+
+    Overlays validated discovery onto the static catalog: `key_status` comes
+    from a real provider call (cached ≤5 min), `available` means the provider
+    actually answered — a present-but-rejected key shows `invalid_key`, and
+    `model_count` prefers the live discovered list over the hardcoded registry.
+    """
+    from app.discovery import provider_key_statuses
     from app.registry import get_provider_catalog
-    return get_provider_catalog()
+
+    catalog = get_provider_catalog()
+    try:
+        statuses = await provider_key_statuses()
+    except Exception:
+        statuses = {}
+
+    for entry in catalog:
+        disc = statuses.get(entry["slug"])
+        if disc is None:
+            entry["key_status"] = "unknown"
+            entry["key_detail"] = ""
+            continue
+        entry["key_status"] = disc.key_status
+        entry["key_detail"] = disc.detail
+        # "configured" (key present / local backend active) stays visible via
+        # key_status != "not_configured"; available now means "answers".
+        entry["available"] = disc.key_status == "ok"
+        if disc.models:
+            entry["model_count"] = len(disc.models)
+    return catalog
 
 
 async def _pick_local_test_model() -> str | None:

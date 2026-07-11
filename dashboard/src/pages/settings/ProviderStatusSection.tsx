@@ -174,13 +174,31 @@ export function ProviderStatusSection() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     {!isLocal && secretKey && (
-                      <Badge color={hasKey ? 'success' : 'neutral'} size="sm">
-                        {hasKey ? 'Connected' : 'Not configured'}
-                      </Badge>
+                      // Verdict from a real provider call (validated discovery),
+                      // not key presence — a rejected key says so.
+                      p.key_status === 'ok' ? (
+                        <Badge color="success" size="sm">Connected</Badge>
+                      ) : p.key_status === 'invalid_key' ? (
+                        <span title={p.key_detail}>
+                          <Badge color="danger" size="sm">Key rejected</Badge>
+                        </span>
+                      ) : p.key_status === 'error' ? (
+                        <span title={p.key_detail}>
+                          <Badge color="warning" size="sm">Unreachable</Badge>
+                        </span>
+                      ) : p.key_status === 'not_configured' || !hasKey ? (
+                        <Badge color="neutral" size="sm">Not configured</Badge>
+                      ) : (
+                        <Badge color="neutral" size="sm">Key set (unverified)</Badge>
+                      )
                     )}
                     <Badge color={badgeColor as any} size="sm">{badgeLabel}</Badge>
                   </div>
                 </div>
+
+                {p.key_status === 'invalid_key' && p.key_detail && (
+                  <p className="text-caption text-danger">{p.key_detail}</p>
+                )}
 
                 <div className="flex items-center justify-between text-caption text-content-tertiary">
                   <span>{p.model_count} model{p.model_count !== 1 ? 's' : ''}</span>
@@ -250,7 +268,7 @@ export function ProviderStatusSection() {
                     variant="ghost"
                     size="sm"
                     onClick={() => handleTest(p.slug)}
-                    disabled={!p.available}
+                    disabled={p.key_status ? p.key_status === 'not_configured' : !p.available}
                     loading={testing === p.slug}
                   >
                     Test

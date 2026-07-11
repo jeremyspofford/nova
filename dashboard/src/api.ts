@@ -730,11 +730,17 @@ export const getCortexJournal = (limit = 20) =>
 
 // ── Provider status ──────────────────────────────────────────────────────────
 
+export type ProviderKeyStatus = 'ok' | 'not_configured' | 'invalid_key' | 'error' | 'unknown'
+
 export interface ProviderStatus {
   slug: string
   name: string
   type: 'subscription' | 'free' | 'paid' | 'local'
+  /** True when the provider answered a real (validated) discovery call. */
   available: boolean
+  /** Verdict from validated discovery — not mere key presence. */
+  key_status?: ProviderKeyStatus
+  key_detail?: string
   model_count: number
   default_model: string
 }
@@ -781,6 +787,8 @@ export interface ProviderModelList {
   name: string
   type: 'local' | 'subscription' | 'free' | 'paid'
   available: boolean
+  key_status?: ProviderKeyStatus
+  detail?: string
   auth_methods: string[]
   models: DiscoveredModel[]
 }
@@ -794,6 +802,20 @@ export interface OllamaPulledModel {
   modified_at: string
   loaded: boolean
 }
+
+// ── Model assignment validation ──────────────────────────────────────────────
+
+export interface ModelAssignment {
+  scope: 'pod_agent' | 'config'
+  name: string
+  model: string
+  status: 'ok' | 'auto' | 'provider_unavailable' | 'unknown_model' | 'unverified'
+  note: string
+}
+
+export const getModelAssignments = () =>
+  apiFetch<{ assignments: ModelAssignment[]; problem_count: number; error?: string }>(
+    '/api/v1/models/assignments')
 
 export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v1'
 export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
