@@ -18,3 +18,30 @@
 # Docker socket-proxy change with no schema migration, so the number was
 # never claimed. Intentional skip — confirmed via gh pr view 3.
 084
+
+# 088_engram_missing_columns.sql was deliberately deleted in commit
+# 76a9012 ("delete migration 088 — it broke every fresh install for a
+# dead feature") after the engram memory backend was shelved.
+088
+
+# 105-119 were reserved by the feature/autonomy-core lane (2026-07-09
+# multi-session split; see PR #33) but never claimed — the branch merged
+# with its schema changes numbered inside the existing sequence, and no
+# file with these numbers ever existed in any ref (verified via
+# `git log --all --diff-filter=A` on 2026-07-11). The sequence resumes
+# at 120 (brain-ux lane).
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119

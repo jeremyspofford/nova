@@ -16,9 +16,8 @@ import logging
 import time
 from collections import deque
 
-from nova_contracts import BlastRadius, ToolDefinition
-
 from app.notifier import notify
+from nova_contracts import BlastRadius, ToolDefinition
 
 log = logging.getLogger(__name__)
 

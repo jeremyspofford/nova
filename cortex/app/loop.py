@@ -11,7 +11,6 @@ import logging
 from .clients import get_orchestrator
 from .config import settings
 from .cycle import run_cycle
-from .db import get_pool
 from .stimulus import brpop_stimulus, close_redis
 
 log = logging.getLogger(__name__)

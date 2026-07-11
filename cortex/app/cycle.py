@@ -526,6 +526,7 @@ async def _plan_action(drive: DriveResult, state: CycleState) -> str:
         )
 
     from datetime import date
+
     from .identity import get_identity
     name, persona = await get_identity()
     persona_block = (

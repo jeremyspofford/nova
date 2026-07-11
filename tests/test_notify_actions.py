@@ -27,7 +27,7 @@ sys.path.insert(0, str(_REPO / "nova-contracts"))
 sys.path.insert(0, str(_REPO / "nova-worker-common"))
 
 import json
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest

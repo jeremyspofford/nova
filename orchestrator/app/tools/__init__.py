@@ -231,10 +231,9 @@ async def _dispatch_mcp_via_consent(
     rule) approves. On approval the approval worker re-executes the call via
     ``executor.execute_approved``'s ``mcp__`` branch.
     """
-    from nova_contracts import BlastRadius
-
     from app.pipeline.tools.registry import execute_mcp_tool, get_server_meta
     from app.tools import mcp_classify
+    from nova_contracts import BlastRadius
 
     parts = name.split("__", 2)
     server_name = parts[1] if len(parts) == 3 else ""

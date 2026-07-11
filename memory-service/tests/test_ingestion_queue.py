@@ -13,7 +13,6 @@ import logging
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app import ingestion
 from app.config import settings
 
