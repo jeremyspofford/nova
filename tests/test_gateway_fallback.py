@@ -32,7 +32,7 @@ def test_cloud_model_name_detection(gw):
     for name in (
         "groq/llama-3.3-70b-versatile", "gemini/gemini-2.5-flash",
         "nvidia_nim/meta/llama-3.3-70b-instruct", "chatgpt/gpt-4o",
-        "cerebras/llama3.1-8b", "openrouter/meta-llama/llama-3.1-8b-instruct:free",
+        "cerebras/llama3.1-8b", "openrouter/meta-llama/llama-3.3-70b-instruct:free",
         "claude-sonnet-4-6", "gpt-4o", "gemini-2.5-flash",
     ):
         assert utils.is_cloud_model_name(name), name

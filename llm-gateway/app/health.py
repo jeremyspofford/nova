@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 
@@ -6,6 +7,15 @@ from fastapi import APIRouter
 
 log = logging.getLogger(__name__)
 health_router = APIRouter(prefix="/health", tags=["health"])
+
+# Per-candidate budgets for the provider test probe. Without these a hung
+# upstream (NVIDIA NIM completions can stall for minutes) rides litellm's
+# 600s default and the dashboard's nginx proxy 504s at 60s instead of the
+# probe reporting anything useful. Local gets one generous budget (cold
+# model loads are legitimate); cloud gets a short one so trying three
+# candidates still finishes under the proxy cap.
+_TEST_TIMEOUT_CLOUD = 15.0
+_TEST_TIMEOUT_LOCAL = 55.0
 
 
 @health_router.get("/live")
@@ -90,10 +100,41 @@ async def _pick_local_test_model() -> str | None:
     return None
 
 
+async def _cloud_test_candidates(slug: str, default_model: str) -> list[str]:
+    """Models to smoke-test a cloud provider, best-first.
+
+    Static per-provider defaults go stale (OpenRouter retired its
+    llama-3.1-8b :free slug), and free-tier models are individually
+    rate-limited upstream at any given moment — so test the default plus a
+    couple of discovered alternates before calling the provider broken.
+    A default that discovery no longer lists is dropped entirely."""
+    candidates = [default_model] if default_model else []
+    try:
+        from app.discovery import provider_key_statuses
+        disc = (await provider_key_statuses()).get(slug)
+    except Exception:
+        return candidates
+    if not disc or disc.key_status != "ok" or not disc.models:
+        return candidates
+    listed = [m.id for m in disc.models]
+    if default_model and default_model not in listed:
+        candidates = []
+    for mid in listed:
+        if mid not in candidates:
+            candidates.append(mid)
+        if len(candidates) >= 3:
+            break
+    return candidates
+
+
 @health_router.post("/providers/{slug}/test")
 async def test_provider(slug: str):
     """Send a minimal completion to a provider and report latency."""
-    from app.registry import get_local_provider, get_provider, get_provider_catalog
+    from app.registry import (
+        get_local_provider,
+        get_provider_catalog,
+        get_provider_for_slug,
+    )
     from nova_contracts import CompleteRequest, Message
 
     catalog = get_provider_catalog()
@@ -115,17 +156,47 @@ async def test_provider(slug: str):
             if not model:
                 return {"ok": False, "latency_ms": 0,
                         "error": "No model is loaded — load one from the list above, then test."}
+            candidates = [model]
         else:
-            provider = await get_provider(model)
-        req = CompleteRequest(
-            model=model,
-            messages=[Message(role="user", content="Say hi")],
-            max_tokens=5,
-        )
-        t0 = time.monotonic()
-        await provider.complete(req)
-        latency = int((time.monotonic() - t0) * 1000)
-        return {"ok": True, "latency_ms": latency}
+            # Probe the named provider directly — get_provider() applies
+            # routing strategy / subscription preference and can silently
+            # test a different backend than the one the user clicked.
+            provider = get_provider_for_slug(slug)
+            if provider is None:
+                return {"ok": False, "latency_ms": 0,
+                        "error": f"No provider instance for slug: {slug}"}
+            candidates = await _cloud_test_candidates(slug, model)
+            if not candidates:
+                return {"ok": False, "latency_ms": 0,
+                        "error": "No models discovered for this provider"}
+
+        timeout = (_TEST_TIMEOUT_LOCAL if entry.get("type") == "local"
+                   else _TEST_TIMEOUT_CLOUD)
+        last_err: Exception | None = None
+        for m in candidates:
+            req = CompleteRequest(
+                model=m,
+                messages=[Message(role="user", content="Say hi")],
+                max_tokens=16,
+            )
+            t0 = time.monotonic()
+            try:
+                await asyncio.wait_for(provider.complete(req), timeout=timeout)
+            except asyncio.TimeoutError:
+                last_err = RuntimeError(
+                    f"{m} did not answer within {timeout:.0f}s")
+                continue
+            except Exception as e:
+                # An empty completion truncated by our tiny token budget
+                # (finish_reason='length' — reasoning models spend it all
+                # before any content) still proves the provider answered,
+                # which is all this probe measures.
+                if "finish_reason='length'" not in str(e):
+                    last_err = e
+                    continue
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": True, "latency_ms": latency, "model": m}
+        raise last_err if last_err else RuntimeError("no models to test")
     except Exception as e:
         return {"ok": False, "latency_ms": 0, "error": str(e)}
 

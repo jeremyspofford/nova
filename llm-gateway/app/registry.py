@@ -595,10 +595,13 @@ MODEL_REGISTRY: dict[str, ModelProvider] = {
     # Cerebras Cloud and LiteLLM both use the no-dash form (`llama3.1-8b`).
     "cerebras/llama3.1-8b":              _cerebras,
 
-    # ── OpenRouter — free models available ────────────────────────────────────
-    "openrouter/meta-llama/llama-3.1-8b-instruct:free": _openrouter,
-    "openrouter/google/gemma-2-9b-it:free":             _openrouter,
-    "openrouter/mistralai/mistral-7b-instruct:free":    _openrouter,
+    # ── OpenRouter — free-tier seeds ──────────────────────────────────────────
+    # OpenRouter retires :free slugs without notice; discovery auto-registers
+    # the live free list when a key is present, so these only need to stay
+    # roughly current (verify against https://openrouter.ai/api/v1/models).
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free": _openrouter,
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free":  _openrouter,
+    "openrouter/qwen/qwen3-coder:free":                  _openrouter,
 
     # ── GitHub Models — 50-150 req/day free ───────────────────────────────────
     "github/gpt-4o-mini":                 _github,
@@ -878,6 +881,28 @@ def get_provider_sync(model: str) -> ModelProvider:
     """Synchronous provider lookup (no strategy awareness). Used by health checks."""
     provider = MODEL_REGISTRY.get(model) or MODEL_REGISTRY[DEFAULT_MODEL_KEY]
     return provider
+
+
+def get_provider_for_slug(slug: str) -> ModelProvider | None:
+    """The provider instance behind a catalog slug, for targeted probes.
+
+    Provider tests must hit the named provider — get_provider() applies
+    routing strategy and subscription preference, which can silently probe
+    a different backend than the one being tested."""
+    return {
+        "ollama": _ollama,
+        "chatgpt": _chatgpt_subscription,
+        "groq": _groq,
+        "gemini": _gemini,
+        "cerebras": _cerebras,
+        "openrouter": _openrouter,
+        "github": _github,
+        "nvidia": _nvidia,
+        "anthropic": _anthropic,
+        "openai": _openai,
+        "vllm": _vllm,
+        "lmstudio": _lmstudio,
+    }.get(slug)
 
 
 def get_ollama_provider() -> OllamaProvider:

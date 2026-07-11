@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     default_groq_model: str = "groq/llama-3.3-70b-versatile"
     default_gemini_model: str = "gemini/gemini-2.5-flash"
     default_cerebras_model: str = "cerebras/llama3.1-8b"   # llama3.3-70b was retired
-    default_openrouter_model: str = "openrouter/meta-llama/llama-3.1-8b-instruct:free"
+    default_openrouter_model: str = "openrouter/meta-llama/llama-3.3-70b-instruct:free"  # 3.1-8b :free was retired
     default_github_model: str = "github/gpt-4o-mini"
     default_nvidia_model: str = "nvidia_nim/meta/llama-3.3-70b-instruct"
     default_chatgpt_model: str = "chatgpt/gpt-4o"
