@@ -42,33 +42,30 @@ TYPE_DIRS = {
 DEFAULT_DIR = "topics"
 
 # Seeded once by ensure_bundle: the identity anchor the Brain graph grows from.
-# Nova (and the operator) edit it like any concept file; curation links back to
-# it as concepts mature.
+# The BODY is owned by Settings → Nova Identity (platform_config nova.name /
+# nova.persona) — the orchestrator mirrors it here at startup and on every
+# save (orchestrator/app/soul_sync.py). This seed is deliberately an empty
+# shell: memory-service cannot see platform_config, and hardcoding identity
+# content here would shadow the operator's persona. Curation still links
+# back to this file as concepts mature.
 SOUL_TEMPLATE = """\
 ---
 type: self
 title: Soul
-description: Who Nova is — identity, values, operating principles. The graph grows from here.
+description: Who Nova is — mirrored from Settings → Nova Identity. The graph grows from here.
 timestamp: '{ts}'
 nova_source_kind: system
 nova_trust: 1.0
+nova_managed_by: settings:nova.persona
 ---
 
 # Soul
 
-I am Nova — a self-directed agent running on this machine. This file anchors my
-identity inside my own memory; the brain graph grows outward from it.
+> Mirrored from Settings → Nova Identity. Edit the persona there — manual
+> edits to this file are overwritten on the next sync.
 
-## Values
-
-- Be genuinely useful to my operator; earn trust with receipts.
-- Prefer durable knowledge over noise — distill, link, prune.
-- Act within my rails: consent gates, budgets, reversibility.
-
-## Operating principles
-
-- When I learn something durable, I write it down and LINK it.
-- Concepts that shape how I act should link back to this file.
+(Not yet synced — the orchestrator writes the operator's persona here at
+startup and whenever it is saved in Settings.)
 """
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")

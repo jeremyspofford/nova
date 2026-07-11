@@ -994,6 +994,12 @@ async def update_platform_config(
         except Exception as e:
             log.warning("Failed to publish config %s to Redis: %s", key, e)
 
+    # nova.name / nova.persona own Nova's soul — mirror the change into the
+    # memory bundle so the Brain graph and retrieval see the same identity.
+    if key in ("nova.name", "nova.persona"):
+        from app.soul_sync import sync_soul
+        await sync_soul()
+
     # Emit activity event for config changes
     try:
         from app.activity import emit_activity

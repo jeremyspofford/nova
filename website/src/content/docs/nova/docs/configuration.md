@@ -146,7 +146,7 @@ These settings are managed from the dashboard Settings page (Nova Identity secti
 | Key | Description | Default |
 |-----|-------------|---------|
 | `nova.name` | Display name used in the system prompt, toolbar, and chat UI | `Nova` |
-| `nova.persona` | Personality guidelines injected into the system prompt's `## Identity` block. Defines communication style, tone, and character. | *(empty)* |
+| `nova.persona` | Personality guidelines injected into the system prompt's `## Identity` block. Defines communication style, tone, and character. Source of truth for Nova's soul: saving it (or `nova.name`) mirrors the identity into the memory bundle's `self/soul.md`, the anchor node of the Brain graph. | *(empty)* |
 | `nova.greeting` | Opening message shown in the Chat page before the user types. Supports `{name}` placeholder which auto-resolves to the current name. | `Hello! I'm {name}. I have access to your workspace...` |
 
 Changes take effect immediately -- no restart required. The AI's system prompt is assembled dynamically:
