@@ -112,6 +112,22 @@ export function ProviderCard({ provider }: { provider: ProviderModelList }) {
               </p>
             )}
           </div>
+        ) : provider.key_status === 'invalid_key' ? (
+          <div className="space-y-2">
+            <p className="text-caption text-danger">
+              API key rejected by the provider{provider.detail ? ` — ${provider.detail}` : '.'}
+            </p>
+            <button
+              onClick={() => navigate('/settings#provider-status')}
+              className="inline-flex items-center gap-1 text-caption text-accent hover:underline"
+            >
+              Replace key in Settings <ExternalLink className="h-3 w-3" />
+            </button>
+          </div>
+        ) : provider.key_status === 'error' ? (
+          <p className="text-caption text-amber-600 dark:text-amber-400">
+            Provider unreachable{provider.detail ? ` — ${provider.detail}` : '.'}
+          </p>
         ) : (
           <div className="space-y-2">
             <p className="text-caption text-content-tertiary">Not configured. To enable:</p>

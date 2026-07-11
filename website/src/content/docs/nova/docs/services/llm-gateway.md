@@ -116,8 +116,14 @@ never takes a request down with it:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/v1/models/discover` | Discover available models from all providers |
+| GET | `/v1/models/discover` | Validated discovery: each provider's live model list plus a `key_status` verdict from a real API call — `ok`, `not_configured`, `invalid_key` (credential rejected), or `error` (unreachable). `available` means the provider actually answered, not merely that a key is present. `?refresh=true` bypasses the 5-minute cache. |
 | GET | `/v1/models/ollama/*` | Ollama model management |
+
+The orchestrator cross-checks every configured model reference (pod agent
+pins, `llm.default_chat_model`, `llm.cloud_fallback_model`) against this
+validated catalog at `GET /api/v1/models/assignments`; the dashboard's Models
+page shows a warning banner for assignments that point at retired models or
+dead providers.
 
 ### Health
 

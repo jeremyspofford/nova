@@ -12,6 +12,7 @@ import {
   unloadOllamaModel,
   getProviderStatus,
   getLMStudioStatus,
+  getModelAssignments,
 } from '../api'
 import type { ProviderModelList, OllamaPulledModel, OllamaStatus } from '../api'
 import { CLOUD_PROVIDER_ORDER } from '../constants'
@@ -76,6 +77,51 @@ function OnboardingBanner({ onDismiss }: { onDismiss: () => void }) {
           <Button variant="secondary" size="sm" onClick={onDismiss}>
             Got it
           </Button>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+// ── Assignment health banner ──────────────────────────────────────────────────
+// Configured model references (pod agent pins, llm.* defaults) that validated
+// discovery says point at retired models or dead providers. Hidden when clean.
+
+function AssignmentHealthBanner() {
+  const { data } = useQuery({
+    queryKey: ['model-assignments'],
+    queryFn: getModelAssignments,
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const problems = (data?.assignments ?? []).filter(
+    a => a.status === 'provider_unavailable' || a.status === 'unknown_model',
+  )
+  if (problems.length === 0) return null
+
+  return (
+    <Card className="p-4 border-warning-dim">
+      <div className="flex gap-3">
+        <AlertTriangle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+        <div className="space-y-2 min-w-0">
+          <p className="text-compact font-medium text-content-primary">
+            {problems.length} model assignment{problems.length !== 1 ? 's' : ''} point
+            {problems.length === 1 ? 's' : ''} at models that aren't actually available
+          </p>
+          <ul className="space-y-1">
+            {problems.map(a => (
+              <li key={`${a.scope}:${a.name}`} className="text-caption text-content-secondary">
+                <span className="font-medium">{a.name}</span>
+                {' → '}
+                <code className="text-mono-sm">{a.model}</code>
+                <span className="text-content-tertiary"> — {a.note}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-caption text-content-tertiary">
+            These fail at request time. Repoint them (Pods page / Settings → LLM Routing)
+            or fix the provider key below.
+          </p>
         </div>
       </div>
     </Card>
@@ -403,6 +449,9 @@ export function Models() {
 
       {/* Onboarding Banner — amber-dim for CPU-only warning */}
       {showOnboarding && <OnboardingBanner onDismiss={dismissOnboarding} />}
+
+      {/* Broken model assignments — pins pointing at retired models / dead providers */}
+      <AssignmentHealthBanner />
 
       {/* Active model hero — the one-second answer */}
       {activeBackend !== 'none' && (
