@@ -23,7 +23,7 @@ The Memory Service provides Nova's long-term memory behind a backend-agnostic AP
 | `index.md` | Auto-maintained root index — always injected into agent context |
 | `log.md` | Dated change log of memory writes |
 | `topics/`, `people/`, `projects/`, `preferences/` | Concept files (`<slug>.md`) |
-| `self/soul.md` | Seeded identity anchor — who Nova is; the Brain graph grows from it |
+| `self/soul.md` | Identity anchor — who Nova is; the Brain graph grows from it. Mirrored from Settings → Nova Identity (`nova.name` / `nova.persona`) by the orchestrator at startup and on every save — edit the persona there, not this file |
 | `journal/YYYY-MM-DD.md` | High-volume inbox for raw ingested digests |
 | `.nova/` | BM25 index + retrieval log (regenerated, safe to delete) |
 

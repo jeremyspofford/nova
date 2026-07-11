@@ -476,9 +476,16 @@ async def lifespan(app: FastAPI):
     _approval_worker_task = asyncio.create_task(
         approval_worker_loop(), name="approval-worker",
     )
+
+    # Reconcile the memory bundle's soul with Settings → Nova Identity —
+    # covers persona edits made while services were down and heals bundles
+    # seeded before the persona existed.
+    from app.soul_sync import soul_sync_on_startup
+    _soul_sync_task = asyncio.create_task(soul_sync_on_startup(), name="soul-sync")
+
     log.info(
         "Queue worker, reaper, effectiveness loop, chat scorer, auto-friction "
-        "subscriber, GitHub poller, and approval-worker started"
+        "subscriber, GitHub poller, approval-worker, and soul-sync started"
     )
 
     # Register quality loops + apply DB-stored agency
@@ -542,13 +549,14 @@ async def lifespan(app: FastAPI):
     _auto_friction_task.cancel()
     _approval_worker_task.cancel()
     _mcp_load_task.cancel()
+    _soul_sync_task.cancel()
     await _poller.stop()
     _poll_task.cancel()
     # Wait briefly for graceful shutdown
     await asyncio.gather(
         _queue_task, _reaper_task, _effectiveness_task, _chat_scorer_task,
         _auto_friction_task, _poll_task, _approval_worker_task,
-        _mcp_load_task,
+        _mcp_load_task, _soul_sync_task,
         return_exceptions=True,
     )
 
@@ -600,6 +608,7 @@ app.add_middleware(
     proxy_header=settings.trusted_proxy_header,
 )
 
+from app.model_assignments import router as model_assignments_router
 from app.notify_router import router as notify_router
 from app.quality_router import quality_router
 from app.secrets_router import router as secrets_router
@@ -624,3 +633,4 @@ app.include_router(quality_router)
 app.include_router(secrets_router)
 app.include_router(notify_router)
 app.include_router(webhooks_router)
+app.include_router(model_assignments_router)

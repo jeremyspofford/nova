@@ -545,7 +545,7 @@ export function Settings() {
                   'guidance, not the most comfortable answer. When the user\'s approach is flawed, ' +
                   'say so directly and explain why. Assume competence. Never patronize.'
                 }
-                description="Personality guidelines appended to every system prompt. Defines communication style, tone, and character."
+                description="Personality guidelines appended to every system prompt. Defines communication style, tone, and character. This is the source of truth for Nova's soul — saving mirrors it into memory (self/soul.md), the anchor node of the Brain graph."
                 onSave={handleSave}
                 saving={saveMutation.isPending}
               />
