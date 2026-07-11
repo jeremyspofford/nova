@@ -868,11 +868,32 @@ async def pull_ollama_model(req: PullRequest):
         ollama_url = await get_ollama_base_url()
         async with httpx.AsyncClient(base_url=ollama_url, timeout=_PULL_TIMEOUT) as client:
             resp = await client.post("/api/pull", json={"name": req.name, "stream": False})
-            resp.raise_for_status()
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail=f"Pull timed out after {_PULL_TIMEOUT}s")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama pull failed: {e}")
+
+    if resp.status_code >= 400:
+        # Ollama puts the reason in {"error": "..."} — pass it through instead
+        # of a generic 502, and translate the two common registry refusals.
+        try:
+            err = resp.json().get("error") or resp.text
+        except Exception:
+            err = resp.text
+        if "file does not exist" in err:
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{req.name}' is not in the Ollama registry — check the name at ollama.com/library",
+            )
+        if "newer version" in err.lower():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{req.name}' needs a newer Ollama than the one running. "
+                    "Restart Ollama from Settings → Local Inference (the restart pulls the latest image), then retry."
+                ),
+            )
+        raise HTTPException(status_code=502, detail=f"Ollama pull failed: {err}")
 
     # Auto-register the pulled model
     from app.registry import sync_ollama_models
