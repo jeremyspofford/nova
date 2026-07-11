@@ -89,11 +89,28 @@ class DiscoveredModel(BaseModel):
     registered: bool = False
 
 
+# Key/reachability verdict per provider, from a REAL API call (not key presence):
+#   ok             — the provider answered an authenticated request
+#   not_configured — no credential (or inactive local backend); nothing probed
+#   invalid_key    — provider rejected the credential (401/403)
+#   error          — configured but unreachable/failed (timeout, 5xx, DNS)
+KeyStatus = str  # "ok" | "not_configured" | "invalid_key" | "error" | "unknown"
+
+
+class ProviderDiscovery(BaseModel):
+    """Cached per-provider discovery result — models plus key validity."""
+    models: list[DiscoveredModel] = []
+    key_status: KeyStatus = "unknown"
+    detail: str = ""  # short human-readable failure/context note
+
+
 class ProviderModelList(BaseModel):
     slug: str
     name: str
     type: str  # local | subscription | free | paid
-    available: bool
+    available: bool  # key_status == "ok" — the provider actually answered
+    key_status: KeyStatus = "unknown"
+    detail: str = ""
     auth_methods: list[str]
     models: list[DiscoveredModel]
 
@@ -179,43 +196,33 @@ def _ensure_registered(model_id: str, provider: "ModelProvider") -> None:
 async def _discover_ollama() -> list[DiscoveredModel]:
     """List pulled Ollama models via /api/tags."""
     from app.registry import get_ollama_base_url
-    try:
-        ollama_url = await get_ollama_base_url()
-        async with httpx.AsyncClient(base_url=ollama_url, timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get("/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-            return [
-                DiscoveredModel(id=m["name"], registered=True)
-                for m in data.get("models", [])
-            ]
-    except Exception as e:
-        log.debug("Ollama discovery failed: %s", e)
-        return []
+    ollama_url = await get_ollama_base_url()
+    async with httpx.AsyncClient(base_url=ollama_url, timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get("/api/tags")
+        resp.raise_for_status()
+        data = resp.json()
+        return [
+            DiscoveredModel(id=m["name"], registered=True)
+            for m in data.get("models", [])
+        ]
 
 
 async def _discover_vllm() -> list[DiscoveredModel]:
     """Discover models from a running vLLM server."""
-    models = []
-    try:
-        from app.registry import _get_redis_config
-        url = await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
-        backend = await _get_redis_config("inference.backend", "ollama")
-        if backend != "vllm":
-            return []
+    from app.registry import _get_redis_config
+    url = await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{url}/v1/models")
-            if r.status_code == 200:
-                data = r.json()
-                from app.registry import _vllm
-                for m in data.get("data", []):
-                    model_id = m.get("id", "")
-                    if model_id:
-                        _ensure_registered(model_id, _vllm)
-                        models.append(DiscoveredModel(id=model_id, registered=True))
-    except Exception as e:
-        log.debug("vLLM discovery failed: %s", e)
+    models: list[DiscoveredModel] = []
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(f"{url}/v1/models")
+        r.raise_for_status()
+        data = r.json()
+        from app.registry import _vllm
+        for m in data.get("data", []):
+            model_id = m.get("id", "")
+            if model_id:
+                _ensure_registered(model_id, _vllm)
+                models.append(DiscoveredModel(id=model_id, registered=True))
     return models
 
 
@@ -226,182 +233,162 @@ async def _discover_lmstudio() -> list[DiscoveredModel]:
     backend \u2014 it may serve embeddings (llm.embed_provider=lmstudio) while
     another backend handles chat. Reaches the host via host.docker.internal.
     """
-    try:
-        from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
-        url = await _refresh_lmstudio_runtime_url()
-        await _lmstudio.check_health()
-        if not _lmstudio.is_available:
-            return []
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT, headers=_lmstudio._extra_headers) as client:
-            r = await client.get(f"{url}/v1/models")
-            r.raise_for_status()
-            data = r.json()
-        models: list[DiscoveredModel] = []
-        for m in data.get("data", []):
-            model_id = m.get("id", "")
-            if model_id:
-                _ensure_registered(model_id, _lmstudio)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-        return models
-    except Exception as e:
-        log.debug("LM Studio discovery failed: %s", e)
-        return []
+    from app.registry import _lmstudio, _refresh_lmstudio_runtime_url
+    url = await _refresh_lmstudio_runtime_url()
+    await _lmstudio.check_health()
+    if not _lmstudio.is_available:
+        raise RuntimeError(f"LM Studio server unreachable at {url}")
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT, headers=_lmstudio._extra_headers) as client:
+        r = await client.get(f"{url}/v1/models")
+        r.raise_for_status()
+        data = r.json()
+    models: list[DiscoveredModel] = []
+    for m in data.get("data", []):
+        model_id = m.get("id", "")
+        if model_id:
+            _ensure_registered(model_id, _lmstudio)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+    return models
 
+
+# Cloud discovery fns below intentionally do NOT catch errors — a 401/403 must
+# reach _discover_provider so it classifies the key as invalid instead of the
+# old behavior (swallow to [] at DEBUG, indistinguishable from "no models").
 
 async def _discover_groq() -> list[DiscoveredModel]:
     """List available Groq models via OpenAI-compatible /models endpoint."""
-    if not effective_key("GROQ_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {effective_key('GROQ_API_KEY')}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _groq
-            models = []
-            for m in data.get("data", []):
-                if not m.get("active", True):
-                    continue
-                model_id = f"groq/{m['id']}"
-                _ensure_registered(model_id, _groq)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("Groq discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {effective_key('GROQ_API_KEY')}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _groq
+        models = []
+        for m in data.get("data", []):
+            if not m.get("active", True):
+                continue
+            model_id = f"groq/{m['id']}"
+            _ensure_registered(model_id, _groq)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_anthropic() -> list[DiscoveredModel]:
     """List available Anthropic models."""
-    if not effective_key("ANTHROPIC_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api.anthropic.com/v1/models",
-                headers={
-                    "x-api-key": effective_key("ANTHROPIC_API_KEY"),
-                    "anthropic-version": "2023-06-01",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _litellm
-            models = []
-            for m in data.get("data", []):
-                model_id = m["id"]
-                _ensure_registered(model_id, _litellm)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("Anthropic discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://api.anthropic.com/v1/models",
+            headers={
+                "x-api-key": effective_key("ANTHROPIC_API_KEY"),
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _litellm
+        models = []
+        for m in data.get("data", []):
+            model_id = m["id"]
+            _ensure_registered(model_id, _litellm)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_openai() -> list[DiscoveredModel]:
     """List available OpenAI models."""
-    if not effective_key("OPENAI_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {effective_key('OPENAI_API_KEY')}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _litellm
-            # Filter to chat models only (skip embeddings, tts, etc.)
-            chat_prefixes = ("gpt-", "o1", "o3", "o4", "chatgpt-")
-            models = []
-            for m in data.get("data", []):
-                if not any(m["id"].startswith(p) for p in chat_prefixes):
-                    continue
-                model_id = m["id"]
-                _ensure_registered(model_id, _litellm)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("OpenAI discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {effective_key('OPENAI_API_KEY')}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _litellm
+        # Filter to chat models only (skip embeddings, tts, etc.)
+        chat_prefixes = ("gpt-", "o1", "o3", "o4", "chatgpt-")
+        models = []
+        for m in data.get("data", []):
+            if not any(m["id"].startswith(p) for p in chat_prefixes):
+                continue
+            model_id = m["id"]
+            _ensure_registered(model_id, _litellm)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_openrouter() -> list[DiscoveredModel]:
-    """List free OpenRouter models (no auth required)."""
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get("https://openrouter.ai/api/v1/models")
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _openrouter
-            # Only show free models to keep the list manageable
-            free_models = [
-                m for m in data.get("data", [])
-                if ":free" in m.get("id", "")
-            ][:30]  # cap at 30
-            models = []
-            for m in free_models:
-                model_id = f"openrouter/{m['id']}"
-                _ensure_registered(model_id, _openrouter)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("OpenRouter discovery failed: %s", e)
-        return []
+    """Validate the OpenRouter key, then list free models.
+
+    The /models list is public and can't validate anything, so we first hit
+    GET /api/v1/key — it 401s on a bad key (the audit's key showed
+    "User not found" yet the provider displayed as available).
+    """
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        key_resp = await client.get(
+            "https://openrouter.ai/api/v1/key",
+            headers={"Authorization": f"Bearer {effective_key('OPENROUTER_API_KEY')}"},
+        )
+        key_resp.raise_for_status()
+
+        resp = await client.get("https://openrouter.ai/api/v1/models")
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _openrouter
+        # Only show free models to keep the list manageable
+        free_models = [
+            m for m in data.get("data", [])
+            if ":free" in m.get("id", "")
+        ][:30]  # cap at 30
+        models = []
+        for m in free_models:
+            model_id = f"openrouter/{m['id']}"
+            _ensure_registered(model_id, _openrouter)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_gemini() -> list[DiscoveredModel]:
     """List available Gemini models."""
     if not effective_key("GEMINI_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={effective_key('GEMINI_API_KEY')}",
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _gemini
-            models = []
-            for m in data.get("models", []):
-                if "generateContent" not in m.get("supportedGenerationMethods", []):
-                    continue
-                model_id = f"gemini/{m['name'].removeprefix('models/')}"
-                _ensure_registered(model_id, _gemini)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("Gemini discovery failed: %s", e)
-        return []
+        # ADC-only config: no REST key to validate the model list with.
+        raise RuntimeError("ADC-configured — model list not available via REST")
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={effective_key('GEMINI_API_KEY')}",
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _gemini
+        models = []
+        for m in data.get("models", []):
+            if "generateContent" not in m.get("supportedGenerationMethods", []):
+                continue
+            model_id = f"gemini/{m['name'].removeprefix('models/')}"
+            _ensure_registered(model_id, _gemini)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_github() -> list[DiscoveredModel]:
     """List available GitHub Models."""
-    if not effective_key("GITHUB_TOKEN"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://models.github.com/v1/models",
-                headers={"Authorization": f"Bearer {effective_key('GITHUB_TOKEN')}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _github
-            models = []
-            for m in data.get("data", data):
-                if not isinstance(m, dict):
-                    continue
-                model_id = f"github/{m['id']}"
-                _ensure_registered(model_id, _github)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("GitHub Models discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://models.github.com/v1/models",
+            headers={"Authorization": f"Bearer {effective_key('GITHUB_TOKEN')}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _github
+        models = []
+        for m in data.get("data", data):
+            if not isinstance(m, dict):
+                continue
+            model_id = f"github/{m['id']}"
+            _ensure_registered(model_id, _github)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_cerebras() -> list[DiscoveredModel]:
@@ -410,50 +397,38 @@ async def _discover_cerebras() -> list[DiscoveredModel]:
     Replaces the hardcoded map, which named a retired model (llama-3.3-70b) and
     couldn't reflect what a given account actually has access to.
     """
-    if not effective_key("CEREBRAS_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://api.cerebras.ai/v1/models",
-                headers={"Authorization": f"Bearer {effective_key('CEREBRAS_API_KEY')}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _cerebras
-            models = []
-            for m in data.get("data", []):
-                model_id = f"cerebras/{m['id']}"
-                _ensure_registered(model_id, _cerebras)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("Cerebras discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://api.cerebras.ai/v1/models",
+            headers={"Authorization": f"Bearer {effective_key('CEREBRAS_API_KEY')}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _cerebras
+        models = []
+        for m in data.get("data", []):
+            model_id = f"cerebras/{m['id']}"
+            _ensure_registered(model_id, _cerebras)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_nvidia() -> list[DiscoveredModel]:
     """List available NVIDIA NIM models via the OpenAI-compatible /models endpoint."""
-    if not effective_key("NVIDIA_NIM_API_KEY"):
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
-            resp = await client.get(
-                "https://integrate.api.nvidia.com/v1/models",
-                headers={"Authorization": f"Bearer {effective_key('NVIDIA_NIM_API_KEY')}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from app.registry import _nvidia
-            models = []
-            for m in data.get("data", []):
-                model_id = f"nvidia_nim/{m['id']}"
-                _ensure_registered(model_id, _nvidia)
-                models.append(DiscoveredModel(id=model_id, registered=True))
-            return models
-    except Exception as e:
-        log.debug("NVIDIA discovery failed: %s", e)
-        return []
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+        resp = await client.get(
+            "https://integrate.api.nvidia.com/v1/models",
+            headers={"Authorization": f"Bearer {effective_key('NVIDIA_NIM_API_KEY')}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        from app.registry import _nvidia
+        models = []
+        for m in data.get("data", []):
+            model_id = f"nvidia_nim/{m['id']}"
+            _ensure_registered(model_id, _nvidia)
+            models.append(DiscoveredModel(id=model_id, registered=True))
+        return models
 
 
 async def _discover_from_model_map(slug: str) -> list[DiscoveredModel]:
@@ -513,8 +488,12 @@ _DISCOVERY_FNS: dict[str, Any] = {
 }
 
 
-async def _is_provider_available(slug: str) -> bool:
-    """Check if a provider has credentials configured."""
+async def _is_provider_configured(slug: str) -> bool:
+    """Whether the provider has a credential / is an active local backend.
+
+    Configured ≠ working: this only gates whether discovery probes at all.
+    Key VALIDITY comes from the probe result (see _discover_provider).
+    """
     from app.providers.chatgpt_subscription_provider import discover_chatgpt_token
 
     if slug == "vllm":
@@ -525,7 +504,7 @@ async def _is_provider_available(slug: str) -> bool:
         return backend == "vllm"
 
     if slug == "lmstudio":
-        # Available when it's the active chat backend, OR when the server is
+        # Configured when it's the active chat backend, OR when the server is
         # reachable (it may serve embeddings while another backend handles chat).
         from app.registry import _get_redis_config, _lmstudio
         backend = await _get_redis_config("inference.backend", "ollama")
@@ -551,71 +530,105 @@ async def _is_provider_available(slug: str) -> bool:
         return False
 
 
-async def _discover_provider(slug: str) -> list[DiscoveredModel]:
-    """Run discovery for a single provider, with Redis caching."""
-    cache_key = f"nova:model_catalog:{slug}"
+def _classify_discovery_error(e: BaseException) -> tuple[str, str]:
+    """Map a discovery exception to (key_status, detail)."""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        body = ""
+        try:
+            body = e.response.text[:120]
+        except Exception:
+            pass
+        if code in (401, 403):
+            return "invalid_key", f"provider rejected the credential (HTTP {code}): {body}"
+        return "error", f"provider returned HTTP {code}: {body}"
+    if isinstance(e, asyncio.TimeoutError):
+        return "error", "discovery timed out"
+    return "error", str(e)[:200]
+
+
+async def _discover_provider(slug: str) -> ProviderDiscovery:
+    """Run discovery for a single provider, with Redis caching.
+
+    The cached value carries key_status so every consumer (catalog, resolve,
+    provider status) shares ONE verdict from a real API call.
+    """
+    cache_key = f"nova:model_catalog:v2:{slug}"
 
     # Try cache first
     try:
         r = await _get_redis()
         cached = await r.get(cache_key)
         if cached:
-            return [DiscoveredModel(**m) for m in json.loads(cached)]
+            return ProviderDiscovery(**json.loads(cached))
     except Exception:
         pass
 
-    # Run discovery
     fn = _DISCOVERY_FNS.get(slug)
     if not fn:
-        return []
+        return ProviderDiscovery(key_status="error", detail=f"unknown provider '{slug}'")
 
-    failure = False
-    try:
-        models = await asyncio.wait_for(fn(), timeout=_DISCOVERY_TIMEOUT)
-    except asyncio.TimeoutError:
-        log.warning("Discovery timeout for %s", slug)
-        models = []
-        failure = True
-    except Exception as e:
-        log.warning("Discovery failed for %s: %s", slug, e)
-        models = []
-        failure = True
+    if not await _is_provider_configured(slug):
+        result = ProviderDiscovery(key_status="not_configured")
+    else:
+        try:
+            models = await asyncio.wait_for(fn(), timeout=_DISCOVERY_TIMEOUT)
+            result = ProviderDiscovery(models=models, key_status="ok")
+            if slug == "chatgpt":
+                result.detail = "subscription token present (not validated by a live call)"
+        except Exception as e:
+            status, detail = _classify_discovery_error(e)
+            result = ProviderDiscovery(key_status=status, detail=detail)
+            level = logging.WARNING if status == "invalid_key" else logging.INFO
+            log.log(level, "Discovery for %s: %s — %s", slug, status, detail)
 
-    # Cache result — use a shorter TTL for failures so dead providers recover
-    # quickly when they come back online, but don't keep paying the full probe
-    # timeout on every request.
+    # Cache result — shorter TTL for failures so a fixed key / recovered
+    # provider is picked up quickly, without paying the probe timeout on
+    # every request while it's down.
     try:
         r = await _get_redis()
-        ttl = _FAILURE_CACHE_TTL if failure else _CACHE_TTL
-        await r.set(cache_key, json.dumps([m.model_dump() for m in models]), ex=ttl)
+        ttl = _CACHE_TTL if result.key_status in ("ok", "not_configured") else _FAILURE_CACHE_TTL
+        await r.set(cache_key, result.model_dump_json(), ex=ttl)
     except Exception:
         pass
 
-    return models
+    return result
+
+
+async def provider_key_statuses() -> dict[str, ProviderDiscovery]:
+    """Per-provider discovery verdicts (cached). Shared by /discover,
+    /health/providers, and auto-resolve."""
+    slugs = [meta["slug"] for meta in _PROVIDER_META]
+    results = await asyncio.gather(
+        *(_discover_provider(s) for s in slugs), return_exceptions=True,
+    )
+    out: dict[str, ProviderDiscovery] = {}
+    for slug, res in zip(slugs, results):
+        if isinstance(res, ProviderDiscovery):
+            out[slug] = res
+        else:
+            out[slug] = ProviderDiscovery(key_status="error", detail=str(res)[:200])
+    return out
 
 
 async def discover_all() -> list[ProviderModelList]:
     """Run all provider discoveries concurrently and return the full catalog."""
-    tasks = {
-        meta["slug"]: _discover_provider(meta["slug"])
-        for meta in _PROVIDER_META
-    }
-
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    statuses = await provider_key_statuses()
 
     catalog = []
-    for meta, result in zip(_PROVIDER_META, results):
+    for meta in _PROVIDER_META:
         slug = meta["slug"]
-        available = await _is_provider_available(slug)
-        models = result if isinstance(result, list) else []
+        disc = statuses.get(slug) or ProviderDiscovery(key_status="error", detail="no result")
 
         catalog.append(ProviderModelList(
             slug=slug,
             name=meta["name"],
             type=meta["type"],
-            available=available,
+            available=disc.key_status == "ok",
+            key_status=disc.key_status,
+            detail=disc.detail,
             auth_methods=AUTH_METHODS.get(slug, []),
-            models=models if available else [],
+            models=disc.models if disc.key_status == "ok" else [],
         ))
 
     return catalog
@@ -688,11 +701,21 @@ def _best_ollama_model() -> str | None:
 
 
 async def resolve_auto_model() -> str:
-    """Iterate the preference list and return the first model whose provider is available.
-    Falls back to preferred local model, best Ollama model, then qwen2.5:7b."""
+    """Return the first preference-list model whose provider key actually
+    WORKS (validated discovery, cached) — not merely whose key exists. A dead
+    Anthropic key no longer wins "auto" only to bounce off a 401 at request
+    time. Falls back to preferred local model, best Ollama model, then
+    qwen2.5:7b."""
+    statuses = await provider_key_statuses()
     for model_id, slug, _ in _AUTO_PREFERENCE:
-        if await _is_provider_available(slug):
-            return model_id
+        disc = statuses.get(slug)
+        if disc is None or disc.key_status != "ok":
+            continue
+        # Prefer a model the provider actually lists; preference entries can
+        # go stale (retired models) — skip to the next provider if so.
+        if disc.models and not any(m.id == model_id for m in disc.models):
+            continue
+        return model_id
 
     # Check if user has a preferred local model configured
     try:
@@ -760,7 +783,7 @@ async def discover_models(refresh: bool = False) -> list[ProviderModelList]:
         # Invalidate cache
         try:
             r = await _get_redis()
-            keys = [f"nova:model_catalog:{m['slug']}" for m in _PROVIDER_META]
+            keys = [f"nova:model_catalog:v2:{m['slug']}" for m in _PROVIDER_META]
             await r.delete(*keys)
         except Exception:
             pass
