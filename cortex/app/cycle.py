@@ -526,9 +526,15 @@ async def _plan_action(drive: DriveResult, state: CycleState) -> str:
         )
 
     from datetime import date
-    prompt = f"""You are Nova's autonomous brain (Cortex). You are deciding what to do this cycle.
+    from .identity import get_identity
+    name, persona = await get_identity()
+    persona_block = (
+        f"\nYour operator-set persona (how you think and act):\n{persona[:1500]}\n"
+        if persona else ""
+    )
+    prompt = f"""You are {name}'s autonomous brain (Cortex). You are deciding what to do this cycle.
 Current date: {date.today().isoformat()}
-
+{persona_block}
 Winning drive: {drive.name} (urgency {drive.urgency}, score {state.winner.score:.2f})
 Drive says: {drive.description}
 Proposed action: {drive.proposed_action or 'none specified'}

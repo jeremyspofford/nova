@@ -54,10 +54,12 @@ async def get_or_create_session(session_id: str | None) -> tuple[str, str]:
         resp = await client.post("/api/v1/agents", json={
             "config": {
                 "name": settings.default_agent_name,
+                # Functional only — identity, name, and tone come from the
+                # orchestrator's Identity block (nova.name / nova.persona in
+                # platform_config), never hardcoded here.
                 "system_prompt": (
-                    "You are a helpful AI assistant with persistent memory across conversations. "
-                    "You are thoughtful, accurate, and concise. You remember what users tell you and "
-                    "reference past context when relevant."
+                    "You have persistent memory across conversations. Remember "
+                    "what users tell you and reference past context when relevant."
                 ),
                 "model": settings.default_model,
             }

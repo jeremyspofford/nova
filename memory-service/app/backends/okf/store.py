@@ -42,30 +42,27 @@ TYPE_DIRS = {
 DEFAULT_DIR = "topics"
 
 # Seeded once by ensure_bundle: the identity anchor the Brain graph grows from.
-# The BODY is owned by Settings → Nova Identity (platform_config nova.name /
-# nova.persona) — the orchestrator mirrors it here at startup and on every
-# save (orchestrator/app/soul_sync.py). This seed is deliberately an empty
-# shell: memory-service cannot see platform_config, and hardcoding identity
-# content here would shadow the operator's persona. Curation still links
-# back to this file as concepts mature.
+# The BODY is `nova.persona` verbatim, two-way synced by the orchestrator
+# (orchestrator/app/soul_sync.py): Settings saves land here, and edits made
+# here (Brain page, agent file tools, direct edits) flow back into
+# platform_config. This seed is deliberately an empty shell: memory-service
+# cannot see platform_config, and hardcoding identity content here would
+# shadow the operator's persona. Curation still links back to this file as
+# concepts mature.
 SOUL_TEMPLATE = """\
 ---
 type: self
 title: Soul
-description: Who Nova is — mirrored from Settings → Nova Identity. The graph grows from here.
+description: Who Nova is — two-way synced with Settings → Nova Identity (nova.persona). Edit here or there; both stay consistent.
 timestamp: '{ts}'
 nova_source_kind: system
 nova_trust: 1.0
-nova_managed_by: settings:nova.persona
+nova_synced_with: settings:nova.persona
 ---
 
-# Soul
-
-> Mirrored from Settings → Nova Identity. Edit the persona there — manual
-> edits to this file are overwritten on the next sync.
-
-(Not yet synced — the orchestrator writes the operator's persona here at
-startup and whenever it is saved in Settings.)
+(Awaiting first sync — this file's body is the persona from Settings →
+Nova Identity. Edit it there or right here; the orchestrator keeps both
+in sync.)
 """
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")

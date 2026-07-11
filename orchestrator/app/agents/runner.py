@@ -860,7 +860,7 @@ def _sandbox_context() -> str:
     return base
 
 
-def _build_self_knowledge() -> str:
+def _build_self_knowledge(name: str) -> str:
     """Compact self-knowledge for interactive chat prompts.
 
     Deliberately small. Large system prompts drown small local models and burn
@@ -876,7 +876,7 @@ def _build_self_knowledge() -> str:
     """
     return (
         "## About Me\n"
-        "I am Nova, a self-directed AI assistant running as a local Docker stack. "
+        f"I am {name}, a self-directed AI assistant running as a local Docker stack. "
         "I operate on a real filesystem with a real shell, so I can take action — "
         "not just talk about it.\n"
         "\n"
@@ -983,7 +983,7 @@ async def _build_nova_context(
     # chat — pipeline agents call run_agent_turn_raw which skips this entirely.
     self_knowledge_block = ""
     if settings.self_knowledge_enabled:
-        self_knowledge_block = f"\n\n{_build_self_knowledge()}"
+        self_knowledge_block = f"\n\n{_build_self_knowledge(name)}"
 
     # Inject active skills
     skills_block = ""
