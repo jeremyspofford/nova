@@ -74,7 +74,7 @@ export const MessageBubble = memo(function MessageBubble({
   message: Message
   conversationMode?: boolean
 }) {
-  const { avatarUrl, isDefaultAvatar } = useNovaIdentity()
+  const { avatarUrl, isDefaultAvatar, name: aiName } = useNovaIdentity()
   const isMobile = useIsMobile()
   const isUser = message.role === 'user'
   const isThinking = !isUser && !!message.isStreaming && !message.content
@@ -141,7 +141,7 @@ export const MessageBubble = memo(function MessageBubble({
             N
           </div>
         ) : (
-          <img src={avatarUrl} alt="Nova" className={clsx(
+          <img src={avatarUrl} alt={aiName} className={clsx(
             'h-6 w-6 rounded-full object-cover',
             isThinking && 'ring-2 ring-amber-500/40',
           )} />

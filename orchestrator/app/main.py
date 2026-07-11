@@ -573,6 +573,8 @@ async def lifespan(app: FastAPI):
 
     await close_clients()
     await close_redis()
+    from app.runtime_config import close_runtime_config_redis
+    await close_runtime_config_redis()
     await close_stimulus_redis()
     await close_ingestion_redis()
     from app.knowledge_router import close_ingestion_redis

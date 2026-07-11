@@ -156,16 +156,10 @@ Changes take effect immediately -- no restart required. The AI's system prompt i
 3. **Response Style** -- formatting rules
 4. **Memories** -- relevant context from previous conversations
 
-## Context budgets
+## Context compaction
 
-The orchestrator allocates context window space across different purposes to prevent any single source from consuming the entire context:
+When a pipeline run's accumulated state grows past a threshold fraction of the context window, the orchestrator summarizes prior stage outputs into a compact string so later stages keep room to work.
 
-| Category | Budget | Purpose |
-|----------|--------|---------|
-| **System** | 10% | System prompts and agent instructions |
-| **Tools** | 15% | MCP tool definitions and schemas |
-| **Memory** | 40% | Retrieved memories and semantic context |
-| **History** | 20% | Conversation history |
-| **Working** | 15% | Current task working space |
-
-These budgets ensure that long conversation histories or large memory retrievals don't crowd out tool definitions or system prompts.
+| Key | Description | Default |
+|-----|-------------|---------|
+| `context.compaction_threshold` | Fraction of the context window at which pipeline state is compacted. Configured from Settings (AI & Pipeline → Context); stored in `platform_config`. | `0.80` |

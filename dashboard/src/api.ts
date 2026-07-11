@@ -957,7 +957,7 @@ export const getPlatformConfigHistory = (key: string) =>
  * Update a single platform config entry.
  * Pass the value as a JSON-encoded string:
  *   updatePlatformConfig('nova.persona', '"My custom persona"')
- *   updatePlatformConfig('nova.default_model', 'null')
+ *   updatePlatformConfig('notify.action_base_url', 'null')
  */
 export const updatePlatformConfig = (key: string, value: string) =>
   apiFetch<PlatformConfigEntry>(`/api/v1/config/${encodeURIComponent(key)}`, {

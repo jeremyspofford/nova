@@ -19,15 +19,17 @@ _orchestrator_client: httpx.AsyncClient | None = None
 
 
 async def _get_memory_url() -> str:
-    """Resolve the memory service URL: Redis override > static config."""
-    try:
-        from app.redis import get_redis
-        redis = get_redis()
-        override = await redis.get("nova:config:memory.provider_url")
-        if override:
-            return override if isinstance(override, str) else override.decode()
-    except Exception:
-        pass
+    """Resolve the memory service URL: Redis override > static config.
+
+    The override lives in db1 (nova:config:*, where config PATCHes push) —
+    NOT this service's default db. The previous implementation imported a
+    module that never existed (app.redis) inside a bare except, so the
+    Settings value was silently dead.
+    """
+    from app.runtime_config import get_redis_config
+    override = await get_redis_config("memory.provider_url")
+    if override:
+        return override
     return settings.memory_service_url
 
 

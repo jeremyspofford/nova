@@ -119,7 +119,7 @@ export function Sidebar({
     window.location.href = '/login'
   }
   const userRole: Role = (user?.role as Role) || (authConfig?.trusted_network ? 'owner' : 'guest')
-  const { avatarUrl } = useNovaIdentity()
+  const { avatarUrl, name: aiName } = useNovaIdentity()
   const { data: attentionCount = 0 } = useAttentionCount()
   const { data: approvalsCount = 0 } = useApprovalsCount()
   const { data: inboxUnread = 0 } = useInboxUnread()
@@ -137,10 +137,10 @@ export function Sidebar({
       )}
     >
       {/* Logo */}
-      <div className={clsx('flex items-center gap-2.5 px-3 h-14 shrink-0 cursor-pointer', collapsed && 'justify-center')} onClick={() => navigate('/chat')} title="Nova">
-        <img src={avatarUrl} alt="Nova" className="h-7 w-7 rounded-lg object-cover shrink-0 dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]" />
+      <div className={clsx('flex items-center gap-2.5 px-3 h-14 shrink-0 cursor-pointer', collapsed && 'justify-center')} onClick={() => navigate('/chat')} title={aiName}>
+        <img src={avatarUrl} alt={aiName} className="h-7 w-7 rounded-lg object-cover shrink-0 dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]" />
         {!collapsed && (
-          <span className="text-h3 text-content-primary tracking-tight">Nova</span>
+          <span className="text-h3 text-content-primary tracking-tight">{aiName}</span>
         )}
       </div>
 
