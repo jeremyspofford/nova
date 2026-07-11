@@ -909,10 +909,47 @@ async def pull_ollama_model(req: PullRequest):
     return {"status": "ok", "model": req.name}
 
 
+async def _assert_model_unreferenced(name: str) -> None:
+    """Refuse deletion while any pod, agent, or config knob still points at `name`.
+
+    Nothing may ever point at a model that doesn't exist, so the check is
+    fail-closed: if the orchestrator can't confirm zero references, the
+    delete is rejected rather than risking a dangling pin.
+    """
+    from app.config import settings
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{settings.orchestrator_url}/api/v1/models/references",
+                params={"model": name},
+                headers={"X-Admin-Secret": settings.nova_admin_secret},
+            )
+            resp.raise_for_status()
+            refs = resp.json().get("references", [])
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Couldn't verify that nothing still uses '{name}' "
+                f"(orchestrator unreachable: {e}). Retry when Nova is fully up."
+            ),
+        )
+    if refs:
+        users = ", ".join(dict.fromkeys(r.get("name", "?") for r in refs))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{name}' is still assigned to: {users}. "
+                "Point them at another model first, then delete."
+            ),
+        )
+
+
 @discovery_router.delete("/ollama/{name:path}")
 async def delete_ollama_model(name: str):
-    """Delete a pulled Ollama model."""
+    """Delete a pulled Ollama model (409 while anything still points at it)."""
     from app.registry import get_ollama_base_url
+    await _assert_model_unreferenced(name)
     try:
         ollama_url = await get_ollama_base_url()
         async with httpx.AsyncClient(base_url=ollama_url, timeout=30.0) as client:

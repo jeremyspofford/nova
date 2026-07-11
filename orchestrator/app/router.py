@@ -19,6 +19,7 @@ from app.db import (
     list_api_keys,
     revoke_api_key,
 )
+from app.model_assignments import ensure_models_exist
 from app.rules import (
     RuleCreate,
     RuleUpdate,
@@ -296,6 +297,7 @@ async def patch_agent_config(
     agent_id: str, req: UpdateAgentConfigRequest, _admin: AdminDep
 ):
     """Update model, system prompt, and fallback model list for a Redis agent. Admin-only."""
+    await ensure_models_exist([req.model, *req.fallback_models])
     agent = await update_agent_config(
         agent_id,
         model=req.model,

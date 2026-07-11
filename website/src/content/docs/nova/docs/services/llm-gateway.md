@@ -118,12 +118,15 @@ never takes a request down with it:
 |--------|------|-------------|
 | GET | `/v1/models/discover` | Validated discovery: each provider's live model list plus a `key_status` verdict from a real API call — `ok`, `not_configured`, `invalid_key` (credential rejected), or `error` (unreachable). `available` means the provider actually answered, not merely that a key is present. `?refresh=true` bypasses the 5-minute cache. |
 | GET | `/v1/models/ollama/*` | Ollama model management |
+| DELETE | `/v1/models/ollama/{name}` | Delete a pulled model — refused with `409` while any pod, agent, or config knob still points at it (the response lists them). Fail-closed: if the orchestrator can't confirm zero references, the delete is rejected. |
 
 The orchestrator cross-checks every configured model reference (pod agent
-pins, `llm.default_chat_model`, `llm.cloud_fallback_model`) against this
-validated catalog at `GET /api/v1/models/assignments`; the dashboard's Models
-page shows a warning banner for assignments that point at retired models or
-dead providers.
+pins, task-agent models, `llm.default_chat_model`, `llm.cloud_fallback_model`)
+against this validated catalog at `GET /api/v1/models/assignments`; the
+dashboard's Models page shows a warning banner for assignments that point at
+retired models or dead providers. Writes are guarded too: pinning a pod or
+agent to a model that no provider serves is rejected with `422`, and deleting
+a still-referenced local model opens a repoint dialog in the dashboard.
 
 ### Health
 
