@@ -14,14 +14,14 @@ from app.db import close_db, init_db
 from app.friction_router import router as friction_router
 from app.goals_router import goals_router
 from app.health import health_router
+from app.ingestion_router import close_ingestion_redis
+from app.ingestion_router import router as ingestion_router
 from app.intel_router import intel_router
 from app.knowledge_router import knowledge_router
 from app.pipeline_router import router as pipeline_router
 from app.queue import queue_worker
 from app.reaper import cleanup_stale_running_on_startup, reaper_loop
 from app.router import router
-from app.ingestion_router import close_ingestion_redis
-from app.ingestion_router import router as ingestion_router
 from app.stimulus import close_redis as close_stimulus_redis
 from app.store import close_redis, ensure_primary_agent, recover_stale_agents
 from fastapi import FastAPI
@@ -577,8 +577,12 @@ async def lifespan(app: FastAPI):
     await close_runtime_config_redis()
     await close_stimulus_redis()
     await close_ingestion_redis()
-    from app.knowledge_router import close_ingestion_redis
-    await close_ingestion_redis()
+    # Alias — importing the bare name would shadow the module-level import
+    # above and make the preceding call an UnboundLocalError (F823).
+    from app.knowledge_router import (
+        close_ingestion_redis as close_knowledge_ingestion_redis,
+    )
+    await close_knowledge_ingestion_redis()
     # Close the admin-secret config Redis connection (lazy-opened in app.auth)
     from app import auth as _auth
     if _auth._config_redis is not None:

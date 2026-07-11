@@ -1528,7 +1528,6 @@ async def _park_for_checkpoint(
     transitions {stage}_running → waiting_human. The checkpoint approval row
     itself was already created by the tool.
     """
-    import json as _json
     from datetime import datetime, timezone
 
     snapshot = {

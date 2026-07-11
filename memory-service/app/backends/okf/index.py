@@ -17,7 +17,6 @@ import math
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from .store import OkfStore, parse_document
 

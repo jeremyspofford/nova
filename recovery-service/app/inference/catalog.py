@@ -38,7 +38,7 @@ async def _default_size_gb(client: httpx.AsyncClient, model: str) -> float | Non
         )
         r.raise_for_status()
         layers = r.json().get("layers", [])
-        total = sum(l.get("size", 0) for l in layers)
+        total = sum(layer.get("size", 0) for layer in layers)
         return round(total / 1e9, 1) if total else None
     except Exception:
         return None

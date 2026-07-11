@@ -12,9 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.backends import current_backend_name, get_backend
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from nova_contracts.memory import (
     ContextRequest,
     ContextResponse,
@@ -26,8 +26,7 @@ from nova_contracts.memory import (
     MemoryIngestResponse,
     ProviderStats,
 )
-
-from app.backends import current_backend_name, get_backend
+from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 
