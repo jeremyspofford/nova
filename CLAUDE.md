@@ -222,7 +222,7 @@ pipeline.web_fetch_strict_sanitize
 - `OLLAMA_BASE_URL` — Set to `auto` (probes host, falls back to Docker), `host` (always use host machine), or explicit URL
 - `POSTGRES_DATA_DIR` / `REDIS_DATA_DIR` — Host bind-mount paths for critical data (default: `./data/postgres`, `./data/redis`). Immune to `docker volume prune`.
 - Local inference: bundled containers (Ollama, vLLM, SGLang, llama.cpp — compose profiles `inference-*`, model dirs via `OLLAMA_MODELS_DIR`/`HF_CACHE_DIR`/`LLAMACPP_MODELS_DIR`) or external servers (LM Studio, any OpenAI-compatible endpoint). Manage in Settings → Local Inference (Redis `inference.*`).
-- Context budgets in orchestrator config: system=10%, tools=15%, memory=40%, history=20%, working=15%
+- Context compaction threshold: `context.compaction_threshold` in platform_config (Settings → AI & Pipeline → Context), `.env` value is fallback only. The per-slice pct budgets were removed 2026-07-10 — no allocator ever consumed them.
 - Voice: `STT_PROVIDER`, `TTS_PROVIDER`, `TTS_VOICE`, `TTS_MODEL` — voice settings (runtime-configurable via dashboard Settings or Redis `nova:config:voice.*`)
 
 ## Platform Secrets (SEC-006a)

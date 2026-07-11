@@ -22,25 +22,22 @@ class Settings(BaseSettings):
     # models that batch calls. Set AGENT_SINGLE_TOOL_CALL=false to allow
     # parallel tool calls again.
     agent_single_tool_call: bool = True
+    # Functional only — identity, name, and tone come from the Identity
+    # block (nova.name / nova.persona in platform_config), never hardcoded.
     default_system_prompt: str = (
-        "You are a helpful AI assistant with persistent memory. "
-        "You remember previous conversations and can use tools to help users."
+        "You have persistent memory across conversations. Remember what "
+        "users tell you and reference past context when relevant."
     )
     # The canonical agent that is auto-created (or adopted) on every startup.
     # Duplicates with the same name+model are pruned automatically.
     primary_agent_name: str = "Nova"
 
-    # Context window budgets (from Part 3 token allocation research)
-    context_system_pct: float = 0.10
-    context_tools_pct: float = 0.15
-    context_memory_pct: float = 0.40
-    context_history_pct: float = 0.20
-    context_working_pct: float = 0.15
+    # Fallback when platform_config has no context.compaction_threshold row
+    # (the Settings UI value wins).
     context_compaction_threshold: float = 0.80  # Trigger at 80% usage
 
     # Memory retrieval mode
     memory_retrieval_mode: str = "inject"  # "inject" (legacy 40%), "tools" (agent-driven). Switch via dashboard Settings or .env
-    context_priming_pct: float = 0.05     # Domain awareness priming budget (small)
 
     service_host: str = "0.0.0.0"
     service_port: int = 8000

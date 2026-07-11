@@ -1955,7 +1955,15 @@ async def _maybe_compact_state(state: PipelineState, task_id: str) -> None:
 
     # Use a generous context budget — most models are 128k+
     context_budget = 128_000
-    threshold = int(context_budget * settings.context_compaction_threshold)
+    # Settings → Context writes context.compaction_threshold to
+    # platform_config; the .env value is only the fallback.
+    from ..runtime_config import get_db_config
+    raw_threshold = await get_db_config("context.compaction_threshold")
+    try:
+        threshold_pct = float(raw_threshold) if raw_threshold else settings.context_compaction_threshold
+    except (TypeError, ValueError):
+        threshold_pct = settings.context_compaction_threshold
+    threshold = int(context_budget * threshold_pct)
 
     if estimated_tokens < threshold:
         return

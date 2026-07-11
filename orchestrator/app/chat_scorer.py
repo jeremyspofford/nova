@@ -339,18 +339,13 @@ async def _process_new_messages() -> int:
                     safety = await score_safety_compliance(task_id_for_scoring, pool)
                     quality_scores.append(safety)
 
-                # Instruction adherence — opt-in via Redis runtime config (db1)
-                try:
-                    import redis.asyncio as aioredis
-                    from app.config_sync import _gateway_redis_url
-                    _r = aioredis.from_url(_gateway_redis_url(), decode_responses=True)
-                    try:
-                        flag = await _r.get("nova:config:quality.instruction_adherence_live")
-                    finally:
-                        await _r.aclose()
-                    enabled = flag is not None and flag.strip().lower() in ("true", "1", "yes")
-                except Exception:
-                    enabled = False
+                # Instruction adherence — opt-in toggle. Lives in
+                # platform_config (seeded by migration 065); the previous
+                # implementation read a Redis key nothing ever wrote, so
+                # flipping the stored value was silently dead.
+                from app.runtime_config import get_db_config
+                flag = await get_db_config("quality.instruction_adherence_live", "false")
+                enabled = (flag or "").strip().lower() in ("true", "1", "yes")
 
                 if enabled:
                     adherence = await score_instruction_adherence_live(

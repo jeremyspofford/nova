@@ -477,11 +477,12 @@ async def lifespan(app: FastAPI):
         approval_worker_loop(), name="approval-worker",
     )
 
-    # Reconcile the memory bundle's soul with Settings → Nova Identity —
-    # covers persona edits made while services were down and heals bundles
-    # seeded before the persona existed.
-    from app.soul_sync import soul_sync_on_startup
-    _soul_sync_task = asyncio.create_task(soul_sync_on_startup(), name="soul-sync")
+    # Two-way soul binding: reconcile Settings → Nova Identity with the
+    # memory bundle's soul file at startup, then keep polling so soul.md
+    # edits (Brain page, agent file tools, direct edits) flow back into
+    # platform_config.
+    from app.soul_sync import soul_sync_loop
+    _soul_sync_task = asyncio.create_task(soul_sync_loop(), name="soul-sync")
 
     log.info(
         "Queue worker, reaper, effectiveness loop, chat scorer, auto-friction "
@@ -572,6 +573,8 @@ async def lifespan(app: FastAPI):
 
     await close_clients()
     await close_redis()
+    from app.runtime_config import close_runtime_config_redis
+    await close_runtime_config_redis()
     await close_stimulus_redis()
     await close_ingestion_redis()
     from app.knowledge_router import close_ingestion_redis

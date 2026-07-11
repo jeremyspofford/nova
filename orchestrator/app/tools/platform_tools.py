@@ -355,14 +355,14 @@ async def _execute_send_message_to_agent(agent_id: str, message: str) -> str:
 
 
 async def _get_creation_autonomy() -> str:
-    """Read nova:config:creation.autonomy from Redis (db1). Default: auto_tasks."""
-    from app.store import get_redis
-    try:
-        redis = get_redis()
-        value = await redis.get("nova:config:creation.autonomy")
-        return value.decode() if isinstance(value, bytes) else (value or "auto_tasks")
-    except Exception:
-        return "auto_tasks"
+    """Read creation.autonomy from platform_config. Default: auto_tasks.
+
+    Settings → Goal & Task Creation writes platform_config (Postgres); the
+    previous implementation read a Redis key nothing ever wrote, so the UI
+    setting was silently dead.
+    """
+    from app.runtime_config import get_db_config
+    return await get_db_config("creation.autonomy", "auto_tasks") or "auto_tasks"
 
 
 # Module-level rate-limit counter: tracks goal creations per session/run
