@@ -318,7 +318,7 @@ Available models by provider:
     gemini/gemini-2.5-pro
 
   OpenRouter (free tier):
-    openrouter/meta-llama/llama-3.1-8b-instruct:free
+    openrouter/meta-llama/llama-3.3-70b-instruct:free
 
 Use model IDs exactly as shown when calling create_agent."""
 
