@@ -182,16 +182,6 @@
     "description": "Frontier-class local model."
   },
   {
-    "id": "mistral-large-3:123b",
-    "ollama_id": "mistral-large-3:123b",
-    "name": "Mistral Large 3",
-    "category": "general",
-    "size_gb": 72.0,
-    "min_vram_gb": 80,
-    "backends": ["ollama"],
-    "description": "Mistral flagship, 128k context."
-  },
-  {
     "id": "deepseek-r1:8b",
     "ollama_id": "deepseek-r1:8b",
     "name": "DeepSeek R1 8B",
@@ -363,17 +353,6 @@
     "backends": ["ollama"],
     "cloud": true,
     "description": "MiniMax M2.7 — hosted by Ollama."
-  },
-  {
-    "id": "kimi-k2:1t-cloud",
-    "ollama_id": "kimi-k2:1t-cloud",
-    "name": "Kimi K2 1T (cloud)",
-    "category": "general",
-    "size_gb": 0,
-    "min_vram_gb": 0,
-    "backends": ["ollama"],
-    "cloud": true,
-    "description": "Moonshot Kimi K2 (1T) — hosted by Ollama."
   },
   {
     "id": "kimi-k2.5:cloud",

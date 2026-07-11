@@ -36,6 +36,7 @@ import { RoutingStatsSection } from './models/RoutingStatsSection'
 import { LMStudioLibrarySection } from './models/LMStudioLibrarySection'
 import { BundledContainersCard } from './models/BundledContainersCard'
 import { PageHeader } from '../components/layout/PageHeader'
+import { useToast } from '../components/ToastProvider'
 import {
   Badge, Button, Card, EmptyState, Metric, ProgressBar,
   SearchInput, Select, Skeleton, StatusDot, Table, Tooltip,
@@ -45,6 +46,17 @@ import type { TableColumn } from '../components/ui'
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const ONBOARDING_DISMISSED_KEY = 'nova_onboarding_dismissed'
+
+/** apiFetch throws `Error("<status>: <body>")` — unwrap FastAPI's {"detail": ...} for humans. */
+function apiErrorDetail(e: unknown): string {
+  const msg = (e instanceof Error ? e.message : String(e)).replace(/^\d+:\s*/, '')
+  try {
+    const parsed = JSON.parse(msg)
+    return typeof parsed.detail === 'string' ? parsed.detail : msg
+  } catch {
+    return msg
+  }
+}
 
 // ── Onboarding Banner ─────────────────────────────────────────────────────────
 
@@ -180,6 +192,7 @@ const HELP_ENTRIES = [
 export function Models() {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const { addToast } = useToast()
   const [pullInput, setPullInput] = useState('')
   const [pullingModels, setPullingModels] = useState<Set<string>>(new Set())
   const [deletingModels, setDeletingModels] = useState<Set<string>>(new Set())
@@ -383,16 +396,21 @@ export function Models() {
     setPullingModels(s => new Set(s).add(name))
     try {
       await pullMutation.mutateAsync(name)
+      addToast({ variant: 'success', message: `Pulled ${name}` })
+      setPullInput('')
+    } catch (e) {
+      addToast({ variant: 'error', message: `Couldn't pull ${name}: ${apiErrorDetail(e)}` })
     } finally {
       setPullingModels(s => { const n = new Set(s); n.delete(name); return n })
     }
-    setPullInput('')
   }
 
   const handleDelete = async (name: string) => {
     setDeletingModels(s => new Set(s).add(name))
     try {
       await deleteMutation.mutateAsync(name)
+    } catch (e) {
+      addToast({ variant: 'error', message: `Couldn't delete ${name}: ${apiErrorDetail(e)}` })
     } finally {
       setDeletingModels(s => { const n = new Set(s); n.delete(name); return n })
     }
