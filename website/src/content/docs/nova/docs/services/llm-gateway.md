@@ -34,6 +34,21 @@ The routing strategy is configurable at runtime via the platform config:
 | `cloud-only` | Skip local inference, use cloud providers only. |
 | `cloud-first` | Try cloud first, use local backend as backup. |
 
+### Tier hints
+
+Requests can carry `tier: best | mid | cheap` instead of a concrete model
+(pods and agents can pin `tier:<name>` the same way). The resolver walks the
+tier's preference list and picks the first candidate that passes **validated
+discovery** — the provider's credential answered a real API call and the model
+is on its current live list — plus quota and context-window checks. Dead keys,
+retired models, and un-pulled local models are skipped, so a tier hint can
+never resolve to a model that doesn't exist. An empty tier falls through to
+the next cheaper tier. Preference lists are seeded from
+`TIER_PREFERENCES_BEST/MID/CHEAP` and overridable at runtime via the Redis
+config key `llm.tier_preferences` (JSON object of tier → model list).
+`GET /v1/models/tiers` shows every candidate's verdict and what each tier
+resolves to right now.
+
 ### Credential-rejection handling
 
 A provider whose API key is rejected (expired, revoked, or never configured)
@@ -117,16 +132,20 @@ never takes a request down with it:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/v1/models/discover` | Validated discovery: each provider's live model list plus a `key_status` verdict from a real API call — `ok`, `not_configured`, `invalid_key` (credential rejected), or `error` (unreachable). `available` means the provider actually answered, not merely that a key is present. `?refresh=true` bypasses the 5-minute cache. |
+| GET | `/v1/models/tiers` | Tier-system health: each tier's preference list with per-candidate verdicts (`ok`, `provider_unavailable`, `unknown_model`, `unregistered`, `no_quota`) and the model the tier currently resolves to (`null` when nothing on the list is usable). |
 | GET | `/v1/models/ollama/*` | Ollama model management |
 | DELETE | `/v1/models/ollama/{name}` | Delete a pulled model — refused with `409` while any pod, agent, or config knob still points at it (the response lists them). Fail-closed: if the orchestrator can't confirm zero references, the delete is rejected. |
 
 The orchestrator cross-checks every configured model reference (pod agent
-pins, task-agent models, `llm.default_chat_model`, `llm.cloud_fallback_model`)
-against this validated catalog at `GET /api/v1/models/assignments`; the
-dashboard's Models page shows a warning banner for assignments that point at
-retired models or dead providers. Writes are guarded too: pinning a pod or
-agent to a model that no provider serves is rejected with `422`, and deleting
-a still-referenced local model opens a repoint dialog in the dashboard.
+pins, pod default models, task-agent models, `llm.default_chat_model`,
+`llm.cloud_fallback_model`) against this validated catalog at
+`GET /api/v1/models/assignments`; `tier:*` pins are verified against
+`/v1/models/tiers` — a tier that can't resolve on any level is flagged as a
+problem instead of rubber-stamped. The dashboard's Models page shows a
+warning banner for assignments that point at retired models or dead
+providers. Writes are guarded too: pinning a pod or agent to a model that no
+provider serves is rejected with `422`, and deleting a still-referenced local
+model opens a repoint dialog in the dashboard.
 
 ### Health
 

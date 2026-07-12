@@ -158,6 +158,7 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 | `inference.lmstudio_api_key` | string | Optional bearer token for the LM Studio server |
 | `llm.embed_provider` | `auto`, `lmstudio`, `ollama`, `gemini`, `litellm` | Overrides which provider serves embeddings (default `auto` = route by model name). Lets embeddings run on a different server than chat to avoid single-model eviction. |
 | `llm.routing_strategy` | `local-first`, `local-only`, `cloud-first`, `cloud-only` | How the gateway routes requests between local and cloud |
+| `llm.tier_preferences` | JSON `{"best": [...], "mid": [...], "cheap": [...]}` | Overrides the tier-hint preference lists. Candidates are validated against live discovery at resolve time — stale entries are skipped, never served (`GET /v1/models/tiers` shows verdicts) |
 | `notify.enabled` | `true`/`false` | Master switch for phone push via ntfy (default true) |
 | `notify.ntfy_url` | URL | In-network ntfy server the orchestrator publishes to (default `http://ntfy`) |
 | `notify.ntfy_topic` | string | Seeded `nova-<hex>` topic — the subscription secret shown in Settings → Notifications |

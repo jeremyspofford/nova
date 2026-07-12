@@ -49,7 +49,9 @@ def _provider_slug_for(model: str) -> str | None:
     return None
 
 
-def _check_assignment(model: str, catalog: list[dict]) -> tuple[str, str]:
+def _check_assignment(
+    model: str, catalog: list[dict], tiers: dict | None = None,
+) -> tuple[str, str]:
     """Return (status, note) for one model assignment.
 
     status: ok | auto | provider_unavailable | unknown_model | unverified
@@ -57,7 +59,7 @@ def _check_assignment(model: str, catalog: list[dict]) -> tuple[str, str]:
     if not model or model == "auto":
         return "auto", "resolved at request time from available providers"
     if model.startswith("tier:"):
-        return "auto", "tier hint — the tier resolver picks a live model at request time"
+        return _check_tier(model[len("tier:"):], tiers)
 
     slug = _provider_slug_for(model)
     by_slug = {p["slug"]: p for p in catalog}
@@ -94,6 +96,30 @@ def _check_assignment(model: str, catalog: list[dict]) -> tuple[str, str]:
     return "provider_unavailable", "no local inference backend is reachable"
 
 
+def _check_tier(name: str, tiers: dict | None) -> tuple[str, str]:
+    """Verdict for a 'tier:<name>' hint against the gateway's tier health.
+
+    Mirrors the resolver's runtime behavior: an empty tier falls through to
+    lower tiers (and an unknown tier name is treated as 'best'), so a hint is
+    only a problem when NOTHING on any reachable tier can serve it.
+    """
+    if not tiers:
+        return "auto", "tier hint — the tier resolver picks a live model at request time"
+    order = ["best", "mid", "cheap"]
+    start = order.index(name) if name in order else 0
+    for t in order[start:]:
+        info = (tiers.get("tiers") or {}).get(t) or {}
+        if info.get("resolved"):
+            if t == name:
+                return "auto", f"tier hint — currently resolves to {info['resolved']}"
+            return "auto", f"tier '{name}' is empty — falls through to '{t}' → {info['resolved']}"
+    return (
+        "provider_unavailable",
+        f"tier '{name}' can't resolve: no tier has a usable model "
+        "(every preference-list entry is dead, delisted, or out of quota)",
+    )
+
+
 def _config_model_value(val) -> str:
     """platform_config values are JSON; unwrap (possibly double-) encoded strings."""
     for _ in range(2):
@@ -123,6 +149,22 @@ async def _fetch_catalog() -> list[dict]:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def _fetch_tiers() -> dict | None:
+    """The gateway's tier-system health. Best-effort: None simply means
+    tier hints pass unchecked, exactly as they did before this check existed."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{settings.llm_gateway_url}/v1/models/tiers",
+                headers={"X-Admin-Secret": settings.nova_admin_secret},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        log.warning("Tier health unavailable — tier hints unchecked: %s", e)
+        return None
 
 
 async def find_model_references(model: str) -> list[dict]:
@@ -235,10 +277,11 @@ async def validate_assignments(_admin: AdminDep) -> dict:
         catalog = await _fetch_catalog()
     except Exception as e:
         return {"error": f"gateway discovery unavailable: {e}", "assignments": []}
+    tiers = await _fetch_tiers()
 
     assignments: list[dict] = []
 
-    # 2. Pod-agent model pins.
+    # 1. Pod-agent model pins.
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -248,11 +291,27 @@ async def validate_assignments(_admin: AdminDep) -> dict:
                ORDER BY p.name, a.position""",
         )
         for r in rows:
-            status, note = _check_assignment(r["model"], catalog)
+            status, note = _check_assignment(r["model"], catalog, tiers)
             assignments.append({
                 "scope": "pod_agent",
                 "name": f"{r['pod']} / {r['agent']} ({r['role']})",
                 "model": r["model"],
+                "status": status,
+                "note": note,
+            })
+
+        # 2. Pod default models.
+        pod_rows = await conn.fetch(
+            """SELECT name, default_model FROM pods
+               WHERE enabled AND default_model IS NOT NULL AND default_model <> ''
+               ORDER BY name""",
+        )
+        for r in pod_rows:
+            status, note = _check_assignment(r["default_model"], catalog, tiers)
+            assignments.append({
+                "scope": "pod",
+                "name": f"{r['name']} pod default",
+                "model": r["default_model"],
                 "status": status,
                 "note": note,
             })
@@ -264,7 +323,7 @@ async def validate_assignments(_admin: AdminDep) -> dict:
         )
     for r in cfg_rows:
         model = _config_model_value(r["value"])
-        status, note = _check_assignment(model, catalog)
+        status, note = _check_assignment(model, catalog, tiers)
         assignments.append({
             "scope": "config",
             "name": r["key"],
@@ -278,7 +337,7 @@ async def validate_assignments(_admin: AdminDep) -> dict:
         for agent in await list_agents():
             if not agent.config.model:
                 continue
-            status, note = _check_assignment(agent.config.model, catalog)
+            status, note = _check_assignment(agent.config.model, catalog, tiers)
             assignments.append({
                 "scope": "agent",
                 "name": f"{agent.config.name} (task agent)",
