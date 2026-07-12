@@ -109,10 +109,12 @@ class Settings(BaseSettings):
     # Subscription routing preference
     prefer_subscription: bool = True  # Try ChatGPT Plus before any other cloud provider
 
-    # Tier-based routing defaults
+    # Tier-based routing defaults. Seeds only — resolution validates every
+    # candidate against live discovery, so stale entries are skipped, not
+    # served. Runtime override: Redis `llm.tier_preferences` (JSON).
     tier_preferences_best: str = "claude-sonnet-4-6,gpt-4o,chatgpt/gpt-4o,gemini/gemini-2.5-pro"
     tier_preferences_mid: str = "groq/llama-3.3-70b-versatile,gemini/gemini-2.5-flash,cerebras/llama3.1-8b"
-    tier_preferences_cheap: str = "groq/llama-3.3-70b-versatile,cerebras/llama3.1-8b,default-ollama,gemini/gemini-2.5-flash"
+    tier_preferences_cheap: str = "groq/llama-3.1-8b-instant,cerebras/llama3.1-8b,default-ollama,gemini/gemini-2.5-flash"
 
     # Cost tracking
     track_costs: bool = True

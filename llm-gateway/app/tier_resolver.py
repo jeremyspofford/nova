@@ -18,7 +18,7 @@ from typing import Any
 
 from .config import settings
 from .rate_limiter import check_remaining_quota
-from .registry import MODEL_REGISTRY, MODEL_SPECS
+from .registry import MODEL_REGISTRY, MODEL_SPECS, slug_for_model_id
 
 log = logging.getLogger(__name__)
 
@@ -163,6 +163,84 @@ def infer_tier(request: Any) -> str:
     return "best"
 
 
+# -- Validated availability ----------------------------------------------------
+
+_LOCAL_SLUGS = ("ollama", "vllm", "lmstudio")
+
+
+def _tier_aliases(model_id: str) -> set[str]:
+    """A model id plus its ':latest' twin — Ollama treats them as the same blob."""
+    if model_id.endswith(":latest"):
+        return {model_id, model_id[: -len(":latest")]}
+    if ":" not in model_id.rsplit("/", 1)[-1]:
+        return {model_id, f"{model_id}:latest"}
+    return {model_id}
+
+
+async def _validated_live_models() -> dict[str, set[str]] | None:
+    """Per-provider live model ids, only for providers whose credential
+    actually works (validated discovery, Redis-cached). None when discovery
+    itself is unusable — callers fall back to registry-only checks."""
+    try:
+        from .discovery import provider_key_statuses
+        statuses = await provider_key_statuses()
+    except Exception as e:
+        log.warning(
+            "Tier resolver: validated discovery unavailable (%s) — "
+            "falling back to registry-only availability checks", e,
+        )
+        return None
+    live = {
+        slug: {m.id for m in disc.models}
+        for slug, disc in statuses.items()
+        if disc.key_status == "ok"
+    }
+    return live if live else None
+
+
+def _candidate_verdict(
+    model_id: str, live: dict[str, set[str]] | None,
+) -> tuple[str, str]:
+    """(status, note) for one preference-list candidate; only 'ok' is eligible.
+
+    Verdicts come from validated discovery — a provider counts only if its
+    credential actually answered a live call, and a model only if the provider
+    currently lists it. `live=None` means discovery is unreachable: fail open
+    to the legacy registry-only checks so a discovery outage can't take the
+    tier system down with it."""
+    registered = model_id in MODEL_REGISTRY
+    if live is None:
+        if not registered:
+            return "unregistered", "not in the model registry and discovery is unavailable"
+        if not MODEL_REGISTRY[model_id].is_available:
+            return "provider_unavailable", "provider has no credential configured"
+        return "ok", "registry-only check — discovery unavailable"
+
+    slug = slug_for_model_id(model_id)
+    if slug is None:
+        if registered and MODEL_REGISTRY[model_id].is_available:
+            return "ok", "unmapped provider — registry-only check"
+        return "unregistered", "unknown provider prefix"
+
+    aliases = _tier_aliases(model_id)
+    if slug in _LOCAL_SLUGS:
+        # A local model counts if ANY live local backend serves it — bare
+        # names don't say which backend the operator runs.
+        local_live = [live[s] for s in _LOCAL_SLUGS if s in live]
+        if not local_live:
+            return "provider_unavailable", "no local inference backend is up"
+        if any(aliases & models for models in local_live):
+            return "ok", ""
+        return "unknown_model", "no local backend lists this model (not pulled/loaded?)"
+
+    models = live.get(slug)
+    if models is None:
+        return "provider_unavailable", f"{slug}: key missing, rejected, or provider unreachable"
+    if models and not (aliases & models):
+        return "unknown_model", f"{slug} doesn't list this model (retired?)"
+    return "ok", ""
+
+
 # -- Tier -> model resolution -------------------------------------------------
 
 async def _resolve_tier_to_model(
@@ -171,6 +249,7 @@ async def _resolve_tier_to_model(
     """Walk preference list for tier, filtered by availability + effectiveness."""
     prefs = await _get_tier_preferences()
     effectiveness = await _get_effectiveness_matrix()
+    live = await _validated_live_models()
 
     # Estimate request token count for context window check
     total_chars = sum(
@@ -203,16 +282,14 @@ async def _resolve_tier_to_model(
             if undersampled:
                 chosen = random.choice(undersampled)
                 resolved = _resolve_virtual(chosen)
-                if resolved and resolved in MODEL_REGISTRY:
-                    provider = MODEL_REGISTRY[resolved]
-                    if provider.is_available:
-                        has_quota, _ = await check_remaining_quota(resolved)
-                        if has_quota:
-                            log.info(
-                                "Exploration: tier=%s task_type=%s → %s (undersampled)",
-                                try_tier, task_type, resolved,
-                            )
-                            return resolved
+                if resolved and _candidate_verdict(resolved, live)[0] == "ok":
+                    has_quota, _ = await check_remaining_quota(resolved)
+                    if has_quota:
+                        log.info(
+                            "Exploration: tier=%s task_type=%s → %s (undersampled)",
+                            try_tier, task_type, resolved,
+                        )
+                        return resolved
 
         for model_id in candidates:
             # Resolve virtual identifiers
@@ -220,11 +297,11 @@ async def _resolve_tier_to_model(
             if resolved is None:
                 continue
 
-            # Check provider availability
-            if resolved not in MODEL_REGISTRY:
-                continue
-            provider = MODEL_REGISTRY[resolved]
-            if not provider.is_available:
+            # Validated availability: the provider's credential actually
+            # works and the model is on its live list — a tier hint must
+            # never resolve to a model that doesn't exist.
+            status, _note = _candidate_verdict(resolved, live)
+            if status != "ok":
                 continue
 
             # Check rate limit quota (read-only)
@@ -353,6 +430,49 @@ def _default_preferences() -> dict[str, list[str]]:
         "mid": [m.strip() for m in settings.tier_preferences_mid.split(",")],
         "cheap": [m.strip() for m in settings.tier_preferences_cheap.split(",")],
     }
+
+
+# -- Tier health (diagnostics) --------------------------------------------------
+
+async def explain_tiers() -> dict[str, Any]:
+    """Health view of the tier system: every preference-list candidate with a
+    validated-discovery verdict, and the model each tier would resolve to.
+
+    Quota-aware but request-agnostic — ignores per-request signals (context
+    length, effectiveness scores, exploration), so 'resolved' is what a
+    typical request gets, not a guarantee for every request."""
+    prefs = await _get_tier_preferences()
+    live = await _validated_live_models()
+
+    tiers: dict[str, Any] = {}
+    for tier_name in TIER_ORDER:
+        entries = []
+        resolved_model = None
+        for model_id in prefs.get(tier_name, []):
+            resolved = _resolve_virtual(model_id)
+            if resolved is None:
+                entries.append({
+                    "model": model_id,
+                    "status": "unknown_model",
+                    "note": "virtual id doesn't resolve (default Ollama model not registered)",
+                })
+                continue
+            status, note = _candidate_verdict(resolved, live)
+            if status == "ok":
+                has_quota, _ = await check_remaining_quota(resolved)
+                if not has_quota:
+                    status, note = "no_quota", "daily rate limit exhausted"
+            entry: dict[str, Any] = {"model": model_id, "status": status}
+            if resolved != model_id:
+                entry["resolves_to"] = resolved
+            if note:
+                entry["note"] = note
+            entries.append(entry)
+            if status == "ok" and resolved_model is None:
+                resolved_model = resolved
+        tiers[tier_name] = {"preferences": entries, "resolved": resolved_model}
+
+    return {"tiers": tiers, "discovery_ok": live is not None}
 
 
 # -- Effectiveness matrix -----------------------------------------------------

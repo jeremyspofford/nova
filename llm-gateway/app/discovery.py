@@ -776,6 +776,16 @@ async def resolve_model() -> ResolveResponse:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@discovery_router.get("/tiers")
+async def tier_health() -> dict:
+    """Tier-system health: each tier's preference list with per-candidate
+    verdicts from validated discovery (ok / provider_unavailable /
+    unknown_model / unregistered / no_quota) and the model the tier would
+    resolve to right now — null when nothing on the list is usable."""
+    from app.tier_resolver import explain_tiers
+    return await explain_tiers()
+
+
 @discovery_router.get("/discover")
 async def discover_models(refresh: bool = False) -> list[ProviderModelList]:
     """Discover all available models across all providers."""

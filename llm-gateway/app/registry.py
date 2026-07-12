@@ -905,6 +905,35 @@ def get_provider_for_slug(slug: str) -> ModelProvider | None:
     }.get(slug)
 
 
+def slug_for_model_id(model_id: str) -> str | None:
+    """The catalog slug a model id belongs to, or None if unmappable.
+
+    Prefers registry instance identity (covers dynamically registered models),
+    then falls back to naming convention — the same prefix rules the request
+    path uses to route unregistered models via the default fallback."""
+    provider = MODEL_REGISTRY.get(model_id)
+    if provider is not None:
+        for slug in ("ollama", "chatgpt", "groq", "gemini", "cerebras",
+                     "openrouter", "github", "nvidia", "anthropic", "openai",
+                     "vllm", "lmstudio"):
+            if get_provider_for_slug(slug) is provider:
+                return slug
+    if "/" in model_id:
+        prefix = model_id.split("/", 1)[0]
+        if prefix == "nvidia_nim":
+            return "nvidia"
+        if get_provider_for_slug(prefix) is not None:
+            return prefix
+        return None
+    if model_id.startswith("claude"):
+        return "anthropic"
+    if model_id.startswith(("gpt-", "o1", "o3", "o4", "text-embedding")):
+        return "openai"
+    if model_id.startswith("gemini"):
+        return "gemini"
+    return "ollama"  # bare names route local by convention
+
+
 def get_ollama_provider() -> OllamaProvider:
     """Direct access to the Ollama provider instance (for health checks)."""
     return _ollama
