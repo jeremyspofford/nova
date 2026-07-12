@@ -13,9 +13,24 @@ The Model Context Protocol is an open standard for connecting AI models to exter
 
 1. The Orchestrator loads MCP server configurations from the database at startup
 2. It connects to each enabled server and discovers its available tools
-3. When an agent runs, `get_all_tools()` returns both built-in tools and MCP tools
-4. The agent can call any MCP tool by name (prefixed with `mcp__<server>__<tool>`)
-5. The Orchestrator dispatches the call to the appropriate MCP server and returns the result
+3. When an agent runs, its tool list carries a one-line **capability index** entry per connected server (name, description, tool count) instead of every tool's full schema
+4. When a task involves an integration, the agent calls `load_integration_tools(server=...)` — the server's real tool schemas are spliced into the conversation for the rest of that task
+5. The agent can then call any loaded MCP tool by name (prefixed with `mcp__<server>__<tool>`)
+6. The Orchestrator dispatches the call to the appropriate MCP server and returns the result
+
+### Lazy loading and "Always inject"
+
+Tool schemas are heavy: a single integration can expose 50+ tools, and injecting
+every schema into every LLM call costs thousands of prompt tokens and measurably
+degrades tool selection on small local models. Lazy loading is therefore the
+default: an installed integration costs ~15 tokens per call until an agent
+actually needs it.
+
+If a specific integration is hot enough that the extra load step hurts, expand
+its server card on the Integrations page and switch on **Always inject tools** —
+that server's schemas then ride along in every LLM call, and it drops out of the
+capability index. Agents on a pod whose tool allowlist pins specific `mcp__`
+tools also get those schemas injected directly, without a load call.
 
 ## Available MCP servers
 
@@ -91,7 +106,7 @@ Nova ships with a built-in catalog of pre-configured MCP servers. You can add an
 2. Click **Add from Catalog** to browse available servers
 3. Select a server and fill in any required configuration (API keys, paths)
 4. Click **Add** -- the Orchestrator will connect to the server and discover its tools
-5. The server's tools are immediately available to all agents
+5. The server immediately appears in every agent's capability index; agents load its tools on demand (or enable **Always inject tools** on the server card to skip the load step)
 
 ## Adding custom MCP servers
 

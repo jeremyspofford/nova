@@ -66,12 +66,19 @@ Return ONLY valid JSON matching this exact schema — no markdown, no preamble:
         from ...tool_permissions import resolve_effective_tools
 
         # Filter to read-only operations — context agent must never write files.
-        # Also allow any MCP tool (mcp__* prefix) so registered MCP servers
-        # (search, browse, read) are available for context gathering.
+        # Also allow MCP tools (mcp__* prefix, plus the load_integration_tools
+        # meta-tool that pulls lazy MCP schemas in on demand) so registered MCP
+        # servers (search, browse, read) are available for context gathering.
         # Permission filtering ensures admin-disabled groups are respected.
+        from ...tools.integration_tools import LOAD_INTEGRATION_TOOL_NAME
         READ_ONLY = {"list_dir", "read_file", "search_codebase", "git_status", "git_log"}
         all_permitted, _ = await resolve_effective_tools(default_allowlist_fallback=False)
-        tools = [t for t in all_permitted if t.name in READ_ONLY or t.name.startswith("mcp__")]
+        tools = [
+            t for t in all_permitted
+            if t.name in READ_ONLY
+            or t.name.startswith("mcp__")
+            or t.name == LOAD_INTEGRATION_TOOL_NAME
+        ]
 
         prompt = (
             "The Task Agent needs to complete the request enclosed below. "

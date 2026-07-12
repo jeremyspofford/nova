@@ -383,6 +383,10 @@ async def _check_abandonments() -> int:
             FROM usage_events ue
             WHERE ue.outcome_score IS NULL
               AND ue.session_id IS NOT NULL
+              -- session_id is TEXT and API clients may send arbitrary ids;
+              -- a single non-UUID row would make the ::uuid cast below throw
+              -- and wedge every scorer iteration until the row is deleted.
+              AND ue.session_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
               AND ue.created_at < $1
               AND NOT EXISTS (
                   SELECT 1 FROM messages m
