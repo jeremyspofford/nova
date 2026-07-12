@@ -118,12 +118,41 @@ async def resolve_effective_tools(
     # Pipeline agents pass default_allowlist_fallback=False — a NULL pod
     # allowlist there means "all permitted tools", not "chat minimal": goal
     # work (briefings, curation, intel) needs the full registry.
+    using_default_allowlist = False
     if allowed_tools is None and default_allowlist_fallback:
         allowed_tools = await get_default_allowed_tools()
+        using_default_allowlist = allowed_tools is not None
     if allowed_tools is not None:
         allowed_set = set(allowed_tools)
         tools = [t for t in tools if t.name in allowed_set]
         tools.extend(_pinned_mcp_tools(allowed_set, {t.name for t in tools}, disabled))
+        if using_default_allowlist:
+            # The default allowlist exists to keep the chat surface tiny for
+            # small local models — but operator-installed integrations must
+            # stay reachable from chat: lazy servers through the one-entry
+            # meta-tool, always_inject servers through their schemas (the
+            # operator said "always", chat included). Explicit pod allowlists
+            # stay exact (pods pin mcp__ names when their job is an
+            # integration).
+            try:
+                from app.pipeline.tools.registry import (
+                    get_injected_mcp_tool_definitions,
+                )
+                from app.tools.integration_tools import (
+                    build_load_integration_tool,
+                )
+                present = {t.name for t in tools}
+                for t in get_injected_mcp_tool_definitions():
+                    parts = t.name.split("__")
+                    if len(parts) >= 2 and f"MCP: {parts[1]}" in disabled:
+                        continue
+                    if t.name not in present:
+                        tools.append(t)
+                meta = build_load_integration_tool(disabled)
+                if meta is not None and meta.name not in present:
+                    tools.append(meta)
+            except Exception:
+                log.debug("MCP registry unavailable while adding integrations")
 
     return tools, disabled
 

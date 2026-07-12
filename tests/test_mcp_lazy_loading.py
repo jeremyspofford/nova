@@ -14,7 +14,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from _service_app import service_app
 
 
@@ -185,3 +184,43 @@ class TestToolListComposition:
         pinned = mcp_env.permissions._pinned_mcp_tools(
             {"mcp__lazy-srv__alpha"}, set(), {"MCP: lazy-srv"})
         assert pinned == []
+
+
+class TestDefaultAllowlist:
+    """The global default allowlist (chat surface) must not hide integrations.
+
+    Chat turns run on a deliberately tiny tool allowlist; installed
+    integrations stay reachable through the meta-tool (lazy servers) or
+    their schemas (always_inject servers). Explicit pod allowlists stay
+    exact.
+    """
+
+    @pytest.fixture
+    def resolve(self, mcp_env, monkeypatch):
+        async def _no_disabled():
+            return set()
+
+        async def _default_allowlist():
+            return ["read_file", "run_shell"]
+
+        monkeypatch.setattr(
+            mcp_env.permissions, "get_disabled_tool_groups", _no_disabled)
+        monkeypatch.setattr(
+            mcp_env.permissions, "get_default_allowed_tools", _default_allowlist)
+        return mcp_env.permissions.resolve_effective_tools
+
+    async def test_chat_surface_keeps_integrations_reachable(self, resolve):
+        tools, _ = await resolve()
+        names = {t.name for t in tools}
+        assert "read_file" in names and "run_shell" in names
+        assert "load_integration_tools" in names
+        assert "mcp__hot-srv__delta" in names
+        # Lazy schemas still load-on-demand, and the allowlist still filters
+        # the rest of the built-ins.
+        assert not any(n.startswith("mcp__lazy-srv__") for n in names)
+        assert "write_file" not in names
+
+    async def test_explicit_pod_allowlist_stays_exact(self, resolve):
+        tools, _ = await resolve(["read_file"])
+        names = {t.name for t in tools}
+        assert names == {"read_file"}
