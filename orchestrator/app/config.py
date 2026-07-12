@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     task_stale_seconds: int = 150
     # Default maximum retries before a task goes to dead letter
     task_default_max_retries: int = 2
+    # Wall-clock budget per pipeline stage (safety rail step 3) — the stage
+    # coroutine is cancelled past this, making the reaper the backstop rather
+    # than the primary timeout. Generous default: task stages on slow local
+    # models legitimately run many minutes. 0 disables. Fallback only —
+    # platform_config pipeline.stage_timeout_seconds (Settings) wins.
+    pipeline_stage_timeout_seconds: int = 900
     # Tasks stuck in queued state longer than this are re-pushed
     stale_queued_seconds: int = 120
     # Extra buffer before declaring an agent session timed out

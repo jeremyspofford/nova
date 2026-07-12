@@ -156,10 +156,13 @@ Changes take effect immediately -- no restart required. The AI's system prompt i
 3. **Response Style** -- formatting rules
 4. **Memories** -- relevant context from previous conversations
 
-## Context compaction
+## Pipeline execution limits
 
-When a pipeline run's accumulated state grows past a threshold fraction of the context window, the orchestrator summarizes prior stage outputs into a compact string so later stages keep room to work.
+When a pipeline run's accumulated state grows past a threshold fraction of the context window, the orchestrator summarizes prior stage outputs into a compact string so later stages keep room to work. Each stage also runs under a wall-clock budget: a stage that exceeds it is cancelled in-process (in-flight LLM calls and tool rounds stop) and the task fails with a clear, retryable timeout error — the stale-heartbeat reaper remains only as a backstop for a dead process.
+
+Both are configured from Settings (AI & Pipeline → Execution & Context) and stored in `platform_config`.
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `context.compaction_threshold` | Fraction of the context window at which pipeline state is compacted. Configured from Settings (AI & Pipeline → Context); stored in `platform_config`. | `0.80` |
+| `context.compaction_threshold` | Fraction of the context window at which pipeline state is compacted. | `0.80` |
+| `pipeline.stage_timeout_seconds` | Wall-clock budget per pipeline stage. Keep it generous if you run slow local models; `0` disables the in-process kill. | `900` |

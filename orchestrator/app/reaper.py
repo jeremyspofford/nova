@@ -11,6 +11,10 @@ What it catches:
 
 The Reaper does NOT cancel actively-running tasks — it only acts on tasks
 that have gone silent (heartbeat expired or no started_at after grace period).
+A task that keeps heartbeating while a stage grinds forever is killed by the
+in-process wall-clock timeout instead (pipeline.stage_timeout_seconds,
+executor.StageWallClockTimeout — safety rail step 3); the Reaper is the
+backstop for a dead or partitioned process, not the primary timeout.
 """
 
 from __future__ import annotations
