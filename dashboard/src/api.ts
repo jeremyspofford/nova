@@ -1598,6 +1598,24 @@ export interface ApprovalDecisionPayload {
 export const listApprovals = () =>
   apiFetch<Approval[]>('/api/v1/capabilities/approvals')
 
+/** Recently resolved approvals — trimmed rows (no args/diff/screenshot). */
+export interface RecentApproval {
+  id: string
+  kind: 'consent' | 'checkpoint'
+  tool_name: string
+  blast_radius: BlastRadius
+  provider_kind: string | null
+  status: ApprovalStatus
+  requested_by: string
+  created_at: string
+  decided_by: string | null
+  decided_via: string | null
+  decided_at: string | null
+}
+
+export const listRecentApprovals = (limit = 20) =>
+  apiFetch<RecentApproval[]>(`/api/v1/capabilities/approvals/recent?limit=${limit}`)
+
 export const getApproval = (id: string) =>
   apiFetch<Approval>(`/api/v1/capabilities/approvals/${id}`)
 

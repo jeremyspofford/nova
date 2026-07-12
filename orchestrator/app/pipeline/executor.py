@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 async def _publish_notification(
     notification_type: str, task_id: str, title: str, body: str = "",
-    actions: list[dict] | None = None,
+    actions: list[dict] | None = None, approval_id: str | None = None,
 ) -> None:
     """Publish a notification to Redis pub/sub for SSE clients. Fire-and-forget — never blocks pipeline."""
     try:
@@ -66,7 +66,10 @@ async def _publish_notification(
         # notify_task_event filters noise (completions only for goal-linked /
         # cortex work) and never raises. `actions` become lockscreen buttons.
         from ..notifier import notify_task_event
-        await notify_task_event(notification_type, str(task_id), title, body, actions=actions)
+        await notify_task_event(
+            notification_type, str(task_id), title, body,
+            actions=actions, approval_id=approval_id,
+        )
     except Exception as e:
         logger.warning(f"Notification publish failed (non-fatal): {e}")
 
@@ -1587,6 +1590,7 @@ async def _park_for_checkpoint(
         f"Nova needs you: {hcp.reason}"[:200],
         hcp.instructions[:500],
         actions=await build_decide_actions(hcp.approval_id, kind="checkpoint"),
+        approval_id=hcp.approval_id,
     )
 
 
