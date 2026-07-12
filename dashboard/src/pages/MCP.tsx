@@ -358,6 +358,9 @@ function ServerCard({
   return (
     <Card className="overflow-hidden">
       <div
+        role="button"
+        aria-expanded={expanded}
+        aria-label={`${server.name} details`}
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-card-hover transition-colors"
         onClick={() => !editing && setExpanded(v => !v)}
       >
