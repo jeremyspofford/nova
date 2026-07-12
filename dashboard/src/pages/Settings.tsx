@@ -112,7 +112,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'local-inference', label: 'Local Inference', icon: Cpu },
       { id: 'provider-status', label: 'Provider Status', icon: Activity },
       { id: 'pipeline-models', label: 'Pipeline Models', icon: Layers },
-      { id: 'context-budgets', label: 'Context Budgets', icon: Gauge },
+      { id: 'context-budgets', label: 'Execution & Context', icon: Gauge },
       { id: 'tool-permissions', label: 'Tool Permissions', icon: Wrench },
       { id: 'voice', label: 'Voice', icon: Mic },
     ],

@@ -40,6 +40,59 @@ from .state_machine import transition_task_status
 logger = logging.getLogger(__name__)
 
 
+class StageWallClockTimeout(RuntimeError):
+    """A pipeline stage exceeded its wall-clock budget and was cancelled.
+
+    Safety rail step 3: the reaper only notices a task whose heartbeats
+    stop — a stage that keeps heartbeating while grinding through slow LLM
+    calls or tool rounds burns tokens unbounded. This in-process timeout is
+    the primary kill; the reaper stays as the backstop for a dead process.
+
+    Cancellation composes with the step-1 idempotency ledger: a wrapped tool
+    cancelled mid-flight leaves its claim 'in_progress' (fate unknown), so a
+    retry surfaces the ambiguity instead of double-firing the side effect.
+    """
+
+
+async def _stage_wallclock_seconds() -> float | None:
+    """Per-stage wall-clock budget, or None when disabled.
+
+    Settings → AI & Pipeline writes pipeline.stage_timeout_seconds to
+    platform_config; the .env value is only the fallback. 0 disables.
+    """
+    from ..runtime_config import get_db_config
+
+    raw = await get_db_config("pipeline.stage_timeout_seconds")
+    try:
+        seconds = float(raw) if raw is not None else float(settings.pipeline_stage_timeout_seconds)
+    except (TypeError, ValueError):
+        seconds = float(settings.pipeline_stage_timeout_seconds)
+    return seconds if seconds > 0 else None
+
+
+async def _await_stage_with_wallclock(stage_coro, stage_role: str) -> dict:
+    """Await a stage coroutine under the wall-clock budget.
+
+    On timeout the coroutine is actually cancelled — in-flight LLM calls and
+    tool rounds stop, instead of burning tokens while heartbeats keep the
+    reaper happy — and StageWallClockTimeout propagates to _run_agent's
+    failure handler, so on_failure semantics (skip/escalate/abort) and
+    error_context apply exactly as for any other stage failure.
+    """
+    wallclock = await _stage_wallclock_seconds()
+    if wallclock is None:
+        return await stage_coro
+    try:
+        return await asyncio.wait_for(stage_coro, timeout=wallclock)
+    except TimeoutError as texc:
+        raise StageWallClockTimeout(
+            f"Stage '{stage_role}' exceeded its wall-clock budget "
+            f"({wallclock:.0f}s) and was cancelled. If this stage "
+            f"legitimately needs longer (e.g. slow local models), "
+            f"raise pipeline.stage_timeout_seconds in Settings."
+        ) from texc
+
+
 # ── Notification helper ────────────────────────────────────────────────────────
 
 async def _publish_notification(
@@ -947,11 +1000,14 @@ async def _run_agent(
     try:
         if agent.role == "task":
             refactor_feedback = state.completed.get("_refactor_feedback")
-            result = await instance.run(state, refactor_feedback=refactor_feedback)
+            stage_coro = instance.run(state, refactor_feedback=refactor_feedback)
         elif agent.role == "code_review":
-            result = await instance.run(state, iteration=code_review_iteration + 1)
+            stage_coro = instance.run(state, iteration=code_review_iteration + 1)
         else:
-            result = await instance.run(state)
+            stage_coro = instance.run(state)
+
+        # Wall-clock kill (safety rail step 3) — see _await_stage_with_wallclock.
+        result = await _await_stage_with_wallclock(stage_coro, agent.role)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         await _complete_session(session_id, result, elapsed_ms, usage=instance._usage)
