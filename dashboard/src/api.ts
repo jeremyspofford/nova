@@ -817,6 +817,21 @@ export const getModelAssignments = () =>
   apiFetch<{ assignments: ModelAssignment[]; problem_count: number; error?: string }>(
     '/api/v1/models/assignments')
 
+/** One pod / agent / config knob currently pointing at a model id. */
+export interface ModelReference {
+  scope: 'pod_agent' | 'pod' | 'agent' | 'config'
+  field: 'model' | 'fallback_models' | 'default_model' | 'value'
+  name: string
+  pod_id?: string
+  agent_id?: string
+  key?: string
+}
+
+/** Everything pointing at a model id — checked before that model may be deleted. */
+export const getModelReferences = (model: string) =>
+  apiFetch<{ model: string; references: ModelReference[]; count: number }>(
+    `/api/v1/models/references?model=${encodeURIComponent(model)}`)
+
 export const MODEL_CATALOG_CACHE_KEY = 'nova_model_catalog_v1'
 export const MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60_000
 

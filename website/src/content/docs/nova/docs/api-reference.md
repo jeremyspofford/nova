@@ -157,6 +157,27 @@ curl -X POST http://localhost:8000/api/v1/pods/{pod_id}/agents \
   -d '{"name": "researcher", "role": "task", "model": "qwen2.5:7b"}'
 ```
 
+Model pins are validated on every pod/agent write: a concrete `model`,
+`default_model`, or `fallback_models` entry that no provider actually serves
+is rejected with `422`. `auto` and `tier:*` hints always pass — they resolve
+at request time.
+
+### Model assignments (admin)
+
+```bash
+# Every configured model reference, checked against validated discovery
+curl http://localhost:8000/api/v1/models/assignments \
+  -H "X-Admin-Secret: your-secret"
+
+# Everything currently pointing at one model id (pods, agents, config knobs)
+curl "http://localhost:8000/api/v1/models/references?model=qwen3:4b" \
+  -H "X-Admin-Secret: your-secret"
+```
+
+`/references` powers the delete guard: a local model can't be deleted while
+anything still points at it — the dashboard opens a repoint dialog, and the
+gateway rejects the delete with `409` listing the assignments that hold it.
+
 ### API keys (admin)
 
 ```bash

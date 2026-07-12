@@ -13,6 +13,7 @@ import {
   getProviderStatus,
   getLMStudioStatus,
   getModelAssignments,
+  getModelReferences,
 } from '../api'
 import type { ProviderModelList, OllamaPulledModel, OllamaStatus } from '../api'
 import { CLOUD_PROVIDER_ORDER } from '../constants'
@@ -35,6 +36,7 @@ import { ProviderCard } from './models/ProviderCard'
 import { RoutingStatsSection } from './models/RoutingStatsSection'
 import { LMStudioLibrarySection } from './models/LMStudioLibrarySection'
 import { BundledContainersCard } from './models/BundledContainersCard'
+import { RepointModal } from './models/RepointModal'
 import { PageHeader } from '../components/layout/PageHeader'
 import { useToast } from '../components/ToastProvider'
 import {
@@ -196,6 +198,7 @@ export function Models() {
   const [pullInput, setPullInput] = useState('')
   const [pullingModels, setPullingModels] = useState<Set<string>>(new Set())
   const [deletingModels, setDeletingModels] = useState<Set<string>>(new Set())
+  const [repointFor, setRepointFor] = useState<string | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [sizeFilter, setSizeFilter] = useState<number>(0)
   // Installed models expanded by default (the whole point of the page);
@@ -405,7 +408,7 @@ export function Models() {
     }
   }
 
-  const handleDelete = async (name: string) => {
+  const performDelete = async (name: string) => {
     setDeletingModels(s => new Set(s).add(name))
     try {
       await deleteMutation.mutateAsync(name)
@@ -414,6 +417,20 @@ export function Models() {
     } finally {
       setDeletingModels(s => { const n = new Set(s); n.delete(name); return n })
     }
+  }
+
+  const handleDelete = async (name: string) => {
+    // Nothing may point at a model that doesn't exist: if this one is still
+    // assigned anywhere, the operator repoints those assignments first (the
+    // gateway enforces the same rule with a 409).
+    try {
+      const { count } = await getModelReferences(name)
+      if (count > 0) {
+        setRepointFor(name)
+        return
+      }
+    } catch { /* check unavailable — the gateway's 409 still guards the delete */ }
+    await performDelete(name)
   }
 
   const handleRefresh = () => {
@@ -1097,6 +1114,18 @@ export function Models() {
           ))}
         </div>
       </section>
+
+      {repointFor && (
+        <RepointModal
+          model={repointFor}
+          onClose={() => setRepointFor(null)}
+          onRepointed={() => {
+            const name = repointFor
+            setRepointFor(null)
+            void performDelete(name)
+          }}
+        />
+      )}
     </div>
   )
 }

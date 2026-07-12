@@ -35,6 +35,7 @@ from typing import Any
 from app.auth import AdminDep, ApiKeyDep
 from app.config import settings
 from app.db import get_pool
+from app.model_assignments import ensure_models_exist
 from app.queue import (
     clear_dead_letter,
     dead_letter_depth,
@@ -713,6 +714,7 @@ async def list_pods(_key: ApiKeyDep) -> list[dict]:
 @router.post("/api/v1/pods", status_code=201)
 async def create_pod(req: PodRequest, _admin: AdminDep) -> dict:
     """Create a new pod configuration. Admin-only."""
+    await ensure_models_exist([req.default_model])
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -751,6 +753,7 @@ async def get_pod(pod_id: str, _key: ApiKeyDep) -> dict:
 @router.patch("/api/v1/pods/{pod_id}")
 async def update_pod(pod_id: str, req: PodRequest, _admin: AdminDep) -> dict:
     """Update pod configuration. Admin-only."""
+    await ensure_models_exist([req.default_model])
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -809,6 +812,7 @@ async def list_pod_agents(pod_id: str, _key: ApiKeyDep) -> list[dict]:
 @router.post("/api/v1/pods/{pod_id}/agents", status_code=201)
 async def add_pod_agent(pod_id: str, req: AgentRequest, _admin: AdminDep) -> dict:
     """Add an agent to a pod. Admin-only."""
+    await ensure_models_exist([req.model, *req.fallback_models])
     pool = get_pool()
     async with pool.acquire() as conn:
         # Verify pod exists
@@ -844,6 +848,7 @@ async def update_pod_agent(
     pod_id: str, agent_id: str, req: AgentRequest, _admin: AdminDep
 ) -> dict:
     """Update an agent's configuration. Admin-only."""
+    await ensure_models_exist([req.model, *req.fallback_models])
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
