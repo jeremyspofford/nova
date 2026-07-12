@@ -25,6 +25,7 @@ from app.store import get_redis
 from app.tool_permissions import resolve_effective_tools
 from app.tools import execute_tool, get_all_tools
 from app.tools.checkpoint_tools import CHECKPOINT_TOOL_NAME, HumanCheckpointPending
+from app.tools.integration_tools import LOAD_INTEGRATION_TOOL_NAME, load_server_tools
 from nova_contracts import (
     CompleteRequest,
     Message,
@@ -796,6 +797,8 @@ def _format_tool_list(tools: list) -> str:
         if t.name.startswith("mcp__"):
             parts = t.name.split("__")
             group = f"MCP: {parts[1]}" if len(parts) >= 2 else "MCP"
+        elif t.name == LOAD_INTEGRATION_TOOL_NAME:
+            group = "Integrations"
         else:
             group = tool_to_group.get(t.name, "Other")
         grouped.setdefault(group, [])
@@ -1112,6 +1115,9 @@ async def _run_tool_loop(
         tools:  Callers must pass explicit tool list (from resolve_effective_tools).
                 None → all tools (fallback for callers that don't manage permissions).
                 [] → no tools.
+                Mutated in place when the model calls load_integration_tools —
+                the caller's list gains the loaded MCP schemas, which the
+                streaming path relies on for its final tools= call.
         on_tool_status:  Optional async callback for emitting tool execution status
                          events to the SSE stream.
         on_thinking:  Optional async callback receiving the model's planning
@@ -1183,7 +1189,18 @@ async def _run_tool_loop(
                 await on_tool_status({"step": tc["name"], "state": "running", "detail": args_summary or tc["name"]})
 
             t0 = time.perf_counter()
-            result = await execute_tool(tc["name"], tc.get("arguments", {}), context=tool_context)
+            if tc["name"] == LOAD_INTEGRATION_TOOL_NAME:
+                # Lazy MCP loading: splice the server's schemas into the live
+                # tool list so the next rounds (and the caller's final
+                # streaming call — `tools` is the caller's own list object)
+                # can call them. The model gets a receipt of what loaded.
+                result, _loaded = await load_server_tools(
+                    str(tc.get("arguments", {}).get("server", "")),
+                )
+                _known = {t.name for t in effective_tools}
+                effective_tools.extend(t for t in _loaded if t.name not in _known)
+            else:
+                result = await execute_tool(tc["name"], tc.get("arguments", {}), context=tool_context)
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
             # Human checkpoint: the tool created a pending approval — stop the

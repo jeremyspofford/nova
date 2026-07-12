@@ -18,7 +18,7 @@ import {
 import { PageHeader } from '../components/layout/PageHeader'
 import {
   Card, Button, Input, Label, Select, Badge, StatusDot,
-  ConfirmDialog, EmptyState, SearchInput,
+  ConfirmDialog, EmptyState, SearchInput, Toggle,
 } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -66,11 +66,15 @@ function slugify(name: string): string {
 function ServerForm({
   initialValues,
   serverId,
+  metadata,
   onDone,
   title = 'New MCP Server',
 }: {
   initialValues?: PrefillValues
   serverId?: string
+  // Existing server metadata — the PATCH endpoint replaces the whole row, so
+  // edits must send it back or always_inject/catalog fields get wiped to {}.
+  metadata?: Record<string, unknown>
   onDone: () => void
   title?: string
 }) {
@@ -106,6 +110,7 @@ function ServerForm({
       env,
       url: form.url.trim() || null,
       enabled: form.enabled,
+      metadata: metadata ?? {},
     })
   }
 
@@ -325,6 +330,27 @@ function ServerCard({
     qc.invalidateQueries({ queryKey: ['mcp-servers'] })
   }
 
+  // Lazy loading (default): agents see a one-line capability index and load
+  // this server's tool schemas on demand. always_inject opts a server back
+  // into schemas-in-every-call. The PATCH reconnects the server, so the
+  // change takes effect immediately.
+  const alwaysInject = !!server.metadata?.always_inject
+  const injectMutation = useMutation({
+    mutationFn: (next: boolean) =>
+      updateMCPServer(server.id, {
+        name: server.name,
+        description: server.description,
+        transport: server.transport,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        url: server.url,
+        enabled: server.enabled,
+        metadata: { ...server.metadata, always_inject: next },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp-servers'] }),
+  })
+
   const statusDot = !server.enabled ? 'neutral' as const
     : server.connected ? 'success' as const
     : 'danger' as const
@@ -345,6 +371,9 @@ function ServerCard({
               <Badge color="success" size="sm">
                 {server.tool_count} tool{server.tool_count !== 1 ? 's' : ''}
               </Badge>
+            )}
+            {alwaysInject && (
+              <Badge color="warning" size="sm">always injected</Badge>
             )}
             {!server.enabled && (
               <Badge color="neutral" size="sm">disabled</Badge>
@@ -390,6 +419,7 @@ function ServerCard({
           <ServerForm
             initialValues={initialValues}
             serverId={server.id}
+            metadata={server.metadata}
             onDone={handleEditDone}
             title="Edit MCP Server"
           />
@@ -435,6 +465,26 @@ function ServerCard({
             <p className="text-caption text-danger">
               Not connected -- click Reload to retry, or check the orchestrator logs.
             </p>
+          )}
+
+          <div className="flex items-start justify-between gap-4 border-t border-border-subtle pt-3">
+            <div>
+              <p className="text-caption font-medium text-content-secondary">Always inject tools</p>
+              <p className="mt-0.5 text-caption text-content-tertiary">
+                Off (default): agents see a one-line summary of this server and load its
+                tools on demand — keeps prompts small. On: every tool schema is included
+                in every LLM call.
+              </p>
+            </div>
+            <Toggle
+              size="sm"
+              checked={alwaysInject}
+              onChange={next => injectMutation.mutate(next)}
+              disabled={injectMutation.isPending}
+            />
+          </div>
+          {injectMutation.isError && (
+            <p className="text-caption text-danger">{String(injectMutation.error)}</p>
           )}
         </div>
       )}

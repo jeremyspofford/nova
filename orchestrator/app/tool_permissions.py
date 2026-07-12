@@ -123,8 +123,38 @@ async def resolve_effective_tools(
     if allowed_tools is not None:
         allowed_set = set(allowed_tools)
         tools = [t for t in tools if t.name in allowed_set]
+        tools.extend(_pinned_mcp_tools(allowed_set, {t.name for t in tools}, disabled))
 
     return tools, disabled
+
+
+def _pinned_mcp_tools(
+    allowed_set: set[str], present: set[str], disabled: set[str],
+) -> list[ToolDefinition]:
+    """Schemas for mcp__ names an allowlist pins explicitly.
+
+    Lazy loading keeps MCP schemas out of get_permitted_tools, so a pod
+    that allowlists specific mcp__ tools would silently lose them. An
+    explicit pin means "this pod's job IS that integration" — inject those
+    schemas directly rather than making every run start with a load call.
+    Admin-disabled server groups still win.
+    """
+    wanted = {n for n in allowed_set if n.startswith("mcp__") and n not in present}
+    if not wanted:
+        return []
+    pinned: list[ToolDefinition] = []
+    try:
+        from app.pipeline.tools.registry import get_mcp_tool_definitions
+        for t in get_mcp_tool_definitions():
+            if t.name not in wanted:
+                continue
+            parts = t.name.split("__")
+            if len(parts) >= 2 and f"MCP: {parts[1]}" in disabled:
+                continue
+            pinned.append(t)
+    except Exception:
+        log.debug("MCP registry unavailable while resolving pinned tools")
+    return pinned
 
 
 def get_valid_group_names() -> set[str]:

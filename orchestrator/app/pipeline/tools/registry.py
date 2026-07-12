@@ -4,7 +4,13 @@ tool interface that merges Nova's built-in tools with MCP server tools.
 
 Workflow:
   startup  → load_mcp_servers()           Connect to all enabled DB entries
-  request  → get_mcp_tool_definitions()   ToolDefinition list for LLM requests
+  request  → get_capability_index() + get_injected_mcp_tool_definitions()
+             Lazy loading: LLM calls carry a one-line index per connected
+             server (via the load_integration_tools meta-tool description);
+             only metadata.always_inject servers contribute schemas up front.
+             get_server_tool_definitions(server) loads schemas on demand;
+             get_mcp_tool_definitions() (everything) feeds management
+             surfaces — the permission UI and the dashboard tool picker.
   agent    → execute_mcp_tool(name, args) Dispatch tool call to the right server
   ops      → list_connected_servers()     Health / status check for the dashboard
   runtime  → reload_mcp_server(name)      Hot-reconnect without full restart
@@ -34,9 +40,11 @@ log = logging.getLogger(__name__)
 # Values are StdioMCPClient or HTTPMCPClient — both share the same public interface
 _active_clients: dict[str, "StdioMCPClient | HTTPMCPClient"] = {}
 
-# name → {"transport": str, "metadata": dict}. Kept in lockstep with _active_clients
-# so the consent gate can classify an MCP tool's blast radius (app.tools.mcp_classify)
-# without a DB round-trip on every call. Mutated only under _registry_lock.
+# name → {"transport": str, "metadata": dict, "description": str}. Kept in
+# lockstep with _active_clients so the consent gate can classify an MCP tool's
+# blast radius (app.tools.mcp_classify) and the lazy-loading capability index
+# can describe servers without a DB round-trip on every call. Mutated only
+# under _registry_lock.
 _server_meta: dict[str, dict] = {}
 
 # Catalog-installed servers store secrets as ${secret:KEY} references in env (the
@@ -231,6 +239,7 @@ async def _connect_server(cfg: dict) -> bool:
             _server_meta[name] = {
                 "transport": transport,
                 "metadata": dict(cfg.get("metadata") or {}),
+                "description": cfg.get("description") or "",
             }
         log.info(
             "MCP server '%s' connected via %s (%d tools)",
@@ -265,6 +274,79 @@ def get_mcp_tool_definitions() -> list[ToolDefinition]:
                 parameters=tool.input_schema,
             ))
     return tools
+
+
+def server_always_injects(name: str) -> bool:
+    """Whether a server opted out of lazy loading via metadata.always_inject.
+
+    Lazy loading is the default: a connected server contributes only a
+    capability-index line to LLM calls, and its schemas load on demand via
+    the load_integration_tools meta-tool. Setting always_inject=true in the
+    server's metadata restores the old inject-every-schema behavior for that
+    server (rarely wanted — only for an integration hot enough that the
+    extra load step hurts).
+    """
+    meta = _server_meta.get(name, {})
+    return bool((meta.get("metadata") or {}).get("always_inject"))
+
+
+def get_injected_mcp_tool_definitions() -> list[ToolDefinition]:
+    """ToolDefinitions from always_inject servers only.
+
+    This is what LLM-facing tool lists (get_all_tools / get_permitted_tools)
+    include by default; every other connected server is represented by the
+    capability index + meta-tool instead.
+    """
+    tools: list[ToolDefinition] = []
+    for name, client in list(_active_clients.items()):
+        if not client.connected or not server_always_injects(name):
+            continue
+        for tool in client.tools:
+            tools.append(ToolDefinition(
+                name=f"mcp__{tool.server_name}__{tool.name}",
+                description=f"[{tool.server_name}] {tool.description}",
+                parameters=tool.input_schema,
+            ))
+    return tools
+
+
+def get_server_tool_definitions(server: str) -> list[ToolDefinition]:
+    """ToolDefinitions for one connected server ([] if unknown/disconnected).
+
+    Used by the load_integration_tools meta-tool to splice a server's schemas
+    into the live tool list mid-conversation.
+    """
+    client = _active_clients.get(server)
+    if client is None or not client.connected:
+        return []
+    return [
+        ToolDefinition(
+            name=f"mcp__{tool.server_name}__{tool.name}",
+            description=f"[{tool.server_name}] {tool.description}",
+            parameters=tool.input_schema,
+        )
+        for tool in client.tools
+    ]
+
+
+def get_capability_index() -> list[dict]:
+    """One entry per connected lazy server: what exists, not full schemas.
+
+    Each entry: {"server", "description", "tool_count"}. always_inject
+    servers are excluded — their schemas are already in the tool list, so
+    indexing them too would tell the model to load what it already has.
+    """
+    index: list[dict] = []
+    for name, client in sorted(_active_clients.items()):
+        if not client.connected or server_always_injects(name):
+            continue
+        meta = _server_meta.get(name, {})
+        index.append({
+            "server": name,
+            "description": meta.get("description") or "",
+            "tool_count": len(client.tools),
+        })
+    return index
 
 
 async def execute_mcp_tool(name: str, arguments: dict) -> str:

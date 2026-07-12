@@ -114,38 +114,55 @@ def get_permitted_tools(disabled_groups: set[str]) -> list[ToolDefinition]:
         if g.name not in disabled_groups:
             tools.extend(g.tools)
 
-    # Filter MCP tools
+    tools.extend(_mcp_facing_tools(disabled_groups))
+    return tools
+
+
+def _mcp_facing_tools(disabled_groups: set[str]) -> list[ToolDefinition]:
+    """The MCP contribution to an LLM-facing tool list.
+
+    Lazy loading: only always_inject servers contribute schemas here;
+    every other connected server is reachable through the
+    load_integration_tools meta-tool, whose description carries the
+    one-line-per-server capability index. Admin-disabled "MCP: {server}"
+    groups are excluded from both.
+    """
+    tools: list[ToolDefinition] = []
     try:
-        from app.pipeline.tools.registry import get_mcp_tool_definitions
-        for t in get_mcp_tool_definitions():
+        from app.pipeline.tools.registry import get_injected_mcp_tool_definitions
+        from app.tools.integration_tools import build_load_integration_tool
+
+        for t in get_injected_mcp_tool_definitions():
             # mcp__{server}__{tool} → server name → "MCP: {server}"
             parts = t.name.split("__")
-            if len(parts) >= 2:
-                mcp_group = f"MCP: {parts[1]}"
-                if mcp_group not in disabled_groups:
-                    tools.append(t)
-            else:
-                tools.append(t)
-    except Exception:
-        pass
+            if len(parts) >= 2 and f"MCP: {parts[1]}" in disabled_groups:
+                continue
+            tools.append(t)
 
+        meta = build_load_integration_tool(disabled_groups)
+        if meta is not None:
+            tools.append(meta)
+    except Exception:
+        # MCP registry unavailable (e.g., during tests) — built-ins only
+        pass
     return tools
 
 
 def get_all_tools() -> list[ToolDefinition]:
     """
-    Return all available tools: built-ins + dynamically-registered MCP tools.
+    Return all LLM-facing tools: built-ins, schemas from always_inject MCP
+    servers, and the load_integration_tools meta-tool when at least one
+    lazy MCP server is connected.
 
-    Call this when building a tool list for an LLM request so MCP server tools
-    are included. Do NOT call at module import time — MCP servers are loaded
+    Lazy servers' schemas are NOT included — the agent loads them on demand
+    (see app.tools.integration_tools). Management surfaces that need every
+    MCP tool (permission UI, tool picker) use
+    app.pipeline.tools.registry.get_mcp_tool_definitions directly.
+
+    Do NOT call at module import time — MCP servers are loaded
     asynchronously after startup.
     """
-    try:
-        from app.pipeline.tools.registry import get_mcp_tool_definitions
-        return ALL_TOOLS + get_mcp_tool_definitions()
-    except Exception:
-        # MCP registry unavailable (e.g., during tests) — fall back to built-ins
-        return list(ALL_TOOLS)
+    return ALL_TOOLS + _mcp_facing_tools(set())
 
 
 async def execute_tool(
@@ -197,6 +214,14 @@ async def execute_tool(
     # create the approval row the pipeline executor parks the task against.
     if name == CHECKPOINT_TOOL_NAME:
         return await _exec_checkpoint(name, arguments, context)
+
+    # Lazy MCP loading: the agent tool loop intercepts this name itself so it
+    # can splice the loaded schemas into the live tool list; this branch is
+    # the fallback for any other dispatch path (returns the receipt only).
+    from app.tools.integration_tools import LOAD_INTEGRATION_TOOL_NAME
+    if name == LOAD_INTEGRATION_TOOL_NAME:
+        from app.tools.integration_tools import execute_tool as _exec_integration
+        return await _exec_integration(name, arguments)
 
     executor = _DISPATCH.get(name)
     if executor:
