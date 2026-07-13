@@ -53,10 +53,17 @@ async def chat_stream(request: ChatRequest):
         if memory_context.get("context"):
             agent_system_prompt += f"\n\n## Relevant Memories\n{memory_context['context']}"
 
+        # Use Ollama if OpenRouter key not configured or is placeholder
+        model = main_agent["model"]
+        has_valid_or_key = settings.openrouter_api_key and not settings.openrouter_api_key.startswith("sk-or-v1-your")
+        if "openrouter:" in model and not has_valid_or_key:
+            model = model.replace("openrouter:", "ollama:")
+            log.info(f"OpenRouter not configured, falling back to Ollama: {model}")
+
         agent_config = {
             "id": main_agent["id"],
             "system_prompt": agent_system_prompt,
-            "model": main_agent["model"],
+            "model": model,
         }
 
         # Get tools for the agent

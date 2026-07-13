@@ -72,11 +72,14 @@ class BM25Index:
                 bm25_score = idf * ((self.k1 + 1) * tf) / (self.k1 * (1 - self.b + self.b * (doc_length / self.avg_doc_length)) + tf)
 
                 # Boost based on priority
-                priority_boost = 1.0 + (self.documents[doc_id]["priority"] * 0.1)
+                doc = self.documents.get(doc_id, {})
+                priority = doc.get("priority", 0)
+                priority_boost = 1.0 + (priority * 0.1)
                 bm25_score *= priority_boost
 
                 # Boost for title matches
-                if token in self._tokenize(self.documents[doc_id]["title"]):
+                doc = self.documents.get(doc_id, {})
+                if token in self._tokenize(doc.get("title", "")):
                     bm25_score *= 2.0
 
                 scores[doc_id] = scores.get(doc_id, 0) + bm25_score

@@ -68,17 +68,12 @@ class OkfMemory:
         total_chars = 0
 
         for doc_id, score in results:
-            if doc_id not in self.store.documents:
-                result = self.store.read_file(doc_id)
-                if not result:
-                    continue
-                fm, body = result
-                title = fm.get("title", doc_id)
-                content = body[:500]  # Trim long documents
-            else:
-                doc = self.store.documents[doc_id]
-                title = doc["title"]
-                content = doc["body"][:500]
+            result = self.store.read_file(doc_id)
+            if not result:
+                continue
+            fm, body = result
+            title = fm.get("title", doc_id)
+            content = body[:500]  # Trim long documents
 
             item = f"- **{title}** (score: {score:.2f}): {content}"
             if total_chars + len(item) > max_chars:
@@ -104,16 +99,11 @@ class OkfMemory:
 
         skill_lines = []
         for doc_id, score in results:
-            if doc_id not in self.store.documents:
-                result = self.store.read_file(doc_id)
-                if not result:
-                    continue
-                fm, body = result
-                title = fm.get("title", doc_id)
-            else:
-                doc = self.store.documents[doc_id]
-                title = doc["title"]
-
+            result = self.store.read_file(doc_id)
+            if not result:
+                continue
+            fm, body = result
+            title = fm.get("title", doc_id)
             skill_lines.append(f"- {title}")
 
         skills_text = "\n".join(skill_lines) if skill_lines else "No applicable skills found."
