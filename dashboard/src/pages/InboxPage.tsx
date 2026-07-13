@@ -100,7 +100,7 @@ export function InboxPage() {
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [confirmClear, setConfirmClear] = useState(false)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['inbox'],
     queryFn: () => apiFetch<InboxResponse>('/api/v1/notify/inbox?limit=100'),
     refetchInterval: 10_000,
@@ -193,6 +193,14 @@ export function InboxPage() {
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-border-subtle py-12 text-center">
+          <AlertTriangle className="mx-auto h-8 w-8 text-danger" />
+          <p className="mt-2 text-compact text-content-secondary">Couldn't load the Inbox</p>
+          <p className="text-caption text-content-tertiary">
+            {(error as Error).message} — if this says unauthorized, sign in again.
+          </p>
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-lg border border-border-subtle py-12 text-center">
