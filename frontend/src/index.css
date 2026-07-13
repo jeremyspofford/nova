@@ -1,0 +1,31 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+:root {
+  /* Nova Teal */
+  --teal-50: #ECFDF9;
+  --teal-100: #CCFBF0;
+  --teal-200: #96F3E3;
+  --teal-300: #5CE8D0;
+  --teal-400: #24C9B8;
+  --teal-500: #19A89E;
+  --teal-600: #168E85;
+  --teal-700: #14746C;
+  --teal-800: #115D57;
+  --teal-900: #104D48;
+  --teal-950: #082D2A;
+
+  /* Amber */
+  --amber-400: #FBBF24;
+  --amber-500: #F59E0B;
+  --amber-600: #D97706;
+}
+
+* {
+  @apply antialiased;
+}
+
+html {
+  scroll-behavior: smooth;
+}

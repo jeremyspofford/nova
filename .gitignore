@@ -1,71 +1,13 @@
-# Secrets
+*.pyc
+__pycache__/
+.pytest_cache/
 .env
 .env.local
-.env.backup*
-.env.bak*
-
-# Worktrees
-.worktrees/
-
-# Agent workspace output (runtime default is ~/.nova/workspace; never commit)
-workspace/
-
-# Superpowers brainstorm sessions
-.superpowers/
-
-# docs/superpowers/ holds tracked planning + spec docs. A global gitignore
-# (~/.gitignore_global) ignores any dir named `superpowers/`, which silently
-# blocks NEW files here — re-include this repo's copy so plans get committed.
-!docs/superpowers/
-!docs/superpowers/**
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
-.venv/
-build/
-
-# Node
+.DS_Store
 node_modules/
 dist/
-*.tsbuildinfo
-
-# Cache
-.cache/
-
-# Claude Code local settings
+build/
+.venv/
+venv/
+data/
 .claude/
-
-# Backups
-backups/
-
-# Machine-specific runtime data (hardware detection output, etc.)
-data/*
-!data/recommended_models.json
-!data/recommended_cloud_models.json
-data/sources/
-
-# OS
-.DS_Store
-*.log
-
-# Playwright MCP snapshots
-.playwright-mcp/
-
-# Screenshots
-*.png
-
-# Website
-website/node_modules/
-website/dist/
-website/.astro/
-.gstack/
-
-# Audit security reports stay local-only (public repo)
-docs/audits/*/security.md
-observability/grafana/.jwt-secret
-observability/grafana/.jwt-jwks.json
