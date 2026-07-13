@@ -1,66 +1,66 @@
 import { useEffect, useRef, useState } from 'react';
+import { getMemoryGraph, getMemoryStats } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
+import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
+
+const CHAT_WIDTH = 384; // w-96
+const REFRESH_MS = 20000;
 
 export function Brain() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [chatOpen, setChatOpen] = useState(true);
+  const rendererRef = useRef<RendererHandle | null>(null);
+  const [stats, setStats] = useState<Record<string, number> | null>(null);
+  const [theme] = useState(DEFAULT_THEME);
 
   useEffect(() => {
-    // Placeholder: for Phase 1, just render empty canvas
-    // Will wire in actual memory graph rendering in Phase 2
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const renderer = THEMES[theme].create(canvas);
+    rendererRef.current = renderer;
 
-    canvas.width = window.innerWidth - (chatOpen ? 350 : 0);
-    canvas.height = window.innerHeight;
+    const size = () =>
+      renderer.resize(window.innerWidth - CHAT_WIDTH, window.innerHeight);
+    size();
+    window.addEventListener('resize', size);
 
-    // Draw simple background gradient
-    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    gradient.addColorStop(0, '#0C0A09');
-    gradient.addColorStop(1, '#1C1917');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Draw placeholder text
-    ctx.fillStyle = '#19A89E';
-    ctx.font = '48px Plus Jakarta Sans';
-    ctx.textAlign = 'center';
-    ctx.fillText('Brain Graph', canvas.width / 2, canvas.height / 2 - 50);
-
-    ctx.fillStyle = '#78716C';
-    ctx.font = '16px Plus Jakarta Sans';
-    ctx.fillText('Memory nodes will appear here in Phase 2', canvas.width / 2, canvas.height / 2 + 30);
-
-    // Handle window resize
-    const handleResize = () => {
-      canvas.width = window.innerWidth - (chatOpen ? 350 : 0);
-      canvas.height = window.innerHeight;
-      // Redraw on resize
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [graph, s] = await Promise.all([getMemoryGraph(), getMemoryStats()]);
+        if (!cancelled) {
+          renderer.setData(graph.nodes, graph.edges);
+          setStats(s);
+        }
+      } catch (err) {
+        console.error('brain refresh failed:', err);
+      }
     };
+    load();
+    const interval = setInterval(load, REFRESH_MS);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [chatOpen]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('resize', size);
+      renderer.destroy();
+      rendererRef.current = null;
+    };
+  }, [theme]);
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-stone-950">
-      <canvas ref={canvasRef} className="absolute inset-0" />
+      <canvas ref={canvasRef} className="absolute top-0 left-0" />
 
-      {/* HUD buttons */}
-      <div className="absolute top-4 left-4 z-10 flex gap-2">
-        <button
-          onClick={() => setChatOpen(!chatOpen)}
-          className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm transition"
-        >
-          {chatOpen ? 'Hide Chat' : 'Show Chat'}
-        </button>
-      </div>
+      {stats && (
+        <div className="absolute top-4 left-4 z-10 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
+          <span className="text-teal-400">{stats.topic ?? 0} topics</span>
+          <span className="text-amber-400">{stats.skill ?? 0} skills</span>
+          <span>{stats.journal ?? 0} journals</span>
+        </div>
+      )}
 
-      {/* Always-open chat panel */}
-      {chatOpen && <ChatPanel />}
+      <ChatPanel />
     </div>
   );
 }
