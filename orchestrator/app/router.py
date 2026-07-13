@@ -118,18 +118,35 @@ def _humanize_chat_error(e: Exception) -> str:
 
 async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sandbox_token=None,
                       conversation_id: str | None = None, user_message: str | None = None,
-                      session_id: str | None = None, message_metadata: dict | None = None):
+                      session_id: str | None = None, message_metadata: dict | None = None,
+                      lock_token: str | None = None):
     """SSE-formatted wrapper: yields deltas from run_agent_turn_streaming, handles errors, resets agent status.
 
     Emits a heartbeat every ``_HB_INTERVAL_S`` seconds while the generator is
     producing nothing (slow model turn, long tool call). The heartbeat keeps
     proxies from closing an idle connection AND lets the UI show elapsed time
     so a user never mistakes "working" for "crashed".
+
+    When ``lock_token`` is set, the stream holds the per-conversation lock
+    (app.chat_stream_lock): it refreshes ownership every few seconds and, if
+    a newer send has taken the lock over, emits a final ``superseded`` event
+    and stops — cancel-and-replace instead of the old blanket 409.
     """
     accumulated = ""
     model_used = None
+    superseded = False
     _HB_INTERVAL_S = 3.0
     started = _time.monotonic()
+
+    from app.chat_stream_lock import (
+        LOCK_CHECK_INTERVAL_S,
+        still_owner_and_refresh,
+    )
+    from app.chat_stream_lock import (
+        lock_key as _lock_key,
+    )
+    stream_lock_key = _lock_key(conversation_id or session_id or agent_id)
+    last_lock_check = started
 
     # Drain the inner generator in a background task that feeds a queue. This is
     # the ONLY safe way to interleave heartbeats: awaiting anext() directly with
@@ -151,6 +168,22 @@ async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sa
     pump_task = asyncio.create_task(_pump())
     try:
         while True:
+            # Ownership check + TTL refresh — runs at least every
+            # _HB_INTERVAL_S even when the model is silent, because the
+            # queue.get below times out onto the heartbeat path.
+            if lock_token is not None:
+                now = _time.monotonic()
+                if now - last_lock_check >= LOCK_CHECK_INTERVAL_S:
+                    last_lock_check = now
+                    if not await still_owner_and_refresh(stream_lock_key, lock_token):
+                        superseded = True
+                        log.info(
+                            "%s superseded by a newer send (agent=%s, conversation=%s) — stopping",
+                            error_label, agent_id, conversation_id or session_id,
+                        )
+                        yield f"data: {json.dumps({'superseded': True})}\n\n".encode()
+                        break
+
             try:
                 kind, payload = await asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL_S)
             except asyncio.TimeoutError:
@@ -217,14 +250,12 @@ async def _sse_stream(agent_id: str, stream_gen, error_label: str = "stream", sa
                     asyncio.create_task(generate_title(conversation_id, user_message))
             except Exception as e:
                 log.warning("Failed to persist conversation messages: %s", e)
-        # Release concurrent stream lock
-        try:
-            from app.store import get_redis
-            _redis = get_redis()
-            lock_key = f"nova:chat:streaming:{conversation_id or session_id}"
-            await _redis.delete(lock_key)
-        except Exception:
-            pass  # Lock auto-expires via TTL if cleanup fails
+        # Release the stream lock — only if this stream still owns it
+        # (a superseding send holds its own token now; deleting here would
+        # kick the successor's lock out from under it).
+        if lock_token is not None and not superseded:
+            from app.chat_stream_lock import release
+            await release(stream_lock_key, lock_token)
 
 
 # ── Sandbox tier (runtime from DB) ────────────────────────────────────────────
@@ -576,16 +607,14 @@ async def chat_stream(req: ChatRequest, user: UserDep):
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Concurrent stream lock — one stream per conversation at a time
-    from app.store import get_redis
-    lock_key = f"nova:chat:streaming:{conversation_id or session_id}"
-    _redis = get_redis()
-    if await _redis.exists(lock_key):
-        raise HTTPException(
-            status_code=409,
-            detail="Nova is currently responding. Try again in a moment."
-        )
-    await _redis.set(lock_key, "1", ex=120)
+    # Concurrent stream lock — one stream per conversation, last-write-wins.
+    # A send while Nova is responding supersedes the in-flight stream (it
+    # stops at its next ownership check) instead of 409ing — a slow local
+    # model no longer walls off the whole conversation for minutes.
+    from app.chat_stream_lock import acquire
+    from app.chat_stream_lock import lock_key as _lock_key
+    stream_lock_key = _lock_key(conversation_id or session_id)
+    stream_lock_token, _ = await acquire(stream_lock_key)
 
     # Extract last user message for persistence
     user_message = None
@@ -653,6 +682,7 @@ async def chat_stream(req: ChatRequest, user: UserDep):
             user_message=user_message,
             session_id=session_id,
             message_metadata=req.metadata,
+            lock_token=stream_lock_token,
         ),
         media_type="text/event-stream",
         headers={

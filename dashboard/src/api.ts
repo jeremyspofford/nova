@@ -451,6 +451,11 @@ export async function* streamChat(
             yield { think: parsed.think as string }
             continue
           }
+          if (parsed.superseded) {
+            // A newer send took over this conversation (cancel-and-replace).
+            // End this stream cleanly; whatever streamed so far stays visible.
+            return
+          }
         } catch {
           if (data) yield data
         }
