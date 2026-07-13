@@ -1,198 +1,120 @@
-"""Chat API router."""
+"""Chat + platform API router.
 
-import logging
+SSE contract for POST /api/v1/chat/stream:
+    data: {"meta": {"conversation_id": ..., "model": ...}}
+    data: {"t": "text delta"}
+    data: {"activity": {"kind": "tool_start|tool_result|dispatch", "name": ..., "agent": ..., "detail": ...}}
+    data: {"error": "..."}
+    data: [DONE]
+"""
+
+import asyncio
 import json
-from fastapi import APIRouter, Request, HTTPException
+import logging
+
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from app import conversations, db
-from app.llm import router as llm_router
-from app.config import settings
-from app.schemas import ChatRequest
-from app.memory.memory import memory
+
+from app import conversations
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
-from app.tools import registry as tool_registry
+from app.llm.router import effective_model
+from app.memory.memory import memory
+from app.schemas import ChatRequest
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Hardcoded main agent prompt for Phase 1
-MAIN_SYSTEM_PROMPT = """You are Nova, a helpful AI assistant. Answer questions directly from your knowledge and memory.
-You have access to tools to help you, and you'll use them when needed.
-Be concise and helpful."""
+
+def _sse(obj) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
 
 
 @router.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """Stream chat responses."""
-    try:
-        # Get or create active conversation
-        conversation_info = await conversations.get_or_create_active_conversation()
-        conversation_id = conversation_info["id"]
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="message is empty")
 
-        # Append user message
-        await conversations.append_message(conversation_id, "user", request.message)
+    conversation = await conversations.get_or_create_active_conversation()
+    conversation_id = conversation["id"]
 
-        # Load conversation history
-        history = await conversations.load_history(conversation_id)
+    main_agent = await agent_registry.get_agent_by_name("main")
+    if not main_agent:
+        raise HTTPException(status_code=500, detail="main agent missing from registry")
 
-        # Get the main agent
-        main_agent = await agent_registry.get_agent_by_name("main")
-        if not main_agent:
-            raise HTTPException(status_code=500, detail="Main agent not configured")
+    history = await conversations.load_history(conversation_id)
+    turn_messages = conversations.to_llm_history(history) + [
+        {"role": "user", "content": request.message}]
 
-        # Retrieve memory context
-        memory_context = await memory.context(request.message, max_chars=2000)
+    await conversations.append_message(conversation_id, "user", request.message)
 
-        # Build message list for agent
-        messages = [{"role": "user", "content": request.message}]
+    async def generate():
+        yield _sse({"meta": {"conversation_id": conversation_id,
+                             "model": effective_model(main_agent["model"])}})
+        final_text = ""
+        try:
+            async for event in agent_runner.run_agent(main_agent, turn_messages):
+                etype = event["type"]
+                if etype == "text":
+                    yield _sse({"t": event["text"]})
+                elif etype == "activity":
+                    yield _sse({"activity": {k: event.get(k) for k in
+                                             ("kind", "name", "agent", "detail")}})
+                    # persist tool activity as an audit row (fire and forget)
+                    asyncio.ensure_future(conversations.append_message(
+                        conversation_id, "tool",
+                        content=(event.get("detail") or "")[:2000],
+                        tool_calls={"kind": event.get("kind"),
+                                    "name": event.get("name"),
+                                    "agent": event.get("agent")}))
+                elif etype == "final":
+                    final_text = event["text"]
+                elif etype == "error":
+                    yield _sse({"error": event["error"]})
+        except Exception as e:
+            log.exception("chat stream failed")
+            yield _sse({"error": str(e)})
 
-        # Add memory context to agent's system prompt
-        agent_system_prompt = main_agent["system_prompt"]
-        if memory_context.get("context"):
-            agent_system_prompt += f"\n\n## Relevant Memories\n{memory_context['context']}"
-
-        # Use Ollama if OpenRouter key not configured or is placeholder
-        model = main_agent["model"]
-        has_valid_or_key = settings.openrouter_api_key and not settings.openrouter_api_key.startswith("sk-or-v1-your")
-        if "openrouter:" in model and not has_valid_or_key:
-            model = model.replace("openrouter:", "ollama:")
-            log.info(f"OpenRouter not configured, falling back to Ollama: {model}")
-
-        agent_config = {
-            "id": main_agent["id"],
-            "system_prompt": agent_system_prompt,
-            "model": model,
-        }
-
-        # Get tools for the agent
-        tools_list = await tool_registry.get_agent_tools(main_agent["id"], main_agent.get("allowed_tools"))
-
-        async def response_generator():
-            """Stream the agent response."""
-            # Emit conversation metadata
-            yield f'data: {json.dumps({"meta": {"conversation_id": conversation_id, "model": agent_config["model"]}})}\n\n'
-
-            full_response = ""
-
+        if final_text.strip():
             try:
-                async for chunk in agent_runner.run_agent_turn_streaming(agent_config, messages, tools_list):
-                    if chunk.get("type") == "text":
-                        text = chunk["text"]
-                        full_response += text
-                        yield f'data: {json.dumps({"t": text})}\n\n'
-                    elif chunk.get("type") == "done":
-                        yield 'data: [DONE]\n\n'
-                    elif chunk.get("error"):
-                        log.error(f"Agent error: {chunk['error']}")
-                        yield f'data: {json.dumps({"error": chunk["error"]})}\n\n'
-            except Exception as e:
-                log.error(f"Error during agent turn: {e}")
-                yield f'data: {json.dumps({"error": str(e)})}\n\n'
+                await conversations.append_message(
+                    conversation_id, "assistant", final_text,
+                    effective_model(main_agent["model"]))
+                await memory.write(
+                    f"User: {request.message}\n\nNova: {final_text}",
+                    type="journal", source_type="chat")
+            except Exception:
+                log.exception("failed to persist assistant turn")
 
-            # Save assistant response and write to memory
-            try:
-                await conversations.append_message(conversation_id, "assistant", full_response, agent_config["model"])
-                # Write exchange to memory
-                exchange = f"User: {request.message}\n\nAssistant: {full_response}"
-                await memory.write(exchange, source_type="chat")
-            except Exception as e:
-                log.error(f"Failed to save message or write to memory: {e}")
+        yield "data: [DONE]\n\n"
 
-        return StreamingResponse(response_generator(), media_type="text/event-stream")
-
-    except Exception as e:
-        log.error(f"Error in chat stream: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @router.get("/api/v1/conversations/active")
 async def get_active_conversation():
-    """Get active conversation metadata."""
-    try:
-        info = await conversations.get_or_create_active_conversation()
-        return info
-    except Exception as e:
-        log.error(f"Error getting active conversation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await conversations.get_or_create_active_conversation()
 
 
 @router.get("/api/v1/conversations/{conversation_id}/messages")
 async def get_messages(conversation_id: str):
-    """Get messages for a conversation."""
-    try:
-        history = await conversations.load_history(conversation_id, limit=100)
-        return history
-    except Exception as e:
-        log.error(f"Error getting messages: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/api/v1/memory/stats")
-async def get_memory_stats():
-    """Get memory statistics."""
-    try:
-        stats = await memory.stats()
-        return stats
-    except Exception as e:
-        log.error(f"Error getting memory stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    history = await conversations.load_history(conversation_id, limit=100)
+    return [m for m in history if m["role"] in ("user", "assistant") and m["content"]]
 
 
 @router.get("/api/v1/agents")
 async def list_agents_endpoint():
-    """List all agents."""
-    try:
-        agents = await agent_registry.list_agents()
-        return agents
-    except Exception as e:
-        log.error(f"Error listing agents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await agent_registry.list_agents(enabled_only=False)
+
+
+@router.get("/api/v1/memory/stats")
+async def memory_stats():
+    return await memory.stats()
 
 
 @router.get("/api/v1/memory/graph")
-async def get_memory_graph():
-    """Get memory graph for visualization (simplified for Phase 2)."""
-    try:
-        stats = await memory.stats()
-
-        # For Phase 2, return a simple node/edge structure
-        # In later phases, this will be enhanced with actual memory graph structure
-        nodes = []
-        edges = []
-
-        # Add topic nodes
-        for i in range(stats.get("topics", 0)):
-            nodes.append({
-                "id": f"topic-{i}",
-                "label": f"Topic {i+1}",
-                "type": "topic",
-                "size": 1.0,
-            })
-
-        # Add skill nodes
-        for i in range(stats.get("skills", 0)):
-            nodes.append({
-                "id": f"skill-{i}",
-                "label": f"Skill {i+1}",
-                "type": "skill",
-                "size": 0.8,
-            })
-
-        # Add some simple edges
-        for i in range(min(3, len(nodes) - 1)):
-            edges.append({
-                "source": nodes[i]["id"],
-                "target": nodes[i + 1]["id"],
-                "weight": 0.5,
-            })
-
-        return {
-            "nodes": nodes,
-            "edges": edges,
-            "stats": stats,
-        }
-    except Exception as e:
-        log.error(f"Error getting memory graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def memory_graph():
+    return await memory.graph()

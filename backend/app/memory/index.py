@@ -1,89 +1,85 @@
-"""BM25 index for memory retrieval."""
+"""In-process BM25 index over memory files. Doc ids are always file paths."""
 
 import logging
 import math
+import re
 from collections import Counter
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text.lower())
+
 
 class BM25Index:
-    """Simple BM25 implementation for memory retrieval."""
+    K1 = 1.5
+    B = 0.75
 
     def __init__(self):
-        self.documents = {}  # doc_id -> {title, body, type, priority}
-        self.inverted_index = {}  # term -> set of doc_ids
-        self.doc_freqs = {}  # (doc_id, term) -> frequency
-        self.doc_lengths = {}  # doc_id -> length
-        self.avg_doc_length = 0
-        self.total_docs = 0
+        self.docs: dict[str, dict] = {}          # doc_id -> {title, type, priority, mtime}
+        self.doc_terms: dict[str, Counter] = {}  # doc_id -> term counts
+        self.doc_lengths: dict[str, int] = {}
+        self.postings: dict[str, set[str]] = {}  # term -> doc_ids
 
-        # BM25 parameters
-        self.k1 = 1.5  # term frequency saturation
-        self.b = 0.75  # document length normalization
+    @property
+    def total_docs(self) -> int:
+        return len(self.docs)
 
-    def _tokenize(self, text: str) -> list[str]:
-        """Simple tokenization."""
-        return text.lower().split()
+    def _avg_len(self) -> float:
+        return sum(self.doc_lengths.values()) / max(1, len(self.doc_lengths))
 
-    def add_document(self, doc_id: str, title: str, body: str, doc_type: str = "topic", priority: int = 0):
-        """Add a document to the index."""
-        self.documents[doc_id] = {
-            "title": title,
-            "body": body,
-            "type": doc_type,
-            "priority": priority,
-        }
+    def remove(self, doc_id: str):
+        if doc_id not in self.docs:
+            return
+        for term in self.doc_terms.get(doc_id, ()):  # noqa: B007
+            bucket = self.postings.get(term)
+            if bucket:
+                bucket.discard(doc_id)
+                if not bucket:
+                    del self.postings[term]
+        self.docs.pop(doc_id, None)
+        self.doc_terms.pop(doc_id, None)
+        self.doc_lengths.pop(doc_id, None)
 
-        # Tokenize and index
-        tokens = self._tokenize(f"{title} {body}")
-        token_counts = Counter(tokens)
+    def upsert(self, doc_id: str, title: str, body: str, doc_type: str,
+               priority: int = 0, mtime: float = 0.0):
+        self.remove(doc_id)
+        terms = Counter(_tokenize(f"{title} {body}"))
+        self.docs[doc_id] = {"title": title, "type": doc_type,
+                             "priority": priority, "mtime": mtime}
+        self.doc_terms[doc_id] = terms
+        self.doc_lengths[doc_id] = sum(terms.values())
+        for term in terms:
+            self.postings.setdefault(term, set()).add(doc_id)
 
-        self.doc_lengths[doc_id] = len(tokens)
+    def search(self, query: str, type_filter: Optional[set[str]] = None,
+               top_k: int = 5) -> list[tuple[str, float]]:
+        q_terms = _tokenize(query)
+        if not q_terms or not self.docs:
+            return []
+        avg_len = self._avg_len()
+        scores: dict[str, float] = {}
 
-        for token, count in token_counts.items():
-            if token not in self.inverted_index:
-                self.inverted_index[token] = set()
-            self.inverted_index[token].add(doc_id)
-            self.doc_freqs[(doc_id, token)] = count
-
-        self.total_docs = len(self.documents)
-        self.avg_doc_length = sum(self.doc_lengths.values()) / max(1, self.total_docs)
-
-    def search(self, query: str, type_filter: Optional[set[str]] = None, top_k: int = 5) -> list[tuple[str, float]]:
-        """Search for documents using BM25."""
-        query_tokens = self._tokenize(query)
-        scores = {}
-
-        for token in query_tokens:
-            if token not in self.inverted_index:
+        for term in q_terms:
+            doc_ids = self.postings.get(term)
+            if not doc_ids:
                 continue
-
-            idf = math.log((self.total_docs - len(self.inverted_index[token]) + 0.5) / (len(self.inverted_index[token]) + 0.5) + 1)
-
-            for doc_id in self.inverted_index[token]:
-                if type_filter and self.documents[doc_id]["type"] not in type_filter:
+            idf = math.log((self.total_docs - len(doc_ids) + 0.5) / (len(doc_ids) + 0.5) + 1)
+            for doc_id in doc_ids:
+                meta = self.docs[doc_id]
+                if type_filter and meta["type"] not in type_filter:
                     continue
+                tf = self.doc_terms[doc_id][term]
+                dl = self.doc_lengths[doc_id]
+                score = idf * ((self.K1 + 1) * tf) / (
+                    self.K1 * (1 - self.B + self.B * dl / avg_len) + tf)
+                if term in _tokenize(meta["title"]):
+                    score *= 2.0
+                score *= 1.0 + meta["priority"] * 0.1
+                scores[doc_id] = scores.get(doc_id, 0.0) + score
 
-                tf = self.doc_freqs.get((doc_id, token), 0)
-                doc_length = self.doc_lengths[doc_id]
-
-                bm25_score = idf * ((self.k1 + 1) * tf) / (self.k1 * (1 - self.b + self.b * (doc_length / self.avg_doc_length)) + tf)
-
-                # Boost based on priority
-                doc = self.documents.get(doc_id, {})
-                priority = doc.get("priority", 0)
-                priority_boost = 1.0 + (priority * 0.1)
-                bm25_score *= priority_boost
-
-                # Boost for title matches
-                doc = self.documents.get(doc_id, {})
-                if token in self._tokenize(doc.get("title", "")):
-                    bm25_score *= 2.0
-
-                scores[doc_id] = scores.get(doc_id, 0) + bm25_score
-
-        # Sort by score and return top_k
-        sorted_results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return sorted_results[:top_k]
+        return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]

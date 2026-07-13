@@ -1,141 +1,156 @@
 import { useEffect, useRef, useState } from 'react';
-import { streamChat, getActiveConversation, getMessages } from '../api';
+import { streamChat, getActiveConversation, getMessages, Activity } from '../api';
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  created_at: string;
-}
+type Item =
+  | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
+  | { id: string; kind: 'activity'; activity: Activity }
+  | { id: string; kind: 'error'; content: string };
+
+let nextId = 0;
+const uid = () => `ui-${++nextId}`;
+
+const activityLabel = (a: Activity): string => {
+  switch (a.kind) {
+    case 'dispatch': return `→ dispatching to ${a.name}`;
+    case 'tool_start': return `⚙ ${a.agent ? `${a.agent}: ` : ''}${a.name}…`;
+    case 'tool_result': return `✓ ${a.name}`;
+    default: return a.name;
+  }
+};
 
 export function ChatPanel() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize conversation
   useEffect(() => {
-    async function init() {
+    (async () => {
       try {
         const conv = await getActiveConversation();
         setConversationId(conv.id);
         const msgs = await getMessages(conv.id);
-        setMessages(msgs);
+        setItems(msgs.map(m => ({
+          id: m.id, kind: 'msg' as const, role: m.role, content: m.content,
+        })));
       } catch (err) {
-        console.error('Init error:', err);
+        setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
       }
-    }
-    init();
+    })();
   }, []);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [items]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || !conversationId) return;
-
-    const userMessage = input;
+    const message = input.trim();
+    if (!message || busy) return;
     setInput('');
-    setLoading(true);
+    setBusy(true);
 
-    // Add user message to UI
-    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: userMessage, created_at: new Date().toISOString() }]);
+    setItems(prev => [...prev, { id: uid(), kind: 'msg', role: 'user', content: message }]);
+    const assistantId = uid();
+    setItems(prev => [...prev, { id: assistantId, kind: 'msg', role: 'assistant', content: '', streaming: true }]);
+
+    const appendToAssistant = (text: string) =>
+      setItems(prev => prev.map(it =>
+        it.id === assistantId && it.kind === 'msg' ? { ...it, content: it.content + text } : it));
 
     try {
-      let assistantContent = '';
-
-      for await (const event of streamChat(userMessage, conversationId)) {
-        if (event.type === 'text' && event.t) {
-          assistantContent += event.t;
-          setMessages(prev => {
-            const last = prev[prev.length - 1];
-            if (last?.role === 'assistant' && last.id === 'streaming') {
-              return [...prev.slice(0, -1), { ...last, content: assistantContent }];
-            }
-            return prev;
+      for await (const event of streamChat(message, conversationId ?? undefined)) {
+        if (event.type === 'text') {
+          appendToAssistant(event.text);
+        } else if (event.type === 'activity') {
+          // insert activity line just before the streaming assistant bubble
+          setItems(prev => {
+            const idx = prev.findIndex(it => it.id === assistantId);
+            const line: Item = { id: uid(), kind: 'activity', activity: event.activity };
+            return idx < 0 ? [...prev, line]
+              : [...prev.slice(0, idx), line, ...prev.slice(idx)];
           });
+        } else if (event.type === 'error') {
+          setItems(prev => [...prev, { id: uid(), kind: 'error', content: event.error }]);
         } else if (event.type === 'done') {
-          // Mark streaming message with real ID when done
-          setMessages(prev => {
-            const last = prev[prev.length - 1];
-            if (last?.id === 'streaming') {
-              return [...prev.slice(0, -1), { ...last, id: Date.now().toString() }];
-            }
-            return prev;
-          });
+          break;
         }
       }
     } catch (err) {
-      console.error('Chat error:', err);
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: `Error: ${err}`, created_at: new Date().toISOString() }]);
+      setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
     } finally {
-      setLoading(false);
+      setItems(prev => prev
+        .map(it => it.id === assistantId && it.kind === 'msg' ? { ...it, streaming: false } : it)
+        .filter(it => !(it.id === assistantId && it.kind === 'msg' && !it.content)));
+      setBusy(false);
+      inputRef.current?.focus();
     }
   }
 
   return (
-    <div className="absolute top-0 right-0 bottom-0 w-96 bg-stone-800 border-l border-stone-700 flex flex-col shadow-2xl">
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.length === 0 && (
-          <div className="text-center text-stone-400 mt-8">
-            <p className="text-lg font-semibold">Start a conversation</p>
-            <p className="text-sm mt-2">Type a message below to begin</p>
+    <aside className="absolute top-0 right-0 bottom-0 w-96 bg-stone-900/95 backdrop-blur border-l border-stone-700 flex flex-col shadow-2xl">
+      <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
+        <span className="text-teal-400 font-semibold">Nova</span>
+        <span className="text-xs text-stone-500">{busy ? 'thinking…' : 'ready'}</span>
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {items.length === 0 && (
+          <div className="text-center text-stone-500 mt-10">
+            <p className="text-base font-medium text-stone-400">Talk to Nova</p>
+            <p className="text-sm mt-1">One continuous conversation — it remembers.</p>
           </div>
         )}
 
-        {messages.map(msg => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-xs px-3 py-2 rounded-lg ${
-                msg.role === 'user'
-                  ? 'bg-teal-600 text-white'
-                  : 'bg-stone-700 text-stone-100'
-              }`}
-            >
-              <p className="text-sm">{msg.content}</p>
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-stone-700 text-stone-100 px-3 py-2 rounded-lg">
-              <div className="flex gap-1">
-                <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" />
-                <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+        {items.map(item => {
+          if (item.kind === 'activity') {
+            return (
+              <div key={item.id} className="text-xs text-amber-400/80 font-mono px-1">
+                {activityLabel(item.activity)}
+              </div>
+            );
+          }
+          if (item.kind === 'error') {
+            return (
+              <div key={item.id} className="text-xs text-red-400 bg-red-950/40 border border-red-900 rounded px-3 py-2">
+                {item.content}
+              </div>
+            );
+          }
+          return (
+            <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap ${
+                item.role === 'user' ? 'bg-teal-700 text-white' : 'bg-stone-800 text-stone-100'
+              }`}>
+                {item.content}
+                {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
               </div>
             </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
+          );
+        })}
+        <div ref={endRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="border-t border-stone-700 p-4 flex gap-2">
+      <form onSubmit={handleSubmit} className="border-t border-stone-700 p-3 flex gap-2">
         <input
+          ref={inputRef}
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
-          disabled={loading}
-          placeholder="Type a message..."
-          className="flex-1 bg-stone-700 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
+          disabled={busy}
+          placeholder="Message Nova…"
+          className="flex-1 bg-stone-800 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={loading || !input.trim()}
-          className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-stone-600 text-white rounded text-sm transition"
+          disabled={busy || !input.trim()}
+          className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:bg-stone-700 disabled:text-stone-500 text-white rounded text-sm transition"
         >
           Send
         </button>
       </form>
-    </div>
+    </aside>
   );
 }
