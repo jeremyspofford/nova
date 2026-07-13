@@ -7,9 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import db
 from app.config import settings
+from app.router_chat import router as chat_router
 
+logging.basicConfig(level=settings.get_log_level())
 log = logging.getLogger(__name__)
-logging.basicConfig(level=settings.LOG_LEVEL)
 
 
 @asynccontextmanager
@@ -36,6 +37,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(chat_router)
 
 
 @app.get("/health")

@@ -1,5 +1,6 @@
 """Configuration management."""
 
+import logging
 from pydantic_settings import BaseSettings
 
 
@@ -15,6 +16,13 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+    def get_log_level(self):
+        """Get logging level."""
+        try:
+            return getattr(logging, self.log_level.upper())
+        except AttributeError:
+            return logging.INFO
 
 
 settings = Settings()
