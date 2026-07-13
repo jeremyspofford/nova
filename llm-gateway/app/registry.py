@@ -367,15 +367,18 @@ async def _get_redis_config(key: str, default: str) -> str:
 
 
 async def get_ollama_base_url() -> str:
-    """Get the current Ollama base URL (runtime-configurable via dashboard).
+    """URL of the first enabled Ollama backend in the pool.
 
-    Reads `nova:config:inference.url` (canonical, written by the dashboard's
-    LocalInferenceSection); falls through to settings.ollama_base_url (env-
-    derived default, typically http://host.docker.internal:11434) when no override is set.
-
-    The legacy `llm.ollama_url` key is retired — main.py runs a one-time
-    migration on startup that copies any legacy value into inference.url.
+    Phase 1: the backend pool (`inference.backends`, app.pool) is canonical —
+    the scalar `inference.url` only backstops a not-yet-seeded pool. Callers
+    (model pulls, tag sync, availability probes) target this backend; other
+    pool entries are reached through routing, not through this helper.
     """
+    from app.pool import pool
+    await pool.refresh()
+    for rt in pool.enabled_runtimes():
+        if rt.entry.engine == "ollama":
+            return rt.entry.url
     override = await _get_redis_config("inference.url", "")
     return override if override else settings.ollama_base_url
 
@@ -442,14 +445,19 @@ async def sync_ollama_models() -> int:
         return 0
 
     added = 0
+    tags: set[str] = set()
     for m in data.get("models", []):
         name = m["name"]
+        tags.add(name)
         if name not in MODEL_REGISTRY and name != DEFAULT_MODEL_KEY:
             MODEL_REGISTRY[name] = _ollama
             _OLLAMA_MODELS.add(name)
             added += 1
             log.info("Auto-registered Ollama model: %s", name)
 
+    if tags:
+        from app.pool import pool
+        pool.merge_models("ollama", tags)
     if added:
         log.info("sync_ollama_models: registered %d new model(s)", added)
     return added
@@ -465,7 +473,12 @@ async def sync_vllm_models() -> int:
         return 0
 
     try:
-        vllm_url = await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
+        from app.pool import pool
+        await pool.refresh()
+        vllm_url = next(
+            (rt.entry.url for rt in pool.enabled_runtimes() if rt.entry.engine == "vllm"),
+            "",
+        ) or await _get_redis_config("inference.url", "") or "http://host.docker.internal:8000"
         async with httpx.AsyncClient(base_url=vllm_url, timeout=5.0) as client:
             resp = await client.get("/v1/models")
             resp.raise_for_status()
@@ -475,13 +488,18 @@ async def sync_vllm_models() -> int:
         return 0
 
     added = 0
+    served: set[str] = set()
     for m in data.get("data", []):
         model_id = m["id"]
+        served.add(model_id)
         if model_id not in MODEL_REGISTRY and model_id != DEFAULT_MODEL_KEY:
             MODEL_REGISTRY[model_id] = _vllm
             _local.update_local_models(_local._local_models | {model_id})
             added += 1
             log.info("Auto-registered vLLM model: %s", model_id)
+    if served:
+        from app.pool import pool
+        pool.merge_models("vllm", served)
     return added
 
 
@@ -540,6 +558,8 @@ async def sync_lmstudio_models() -> int:
             log.info("Auto-registered LM Studio model: %s", model_id)
     if loaded:
         _local.update_local_models(_local._local_models | loaded)
+        from app.pool import pool
+        pool.merge_models("lmstudio", loaded)
         log.info("sync_lmstudio_models: %d model(s) loaded (%d new)", len(loaded), added)
     return added
 
@@ -804,14 +824,18 @@ async def _maybe_resync_local(model: str) -> bool:
     if now - _last_local_resync < _LOCAL_RESYNC_INTERVAL:
         return False
     _last_local_resync = now
-    backend = await _get_redis_config("inference.backend", "ollama")
     try:
-        if backend == "lmstudio":
-            await sync_lmstudio_models()
-        elif backend == "ollama":
+        from app.pool import pool
+        await pool.refresh()
+        engines = {rt.entry.engine for rt in pool.enabled_runtimes()}
+        if "ollama" in engines:
             await sync_ollama_models()
-        else:
-            return False
+        if "lmstudio" in engines:
+            await sync_lmstudio_models()
+        # Force the router's next refresh to re-probe every entry's catalog
+        # (covers vllm/sglang/llamacpp/openai remotes the syncs don't reach).
+        _local._catalog_probed_at.clear()
+        await _local.refresh_config()
     except Exception as e:
         log.debug("local model re-sync on miss failed: %s", e)
         return False

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+from app.backends_router import backends_router
 from app.config import settings
 from app.discovery import discovery_router
 from app.health import health_router
@@ -68,6 +69,17 @@ async def lifespan(app: FastAPI):
             await _migration_redis.aclose()
     except Exception as e:
         log.warning("llm.ollama_url migration skipped: %s", e)
+
+    # Backend pool (Phase 1): seed inference.backends from the legacy scalar
+    # keys on first boot after the upgrade, then prime entries + catalogs so
+    # the first request doesn't pay the probe.
+    try:
+        from app.pool import pool
+        from app.registry import _local
+        await pool.seed_from_scalar()
+        await _local.refresh_config()
+    except Exception as e:
+        log.warning("Backend pool init skipped: %s", e)
 
     # Auto-register any Ollama models that are pulled but not in the registry
     try:
@@ -223,5 +235,6 @@ app.include_router(health_router)
 app.include_router(health_router, prefix="/v1")  # also expose at /v1/health/* for dashboard proxy
 # All other routes require auth.
 app.include_router(discovery_router, prefix="/v1", dependencies=[Depends(_admin_auth)])
+app.include_router(backends_router, prefix="/v1", dependencies=[Depends(_admin_auth)])
 app.include_router(router, dependencies=[Depends(_admin_auth)])
 app.include_router(openai_router, dependencies=[Depends(_admin_auth)])
