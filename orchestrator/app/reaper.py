@@ -198,7 +198,7 @@ async def _reap_timed_out_sessions() -> None:
     """
     Find agent sessions running past their timeout_seconds (from pod_agents config).
     Mark them failed. The pipeline executor's heartbeat loop will detect the failed
-    session and handle it per the agent's on_failure config (abort/skip/escalate).
+    session and handle it per the agent's on_failure config (abort/skip).
     """
     from .db import get_pool
 

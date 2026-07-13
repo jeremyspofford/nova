@@ -1063,10 +1063,9 @@ async def _run_agent(
         if agent.on_failure == "skip":
             logger.info(f"Agent '{agent.role}' failed with on_failure=skip — continuing")
             return {}, session_id
-        if agent.on_failure == "escalate":
-            await _pause_for_human_review(task_id, f"Agent '{agent.role}' failed: {exc}", state)
-            return None, session_id
-        # on_failure == "abort" (default) — propagate error_context to task
+        # on_failure == "abort" (default) — propagate error_context to task.
+        # A crash is never routed to human review: there's nothing to review,
+        # only noise in the queue (the 'escalate' option was removed in 124).
         await mark_task_failed(
             task_id,
             error=f"Agent '{agent.role}' failed: {exc}",

@@ -40,7 +40,6 @@ function agentPipelineStatuses(agents: PodAgent[]): ('done' | 'pending')[] {
 const ON_FAILURE_OPTIONS = [
   { value: 'abort', label: 'Abort', description: 'Stop the pipeline immediately' },
   { value: 'skip', label: 'Skip', description: 'Skip this agent and continue' },
-  { value: 'escalate', label: 'Escalate', description: 'Escalate to human review' },
 ]
 
 // ── Agent row ────────────────────────────────────────────────────────────────
@@ -933,7 +932,7 @@ const HELP_ENTRIES = [
   { term: 'Sandbox Tier', definition: "How isolated the agent's execution environment is — from 'isolated' (most restricted) to 'root' (full system access)." },
   { term: 'Routing Keywords', definition: "Terms that trigger this pod — when a task matches these keywords, it's routed to this pod's pipeline." },
   { term: 'Fallback Models', definition: 'Secondary AI models used if the primary model is unavailable or rate-limited.' },
-  { term: 'On Failure', definition: 'What happens when an agent fails — abort (stop), skip (continue), or escalate (flag for human review).' },
+  { term: 'On Failure', definition: 'What happens when an agent crashes — abort (task fails) or skip (continue without it). Crashes never go to human review; only quality escalations do.' },
 ]
 
 // ── Main page ────────────────────────────────────────────────────────────────

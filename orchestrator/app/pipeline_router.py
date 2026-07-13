@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from app.auth import AdminDep, ApiKeyDep
 from app.config import settings
@@ -117,7 +117,9 @@ class AgentRequest(BaseModel):
     max_retries: int = 2
     system_prompt: str | None = None
     allowed_tools: list[str] | None = None   # None → all tools
-    on_failure: str = "abort"          # abort | skip | escalate
+    # A crashed agent aborts (task → failed) or is skipped — never "escalated":
+    # a crash isn't reviewable work, it's noise in the review queue.
+    on_failure: Literal["abort", "skip"] = "abort"
     run_condition: dict[str, Any] = {"type": "always"}
     artifact_type: str | None = None
     parallel_group: str | None = None

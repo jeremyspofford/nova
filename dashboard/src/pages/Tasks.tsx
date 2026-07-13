@@ -73,14 +73,6 @@ const PIPELINE_STAGES = [
 function inferReviewPrompt(task: PipelineTask): string {
   const escalation = (task.metadata?.escalation_message as string | undefined) ?? ''
 
-  if (escalation.match(/^Agent '.+' failed:/)) {
-    return (
-      'This task was escalated because an agent failed during execution. ' +
-      'What went wrong, and is it safe to retry? Should I adjust the task input, ' +
-      'change the agent configuration, or reject this task entirely?'
-    )
-  }
-
   if (escalation.toLowerCase().includes('guardrail') || escalation.toLowerCase().includes('finding')) {
     return (
       'The guardrail agent flagged this task with security or safety findings. ' +
