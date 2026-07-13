@@ -18,7 +18,11 @@ async def get_or_create_active_conversation() -> dict:
         )
 
         if result:
-            return dict(result)
+            return {
+                "id": str(result["id"]),
+                "title": result["title"],
+                "created_at": result["created_at"],
+            }
 
         # Create new conversation
         conversation_id = uuid.uuid4()
@@ -69,7 +73,14 @@ async def load_history(conversation_id: str, limit: int = 40) -> list:
             uuid.UUID(conversation_id),
             limit,
         )
-        return [dict(row) for row in rows]
+        return [{
+            "id": str(row["id"]),
+            "role": row["role"],
+            "content": row["content"],
+            "model_used": row["model_used"],
+            "tool_calls": row["tool_calls"],
+            "created_at": str(row["created_at"]) if row["created_at"] else None,
+        } for row in rows]
 
 
 async def get_conversation_summary(conversation_id: str) -> Optional[dict]:
@@ -79,4 +90,12 @@ async def get_conversation_summary(conversation_id: str) -> Optional[dict]:
             "SELECT id, title, created_at, updated_at, last_message_at FROM conversations WHERE id = $1",
             uuid.UUID(conversation_id),
         )
-        return dict(result) if result else None
+        if result:
+            return {
+                "id": str(result["id"]),
+                "title": result["title"],
+                "created_at": str(result["created_at"]) if result["created_at"] else None,
+                "updated_at": str(result["updated_at"]) if result["updated_at"] else None,
+                "last_message_at": str(result["last_message_at"]) if result["last_message_at"] else None,
+            }
+        return None

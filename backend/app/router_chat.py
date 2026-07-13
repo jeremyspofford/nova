@@ -8,6 +8,7 @@ from app import conversations, db
 from app.llm import router as llm_router
 from app.config import settings
 from app.schemas import ChatRequest
+from app.memory.memory import memory
 
 log = logging.getLogger(__name__)
 
@@ -33,9 +34,16 @@ async def chat_stream(request: ChatRequest):
         # Load conversation history
         history = await conversations.load_history(conversation_id)
 
+        # Retrieve memory context
+        memory_context = await memory.context(request.message, max_chars=2000)
+
         # Build message list for LLM
         messages = []
-        messages.append({"role": "system", "content": MAIN_SYSTEM_PROMPT})
+        system_prompt = MAIN_SYSTEM_PROMPT
+        if memory_context.get("context"):
+            system_prompt += f"\n\n## Relevant Memories\n{memory_context['context']}"
+
+        messages.append({"role": "system", "content": system_prompt})
 
         for msg in history:
             messages.append({
@@ -66,11 +74,14 @@ async def chat_stream(request: ChatRequest):
                 log.error(f"Error during streaming: {e}")
                 yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
-            # Save assistant response
+            # Save assistant response and write to memory
             try:
                 await conversations.append_message(conversation_id, "assistant", full_response, model)
+                # Write exchange to memory
+                exchange = f"User: {request.message}\n\nAssistant: {full_response}"
+                await memory.write(exchange, source_type="chat")
             except Exception as e:
-                log.error(f"Failed to save assistant message: {e}")
+                log.error(f"Failed to save message or write to memory: {e}")
 
         return StreamingResponse(response_generator(), media_type="text/event-stream")
 
@@ -98,4 +109,62 @@ async def get_messages(conversation_id: str):
         return history
     except Exception as e:
         log.error(f"Error getting messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/v1/memory/stats")
+async def get_memory_stats():
+    """Get memory statistics."""
+    try:
+        stats = await memory.stats()
+        return stats
+    except Exception as e:
+        log.error(f"Error getting memory stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/v1/memory/graph")
+async def get_memory_graph():
+    """Get memory graph for visualization (simplified for Phase 2)."""
+    try:
+        stats = await memory.stats()
+
+        # For Phase 2, return a simple node/edge structure
+        # In later phases, this will be enhanced with actual memory graph structure
+        nodes = []
+        edges = []
+
+        # Add topic nodes
+        for i in range(stats.get("topics", 0)):
+            nodes.append({
+                "id": f"topic-{i}",
+                "label": f"Topic {i+1}",
+                "type": "topic",
+                "size": 1.0,
+            })
+
+        # Add skill nodes
+        for i in range(stats.get("skills", 0)):
+            nodes.append({
+                "id": f"skill-{i}",
+                "label": f"Skill {i+1}",
+                "type": "skill",
+                "size": 0.8,
+            })
+
+        # Add some simple edges
+        for i in range(min(3, len(nodes) - 1)):
+            edges.append({
+                "source": nodes[i]["id"],
+                "target": nodes[i + 1]["id"],
+                "weight": 0.5,
+            })
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": stats,
+        }
+    except Exception as e:
+        log.error(f"Error getting memory graph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
