@@ -1,12 +1,26 @@
-"""Wrapper provider that delegates to whichever local backend is active."""
+"""Chain-facing wrapper that routes over the backend pool.
+
+Phase 1 of the models/inference unified plan: "local" is no longer one
+active backend but a pool of named entries (``app.pool``). This provider
+keeps the fallback-chain contract (one ``ModelProvider`` named "local", so
+routing strategies keep their meaning) while routing each request to the
+pool entry whose discovered catalog serves the requested model — falling
+back to the primary (first enabled) entry with model substitution, so
+local-first still always answers.
+"""
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-from typing import AsyncIterator, Optional, Set
+from typing import AsyncIterator, Set
 
+import httpx
 from app.config import settings
+
+# Re-exported: callers historically import the conventional per-engine
+# default URLs from this module. app.pool has no import-time dependency on
+# app.providers, so this does not cycle.
+from app.pool import DEFAULT_ENGINE_URLS as DEFAULT_URLS  # noqa: F401
 from nova_contracts.llm import (
     CompleteRequest,
     CompleteResponse,
@@ -17,49 +31,32 @@ from nova_contracts.llm import (
 )
 
 from .base import ModelProvider
-from .ollama_provider import OllamaProvider
 from .utils import is_cloud_model_name
-from .vllm_provider import VLLMProvider
 
 logger = logging.getLogger(__name__)
 
-# All backends are reached over HTTP. Defaults point at the host on each
-# server's conventional port for user-run external servers; when Nova's
-# bundled containers are started (recovery service), it writes the in-network
-# URL (http://ollama:11434, http://vllm:8000, …) to inference.url, which wins.
-# LM Studio is a desktop app and stays external-only (inference.lmstudio_url).
-DEFAULT_URLS = {
-    "ollama": settings.ollama_base_url,  # resolved host URL (auto/host expanded)
-    "vllm": "http://host.docker.internal:8000",
-    "sglang": "http://host.docker.internal:30000",
-    "llamacpp": "http://host.docker.internal:8080",
-    "lmstudio": "http://host.docker.internal:1234",  # desktop app on the host (WSL/Mac/Win)
-}
+_CATALOG_TTL = 30.0
 
+# Pool-wide acceptance gate — recovery writes inference.state during bundled
+# container lifecycle ("starting" while compose pulls/boots, "draining" on
+# stop). Transitional: becomes per-entry state when container entries carry
+# their own lifecycle in a later slice.
 READY_STATES = {"ready"}
 
 
 class LocalInferenceProvider(ModelProvider):
-    """
-    Wrapper that reads active backend config from Redis and delegates.
+    """Routes chain traffic to the right pool backend.
 
-    Config keys (in Redis nova:config:*):
-    - inference.backend: "ollama" | "vllm" | "sglang" | "llamacpp" | "lmstudio" | "custom" | "none"
-    - inference.state: "ready" | "draining" | "starting" | "error"
-    - inference.url: override URL (empty = default for backend)
-    - inference.custom_url: URL for the custom backend
-    - inference.custom_auth_header: Authorization header for the custom backend
+    The pool (``app.pool.pool``) owns entries, delegates, and catalogs;
+    this class owns request routing and catalog freshness.
     """
 
     def __init__(self):
-        self._current_backend: Optional[str] = None
-        self._current_url: str = ""
-        self._delegate: Optional[ModelProvider] = None
+        self._catalog_probed_at: dict[str, float] = {}  # backend id → monotonic
+        # Legacy catalog feeder (sync_vllm_models / sync_lmstudio_models push
+        # here before pool probes run). Merged into resolution as a fallback.
         self._local_models: Set[str] = set()
         self._state: str = "ready"
-        self._config_cache_time = 0.0
-        self._config_ttl = 5.0
-        self._refresh_lock = asyncio.Lock()
 
     @property
     def name(self) -> str:
@@ -67,165 +64,156 @@ class LocalInferenceProvider(ModelProvider):
 
     @property
     def capabilities(self) -> set[ModelCapability]:
-        if self._delegate:
-            return self._delegate.capabilities
-        return set()
+        rt = self._pool().primary()
+        return rt.delegate.capabilities if rt else set()
 
     @property
     def is_available(self) -> bool:
-        return (self._state in READY_STATES and
-                self._delegate is not None and
-                self._delegate.is_available)
+        return (
+            self._state in READY_STATES
+            and any(rt.available for rt in self._pool().enabled_runtimes())
+        )
 
     @property
     def is_local(self) -> bool:
         return True
 
+    def _pool(self):
+        from app.pool import pool
+        return pool
+
+    # ── Catalog interface (registry + discovery) ─────────────────────────
+
     def is_local_model(self, model: str) -> bool:
-        """Check if a model name belongs to the active local backend."""
+        """Whether any enabled pool backend serves this model."""
+        if self._pool().resolve_model(model) is not None:
+            return True
         return model in self._local_models
 
     def update_local_models(self, models: Set[str]) -> None:
-        """Update the set of known local models (called by discovery)."""
-        self._local_models = models
+        """Legacy feeder — external syncs push discovered models here."""
+        self._local_models = set(models)
 
     async def refresh_config(self) -> None:
-        """Read backend config from Redis and swap delegate if changed."""
+        """Refresh pool entries, acceptance state, and stale model catalogs."""
+        pool = self._pool()
+        await pool.refresh()
+        try:
+            from app.registry import _get_redis_config
+            self._state = await _get_redis_config("inference.state", "ready")
+        except Exception:
+            pass  # keep last-known state
         now = time.monotonic()
-        if (now - self._config_cache_time) < self._config_ttl:
-            return
+        for rt in pool.enabled_runtimes():
+            if (now - self._catalog_probed_at.get(rt.entry.id, 0.0)) < _CATALOG_TTL:
+                continue
+            self._catalog_probed_at[rt.entry.id] = now
+            await self._probe_catalog(rt)
 
-        async with self._refresh_lock:
-            # Re-check after acquiring lock (another coroutine may have updated)
-            now = time.monotonic()
-            if (now - self._config_cache_time) < self._config_ttl:
-                return
+    async def _probe_catalog(self, rt) -> None:
+        """Fetch one backend's model list (engine-aware). Never raises."""
+        entry = rt.entry
+        headers = {"Authorization": entry.auth_header} if entry.auth_header else {}
+        try:
+            async with httpx.AsyncClient(timeout=5.0, headers=headers) as client:
+                if entry.engine == "ollama":
+                    resp = await client.get(f"{entry.url}/api/tags")
+                    resp.raise_for_status()
+                    models = {m["name"] for m in resp.json().get("models", [])}
+                else:
+                    resp = await client.get(f"{entry.url}/v1/models")
+                    resp.raise_for_status()
+                    models = {
+                        m.get("id", "") for m in resp.json().get("data", [])
+                    } - {""}
+            rt.models = models
+            if hasattr(rt.delegate, "check_health"):
+                await rt.delegate.check_health()
+            logger.debug("Backend '%s': %d model(s) discovered", entry.id, len(models))
+        except Exception as e:
+            # Unreachable backend keeps its last-known catalog; health flag
+            # on the delegate governs availability.
+            logger.debug("Backend '%s' catalog probe failed: %s", entry.id, e)
+            if hasattr(rt.delegate, "check_health"):
+                try:
+                    await rt.delegate.check_health()
+                except Exception:
+                    pass
 
-            self._config_cache_time = now
+    # ── Request routing ───────────────────────────────────────────────────
 
-            try:
-                from app.registry import _get_redis_config
-                backend = await _get_redis_config("inference.backend", "ollama")
-                state = await _get_redis_config("inference.state", "ready")
-                url_override = await _get_redis_config("inference.url", "")
-                custom_url = ""
-                custom_auth = ""
-                if backend == "custom":
-                    custom_url = await _get_redis_config("inference.custom_url", "")
-                    custom_auth = await _get_redis_config("inference.custom_auth_header", "")
-                lmstudio_url = ""
-                lmstudio_api_key = ""
-                if backend == "lmstudio":
-                    lmstudio_url = await _get_redis_config("inference.lmstudio_url", "")
-                    lmstudio_api_key = await _get_redis_config("inference.lmstudio_api_key", "")
-            except Exception:
-                logger.debug("Failed to read inference config from Redis, keeping current state")
-                return
+    def _route(self, model: str):
+        """(runtime, resolved_model) for a request — catalog owner if any,
+        else the primary backend with model substitution."""
+        pool = self._pool()
+        rt = pool.resolve_model(model)
+        if rt is not None and rt.available:
+            return rt, model
+        primary = pool.primary()
+        if primary is None:
+            return None, model
+        return primary, self._substitute(primary, model)
 
-            self._state = state
+    def _substitute(self, rt, requested: str) -> str:
+        """Map an unservable model onto one the target backend has.
 
-            # Effective URL drives delegate swap detection. LM Studio uses its
-            # dedicated inference.lmstudio_url (not the shared inference.url
-            # override, which is for Ollama/vLLM/SGLang external pointing).
-            effective_url = lmstudio_url if backend == "lmstudio" else url_override
-
-            if backend != self._current_backend or effective_url != self._current_url:
-                self._current_backend = backend
-                self._current_url = effective_url
-                self._delegate = self._create_delegate(
-                    backend, url_override,
-                    custom_url=custom_url, custom_auth=custom_auth,
-                    lmstudio_url=lmstudio_url, lmstudio_api_key=lmstudio_api_key,
-                )
-                self._local_models.clear()
-                # Probe the new delegate so it's available immediately
-                if self._delegate and hasattr(self._delegate, 'check_health'):
-                    await self._delegate.check_health()
-                logger.info("Local inference backend changed to: %s", backend)
-
-    def _create_delegate(self, backend: str, url_override: str,
-                         custom_url: str = "", custom_auth: str = "",
-                         lmstudio_url: str = "", lmstudio_api_key: str = "") -> Optional[ModelProvider]:
-        """Create a new provider instance for the given backend."""
-        if backend == "none":
-            return None
-
-        url = url_override or DEFAULT_URLS.get(backend, "")
-
-        if backend == "ollama":
-            return OllamaProvider(base_url=url or DEFAULT_URLS["ollama"])
-        elif backend == "vllm":
-            return VLLMProvider(base_url=url or DEFAULT_URLS["vllm"])
-        elif backend == "sglang":
-            from .sglang_provider import SGLangProvider
-            return SGLangProvider(base_url=url or DEFAULT_URLS["sglang"])
-        elif backend == "llamacpp":
-            from .llamacpp_provider import LlamaCppProvider
-            return LlamaCppProvider(base_url=url or DEFAULT_URLS["llamacpp"])
-        elif backend == "custom":
-            if not custom_url:
-                logger.warning("Custom backend selected but no URL configured")
-                return None
-            from .remote_provider import RemoteInferenceProvider
-            return RemoteInferenceProvider(url=custom_url, auth_header=custom_auth or None)
-        elif backend == "lmstudio":
-            # LM Studio uses a dedicated URL/key; the shared inference.url override
-            # does NOT apply (it's for Ollama/vLLM/SGLang external pointing).
-            from .lmstudio_provider import LMStudioProvider
-            lm_url = lmstudio_url or DEFAULT_URLS["lmstudio"]
-            headers: dict[str, str] = {}
-            if lmstudio_api_key:
-                headers["Authorization"] = f"Bearer {lmstudio_api_key}"
-            return LMStudioProvider(base_url=lm_url, extra_headers=headers or None)
-        else:
-            logger.warning("Unknown backend: %s", backend)
-            return None
-
-    def _resolve_local_model(self, requested: str) -> str:
-        """Map a requested model to one the active local backend can actually serve.
-
-        The local provider sits first in the local-first fallback chain, so it
-        receives whatever model the caller asked for — often a cloud model
-        (e.g. 'cerebras/llama-3.3-70b') that isn't pulled locally. Rather than
-        404 and force the whole chain to fail, serve the configured local default
-        so local-first always returns an answer.
+        The local provider sits first in the local-first chain, so it often
+        receives cloud model names. Rather than 404 and fail the whole
+        chain, serve the configured default (when pulled) or the backend's
+        first available model.
         """
         default = settings.default_ollama_model
         if not requested:
             return default
-        if self._local_models:
-            if requested in self._local_models:
+        if rt.models:
+            if requested in rt.models:
                 return requested
-            # Discovery knows the local models and this isn't one → substitute.
-            return default if default in self._local_models else sorted(self._local_models)[0]
-        # No discovery data yet: only override an obvious cloud model, so a valid
-        # local name we simply haven't indexed still passes through.
+            if ":" not in requested and f"{requested}:latest" in rt.models:
+                return f"{requested}:latest"
+            return default if default in rt.models else sorted(rt.models)[0]
+        # No catalog yet: only override an obvious cloud model so a valid
+        # local name we haven't indexed still passes through.
         if is_cloud_model_name(requested):
             return default
         return requested
 
-    def _localize(self, request: CompleteRequest) -> CompleteRequest:
-        model = self._resolve_local_model(request.model)
+    def _prepare(self, request: CompleteRequest):
+        if self._state not in READY_STATES:
+            raise RuntimeError(
+                f"Local inference is not accepting requests (state="
+                f"{self._state!r})."
+            )
+        rt, model = self._route(request.model)
+        if rt is None:
+            raise RuntimeError(
+                "No local inference backend is enabled (the backend pool is "
+                "empty or every entry is disabled/unreachable)."
+            )
         if model != request.model:
             logger.info(
-                "Local backend can't serve '%s'; using local default '%s'",
-                request.model, model,
+                "Backend '%s' can't serve '%s'; using '%s'",
+                rt.entry.id, request.model, model,
             )
-            return request.model_copy(update={"model": model})
-        return request
+            request = request.model_copy(update={"model": model})
+        return rt, request
 
     async def complete(self, request: CompleteRequest) -> CompleteResponse:
         await self.refresh_config()
-        self._assert_available()
-        return await self._delegate.complete(self._localize(request))
+        rt, request = self._prepare(request)
+        return await rt.delegate.complete(request)
 
     async def stream(self, request: CompleteRequest) -> AsyncIterator[StreamChunk]:
         await self.refresh_config()
-        self._assert_available()
-        async for chunk in self._delegate.stream(self._localize(request)):
+        rt, request = self._prepare(request)
+        async for chunk in rt.delegate.stream(request):
             yield chunk
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         await self.refresh_config()
-        self._assert_available()
-        return await self._delegate.embed(request)
+        pool = self._pool()
+        rt = pool.resolve_model(getattr(request, "model", "") or "")
+        if rt is None or not rt.available:
+            rt = pool.primary()
+        if rt is None:
+            raise RuntimeError("No local inference backend is enabled for embeddings.")
+        return await rt.delegate.embed(request)

@@ -861,6 +861,35 @@ export interface ResolvedModel {
 export const resolveModel = () =>
   apiFetch<ResolvedModel>('/v1/models/resolve')
 
+// ── Backend pool (Phase 1, models/inference unified plan) ────────────────────
+// Named local-inference backends the gateway routes over (inference.backends).
+
+export interface BackendPoolEntry {
+  id: string
+  kind: 'container' | 'remote'
+  engine: 'ollama' | 'vllm' | 'sglang' | 'llamacpp' | 'lmstudio' | 'openai'
+  url: string
+  enabled: boolean
+  auth_header: string
+  // Live status from the list endpoint
+  available?: boolean
+  model_count?: number
+  models?: string[]
+  is_primary?: boolean
+}
+
+export const getBackendPool = () =>
+  apiFetch<BackendPoolEntry[]>('/v1/backends')
+
+export const upsertBackend = (id: string, body: Omit<BackendPoolEntry, 'id' | 'available' | 'model_count' | 'models' | 'is_primary'>) =>
+  apiFetch<BackendPoolEntry>(`/v1/backends/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+
+export const deleteBackend = (id: string) =>
+  apiFetch<void>(`/v1/backends/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
 export const getOllamaPulled = () =>
   apiFetch<OllamaPulledModel[]>('/v1/models/ollama/pulled')
 

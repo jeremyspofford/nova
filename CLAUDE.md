@@ -151,9 +151,10 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 | Key | Values | Effect |
 |---|---|---|
 | `memory.provider_url` | URL | Advanced: point the orchestrator at an external memory provider serving `/api/v1/memory/*` |
-| `inference.backend` | `ollama`, `vllm`, `sglang`, `llamacpp`, `lmstudio`, `custom`, `none` | Which local inference backend the gateway uses |
-| `inference.state` | `ready`, `starting`, `error`, `draining` | Whether local inference is accepting requests |
-| `inference.url` | URL | Runtime override for the local inference endpoint. Recovery writes the in-network URL here when a bundled container starts (e.g. `http://ollama:11434`) and clears it on stop |
+| `inference.backends` | JSON list | **Canonical local-inference inventory (Phase 1 pool):** named entries `{id, kind: container\|remote, engine, url, enabled, auth_header}` the gateway routes over (`llm-gateway/app/pool.py`; CRUD at `/v1/backends`; Models page → Backend pool). Seeded from the scalar keys on first gateway boot after upgrade |
+| `inference.backend` | `ollama`, `vllm`, `sglang`, `llamacpp`, `lmstudio`, `custom`, `none` | Legacy scalar mirror of the primary selection — still written by recovery/Settings for older readers; not used for routing once the pool is seeded |
+| `inference.state` | `ready`, `starting`, `error`, `draining` | Whether local inference (pool-wide) is accepting requests |
+| `inference.url` | URL | Legacy scalar mirror — recovery still writes the in-network URL on bundled start (and clears on stop), but routing reads the pool |
 | `inference.lmstudio_url` | URL | LM Studio server URL (default `http://host.docker.internal:1234`) |
 | `inference.lmstudio_api_key` | string | Optional bearer token for the LM Studio server |
 | `llm.embed_provider` | `auto`, `lmstudio`, `ollama`, `gemini`, `litellm` | Overrides which provider serves embeddings (default `auto` = route by model name). Lets embeddings run on a different server than chat to avoid single-model eviction. |
@@ -165,7 +166,7 @@ Several settings are runtime-configurable via Redis (db 1, prefix `nova:config:`
 | `notify.action_base_url` | URL | Phone-reachable dashboard URL — enables signed Approve/Deny buttons on pushes (empty = disabled) |
 | `notify.action_key` | string | Seeded 64-hex HMAC key signing push action links (internal — never share) |
 
-**Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.state`, `inference.backend`, and `inference.url` in Redis before debugging code. The gateway treats `OLLAMA_BASE_URL=auto`/`host`/empty as aliases for a host-run Ollama (`http://host.docker.internal:11434`); Redis runtime overrides via `inference.url` (and `inference.lmstudio_url` for LM Studio) win when set. Recovery writes/clears `inference.url` when bundled containers start/stop.
+**Gotcha:** Stale Redis config values survive container restarts. If inference is broken, check `inference.backends` (the pool), `inference.state`, and each entry's `enabled`/`url` in Redis before debugging code (`docker compose exec redis redis-cli -n 1 GET nova:config:inference.backends`). The gateway treats `OLLAMA_BASE_URL=auto`/`host`/empty as aliases for a host-run Ollama (`http://host.docker.internal:11434`). Recovery upserts a container's pool entry on bundled start (front = primary) and disables it on stop; the scalar `inference.backend`/`inference.url` keys are legacy mirrors only.
 
 ## Feature Flags
 

@@ -35,6 +35,7 @@ import { GPUStatsCard } from './models/GPUStatsCard'
 import { ProviderCard } from './models/ProviderCard'
 import { RoutingStatsSection } from './models/RoutingStatsSection'
 import { LMStudioLibrarySection } from './models/LMStudioLibrarySection'
+import { BackendPoolCard } from './models/BackendPoolCard'
 import { BundledContainersCard } from './models/BundledContainersCard'
 import { RepointModal } from './models/RepointModal'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -564,6 +565,10 @@ export function Models() {
       {/* Bundled inference containers — start/stop the engines Nova runs itself,
           right where you manage models (mirrors Settings → Local Inference). */}
       <BundledContainersCard hasGpu={(hardware.data?.gpus?.length ?? 0) > 0} />
+
+      {/* Backend pool — every named backend the gateway routes local
+          inference over: bundled containers + user-named remote servers. */}
+      <BackendPoolCard />
 
       {/* Ollama — reachable model store, active or not */}
       {(activeBackend === 'ollama' || ollamaHealthy) && (() => {

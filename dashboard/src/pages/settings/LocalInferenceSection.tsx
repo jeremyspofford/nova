@@ -8,7 +8,7 @@ import {
   getRecommendation,
   type InferenceRecommendation,
 } from "../../api-recovery";
-import { getLMStudioStatus } from "../../api";
+import { getLMStudioStatus, upsertBackend } from "../../api";
 import { BundledContainersCard } from "../models/BundledContainersCard";
 
 interface HardwareInfo {
@@ -187,6 +187,26 @@ export function LocalInferenceSection({ entries, onSave, saving }: ConfigSection
   const keepAlive = useConfigValue(entries, "inference.keep_alive", "30m");
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // The gateway routes from the backend pool (inference.backends), not the
+  // scalar inference.url — mirror external-URL saves into the pool entry so
+  // this field keeps taking effect (the scalar stays for legacy readers).
+  const saveRemoteUrl = (key: string, value: string) => {
+    onSave(key, value);
+    const url = value.replace(/^"|"$/g, "").trim();
+    if (url && configBackend && configBackend !== "none") {
+      const engine = configBackend === "custom" ? "openai" : configBackend;
+      upsertBackend(configBackend, {
+        kind: "remote",
+        engine: engine as Parameters<typeof upsertBackend>[1]["engine"],
+        url,
+        enabled: true,
+        auth_header: "",
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: ["backend-pool"] }))
+        .catch(() => { /* pool unreachable — recovery's select flow will converge it */ });
+    }
+  };
 
   // Track backend switching for confirmation banner
   const [switchInfo, setSwitchInfo] = useState<{ from: string; to: string } | null>(null);
@@ -555,10 +575,10 @@ export function LocalInferenceSection({ entries, onSave, saving }: ConfigSection
               label="External URL"
               configKey="inference.url"
               value={remoteUrl}
-              onSave={onSave}
+              onSave={saveRemoteUrl}
               saving={saving}
               placeholder="http://192.168.12.10:11434"
-              description="Base URL of the external Ollama / vLLM / SGLang server. Leave blank to use the bundled service."
+              description="Base URL of the external Ollama / vLLM / SGLang server. Leave blank to use the bundled service. Also updates this backend's pool entry (Models → Backend pool)."
             />
             {remoteUrl && (
               <div className="flex items-center gap-2">

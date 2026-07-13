@@ -207,6 +207,14 @@ async def start_bundled_backend(name: str) -> dict:
         remove_compose_profile(spec["profile"])
         return result
 
+    # Canonical: upsert the container's pool entry as primary (Phase 1 —
+    # the gateway routes from inference.backends). Scalars stay mirrored
+    # for legacy readers during the transition.
+    from app.inference.pool_sync import upsert_pool_entry
+    await upsert_pool_entry(
+        f"bundled-{name}", name, spec["url"], kind="container",
+        enabled=True, front=True,
+    )
     await write_config_state("inference.backend", name)
     await write_config_state("inference.url", spec["url"])
     await write_config_state("inference.error", "")
@@ -237,6 +245,10 @@ async def stop_bundled_backend(name: str) -> dict:
     result = await stop_profiled_service(spec["profile"], spec["service"])
     remove_compose_profile(spec["profile"])
 
+    # Canonical: a stopped container's pool entry is disabled (kept, so its
+    # config survives the next start). Scalars mirrored for legacy readers.
+    from app.inference.pool_sync import set_pool_entry_enabled
+    await set_pool_entry_enabled(f"bundled-{name}", False)
     if await read_config("inference.url", "") == spec["url"]:
         await write_config_state("inference.url", "")
     if await read_config("inference.backend", "none") == name:
@@ -258,12 +270,48 @@ async def select_backend(backend: str) -> dict:
     await write_config_state("inference.error", "")
 
     spec = BUNDLED_BACKENDS.get(backend)
-    if spec and await profiled_service_status(spec["service"]) == "running":
+    bundled_running = bool(
+        spec and await profiled_service_status(spec["service"]) == "running"
+    )
+    if bundled_running:
         await write_config_state("inference.url", spec["url"])
     else:
         current_url = await read_config("inference.url", "")
         if current_url in _BUNDLED_URLS:
             await write_config_state("inference.url", "")
+
+    # Canonical pool write: selecting a backend makes its entry primary.
+    # A running bundled container gets its in-network URL (container entry);
+    # anything else is an external server on the engine's conventional URL —
+    # editable afterwards on the Models page.
+    if backend != "none":
+        from app.inference.pool_sync import upsert_pool_entry
+        _EXTERNAL_URLS = {
+            "ollama": "http://host.docker.internal:11434",
+            "vllm": "http://host.docker.internal:8000",
+            "sglang": "http://host.docker.internal:30000",
+            "llamacpp": "http://host.docker.internal:8080",
+            "lmstudio": "http://host.docker.internal:1234",
+        }
+        if bundled_running:
+            await upsert_pool_entry(
+                f"bundled-{backend}", backend, spec["url"],
+                kind="container", enabled=True, front=True,
+            )
+        else:
+            engine = "openai" if backend == "custom" else backend
+            url = (
+                await read_config("inference.custom_url", "")
+                if backend == "custom"
+                else await read_config("inference.lmstudio_url", "")
+                if backend == "lmstudio"
+                else ""
+            ) or _EXTERNAL_URLS.get(engine, "")
+            if url:
+                await upsert_pool_entry(
+                    backend, engine, url,
+                    kind="remote", enabled=True, front=True,
+                )
 
     await write_config_state("inference.state", "ready" if backend != "none" else "stopped")
     logger.info("Inference backend selected: %s", backend)
@@ -272,6 +320,8 @@ async def select_backend(backend: str) -> dict:
 
 async def clear_backend() -> dict:
     """Deselect local inference (fall back to cloud/none)."""
+    from app.inference.pool_sync import disable_all_pool_entries
+    await disable_all_pool_entries()
     await write_config_state("inference.backend", "none")
     await write_config_state("inference.state", "stopped")
     await write_config_state("inference.error", "")
