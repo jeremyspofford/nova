@@ -55,6 +55,7 @@ async def reaper_loop() -> None:
             await _reap_timed_out_sessions()
             await _reap_stale_clarifications()
             await _reap_stale_checkpoints()
+            await _reap_expired_approvals()
             # Run task history cleanup once per ~60 cycles (~hourly at 60s interval)
             _cycle += 1
             if _cycle % 60 == 0:
@@ -331,6 +332,43 @@ async def _reap_stale_checkpoints() -> None:
         async with pool.acquire() as audit_conn:
             await _audit(audit_conn, "task_cancelled", "warning", task_id=task_id,
                          data={"reason": "checkpoint_timeout"})
+
+
+# ── Reap expired pending approvals ────────────────────────────────────────────
+
+async def _reap_expired_approvals() -> None:
+    """Expired pending approvals → 'timeout', so they leave the DB's idea of
+    'pending' instead of zombie-ing forever.
+
+    The consent worker flips a row only when it comes back to execute the
+    call; if the task died first, nothing ever touches the row again — it's
+    hidden from /approvals (which filters expires_at > now()) while every
+    inbox message about it still says 'waiting for your decision'. Checkpoint
+    approvals whose task is still parked (waiting_human) are left for
+    _reap_stale_checkpoints, which also resolves the task.
+    """
+    from .db import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE approval_requests ar
+            SET status = 'timeout'
+            WHERE ar.status = 'pending'
+              AND ar.expires_at < now()
+              AND NOT EXISTS (
+                  SELECT 1 FROM tasks t
+                  WHERE t.id = ar.task_id AND t.status = 'waiting_human'
+              )
+            RETURNING ar.id, ar.kind, ar.tool_name
+            """,
+        )
+    for r in rows:
+        logger.info(
+            "Reaper: approval %s (%s %s) expired unanswered — marked timeout",
+            r["id"], r["kind"], r["tool_name"],
+        )
 
 
 # ── Auto-cleanup expired task history ─────────────────────────────────────────

@@ -105,6 +105,7 @@ async def get_notify_config() -> dict:
 
 async def _record_delivery(
     event: str, title: str, ok: bool, detail: str, message: str = "",
+    approval_id: str | None = None, task_id: str | None = None,
 ) -> None:
     """Write one delivery receipt + the message body (best-effort, never raises).
 
@@ -112,15 +113,17 @@ async def _record_delivery(
     depends on a device being subscribed. Rows double as the operator's
     in-dashboard Inbox (the message is readable in Nova regardless of
     whether any push client is set up), so record on every attempt,
-    including suppressed ones.
+    including suppressed ones. `approval_id`/`task_id` link the row to the
+    item it's about so the Inbox can show live status and a jump link.
     """
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO notify_log (event, title, ok, detail, message) "
-                "VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO notify_log (event, title, ok, detail, message, approval_id, task_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6::uuid, $7::uuid)",
                 event, title[:200], ok, detail[:300], message[:4000],
+                approval_id, task_id,
             )
             # Retention: receipts are operational breadcrumbs, not history.
             await conn.execute(
@@ -161,11 +164,15 @@ async def notify(
     tags: str | None = None,
     click: str | None = None,
     actions: list[dict] | None = None,
+    approval_id: str | None = None,
+    task_id: str | None = None,
 ) -> bool:
     """Publish one push notification. Never raises; False on any failure.
 
     Uses ntfy's JSON publish endpoint (POST to the server root) — handles
     UTF-8 titles/bodies cleanly where raw PUT headers would not.
+    `approval_id`/`task_id` are recorded on the Inbox row (not sent to ntfy)
+    so the message stays connected to the item it's about.
     """
     try:
         conf = await get_notify_config()
@@ -175,6 +182,7 @@ async def notify(
                 "suppressed: notifications disabled" if not conf["enabled"]
                 else "suppressed: no topic seeded",
                 message=message or title,
+                approval_id=approval_id, task_id=task_id,
             )
             return False
 
@@ -197,6 +205,7 @@ async def notify(
         if resp.status_code == 200:
             await _record_delivery(
                 event, title, True, "accepted by ntfy", message=payload["message"],
+                approval_id=approval_id, task_id=task_id,
             )
             return True
         logger.warning(
@@ -206,19 +215,21 @@ async def notify(
         await _record_delivery(
             event, title, False, f"ntfy rejected: HTTP {resp.status_code}",
             message=payload["message"],
+            approval_id=approval_id, task_id=task_id,
         )
         return False
     except Exception as e:
         logger.warning("notify: push failed for %s (non-fatal): %s", event, e)
         await _record_delivery(
             event, title, False, f"publish error: {e}", message=message or title,
+            approval_id=approval_id, task_id=task_id,
         )
         return False
 
 
 async def notify_task_event(
     notification_type: str, task_id: str, title: str, body: str = "",
-    actions: list[dict] | None = None,
+    actions: list[dict] | None = None, approval_id: str | None = None,
 ) -> bool:
     """Bridge from the pipeline's SSE notifications to phone push.
 
@@ -246,6 +257,8 @@ async def notify_task_event(
             title=title,
             message=f"{body}\n\nTask {task_id[:8]}" if body else f"Task {task_id[:8]}",
             actions=actions,
+            approval_id=approval_id,
+            task_id=task_id,
         )
     except Exception as e:
         logger.warning("notify: task-event push failed (non-fatal): %s", e)

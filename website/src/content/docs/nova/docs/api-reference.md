@@ -219,6 +219,30 @@ curl -X POST http://localhost:8000/api/v1/mcp-servers/{id}/reload \
   -H "X-Admin-Secret: your-secret"
 ```
 
+### Approvals & Inbox (admin)
+
+```bash
+# Pending approvals — genuinely decidable items only (pending AND unexpired).
+# The reaper flips expired pending rows to 'timeout', so nothing zombies.
+curl http://localhost:8000/api/v1/capabilities/approvals \
+  -H "X-Admin-Secret: your-secret"
+
+# Recently resolved approvals (approved / rejected / timeout / superseded),
+# newest first — context for an empty pending list
+curl "http://localhost:8000/api/v1/capabilities/approvals/recent?limit=20" \
+  -H "X-Admin-Secret: your-secret"
+
+# Inbox — messages carry the referenced item's LIVE status
+curl "http://localhost:8000/api/v1/notify/inbox?limit=50" \
+  -H "X-Admin-Secret: your-secret"
+```
+
+Inbox items about an approval or task include `approval_id` / `task_id` plus
+`approval_status` / `task_status` resolved at read time, so a message written
+as "waiting for your decision" reports `approved`, `timeout`, or `complete`
+once the item is resolved. Messages about nothing in particular (briefings,
+agent pushes) carry `null` for all four fields.
+
 ### Identity (public)
 
 ```bash

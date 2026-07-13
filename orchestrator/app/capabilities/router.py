@@ -115,6 +115,18 @@ async def list_pending_approvals(
     ]
 
 
+@router.get("/approvals/recent", response_model=list[dict])
+async def list_recent_approvals(
+    ctx: CapabilityCtxDep,
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Recently resolved approvals (approved / rejected / timeout / superseded),
+    newest first — context for an empty pending list."""
+    pool = get_pool()
+    rows = await consent_db.list_recent(pool, tenant_id=ctx.tenant_id, limit=limit)
+    return [dict(r) for r in rows]
+
+
 @router.get("/approvals/{approval_id}", response_model=dict)
 async def get_approval(
     approval_id: UUID,

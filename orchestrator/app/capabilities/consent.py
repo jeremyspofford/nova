@@ -140,6 +140,8 @@ async def gate(
         title=f"Approval needed: {tool_name}",
         message=f"{summary} — waiting for your decision in Pending Approvals.",
         actions=await build_decide_actions(str(approval_id), kind="consent"),
+        approval_id=str(approval_id),
+        task_id=str(task_id) if task_id else None,
     )
 
     return ConsentDecision(action="pending", approval_id=approval_id)
@@ -212,6 +214,24 @@ async def list_pending(pool: asyncpg.Pool, *, tenant_id: UUID) -> list[asyncpg.R
             "WHERE tenant_id=$1 AND status='pending' AND expires_at > now() "
             "ORDER BY created_at DESC LIMIT 500",
             tenant_id,
+        )
+
+
+async def list_recent(
+    pool: asyncpg.Pool, *, tenant_id: UUID, limit: int = 20,
+) -> list[asyncpg.Record]:
+    """Recently resolved approvals (anything not pending), newest first.
+
+    Lets the dashboard explain an empty pending list — "your approval expired
+    2 days ago" beats a void."""
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT id, kind, tool_name, blast_radius, provider_kind, status, "
+            "       requested_by, created_at, decided_by, decided_via, decided_at "
+            "FROM approval_requests "
+            "WHERE tenant_id=$1 AND status <> 'pending' "
+            "ORDER BY COALESCE(decided_at, created_at) DESC LIMIT $2",
+            tenant_id, limit,
         )
 
 

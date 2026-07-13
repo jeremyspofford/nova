@@ -159,16 +159,25 @@ async def notify_inbox(
     readable here even when no push client is subscribed (the ntfy leg is
     optional delivery, not the canonical surface). Always returns the
     total unread count for nav badging.
+
+    Messages linked to an approval or task carry the referenced item's LIVE
+    status (approval_status / task_status), so the UI can say "still waiting
+    for you" vs "already approved" vs "expired" instead of presenting every
+    old message as actionable.
     """
     from app.db import get_pool
 
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, created_at, event, title, message, ok, detail, read_at "
-            "FROM notify_log "
-            + ("WHERE read_at IS NULL " if unread_only else "")
-            + "ORDER BY created_at DESC LIMIT $1",
+            "SELECT n.id, n.created_at, n.event, n.title, n.message, n.ok, "
+            "       n.detail, n.read_at, n.approval_id, n.task_id, "
+            "       a.status AS approval_status, t.status AS task_status "
+            "FROM notify_log n "
+            "LEFT JOIN approval_requests a ON a.id = n.approval_id "
+            "LEFT JOIN tasks t ON t.id = n.task_id "
+            + ("WHERE n.read_at IS NULL " if unread_only else "")
+            + "ORDER BY n.created_at DESC LIMIT $1",
             limit,
         )
         unread = await conn.fetchval(
@@ -186,6 +195,10 @@ async def notify_inbox(
                 "ok": r["ok"],
                 "detail": r["detail"],
                 "read_at": r["read_at"].isoformat() if r["read_at"] else None,
+                "approval_id": str(r["approval_id"]) if r["approval_id"] else None,
+                "task_id": str(r["task_id"]) if r["task_id"] else None,
+                "approval_status": r["approval_status"],
+                "task_status": r["task_status"],
             }
             for r in rows
         ],

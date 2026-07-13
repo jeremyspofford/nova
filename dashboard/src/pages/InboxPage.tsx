@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCheck, ChevronDown, ChevronRight, Inbox as InboxIcon, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCheck, ChevronDown, ChevronRight, Inbox as InboxIcon, Trash2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { PageHeader } from '../components/layout/PageHeader'
 import { useToast } from '../components/ToastProvider'
@@ -15,6 +16,10 @@ interface InboxMessage {
   ok: boolean
   detail: string
   read_at: string | null
+  approval_id: string | null
+  task_id: string | null
+  approval_status: string | null
+  task_status: string | null
 }
 
 interface InboxResponse {
@@ -48,6 +53,45 @@ function fmt(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
+}
+
+/** Live state of the item a message is about (approval or task), so old
+ *  messages stop claiming something is "waiting" after it was resolved. */
+interface RefInfo {
+  label: string
+  color: 'success' | 'warning' | 'danger' | 'info' | 'neutral'
+  to: string
+  linkLabel: string
+  actionable: boolean
+}
+
+function refInfo(m: InboxMessage): RefInfo | null {
+  if (m.approval_id && m.approval_status) {
+    const to = '/approvals'
+    const linkLabel = 'Open approvals'
+    switch (m.approval_status) {
+      case 'pending': return { label: 'awaiting your decision', color: 'warning', to, linkLabel, actionable: true }
+      case 'approved': return { label: 'approved', color: 'success', to, linkLabel, actionable: false }
+      case 'rejected': return { label: 'rejected', color: 'neutral', to, linkLabel, actionable: false }
+      case 'timeout': return { label: 'expired unanswered', color: 'danger', to, linkLabel, actionable: false }
+      case 'superseded': return { label: 'superseded', color: 'neutral', to, linkLabel, actionable: false }
+      default: return null
+    }
+  }
+  if (m.task_id && m.task_status) {
+    const to = '/tasks'
+    const linkLabel = 'Open tasks'
+    switch (m.task_status) {
+      case 'pending_human_review': return { label: 'needs your review', color: 'warning', to, linkLabel, actionable: true }
+      case 'waiting_human': return { label: 'checkpoint waiting', color: 'warning', to: '/approvals', linkLabel: 'Open approvals', actionable: true }
+      case 'clarification_needed': return { label: 'needs clarification', color: 'warning', to, linkLabel, actionable: true }
+      case 'complete': return { label: 'task complete', color: 'success', to, linkLabel, actionable: false }
+      case 'failed': return { label: 'task failed', color: 'danger', to, linkLabel, actionable: false }
+      case 'cancelled': return { label: 'task cancelled', color: 'neutral', to, linkLabel, actionable: false }
+      default: return { label: m.task_status.replace(/_/g, ' '), color: 'info', to, linkLabel, actionable: false }
+    }
+  }
+  return null
 }
 
 export function InboxPage() {
@@ -163,6 +207,7 @@ export function InboxPage() {
           {items.map(m => {
             const isOpen = expanded.has(m.id)
             const isUnread = !m.read_at
+            const ref = refInfo(m)
             return (
               <div key={m.id}>
                 <button
@@ -179,9 +224,13 @@ export function InboxPage() {
                   <span className={`min-w-0 flex-1 truncate text-compact ${isUnread ? 'font-semibold text-content-primary' : 'text-content-secondary'}`}>
                     {m.title}
                   </span>
-                  <Badge color={EVENT_COLOR[m.event] ?? 'neutral'}>
-                    {EVENT_LABEL[m.event] ?? m.event}
-                  </Badge>
+                  {ref ? (
+                    <Badge color={ref.color}>{ref.label}</Badge>
+                  ) : (
+                    <Badge color={EVENT_COLOR[m.event] ?? 'neutral'}>
+                      {EVENT_LABEL[m.event] ?? m.event}
+                    </Badge>
+                  )}
                   {!m.ok && (
                     <span className="flex shrink-0 items-center gap-1 text-caption text-amber-500" title={m.detail}>
                       <AlertTriangle className="h-3.5 w-3.5" />
@@ -197,6 +246,15 @@ export function InboxPage() {
                     <p className="whitespace-pre-wrap text-compact text-content-primary">
                       {m.message || m.title}
                     </p>
+                    {ref && (
+                      <Link
+                        to={ref.to}
+                        className={`mt-2 inline-flex items-center gap-1 text-compact ${ref.actionable ? 'font-semibold text-accent hover:text-accent-hover' : 'text-content-secondary hover:text-content-primary'}`}
+                      >
+                        {ref.linkLabel}
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </Link>
+                    )}
                     {!m.ok && (
                       <p className="mt-2 text-caption text-amber-500">
                         Push delivery: {m.detail} — the message is only here in the Inbox.
