@@ -9,6 +9,9 @@ from app.llm import router as llm_router
 from app.config import settings
 from app.schemas import ChatRequest
 from app.memory.memory import memory
+from app.agents import registry as agent_registry
+from app.agents import runner as agent_runner
+from app.tools import registry as tool_registry
 
 log = logging.getLogger(__name__)
 
@@ -34,33 +37,40 @@ async def chat_stream(request: ChatRequest):
         # Load conversation history
         history = await conversations.load_history(conversation_id)
 
+        # Get the main agent
+        main_agent = await agent_registry.get_agent_by_name("main")
+        if not main_agent:
+            raise HTTPException(status_code=500, detail="Main agent not configured")
+
         # Retrieve memory context
         memory_context = await memory.context(request.message, max_chars=2000)
 
-        # Build message list for LLM
-        messages = []
-        system_prompt = MAIN_SYSTEM_PROMPT
+        # Build message list for agent
+        messages = [{"role": "user", "content": request.message}]
+
+        # Add memory context to agent's system prompt
+        agent_system_prompt = main_agent["system_prompt"]
         if memory_context.get("context"):
-            system_prompt += f"\n\n## Relevant Memories\n{memory_context['context']}"
+            agent_system_prompt += f"\n\n## Relevant Memories\n{memory_context['context']}"
 
-        messages.append({"role": "system", "content": system_prompt})
+        agent_config = {
+            "id": main_agent["id"],
+            "system_prompt": agent_system_prompt,
+            "model": main_agent["model"],
+        }
 
-        for msg in history:
-            messages.append({
-                "role": msg["role"],
-                "content": msg["content"] or "",
-            })
+        # Get tools for the agent
+        tools_list = await tool_registry.get_agent_tools(main_agent["id"], main_agent.get("allowed_tools"))
 
         async def response_generator():
-            """Stream the LLM response."""
+            """Stream the agent response."""
             # Emit conversation metadata
-            yield f'data: {json.dumps({"meta": {"conversation_id": conversation_id, "model": settings.log_level}})}\n\n'
+            yield f'data: {json.dumps({"meta": {"conversation_id": conversation_id, "model": agent_config["model"]}})}\n\n'
 
             full_response = ""
-            model = "openrouter:anthropic/claude-3.5-haiku" if settings.openrouter_api_key else "ollama:llama2"
 
             try:
-                async for chunk in llm_router.stream_chat(messages, model):
+                async for chunk in agent_runner.run_agent_turn_streaming(agent_config, messages, tools_list):
                     if chunk.get("type") == "text":
                         text = chunk["text"]
                         full_response += text
@@ -68,15 +78,15 @@ async def chat_stream(request: ChatRequest):
                     elif chunk.get("type") == "done":
                         yield 'data: [DONE]\n\n'
                     elif chunk.get("error"):
-                        log.error(f"LLM streaming error: {chunk['error']}")
+                        log.error(f"Agent error: {chunk['error']}")
                         yield f'data: {json.dumps({"error": chunk["error"]})}\n\n'
             except Exception as e:
-                log.error(f"Error during streaming: {e}")
+                log.error(f"Error during agent turn: {e}")
                 yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
             # Save assistant response and write to memory
             try:
-                await conversations.append_message(conversation_id, "assistant", full_response, model)
+                await conversations.append_message(conversation_id, "assistant", full_response, agent_config["model"])
                 # Write exchange to memory
                 exchange = f"User: {request.message}\n\nAssistant: {full_response}"
                 await memory.write(exchange, source_type="chat")
