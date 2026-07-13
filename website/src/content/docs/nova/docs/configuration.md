@@ -32,15 +32,15 @@ cp .env.example .env
 | `LLM_ROUTING_STRATEGY` | Model routing strategy (see below) | `local-first` |
 | `DEFAULT_CHAT_MODEL` | Default model for chat interactions | `llama3.2` |
 
-## Inference backend
+## Inference backends (the pool)
 
-The active inference backend is configured from the dashboard Settings page (AI & Models -- Local Inference). These settings are stored in Redis (`nova:config:inference.*`) and take effect immediately -- no restart required.
+Local inference is a **pool of named backends** stored as JSON in Redis (`nova:config:inference.backends`) and managed from the dashboard's Models page (Backend pool card). Each entry is `{id, kind: container|remote, engine, url, enabled, auth_header}`; multiple containers and multiple user-named remotes (`remote-vllm-a`, `remote-vllm-b`) coexist. Requests route to the backend whose discovered model catalog serves the requested model; the first enabled entry is the primary fallback. Changes take effect immediately -- no restart required.
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `inference.backend` | Active backend: `ollama`, `vllm`, or `none` | `ollama` |
-| `inference.state` | Backend state: `ready`, `draining`, `starting`, `error` | `ready` |
-| `inference.url` | Override URL for the backend (auto-detected from Docker service name if empty) | *(empty)* |
+| `inference.backends` | JSON list of named backend entries -- the canonical pool the gateway routes over. Seeded automatically from the legacy scalar keys on first boot after upgrade. | *(seeded)* |
+| `inference.state` | Pool-wide acceptance state: `ready`, `draining`, `starting`, `error` | `ready` |
+| `inference.backend` / `inference.url` | Legacy scalar mirrors of the primary selection -- still written for older readers, no longer used for routing once the pool is seeded | *(empty)* |
 
 The setup script runs hardware detection and writes results to `data/hardware.json`. The recovery service syncs this to Redis on startup. The dashboard shows the detected hardware and recommends a backend based on GPU availability.
 

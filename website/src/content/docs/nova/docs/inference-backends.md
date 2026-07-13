@@ -55,9 +55,15 @@ SGLang caches these in a radix tree -- subsequent requests skip re-computing att
 llama.cpp ships as a bundled backend (`inference-llamacpp`), serving a GGUF file from `LLAMACPP_MODELS_DIR`. For CPU-only deployments, Ollama remains the easiest option.
 :::
 
+## The backend pool
+
+Local inference routes over a **pool of named backends** (`nova:config:inference.backends`), managed from the Models page's *Backend pool* card. Bundled containers register themselves when started; you can add any number of **user-named remote servers** (`remote-vllm-a`, `remote-vllm-b`, an LM Studio box, any OpenAI-compatible endpoint) with per-entry URL and optional Authorization header. Each entry keeps its own discovered model catalog: a request for a model goes to the backend that actually serves it, and anything unresolvable falls back to the **primary** (first enabled) entry with model substitution. Disable an entry to take it out of routing without losing its configuration.
+
+The pool seeds itself from the older single-backend settings on first boot after upgrading, so existing setups keep routing unchanged.
+
 ## Managed backends
 
-Nova bundles four backends -- **Ollama**, **vLLM**, **SGLang**, and **llama.cpp**. Each is a Docker Compose service behind a profile (`inference-ollama`, `inference-vllm`, `inference-sglang`, `inference-llamacpp`), and the recovery service manages its lifecycle. Several containers can be warm at once; `inference.backend` picks the one the gateway routes to, so switching between running backends is instant.
+Nova bundles four backends -- **Ollama**, **vLLM**, **SGLang**, and **llama.cpp**. Each is a Docker Compose service behind a profile (`inference-ollama`, `inference-vllm`, `inference-sglang`, `inference-llamacpp`), and the recovery service manages its lifecycle. Several containers can be warm at once; starting one places it at the front of the backend pool (primary), so switching between running backends is instant.
 
 Model storage is configurable so you can reuse existing model stores instead of re-downloading:
 
