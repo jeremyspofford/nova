@@ -74,6 +74,17 @@ async def _reap_stale_running_tasks() -> None:
     Find tasks in active states whose heartbeat has expired.
     These are tasks that started execution but the pipeline process died.
 
+    The DB query only nominates CANDIDATES: the live heartbeat is the Redis
+    key the executor's heartbeat loop refreshes every 30s
+    (queue.write_heartbeat), while tasks.last_heartbeat_at is only touched
+    once at pipeline start. Before this liveness check existed, every task
+    whose stage legitimately ran past task_stale_seconds (~150s — routine
+    for local models on CPU) was force-failed while its process was healthy
+    and heartbeating. A candidate with a live Redis heartbeat gets its DB
+    timestamp refreshed and is skipped; a Redis outage falls through to the
+    reap (the heartbeat writer can't write either, so the DB column is the
+    only signal left).
+
     Recovery: always force-fail via force_fail_task, which bypasses the CAS
     state machine. The reaper is a terminal recovery mechanism — if a task
     wants to retry, it must be re-submitted through the normal path. The old
@@ -82,7 +93,7 @@ async def _reap_stale_running_tasks() -> None:
     """
     from .db import get_pool
     from .pipeline.state_machine import force_fail_task
-    from .queue import move_to_dead_letter
+    from .queue import is_heartbeat_alive, move_to_dead_letter
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -102,6 +113,23 @@ async def _reap_stale_running_tasks() -> None:
 
     for task in stale_tasks:
         task_id = str(task["id"])
+
+        try:
+            alive = await is_heartbeat_alive(task_id)
+        except Exception as e:
+            logger.warning(
+                "Reaper could not check Redis heartbeat for %s (%s) — "
+                "falling back to the DB timestamp", task_id, e,
+            )
+            alive = False
+        if alive:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE tasks SET last_heartbeat_at = now() WHERE id = $1",
+                    task["id"],
+                )
+            continue
+
         reason = (
             f"reaped: heartbeat expired in state '{task['status']}' "
             f"(retry_count={task['retry_count']}/{task['max_retries']})"
