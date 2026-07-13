@@ -133,6 +133,17 @@ async def get_memory_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/v1/agents")
+async def list_agents_endpoint():
+    """List all agents."""
+    try:
+        agents = await agent_registry.list_agents()
+        return agents
+    except Exception as e:
+        log.error(f"Error listing agents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/v1/memory/graph")
 async def get_memory_graph():
     """Get memory graph for visualization (simplified for Phase 2)."""
