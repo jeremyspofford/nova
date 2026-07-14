@@ -239,6 +239,85 @@ async def pull_model_endpoint(body: dict):
                                       "X-Accel-Buffering": "no"})
 
 
+# ── model recommendations (designed 2026-07-14) ──────────────────────────
+
+@router.get("/api/v1/hardware")
+async def hardware_endpoint():
+    from app import hardware
+    return await hardware.detect()
+
+
+@router.get("/api/v1/models/recommendations")
+async def model_recommendations_endpoint():
+    from app import model_recs
+    return await model_recs.recommendations()
+
+
+@router.post("/api/v1/models/test")
+async def model_test_endpoint(body: dict):
+    """Probe a model on this machine: TTFT/tok_s plus a mechanically verified
+    tool call. Never pulls — an uninstalled model comes back as an error."""
+    from app import model_recs
+    model = str(body.get("model", "")).strip()
+    if ":" not in model:
+        raise HTTPException(status_code=422,
+                            detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    return await model_recs.probe(model)
+
+
+@router.get("/api/v1/models/curated")
+async def list_curated_endpoint():
+    from app import curated_models
+    return await curated_models.list_all()
+
+
+@router.post("/api/v1/models/curated", status_code=201)
+async def create_curated_endpoint(body: dict):
+    from app import curated_models
+    _require_edit_mode()
+    try:
+        return await curated_models.create(
+            model=str(body.get("model", "")),
+            provider=str(body.get("provider", "")),
+            **{k: body[k] for k in
+               ("min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles", "notes")
+               if k in body})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # duplicate model etc.
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/api/v1/models/curated/{row_id}")
+async def patch_curated_endpoint(row_id: str, body: dict):
+    from app import curated_models
+    if any(k != "enabled" for k in body):  # enable/disable is always allowed
+        _require_edit_mode()
+    try:
+        result = await curated_models.update(row_id, **body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="curated model not found")
+    if result == "is_system":
+        raise HTTPException(status_code=403,
+                            detail="seeded rows can be toggled but not rewritten")
+    return {"status": "updated"}
+
+
+@router.delete("/api/v1/models/curated/{row_id}")
+async def delete_curated_endpoint(row_id: str):
+    from app import curated_models
+    _require_edit_mode()
+    result = await curated_models.delete(row_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="curated model not found")
+    if result == "is_system":
+        raise HTTPException(status_code=403,
+                            detail="seeded rows can be disabled but not deleted")
+    return {"status": "deleted"}
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

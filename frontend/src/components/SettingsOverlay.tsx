@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import {
-  AgentInfo, Automation, BundledInferenceStatus, DbToolInfo, ModelInfo, Rule,
-  SettingDef, ToolsCatalog, createAgent, createAutomation, createRule,
-  createTool, deleteAgent, deleteAutomation, deleteRule, deleteTool,
-  getAgents, getAutomations, getBundledInference, getModels, getRules,
-  getSettings, getTools, patchAgent, patchAutomation, patchRule,
-  patchSettings, patchTool, pullModel, setBundledInference,
+  AgentInfo, Automation, BundledInferenceStatus, CuratedModel, DbToolInfo,
+  ModelInfo, ModelRecommendation, ProbeResult, RecommendationsResponse, Rule,
+  SettingDef, ToolsCatalog, createAgent, createAutomation, createCuratedModel,
+  createRule, createTool, deleteAgent, deleteAutomation, deleteCuratedModel,
+  deleteRule, deleteTool, getAgents, getAutomations, getBundledInference,
+  getCuratedModels, getModels, getRecommendations, getRules, getSettings,
+  getTools, patchAgent, patchAutomation, patchCuratedModel, patchRule,
+  patchSettings, patchTool, pullModel, setBundledInference, testModel,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { displayName } from '../names';
@@ -67,7 +69,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           </div>
         </header>
         <div className="flex-1 overflow-y-auto nice-scroll p-4">
-          {tab === 'settings' ? <SettingsTab exclude={['Automations']} />
+          {tab === 'settings' ? <SettingsTab exclude={['Automations']} editMode={editMode} />
             : tab === 'agents' ? <AgentsTab editMode={editMode} />
             : tab === 'automations' ? <AutomationsTab editMode={editMode} />
             : tab === 'rules' ? <RulesTab editMode={editMode} />
@@ -88,7 +90,8 @@ function EditModeHint() {
   );
 }
 
-function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] }) {
+function SettingsTab({ only, exclude, editMode = false }:
+    { only?: string[]; exclude?: string[]; editMode?: boolean }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
@@ -230,6 +233,8 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
               </div>
             ))}
             {section === 'Inference' && <PullModel onPulled={() => getModels().then(setModels)} />}
+            {section === 'Inference' && <DetectSuggest />}
+            {section === 'Inference' && <CuratedTable editMode={editMode} />}
           </div>
         </section>
       ))}
@@ -366,6 +371,382 @@ function PullModel({ onPulled }: { onPulled: () => void }) {
       </div>
       {progress && <div className="text-xs font-mono text-stone-400">{progress}</div>}
     </form>
+  );
+}
+
+function probeLine(p: ProbeResult | 'running' | undefined) {
+  if (!p) return null;
+  if (p === 'running') return <span className="text-amber-400">probing… (local models can take a minute)</span>;
+  if (p.error) return <span className="text-red-400">✗ {p.error}</span>;
+  if (!p.tool_call_ok) return <span className="text-red-400">✗ tool call failed the mechanical check</span>;
+  return (
+    <span className="text-emerald-400">
+      ✓ tool call verified · {p.tok_s != null && `${p.tok_s} tok/s · `}
+      TTFT {p.ttft_ms} ms · {p.gpu_active ? `GPU (${p.vram_gb ?? '?'} GB VRAM)` : p.gpu_active === false ? 'CPU' : 'cloud'}
+    </span>
+  );
+}
+
+/** Detect & suggest — hardware-sized, per-agent model recommendations with
+ *  a one-click probe. Detection runs on demand and is timestamped; nothing
+ *  is cached or pulled behind the operator's back. */
+function DetectSuggest() {
+  const [recs, setRecs] = useState<RecommendationsResponse | null>(null);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState('');
+  const [probes, setProbes] = useState<Record<string, ProbeResult | 'running'>>({});
+  const [applied, setApplied] = useState<Set<string>>(new Set());
+
+  async function detect() {
+    setRunning(true);
+    setStatus('');
+    setApplied(new Set());
+    try {
+      const [r, a] = await Promise.all([getRecommendations(), getAgents()]);
+      setRecs(r);
+      setAgents(a);
+    } catch (e) { setStatus(String(e)); }
+    setRunning(false);
+  }
+
+  async function apply(rec: ModelRecommendation) {
+    if (!rec.suggested_model) return;
+    try {
+      if (rec.agent === 'compaction (setting)') {
+        await patchSettings({ 'compaction.model': rec.suggested_model });
+      } else {
+        const agent = agents.find(a => a.name === rec.agent);
+        if (!agent) throw new Error(`agent ${rec.agent} not found`);
+        await patchAgent(agent.id, { model: rec.suggested_model });
+      }
+      setApplied(prev => new Set(prev).add(rec.agent));
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  async function applyAll() {
+    if (!recs) return;
+    for (const r of recs.recommendations) {
+      if (r.status === 'switch' && !applied.has(r.agent)) await apply(r);
+    }
+  }
+
+  async function probe(model: string) {
+    setProbes(p => ({ ...p, [model]: 'running' }));
+    try {
+      const res = await testModel(model);
+      setProbes(p => ({ ...p, [model]: res }));
+    } catch (e) {
+      setProbes(p => ({
+        ...p,
+        [model]: { model, ok: false, error: String(e) } as ProbeResult,
+      }));
+    }
+  }
+
+  const hw = recs?.hardware;
+  const switches = recs?.recommendations.filter(r => r.status === 'switch') ?? [];
+
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm text-stone-200">Detect &amp; suggest</div>
+          <div className="text-xs text-stone-500">
+            Size this machine and suggest a model per agent from the curated
+            table below. Suggestions are advice — test them before trusting them.
+          </div>
+        </div>
+        <button
+          onClick={detect}
+          disabled={running}
+          className="shrink-0 text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
+        >
+          {running ? 'detecting…' : recs ? 'refresh' : 'detect & suggest'}
+        </button>
+      </div>
+
+      {hw && (
+        <div className="text-xs font-mono text-stone-400 border-t border-stone-700/60 pt-2">
+          {hw.ram_gb ?? '?'} GB RAM · {hw.cpu_cores ?? '?'} cores ·
+          {hw.nvidia_runtime ? ' NVIDIA runtime ✓' : hw.nvidia_runtime === false ? ' no GPU runtime' : ' GPU unknown'} ·
+          VRAM {hw.vram_observed_gb != null ? `${hw.vram_observed_gb} GB observed` : 'unobserved'} ·
+          detected {new Date(hw.detected_at).toLocaleTimeString()}
+          {!recs?.cloud_available && <span className="text-stone-500"> · no cloud key — local only</span>}
+        </div>
+      )}
+      {hw?.nvidia_runtime && hw.vram_observed_gb == null && (
+        <div className="text-xs text-amber-400/90">
+          GPU runtime detected, but no model has been seen using it — the bundled
+          Ollama runs CPU-only until a GPU reservation block is added to
+          docker-compose.yml (see README). Probes report the truth either way.
+        </div>
+      )}
+
+      {recs && (
+        <div className="space-y-2">
+          {recs.recommendations.map(r => (
+            <div key={r.agent} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs text-stone-100">{displayName(r.agent)}</span>
+                  <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{r.profile}</span>
+                  {r.current_valid === false && (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded border bg-red-950/50 text-red-300 border-red-900"
+                      title="Pin guard: the current model is not in the live catalog — requests with it will fail."
+                    >
+                      current model missing
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {r.status === 'keep' ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ keep current</span>
+                  ) : r.status === 'switch' && r.suggested_model ? (
+                    <>
+                      <button
+                        onClick={() => probe(r.suggested_model!)}
+                        disabled={probes[r.suggested_model] === 'running'}
+                        className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200 disabled:opacity-50"
+                      >
+                        test
+                      </button>
+                      {applied.has(r.agent) ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ applied</span>
+                      ) : (
+                        <button
+                          onClick={() => apply(r)}
+                          className="text-xs px-2 py-0.5 rounded bg-teal-700 hover:bg-teal-600 text-white"
+                        >
+                          apply
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-stone-500">no fit</span>
+                  )}
+                </div>
+              </div>
+              <div className="mt-1 text-xs font-mono text-stone-400 truncate">
+                {r.current_model}
+                {r.status === 'switch' && r.suggested_model && (
+                  <> <span className="text-stone-600">→</span> <span className="text-teal-300">{r.suggested_model}</span></>
+                )}
+              </div>
+              <div className="mt-0.5 text-xs text-stone-500">{r.reason}</div>
+              {r.alternates.length > 0 && (
+                <div className="mt-0.5 text-[11px] text-stone-600">
+                  alternates: {r.alternates.map(a => `${a.model} (${a.note})`).join(' · ')}
+                </div>
+              )}
+              {r.suggested_model && probes[r.suggested_model] && (
+                <div className="mt-1 text-xs font-mono">{probeLine(probes[r.suggested_model])}</div>
+              )}
+            </div>
+          ))}
+          {switches.length > 1 && (
+            <button
+              onClick={applyAll}
+              className="w-full text-xs bg-teal-800/60 hover:bg-teal-700 text-teal-100 rounded py-1.5"
+            >
+              apply all {switches.filter(r => !applied.has(r.agent)).length} suggestions
+            </button>
+          )}
+        </div>
+      )}
+      {status && <div className="text-xs text-red-400">{status}</div>}
+    </div>
+  );
+}
+
+/** The curated model table behind recommendations — seeded knowledge,
+ *  operator-editable (system rows toggle-only, like rules/tools). */
+function CuratedTable({ editMode }: { editMode: boolean }) {
+  const [rows, setRows] = useState<CuratedModel[]>([]);
+  const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<CuratedModel | null>(null);
+  const emptyForm = {
+    model: '', provider: 'ollama', min_ram_gb: '', min_vram_gb: '',
+    tool_tier: 'B', speed: 'medium', roles: '', notes: '',
+  };
+  const [form, setForm] = useState(emptyForm);
+
+  const load = () => getCuratedModels().then(setRows).catch(e => setStatus(String(e)));
+  useEffect(() => { load(); }, []);
+
+  async function toggle(m: CuratedModel) {
+    try { await patchCuratedModel(m.id, { enabled: !m.enabled }); load(); }
+    catch (e) { setStatus(String(e)); }
+  }
+
+  async function remove(m: CuratedModel) {
+    if (!window.confirm(`Remove "${m.model}" from the curated table?`)) return;
+    try { await deleteCuratedModel(m.id); load(); } catch (e) { setStatus(String(e)); }
+  }
+
+  const parseRoles = (s: string) => s.split(',').map(r => r.trim()).filter(Boolean);
+  const numOrNull = (s: string) => (s.trim() === '' ? null : Number(s));
+
+  function startEdit(m: CuratedModel) {
+    setEditing(m);
+    setForm({
+      model: m.model, provider: m.provider,
+      min_ram_gb: m.min_ram_gb == null ? '' : String(m.min_ram_gb),
+      min_vram_gb: m.min_vram_gb == null ? '' : String(m.min_vram_gb),
+      tool_tier: m.tool_tier, speed: m.speed,
+      roles: m.roles.join(', '), notes: m.notes,
+    });
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const fields = {
+      min_ram_gb: numOrNull(form.min_ram_gb),
+      min_vram_gb: numOrNull(form.min_vram_gb),
+      tool_tier: form.tool_tier, speed: form.speed,
+      roles: parseRoles(form.roles), notes: form.notes,
+    };
+    try {
+      if (editing) {
+        await patchCuratedModel(editing.id, fields);
+        setEditing(null);
+      } else {
+        await createCuratedModel({ model: form.model, provider: form.provider as CuratedModel['provider'], ...fields } as Partial<CuratedModel>);
+        setCreating(false);
+      }
+      setForm(emptyForm);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  const formFields = (
+    <>
+      <div className="flex gap-2">
+        <input placeholder="min RAM GB (CPU)" value={form.min_ram_gb}
+          onChange={e => setForm({ ...form, min_ram_gb: e.target.value })}
+          className="w-32 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" />
+        <input placeholder="min VRAM GB (GPU)" value={form.min_vram_gb}
+          onChange={e => setForm({ ...form, min_vram_gb: e.target.value })}
+          className="w-32 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" />
+        <select value={form.tool_tier} onChange={e => setForm({ ...form, tool_tier: e.target.value })}
+          className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" title="tool tier">
+          {['A', 'B', 'C'].map(t => <option key={t} value={t}>tier {t}</option>)}
+        </select>
+        <select value={form.speed} onChange={e => setForm({ ...form, speed: e.target.value })}
+          className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" title="speed class">
+          {['fast', 'medium', 'slow'].map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <input placeholder="roles (comma-sep: chat, tools, guard, compaction)" value={form.roles}
+        onChange={e => setForm({ ...form, roles: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+      <input placeholder="notes" value={form.notes}
+        onChange={e => setForm({ ...form, notes: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" />
+    </>
+  );
+
+  return (
+    <details className="rounded-lg border border-stone-700 bg-stone-800/30">
+      <summary className="px-3 py-2 text-sm text-stone-300 cursor-pointer select-none">
+        Curated model table ({rows.length}) — the knowledge behind suggestions
+      </summary>
+      <div className="px-3 pb-3 space-y-2">
+        <p className="text-xs text-stone-500">
+          Rough requirements per model; the probe is the truth. Seeded rows can
+          be toggled off but not rewritten; add your own rows for anything missing.
+        </p>
+        {rows.map(m => (
+          <div key={m.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
+            {editing?.id === m.id ? (
+              <form onSubmit={submit} className="space-y-2">
+                <div className="text-xs font-mono text-stone-100">{m.model}</div>
+                {formFields}
+                <div className="flex gap-2 justify-end">
+                  <button type="button" onClick={() => { setEditing(null); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+                  <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-mono text-stone-100 truncate">{m.model}</span>
+                    <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">tier {m.tool_tier}</span>
+                    {m.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">seed</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {editMode && !m.is_system && (
+                      <>
+                        <button onClick={() => startEdit(m)}
+                          className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
+                          edit
+                        </button>
+                        <button onClick={() => remove(m)}
+                          className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
+                          delete
+                        </button>
+                      </>
+                    )}
+                    <button onClick={() => toggle(m)}
+                      className={`text-xs px-2 py-0.5 rounded border ${
+                        m.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
+                      }`}>
+                      {m.enabled ? 'enabled' : 'disabled'}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-0.5 text-[11px] text-stone-500">
+                  {m.speed} · {m.roles.join('/') || 'no roles'}
+                  {m.min_ram_gb != null && ` · ${m.min_ram_gb} GB RAM`}
+                  {m.min_vram_gb != null && ` · ${m.min_vram_gb} GB VRAM`}
+                </div>
+                {m.notes && <div className="mt-0.5 text-[11px] text-stone-600 line-clamp-2">{m.notes}</div>}
+                {m.last_probe && (
+                  <div className="mt-0.5 text-[11px] font-mono">{probeLine(m.last_probe)}
+                    {m.probed_at && <span className="text-stone-600"> · {new Date(m.probed_at).toLocaleString()}</span>}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+
+        {editMode && creating ? (
+          <form onSubmit={submit} className="rounded border border-teal-800 bg-stone-900/40 px-2.5 py-2 space-y-2">
+            <div className="flex gap-2">
+              <input required placeholder="model, e.g. ollama:gemma3:12b" value={form.model}
+                onChange={e => setForm({ ...form, model: e.target.value })}
+                className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+              <select value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })}
+                className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200">
+                <option value="ollama">ollama</option>
+                <option value="openrouter">openrouter</option>
+              </select>
+            </div>
+            {formFields}
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => { setCreating(false); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+              <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">add</button>
+            </div>
+          </form>
+        ) : editMode ? (
+          <button onClick={() => { setForm(emptyForm); setCreating(true); }}
+            className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded py-1.5">
+            + add a model
+          </button>
+        ) : (
+          <p className="text-[11px] text-stone-600">
+            🔒 Enable/disable is always available; adding or editing rows needs
+            Settings → Operator → Edit mode.
+          </p>
+        )}
+        {status && <div className="text-xs text-red-400">{status}</div>}
+      </div>
+    </details>
   );
 }
 

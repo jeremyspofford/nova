@@ -378,6 +378,109 @@ export async function getMemoryItem(id: string): Promise<MemoryItem> {
   return r.json();
 }
 
+// ── model recommendations ─────────────────────────────────────────────────
+
+export interface HardwareInfo {
+  ram_gb: number | null;
+  cpu_cores: number | null;
+  nvidia_runtime: boolean | null;
+  vram_observed_gb: number | null;
+  detected_at: string;
+}
+
+export interface ModelRecommendation {
+  agent: string;
+  is_system: boolean;
+  profile: string;
+  current_model: string;
+  current_valid: boolean | null;
+  status: 'keep' | 'switch' | 'no_fit';
+  suggested_model: string | null;
+  reason: string;
+  alternates: { model: string; note: string }[];
+}
+
+export interface RecommendationsResponse {
+  hardware: HardwareInfo;
+  cloud_available: boolean;
+  curated_count: number;
+  recommendations: ModelRecommendation[];
+}
+
+export async function getRecommendations(): Promise<RecommendationsResponse> {
+  const r = await fetch(`${API_URL}/api/v1/models/recommendations`);
+  if (!r.ok) throw new Error('Failed to load recommendations');
+  return r.json();
+}
+
+export interface ProbeResult {
+  model: string;
+  ok: boolean;
+  tool_call_ok: boolean | null;
+  ttft_ms: number | null;
+  tok_s: number | null;
+  gpu_active: boolean | null;
+  vram_gb: number | null;
+  error: string | null;
+  ran_at: string;
+}
+
+export async function testModel(model: string): Promise<ProbeResult> {
+  const r = await fetch(`${API_URL}/api/v1/models/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Probe failed');
+  return r.json();
+}
+
+export interface CuratedModel {
+  id: string;
+  model: string;
+  provider: 'ollama' | 'openrouter';
+  min_ram_gb: number | null;
+  min_vram_gb: number | null;
+  tool_tier: 'A' | 'B' | 'C';
+  speed: 'fast' | 'medium' | 'slow';
+  roles: string[];
+  notes: string;
+  is_system: boolean;
+  enabled: boolean;
+  last_probe: ProbeResult | null;
+  probed_at: string | null;
+}
+
+export async function getCuratedModels(): Promise<CuratedModel[]> {
+  const r = await fetch(`${API_URL}/api/v1/models/curated`);
+  if (!r.ok) throw new Error('Failed to load curated models');
+  return r.json();
+}
+
+export async function createCuratedModel(body: Partial<CuratedModel>): Promise<CuratedModel> {
+  const r = await fetch(`${API_URL}/api/v1/models/curated`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchCuratedModel(id: string, body: Record<string, unknown>): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/models/curated/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function deleteCuratedModel(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/models/curated/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
 export async function* pullModel(name: string): AsyncGenerator<Record<string, unknown>> {
   const r = await fetch(`${API_URL}/api/v1/models/pull`, {
     method: 'POST',

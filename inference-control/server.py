@@ -1,10 +1,11 @@
 """Nova inference-control sidecar — the only holder of the Docker socket.
 
 The socket is root-equivalent on the host, so the backend never mounts it.
-Instead this tiny service exposes exactly three fixed endpoints on the
+Instead this tiny service exposes exactly four fixed endpoints on the
 compose-internal network (no published ports):
 
     GET  /status  -> {present, running, state, op, error}
+    GET  /gpu     -> {nvidia_runtime}   (docker info runtime check)
     POST /start   -> docker compose --profile inference up -d ollama
     POST /stop    -> docker compose --profile inference stop ollama
 
@@ -49,6 +50,19 @@ def _container_state() -> dict:
             "state": state or "absent"}
 
 
+def _gpu_info() -> dict:
+    """Whether docker can hand a container an NVIDIA GPU. Presence of the
+    runtime is the honest answer available without launching probe containers;
+    actual VRAM is observed empirically by the backend during model probes."""
+    proc = subprocess.run(["docker", "info", "--format", "{{json .Runtimes}}"],
+                          capture_output=True, text=True, timeout=10)
+    try:
+        runtimes = json.loads(proc.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        runtimes = {}
+    return {"nvidia_runtime": "nvidia" in runtimes}
+
+
 def _run_op(verb: str):
     cmd = _COMPOSE + (["up", "-d", SERVICE] if verb == "start"
                       else ["stop", SERVICE])
@@ -81,6 +95,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/gpu":
+            try:
+                return self._send(200, _gpu_info())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
         if self.path != "/status":
             return self._send(404, {"error": "not found"})
         try:

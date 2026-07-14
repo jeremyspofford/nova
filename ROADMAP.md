@@ -148,44 +148,36 @@ See README for what works. This file is the ordered backlog.
   Chat polish: bouncing typing dots while waiting for the first token; the
   memory detail modal is wider (42rem) with roomier padding.
 
+- **Model recommendations (2026-07-14)** — hardware-aware, per-agent model
+  suggestions (brainstormed + designed + shipped same day). One engine
+  (`backend/app/model_recs.py`): detected hardware (RAM/CPU from `/proc`
+  in-container; GPU presence via a new fixed `GET /gpu` verb on the
+  inference-control sidecar; VRAM never guessed — observed empirically from
+  Ollama `/api/ps` during probes, the anti-`hardware.json` design) + a
+  DB-seeded curated table (migration 018, 13 rows: min RAM/VRAM, tool tier
+  A/B/C, speed class, roles; edit-mode editable, seed rows toggle-only) +
+  role profiles (chat/tools/guard/compaction, heuristic for user agents) →
+  per-agent {suggested, reason, alternates}. Hybrid-aware: cloud candidates
+  only with a key, and a cloud pick always lists a fully-local alternate;
+  exact scoring ties keep the current model (no churn). Pin guard flags any
+  agent whose model isn't in the live catalog. Surfaces: Settings →
+  Inference "Detect & suggest" card (+ curated-table editor) and a
+  `recommend_models` tool on model-manager. "Test this model" probe:
+  TTFT/tok_s + a forced tool call verified MECHANICALLY from the tool_calls
+  frame (nonce match — prose claims count for nothing) + GPU/VRAM readback;
+  results stamped onto curated rows; never pulls. Live-verified: chat →
+  dispatch → model-manager presented real hardware (31.2 GB / 20 cores /
+  CPU-only inference) and the full per-agent table, asking before any pull;
+  probes: qwen2.5:3b ✓ 5.7 tok/s CPU, glm-5.2 ✓ 44.9 tok/s; 8/8 edit-mode
+  gating checks; pin guard flagged an un-pulled model live; compaction.model
+  now runs the feature's own suggestion (qwen2.5:3b). Lesson re-learned: a
+  new capability must be advertised in the agent INDEX (description +
+  keywords), not just granted — main answered "I can't inspect hardware"
+  until the index said otherwise.
+
 ## Next up
 
-1. **Model recommendations (designed 2026-07-14, ready to build)** — help
-   users pick models instead of guessing. Decisions from the brainstorm:
-   - *Hybrid-aware*: recommend local models from detected hardware; when
-     `OPENROUTER_API_KEY` is present, tool-heavy roles (ingestion/research)
-     may suggest cloud where local judgment falls short — always with a
-     fully-local alternate listed. Local-first, cloud opt-in.
-   - *Detection = cheap + empirical*: RAM/CPU from `/proc` in-container
-     (WSL2-honest numbers); GPU presence via ONE new fixed verb on the
-     inference-control sidecar (`GET /gpu` — docker nvidia runtime check,
-     nothing parameterized); real VRAM truth observed empirically from
-     Ollama `/api/ps` during probes. No host script, no stale
-     `hardware.json` (the v2 trap). Detection on demand, timestamped in UI.
-   - *Curated table DB-seeded + editable*: migration seeds ~12 rows
-     (model → provider, min RAM/VRAM, tool-calling tier A/B/C, speed class,
-     suited roles, notes); editable under operator edit mode with the same
-     invariants as rules/tools (system rows toggle-only). DB home means an
-     ingestion automation can refresh curation later.
-   - *Per-agent suggestions, not one global pick*: engine input = hardware +
-     curated table + role profile (main: speed + decent tools;
-     ingestion/research: tool reliability; guardian: small + strict;
-     compaction: tiny, no tools; user-created agents: heuristic from tool
-     grants). Output = per-agent {current, suggested, reason, alternates}
-     with per-row apply and apply-all.
-   - *Surfaces*: Settings → Inference "Detect & suggest" card AND a
-     `recommend_models` tool for the model-manager agent — both thin
-     wrappers over one engine function.
-   - *Validation probe*: one-click "test this model" — short completion
-     (TTFT, tok/s) + a forced tool call verified MECHANICALLY at the
-     dispatch layer (never model self-report — the glm-5.2 fabrication
-     lesson); results stamped onto the row ("verified on your hardware,
-     12 tok/s") and VRAM observations fed back into the hardware snapshot.
-     Pulls are always explicit with size shown, never automatic.
-   - *Pin guard (v2 harvest)*: flag any agent whose model isn't in the live
-     catalog — no config may point at a nonexistent model.
-
-2. **Named local-inference endpoints (multi-backend)** — users run LM
+1. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -195,7 +187,7 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
-3. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+2. **Chat activity in the brain views (designed 2026-07-14, build later)** —
    while Nova is answering, the brain should visibly "think", whatever theme
    is active. Design:
    - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
@@ -214,7 +206,7 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
-4. **Platform entities in the brain graph** — agents, automations, tools,
+3. **Platform entities in the brain graph** — agents, automations, tools,
    and rules join the galaxy/graph as first-class nodes (skills are already
    there via memory). The brain becomes the full map of what Nova *is*:
    knowledge (topics), experience (journals), capabilities (skills, tools,
@@ -229,7 +221,7 @@ See README for what works. This file is the ordered backlog.
    - HUD filter chips (or a Settings toggle) so the memory-only view stays
      one click away — ~40 extra nodes shouldn't drown the knowledge graph.
 
-5. **PWA — Nova on the phone (until a native app)** — installable web app
+4. **PWA — Nova on the phone (until a native app)** — installable web app
    served from the same stack. The manifest/service-worker part is easy;
    the real prerequisites are exposure and layout. Ordered plan:
    1. *Auth first* (pulls the "Later" auth item forward): single admin

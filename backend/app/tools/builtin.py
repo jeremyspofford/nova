@@ -289,6 +289,26 @@ async def _list_models(args, ctx):
                "active_pulls": models_catalog.active_pulls()})
 
 
+async def _recommend_models(args, ctx):
+    from app import model_recs
+    recs = await model_recs.recommendations()
+    hw = recs["hardware"]
+    return _j({
+        "hardware": {"ram_gb": hw["ram_gb"], "cpu_cores": hw["cpu_cores"],
+                     "nvidia_runtime": hw["nvidia_runtime"],
+                     "vram_observed_gb": hw["vram_observed_gb"]},
+        "cloud_available": recs["cloud_available"],
+        "recommendations": [
+            {k: r[k] for k in ("agent", "profile", "current_model", "status",
+                               "suggested_model", "reason", "alternates")}
+            for r in recs["recommendations"]],
+        "note": ("Suggestions come from the curated model table sized against "
+                 "this machine. They can be verified with the test probe in "
+                 "Settings → Inference; local models must be pulled before "
+                 "testing (never pull without asking)."),
+    })
+
+
 async def _pull_model(args, ctx):
     from app import models_catalog
     name = (args.get("name") or "").strip()
@@ -504,6 +524,15 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "which backends support pulling and any pulls in progress."),
         "parameters": {"type": "object", "properties": {}},
         "execute": _list_models,
+    },
+    "recommend_models": {
+        "name": "recommend_models",
+        "description": ("Suggest a model per agent based on this machine's "
+                        "hardware (RAM, cores, GPU) and the curated model table. "
+                        "Returns per-agent suggestions with reasons and "
+                        "alternates — present the reasons, not just names."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _recommend_models,
     },
     "pull_model": {
         "name": "pull_model",
