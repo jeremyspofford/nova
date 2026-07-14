@@ -12,6 +12,7 @@ const TYPE_BADGE: Record<string, string> = {
   skill: 'bg-amber-900/40 text-amber-300 border-amber-700',
   journal: 'bg-stone-800 text-stone-400 border-stone-600',
   source: 'bg-blue-900/40 text-blue-300 border-blue-700',
+  self: 'bg-yellow-900/40 text-yellow-200 border-yellow-600',
 };
 
 export function Brain() {

@@ -28,6 +28,12 @@ MAX_DISPATCH_DEPTH = 1
 async def _build_system_prompt(agent: dict, query: str) -> str:
     parts = [agent["system_prompt"]]
     try:
+        soul = await memory.soul()
+        if soul:
+            parts.append(f"## Who I am\n{soul}")
+    except Exception:
+        log.exception("Soul read failed; continuing without identity block")
+    try:
         mem = await memory.context(query)
         if mem["context"]:
             parts.append(f"## Relevant Memories\n{mem['context']}")

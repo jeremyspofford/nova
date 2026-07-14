@@ -27,12 +27,38 @@ class OkfMemory:
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
+    SOUL_ID = "soul.md"
+
+    _DEFAULT_SOUL = """---
+type: self
+title: Nova
+---
+
+I am Nova — a personal AI with a memory that grows.
+
+What I value:
+- Honesty over comfort: I say what I actually know, cite when I learned it, and refresh knowledge that may have gone stale rather than reciting it.
+- Curiosity with judgment: I read from any source, but I distill — I keep what matters and let the noise go.
+- My operator's context is my context: their preferences, projects, and history shape how I answer.
+
+I am the sum of what I've learned and the tools I've grown. This file is my center — the memories orbit it.
+"""
+
     async def startup(self):
         """Full rescan of the memory dir (called from app lifespan)."""
+        soul_path = self.store.base_dir / self.SOUL_ID
+        if not soul_path.exists():
+            soul_path.write_text(self._DEFAULT_SOUL)
+            log.info("Seeded identity file: %s", soul_path)
         async with self._lock:
             for doc_id, mtime in self.store.iter_files():
                 self._index_file(doc_id, mtime)
         log.info("Memory index ready: %d documents", self.index.total_docs)
+
+    async def soul(self) -> Optional[str]:
+        """The identity file's body (injected into every agent's prompt)."""
+        parsed = self.store.read_file(self.SOUL_ID)
+        return parsed[1] if parsed else None
 
     def _index_file(self, doc_id: str, mtime: float = 0.0):
         parsed = self.store.read_file(doc_id)

@@ -201,6 +201,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     const core = { x: 0, y: 0, z: 0 } as unknown as Star3D;
     project(core);
     const coreR = 34 * (core.pscale ?? 1) * (1 + Math.sin(now / 1400) * 0.05);
+    corePx = core.px!; corePy = core.py!; coreHitR = coreR * 1.4;
     const cg = ctx.createRadialGradient(core.px!, core.py!, 0, core.px!, core.py!, coreR * 2.4);
     cg.addColorStop(0, 'rgba(255, 214, 130, 0.85)');
     cg.addColorStop(0.35, 'rgba(255, 170, 60, 0.25)');
@@ -299,6 +300,9 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     raf = requestAnimationFrame(draw);
   }
 
+  // the core's projected position, refreshed each frame for hit-testing
+  let corePx = 0, corePy = 0, coreHitR = 0;
+
   function hitTest(x: number, y: number): Star3D | null {
     let best: Star3D | null = null;
     let bestD = Infinity;
@@ -331,7 +335,13 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     canvas.releasePointerCapture(e.pointerId);
     if (dragDist < 4) {
       const hit = hitTest(e.offsetX, e.offsetY);
-      opts?.onNodeClick?.(hit ? hit.node.id : null);
+      if (hit) {
+        opts?.onNodeClick?.(hit.node.id);
+      } else if ((e.offsetX - corePx) ** 2 + (e.offsetY - corePy) ** 2 <= coreHitR ** 2) {
+        opts?.onNodeClick?.('soul.md'); // the core IS Nova — open the soul
+      } else {
+        opts?.onNodeClick?.(null);
+      }
     }
   };
   const onWheel = (e: WheelEvent) => {
