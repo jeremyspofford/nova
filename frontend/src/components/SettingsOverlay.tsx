@@ -332,6 +332,36 @@ function RulesTab() {
     try { await deleteRule(r.id); load(); } catch (e) { setStatus(String(e)); }
   }
 
+  const [editing, setEditing] = useState<Rule | null>(null);
+  const [editForm, setEditForm] = useState({ description: '', pattern: '', action: 'block', target_tools: '' });
+
+  function startEdit(r: Rule) {
+    setEditing(r);
+    setEditForm({
+      description: r.description,
+      pattern: r.pattern,
+      action: r.action,
+      target_tools: r.target_tools?.join(', ') ?? '',
+    });
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    try {
+      const tools = editForm.target_tools.split(',').map(s => s.trim()).filter(Boolean);
+      await patchRule(editing.id, {
+        description: editForm.description,
+        pattern: editForm.pattern,
+        action: editForm.action,
+        target_tools: tools.length ? tools : null,
+      });
+      setEditing(null);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -356,36 +386,69 @@ function RulesTab() {
       </p>
       {rows.map(r => (
         <div key={r.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm text-stone-100 truncate">{r.name}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                r.action === 'block'
-                  ? 'bg-red-950/50 text-red-300 border-red-900'
-                  : 'bg-amber-950/50 text-amber-300 border-amber-900'
-              }`}>{r.action}</span>
-              {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {!r.is_system && (
-                <button onClick={() => remove(r)}
-                  className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
-                  delete
-                </button>
-              )}
-              <button onClick={() => toggle(r)}
-                className={`text-xs px-2 py-0.5 rounded border ${
-                  r.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                }`}>
-                {r.enabled ? 'enabled' : 'disabled'}
-              </button>
-            </div>
-          </div>
-          {r.description && <div className="mt-1 text-xs text-stone-400">{r.description}</div>}
-          <div className="mt-1 text-xs text-stone-500 font-mono truncate">
-            /{r.pattern}/ · {r.target_tools?.join(', ') ?? 'all tools'}
-            {r.hit_count > 0 && <span className="text-amber-400"> · {r.hit_count} hits</span>}
-          </div>
+          {editing?.id === r.id ? (
+            <form onSubmit={saveEdit} className="space-y-2">
+              <div className="text-sm text-stone-100">{r.name}</div>
+              <input required placeholder="regex pattern" value={editForm.pattern}
+                onChange={e => setEditForm({ ...editForm, pattern: e.target.value })}
+                className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200" />
+              <input placeholder="description" value={editForm.description}
+                onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+                className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200" />
+              <div className="flex gap-2">
+                <select value={editForm.action}
+                  onChange={e => setEditForm({ ...editForm, action: e.target.value })}
+                  className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200">
+                  <option value="block">block</option>
+                  <option value="warn">warn</option>
+                </select>
+                <input placeholder="target tools (comma-sep, empty = all)" value={editForm.target_tools}
+                  onChange={e => setEditForm({ ...editForm, target_tools: e.target.value })}
+                  className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200" />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
+                <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-stone-100 truncate">{r.name}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    r.action === 'block'
+                      ? 'bg-red-950/50 text-red-300 border-red-900'
+                      : 'bg-amber-950/50 text-amber-300 border-amber-900'
+                  }`}>{r.action}</span>
+                  {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => startEdit(r)}
+                    className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
+                    edit
+                  </button>
+                  {!r.is_system && (
+                    <button onClick={() => remove(r)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
+                      delete
+                    </button>
+                  )}
+                  <button onClick={() => toggle(r)}
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      r.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
+                    }`}>
+                    {r.enabled ? 'enabled' : 'disabled'}
+                  </button>
+                </div>
+              </div>
+              {r.description && <div className="mt-1 text-xs text-stone-400">{r.description}</div>}
+              <div className="mt-1 text-xs text-stone-500 font-mono truncate">
+                /{r.pattern}/ · {r.target_tools?.join(', ') ?? 'all tools'}
+                {r.hit_count > 0 && <span className="text-amber-400"> · {r.hit_count} hits</span>}
+              </div>
+            </>
+          )}
         </div>
       ))}
 
