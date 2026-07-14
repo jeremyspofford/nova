@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMemoryGraph, getMemoryItem, getMemoryStats, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
+import { Markdown } from '../components/Markdown';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 
 const CHAT_WIDTH = 384; // w-96
@@ -108,11 +109,11 @@ export function Brain() {
             </button>
           </header>
 
-          <div className="flex-1 overflow-y-auto px-4 py-3 text-sm text-stone-300 whitespace-pre-wrap">
+          <div className="flex-1 overflow-y-auto nice-scroll px-4 py-3 text-sm text-stone-300">
             {fm.description && (
               <p className="text-stone-400 italic mb-3">{fm.description}</p>
             )}
-            {detail.content}
+            <Markdown>{detail.content}</Markdown>
           </div>
 
           <footer className="px-4 py-2.5 border-t border-stone-700 flex items-center justify-between gap-2 text-xs">

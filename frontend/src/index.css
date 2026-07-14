@@ -26,6 +26,26 @@
   @apply antialiased;
 }
 
+/* Thin, recessive scrollbars for panes (chat, detail, code blocks). */
+.nice-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(68 64 60 / 0.55) transparent;
+}
+.nice-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.nice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: rgb(68 64 60 / 0.45);
+  border-radius: 3px;
+}
+.nice-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgb(87 83 78 / 0.75);
+}
+
 html {
   scroll-behavior: smooth;
 }

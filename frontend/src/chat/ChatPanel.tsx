@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { streamChat, getActiveConversation, getMessages, Activity } from '../api';
+import { Markdown } from '../components/Markdown';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -96,7 +97,7 @@ export function ChatPanel() {
         <span className="text-xs text-stone-500">{busy ? 'thinking…' : 'ready'}</span>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+      <div className="flex-1 overflow-y-auto nice-scroll p-4 space-y-2">
         {items.length === 0 && (
           <div className="text-center text-stone-500 mt-10">
             <p className="text-base font-medium text-stone-400">Talk to Nova</p>
@@ -121,10 +122,12 @@ export function ChatPanel() {
           }
           return (
             <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap ${
-                item.role === 'user' ? 'bg-teal-700 text-white' : 'bg-stone-800 text-stone-100'
+              <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+                item.role === 'user'
+                  ? 'bg-teal-700 text-white whitespace-pre-wrap'
+                  : 'bg-stone-800 text-stone-100'
               }`}>
-                {item.content}
+                {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
                 {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
               </div>
             </div>
