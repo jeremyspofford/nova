@@ -1,5 +1,9 @@
 version: '3.8'
 
+# Pinned so container labels/names are stable regardless of the checkout
+# directory — the inference-control sidecar targets this project by name.
+name: nova-rebuild
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -24,6 +28,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OKF_MEMORY_DIR: /app/data/memory
       SEARXNG_URL: http://searxng:8080
+      INFERENCE_CONTROL_URL: http://inference-control:9911
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"
@@ -56,6 +61,17 @@ services:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  # Docker control sidecar: the ONLY container holding the docker socket
+  # (root-equivalent on the host — the backend never mounts it). Exposes a
+  # fixed-verb API (status/start/stop of the bundled ollama service, nothing
+  # parameterized) on the compose network only — no published ports.
+  inference-control:
+    build: ./inference-control
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.yml:/compose/docker-compose.yml:ro
     restart: unless-stopped
 
   searxng:

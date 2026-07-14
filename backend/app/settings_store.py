@@ -65,6 +65,12 @@ SETTING_DEFS: list[dict] = [
      "min": 0.6, "max": 1.5, "section": "Appearance",
      "label": "Label text size",
      "description": "Scales all graph label text."},
+    # ── Operator ─────────────────────────────────────────────────────────
+    {"key": "ui.edit_mode", "type": "boolean", "default": False,
+     "section": "Operator", "label": "Edit mode",
+     "description": ("Allow manual create/edit/delete of agents, automations, rules, "
+                     "and tools from this UI (enforced at the API layer). Off = view "
+                     "plus enable/disable. Nova's own management tools are unaffected.")},
     # ── Automations ──────────────────────────────────────────────────────
     {"key": "automations.enabled", "type": "boolean", "default": True,
      "section": "Automations", "label": "Automations enabled",

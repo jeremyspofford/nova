@@ -1,7 +1,8 @@
 """Agent registry — CRUD over the agents table.
 
-is_system agents can be disabled but never deleted (there is deliberately no
-delete operation at all; disable is the only off-switch).
+is_system agents can be disabled but never deleted. Non-system agents are
+deletable via the operator API (gated by ui.edit_mode) and stay
+create/update-only at the tool layer (manage_agents has no delete action).
 """
 
 import logging
@@ -79,3 +80,19 @@ async def update_agent(agent_id: str, **updates) -> bool:
 
 async def disable_agent(agent_id: str) -> bool:
     return await update_agent(agent_id, enabled=False)
+
+
+async def delete_agent(agent_id: str) -> str:
+    """Returns 'deleted' | 'not_found' | 'is_system'. System agents (main,
+    the managers, guardian) can never be deleted — disable is their only
+    off-switch."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT name, is_system FROM agents WHERE id = $1", uuid.UUID(agent_id))
+        if not row:
+            return "not_found"
+        if row["is_system"]:
+            return "is_system"
+        await conn.execute("DELETE FROM agents WHERE id = $1", uuid.UUID(agent_id))
+    log.info("Agent deleted: %s", row["name"])
+    return "deleted"

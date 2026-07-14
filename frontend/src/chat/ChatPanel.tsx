@@ -4,6 +4,7 @@ import {
   patchAgent, Activity, ModelInfo,
 } from '../api';
 import { Markdown } from '../components/Markdown';
+import { displayName } from '../names';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -15,10 +16,10 @@ const uid = () => `ui-${++nextId}`;
 
 const activityLabel = (a: Activity): string => {
   switch (a.kind) {
-    case 'dispatch': return `→ dispatching to ${a.name}`;
-    case 'tool_start': return `⚙ ${a.agent ? `${a.agent}: ` : ''}${a.name}…`;
-    case 'tool_result': return `✓ ${a.name}`;
-    default: return a.name;
+    case 'dispatch': return `→ dispatching to ${displayName(a.name)}`;
+    case 'tool_start': return `⚙ ${a.agent ? `${displayName(a.agent)}: ` : ''}${displayName(a.name)}…`;
+    case 'tool_result': return `✓ ${displayName(a.name)}`;
+    default: return displayName(a.name);
   }
 };
 
@@ -36,8 +37,16 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const resizing = useRef(false);
+
+  // grow the input vertically with its content, capped at ~8 lines
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
 
   // model picker — changes main's model live (applies on the next turn)
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -95,8 +104,7 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function send() {
     const message = input.trim();
     if (!message || busy) return;
     setInput('');
@@ -201,8 +209,23 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
                   ? 'bg-teal-700 text-white whitespace-pre-wrap'
                   : 'bg-stone-800 text-stone-100'
               }`}>
-                {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
-                {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+                {item.streaming && !item.content ? (
+                  // waiting for the first token — bouncing "typing" dots
+                  <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
+                    {[0, 150, 300].map(delay => (
+                      <span
+                        key={delay}
+                        className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
+                        style={{ animationDelay: `${delay}ms` }}
+                      />
+                    ))}
+                  </span>
+                ) : (
+                  <>
+                    {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
+                    {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+                  </>
+                )}
               </div>
             </div>
           );
@@ -210,15 +233,25 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
         <div ref={endRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-stone-700 p-3 flex gap-2">
-        <input
+      <form
+        onSubmit={e => { e.preventDefault(); send(); }}
+        className="border-t border-stone-700 p-3 flex items-end gap-2"
+      >
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={1}
           value={input}
           onChange={e => setInput(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
           disabled={busy}
           placeholder="Message Nova…"
-          className="flex-1 bg-stone-800 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
+          title="Enter to send, Shift+Enter for a new line"
+          className="flex-1 resize-none overflow-y-auto nice-scroll bg-stone-800 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
         />
         <button
           type="submit"

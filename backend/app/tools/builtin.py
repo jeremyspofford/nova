@@ -443,7 +443,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "description": {"type": "string"},
             "system_prompt": {"type": "string"},
             "model": {"type": "string",
-                      "description": "e.g. openrouter:anthropic/claude-haiku-4.5"},
+                      "description": "e.g. openrouter:z-ai/glm-5.2"},
             "allowed_tools": {"type": "array", "items": {"type": "string"}},
             "routing_keywords": {"type": "array", "items": {"type": "string"}},
             "agent_id": {"type": "string"},

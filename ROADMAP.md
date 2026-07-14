@@ -92,6 +92,25 @@ See README for what works. This file is the ordered backlog.
   write blocked; guardian-created facebook block enforced on ingestion;
   casual "disable it real quick" got pushback demanding explicit intent.
 
+- **Operator edit mode** (2026-07-14) — `ui.edit_mode` Settings toggle
+  (default OFF) gates manual create/edit/delete of agents, automations,
+  rules, and tools, **enforced at the API layer** (403s), not just hidden
+  buttons; reads, enable/disable, and model changes stay open. New surface:
+  agent create/delete endpoints + full agent editor (system prompt, tool
+  grants, routing keywords), a Tools tab (DB tools toggleable/creatable
+  against the host allowlist, builtins listed read-only), and view-mode
+  hints. A 🔒/✏️ badge in the overlay header shows the current mode from
+  any tab (the switch itself lives in Settings → Operator), and the
+  `automations.*` subsystem settings moved into the Automations tab where
+  the automations live. System entities remain undeletable even in edit
+  mode. Live-verified end-to-end: 7 gated endpoints 403 when off / work
+  when on, agent + tool created and deleted through the UI, and — the key
+  invariant — Nova's own `manage_*` tools work with the toggle OFF
+  (chat-created automation while locked). Bonus finding: glm-5.2
+  fabricated a "created!" success without
+  calling the tool on the first attempt — never trust self-report, verify
+  against the DB (old-Nova lesson holds).
+
 - **Bundled Ollama + local-path validation** (2026-07-13) — optional
   `inference` compose profile ships Ollama (batteries-included local
   inference; `OLLAMA_BASE_URL` defaults to the bundled service, override for
@@ -103,20 +122,35 @@ See README for what works. This file is the ordered backlog.
   "look up" — but the machinery is fully compatible. Local users should
   prefer 7B+ models and a GPU for interactive latency.
 
+- **Hot-swappable bundled inference from Settings** (2026-07-14) — the
+  bundled Ollama container starts/stops from Settings → Inference (status
+  dot + toggle, 4s poll; card hides when the sidecar is absent). The docker
+  socket (root-equivalent on the host) is held ONLY by a new
+  `inference-control` sidecar (`inference-control/server.py`, ~120 lines,
+  stdlib): fixed-verb API — GET /status, POST /start, POST /stop of the
+  `ollama` compose service, nothing parameterized — on the compose network
+  only, no published ports. Start/stop shell out to `docker compose
+  --profile inference` against the mounted compose file, so operator edits
+  (e.g. a GPU block) are honored; compose project name is now pinned
+  (`name: nova-rebuild`). Backend proxies at
+  `GET/POST /api/v1/inference/bundled`, adding an `api_ok` probe of the
+  bundled URL and invalidating the models cache on toggle. Live-verified
+  via Playwright through :5173: stop → container exits, card shows
+  stopped; start → running + api_ok; then a real chat turn on
+  `ollama:qwen2.5:3b` through the recycled container; sidecar rejects
+  non-verb paths (404/501) and is unreachable from the host.
+
+- **Default cloud model → z-ai/glm-5.2 + chat polish** (2026-07-14) — GLM-5.2
+  replaces claude-haiku-4.5 as the default OpenRouter model: cheaper
+  ($0.93/$2.92 vs $1/$5 per M tokens), 1M context, tools + parallel tool
+  calls verified live on OpenRouter. Migration 017 moved existing haiku
+  agents; `default_model` env default and the manage_agents example updated.
+  Chat polish: bouncing typing dots while waiting for the first token; the
+  memory detail modal is wider (42rem) with roomier padding.
+
 ## Next up
 
-1. **Hot-swappable bundled inference from Settings** — the Ollama *URL* and
-   fallback model are now runtime settings (done), but starting/stopping the
-   bundled container still requires the CLI (`--profile inference`). Full
-   hot-swap needs the backend to control Docker — a security design decision:
-   the socket is root-equivalent on the host. Plan: a minimal control
-   sidecar (or socket-proxy-gated mount) exposing exactly two verbs
-   (start/stop ollama) to the backend, surfaced as a toggle + status
-   indicator in Settings → Inference. Old Nova solved this with a dedicated
-   recovery service + docker-socket-proxy; borrow that shape, radically
-   smaller.
-
-2. **Model recommendations (brainstorm needed)** — help users pick models
+1. **Model recommendations (brainstorm needed)** — help users pick models
    instead of guessing. Axes to work through together:
    - *Bring-your-own vs guided*: user names a model or two they want, OR Nova
      reads system resources (GPU vendor/VRAM via nvidia-smi/rocm, RAM, CPU)
@@ -131,7 +165,7 @@ See README for what works. This file is the ordered backlog.
    - *Validation*: offer a one-click "test this model" (short tool-calling
      probe) so suggestions are verified on the user's actual hardware.
 
-3. **Named local-inference endpoints (multi-backend)** — users run LM
+2. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -141,13 +175,63 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
+3. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+   while Nova is answering, the brain should visibly "think", whatever theme
+   is active. Design:
+   - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
+     an optional `setActivity?(state: {active: boolean; kind?: 'thinking' |
+     'dispatch' | 'tool'})` — the registry's optional-method pattern
+     (`configure?`, `recenter?`) already covers "new views opt in"; no base
+     class needed, TypeScript's interface is the extension seam.
+   - *Wiring*: ChatPanel dispatches `nova:chat-activity` window events on
+     stream start / activity frames / done; Brain.tsx forwards to the active
+     renderer (same event bridge as `nova:setting-changed`).
+   - *Galaxy treatment*: core glow pulse + slightly faster auto-orbit while
+     active; a shooting-star particle arcing between random nodes on each
+     tool event.
+   - *Graph treatment*: soft node pulse / edge shimmer rippling outward from
+     the center while active.
+   - Chat-side feedback (bouncing dots + streaming cursor) shipped
+     2026-07-14; this item is the brain-side half.
+
+4. **Platform entities in the brain graph** — agents, automations, tools,
+   and rules join the galaxy/graph as first-class nodes (skills are already
+   there via memory). The brain becomes the full map of what Nova *is*:
+   knowledge (topics), experience (journals), capabilities (skills, tools,
+   agents), habits (automations), boundaries (rules). Design:
+   - New `GET /api/v1/brain/graph` merges the memory graph with platform
+     entities as typed nodes; distinct cluster colors (agents violet,
+     automations blue, tools sage, rules red).
+   - Real edges, not decoration: automation → its agent; agent → its
+     allowed tools; rule → its target tools; disabled entities dimmed.
+   - Clicking opens a per-type detail card (agent config, rule pattern +
+     hit count, automation last-run) instead of the markdown panel.
+   - HUD filter chips (or a Settings toggle) so the memory-only view stays
+     one click away — ~40 extra nodes shouldn't drown the knowledge graph.
+
+5. **PWA — Nova on the phone (until a native app)** — installable web app
+   served from the same stack. The manifest/service-worker part is easy;
+   the real prerequisites are exposure and layout. Ordered plan:
+   1. *Auth first* (pulls the "Later" auth item forward): single admin
+      token, required the moment anything binds beyond localhost.
+   2. *Same-origin serving*: frontend built + served behind one origin
+      with the API (nginx or FastAPI static) so cookies/tokens and the
+      service worker scope behave; drop the hardcoded VITE_API_URL.
+   3. *Responsive chat-first layout*: on small screens chat is the app
+      (full-width, brain reachable via a tab/swipe); the galaxy stays a
+      desktop-first surface.
+   4. *PWA shell*: vite-plugin-pwa — manifest (name, icons, theme color),
+      service worker caching the app shell only (chat is useless offline;
+      don't pretend otherwise). iOS notes: needs HTTPS, install is manual
+      "Add to Home Screen", web push works from iOS 16.4+ if wanted later.
+   5. *Reachability*: recommend Tailscale (batteries-included,
+      privacy-first — no public exposure, TLS via `tailscale serve`) with
+      Cloudflare Tunnel as the public-facing alternative.
 
 ## Later
 
 - **Auth** — required before exposing beyond localhost. Single admin token is
-  enough for a first pass.
-- **Agent management UI** — list/disable/edit agents visually instead of via
-  chat or curl.
+  enough for a first pass. (The PWA item above pulls this forward.)
 - **Journal polish** — pre-rewrite journal files lack a `title:` frontmatter
   key, so the brain labels them by path. Cosmetic; fix by backfilling titles.
 - **Device control agent** — computer-use loop (screenshot → reason → act)
