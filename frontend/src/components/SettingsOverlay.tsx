@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
-  Automation, Rule, SettingDef, createAutomation, createRule, deleteAutomation,
-  deleteRule, getAgents, getAutomations, getRules, getSettings, patchAutomation,
-  patchRule, patchSettings,
+  Automation, ModelInfo, Rule, SettingDef, createAutomation, createRule,
+  deleteAutomation, deleteRule, getAgents, getAutomations, getModels, getRules,
+  getSettings, patchAutomation, patchRule, patchSettings,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { ThemePreview } from './ThemePreview';
@@ -15,7 +15,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
       <div
-        className="w-[36rem] max-w-[calc(100vw-26rem)] max-h-[80vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[46rem] max-w-[calc(100vw-26rem)] max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
@@ -46,9 +46,13 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
 
 function SettingsTab() {
   const [defs, setDefs] = useState<SettingDef[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
 
-  useEffect(() => { getSettings().then(setDefs).catch(e => setStatus(String(e))); }, []);
+  useEffect(() => {
+    getSettings().then(setDefs).catch(e => setStatus(String(e)));
+    getModels().then(setModels).catch(() => {});
+  }, []);
 
   async function save(key: string, value: unknown) {
     try {
@@ -97,6 +101,30 @@ function SettingsTab() {
           className="shrink-0 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
         >
           {(d.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+    }
+    if (d.type === 'model') {
+      const scoped = d.model_scope === 'ollama'
+        ? models.filter(m => m.provider === 'ollama')
+        : models;
+      return (
+        <select
+          value={String(d.value)}
+          onChange={e => save(d.key, e.target.value)}
+          className="shrink-0 max-w-[16rem] bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+        >
+          {d.allow_empty && <option value="">(agent's model)</option>}
+          {scoped.map(m => (
+            <option key={m.id} value={d.model_scope === 'ollama' ? m.name : m.id}>
+              {m.name}
+            </option>
+          ))}
+          {/* keep the stored value selectable even if not currently listed */}
+          {!!d.value && !scoped.some(m =>
+            (d.model_scope === 'ollama' ? m.name : m.id) === d.value) && (
+            <option value={String(d.value)}>{String(d.value)} (not detected)</option>
+          )}
         </select>
       );
     }

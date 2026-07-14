@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { streamChat, getActiveConversation, getMessages, Activity } from '../api';
+import {
+  streamChat, getActiveConversation, getAgents, getMessages, getModels,
+  patchAgent, Activity, ModelInfo,
+} from '../api';
 import { Markdown } from '../components/Markdown';
 
 type Item =
@@ -36,6 +39,28 @@ export function ChatPanel({ width, onWidthChange, onOpenSettings }: ChatPanelPro
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resizing = useRef(false);
+
+  // model picker — changes main's model live (applies on the next turn)
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [mainAgent, setMainAgent] = useState<{ id: string; model: string } | null>(null);
+
+  useEffect(() => {
+    getModels().then(setModels).catch(() => {});
+    getAgents().then(agents => {
+      const main = agents.find(a => a.name === 'main');
+      if (main) setMainAgent({ id: main.id, model: main.model });
+    }).catch(() => {});
+  }, []);
+
+  async function changeModel(model: string) {
+    if (!mainAgent) return;
+    try {
+      await patchAgent(mainAgent.id, { model });
+      setMainAgent({ ...mainAgent, model });
+    } catch (err) {
+      console.error('model change failed:', err);
+    }
+  }
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -127,13 +152,26 @@ export function ChatPanel({ width, onWidthChange, onOpenSettings }: ChatPanelPro
         onDoubleClick={() => onWidthChange(384)}
         title="Drag to resize (double-click to reset)"
       />
-      <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
-        <span className="text-teal-400 font-semibold">Nova</span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-stone-500">{busy ? 'thinking…' : 'ready'}</span>
+      <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-2">
+        <span className="text-teal-400 font-semibold shrink-0">Nova</span>
+        <div className="flex items-center gap-2 min-w-0">
+          {mainAgent && models.length > 0 && (
+            <select
+              value={mainAgent.model}
+              onChange={e => changeModel(e.target.value)}
+              className="min-w-0 max-w-[11rem] truncate bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-[11px] text-stone-400 hover:text-stone-200"
+              title="Model for the main agent (applies next message)"
+            >
+              {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {!models.some(m => m.id === mainAgent.model) && (
+                <option value={mainAgent.model}>{mainAgent.model}</option>
+              )}
+            </select>
+          )}
+          <span className="text-xs text-stone-500 shrink-0">{busy ? 'thinking…' : 'ready'}</span>
           <button
             onClick={onOpenSettings}
-            className="text-stone-400 hover:text-teal-300 text-base leading-none"
+            className="shrink-0 text-stone-400 hover:text-teal-300 text-base leading-none"
             title="Settings & Automations"
             aria-label="Settings"
           >

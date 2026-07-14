@@ -14,6 +14,8 @@ export interface RendererHandle {
   destroy(): void;
   /** Optional runtime settings (e.g. rotationSpeed, labelMode). */
   configure?(options: Record<string, unknown>): void;
+  /** Reset the camera/viewport to frame the whole scene. */
+  recenter?(): void;
 }
 
 export interface RendererOpts {

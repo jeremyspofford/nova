@@ -180,6 +180,18 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
     configure(options: Record<string, unknown>) {
       if (typeof options.labelScale === 'number') labelScale = options.labelScale;
     },
+    recenter() {
+      // fit the node bounding box into the viewport with a margin
+      const xs = nodes.map(n => n.x ?? 0), ys = nodes.map(n => n.y ?? 0);
+      if (!xs.length) { scale = 1; tx = 0; ty = 0; return; }
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
+      scale = Math.min(2, Math.max(0.25,
+        Math.min(canvas.width / (w + 160), canvas.height / (h + 160))));
+      tx = canvas.width / 2 - ((minX + maxX) / 2) * scale;
+      ty = canvas.height / 2 - ((minY + maxY) / 2) * scale;
+    },
     destroy() {
       cancelAnimationFrame(raf);
       sim?.stop();

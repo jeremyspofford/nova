@@ -197,13 +197,22 @@ export function Brain() {
     <div className="relative w-full h-screen overflow-hidden bg-stone-950">
       <canvas ref={canvasRef} className="absolute top-0 left-0" />
 
-      {stats && (
-        <div className="absolute top-4 left-4 z-10 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
-          <span className="text-teal-400">{stats.topic ?? 0} topics</span>
-          <span className="text-amber-400">{stats.skill ?? 0} skills</span>
-          <span>{stats.journal ?? 0} journals</span>
-        </div>
-      )}
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+        {stats && (
+          <div className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
+            <span className="text-teal-400">{stats.topic ?? 0} topics</span>
+            <span className="text-amber-400">{stats.skill ?? 0} skills</span>
+            <span>{stats.journal ?? 0} journals</span>
+          </div>
+        )}
+        <button
+          onClick={() => rendererRef.current?.recenter?.()}
+          className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-xs"
+          title="Recenter the view"
+        >
+          ⌖ recenter
+        </button>
+      </div>
 
       {detail && prefs.detailStyle === 'modal' ? (
         <div

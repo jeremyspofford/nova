@@ -369,6 +369,9 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       canvas.width = width;
       canvas.height = height;
     },
+    recenter() {
+      yaw = 0.4; pitch = 0.25; dist = 620;
+    },
     configure(options: Record<string, unknown>) {
       if (typeof options.rotationSpeed === 'number') rotationSpeed = options.rotationSpeed;
       if (typeof options.labelScale === 'number') labelScale = options.labelScale;

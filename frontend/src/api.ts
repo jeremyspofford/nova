@@ -117,7 +117,7 @@ export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: Gra
 
 export interface SettingDef {
   key: string;
-  type: 'number' | 'boolean' | 'string' | 'enum';
+  type: 'number' | 'boolean' | 'string' | 'enum' | 'model';
   label: string;
   description: string;
   section: string;
@@ -125,6 +125,16 @@ export interface SettingDef {
   min?: number;
   max?: number;
   options?: string[];
+  model_scope?: 'ollama' | 'any';
+  allow_empty?: boolean;
+}
+
+export interface ModelInfo { id: string; provider: string; name: string }
+
+export async function getModels(): Promise<ModelInfo[]> {
+  const r = await fetch(`${API_URL}/api/v1/models`);
+  if (!r.ok) throw new Error('Failed to load models');
+  return r.json();
 }
 
 export async function getSettings(): Promise<SettingDef[]> {
@@ -237,12 +247,28 @@ export async function deleteRule(id: string): Promise<void> {
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
-export interface AgentInfo { name: string; enabled: boolean; description: string }
+export interface AgentInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  description: string;
+  model: string;
+  is_system: boolean;
+}
 
 export async function getAgents(): Promise<AgentInfo[]> {
   const r = await fetch(`${API_URL}/api/v1/agents`);
   if (!r.ok) throw new Error('Failed to load agents');
   return r.json();
+}
+
+export async function patchAgent(id: string, body: Record<string, unknown>): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/agents/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
 }
 
 export interface MemoryItem {

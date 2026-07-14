@@ -125,6 +125,28 @@ async def list_agents_endpoint():
     return await agent_registry.list_agents(enabled_only=False)
 
 
+@router.patch("/api/v1/agents/{agent_id}")
+async def patch_agent_endpoint(agent_id: str, body: dict):
+    # operator-editable subset; model changes apply on the next turn
+    allowed = {k: v for k, v in body.items()
+               if k in ("model", "enabled", "description")}
+    if not allowed:
+        raise HTTPException(status_code=422, detail="no editable fields provided")
+    if "model" in allowed and ":" not in str(allowed["model"]):
+        raise HTTPException(status_code=422,
+                            detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    ok = await agent_registry.update_agent(agent_id, **allowed)
+    if not ok:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return {"status": "updated"}
+
+
+@router.get("/api/v1/models")
+async def list_models_endpoint():
+    from app import models_catalog
+    return await models_catalog.list_models()
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

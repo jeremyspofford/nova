@@ -28,7 +28,8 @@ SETTING_DEFS: list[dict] = [
      "min": 4, "max": 100, "section": "Context",
      "label": "Compaction threshold (messages)",
      "description": "Un-summarized messages that must age out of the window before a summary pass runs."},
-    {"key": "compaction.model", "type": "string", "default": "",
+    {"key": "compaction.model", "type": "model", "default": "",
+     "model_scope": "any", "allow_empty": True,
      "section": "Context", "label": "Compaction model",
      "description": "Model for summary passes (empty = the main agent's model)."},
     # ── Inference ────────────────────────────────────────────────────────
@@ -38,7 +39,8 @@ SETTING_DEFS: list[dict] = [
      "description": ("Local inference endpoint. Default is the bundled service "
                      "(docker compose --profile inference); for host-run Ollama use "
                      "http://host.docker.internal:11434. Applies to the next request.")},
-    {"key": "inference.local_fallback_model", "type": "string",
+    {"key": "inference.local_fallback_model", "type": "model",
+     "model_scope": "ollama", "allow_empty": False,
      "default": "qwen2.5:3b", "section": "Inference",
      "label": "Local fallback model",
      "description": "Ollama model used when no OpenRouter key is configured."},
@@ -122,6 +124,8 @@ def _validate(key: str, value: Any) -> Any:
         if value not in d.get("options", []):
             raise ValueError(f"{key}: must be one of {d.get('options')}")
         return value
+    # "model" and "string" are both free strings server-side; "model" is a UI
+    # hint to render a dropdown fed by /api/v1/models
     if not isinstance(value, str):
         raise ValueError(f"{key}: expected a string")
     return value
