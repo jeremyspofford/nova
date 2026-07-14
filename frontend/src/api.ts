@@ -282,3 +282,29 @@ export async function getMemoryItem(id: string): Promise<MemoryItem> {
   if (!r.ok) throw new Error('Memory item not found');
   return r.json();
 }
+
+export async function* pullModel(name: string): AsyncGenerator<Record<string, unknown>> {
+  const r = await fetch(`${API_URL}/api/v1/models/pull`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!r.ok || !r.body) throw new Error('Pull request failed');
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() ?? '';
+    for (const f of frames) {
+      const line = f.trim();
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') return;
+      try { yield JSON.parse(data); } catch { /* skip */ }
+    }
+  }
+}

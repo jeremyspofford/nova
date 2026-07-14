@@ -147,6 +147,41 @@ async def list_models_endpoint():
     return await models_catalog.list_models()
 
 
+@router.post("/api/v1/models/pull")
+async def pull_model_endpoint(body: dict):
+    """Pull a new Ollama model — proxies Ollama's native /api/pull, streaming
+    progress as SSE. Nova downloads its own local models; no CLI needed."""
+    import httpx
+    from app import models_catalog
+
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="model name is required")
+    base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", f"{base}/api/pull",
+                                         json={"name": name}) as resp:
+                    if resp.status_code != 200:
+                        detail = (await resp.aread()).decode(errors="replace")[:200]
+                        yield _sse({"error": f"pull failed: {detail}"})
+                        return
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            yield f"data: {line}\n\n"
+        except httpx.HTTPError as e:
+            yield _sse({"error": f"cannot reach Ollama at {base}: {e}"})
+            return
+        models_catalog.invalidate()
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

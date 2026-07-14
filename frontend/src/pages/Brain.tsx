@@ -207,10 +207,19 @@ export function Brain() {
         )}
         <button
           onClick={() => rendererRef.current?.recenter?.()}
-          className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-xs"
+          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
           title="Recenter the view"
+          aria-label="Recenter"
         >
-          ⌖ recenter
+          ⌖
+        </button>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
+          title="Settings, Automations, Rules & Agents"
+          aria-label="Settings"
+        >
+          ⚙
         </button>
       </div>
 
@@ -239,7 +248,6 @@ export function Brain() {
       <ChatPanel
         width={chatWidth}
         onWidthChange={changeChatWidth}
-        onOpenSettings={() => setSettingsOpen(true)}
       />
     </div>
   );

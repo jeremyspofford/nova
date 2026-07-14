@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
-  Automation, ModelInfo, Rule, SettingDef, createAutomation, createRule,
-  deleteAutomation, deleteRule, getAgents, getAutomations, getModels, getRules,
-  getSettings, patchAutomation, patchRule, patchSettings,
+  AgentInfo, Automation, ModelInfo, Rule, SettingDef, createAutomation,
+  createRule, deleteAutomation, deleteRule, getAgents, getAutomations,
+  getModels, getRules, getSettings, patchAgent, patchAutomation, patchRule,
+  patchSettings, pullModel,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { ThemePreview } from './ThemePreview';
 
-type Tab = 'settings' | 'automations' | 'rules';
+type Tab = 'settings' | 'agents' | 'automations' | 'rules';
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('settings');
@@ -20,7 +21,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
           <div className="flex gap-1 text-sm">
-            {(['settings', 'automations', 'rules'] as Tab[]).map(t => (
+            {(['settings', 'agents', 'automations', 'rules'] as Tab[]).map(t => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -36,6 +37,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
         </header>
         <div className="flex-1 overflow-y-auto nice-scroll p-4">
           {tab === 'settings' ? <SettingsTab />
+            : tab === 'agents' ? <AgentsTab />
             : tab === 'automations' ? <AutomationsTab />
             : <RulesTab />}
         </div>
@@ -174,10 +176,171 @@ function SettingsTab() {
                 {field(d)}
               </div>
             ))}
+            {section === 'Inference' && <PullModel onPulled={() => getModels().then(setModels)} />}
           </div>
         </section>
       ))}
       {status && <div className="text-xs text-teal-400">{status}</div>}
+    </div>
+  );
+}
+
+/** Pull a new Ollama model from inside Nova (streams progress from /api/pull). */
+function PullModel({ onPulled }: { onPulled: () => void }) {
+  const [name, setName] = useState('');
+  const [progress, setProgress] = useState('');
+  const [pulling, setPulling] = useState(false);
+
+  async function pull(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || pulling) return;
+    setPulling(true);
+    setProgress('starting…');
+    try {
+      for await (const ev of pullModel(name.trim())) {
+        if (typeof ev.error === 'string') {
+          setProgress(`✗ ${ev.error}`);
+          setPulling(false);
+          return;
+        }
+        const status = String(ev.status ?? '');
+        if (typeof ev.total === 'number' && typeof ev.completed === 'number' && ev.total > 0) {
+          setProgress(`${status} — ${Math.round((ev.completed / ev.total) * 100)}%`);
+        } else if (status) {
+          setProgress(status);
+        }
+      }
+      setProgress(`✓ ${name.trim()} ready`);
+      onPulled();
+    } catch (err) {
+      setProgress(`✗ ${err}`);
+    } finally {
+      setPulling(false);
+    }
+  }
+
+  return (
+    <form onSubmit={pull} className="mt-1 rounded-lg border border-dashed border-stone-700 p-3 space-y-2">
+      <div className="text-sm text-stone-200">Pull a new local model</div>
+      <div className="text-xs text-stone-500">
+        Any model from the Ollama library (e.g. <code className="font-mono">qwen2.5:7b</code>,{' '}
+        <code className="font-mono">llama3.2:3b</code>). Downloads into the bundled service.
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="model:tag"
+          disabled={pulling}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200 disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={pulling || !name.trim()}
+          className="text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
+        >
+          {pulling ? 'pulling…' : 'pull'}
+        </button>
+      </div>
+      {progress && <div className="text-xs font-mono text-stone-400">{progress}</div>}
+    </form>
+  );
+}
+
+/** Per-agent model + status — every agent has its OWN model. */
+function AgentsTab() {
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [allModel, setAllModel] = useState('');
+  const [status, setStatus] = useState('');
+
+  const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)));
+  useEffect(() => {
+    load();
+    getModels().then(setModels).catch(() => {});
+  }, []);
+
+  async function setModel(a: AgentInfo, model: string) {
+    try {
+      await patchAgent(a.id, { model });
+      setAgents(prev => prev.map(x => x.id === a.id ? { ...x, model } : x));
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  async function setAll() {
+    if (!allModel) return;
+    try {
+      await Promise.all(agents.map(a => patchAgent(a.id, { model: allModel })));
+      setStatus(`All agents set to ${allModel}`);
+      setTimeout(() => setStatus(''), 2000);
+      load();
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  async function toggle(a: AgentInfo) {
+    if (a.name === 'main' && a.enabled) {
+      setStatus('main cannot be disabled — it is the chat itself');
+      return;
+    }
+    try {
+      await patchAgent(a.id, { enabled: !a.enabled });
+      load();
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  const modelSelect = (value: string, onChange: (v: string) => void, placeholder?: string) => (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="max-w-[14rem] bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-xs text-stone-300"
+    >
+      {placeholder && <option value="">{placeholder}</option>}
+      {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+      {!!value && !models.some(m => m.id === value) && (
+        <option value={value}>{value} (not detected)</option>
+      )}
+    </select>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-stone-700 bg-stone-800/50 p-3">
+        <div className="text-sm text-stone-300">Set <b>all</b> agents to</div>
+        <div className="flex items-center gap-2">
+          {modelSelect(allModel, setAllModel, 'choose a model…')}
+          <button
+            onClick={setAll}
+            disabled={!allModel}
+            className="text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
+          >
+            apply
+          </button>
+        </div>
+      </div>
+
+      {agents.map(a => (
+        <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm text-stone-100">{a.name}</span>
+              {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {modelSelect(a.model, v => setModel(a, v))}
+              <button
+                onClick={() => toggle(a)}
+                className={`text-xs px-2 py-0.5 rounded border ${
+                  a.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
+                }`}
+              >
+                {a.enabled ? 'enabled' : 'disabled'}
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>
+        </div>
+      ))}
+      {status && <div className="text-xs text-amber-400">{status}</div>}
     </div>
   );
 }

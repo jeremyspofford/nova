@@ -25,13 +25,12 @@ const activityLabel = (a: Activity): string => {
 interface ChatPanelProps {
   width: number;
   onWidthChange: (w: number) => void;
-  onOpenSettings: () => void;
 }
 
 const MIN_W = 320;
 const MAX_W = 760;
 
-export function ChatPanel({ width, onWidthChange, onOpenSettings }: ChatPanelProps) {
+export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -169,14 +168,6 @@ export function ChatPanel({ width, onWidthChange, onOpenSettings }: ChatPanelPro
             </select>
           )}
           <span className="text-xs text-stone-500 shrink-0">{busy ? 'thinking…' : 'ready'}</span>
-          <button
-            onClick={onOpenSettings}
-            className="shrink-0 text-stone-400 hover:text-teal-300 text-base leading-none"
-            title="Settings & Automations"
-            aria-label="Settings"
-          >
-            ⚙
-          </button>
         </div>
       </header>
 

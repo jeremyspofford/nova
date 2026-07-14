@@ -48,6 +48,10 @@ async def _openrouter_models() -> list[dict]:
         return []
 
 
+def invalidate():
+    _cache["at"] = 0.0
+
+
 async def list_models(force: bool = False) -> list[dict]:
     if not force and time.monotonic() - _cache["at"] < _CACHE_TTL and _cache["models"]:
         return _cache["models"]
