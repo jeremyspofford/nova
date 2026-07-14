@@ -1,0 +1,21 @@
+# GPU override for the bundled Ollama service.
+#
+# The inference-control sidecar merges this file AUTOMATICALLY whenever the
+# docker NVIDIA runtime is present (set OLLAMA_GPU=off in .env to opt out),
+# so the Settings → Inference toggle always recreates ollama with the right
+# device access. For manual host-side compose commands to match, add
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+# to .env (compose reads it automatically).
+#
+# The base docker-compose.yml stays CPU-safe: machines without the NVIDIA
+# runtime never load this file and keep working out of the box.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -469,17 +469,21 @@ function DetectSuggest() {
       {hw && (
         <div className="text-xs font-mono text-stone-400 border-t border-stone-700/60 pt-2">
           {hw.ram_gb ?? '?'} GB RAM · {hw.cpu_cores ?? '?'} cores ·
-          {hw.nvidia_runtime ? ' NVIDIA runtime ✓' : hw.nvidia_runtime === false ? ' no GPU runtime' : ' GPU unknown'} ·
-          VRAM {hw.vram_observed_gb != null ? `${hw.vram_observed_gb} GB observed` : 'unobserved'} ·
+          {hw.gpu_name
+            ? ` ${hw.gpu_name} · ${hw.vram_total_gb} GB VRAM`
+            : hw.nvidia_runtime
+            ? ` NVIDIA runtime ✓ · VRAM ${hw.vram_observed_gb != null ? `${hw.vram_observed_gb} GB observed` : 'unmeasured'}`
+            : hw.nvidia_runtime === false ? ' no GPU runtime' : ' GPU unknown'} ·
           detected {new Date(hw.detected_at).toLocaleTimeString()}
           {!recs?.cloud_available && <span className="text-stone-500"> · no cloud key — local only</span>}
         </div>
       )}
-      {hw?.nvidia_runtime && hw.vram_observed_gb == null && (
+      {hw?.nvidia_runtime && hw.vram_total_gb == null && (
         <div className="text-xs text-amber-400/90">
-          GPU runtime detected, but no model has been seen using it — the bundled
-          Ollama runs CPU-only until a GPU reservation block is added to
-          docker-compose.yml (see README). Probes report the truth either way.
+          GPU runtime detected, but the bundled Ollama isn't exposing a GPU —
+          it may be stopped, or running without the GPU override
+          (docker-compose.gpu.yml, merged automatically by the sidecar).
+          Restart it with the toggle above, then re-detect.
         </div>
       )}
 

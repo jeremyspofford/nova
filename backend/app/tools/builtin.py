@@ -296,6 +296,8 @@ async def _recommend_models(args, ctx):
     return _j({
         "hardware": {"ram_gb": hw["ram_gb"], "cpu_cores": hw["cpu_cores"],
                      "nvidia_runtime": hw["nvidia_runtime"],
+                     "gpu_name": hw["gpu_name"],
+                     "vram_total_gb": hw["vram_total_gb"],
                      "vram_observed_gb": hw["vram_observed_gb"]},
         "cloud_available": recs["cloud_available"],
         "recommendations": [

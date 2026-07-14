@@ -55,10 +55,16 @@ def _profile_for(agent: dict) -> str:
     return "tools" if agent.get("allowed_tools") else "chat"
 
 
+def _vram_known(hw: dict) -> float | None:
+    """Measured total VRAM (nvidia-smi in the ollama container) or, failing
+    that, the largest VRAM footprint a probe has observed. Never a guess."""
+    return hw.get("vram_total_gb") or hw.get("vram_observed_gb")
+
+
 def _fits_local(row: dict, hw: dict) -> tuple[bool, str]:
     """(fits, 'gpu'|'cpu'|''). VRAM fit only counts when VRAM has actually
-    been observed; a bare nvidia runtime without observations sizes by RAM."""
-    vram = hw.get("vram_observed_gb")
+    been measured or observed; a bare nvidia runtime sizes by RAM."""
+    vram = _vram_known(hw)
     if hw.get("nvidia_runtime") and vram and row["min_vram_gb"] \
             and vram >= row["min_vram_gb"]:
         return True, "gpu"
@@ -116,7 +122,7 @@ def _pick_for(current: str, cands: list[dict]) -> dict:
 
 
 def _reason(profile: str, pick: dict, hw: dict) -> str:
-    where = {"gpu": f"fits your observed {hw.get('vram_observed_gb')} GB VRAM",
+    where = {"gpu": f"fits your {_vram_known(hw)} GB VRAM (GPU)",
              "cpu": f"fits your {hw.get('ram_gb')} GB RAM (CPU)",
              "cloud": "cloud (OpenRouter key configured)"}[pick["how"]]
     why = {"tools": "tool-heavy role — reliability first",
@@ -249,19 +255,31 @@ async def probe(model: str) -> dict:
             result["error"] = f"cannot reach Ollama: {e}"
             return result
 
-    # 1) short completion — TTFT and rough tok/s (chars/4). The prompt asks
-    #    for ~40 tokens so the generation window is long enough to time.
+    # 1) local models: a tiny untimed warmup first, so TTFT measures the
+    #    model, not a cold load from disk (which can dwarf it by 100x)
+    if is_ollama:
+        async for ev in client.stream(
+                [{"role": "user", "content": "Reply with only: ok"}], model_name):
+            if ev["type"] == "error":
+                result["error"] = ev["error"]
+                return result
+
+    # 2) timed completion — TTFT and tok/s from EXACT token counts
+    #    (stream_options.include_usage; chars/4 only as a fallback)
     t0 = time.monotonic()
     t_first = t_last = None
     chars = 0
+    completion_tokens = None
     async for ev in client.stream(
             [{"role": "user", "content": "List the numbers 1 through 40, "
                                          "separated by commas. Nothing else."}],
-            model_name):
+            model_name, include_usage=True):
         if ev["type"] == "text":
             t_last = time.monotonic()
             t_first = t_first or t_last
             chars += len(ev["text"])
+        elif ev["type"] == "usage":
+            completion_tokens = ev["usage"].get("completion_tokens")
         elif ev["type"] == "error":
             result["error"] = ev["error"]
             return result
@@ -269,8 +287,11 @@ async def probe(model: str) -> dict:
         result["error"] = "model produced no output"
         return result
     result["ttft_ms"] = round((t_first - t0) * 1000)
-    if t_last > t_first and chars:
-        result["tok_s"] = round((chars / 4) / (t_last - t_first), 1)
+    if t_last > t_first:
+        # tokens after the first one, over the window they streamed in
+        n = (completion_tokens - 1) if completion_tokens else chars / 4
+        if n > 0:
+            result["tok_s"] = round(n / (t_last - t_first), 1)
 
     # 2) forced tool call, verified mechanically — the model must emit a
     #    wellformed tool_calls frame with our nonce; prose claims don't count

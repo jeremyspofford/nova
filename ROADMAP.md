@@ -175,6 +175,29 @@ See README for what works. This file is the ordered backlog.
   keywords), not just granted — main answered "I can't inspect hardware"
   until the index said otherwise.
 
+- **GPU wiring + measured VRAM (2026-07-14)** — the bundled Ollama ran
+  CPU-only even on GPU machines (the compose GPU block was a documented-but-
+  never-written manual step), so Nova could detect the nvidia runtime but
+  never see the GPU. Now: `docker-compose.gpu.yml` (nvidia device
+  reservation) is merged **automatically by the inference-control sidecar**
+  whenever the docker NVIDIA runtime is present (`OLLAMA_GPU=auto|on|off`;
+  base compose stays CPU-safe for GPU-less machines), plus a fifth fixed
+  sidecar verb `GET /vram` — nvidia-smi INSIDE the ollama container reports
+  GPU name + total VRAM, zero parameterization. Hardware detection, the
+  recommendation fit logic, the Settings card, and recommend_models all use
+  the measured values; nothing is ever hand-fed (operator explicitly asked
+  for hallucination-proof verification). Probe hardening from the same
+  session: exact token counts via `stream_options.include_usage` (chars/4
+  undercounted numeric output ~4x) and an untimed warmup for local models so
+  TTFT measures the model, not a cold disk load. Live-verified, all values
+  measured: RTX 3090 / 24.0 GB VRAM detected; qwen2.5:3b probe went
+  6.0 tok/s CPU → 138.5 tok/s GPU (TTFT 154 ms, 3.1 GB VRAM observed,
+  cross-checked against `ollama run --verbose` at 150.9 tok/s); tools-role
+  suggestion re-sized from the CPU MoE pick to qwen2.5:32b-on-GPU. Platform
+  matrix documented in README (Linux/WSL2 NVIDIA auto; Docker Desktop
+  `OLLAMA_GPU=on`; macOS = host-run Ollama via the settings URL — containers
+  can't reach Apple GPUs; AMD/ROCm not wired yet, clean CPU fallback).
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM

@@ -384,6 +384,8 @@ export interface HardwareInfo {
   ram_gb: number | null;
   cpu_cores: number | null;
   nvidia_runtime: boolean | null;
+  gpu_name: string | null;
+  vram_total_gb: number | null;
   vram_observed_gb: number | null;
   detected_at: string;
 }

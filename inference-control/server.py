@@ -6,6 +6,7 @@ compose-internal network (no published ports):
 
     GET  /status  -> {present, running, state, op, error}
     GET  /gpu     -> {nvidia_runtime}   (docker info runtime check)
+    GET  /vram    -> {gpus: [{name, vram_total_gb}]}   (nvidia-smi in ollama)
     POST /start   -> docker compose --profile inference up -d ollama
     POST /stop    -> docker compose --profile inference stop ollama
 
@@ -27,11 +28,32 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("inference-control")
 
 COMPOSE_FILE = os.environ.get("COMPOSE_FILE", "/compose/docker-compose.yml")
+GPU_COMPOSE_FILE = os.environ.get("GPU_COMPOSE_FILE",
+                                  "/compose/docker-compose.gpu.yml")
+# auto: merge the GPU override when the docker NVIDIA runtime exists;
+# on/off force it either way (operator escape hatch for broken drivers)
+OLLAMA_GPU = os.environ.get("OLLAMA_GPU", "auto").lower()
 PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
 SERVICE = "ollama"
 PORT = 9911
 
-_COMPOSE = ["docker", "compose", "-f", COMPOSE_FILE, "--profile", "inference"]
+
+def _use_gpu_file() -> bool:
+    if OLLAMA_GPU == "off" or not os.path.exists(GPU_COMPOSE_FILE):
+        return False
+    if OLLAMA_GPU == "on":
+        return True
+    try:
+        return _gpu_info()["nvidia_runtime"]
+    except Exception:
+        return False
+
+
+def _compose_cmd() -> list:
+    cmd = ["docker", "compose", "-f", COMPOSE_FILE]
+    if _use_gpu_file():
+        cmd += ["-f", GPU_COMPOSE_FILE]
+    return cmd + ["--profile", "inference"]
 
 _lock = threading.Lock()
 _op: dict = {"verb": None, "error": None}
@@ -63,9 +85,36 @@ def _gpu_info() -> dict:
     return {"nvidia_runtime": "nvidia" in runtimes}
 
 
+def _vram_info() -> dict:
+    """GPU name + total VRAM, measured by nvidia-smi INSIDE the ollama
+    container (the nvidia runtime injects the binary when the container has
+    GPU access). Fixed command, nothing parameterized. Fails soft: a stopped
+    or CPU-only container reports an error, never a guess."""
+    proc = subprocess.run(
+        _compose_cmd() + ["exec", "-T", SERVICE, "nvidia-smi",
+                          "--query-gpu=name,memory.total",
+                          "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, timeout=20)
+    if proc.returncode != 0:
+        return {"gpus": [],
+                "error": (proc.stderr or proc.stdout)[-300:].strip()
+                or "nvidia-smi unavailable in the ollama container"}
+    gpus = []
+    for line in proc.stdout.splitlines():
+        if "," not in line:
+            continue
+        name, mib = line.rsplit(",", 1)
+        try:
+            gpus.append({"name": name.strip(),
+                         "vram_total_gb": round(float(mib.strip()) / 1024, 1)})
+        except ValueError:
+            continue
+    return {"gpus": gpus}
+
+
 def _run_op(verb: str):
-    cmd = _COMPOSE + (["up", "-d", SERVICE] if verb == "start"
-                      else ["stop", SERVICE])
+    cmd = _compose_cmd() + (["up", "-d", SERVICE] if verb == "start"
+                            else ["stop", SERVICE])
     # first start may pull the ollama image (~GBs) — allow it time
     timeout = 1800 if verb == "start" else 120
     log.info("%s: %s", verb, " ".join(cmd))
@@ -98,6 +147,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/gpu":
             try:
                 return self._send(200, _gpu_info())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/vram":
+            try:
+                return self._send(200, _vram_info())
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
         if self.path != "/status":

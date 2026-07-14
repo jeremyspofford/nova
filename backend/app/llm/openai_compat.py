@@ -4,6 +4,7 @@ Event vocabulary yielded by stream():
     {"type": "text", "text": str}                    incremental content delta
     {"type": "tool_calls", "tool_calls": [           complete calls, end of turn
         {"id": str, "name": str, "arguments": str}]}
+    {"type": "usage", "usage": dict}                 only with include_usage
     {"type": "done"}
     {"type": "error", "error": str}
 """
@@ -26,7 +27,8 @@ class OpenAICompatClient:
         self.timeout = timeout
 
     async def stream(self, messages: list, model: str,
-                     tools: Optional[list] = None) -> AsyncIterator[dict]:
+                     tools: Optional[list] = None,
+                     include_usage: bool = False) -> AsyncIterator[dict]:
         headers = {"Content-Type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -34,6 +36,8 @@ class OpenAICompatClient:
         payload: dict = {"model": model, "messages": messages, "stream": True}
         if tools:
             payload["tools"] = tools
+        if include_usage:  # exact token counts in a final usage chunk
+            payload["stream_options"] = {"include_usage": True}
 
         # Tool-call deltas arrive fragmented; merge them by choice index.
         pending_calls: dict[int, dict] = {}
@@ -61,6 +65,8 @@ class OpenAICompatClient:
                             log.warning("Unparseable stream chunk: %.200s", data)
                             continue
 
+                        if chunk.get("usage"):
+                            yield {"type": "usage", "usage": chunk["usage"]}
                         choices = chunk.get("choices") or []
                         if not choices:
                             continue

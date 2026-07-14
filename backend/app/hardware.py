@@ -44,6 +44,26 @@ async def _nvidia_runtime() -> bool | None:
         return None
 
 
+async def _gpu_details() -> dict:
+    """Measured GPU name + total VRAM from nvidia-smi inside the ollama
+    container (sidecar /vram). None when the container is stopped, has no
+    GPU access, or there is no NVIDIA GPU — never an estimate."""
+    empty = {"gpu_name": None, "vram_total_gb": None}
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.get(f"{settings.inference_control_url}/vram")
+            resp.raise_for_status()
+            gpus = resp.json().get("gpus") or []
+    except Exception as e:
+        log.warning("VRAM detection unavailable (sidecar): %s", e)
+        return empty
+    if not gpus:
+        return empty
+    name = gpus[0]["name"] + (f" ×{len(gpus)}" if len(gpus) > 1 else "")
+    return {"gpu_name": name,
+            "vram_total_gb": round(sum(g["vram_total_gb"] for g in gpus), 1)}
+
+
 async def _vram_observed_gb() -> float | None:
     """Largest VRAM footprint any probe has actually seen — a lower bound
     on usable VRAM, never an estimate."""
@@ -55,10 +75,14 @@ async def _vram_observed_gb() -> float | None:
 
 
 async def detect() -> dict:
+    nvidia = await _nvidia_runtime()
+    details = await _gpu_details() if nvidia else \
+        {"gpu_name": None, "vram_total_gb": None}
     return {
         "ram_gb": _ram_gb(),
         "cpu_cores": os.cpu_count(),
-        "nvidia_runtime": await _nvidia_runtime(),
+        "nvidia_runtime": nvidia,
+        **details,
         "vram_observed_gb": await _vram_observed_gb(),
         "detected_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -72,6 +72,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker-compose.yml:/compose/docker-compose.yml:ro
+      - ./docker-compose.gpu.yml:/compose/docker-compose.gpu.yml:ro
+    environment:
+      # auto: use the GPU override when the docker NVIDIA runtime exists;
+      # on/off force it (e.g. OLLAMA_GPU=on for Docker Desktop setups that
+      # support --gpus without advertising an nvidia runtime)
+      OLLAMA_GPU: ${OLLAMA_GPU:-auto}
     restart: unless-stopped
 
   searxng:

@@ -22,6 +22,36 @@ live status) — no CLI needed; `docker compose --profile inference up -d`
 still works. Its URL and the fallback model are runtime settings there too
 (point the URL at `http://host.docker.internal:11434` for a host-run Ollama).
 
+## GPU acceleration (bundled Ollama)
+
+`docker-compose.gpu.yml` grants the ollama service NVIDIA GPU access. The
+inference-control sidecar merges it **automatically** whenever the docker
+NVIDIA runtime is present, so the Settings toggle always (re)creates ollama
+with the right device access — `OLLAMA_GPU=off` in `.env` opts out,
+`OLLAMA_GPU=on` forces it. For manual host-side compose commands to match,
+uncomment `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` in `.env`.
+
+Per platform:
+
+- **Linux + NVIDIA** — install the
+  [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html);
+  detection and the override are automatic from there.
+- **Windows (WSL2) + NVIDIA** — the Windows NVIDIA driver + WSL2 GPU
+  passthrough + nvidia-container-toolkit inside WSL; automatic from there.
+  Some Docker Desktop setups support `--gpus` without advertising an
+  `nvidia` runtime — set `OLLAMA_GPU=on` for those.
+- **macOS** — Docker containers cannot access Apple GPUs at all (platform
+  limitation, not Nova's). Run [Ollama natively](https://ollama.com)
+  (it uses Metal) and point **Settings → Inference → Ollama URL** at
+  `http://host.docker.internal:11434`; probes still observe GPU usage via
+  Ollama's own reporting.
+- **AMD (ROCm)** — not wired yet; the stack falls back to CPU cleanly.
+
+Nova never guesses at hardware: GPU presence comes from `docker info`, the
+GPU name and total VRAM from `nvidia-smi` inside the ollama container, and
+per-model VRAM/GPU usage from Ollama `/api/ps` during "test this model"
+probes (Settings → Inference → Detect & suggest).
+
 ## What works (all live-verified)
 
 | Capability | How |
