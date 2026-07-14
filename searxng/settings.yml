@@ -1,0 +1,14 @@
+# Nova's bundled metasearch service. Inherits SearXNG defaults; overrides only
+# what Nova needs: JSON output for the backend, limiter off (internal callers
+# only — the service is not exposed beyond the compose network + loopback).
+use_default_settings: true
+
+server:
+  secret_key: "${SEARXNG_SECRET}"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json

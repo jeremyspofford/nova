@@ -1,0 +1,24 @@
+/** Small static dataset for theme preview thumbnails. */
+
+import type { GraphNode, GraphEdge } from '../api';
+
+const now = Date.now() / 1000;
+
+export const SAMPLE_NODES: GraphNode[] = [
+  { id: 't1', label: 'Bear Mountain', type: 'topic', mtime: now, tags: ['parks'] },
+  { id: 't2', label: 'Trailside Zoo', type: 'topic', mtime: now - 86400, tags: ['parks'] },
+  { id: 't3', label: 'AI News', type: 'topic', mtime: now - 172800, tags: ['tech'] },
+  { id: 't4', label: 'OpenRouter', type: 'topic', mtime: now - 259200, tags: ['tech'] },
+  { id: 's1', label: 'Weather advice', type: 'skill', mtime: now - 86400 },
+  { id: 's2', label: 'Table format', type: 'skill', mtime: now - 172800 },
+  { id: 'j1', label: 'Journal', type: 'journal', mtime: now },
+  { id: 'j2', label: 'Journal', type: 'journal', mtime: now - 86400 },
+  { id: 'src1', label: 'Wikipedia', type: 'source', mtime: now - 259200 },
+];
+
+export const SAMPLE_EDGES: GraphEdge[] = [
+  { source: 't1', target: 't2', kind: 'tag' },
+  { source: 't3', target: 't4', kind: 'tag' },
+  { source: 't1', target: 'src1', kind: 'link' },
+  { source: 't2', target: 's1', kind: 'link' },
+];

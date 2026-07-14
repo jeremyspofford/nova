@@ -1,5 +1,0 @@
-[tools]
-python = "latest"
-pre-commit = "latest"
-claude-code = "latest"
-"npm:@earendil-works/pi-coding-agent" = "0.80.6"
