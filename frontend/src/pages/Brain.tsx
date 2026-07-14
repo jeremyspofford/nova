@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMemoryGraph, getMemoryItem, getMemoryStats, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
+import { SettingsOverlay } from '../components/SettingsOverlay';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 
 const CHAT_WIDTH = 384; // w-96
@@ -20,6 +21,7 @@ export function Brain() {
   const rendererRef = useRef<RendererHandle | null>(null);
   const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('nova.brain.theme');
     return saved && saved in THEMES ? saved : DEFAULT_THEME;
@@ -129,6 +131,14 @@ export function Brain() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm"
+          title="Settings & Automations"
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
         {theme === 'galaxy' && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs text-stone-400">
             <span title="Rotation speed">spin</span>
@@ -203,6 +213,8 @@ export function Brain() {
           </footer>
         </aside>
       )}
+
+      {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
 
       <ChatPanel />
     </div>

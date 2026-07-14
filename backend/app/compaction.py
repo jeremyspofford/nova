@@ -12,8 +12,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from app import conversations, db
-from app.config import settings
+from app import conversations, db, settings_store
 from app.llm import router as llm_router
 
 log = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ async def maybe_compact(conversation_id: str, model: str,
                     "SELECT summary FROM conversations WHERE id = $1",
                     uuid.UUID(conversation_id))
 
-            if len(rows) < settings.compaction_min_aged:
+            if len(rows) < settings_store.get("compaction.min_aged"):
                 return
 
             parts = []
@@ -69,7 +68,7 @@ async def maybe_compact(conversation_id: str, model: str,
                 user_prompt += f"Previous summary:\n{prev}\n\n"
             user_prompt += f"Newly aged-out messages:\n{transcript}\n\nUpdated summary:"
 
-            compaction_model = settings.compaction_model or model
+            compaction_model = settings_store.get("compaction.model") or model
             summary = ""
             async for event in llm_router.stream_chat(
                     [{"role": "system", "content": _SYSTEM},

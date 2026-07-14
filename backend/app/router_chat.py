@@ -15,7 +15,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import compaction, conversations
+from app import automations, compaction, conversations, settings_store
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.config import settings
@@ -45,8 +45,9 @@ async def chat_stream(request: ChatRequest):
         raise HTTPException(status_code=500, detail="main agent missing from registry")
 
     model_eff = effective_model(main_agent["model"])
-    total_budget = (settings.context_budget_ollama if model_eff.startswith("ollama:")
-                    else settings.context_budget_openrouter)
+    total_budget = settings_store.get(
+        "context.budget_ollama" if model_eff.startswith("ollama:")
+        else "context.budget_openrouter")
     # Reserve for system prompt + memory + skills + summary + response headroom.
     overhead = (settings.memory_context_max_chars // 4) + 2500
     history_budget = max(1500, total_budget - overhead)
@@ -140,3 +141,50 @@ async def memory_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="memory item not found")
     return item
+
+
+# ── settings (UI-configured runtime behavior) ────────────────────────────
+
+@router.get("/api/v1/settings")
+async def get_settings():
+    return settings_store.all_settings()
+
+
+@router.patch("/api/v1/settings")
+async def patch_settings(changes: dict):
+    applied = {}
+    for key, value in changes.items():
+        try:
+            await settings_store.set_value(key, value)
+            applied[key] = value
+        except (KeyError, ValueError) as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    return {"applied": applied}
+
+
+# ── automations ──────────────────────────────────────────────────────────
+
+@router.get("/api/v1/automations")
+async def list_automations_endpoint():
+    return await automations.list_automations()
+
+
+@router.post("/api/v1/automations", status_code=201)
+async def create_automation_endpoint(body: dict):
+    try:
+        return await automations.create(
+            name=str(body.get("name", "")).strip(),
+            instruction=str(body.get("instruction", "")).strip(),
+            agent_name=str(body.get("agent_name", "")).strip(),
+            interval_minutes=int(body.get("interval_minutes", 0)),
+            description=str(body.get("description", "")))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/api/v1/automations/{automation_id}")
+async def patch_automation_endpoint(automation_id: str, body: dict):
+    ok = await automations.update(automation_id, **body)
+    if not ok:
+        raise HTTPException(status_code=404, detail="automation not found or no valid fields")
+    return {"status": "updated"}

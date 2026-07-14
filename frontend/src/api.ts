@@ -115,6 +115,84 @@ export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: Gra
   return r.json();
 }
 
+export interface SettingDef {
+  key: string;
+  type: 'number' | 'boolean' | 'string' | 'enum';
+  label: string;
+  description: string;
+  section: string;
+  value: unknown;
+  min?: number;
+  max?: number;
+  options?: string[];
+}
+
+export async function getSettings(): Promise<SettingDef[]> {
+  const r = await fetch(`${API_URL}/api/v1/settings`);
+  if (!r.ok) throw new Error('Failed to load settings');
+  return r.json();
+}
+
+export async function patchSettings(changes: Record<string, unknown>): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Save failed');
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  description: string;
+  instruction: string;
+  agent_name: string;
+  interval_minutes: number;
+  enabled: boolean;
+  is_system: boolean;
+  consecutive_failures: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_status: string | null;
+  last_summary: string | null;
+}
+
+export async function getAutomations(): Promise<Automation[]> {
+  const r = await fetch(`${API_URL}/api/v1/automations`);
+  if (!r.ok) throw new Error('Failed to load automations');
+  return r.json();
+}
+
+export async function createAutomation(body: {
+  name: string; instruction: string; agent_name: string; interval_minutes: number;
+}): Promise<Automation> {
+  const r = await fetch(`${API_URL}/api/v1/automations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchAutomation(id: string, body: Record<string, unknown>): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/automations/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error('Update failed');
+}
+
+export interface AgentInfo { name: string; enabled: boolean; description: string }
+
+export async function getAgents(): Promise<AgentInfo[]> {
+  const r = await fetch(`${API_URL}/api/v1/agents`);
+  if (!r.ok) throw new Error('Failed to load agents');
+  return r.json();
+}
+
 export interface MemoryItem {
   id: string;
   frontmatter: Record<string, string>;

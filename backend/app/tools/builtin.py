@@ -194,6 +194,79 @@ async def _web_search(args, ctx):
     return await search(query, int(args.get("max_results", 6)))
 
 
+# ── staleness scanner (mechanical; the ingestion agent acts on it) ──────
+
+async def _list_stale_topics(args, ctx):
+    from datetime import datetime, timedelta, timezone
+    from app import settings_store
+    max_age_days = int(args.get("max_age_days")
+                       or settings_store.get("automations.staleness_max_age_days"))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    stale = []
+    for doc_id, _mtime in memory.store.iter_files():
+        parsed = memory.store.read_file(doc_id)
+        if not parsed:
+            continue
+        fm, _body = parsed
+        if fm.get("type") not in ("topic", "source") or not fm.get("source_url"):
+            continue
+        ts = str(fm.get("timestamp", ""))
+        try:
+            learned = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if learned < cutoff:
+            stale.append({"id": doc_id, "title": fm.get("title", doc_id),
+                          "learned": ts[:10], "source_url": fm["source_url"]})
+    stale.sort(key=lambda s: s["learned"])
+    return _j({"stale_count": len(stale), "topics": stale[:10],
+               "threshold_days": max_age_days})
+
+
+# ── automations CRUD (Nova schedules its own behaviors) ─────────────────
+
+async def _manage_automations(args, ctx):
+    from app import automations as auto
+    action = (args.get("action") or "").lower()
+
+    if action == "list":
+        rows = await auto.list_automations()
+        slim = [{k: r[k] for k in ("name", "description", "agent_name",
+                                   "interval_minutes", "enabled", "is_system",
+                                   "last_status", "last_run_at", "next_run_at")}
+                for r in rows]
+        return _j(slim)
+
+    if action == "create":
+        try:
+            row = await auto.create(
+                name=args.get("name", "").strip(),
+                instruction=args.get("instruction", "").strip(),
+                agent_name=args.get("agent_name", "").strip(),
+                interval_minutes=int(args.get("interval_minutes", 0)),
+                description=args.get("description", ""))
+        except Exception as e:
+            return f"Error creating automation: {e}"
+        return _j({"status": "created", "name": row["name"],
+                   "next_run_at": row["next_run_at"]})
+
+    if action in ("update", "enable", "disable"):
+        row = await auto.get_by_name(args.get("name", ""))
+        if not row:
+            return f"Error: automation '{args.get('name')}' not found"
+        updates = {k: v for k, v in args.items()
+                   if k in ("description", "instruction", "agent_name",
+                            "interval_minutes")}
+        if action == "enable":
+            updates["enabled"] = True
+        elif action == "disable":
+            updates["enabled"] = False
+        ok = await auto.update(row["id"], **updates)
+        return _j({"status": "updated" if ok else "failed", "name": row["name"]})
+
+    return f"Error: unknown action '{action}' (use list/create/update/enable/disable)"
+
+
 # ── dispatch (declaration; execution is runner-inlined) ─────────────────
 
 async def _dispatch_stub(args, ctx):
@@ -306,6 +379,35 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "body_template": {"type": "object"},
         }, "required": ["action"]},
         "execute": _manage_tools,
+    },
+    "list_stale_topics": {
+        "name": "list_stale_topics",
+        "description": ("List sourced memory topics whose knowledge has aged past the "
+                        "staleness threshold — candidates for a REFRESH. Oldest first."),
+        "parameters": {"type": "object", "properties": {
+            "max_age_days": {"type": "integer",
+                             "description": "Override the configured threshold"},
+        }},
+        "execute": _list_stale_topics,
+    },
+    "manage_automations": {
+        "name": "manage_automations",
+        "description": ("Manage scheduled automations (a schedule + an instruction + the "
+                        "agent that executes it). Use to list existing automations or "
+                        "create new recurring behaviors, e.g. periodic research or "
+                        "refresh jobs. Minimum interval 5 minutes."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["list", "create", "update", "enable", "disable"]},
+            "name": {"type": "string", "description": "kebab-case unique name"},
+            "description": {"type": "string"},
+            "instruction": {"type": "string",
+                            "description": "Self-contained instructions the agent runs each time"},
+            "agent_name": {"type": "string",
+                           "description": "Which agent executes it (see list_agents)"},
+            "interval_minutes": {"type": "integer"},
+        }, "required": ["action"]},
+        "execute": _manage_automations,
     },
     "dispatch_to_agent": {
         "name": "dispatch_to_agent",

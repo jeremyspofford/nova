@@ -66,15 +66,24 @@ See README for what works. This file is the ordered backlog.
   (Graph/Galaxy) persisted in localStorage. Upgrade path: true Three.js +
   UnrealBloom behind the same theme key if fidelity falls short.
 
+- **Automations + Settings platform** (2026-07-13) — behavioral config moved
+  to a DB-backed, UI-editable settings store (defs registry in
+  `settings_store.py`; env demoted to infra + secrets — the old-Nova config
+  fragmentation lesson applied from day one). **Automations** = schedule +
+  instruction + executing agent: generic 60s scheduler, live UI kill switch,
+  consecutive-failure auto-disable at 5, journaled outcomes; seeded
+  `refresh-stale-knowledge` (ingestion agent + `list_stale_topics` tool)
+  generalizes the staleness sweep. Nova creates automations from chat via
+  `manage_automations`. Gear-button overlay hosts Settings + Automations
+  tabs. Verified: autonomous in-place refresh of a backdated topic; chat-
+  created `tech-news-digest`; kill switch; failure counting; idempotent
+  no-op runs.
+
 ## Next up
 
 
 ## Later
 
-- **Scheduled staleness sweep** — background loop that periodically re-ingests
-  topics whose `source_url` + age exceed a threshold. Nova's first autonomous
-  background behavior; needs its own design (scheduler, budget, failure
-  policy). The on-demand refresh path is its foundation.
 - **Rules/guardrail layer** — pre-execution checks on tool calls (regex or
   allowlist-based blocks), the v1 exclusion that matters most once agents
   multiply.
