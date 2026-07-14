@@ -199,9 +199,12 @@ async def delete_agent_endpoint(agent_id: str):
 
 
 @router.get("/api/v1/models")
-async def list_models_endpoint():
+async def list_models_endpoint(full: bool = False):
+    """Filtered (default): installed local models + approved (curated) cloud
+    models. full=true: everything from authenticated providers. Providers
+    without credentials never appear in either view."""
     from app import models_catalog
-    return await models_catalog.list_models()
+    return await models_catalog.list_models(full=full)
 
 
 @router.post("/api/v1/models/pull")

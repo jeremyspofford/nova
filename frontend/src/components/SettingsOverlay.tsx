@@ -874,6 +874,7 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
 function AgentsTab({ editMode }: { editMode: boolean }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [showAllModels, setShowAllModels] = useState(false);
   const [allModel, setAllModel] = useState('');
   const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
@@ -887,8 +888,10 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
   const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)));
   useEffect(() => {
     load();
-    getModels().then(setModels).catch(() => {});
   }, []);
+  useEffect(() => {
+    getModels(showAllModels).then(setModels).catch(() => {});
+  }, [showAllModels]);
 
   async function setModel(a: AgentInfo, model: string) {
     try {
@@ -1019,18 +1022,27 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-        <div className="text-sm text-stone-300">Set <b>all</b> agents to</div>
-        <div className="flex items-center gap-2">
-          {modelSelect(allModel, setAllModel, 'choose a model…')}
-          <button
-            onClick={setAll}
-            disabled={!allModel}
-            className="text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
-          >
-            apply
-          </button>
+      <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm text-stone-300">Set <b>all</b> agents to</div>
+          <div className="flex items-center gap-2">
+            {modelSelect(allModel, setAllModel, 'choose a model…')}
+            <button
+              onClick={setAll}
+              disabled={!allModel}
+              className="text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
+            >
+              apply
+            </button>
+          </div>
         </div>
+        <label className="flex items-center gap-1.5 text-[11px] text-stone-500 cursor-pointer select-none">
+          <input type="checkbox" checked={showAllModels}
+            onChange={e => setShowAllModels(e.target.checked)}
+            className="accent-teal-600" />
+          show the full catalog of authenticated providers — default is
+          installed local models + approved (curated) cloud models
+        </label>
       </div>
 
       {agents.map(a => (

@@ -263,7 +263,9 @@ async def recommendations() -> dict:
     agents = await agent_registry.list_agents(enabled_only=False)
     cloud_ok = settings.has_openrouter()
 
-    catalog = await models_catalog.list_models()
+    # pin guard checks the FULL catalog — validity means "the provider
+    # actually serves it", not "it's on the approved dropdown list"
+    catalog = await models_catalog.list_models(full=True)
     catalog_ids = {m["id"] for m in catalog}
 
     per_profile: dict[str, list[dict]] = {}

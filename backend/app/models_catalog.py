@@ -34,6 +34,11 @@ async def _ollama_models() -> list[dict]:
 
 
 async def _openrouter_models() -> list[dict]:
+    # Auth gate: no key = no access = the models don't exist for this
+    # install. (Same rule for every future provider: unauthenticated
+    # providers contribute nothing to any catalog view.)
+    if not settings.has_openrouter():
+        return []
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{settings.openrouter_base_url}/models")
@@ -106,12 +111,28 @@ async def start_pull(name: str) -> str:
             f"take minutes).")
 
 
-async def list_models(force: bool = False) -> list[dict]:
+async def list_models(force: bool = False, full: bool = False) -> list[dict]:
+    """The models this install can actually use.
+
+    Default (filtered) view = what dropdowns should offer: models INSTALLED
+    on running local backends + cloud models the operator has approved (the
+    enabled curated rows). full=True = everything served by authenticated
+    providers — the validity universe for the pin guard and for operators
+    who ask to see the whole catalog. Either way, unauthenticated providers
+    contribute nothing.
+    """
     if not force and time.monotonic() - _cache["at"] < _CACHE_TTL and _cache["models"]:
-        return _cache["models"]
-    ollama = await _ollama_models()
-    openrouter = await _openrouter_models()
-    models = ollama + openrouter
-    if models:
-        _cache.update(at=time.monotonic(), models=models)
-    return models
+        models = _cache["models"]
+    else:
+        ollama = await _ollama_models()
+        openrouter = await _openrouter_models()
+        models = ollama + openrouter
+        if models:
+            _cache.update(at=time.monotonic(), models=models)
+    if full:
+        return models
+    from app import curated_models
+    curated = await curated_models.list_all(enabled_only=True)
+    approved_cloud = {r["model"] for r in curated if r["provider"] != "ollama"}
+    return [m for m in models
+            if m["provider"] == "ollama" or m["id"] in approved_cloud]

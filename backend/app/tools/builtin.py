@@ -280,13 +280,22 @@ async def _manage_automations(args, ctx):
 
 async def _list_models(args, ctx):
     from app import models_catalog
-    models = await models_catalog.list_models()
+    full = bool(args.get("full"))
+    models = await models_catalog.list_models(full=full)
     grouped: dict[str, list[str]] = {}
     for m in models:
         grouped.setdefault(m["provider"], []).append(m["name"])
-    return _j({"providers": grouped,
-               "pull_capable_backends": ["ollama"],
-               "active_pulls": models_catalog.active_pulls()})
+    result = {"providers": grouped,
+              "pull_capable_backends": ["ollama"],
+              "active_pulls": models_catalog.active_pulls()}
+    if not full:
+        hidden = len(await models_catalog.list_models(full=True)) - len(models)
+        if hidden > 0:
+            result["note"] = (f"{hidden} more models exist on authenticated "
+                              f"providers — call list_models with full=true "
+                              f"to see them. Approved cloud models are the "
+                              f"enabled curated rows.")
+    return _j(result)
 
 
 async def _recommend_models(args, ctx):
@@ -525,10 +534,15 @@ BUILTIN_TOOLS: dict[str, dict] = {
     },
     "list_models": {
         "name": "list_models",
-        "description": ("List every model available to Nova, grouped by provider "
-                        "(installed local models + the OpenRouter catalog), plus "
-                        "which backends support pulling and any pulls in progress."),
-        "parameters": {"type": "object", "properties": {}},
+        "description": ("List the models Nova can use, grouped by provider: "
+                        "installed local models + approved (curated) cloud "
+                        "models by default; full=true adds everything served "
+                        "by authenticated providers. Also reports which "
+                        "backends support pulling and any pulls in progress."),
+        "parameters": {"type": "object", "properties": {
+            "full": {"type": "boolean",
+                     "description": "true = the entire catalog of authenticated providers, not just approved models"},
+        }},
         "execute": _list_models,
     },
     "recommend_models": {

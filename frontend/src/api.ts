@@ -131,8 +131,8 @@ export interface SettingDef {
 
 export interface ModelInfo { id: string; provider: string; name: string }
 
-export async function getModels(): Promise<ModelInfo[]> {
-  const r = await fetch(`${API_URL}/api/v1/models`);
+export async function getModels(full = false): Promise<ModelInfo[]> {
+  const r = await fetch(`${API_URL}/api/v1/models${full ? '?full=true' : ''}`);
   if (!r.ok) throw new Error('Failed to load models');
   return r.json();
 }

@@ -240,6 +240,22 @@ See README for what works. This file is the ordered backlog.
   consolidation onto the already-suggested cloud model with local
   alternates intact; warmer pin/unpin verified against ollama /api/ps.
 
+- **Auth-gated, curated-filtered model catalog (2026-07-14)** — dropdowns
+  stopped showing "every model imaginable". Default catalog = models
+  INSTALLED on running local backends + cloud models the operator approved
+  (enabled curated rows); `?full=true` (and a "show full catalog" checkbox
+  in Agents) = everything served by AUTHENTICATED providers; providers
+  without credentials contribute nothing to any view (no OpenRouter key =
+  no OpenRouter models — same rule for every future provider). The pin
+  guard deliberately checks the FULL catalog: validity means "the provider
+  serves it", not "it's on the approved list", so an uncurated-but-real
+  assignment is never falsely flagged. list_models (tool) defaults to the
+  approved view and reports how many more exist behind full=true.
+  Verified: 344 → 4 models in the default view; the curated∩catalog
+  intersection immediately caught a real seed bug (claude-sonnet-4-6 vs
+  OpenRouter's actual claude-sonnet-4.6 — dots, not dashes; fixed in 018
+  and live).
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM

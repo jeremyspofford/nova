@@ -67,7 +67,7 @@ VALUES
   ('openrouter:anthropic/claude-haiku-4.5', 'openrouter', NULL, NULL, 'A', 'fast',
    ARRAY['chat','tools','guard'],
    'Fast premium cloud; strong instruction following for guard duty.', true),
-  ('openrouter:anthropic/claude-sonnet-4-6', 'openrouter', NULL, NULL, 'A', 'medium',
+  ('openrouter:anthropic/claude-sonnet-4.6', 'openrouter', NULL, NULL, 'A', 'medium',
    ARRAY['tools','chat'],
    'Premium judgment for the hardest research and multi-step tool work.', true)
 ON CONFLICT (model) DO NOTHING;
