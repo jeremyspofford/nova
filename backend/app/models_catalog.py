@@ -52,6 +52,60 @@ def invalidate():
     _cache["at"] = 0.0
 
 
+# ── background pulls (only Ollama exposes a pull API; LM Studio / llama.cpp
+#    / vLLM manage their own downloads — future named-endpoint backends will
+#    surface as list-only) ─────────────────────────────────────────────────
+
+_active_pulls: set[str] = set()
+
+
+def active_pulls() -> list[str]:
+    return sorted(_active_pulls)
+
+
+async def start_pull(name: str) -> str:
+    """Kick off a background Ollama pull. Returns a status string immediately."""
+    import asyncio
+
+    if name in _active_pulls:
+        return f"'{name}' is already being pulled."
+    base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+    _active_pulls.add(name)
+
+    async def run():
+        from app.memory.memory import memory
+        try:
+            last_status = ""
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", f"{base}/api/pull",
+                                         json={"name": name}) as resp:
+                    if resp.status_code != 200:
+                        detail = (await resp.aread()).decode(errors="replace")[:200]
+                        log.warning("model pull '%s' failed: %s", name, detail)
+                        return
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            last_status = line
+            if '"success"' in last_status:
+                invalidate()
+                log.info("model pull complete: %s", name)
+                await memory.write(
+                    f"Pulled new local model '{name}' — now available for agents.",
+                    type="journal", source_type="tool")
+            else:
+                log.warning("model pull '%s' ended without success: %.200s",
+                            name, last_status)
+        except Exception:
+            log.exception("model pull '%s' crashed", name)
+        finally:
+            _active_pulls.discard(name)
+
+    asyncio.ensure_future(run())
+    return (f"Pull of '{name}' started in the background. It will appear in "
+            f"list_models when complete (check back in a bit — larger models "
+            f"take minutes).")
+
+
 async def list_models(force: bool = False) -> list[dict]:
     if not force and time.monotonic() - _cache["at"] < _CACHE_TTL and _cache["models"]:
         return _cache["models"]

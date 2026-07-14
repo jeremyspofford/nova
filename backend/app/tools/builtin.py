@@ -276,6 +276,32 @@ async def _manage_automations(args, ctx):
     return f"Error: unknown action '{action}' (use list/create/update/enable/disable/delete)"
 
 
+# ── model management (model-manager agent) ──────────────────────────────
+
+async def _list_models(args, ctx):
+    from app import models_catalog
+    models = await models_catalog.list_models()
+    grouped: dict[str, list[str]] = {}
+    for m in models:
+        grouped.setdefault(m["provider"], []).append(m["name"])
+    return _j({"providers": grouped,
+               "pull_capable_backends": ["ollama"],
+               "active_pulls": models_catalog.active_pulls()})
+
+
+async def _pull_model(args, ctx):
+    from app import models_catalog
+    name = (args.get("name") or "").strip()
+    backend = (args.get("backend") or "ollama").strip().lower()
+    if not name:
+        return "Error: name is required (e.g. qwen2.5:7b)"
+    if backend != "ollama":
+        return (f"Error: backend '{backend}' does not expose a pull API — "
+                f"LM Studio, llama.cpp, and vLLM manage their own model "
+                f"downloads. Only 'ollama' supports pulling from Nova.")
+    return await models_catalog.start_pull(name)
+
+
 # ── guardrail rules (guardian agent only) ───────────────────────────────
 
 async def _manage_rules(args, ctx):
@@ -470,6 +496,27 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "interval_minutes": {"type": "integer"},
         }, "required": ["action"]},
         "execute": _manage_automations,
+    },
+    "list_models": {
+        "name": "list_models",
+        "description": ("List every model available to Nova, grouped by provider "
+                        "(installed local models + the OpenRouter catalog), plus "
+                        "which backends support pulling and any pulls in progress."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _list_models,
+    },
+    "pull_model": {
+        "name": "pull_model",
+        "description": ("Download a new local model in the background (Ollama library "
+                        "names like qwen2.5:7b or llama3.2:3b). Larger models take "
+                        "minutes and gigabytes of disk — prefer small/mid sizes unless "
+                        "asked otherwise. Verify later with list_models."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "model:tag from the Ollama library"},
+            "backend": {"type": "string",
+                        "description": "Target backend (default ollama — the only pull-capable one)"},
+        }, "required": ["name"]},
+        "execute": _pull_model,
     },
     "manage_rules": {
         "name": "manage_rules",

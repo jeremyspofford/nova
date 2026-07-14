@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 MAX_DISPATCH_DEPTH = 1
 
 
-async def _build_system_prompt(agent: dict, query: str) -> str:
+async def _build_system_prompt(agent: dict, query: str,
+                               include_index: bool = False) -> str:
     parts = [agent["system_prompt"]]
     try:
         soul = await memory.soul()
@@ -33,6 +34,18 @@ async def _build_system_prompt(agent: dict, query: str) -> str:
             parts.append(f"## Who I am\n{soul}")
     except Exception:
         log.exception("Soul read failed; continuing without identity block")
+    if include_index:
+        # An agent that can dispatch always SEES the index — "remember to
+        # check" proved unreliable in live testing.
+        try:
+            from app.agents import registry as agent_registry
+            others = [a for a in await agent_registry.list_agents(enabled_only=True)
+                      if a["name"] != agent.get("name")]
+            if others:
+                lines = "\n".join(f"- {a['name']}: {a['description']}" for a in others)
+                parts.append("## Available specialists (dispatch_to_agent)\n" + lines)
+        except Exception:
+            log.exception("Agent index injection failed; continuing without it")
     try:
         mem = await memory.context(query)
         if mem["context"]:
@@ -58,14 +71,17 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
-    system_prompt = await _build_system_prompt(agent, query)
+
+    exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()
+    tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
+    can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
+
+    system_prompt = await _build_system_prompt(agent, query,
+                                               include_index=can_dispatch)
     if conversation_summary:
         system_prompt += ("\n\n## Conversation so far (running summary)\n"
                           + conversation_summary)
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
-
-    exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()
-    tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
            "dispatch_depth": dispatch_depth,

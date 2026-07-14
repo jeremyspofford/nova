@@ -131,6 +131,16 @@ See README for what works. This file is the ordered backlog.
    - *Validation*: offer a one-click "test this model" (short tool-calling
      probe) so suggestions are verified on the user's actual hardware.
 
+3. **Named local-inference endpoints (multi-backend)** — users run LM
+   Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
+   *serving* (our existing client already speaks it); none but Ollama expose
+   a pull API (they manage their own downloads). Design: a registry of named
+   endpoints `{name, url, kind}` (Settings-managed), catalog aggregation
+   from each endpoint's /v1/models, model routing by endpoint (e.g.
+   `local/lmstudio:<model>`), pull offered only where supported. The
+   pull_model/list_models tool contracts are already backend-scoped in
+   anticipation.
+
 
 ## Later
 
