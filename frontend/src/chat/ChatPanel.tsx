@@ -201,8 +201,23 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
                   ? 'bg-teal-700 text-white whitespace-pre-wrap'
                   : 'bg-stone-800 text-stone-100'
               }`}>
-                {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
-                {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+                {item.streaming && !item.content ? (
+                  // waiting for the first token — bouncing "typing" dots
+                  <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
+                    {[0, 150, 300].map(delay => (
+                      <span
+                        key={delay}
+                        className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
+                        style={{ animationDelay: `${delay}ms` }}
+                      />
+                    ))}
+                  </span>
+                ) : (
+                  <>
+                    {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
+                    {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+                  </>
+                )}
               </div>
             </div>
           );

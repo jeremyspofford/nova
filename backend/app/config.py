@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     # LLM providers
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    default_model: str = "openrouter:anthropic/claude-haiku-4.5"
+    # Default cloud model: cheaper than haiku-4.5 ($0.93/$2.92 vs $1/$5 per M),
+    # 1M ctx, tools + parallel tool calls verified on OpenRouter (2026-07-14).
+    default_model: str = "openrouter:z-ai/glm-5.2"
     # NOTE: ollama URL + local fallback model are runtime settings now
     # (Settings -> Inference), not env.
 

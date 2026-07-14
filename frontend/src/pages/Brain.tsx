@@ -142,9 +142,10 @@ export function Brain() {
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
 
-  const detailContent = detail && (
+  // roomy = the centered modal; the sidebar keeps its tighter density
+  const renderDetail = (roomy: boolean) => detail && (
     <>
-      <header className="px-4 py-3 border-b border-stone-700 flex items-start justify-between gap-2">
+      <header className={`${roomy ? 'px-6 py-4' : 'px-4 py-3'} border-b border-stone-700 flex items-start justify-between gap-2`}>
         <div>
           <h2 className="text-stone-100 font-semibold leading-snug">
             {fm.title ?? detail.id}
@@ -170,14 +171,14 @@ export function Brain() {
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto nice-scroll px-4 py-3 text-sm text-stone-300">
+      <div className={`flex-1 overflow-y-auto nice-scroll ${roomy ? 'px-6 py-4' : 'px-4 py-3'} text-sm text-stone-300`}>
         {fm.description && (
           <p className="text-stone-400 italic mb-3">{fm.description}</p>
         )}
         <Markdown>{detail.content}</Markdown>
       </div>
 
-      <footer className="px-4 py-2.5 border-t border-stone-700 flex items-center justify-between gap-2 text-xs">
+      <footer className={`${roomy ? 'px-6 py-3' : 'px-4 py-2.5'} border-t border-stone-700 flex items-center justify-between gap-2 text-xs`}>
         <span className="font-mono text-stone-600 truncate">{detail.id}</span>
         {fm.source_url && (
           <a
@@ -229,17 +230,17 @@ export function Brain() {
           onClick={() => setDetail(null)}
         >
           <div
-            className="w-[34rem] max-w-[calc(100vw-26rem)] max-h-[80vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+            className="w-[42rem] max-w-[calc(100vw-26rem)] max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
             onClick={e => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
           >
-            {detailContent}
+            {renderDetail(true)}
           </div>
         </div>
       ) : detail && (
         <aside className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
-          {detailContent}
+          {renderDetail(false)}
         </aside>
       )}
 

@@ -121,6 +121,14 @@ See README for what works. This file is the ordered backlog.
   `ollama:qwen2.5:3b` through the recycled container; sidecar rejects
   non-verb paths (404/501) and is unreachable from the host.
 
+- **Default cloud model → z-ai/glm-5.2 + chat polish** (2026-07-14) — GLM-5.2
+  replaces claude-haiku-4.5 as the default OpenRouter model: cheaper
+  ($0.93/$2.92 vs $1/$5 per M tokens), 1M context, tools + parallel tool
+  calls verified live on OpenRouter. Migration 017 moved existing haiku
+  agents; `default_model` env default and the manage_agents example updated.
+  Chat polish: bouncing typing dots while waiting for the first token; the
+  memory detail modal is wider (42rem) with roomier padding.
+
 ## Next up
 
 1. **Model recommendations (brainstorm needed)** — help users pick models
@@ -147,6 +155,25 @@ See README for what works. This file is the ordered backlog.
    `local/lmstudio:<model>`), pull offered only where supported. The
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
+
+3. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+   while Nova is answering, the brain should visibly "think", whatever theme
+   is active. Design:
+   - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
+     an optional `setActivity?(state: {active: boolean; kind?: 'thinking' |
+     'dispatch' | 'tool'})` — the registry's optional-method pattern
+     (`configure?`, `recenter?`) already covers "new views opt in"; no base
+     class needed, TypeScript's interface is the extension seam.
+   - *Wiring*: ChatPanel dispatches `nova:chat-activity` window events on
+     stream start / activity frames / done; Brain.tsx forwards to the active
+     renderer (same event bridge as `nova:setting-changed`).
+   - *Galaxy treatment*: core glow pulse + slightly faster auto-orbit while
+     active; a shooting-star particle arcing between random nodes on each
+     tool event.
+   - *Graph treatment*: soft node pulse / edge shimmer rippling outward from
+     the center while active.
+   - Chat-side feedback (bouncing dots + streaming cursor) shipped
+     2026-07-14; this item is the brain-side half.
 
 
 ## Later
