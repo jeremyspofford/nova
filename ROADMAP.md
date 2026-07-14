@@ -20,15 +20,15 @@ See README for what works. This file is the ordered backlog.
    visible to all agents. Honor `allowed_tools` for DB tools the same way as
    builtins (an agent sees a DB tool only if named, or via a `db:*` grant).
 
-3. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
+2. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
    style renderer), add a theme picker in the HUD, persist choice in
    localStorage.
 
-4. **Node detail on click** — clicking a brain node opens the memory item
+3. **Node detail on click** — clicking a brain node opens the memory item
    (`read_memory_item` already exists server-side; needs a
    `GET /api/v1/memory/item?id=` endpoint + a side panel).
 
-5. **Conversation compaction** — history is the most recent 50 messages; long
+4. **Conversation compaction** — history is the most recent 50 messages; long
    sessions silently lose older turns. Periodically distill older history into
    a topic/journal memory (the retrieval path then recalls it).
 
