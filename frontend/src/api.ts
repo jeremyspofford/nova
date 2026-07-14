@@ -185,6 +185,11 @@ export async function patchAutomation(id: string, body: Record<string, unknown>)
   if (!r.ok) throw new Error('Update failed');
 }
 
+export async function deleteAutomation(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/automations/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
 export interface AgentInfo { name: string; enabled: boolean; description: string }
 
 export async function getAgents(): Promise<AgentInfo[]> {

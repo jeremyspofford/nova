@@ -74,6 +74,22 @@ async def update(automation_id: str, **updates) -> bool:
     return result.endswith("1")
 
 
+async def delete(automation_id: str) -> str:
+    """Delete a non-system automation. Returns 'deleted' | 'not_found' | 'is_system'."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT is_system, name FROM automations WHERE id = $1",
+            uuid.UUID(automation_id))
+        if not row:
+            return "not_found"
+        if row["is_system"]:
+            return "is_system"
+        await conn.execute("DELETE FROM automations WHERE id = $1",
+                           uuid.UUID(automation_id))
+    log.info("Automation deleted: %s", row["name"])
+    return "deleted"
+
+
 async def due() -> list[dict]:
     async with db.acquire() as conn:
         return [_row(r) for r in await conn.fetch(

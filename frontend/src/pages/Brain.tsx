@@ -5,7 +5,6 @@ import { Markdown } from '../components/Markdown';
 import { SettingsOverlay } from '../components/SettingsOverlay';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 
-const CHAT_WIDTH = 384; // w-96
 const REFRESH_MS = 20000;
 
 const TYPE_BADGE: Record<string, string> = {
@@ -22,6 +21,16 @@ export function Brain() {
   const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatWidth, setChatWidth] = useState(() =>
+    parseInt(localStorage.getItem('nova.chat.width') ?? '384'));
+  const chatWidthRef = useRef(chatWidth);
+
+  const changeChatWidth = useCallback((w: number) => {
+    setChatWidth(w);
+    chatWidthRef.current = w;
+    localStorage.setItem('nova.chat.width', String(w));
+    rendererRef.current?.resize(window.innerWidth - w, window.innerHeight);
+  }, []);
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('nova.brain.theme');
     return saved && saved in THEMES ? saved : DEFAULT_THEME;
@@ -30,6 +39,14 @@ export function Brain() {
     parseFloat(localStorage.getItem('nova.brain.rotation') ?? '2'));
   const [labelMode, setLabelMode] = useState(() =>
     localStorage.getItem('nova.brain.labels') ?? 'auto');
+  const [labelScale, setLabelScale] = useState(() =>
+    parseFloat(localStorage.getItem('nova.brain.labelscale') ?? '1'));
+
+  const changeLabelScale = (v: number) => {
+    setLabelScale(v);
+    localStorage.setItem('nova.brain.labelscale', String(v));
+    rendererRef.current?.configure?.({ labelScale: v });
+  };
 
   const pickTheme = (key: string) => {
     setTheme(key);
@@ -70,10 +87,11 @@ export function Brain() {
     renderer.configure?.({
       rotationSpeed: parseFloat(localStorage.getItem('nova.brain.rotation') ?? '2'),
       labelMode: localStorage.getItem('nova.brain.labels') ?? 'auto',
+      labelScale: parseFloat(localStorage.getItem('nova.brain.labelscale') ?? '1'),
     });
 
     const size = () =>
-      renderer.resize(window.innerWidth - CHAT_WIDTH, window.innerHeight);
+      renderer.resize(window.innerWidth - chatWidthRef.current, window.innerHeight);
     size();
     window.addEventListener('resize', size);
 
@@ -131,35 +149,33 @@ export function Brain() {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm"
-          title="Settings & Automations"
-          aria-label="Settings"
-        >
-          ⚙
-        </button>
-        {theme === 'galaxy' && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs text-stone-400">
-            <span title="Rotation speed">spin</span>
-            <input
-              type="range"
-              min={0}
-              max={6}
-              step={0.25}
-              value={rotation}
-              onChange={e => changeRotation(parseFloat(e.target.value))}
-              className="w-24 accent-teal-500"
-            />
-            <button
-              onClick={cycleLabels}
-              className="px-2 py-0.5 rounded border border-stone-700 text-stone-300 hover:text-white capitalize"
-              title="Label visibility: auto = titles up close, categories zoomed out"
-            >
-              labels: {labelMode}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs text-stone-400">
+          {theme === 'galaxy' && (
+            <>
+              <span title="Rotation speed">spin</span>
+              <input
+                type="range" min={0} max={6} step={0.25}
+                value={rotation}
+                onChange={e => changeRotation(parseFloat(e.target.value))}
+                className="w-20 accent-teal-500"
+              />
+              <button
+                onClick={cycleLabels}
+                className="px-2 py-0.5 rounded border border-stone-700 text-stone-300 hover:text-white capitalize"
+                title="Label visibility: auto = titles up close, categories zoomed out"
+              >
+                labels: {labelMode}
+              </button>
+            </>
+          )}
+          <span title="Label text size">Aa</span>
+          <input
+            type="range" min={0.6} max={1.5} step={0.05}
+            value={labelScale}
+            onChange={e => changeLabelScale(parseFloat(e.target.value))}
+            className="w-20 accent-teal-500"
+          />
+        </div>
       </div>
 
       {/* Node detail — the graph is a metadata index; full content on demand */}
@@ -216,7 +232,11 @@ export function Brain() {
 
       {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
 
-      <ChatPanel />
+      <ChatPanel
+        width={chatWidth}
+        onWidthChange={changeChatWidth}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
     </div>
   );
 }

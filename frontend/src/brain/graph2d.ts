@@ -29,6 +29,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
   let sim: Simulation<SimNode, SimLink> | null = null;
   let raf = 0;
   let hovered: SimNode | null = null;
+  let labelScale = 1;
 
   // pan/zoom transform
   let scale = 1, tx = 0, ty = 0;
@@ -91,7 +92,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
       }
 
       if (showAllLabels || n === hovered || n.type === 'skill') {
-        ctx.font = `${11 / scale}px sans-serif`;
+        ctx.font = `${(11 * labelScale) / scale}px sans-serif`;
         ctx.fillStyle = n === hovered ? '#F5F5F4' : 'rgba(214,211,209,0.75)';
         ctx.textAlign = 'center';
         ctx.fillText(n.label.slice(0, 32), n.x!, n.y! + r + 12 / scale);
@@ -175,6 +176,9 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
       canvas.height = height;
       sim?.force('center', forceCenter(width / 2, height / 2));
       sim?.alpha(0.3).restart();
+    },
+    configure(options: Record<string, unknown>) {
+      if (typeof options.labelScale === 'number') labelScale = options.labelScale;
     },
     destroy() {
       cancelAnimationFrame(raf);

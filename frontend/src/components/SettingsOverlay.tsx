@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  Automation, SettingDef, createAutomation, getAgents, getAutomations,
-  getSettings, patchAutomation, patchSettings,
+  Automation, SettingDef, createAutomation, deleteAutomation, getAgents,
+  getAutomations, getSettings, patchAutomation, patchSettings,
 } from '../api';
 
 type Tab = 'settings' | 'automations';
@@ -117,9 +117,44 @@ function AutomationsTab() {
     return () => clearInterval(iv);
   }, []);
 
+  const [editing, setEditing] = useState<Automation | null>(null);
+  const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', interval_minutes: 60 });
+
   async function toggle(a: Automation) {
     await patchAutomation(a.id, { enabled: !a.enabled });
     load();
+  }
+
+  function startEdit(a: Automation) {
+    setEditing(a);
+    setEditForm({
+      description: a.description,
+      instruction: a.instruction,
+      agent_name: a.agent_name,
+      interval_minutes: a.interval_minutes,
+    });
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    try {
+      await patchAutomation(editing.id, editForm);
+      setEditing(null);
+      load();
+    } catch (err) {
+      setStatus(String(err));
+    }
+  }
+
+  async function remove(a: Automation) {
+    if (!window.confirm(`Delete automation "${a.name}"? This cannot be undone.`)) return;
+    try {
+      await deleteAutomation(a.id);
+      load();
+    } catch (err) {
+      setStatus(String(err));
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -138,35 +173,86 @@ function AutomationsTab() {
     <div className="space-y-3">
       {rows.map(a => (
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm text-stone-100 truncate">{a.name}</span>
-              {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
-            </div>
-            <button
-              onClick={() => toggle(a)}
-              className={`shrink-0 text-xs px-2 py-0.5 rounded border ${
-                a.enabled
-                  ? 'border-teal-700 text-teal-300 bg-teal-900/30'
-                  : 'border-stone-600 text-stone-500'
-              }`}
-            >
-              {a.enabled ? 'enabled' : 'disabled'}
-            </button>
-          </div>
-          <div className="mt-1 text-xs text-stone-500">
-            {a.agent_name} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
-            {a.last_status && (
-              <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
-                {' '}· last: {a.last_status}
-              </span>
-            )}
-            {a.consecutive_failures > 0 && (
-              <span className="text-amber-400"> · {a.consecutive_failures} fails</span>
-            )}
-          </div>
-          {a.last_summary && (
-            <div className="mt-1.5 text-xs text-stone-400 line-clamp-2">{a.last_summary}</div>
+          {editing?.id === a.id ? (
+            <form onSubmit={saveEdit} className="space-y-2">
+              <div className="text-sm text-stone-100">{a.name}</div>
+              <textarea
+                required
+                value={editForm.instruction}
+                onChange={e => setEditForm({ ...editForm, instruction: e.target.value })}
+                rows={4}
+                className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+              />
+              <div className="flex gap-2">
+                <select
+                  value={editForm.agent_name}
+                  onChange={e => setEditForm({ ...editForm, agent_name: e.target.value })}
+                  className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+                >
+                  {agents.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <input
+                  type="number" min={5}
+                  value={editForm.interval_minutes}
+                  onChange={e => setEditForm({ ...editForm, interval_minutes: parseInt(e.target.value || '60') })}
+                  className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+                  title="Interval (minutes)"
+                />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
+                <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-stone-100 truncate">{a.name}</span>
+                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => startEdit(a)}
+                    className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
+                  >
+                    edit
+                  </button>
+                  {!a.is_system && (
+                    <button
+                      onClick={() => remove(a)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
+                    >
+                      delete
+                    </button>
+                  )}
+                  <button
+                    onClick={() => toggle(a)}
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      a.enabled
+                        ? 'border-teal-700 text-teal-300 bg-teal-900/30'
+                        : 'border-stone-600 text-stone-500'
+                    }`}
+                  >
+                    {a.enabled ? 'enabled' : 'disabled'}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1 text-xs text-stone-500">
+                {a.agent_name} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
+                {a.last_status && (
+                  <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
+                    {' '}· last: {a.last_status}
+                  </span>
+                )}
+                {a.consecutive_failures > 0 && (
+                  <span className="text-amber-400"> · {a.consecutive_failures} fails</span>
+                )}
+              </div>
+              {a.last_summary && (
+                <div className="mt-1.5 text-xs text-stone-400 line-clamp-2">{a.last_summary}</div>
+              )}
+            </>
           )}
         </div>
       ))}

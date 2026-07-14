@@ -188,3 +188,14 @@ async def patch_automation_endpoint(automation_id: str, body: dict):
     if not ok:
         raise HTTPException(status_code=404, detail="automation not found or no valid fields")
     return {"status": "updated"}
+
+
+@router.delete("/api/v1/automations/{automation_id}")
+async def delete_automation_endpoint(automation_id: str):
+    result = await automations.delete(automation_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="automation not found")
+    if result == "is_system":
+        raise HTTPException(status_code=403,
+                            detail="system automations can be disabled but not deleted")
+    return {"status": "deleted"}

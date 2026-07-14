@@ -264,7 +264,16 @@ async def _manage_automations(args, ctx):
         ok = await auto.update(row["id"], **updates)
         return _j({"status": "updated" if ok else "failed", "name": row["name"]})
 
-    return f"Error: unknown action '{action}' (use list/create/update/enable/disable)"
+    if action == "delete":
+        row = await auto.get_by_name(args.get("name", ""))
+        if not row:
+            return f"Error: automation '{args.get('name')}' not found"
+        result = await auto.delete(row["id"])
+        if result == "is_system":
+            return f"Error: '{row['name']}' is a system automation — it can be disabled but not deleted"
+        return _j({"status": result, "name": row["name"]})
+
+    return f"Error: unknown action '{action}' (use list/create/update/enable/disable/delete)"
 
 
 # ── dispatch (declaration; execution is runner-inlined) ─────────────────
@@ -398,7 +407,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "refresh jobs. Minimum interval 5 minutes."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string",
-                       "enum": ["list", "create", "update", "enable", "disable"]},
+                       "enum": ["list", "create", "update", "enable", "disable", "delete"]},
             "name": {"type": "string", "description": "kebab-case unique name"},
             "description": {"type": "string"},
             "instruction": {"type": "string",

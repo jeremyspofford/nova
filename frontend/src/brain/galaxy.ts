@@ -69,6 +69,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
   // runtime settings (Brain HUD -> configure())
   let rotationSpeed = 2;                       // multiplier on the base spin
   let labelMode: 'auto' | 'on' | 'off' = 'auto';
+  let labelScale = 1;                          // text-size dial
 
   // clusters: category groupings labelled when zoomed out
   let clusters = new Map<string, { label: string; color: string; ids: string[] }>();
@@ -247,7 +248,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     // core identity label — the golden orb is Nova itself, the anchor the
     // memories orbit
     if (core.px != null) {
-      ctx.font = `600 ${Math.max(11, 13 * (core.pscale ?? 1))}px system-ui`;
+      ctx.font = `500 ${Math.min(14, Math.max(11, 12 * (core.pscale ?? 1))) * labelScale}px system-ui`;
       ctx.shadowColor = '#ffd682';
       ctx.shadowBlur = 12;
       ctx.fillStyle = 'rgba(255, 236, 200, 0.9)';
@@ -265,10 +266,11 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       const depthFade = Math.min(1, 380 / (s.pdepth ?? 380));
       const alpha = alphaBase * (s === hovered ? 1 : 0.9 * depthFade);
       if (alpha <= 0.03) continue;
-      const size = Math.max(10, 15 * (s.pscale ?? 1));
-      ctx.font = `600 ${size}px system-ui`;
+      // clamp: labels must not balloon as the camera closes in
+      const size = Math.min(15, Math.max(10, 13 * (s.pscale ?? 1))) * labelScale;
+      ctx.font = `500 ${size}px system-ui`;
       ctx.shadowColor = s.color;
-      ctx.shadowBlur = 14;
+      ctx.shadowBlur = 10;
       ctx.fillStyle = s === hovered ? '#ffffff' : `rgba(235, 250, 250, ${alpha})`;
       const text = s.node.label.length > 30 ? s.node.label.slice(0, 28) + '…' : s.node.label;
       ctx.fillText(text, s.px, s.py! + s.size * (s.pscale ?? 1) * 2.6 + size);
@@ -287,10 +289,10 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
         if (!count) continue;
         cx /= count; cy /= count; cd /= count;
         const depthFade = Math.min(1, 500 / cd);
-        const size = Math.max(16, 26 * (FOV / cd));
-        ctx.font = `700 ${size}px system-ui`;
+        const size = Math.min(20, Math.max(13, 22 * (FOV / cd))) * labelScale;
+        ctx.font = `600 ${size}px system-ui`;
         ctx.shadowColor = c.color;
-        ctx.shadowBlur = 22;
+        ctx.shadowBlur = 14;
         ctx.fillStyle = `rgba(240, 253, 250, ${0.85 * clusterLabelAlpha * depthFade})`;
         ctx.fillText(c.label, cx, cy - size * 0.4);
         ctx.shadowBlur = 0;
@@ -369,6 +371,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     },
     configure(options: Record<string, unknown>) {
       if (typeof options.rotationSpeed === 'number') rotationSpeed = options.rotationSpeed;
+      if (typeof options.labelScale === 'number') labelScale = options.labelScale;
       if (options.labelMode === 'auto' || options.labelMode === 'on' || options.labelMode === 'off') {
         labelMode = options.labelMode;
       }
