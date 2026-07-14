@@ -697,6 +697,8 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
   const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<CuratedModel | null>(null);
+  const [installed, setInstalled] = useState<Set<string>>(new Set());
+  const [pulls, setPulls] = useState<Record<string, string>>({});
   const emptyForm = {
     model: '', provider: 'ollama', min_ram_gb: '', min_vram_gb: '',
     tool_tier: 'B', speed: 'medium', roles: '', notes: '',
@@ -704,7 +706,34 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
   const [form, setForm] = useState(emptyForm);
 
   const load = () => getCuratedModels().then(setRows).catch(e => setStatus(String(e)));
-  useEffect(() => { load(); }, []);
+  const loadInstalled = () => getModels()
+    .then(ms => setInstalled(new Set(ms.filter(m => m.provider === 'ollama').map(m => m.id))))
+    .catch(() => {});
+  useEffect(() => { load(); loadInstalled(); }, []);
+
+  async function pullRow(m: CuratedModel) {
+    const name = m.model.startsWith('ollama:') ? m.model.slice(7) : m.model;
+    setPulls(p => ({ ...p, [m.model]: 'starting…' }));
+    try {
+      for await (const ev of pullModel(name)) {
+        if (typeof ev.error === 'string') {
+          setPulls(p => ({ ...p, [m.model]: `✗ ${ev.error}` }));
+          return;
+        }
+        const st = String(ev.status ?? '');
+        if (typeof ev.total === 'number' && typeof ev.completed === 'number' && ev.total > 0) {
+          const pct = Math.round((ev.completed / ev.total) * 100);
+          setPulls(p => ({ ...p, [m.model]: `${st} — ${pct}%` }));
+        } else if (st) {
+          setPulls(p => ({ ...p, [m.model]: st }));
+        }
+      }
+      setPulls(p => ({ ...p, [m.model]: '✓ installed' }));
+      loadInstalled();
+    } catch (err) {
+      setPulls(p => ({ ...p, [m.model]: `✗ ${err}` }));
+    }
+  }
 
   async function toggle(m: CuratedModel) {
     try { await patchCuratedModel(m.id, { enabled: !m.enabled }); load(); }
@@ -786,8 +815,10 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
       </summary>
       <div className="px-3 pb-3 space-y-2">
         <p className="text-xs text-stone-500">
-          Rough requirements per model; the probe is the truth. Seeded rows can
-          be toggled off but not rewritten; add your own rows for anything missing.
+          Rough requirements per model; the probe is the truth. <b>Enabled</b> =
+          participates in suggestions and the approved dropdown list — disable
+          to veto a model without deleting it. Seeded rows can be toggled but
+          not rewritten; add your own rows for anything missing.
         </p>
         {rows.map(m => (
           <div key={m.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
@@ -809,6 +840,17 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                     {m.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">seed</span>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {m.provider === 'ollama' && (
+                      installed.has(m.model) ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ installed</span>
+                      ) : (
+                        <button onClick={() => pullRow(m)}
+                          disabled={pulls[m.model] !== undefined && !pulls[m.model].startsWith('✗')}
+                          className="text-xs px-2 py-0.5 rounded bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white">
+                          pull
+                        </button>
+                      )
+                    )}
                     {editMode && !m.is_system && (
                       <>
                         <button onClick={() => startEdit(m)}
@@ -822,6 +864,7 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                       </>
                     )}
                     <button onClick={() => toggle(m)}
+                      title="Enabled rows feed suggestions and the approved dropdown list; disable to veto."
                       className={`text-xs px-2 py-0.5 rounded border ${
                         m.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
                       }`}>
@@ -835,6 +878,9 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                   {m.min_vram_gb != null && ` · ${m.min_vram_gb} GB VRAM`}
                 </div>
                 {m.notes && <div className="mt-0.5 text-[11px] text-stone-600 line-clamp-2">{m.notes}</div>}
+                {pulls[m.model] && (
+                  <div className="mt-0.5 text-[11px] font-mono text-stone-400">{pulls[m.model]}</div>
+                )}
                 {m.last_probe && (
                   <div className="mt-0.5 text-[11px] font-mono">{probeLine(m.last_probe)}
                     {m.probed_at && <span className="text-stone-600"> · {new Date(m.probed_at).toLocaleString()}</span>}

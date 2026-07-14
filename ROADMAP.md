@@ -353,7 +353,19 @@ See README for what works. This file is the ordered backlog.
    - *Redaction*: tool args can carry secrets; interplay with guardian
      rules and the no-secret-in-requests pattern.
 
-2. **Named local-inference endpoints (multi-backend)** — users run LM
+2. **Self-updating model curation (proposal flow)** — the curated table
+   must not rot, or recommendations rot with it. A scheduled automation has
+   model-manager (with web_search/fetch_url) research newly released local
+   and cloud models and PROPOSE curated rows: inserted **disabled**, never
+   auto-approved, with a journal report of what was found and why it might
+   matter. The operator's enable click remains the approval gate for
+   dropdowns and recommendations — the conversational lane never holds
+   approval power (guardian principle). Also in scope: refreshing stale
+   rows (pricing, superseded models) and flagging dead ones (models the
+   pin guard says providers no longer serve). Needs a `manage_curated`
+   tool granted to model-manager whose writes always land disabled.
+
+3. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -363,7 +375,7 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
-3. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+4. **Chat activity in the brain views (designed 2026-07-14, build later)** —
    while Nova is answering, the brain should visibly "think", whatever theme
    is active. Design:
    - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
@@ -382,7 +394,7 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
-4. **Platform entities in the brain graph** — agents, automations, tools,
+5. **Platform entities in the brain graph** — agents, automations, tools,
    and rules join the galaxy/graph as first-class nodes (skills are already
    there via memory). The brain becomes the full map of what Nova *is*:
    knowledge (topics), experience (journals), capabilities (skills, tools,
@@ -397,7 +409,7 @@ See README for what works. This file is the ordered backlog.
    - HUD filter chips (or a Settings toggle) so the memory-only view stays
      one click away — ~40 extra nodes shouldn't drown the knowledge graph.
 
-5. **PWA — Nova on the phone (until a native app)** — installable web app
+6. **PWA — Nova on the phone (until a native app)** — installable web app
    served from the same stack. The manifest/service-worker part is easy;
    the real prerequisites are exposure and layout. Ordered plan:
    1. *Auth first* (pulls the "Later" auth item forward): single admin
