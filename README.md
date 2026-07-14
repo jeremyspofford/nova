@@ -56,6 +56,17 @@ real ceiling for the bundled Ollama), and on Docker Desktop the VM hides
 the host's memory entirely (that's what the override is for). The Detect &
 suggest card names the platform and says exactly which number sizing used.
 
+**Concurrent load**: assigning different large local models to different
+agents doesn't crash — Ollama evicts or spills to CPU, which shows up as
+silent multi-second reloads on every agent switch. And in Nova concurrency
+is the *common* case: a dispatch turn runs main's model and the sub-agent's
+within one request. Settings → Inference shows stacked VRAM/RAM bars for
+"if every assigned local model loads at once" (distinct models only — many
+agents on one model is one load; cloud models cost zero), suggestions run a
+consolidation pass so the recommended set fits together, and **Keep chat
+model loaded** pins main's local model in memory (re-pinned automatically
+after Ollama restarts) so chat never pays the reload.
+
 Nova never guesses at hardware: GPU presence comes from `docker info`, the
 GPU name and total VRAM from `nvidia-smi` inside the ollama container, and
 per-model VRAM/GPU usage from Ollama `/api/ps` during "test this model"

@@ -44,6 +44,12 @@ SETTING_DEFS: list[dict] = [
      "default": "qwen2.5:3b", "section": "Inference",
      "label": "Local fallback model",
      "description": "Ollama model used when no OpenRouter key is configured."},
+    {"key": "inference.keep_chat_model_warm", "type": "boolean", "default": False,
+     "section": "Inference", "label": "Keep chat model loaded",
+     "description": ("Pin main's local model in Ollama memory so chat answers "
+                     "without a multi-second reload (re-pins after Ollama "
+                     "restarts; unpins when main moves to cloud). Ollama may "
+                     "still swap it out under heavy memory pressure.")},
     {"key": "inference.memory_gb_override", "type": "number", "default": 0,
      "min": 0, "max": 2048, "section": "Inference",
      "label": "Memory override for model sizing (GB)",

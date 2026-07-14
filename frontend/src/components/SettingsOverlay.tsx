@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   AgentInfo, Automation, BundledInferenceStatus, CuratedModel, DbToolInfo,
-  ModelInfo, ModelRecommendation, ProbeResult, RecommendationsResponse, Rule,
-  SettingDef, ToolsCatalog, createAgent, createAutomation, createCuratedModel,
-  createRule, createTool, deleteAgent, deleteAutomation, deleteCuratedModel,
-  deleteRule, deleteTool, getAgents, getAutomations, getBundledInference,
-  getCuratedModels, getModels, getRecommendations, getRules, getSettings,
-  getTools, patchAgent, patchAutomation, patchCuratedModel, patchRule,
-  patchSettings, patchTool, pullModel, setBundledInference, testModel,
+  ModelBudget, ModelInfo, ModelRecommendation, ProbeResult,
+  RecommendationsResponse, Rule, SettingDef, ToolsCatalog, createAgent,
+  createAutomation, createCuratedModel, createRule, createTool, deleteAgent,
+  deleteAutomation, deleteCuratedModel, deleteRule, deleteTool, getAgents,
+  getAutomations, getBundledInference, getCuratedModels, getModelBudget,
+  getModels, getRecommendations, getRules, getSettings, getTools, patchAgent,
+  patchAutomation, patchCuratedModel, patchRule, patchSettings, patchTool,
+  pullModel, setBundledInference, testModel,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { displayName } from '../names';
@@ -233,6 +234,7 @@ function SettingsTab({ only, exclude, editMode = false }:
               </div>
             ))}
             {section === 'Inference' && <PullModel onPulled={() => getModels().then(setModels)} />}
+            {section === 'Inference' && <ConcurrentLoad />}
             {section === 'Inference' && <DetectSuggest />}
             {section === 'Inference' && <CuratedTable editMode={editMode} />}
           </div>
@@ -384,6 +386,109 @@ function probeLine(p: ProbeResult | 'running' | undefined) {
       ✓ tool call verified · {p.tok_s != null && `${p.tok_s} tok/s · `}
       TTFT {p.ttft_ms} ms · {p.gpu_active ? `GPU (${p.vram_gb ?? '?'} GB VRAM)` : p.gpu_active === false ? 'CPU' : 'cloud'}
     </span>
+  );
+}
+
+const BAR_COLORS = ['bg-teal-600', 'bg-sky-600', 'bg-violet-600', 'bg-amber-600',
+  'bg-rose-600', 'bg-lime-600'];
+
+/** One stacked memory bar: distinct local models as segments vs the pool
+ *  total. Many agents on one model = one segment (one load in Ollama). */
+function MemoryBar({ label, used, total, over, items }: {
+  label: string; used: number; total: number | null; over: boolean;
+  items: { model: string; gb: number | null; source: string; pinned: boolean; agents: string[] }[];
+}) {
+  if (!items.length) return null;
+  const denom = total && total > 0 ? Math.max(total, used) : Math.max(used, 1);
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-[11px] text-stone-400">
+        <span>{label}</span>
+        <span className={over ? 'text-red-400' : ''}>
+          {used} / {total ?? '?'} GB{over && total != null ? ` — over by ${Math.round((used - total) * 10) / 10} GB` : ''}
+        </span>
+      </div>
+      <div className="h-2.5 rounded bg-stone-800 overflow-hidden flex">
+        {items.map((it, i) => (
+          <div
+            key={it.model}
+            title={`${it.model} — ${it.gb ?? '?'} GB (${it.source})`}
+            className={`${BAR_COLORS[i % BAR_COLORS.length]} ${it.source !== 'probe' ? 'opacity-60' : ''} h-full`}
+            style={{ width: `${((it.gb ?? 0) / denom) * 100}%` }}
+          />
+        ))}
+        {total != null && used < total && <div className="flex-1" />}
+      </div>
+      <div className="space-y-0.5">
+        {items.map((it, i) => (
+          <div key={it.model} className="flex items-center gap-1.5 text-[11px]">
+            <span className={`w-2 h-2 rounded-sm shrink-0 ${BAR_COLORS[i % BAR_COLORS.length]}`} />
+            <span className="font-mono text-stone-300 truncate">{it.model}</span>
+            <span className="text-stone-500 shrink-0">
+              {it.gb != null ? `${it.gb} GB` : '? GB'}
+              {it.source === 'estimate' ? ' est.' : it.source === 'unknown' ? ' — probe it' : ''}
+              {it.pinned ? ' · 📌 pinned' : ''}
+            </span>
+            <span className="text-stone-600 truncate">· {it.agents.join(', ')}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Both pools of a budget, plus the cloud models listed at zero. */
+function BudgetBars({ budget }: { budget: ModelBudget }) {
+  const vramItems = budget.items.filter(i => i.pool === 'vram');
+  const ramItems = budget.items.filter(i => i.pool === 'ram');
+  const cloudItems = budget.items.filter(i => i.pool === 'cloud');
+  return (
+    <div className="space-y-2">
+      <MemoryBar label="VRAM if all load at once" used={budget.vram_used_gb}
+        total={budget.vram_total_gb} over={budget.vram_over} items={vramItems} />
+      <MemoryBar label="RAM if all load at once (OS overhead not included)"
+        used={budget.ram_used_gb} total={budget.ram_total_gb}
+        over={budget.ram_over} items={ramItems} />
+      {cloudItems.length > 0 && (
+        <div className="text-[11px] text-stone-600">
+          cloud (0 GB local): {cloudItems.map(i => `${i.model} (${i.agents.length})`).join(' · ')}
+        </div>
+      )}
+      {(budget.vram_over || budget.ram_over) && (
+        <div className="text-[11px] text-amber-400/90">
+          Over budget doesn't crash — Ollama evicts or spills to CPU, which
+          shows up as multi-second reloads on every agent switch.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Concurrent-load card for the CURRENT assignments. In Nova concurrency is
+ *  the common case: a dispatch turn runs main's model and the sub-agent's
+ *  within one request. */
+function ConcurrentLoad() {
+  const [budget, setBudget] = useState<ModelBudget | null>(null);
+  const load = () => getModelBudget().then(setBudget).catch(() => setBudget(null));
+  useEffect(() => {
+    load();
+    const onChange = () => load();
+    window.addEventListener('nova:setting-changed', onChange);
+    return () => window.removeEventListener('nova:setting-changed', onChange);
+  }, []);
+
+  if (!budget) return null;
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="text-sm text-stone-200">Concurrent load — current assignments</div>
+        <button onClick={load}
+          className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
+          refresh
+        </button>
+      </div>
+      <BudgetBars budget={budget} />
+    </div>
   );
 }
 
@@ -556,6 +661,10 @@ function DetectSuggest() {
               )}
             </div>
           ))}
+          <div className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
+            <div className="text-[11px] text-stone-400 mb-1.5">If all SUGGESTED models load at once:</div>
+            <BudgetBars budget={recs.budget} />
+          </div>
           {switches.length > 1 && (
             <button
               onClick={applyAll}

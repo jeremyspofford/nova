@@ -253,6 +253,14 @@ async def model_recommendations_endpoint():
     return await model_recs.recommendations()
 
 
+@router.get("/api/v1/models/budget")
+async def model_budget_endpoint():
+    """Concurrent-load math for the CURRENT assignments — what memory looks
+    like if every assigned local model is loaded at once."""
+    from app import model_recs
+    return await model_recs.current_budget()
+
+
 @router.post("/api/v1/models/test")
 async def model_test_endpoint(body: dict):
     """Probe a model on this machine: TTFT/tok_s plus a mechanically verified

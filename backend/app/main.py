@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import db, rules, scheduler, settings_store
+from app import db, model_warmer, rules, scheduler, settings_store
 from app.config import settings
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
@@ -25,14 +25,16 @@ async def lifespan(app: FastAPI):
     await rules.warm()
     await memory.startup()
     scheduler_task = asyncio.create_task(scheduler.loop())
+    warmer_task = asyncio.create_task(model_warmer.loop())
     log.info("Backend ready")
     yield
     log.info("Shutting down...")
-    scheduler_task.cancel()
-    try:
-        await scheduler_task
-    except asyncio.CancelledError:
-        pass
+    for task in (scheduler_task, warmer_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await db.close_pool()
 
 

@@ -304,6 +304,10 @@ async def _recommend_models(args, ctx):
             {k: r[k] for k in ("agent", "profile", "current_model", "status",
                                "suggested_model", "reason", "alternates")}
             for r in recs["recommendations"]],
+        "concurrent_load_if_all_suggested_load_at_once": {
+            k: recs["budget"][k] for k in
+            ("vram_used_gb", "vram_total_gb", "vram_over",
+             "ram_used_gb", "ram_total_gb", "ram_over")},
         "note": ("Suggestions come from the curated model table sized against "
                  "this machine. They can be verified with the test probe in "
                  "Settings → Inference; local models must be pulled before "

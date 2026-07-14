@@ -21,10 +21,10 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app import curated_models, hardware, models_catalog, settings_store
+from app import curated_models, hardware, model_warmer, models_catalog, settings_store
 from app.agents import registry as agent_registry
 from app.config import settings
-from app.llm.router import _resolve
+from app.llm.router import _resolve, effective_model
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +137,126 @@ def _reason(profile: str, pick: dict, hw: dict) -> str:
     return f"{why}; tier-{pick['tool_tier']} {pick['speed']}, {where}"
 
 
+# ── concurrent-load budget: what happens if everything loads at once ─────
+#
+# Ollama doesn't crash when assigned models exceed memory — it evicts or
+# spills to CPU, which shows up as silent multi-second reloads per agent
+# switch. In Nova concurrency is the COMMON case (a dispatch turn runs
+# main's model AND the sub-agent's within one request), so the math is over
+# DISTINCT local models: many agents on one model = one load; cloud = zero.
+
+def _footprint(model: str, rows_by_model: dict, hw: dict) -> dict:
+    """{pool: 'vram'|'ram'|'cloud', gb, source: 'probe'|'estimate'|'unknown'}"""
+    if not model.startswith("ollama:"):
+        return {"pool": "cloud", "gb": 0.0, "source": "probe"}
+    row = rows_by_model.get(model)
+    probe = (row or {}).get("last_probe") or {}
+    if probe.get("gpu_active") and probe.get("vram_gb"):
+        return {"pool": "vram", "gb": probe["vram_gb"], "source": "probe"}
+    if probe.get("gpu_active") is False:
+        gb = (row or {}).get("min_ram_gb")
+        return {"pool": "ram", "gb": gb, "source": "estimate" if gb else "unknown"}
+    if row:  # never probed: guess the pool from hardware + curated minimums
+        vram = _vram_known(hw)
+        if hw.get("nvidia_runtime") and vram and row.get("min_vram_gb") \
+                and row["min_vram_gb"] <= vram:
+            return {"pool": "vram", "gb": row["min_vram_gb"], "source": "estimate"}
+        if row.get("min_ram_gb"):
+            return {"pool": "ram", "gb": row["min_ram_gb"], "source": "estimate"}
+    return {"pool": "vram" if hw.get("nvidia_runtime") else "ram",
+            "gb": None, "source": "unknown"}
+
+
+def _budget(assignments: dict[str, list[str]], rows: list[dict], hw: dict) -> dict:
+    """assignments: model id -> agent names using it (already deduplicated)."""
+    rows_by_model = {r["model"]: r for r in rows}
+    pinned = f"ollama:{model_warmer.state['pinned']}" \
+        if model_warmer.state["pinned"] else None
+    items = [{"model": m, "agents": agents,
+              **_footprint(m, rows_by_model, hw), "pinned": m == pinned}
+             for m, agents in sorted(assignments.items())]
+    vram_used = round(sum(i["gb"] or 0 for i in items if i["pool"] == "vram"), 1)
+    ram_used = round(sum(i["gb"] or 0 for i in items if i["pool"] == "ram"), 1)
+    vram_total = hw.get("vram_total_gb")
+    ram_total = hw.get("sizing_ram_gb")
+    return {"items": items,
+            "vram_used_gb": vram_used, "vram_total_gb": vram_total,
+            "ram_used_gb": ram_used, "ram_total_gb": ram_total,
+            "vram_over": bool(vram_total and vram_used > vram_total),
+            "ram_over": bool(ram_total and ram_used > ram_total),
+            "unknown_count": sum(1 for i in items if i["source"] == "unknown")}
+
+
+async def current_budget() -> dict:
+    """Concurrent-load math for what is ASSIGNED right now (enabled agents
+    + the compaction setting), using effective models — what actually runs."""
+    hw = await hardware.detect()
+    rows = await curated_models.list_all()
+    assignments: dict[str, list[str]] = {}
+    for a in await agent_registry.list_agents(enabled_only=True):
+        assignments.setdefault(effective_model(a["model"]), []).append(a["name"])
+    comp = settings_store.get("compaction.model")
+    if comp:
+        assignments.setdefault(effective_model(comp), []).append("compaction (setting)")
+    return {"hardware": hw, **_budget(assignments, rows, hw)}
+
+
+# consolidation preserves the most latency-critical profiles' picks
+_PROFILE_PRIORITY = {"compaction": 0, "guard": 1, "tools": 2, "chat": 3}
+
+
+def _consolidate(out: list[dict], per_profile: dict, rows: list[dict],
+                 hw: dict) -> dict:
+    """While the suggested set is over budget, move the least-critical
+    profile group off its distinct local model and onto the best candidate
+    already in the suggested set (no new load ⇒ no new footprint). Returns
+    the final budget; an unresolvable overage stays visible as a warning."""
+    def assignments() -> dict:
+        a: dict[str, list[str]] = {}
+        for r in out:
+            if r.get("suggested_model"):
+                a.setdefault(r["suggested_model"], []).append(r["agent"])
+        return a
+
+    for _ in range(len(_PROFILE_PRIORITY)):
+        budget = _budget(assignments(), rows, hw)
+        if not (budget["vram_over"] or budget["ram_over"]):
+            return budget
+        in_set = set(assignments())
+        groups: dict[tuple, list[dict]] = {}
+        for r in out:
+            m = r.get("suggested_model")
+            if m and m.startswith("ollama:"):
+                key = (_PROFILE_PRIORITY.get(r["profile"], 9), r["profile"], m)
+                groups.setdefault(key, []).append(r)
+        replaced = False
+        for key in sorted(groups):
+            _prio, profile, m = key
+            eligible = [c for c in per_profile[profile]
+                        if c["model"] in in_set and c["model"] != m]
+            if not eligible:
+                continue
+            alt = eligible[0]
+            # an exact-rank tie prefers the group's current model — same
+            # no-churn rule as _pick_for
+            current = groups[key][0]["current_model"]
+            for c in eligible:
+                if c["_key"] == eligible[0]["_key"] and c["model"] == current:
+                    alt = c
+                    break
+            for r in groups[key]:
+                r["suggested_model"] = alt["model"]
+                r["status"] = "keep" if alt["model"] == r["current_model"] else "switch"
+                r["reason"] = (_reason(profile, alt, hw)
+                               + " — consolidated onto an already-suggested "
+                                 "model instead of a second large local load")
+            replaced = True
+            break
+        if not replaced:
+            return budget
+    return _budget(assignments(), rows, hw)
+
+
 async def recommendations() -> dict:
     hw = await hardware.detect()
     rows = await curated_models.list_all(enabled_only=True)
@@ -205,8 +325,10 @@ async def recommendations() -> dict:
                            for a in comp_cands if a["model"] != pick["model"]][:2],
         })
 
+    budget = _consolidate(out, per_profile, rows, hw)
     return {"hardware": hw, "cloud_available": cloud_ok,
-            "curated_count": len(rows), "recommendations": out}
+            "curated_count": len(rows), "recommendations": out,
+            "budget": budget}
 
 
 # ── the probe: verified on YOUR hardware, mechanically ───────────────────

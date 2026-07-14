@@ -216,6 +216,30 @@ See README for what works. This file is the ordered backlog.
   unified path itself needs a Mac to exercise — logic shipped, untested on
   real Metal (this box has an NVIDIA runtime, so the branch can't trigger).
 
+- **Concurrent-load budget + keep-warm (2026-07-14)** — models compete for
+  the same memory, and in Nova concurrency is the COMMON case (a dispatch
+  turn runs main's model and the sub-agent's in one request; automations
+  fire in the background). New budget math over DISTINCT local models
+  (many agents on one model = one Ollama load; cloud = zero): footprints
+  from probe measurements where available, curated minimums as labeled
+  estimates otherwise, split into VRAM and RAM pools. Surfaces: stacked
+  VRAM/RAM bars in Settings → Inference for current assignments
+  (GET /api/v1/models/budget) and for the suggested set inside Detect &
+  suggest; recommend_models reports the same numbers. The engine runs a
+  consolidation pass when the suggested set is over budget: least-critical
+  profiles first (compaction < guard < tools < chat), moved onto the best
+  candidate already in the set (no new load = no new footprint), reasons
+  rewritten to describe the final pick, exact-rank ties keep the current
+  model, unresolvable overage stays visible as a warning ("over budget
+  doesn't crash — Ollama evicts or spills, felt as multi-second reloads").
+  **Keep chat model loaded** setting + warmer loop: pins main's local model
+  via native /api/generate keep_alive=-1 (the OpenAI-compat endpoint has no
+  keep_alive), re-pins after Ollama restarts (60s tick), unpins on disable
+  or model change; pinned model marked 📌 on the bars. Live-verified:
+  natural over-budget case (32b estimate + probed 3b > 24 GB) triggered
+  consolidation onto the already-suggested cloud model with local
+  alternates intact; warmer pin/unpin verified against ollama /api/ps.
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM

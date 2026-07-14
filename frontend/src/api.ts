@@ -407,11 +407,38 @@ export interface ModelRecommendation {
   alternates: { model: string; note: string }[];
 }
 
+export interface BudgetItem {
+  model: string;
+  agents: string[];
+  pool: 'vram' | 'ram' | 'cloud';
+  gb: number | null;
+  source: 'probe' | 'estimate' | 'unknown';
+  pinned: boolean;
+}
+
+export interface ModelBudget {
+  items: BudgetItem[];
+  vram_used_gb: number;
+  vram_total_gb: number | null;
+  ram_used_gb: number;
+  ram_total_gb: number | null;
+  vram_over: boolean;
+  ram_over: boolean;
+  unknown_count: number;
+}
+
 export interface RecommendationsResponse {
   hardware: HardwareInfo;
   cloud_available: boolean;
   curated_count: number;
   recommendations: ModelRecommendation[];
+  budget: ModelBudget;
+}
+
+export async function getModelBudget(): Promise<ModelBudget & { hardware: HardwareInfo }> {
+  const r = await fetch(`${API_URL}/api/v1/models/budget`);
+  if (!r.ok) throw new Error('Failed to load model budget');
+  return r.json();
 }
 
 export async function getRecommendations(): Promise<RecommendationsResponse> {
