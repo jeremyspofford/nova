@@ -129,8 +129,24 @@ async def get_active_conversation():
 
 @router.get("/api/v1/conversations/{conversation_id}/messages")
 async def get_messages(conversation_id: str):
+    """User/assistant turns plus the persisted activity trail (tool rows) —
+    the UI shows past turns' actions as a dim, collapsible trace."""
     history = await conversations.load_history(conversation_id, limit=100)
-    return [m for m in history if m["role"] in ("user", "assistant") and m["content"]]
+    out = []
+    for m in history:
+        if m["role"] in ("user", "assistant") and m["content"]:
+            out.append({"id": m["id"], "role": m["role"], "content": m["content"],
+                        "created_at": m["created_at"]})
+        elif m["role"] == "tool" and m["tool_calls"]:
+            tc = m["tool_calls"]
+            if isinstance(tc, str):
+                try:
+                    tc = json.loads(tc)
+                except ValueError:
+                    continue
+            out.append({"id": m["id"], "role": "tool", "content": m["content"] or "",
+                        "created_at": m["created_at"], "tool_calls": tc})
+    return out
 
 
 @router.get("/api/v1/agents")
@@ -151,6 +167,14 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
         raise HTTPException(status_code=422, detail="no editable fields provided")
     if any(k in _AGENT_EDIT_FIELDS for k in allowed):
         _require_edit_mode()
+    if allowed.get("enabled") is False:
+        target = next((a for a in await agent_registry.list_agents(enabled_only=False)
+                       if a["id"] == agent_id), None)
+        if target and target["is_system"]:
+            raise HTTPException(
+                status_code=403,
+                detail="system agents are always active — constrain them with "
+                       "rules and tool grants instead")
     if "model" in allowed and ":" not in str(allowed["model"]):
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")

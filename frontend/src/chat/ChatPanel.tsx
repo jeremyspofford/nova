@@ -8,11 +8,95 @@ import { displayName } from '../names';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
-  | { id: string; kind: 'activity'; activity: Activity }
+  | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
   | { id: string; kind: 'error'; content: string };
 
 let nextId = 0;
 const uid = () => `ui-${++nextId}`;
+
+function renderItem(item: Item) {
+  if (item.kind === 'activity') {
+    if (item.activity.kind === 'narration') {
+      return (
+        <div key={item.id} className={`text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
+          ⚠ {displayName(item.activity.name)} announced an action but
+          called no tool — the described work did <b>not</b> happen.
+        </div>
+      );
+    }
+    return (
+      <div key={item.id} className="text-xs text-amber-400/80 font-mono px-1">
+        {activityLabel(item.activity)}
+      </div>
+    );
+  }
+  if (item.kind === 'error') {
+    return (
+      <div key={item.id} className="text-xs text-red-400 bg-red-950/40 border border-red-900 rounded px-3 py-2">
+        {item.content}
+      </div>
+    );
+  }
+  return (
+    <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div className={`max-w-[85%] min-w-0 break-words px-3 py-2 rounded-lg text-sm ${
+        item.role === 'user'
+          ? 'bg-teal-700 text-white whitespace-pre-wrap'
+          : 'bg-stone-800 text-stone-100'
+      }`}>
+        {item.streaming && !item.content ? (
+          // waiting for the first token — bouncing "typing" dots
+          <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
+            {[0, 150, 300].map(delay => (
+              <span
+                key={delay}
+                className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
+                style={{ animationDelay: `${delay}ms` }}
+              />
+            ))}
+          </span>
+        ) : (
+          <>
+            {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
+            {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Past turns' activity trail collapses into a dim expandable trace so it's
+ *  reviewable without competing with the conversation; narration warnings
+ *  stay visible (dimmed). Live activity renders inline as it happens. */
+function renderGrouped(items: Item[]) {
+  const blocks: React.ReactNode[] = [];
+  let trace: Extract<Item, { kind: 'activity' }>[] = [];
+  const flush = () => {
+    if (!trace.length) return;
+    blocks.push(
+      <details key={`trace-${trace[0].id}`} className="opacity-70 hover:opacity-100 transition-opacity">
+        <summary className="text-[11px] text-stone-600 cursor-pointer select-none px-1">
+          ⚙ {trace.length} agent action{trace.length > 1 ? 's' : ''}
+        </summary>
+        <div className="space-y-1 mt-1 pl-2 border-l border-stone-800">
+          {trace.map(renderItem)}
+        </div>
+      </details>,
+    );
+    trace = [];
+  };
+  for (const item of items) {
+    if (item.kind === 'activity' && item.fromHistory && item.activity.kind !== 'narration') {
+      trace.push(item);
+    } else {
+      flush();
+      blocks.push(renderItem(item));
+    }
+  }
+  flush();
+  return blocks;
+}
 
 const activityLabel = (a: Activity): string => {
   switch (a.kind) {
@@ -91,9 +175,17 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
         const conv = await getActiveConversation();
         setConversationId(conv.id);
         const msgs = await getMessages(conv.id);
-        setItems(msgs.map(m => ({
-          id: m.id, kind: 'msg' as const, role: m.role, content: m.content,
-        })));
+        setItems(msgs.map((m): Item => m.role === 'tool'
+          ? {
+              id: m.id, kind: 'activity', fromHistory: true,
+              activity: {
+                kind: m.tool_calls?.kind ?? 'tool_result',
+                name: m.tool_calls?.name ?? '',
+                agent: m.tool_calls?.agent,
+                detail: m.content,
+              },
+            }
+          : { id: m.id, kind: 'msg', role: m.role, content: m.content }));
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
       }
@@ -187,57 +279,7 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
           </div>
         )}
 
-        {items.map(item => {
-          if (item.kind === 'activity') {
-            if (item.activity.kind === 'narration') {
-              return (
-                <div key={item.id} className="text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5">
-                  ⚠ {displayName(item.activity.name)} announced an action but
-                  called no tool — the described work did <b>not</b> happen.
-                </div>
-              );
-            }
-            return (
-              <div key={item.id} className="text-xs text-amber-400/80 font-mono px-1">
-                {activityLabel(item.activity)}
-              </div>
-            );
-          }
-          if (item.kind === 'error') {
-            return (
-              <div key={item.id} className="text-xs text-red-400 bg-red-950/40 border border-red-900 rounded px-3 py-2">
-                {item.content}
-              </div>
-            );
-          }
-          return (
-            <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] min-w-0 break-words px-3 py-2 rounded-lg text-sm ${
-                item.role === 'user'
-                  ? 'bg-teal-700 text-white whitespace-pre-wrap'
-                  : 'bg-stone-800 text-stone-100'
-              }`}>
-                {item.streaming && !item.content ? (
-                  // waiting for the first token — bouncing "typing" dots
-                  <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
-                    {[0, 150, 300].map(delay => (
-                      <span
-                        key={delay}
-                        className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
-                        style={{ animationDelay: `${delay}ms` }}
-                      />
-                    ))}
-                  </span>
-                ) : (
-                  <>
-                    {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
-                    {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        {renderGrouped(items)}
         <div ref={endRef} />
       </div>
 

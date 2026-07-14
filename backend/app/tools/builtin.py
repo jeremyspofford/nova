@@ -53,6 +53,16 @@ async def _read_memory_item(args, ctx):
     return _j(item) if item else "Error: item not found"
 
 
+async def _delete_memory_item(args, ctx):
+    item_id = (args.get("item_id") or "").strip()
+    if not (item_id.startswith("skills/") or item_id.startswith("topics/")):
+        return ("Error: only skills/ and topics/ items can be deleted — "
+                "journals are the audit trail and identity is protected")
+    if await memory.delete_item(item_id):
+        return _j({"status": "deleted", "id": item_id})
+    return f"Error: item '{item_id}' not found"
+
+
 # ── agents ───────────────────────────────────────────────────────────────
 
 async def _list_agents(args, ctx):
@@ -544,6 +554,20 @@ BUILTIN_TOOLS: dict[str, dict] = {
                      "description": "true = the entire catalog of authenticated providers, not just approved models"},
         }},
         "execute": _list_models,
+    },
+    "delete_memory_item": {
+        "name": "delete_memory_item",
+        "description": ("Permanently delete a skill or topic from memory by item "
+                        "id (e.g. skills/weather-clothing-advice.md). Only "
+                        "skills/ and topics/ can be deleted — journals and "
+                        "identity cannot. Confirm the exact id first "
+                        "(search_memory / read_memory_item) and report the "
+                        "returned status, never your intention."),
+        "parameters": {"type": "object", "properties": {
+            "item_id": {"type": "string",
+                        "description": "e.g. skills/weather-clothing-advice.md"},
+        }, "required": ["item_id"]},
+        "execute": _delete_memory_item,
     },
     "recommend_models": {
         "name": "recommend_models",

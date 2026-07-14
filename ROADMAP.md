@@ -344,6 +344,24 @@ See README for what works. This file is the ordered backlog.
   409 correctly listed "compaction (setting), local fallback (setting)"
   for qwen2.5:3b; full pull → uninstall → gone cycle on qwen2.5:0.5b.
 
+- **Delete capability + always-active system agents + persistent activity
+  trail (2026-07-14)** — the 19:24 incident ("✅ skill deleted", zero tool
+  calls, file untouched — narration detector caught it live) exposed a
+  capability hole: NO agent tool could delete anything, so even a perfect
+  dispatch would have dead-ended. New `delete_memory_item` builtin
+  (skills/ and topics/ only — journals are the audit trail, identity is
+  excluded by path AND the protect-soul rule now watches it), granted to
+  skill-manager with confirm-from-status prompt discipline (migration
+  020). Acid test: dispatch → search → read → delete, file verifiably
+  gone. Operator decisions shipped alongside: **system agents are always
+  active** ("always active" badge instead of a toggle; API 403s disable
+  attempts — rules and tool grants are the constraint mechanisms), and the
+  **activity trail persists across refresh**: tool rows return with
+  history and past turns render as dim collapsible "⚙ N agent actions"
+  traces, narration warnings staying visible (dimmed) — you can audit any
+  old request/response without it shouting. Curated-table hint now says
+  "Approved" to match its switch.
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's

@@ -852,10 +852,10 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
       </summary>
       <div className="px-3 pb-3 space-y-2">
         <p className="text-xs text-stone-500">
-          Rough requirements per model; the probe is the truth. <b>Enabled</b> =
-          participates in suggestions and the approved dropdown list — disable
-          to veto a model without deleting it. Seeded rows can be toggled but
-          not rewritten; add your own rows for anything missing.
+          Rough requirements per model; the probe is the truth. <b>Approved</b> =
+          feeds suggestions and the model dropdowns; switching it off vetoes the
+          model but never deletes the row — flip it back anytime. Seeded rows
+          can be toggled but not rewritten; add your own for anything missing.
         </p>
         {rows.map(m => (
           <div key={m.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
@@ -1243,10 +1243,6 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
   }
 
   async function toggle(a: AgentInfo) {
-    if (a.name === 'main' && a.enabled) {
-      setStatus('main cannot be disabled — it is the chat itself');
-      return;
-    }
     try {
       await patchAgent(a.id, { enabled: !a.enabled });
       load();
@@ -1417,8 +1413,15 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
                       delete
                     </button>
                   )}
-                  <Toggle on={a.enabled} onChange={() => toggle(a)} label="active"
-                    title="Inactive agents leave the dispatch index and can't run — the off switch for system agents, which can't be deleted." />
+                  {a.is_system ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-stone-700 text-stone-500 select-none"
+                      title="System agents are core infrastructure and always active — constrain them with rules and tool grants.">
+                      always active
+                    </span>
+                  ) : (
+                    <Toggle on={a.enabled} onChange={() => toggle(a)} label="active"
+                      title="Inactive agents leave the dispatch index and can't run." />
+                  )}
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>

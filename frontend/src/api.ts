@@ -80,9 +80,10 @@ export async function getActiveConversation(): Promise<{ id: string; title: stri
 
 export interface StoredMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
   created_at: string;
+  tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
 }
 
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
