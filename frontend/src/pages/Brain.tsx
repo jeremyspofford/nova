@@ -19,7 +19,15 @@ export function Brain() {
   const rendererRef = useRef<RendererHandle | null>(null);
   const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
-  const [theme] = useState(DEFAULT_THEME);
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('nova.brain.theme');
+    return saved && saved in THEMES ? saved : DEFAULT_THEME;
+  });
+
+  const pickTheme = (key: string) => {
+    setTheme(key);
+    localStorage.setItem('nova.brain.theme', key);
+  };
 
   const openDetail = useCallback(async (id: string) => {
     try {
@@ -72,13 +80,30 @@ export function Brain() {
     <div className="relative w-full h-screen overflow-hidden bg-stone-950">
       <canvas ref={canvasRef} className="absolute top-0 left-0" />
 
-      {stats && (
-        <div className="absolute top-4 left-4 z-10 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
-          <span className="text-teal-400">{stats.topic ?? 0} topics</span>
-          <span className="text-amber-400">{stats.skill ?? 0} skills</span>
-          <span>{stats.journal ?? 0} journals</span>
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
+        {stats && (
+          <div className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
+            <span className="text-teal-400">{stats.topic ?? 0} topics</span>
+            <span className="text-amber-400">{stats.skill ?? 0} skills</span>
+            <span>{stats.journal ?? 0} journals</span>
+          </div>
+        )}
+        <div className="flex rounded-lg overflow-hidden border border-stone-700 bg-stone-900/80 backdrop-blur text-xs">
+          {Object.entries(THEMES).map(([key, t]) => (
+            <button
+              key={key}
+              onClick={() => pickTheme(key)}
+              className={`px-3 py-2 transition ${
+                theme === key
+                  ? 'bg-teal-700/60 text-teal-200'
+                  : 'text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
       {/* Node detail — the graph is a metadata index; full content on demand */}
       {detail && (

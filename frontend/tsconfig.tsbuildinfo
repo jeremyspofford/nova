@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/brain/graph2d.ts","./src/brain/theme.ts","./src/chat/ChatPanel.tsx","./src/components/Markdown.tsx","./src/pages/Brain.tsx"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/brain/galaxy.ts","./src/brain/graph2d.ts","./src/brain/theme.ts","./src/chat/ChatPanel.tsx","./src/components/Markdown.tsx","./src/pages/Brain.tsx"],"version":"5.9.3"}

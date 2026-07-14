@@ -57,11 +57,16 @@ See README for what works. This file is the ordered backlog.
   47 messages into a summary that correctly answered "what did we do at the
   beginning"; idempotent (no re-compaction); raw exchanges stay journaled.
 
-## Next up
+- **Galaxy theme** (2026-07-13) — canvas-2D homage to the v0.1.0-alpha
+  Three.js brain (recipe recovered from the tag + era screenshots): breathing
+  star nodes with additive glow + white-hot centers, domain cluster colors,
+  Fibonacci-sphere cluster layout with light 3D relaxation, slow auto-orbit
+  (drag to orbit, wheel to zoom, click for detail), neon depth-faded topic
+  labels, starfield + nebula backdrop, golden core anchor. HUD theme picker
+  (Graph/Galaxy) persisted in localStorage. Upgrade path: true Three.js +
+  UnrealBloom behind the same theme key if fidelity falls short.
 
-1. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
-   style renderer), add a theme picker in the HUD, persist choice in
-   localStorage.
+## Next up
 
 
 ## Later

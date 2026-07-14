@@ -5,6 +5,7 @@
  */
 
 import type { GraphNode, GraphEdge } from '../api';
+import { createGalaxy } from './galaxy';
 import { createGraph2D } from './graph2d';
 
 export interface RendererHandle {
@@ -22,6 +23,7 @@ export type RendererFactory = (canvas: HTMLCanvasElement, opts?: RendererOpts) =
 
 export const THEMES: Record<string, { label: string; create: RendererFactory }> = {
   graph: { label: 'Graph', create: createGraph2D },
+  galaxy: { label: 'Galaxy', create: createGalaxy },
 };
 
 export const DEFAULT_THEME = 'graph';
