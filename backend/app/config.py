@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Agent loop
     max_tool_rounds: int = 6
 
+    # Web search (bundled SearXNG primary; keyless DDG fallback lives in code)
+    searxng_url: str = "http://searxng:8080"
+
     # Memory
     okf_memory_dir: str = "./data/memory"
     memory_context_max_chars: int = 4000

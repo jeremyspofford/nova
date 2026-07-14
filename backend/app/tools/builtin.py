@@ -186,6 +186,14 @@ async def _fetch_url(args, ctx):
     return await fetch_url(url)
 
 
+async def _web_search(args, ctx):
+    query = args.get("query", "").strip()
+    if not query:
+        return "Error: query is required"
+    from app.tools.web_search import search
+    return await search(query, int(args.get("max_results", 6)))
+
+
 # ── dispatch (declaration; execution is runner-inlined) ─────────────────
 
 async def _dispatch_stub(args, ctx):
@@ -226,6 +234,17 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                         "create a new item.")},
         }, "required": ["content"]},
         "execute": _write_memory,
+    },
+    "web_search": {
+        "name": "web_search",
+        "description": ("Search the web (Nova's own private metasearch service) and get "
+                        "titles, URLs, and snippets. Use it to DISCOVER sources, then "
+                        "fetch_url the promising ones."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "max_results": {"type": "integer", "description": "1-8, default 6"},
+        }, "required": ["query"]},
+        "execute": _web_search,
     },
     "fetch_url": {
         "name": "fetch_url",

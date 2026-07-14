@@ -23,6 +23,18 @@ See README for what works. This file is the ordered backlog.
   topic + "right now" question → re-fetch + in-place update (timestamp bumped,
   no duplicate); stable-fact question → zero fetches.
 
+- **Source discovery** (2026-07-13) — Nova finds new sources, not just
+  re-fetches known ones. Bundled **SearXNG** metasearch service (keyless,
+  self-hosted, JSON) is the primary `web_search` provider with keyless DDG
+  HTML as automatic fallback (`backend/app/tools/web_search.py`); no keyed
+  providers by design (product principles: batteries-included, privacy-first,
+  local-model users primary). Ingestion agent now has three modes:
+  INGEST / REFRESH (item_id in-place) / RESEARCH (search → fetch up to 3
+  candidates → store durable knowledge, report ephemeral). Verified: zoo-hours
+  question discovered + fetched parks.ny.gov, answered with current hours;
+  cold-subject research created a tagged topic; provider fallback fires when
+  searxng is stopped; stable facts stay memory-only.
+
 ## Next up
 
 1. **Per-agent granting of DB tools** — today every enabled `tools` row is

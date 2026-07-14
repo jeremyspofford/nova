@@ -24,6 +24,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OKF_MEMORY_DIR: /app/data/memory
+      SEARXNG_URL: http://searxng:8080
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"
@@ -45,6 +46,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-nova-searxng-dev-secret}
+      SEARXNG_BASE_URL: http://searxng:8080/
+    ports:
+      - "127.0.0.1:8380:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
