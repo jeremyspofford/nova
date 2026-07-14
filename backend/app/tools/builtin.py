@@ -273,7 +273,9 @@ BUILTIN_TOOLS: dict[str, dict] = {
     "manage_agents": {
         "name": "manage_agents",
         "description": ("Manage the agent registry: list, create, update, or disable agents. "
-                        "System agents can be disabled but never deleted."),
+                        "System agents can be disabled but never deleted. allowed_tools may "
+                        "name builtins, specific DB-created tools, or 'db:*' for all "
+                        "DB-created tools."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["list", "create", "update", "disable"]},
             "name": {"type": "string"},

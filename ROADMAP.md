@@ -42,17 +42,19 @@ See README for what works. This file is the ordered backlog.
   external link. Path-traversal guard added to `store.read_file` (item ids are
   LLM/user-supplied).
 
+- **Per-agent DB-tool granting** (2026-07-13) — `allowed_tools` now governs
+  DB-created tools like builtins (named grants or `db:*` wildcard; `main` holds
+  `db:*` so created tools stay reachable at the front door). Plus
+  execution-layer enforcement: `execute_tool` refuses names not offered to the
+  calling agent, so a hallucinated tool name is refused, not executed.
+
 ## Next up
 
-1. **Per-agent granting of DB tools** — today every enabled `tools` row is
-   visible to all agents. Honor `allowed_tools` for DB tools the same way as
-   builtins (an agent sees a DB tool only if named, or via a `db:*` grant).
-
-2. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
+1. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
    style renderer), add a theme picker in the HUD, persist choice in
    localStorage.
 
-3. **Conversation compaction** — history is the most recent 50 messages; long
+2. **Conversation compaction** — history is the most recent 50 messages; long
    sessions silently lose older turns. Periodically distill older history into
    a topic/journal memory (the retrieval path then recalls it).
 

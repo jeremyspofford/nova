@@ -47,21 +47,44 @@ def _to_llm_def(tool: dict) -> dict:
 
 
 async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> list[dict]:
-    """LLM tool definitions for an agent."""
+    """LLM tool definitions for an agent.
+
+    allowed_tools governs DB-defined tools exactly like builtins:
+    None => everything; a list => only the named tools, with the special
+    grant 'db:*' meaning "all DB-defined tools".
+    """
     exclude = exclude or set()
-    allowed = agent.get("allowed_tools")  # None => all builtins
-    names = list(BUILTIN_TOOLS) if allowed is None else [n for n in allowed
-                                                         if n in BUILTIN_TOOLS]
-    defs = [_to_llm_def(BUILTIN_TOOLS[n]) for n in names if n not in exclude]
+    allowed = agent.get("allowed_tools")
+
+    if allowed is None:
+        builtin_names = list(BUILTIN_TOOLS)
+        all_db, named = True, set()
+    else:
+        builtin_names = [n for n in allowed if n in BUILTIN_TOOLS]
+        all_db = "db:*" in allowed
+        named = set(allowed)
+
+    defs = [_to_llm_def(BUILTIN_TOOLS[n]) for n in builtin_names if n not in exclude]
 
     for name, tool in (await _load_db_tools()).items():
-        if name not in exclude and name not in BUILTIN_TOOLS:
+        if name in exclude or name in BUILTIN_TOOLS:
+            continue
+        if all_db or name in named:
             defs.append(_to_llm_def(tool))
     return defs
 
 
 async def execute_tool(name: str, args: dict, ctx: dict) -> str:
-    """Single dispatch point for every tool call (dispatch_to_agent is runner-inlined)."""
+    """Single dispatch point for every tool call (dispatch_to_agent is runner-inlined).
+
+    ctx may carry 'granted' (the tool names actually offered to the calling
+    agent) — enforced here so a model inventing an ungranted tool name is
+    refused rather than executed.
+    """
+    granted = ctx.get("granted")
+    if granted is not None and name not in granted:
+        return f"Error: tool '{name}' is not granted to this agent"
+
     if name in BUILTIN_TOOLS:
         try:
             return await BUILTIN_TOOLS[name]["execute"](args, ctx)

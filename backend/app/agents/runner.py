@@ -56,7 +56,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
-           "dispatch_depth": dispatch_depth}
+           "dispatch_depth": dispatch_depth,
+           "granted": {t["function"]["name"] for t in tools}}
 
     final_text = ""
 
