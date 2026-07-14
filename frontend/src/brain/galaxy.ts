@@ -15,6 +15,11 @@ const NODE_COLORS: Record<string, string> = {
   skill: '#fbbf24',
   journal: '#a8a29e',
   source: '#818cf8',
+  core: '#facc15',
+  agent: '#a78bfa',
+  tool: '#84a98c',
+  automation: '#60a5fa',
+  rule: '#f87171',
 };
 const CLUSTER_COLORS = ['#22d3ee', '#4ade80', '#a78bfa', '#fb923c', '#f472b6', '#facc15'];
 
@@ -76,7 +81,12 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
 
   function clusterKey(n: GraphNode): string {
     if (n.type === 'topic') return n.tags?.[0] ?? 'topics';
-    return n.type === 'skill' ? 'skills' : n.type === 'journal' ? 'journals' : 'sources';
+    if (n.type === 'core') return 'nova';
+    const known: Record<string, string> = {
+      skill: 'skills', journal: 'journals', source: 'sources',
+      agent: 'agents', tool: 'tools', automation: 'automations', rule: 'rules',
+    };
+    return known[n.type] ?? `${n.type}s`;
   }
 
   // deterministic backdrop
@@ -227,7 +237,8 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       const birth = Math.min(1, (now - s.born) / 900);
       const r = s.size * (s.pscale ?? 1) * breathe * (s === hovered ? 1.35 : 1);
       const depthFade = Math.min(1, 420 / (s.pdepth ?? 420));
-      const alpha = (s.node.type === 'journal' ? 0.5 : 0.95) * depthFade * birth;
+      const alpha = (s.node.enabled === false ? 0.35
+        : s.node.type === 'journal' ? 0.5 : 0.95) * depthFade * birth;
 
       const g = ctx.createRadialGradient(s.px, s.py!, 0, s.px, s.py!, r * 2.6);
       g.addColorStop(0, s.color);

@@ -449,6 +449,87 @@ async def uninstall_model_endpoint(body: dict):
     return {"status": "uninstalled", "name": name}
 
 
+# ── brain graph: memory + platform entities (the full map of what Nova IS) ─
+
+@router.get("/api/v1/brain/graph")
+async def brain_graph_endpoint(platform: bool = True):
+    """Knowledge/experience (the memory graph) merged — when platform=true —
+    with capabilities and behaviors as first-class nodes: agents, granted
+    tools, automations, rules. Real edges only (grants, executors, guard
+    targets), never decoration."""
+    import time as _time
+
+    g = await memory.graph()
+    if not platform:
+        return g
+    nodes, edges = g["nodes"], g["edges"]
+    now = _time.time()
+
+    nodes.append({"id": "nova", "label": "Nova", "type": "core", "mtime": now,
+                  "description": "The coordinating mind — main is the front "
+                                 "door; every specialist hangs off it."})
+
+    agents = await agent_registry.list_agents(enabled_only=False)
+    catalog = await tool_registry.list_all_tools()
+    db_tool_names = [t["name"] for t in catalog["db_tools"]]
+    builtin_names = [b["name"] for b in catalog["builtins"]]
+    tool_desc = {t["name"]: t["description"] for t in catalog["db_tools"]}
+    tool_desc.update({b["name"]: b["description"] for b in catalog["builtins"]})
+
+    granted: dict[str, list[str]] = {}  # tool name -> agent names using it
+    for a in agents:
+        names: list[str] = []
+        for t in (a["allowed_tools"] or builtin_names):  # null grant = all builtins
+            if t == "db:*":
+                names.extend(db_tool_names)
+            elif t.startswith("db:"):
+                names.append(t[3:])
+            else:
+                names.append(t)
+        for t in names:
+            granted.setdefault(t, []).append(a["name"])
+
+    for a in agents:
+        nodes.append({"id": f"agent:{a['name']}", "label": a["name"],
+                      "type": "agent", "mtime": now, "enabled": a["enabled"],
+                      "description": a["description"]})
+        edges.append({"source": "nova", "target": f"agent:{a['name']}",
+                      "kind": "platform"})
+
+    for tool_name, users in granted.items():
+        nodes.append({"id": f"tool:{tool_name}", "label": tool_name,
+                      "type": "tool", "mtime": now,
+                      "description": tool_desc.get(tool_name, "")})
+        for user in users:
+            edges.append({"source": f"agent:{user}",
+                          "target": f"tool:{tool_name}", "kind": "grant"})
+
+    for auto in await automations.list_automations():
+        nodes.append({"id": f"automation:{auto['name']}", "label": auto["name"],
+                      "type": "automation", "mtime": now,
+                      "enabled": auto["enabled"],
+                      "description": auto.get("description")
+                      or (auto.get("instruction") or "")[:200]})
+        edges.append({"source": f"automation:{auto['name']}",
+                      "target": f"agent:{auto['agent_name']}", "kind": "platform"})
+
+    node_ids = {n["id"] for n in nodes}
+    for r in await rules.list_rules():
+        nodes.append({"id": f"rule:{r['name']}", "label": r["name"],
+                      "type": "rule", "mtime": now, "enabled": r["enabled"],
+                      "description": r.get("description", "")})
+        for t in (r.get("target_tools") or []):
+            if f"tool:{t}" in node_ids:
+                edges.append({"source": f"rule:{r['name']}",
+                              "target": f"tool:{t}", "kind": "guard"})
+        for aname in (r.get("target_agents") or []):
+            if f"agent:{aname}" in node_ids:
+                edges.append({"source": f"rule:{r['name']}",
+                              "target": f"agent:{aname}", "kind": "guard"})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

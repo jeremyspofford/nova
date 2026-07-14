@@ -12,14 +12,27 @@ interface SimNode extends SimulationNodeDatum {
   label: string;
   type: string;
   mtime: number;
+  enabled?: boolean;
 }
 interface SimLink { source: string | SimNode; target: string | SimNode; kind: string }
 
 const NODE_COLORS: Record<string, string> = {
-  topic: '#24C9B8',    // teal — knowledge
-  skill: '#FBBF24',    // amber — behavior
-  journal: '#78716C',  // stone — episodic, dim
-  source: '#60A5FA',   // blue — external
+  topic: '#24C9B8',      // teal — knowledge
+  skill: '#FBBF24',      // amber — behavior
+  journal: '#78716C',    // stone — episodic, dim
+  source: '#60A5FA',     // blue — external
+  core: '#FACC15',       // gold — Nova herself
+  agent: '#8B5CF6',      // violet — capabilities
+  tool: '#84A98C',       // sage — what agents may do
+  automation: '#3B82F6', // blue — habits
+  rule: '#EF4444',       // red — boundaries
+};
+
+const EDGE_COLORS: Record<string, string> = {
+  link: 'rgba(36,201,184,0.35)',
+  platform: 'rgba(139,92,246,0.30)',
+  grant: 'rgba(132,169,140,0.25)',
+  guard: 'rgba(239,68,68,0.35)',
 };
 
 export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): RendererHandle {
@@ -63,7 +76,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
       const s = l.source as SimNode, t = l.target as SimNode;
       if (typeof s === 'string' || typeof t === 'string') continue;
       if (s.x == null || t.x == null) continue;
-      ctx.strokeStyle = l.kind === 'link' ? 'rgba(36,201,184,0.35)' : 'rgba(120,113,108,0.25)';
+      ctx.strokeStyle = EDGE_COLORS[l.kind] ?? 'rgba(120,113,108,0.25)';
       ctx.beginPath();
       ctx.moveTo(s.x!, s.y!);
       ctx.lineTo(t.x!, t.y!);
@@ -79,7 +92,8 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
       ctx.beginPath();
       ctx.arc(n.x!, n.y!, r, 0, Math.PI * 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = n.type === 'journal' ? 0.6 : 0.95;
+      // switched-off entities stay visible but recede
+      ctx.globalAlpha = n.enabled === false ? 0.35 : n.type === 'journal' ? 0.6 : 0.95;
       ctx.fill();
       ctx.globalAlpha = 1;
 

@@ -36,7 +36,10 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./data/memory:/app/data/memory
+      # NOVA_MEMORY_DIR: point memory anywhere plain files can live — a NAS
+      # mount, an Obsidian vault folder, another disk. Markdown in, markdown
+      # out; the index rescans on startup and reindexes on write.
+      - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
       - ./backend:/app/backend:cached
     develop:
       watch:

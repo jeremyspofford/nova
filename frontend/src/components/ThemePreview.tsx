@@ -17,7 +17,11 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
     renderer.resize(220, 130);
     renderer.configure?.({ rotationSpeed: 1.5, labelMode: 'off', labelScale: 0.7 });
     renderer.setData(SAMPLE_NODES, SAMPLE_EDGES);
-    return () => renderer.destroy();
+    // the force layout's natural spread dwarfs a 220x130 canvas — fit the
+    // view once the simulation has roughly settled (twice, to be sure)
+    const t1 = setTimeout(() => renderer.recenter?.(), 500);
+    const t2 = setTimeout(() => renderer.recenter?.(), 1400);
+    return () => { clearTimeout(t1); clearTimeout(t2); renderer.destroy(); };
   }, [themeKey]);
 
   return (

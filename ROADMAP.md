@@ -362,6 +362,27 @@ See README for what works. This file is the ordered backlog.
   old request/response without it shouting. Curated-table hint now says
   "Approved" to match its switch.
 
+- **Platform entities in the brain + configurable memory home
+  (2026-07-14)** — the brain is now the full map of what Nova IS.
+  `GET /api/v1/brain/graph` merges the memory graph with a golden **Nova
+  core**, agents (violet), granted tools (sage), automations (blue), and
+  rules (red) — REAL edges only: core→agent, agent→granted-tool (db:*
+  resolved), automation→executing-agent, rule→target tools/agents;
+  switched-off entities render dimmed. Works in BOTH renderers (galaxy
+  clusters them as named constellations; graph colors by type), toggleable
+  via Settings → Appearance → "Platform entities in the brain"
+  (knowledge-only view one click away). Clicking a platform node opens a
+  detail card from its metadata (v1 = description; richer per-type cards —
+  rule hit counts, automation last-run — can ride the observability work).
+  Verified: 41 nodes / 53 edges, zero dangling references, guard edges
+  resolve to the right tools. Also fixed: the Graph theme thumbnail
+  rendered dark because the force layout's spread dwarfs the 220×130
+  preview — it now fits-to-view after the simulation settles, and preview
+  sample data includes platform nodes. **Memory home is configurable**:
+  `NOVA_MEMORY_DIR` in .env points the markdown store at a NAS mount or
+  Obsidian vault (README documents it); cloud sync stays a designed-later
+  item (see Later).
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's
@@ -426,22 +447,7 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
-5. **Platform entities in the brain graph** — agents, automations, tools,
-   and rules join the galaxy/graph as first-class nodes (skills are already
-   there via memory). The brain becomes the full map of what Nova *is*:
-   knowledge (topics), experience (journals), capabilities (skills, tools,
-   agents), habits (automations), boundaries (rules). Design:
-   - New `GET /api/v1/brain/graph` merges the memory graph with platform
-     entities as typed nodes; distinct cluster colors (agents violet,
-     automations blue, tools sage, rules red).
-   - Real edges, not decoration: automation → its agent; agent → its
-     allowed tools; rule → its target tools; disabled entities dimmed.
-   - Clicking opens a per-type detail card (agent config, rule pattern +
-     hit count, automation last-run) instead of the markdown panel.
-   - HUD filter chips (or a Settings toggle) so the memory-only view stays
-     one click away — ~40 extra nodes shouldn't drown the knowledge graph.
-
-6. **PWA — Nova on the phone (until a native app)** — installable web app
+5. **PWA — Nova on the phone (until a native app)** — installable web app
    served from the same stack. The manifest/service-worker part is easy;
    the real prerequisites are exposure and layout. Ordered plan:
    1. *Auth first* (pulls the "Later" auth item forward): single admin
@@ -464,6 +470,20 @@ See README for what works. This file is the ordered backlog.
 
 - **Auth** — required before exposing beyond localhost. Single admin token is
   enough for a first pass. (The PWA item above pulls this forward.)
+- **Memory sync pipeline (local-first cloud/NAS/vault)** — `NOVA_MEMORY_DIR`
+  already points the store anywhere mountable; this item is about SYNC, not
+  location. Direction from the 2026-07-14 discussion: local stays the
+  write path and source of truth (agents read/write markdown at local
+  latency; the BM25 index never leaves), with a one-way publish step after
+  ingestion settles — new/updated topics and skills replicate outward
+  (rclone/Syncthing-style, or straight into an Obsidian-synced vault);
+  journals may lag or stay local. Inbound edits (vault edited on another
+  device) arrive as files and are picked up by the startup rescan — add a
+  file-watcher for live pickup. Conflict policy: last-writer-wins per file
+  is fine for markdown at this scale; provenance frontmatter already
+  timestamps everything. Prerequisite thinking: secrets never live in
+  memory files (checked), and the guardian's no-secret rule should watch
+  any future push tool.
 - **Journal polish** — pre-rewrite journal files lack a `title:` frontmatter
   key, so the brain labels them by path. Cosmetic; fix by backfilling titles.
 - **Device control agent** — computer-use loop (screenshot → reason → act)

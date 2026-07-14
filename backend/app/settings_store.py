@@ -60,6 +60,11 @@ SETTING_DEFS: list[dict] = [
                      "this for the bundled Ollama: the VM's memory really is its "
                      "ceiling.")},
     # ── Appearance (brain) ───────────────────────────────────────────────
+    {"key": "brain.show_platform", "type": "boolean", "default": True,
+     "section": "Appearance", "label": "Platform entities in the brain",
+     "description": ("Agents, tools, automations, and rules join the memory "
+                     "graph as first-class nodes with their real relationships "
+                     "as edges. Off = knowledge-only view.")},
     {"key": "brain.view", "type": "enum", "default": "graph",
      "options": ["graph", "galaxy"], "section": "Appearance",
      "label": "Brain view",

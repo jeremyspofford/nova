@@ -72,6 +72,16 @@ GPU name and total VRAM from `nvidia-smi` inside the ollama container, and
 per-model VRAM/GPU usage from Ollama `/api/ps` during "test this model"
 probes (Settings → Inference → Detect & suggest).
 
+## Where memory lives
+
+Nova's memory is plain markdown under `./data/memory/` — human-readable,
+hand-editable, no lock-in. Point it anywhere with `NOVA_MEMORY_DIR` in
+`.env` (a NAS mount, an **Obsidian vault** folder, another disk): the
+files are ordinary notes with frontmatter, the BM25 index rescans on
+startup and reindexes on write, and edits made outside Nova are picked up
+on the next restart. Cloud sync is deliberately not built in yet — see the
+roadmap for the local-first sync pipeline design.
+
 ## What works (all live-verified)
 
 | Capability | How |

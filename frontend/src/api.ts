@@ -107,12 +107,19 @@ export interface GraphNode {
   tags?: string[];
   source_url?: string;
   learned?: string;
+  enabled?: boolean;
 }
 export interface GraphEdge { source: string; target: string; kind: string }
 
 export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   const r = await fetch(`${API_URL}/api/v1/memory/graph`);
   if (!r.ok) throw new Error('Failed to load memory graph');
+  return r.json();
+}
+
+export async function getBrainGraph(platform: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const r = await fetch(`${API_URL}/api/v1/brain/graph?platform=${platform}`);
+  if (!r.ok) throw new Error('Failed to load brain graph');
   return r.json();
 }
 

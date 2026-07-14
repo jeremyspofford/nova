@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getMemoryGraph, getMemoryItem, getMemoryStats, getSettings, MemoryItem } from '../api';
+import { getBrainGraph, getMemoryItem, getMemoryStats, getSettings, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
 import { SettingsOverlay } from '../components/SettingsOverlay';
@@ -14,7 +14,17 @@ const TYPE_BADGE: Record<string, string> = {
   journal: 'bg-stone-800 text-stone-400 border-stone-600',
   source: 'bg-blue-900/40 text-blue-300 border-blue-700',
   self: 'bg-yellow-900/40 text-yellow-200 border-yellow-600',
+  core: 'bg-yellow-900/40 text-yellow-200 border-yellow-600',
+  agent: 'bg-violet-900/40 text-violet-300 border-violet-700',
+  tool: 'bg-lime-900/30 text-lime-300 border-lime-800',
+  automation: 'bg-blue-900/40 text-blue-300 border-blue-700',
+  rule: 'bg-red-950/50 text-red-300 border-red-900',
 };
+
+// platform nodes carry their card content in the graph payload — no
+// markdown file behind them to fetch
+const PLATFORM_TYPES = new Set(['core', 'agent', 'tool', 'automation', 'rule']);
+const PLATFORM_LABELED = new Set(['skill', 'agent', 'tool', 'automation', 'rule']);
 
 interface BrainPrefs {
   view: string;
@@ -22,11 +32,12 @@ interface BrainPrefs {
   rotationSpeed: number;
   labelMode: string;
   labelScale: number;
+  showPlatform: boolean;
 }
 
 const DEFAULT_PREFS: BrainPrefs = {
   view: DEFAULT_THEME, detailStyle: 'sidebar',
-  rotationSpeed: 2, labelMode: 'auto', labelScale: 1,
+  rotationSpeed: 2, labelMode: 'auto', labelScale: 1, showPlatform: true,
 };
 
 export function Brain() {
@@ -61,6 +72,7 @@ export function Brain() {
         rotationSpeed: Number(v('brain.rotation_speed') ?? 2),
         labelMode: String(v('brain.label_mode') ?? 'auto'),
         labelScale: Number(v('brain.label_scale') ?? 1),
+        showPlatform: v('brain.show_platform') !== false,
       });
     }).catch(() => {});
 
@@ -74,6 +86,7 @@ export function Brain() {
         if (key === 'brain.rotation_speed') next.rotationSpeed = Number(value);
         if (key === 'brain.label_mode') next.labelMode = String(value);
         if (key === 'brain.label_scale') next.labelScale = Number(value);
+        if (key === 'brain.show_platform') next.showPlatform = Boolean(value);
         return next;
       });
       const patch: Record<string, unknown> = {};
@@ -86,9 +99,22 @@ export function Brain() {
     return () => window.removeEventListener('nova:setting-changed', onChange);
   }, []);
 
+  // latest graph nodes — platform node cards are built from these
+  const nodesRef = useRef<Map<string, GraphNode>>(new Map());
+
   const openDetail = useCallback(async (id: string | null) => {
     if (id === null) {
       setDetail(null);
+      return;
+    }
+    const node = nodesRef.current.get(id);
+    if (node && PLATFORM_TYPES.has(node.type)) {
+      setDetail({
+        id,
+        frontmatter: { type: node.type, title: node.label,
+                       description: node.description ?? '' },
+        content: node.description ?? '*(no description)*',
+      });
       return;
     }
     try {
@@ -119,14 +145,15 @@ export function Brain() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [graph, s] = await Promise.all([getMemoryGraph(), getMemoryStats()]);
+        const [graph, s] = await Promise.all([
+          getBrainGraph(prefsRef.current.showPlatform), getMemoryStats()]);
         if (!cancelled) {
-          // skills read as feature names — Title Case them; topic/journal
-          // labels are document titles and pass through untouched
-          renderer.setData(
-            graph.nodes.map(n =>
-              n.type === 'skill' ? { ...n, label: displayName(n.label) } : n),
-            graph.edges);
+          // skills/platform names are feature names — Title Case them;
+          // topic/journal labels are document titles and pass through
+          const nodes = graph.nodes.map(n =>
+            PLATFORM_LABELED.has(n.type) ? { ...n, label: displayName(n.label) } : n);
+          nodesRef.current = new Map(nodes.map(n => [n.id, n]));
+          renderer.setData(nodes, graph.edges);
           setStats(s);
         }
       } catch (err) {
@@ -143,7 +170,7 @@ export function Brain() {
       renderer.destroy();
       rendererRef.current = null;
     };
-  }, [prefs.view, openDetail]);
+  }, [prefs.view, prefs.showPlatform, openDetail]);
 
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
