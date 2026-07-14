@@ -4,6 +4,7 @@ import {
   patchAgent, Activity, ModelInfo,
 } from '../api';
 import { Markdown } from '../components/Markdown';
+import { displayName } from '../names';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -15,10 +16,10 @@ const uid = () => `ui-${++nextId}`;
 
 const activityLabel = (a: Activity): string => {
   switch (a.kind) {
-    case 'dispatch': return `→ dispatching to ${a.name}`;
-    case 'tool_start': return `⚙ ${a.agent ? `${a.agent}: ` : ''}${a.name}…`;
-    case 'tool_result': return `✓ ${a.name}`;
-    default: return a.name;
+    case 'dispatch': return `→ dispatching to ${displayName(a.name)}`;
+    case 'tool_start': return `⚙ ${a.agent ? `${displayName(a.agent)}: ` : ''}${displayName(a.name)}…`;
+    case 'tool_result': return `✓ ${displayName(a.name)}`;
+    default: return displayName(a.name);
   }
 };
 

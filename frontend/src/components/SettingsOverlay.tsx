@@ -7,6 +7,7 @@ import {
   setBundledInference,
 } from '../api';
 import { THEMES } from '../brain/theme';
+import { displayName } from '../names';
 import { ThemePreview } from './ThemePreview';
 
 type Tab = 'settings' | 'agents' | 'automations' | 'rules';
@@ -395,7 +396,7 @@ function AgentsTab() {
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm text-stone-100">{a.name}</span>
+              <span className="text-sm text-stone-100">{displayName(a.name)}</span>
               {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -491,7 +492,7 @@ function AutomationsTab() {
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
           {editing?.id === a.id ? (
             <form onSubmit={saveEdit} className="space-y-2">
-              <div className="text-sm text-stone-100">{a.name}</div>
+              <div className="text-sm text-stone-100">{displayName(a.name)}</div>
               <textarea
                 required
                 value={editForm.instruction}
@@ -505,7 +506,7 @@ function AutomationsTab() {
                   onChange={e => setEditForm({ ...editForm, agent_name: e.target.value })}
                   className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
                 >
-                  {agents.map(n => <option key={n} value={n}>{n}</option>)}
+                  {agents.map(n => <option key={n} value={n}>{displayName(n)}</option>)}
                 </select>
                 <input
                   type="number" min={5}
@@ -524,7 +525,7 @@ function AutomationsTab() {
             <>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm text-stone-100 truncate">{a.name}</span>
+                  <span className="text-sm text-stone-100 truncate">{displayName(a.name)}</span>
                   {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -555,7 +556,7 @@ function AutomationsTab() {
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500">
-                {a.agent_name} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
+                {displayName(a.agent_name)} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
                 {a.last_status && (
                   <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
                     {' '}· last: {a.last_status}
@@ -596,7 +597,7 @@ function AutomationsTab() {
               className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
             >
               <option value="">agent…</option>
-              {agents.map(a => <option key={a} value={a}>{a}</option>)}
+              {agents.map(a => <option key={a} value={a}>{displayName(a)}</option>)}
             </select>
             <input
               type="number" min={5}
@@ -701,7 +702,7 @@ function RulesTab() {
         <div key={r.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
           {editing?.id === r.id ? (
             <form onSubmit={saveEdit} className="space-y-2">
-              <div className="text-sm text-stone-100">{r.name}</div>
+              <div className="text-sm text-stone-100">{displayName(r.name)}</div>
               <input required placeholder="regex pattern" value={editForm.pattern}
                 onChange={e => setEditForm({ ...editForm, pattern: e.target.value })}
                 className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200" />
@@ -728,7 +729,7 @@ function RulesTab() {
             <>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm text-stone-100 truncate">{r.name}</span>
+                  <span className="text-sm text-stone-100 truncate">{displayName(r.name)}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                     r.action === 'block'
                       ? 'bg-red-950/50 text-red-300 border-red-900'

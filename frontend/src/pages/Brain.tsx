@@ -4,6 +4,7 @@ import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
 import { SettingsOverlay } from '../components/SettingsOverlay';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
+import { displayName } from '../names';
 
 const REFRESH_MS = 20000;
 
@@ -120,7 +121,12 @@ export function Brain() {
       try {
         const [graph, s] = await Promise.all([getMemoryGraph(), getMemoryStats()]);
         if (!cancelled) {
-          renderer.setData(graph.nodes, graph.edges);
+          // skills read as feature names — Title Case them; topic/journal
+          // labels are document titles and pass through untouched
+          renderer.setData(
+            graph.nodes.map(n =>
+              n.type === 'skill' ? { ...n, label: displayName(n.label) } : n),
+            graph.edges);
           setStats(s);
         }
       } catch (err) {
