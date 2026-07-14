@@ -22,9 +22,6 @@ services:
     environment:
       DATABASE_URL: postgresql://nova:${POSTGRES_PASSWORD:-nova-dev-password}@postgres:5432/nova
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      # batteries-included default: the bundled ollama service; override in .env
-      # for a host-run Ollama (http://host.docker.internal:11434)
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OKF_MEMORY_DIR: /app/data/memory
       SEARXNG_URL: http://searxng:8080
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -51,7 +48,7 @@ services:
 
   # Bundled local inference (optional): docker compose --profile inference up -d
   # CPU works for small models; for NVIDIA GPU add a deploy.resources.reservations
-  # block (documented in README). Host-run Ollama users: set OLLAMA_BASE_URL in .env.
+  # block (documented in README). Host-run Ollama: set the URL in Settings → Inference.
   ollama:
     image: ollama/ollama:latest
     profiles: ["inference"]

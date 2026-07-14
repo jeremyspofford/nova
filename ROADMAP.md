@@ -105,6 +105,32 @@ See README for what works. This file is the ordered backlog.
 
 ## Next up
 
+1. **Hot-swappable bundled inference from Settings** — the Ollama *URL* and
+   fallback model are now runtime settings (done), but starting/stopping the
+   bundled container still requires the CLI (`--profile inference`). Full
+   hot-swap needs the backend to control Docker — a security design decision:
+   the socket is root-equivalent on the host. Plan: a minimal control
+   sidecar (or socket-proxy-gated mount) exposing exactly two verbs
+   (start/stop ollama) to the backend, surfaced as a toggle + status
+   indicator in Settings → Inference. Old Nova solved this with a dedicated
+   recovery service + docker-socket-proxy; borrow that shape, radically
+   smaller.
+
+2. **Model recommendations (brainstorm needed)** — help users pick models
+   instead of guessing. Axes to work through together:
+   - *Bring-your-own vs guided*: user names a model or two they want, OR Nova
+     reads system resources (GPU vendor/VRAM via nvidia-smi/rocm, RAM, CPU)
+     and suggests a shortlist.
+   - *Per-role suggestions*: chat wants speed; ingestion/research wants tool
+     reliability; compaction can be tiny. Suggest per-agent models, not one
+     global pick.
+   - *Curation source*: a small hand-maintained table (model → min RAM/VRAM,
+     tool-calling quality tier) beats a live registry for v1.
+   - *Where it lives*: first-run experience? Settings → Inference panel with
+     a "detect & suggest" button? Both?
+   - *Validation*: offer a one-click "test this model" (short tool-calling
+     probe) so suggestions are verified on the user's actual hardware.
+
 
 ## Later
 

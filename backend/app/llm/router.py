@@ -17,7 +17,8 @@ _OPENROUTER_HEADERS = {
 def effective_model(model: str) -> str:
     """Swap openrouter: models to the local fallback when no real key is configured."""
     if model.startswith("openrouter:") and not settings.has_openrouter():
-        fallback = f"ollama:{settings.local_fallback_model}"
+        from app import settings_store
+        fallback = f"ollama:{settings_store.get('inference.local_fallback_model')}"
         log.info("OpenRouter not configured; %s -> %s", model, fallback)
         return fallback
     return model
@@ -30,7 +31,9 @@ def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
                                     extra_headers=_OPENROUTER_HEADERS)
         return client, model.split(":", 1)[1]
     if model.startswith("ollama:"):
-        client = OpenAICompatClient(f"{settings.ollama_base_url.rstrip('/')}/v1", "ollama")
+        from app import settings_store
+        base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+        client = OpenAICompatClient(f"{base}/v1", "ollama")
         return client, model.split(":", 1)[1]
     raise ValueError(f"Unknown model format: {model!r} (expected 'openrouter:...' or 'ollama:...')")
 

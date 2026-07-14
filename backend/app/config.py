@@ -12,11 +12,9 @@ class Settings(BaseSettings):
     # LLM providers
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    ollama_base_url: str = "http://ollama:11434"
     default_model: str = "openrouter:anthropic/claude-haiku-4.5"
-    # Model used when OpenRouter is not configured and an agent asks for an
-    # openrouter: model. qwen2.5:3b — small, CPU-viable, solid tool calling.
-    local_fallback_model: str = "qwen2.5:3b"
+    # NOTE: ollama URL + local fallback model are runtime settings now
+    # (Settings -> Inference), not env.
 
     # Agent loop
     max_tool_rounds: int = 6

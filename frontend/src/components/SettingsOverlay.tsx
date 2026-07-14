@@ -4,6 +4,8 @@ import {
   deleteRule, getAgents, getAutomations, getRules, getSettings, patchAutomation,
   patchRule, patchSettings,
 } from '../api';
+import { THEMES } from '../brain/theme';
+import { ThemePreview } from './ThemePreview';
 
 type Tab = 'settings' | 'automations' | 'rules';
 
@@ -52,11 +54,77 @@ function SettingsTab() {
     try {
       await patchSettings({ [key]: value });
       setDefs(prev => prev.map(d => d.key === key ? { ...d, value } : d));
+      // Brain (and anything else) reacts live without a page reload
+      window.dispatchEvent(new CustomEvent('nova:setting-changed', { detail: { key, value } }));
       setStatus(`Saved ${key}`);
       setTimeout(() => setStatus(''), 1500);
     } catch (e) {
       setStatus(String(e));
     }
+  }
+
+  function field(d: SettingDef) {
+    if (d.key === 'brain.view') {
+      return (
+        <div className="flex gap-3">
+          {Object.keys(THEMES).map(k => (
+            <ThemePreview key={k} themeKey={k} selected={d.value === k}
+              onSelect={() => save(d.key, k)} />
+          ))}
+        </div>
+      );
+    }
+    if (d.type === 'boolean') {
+      return (
+        <button
+          onClick={() => save(d.key, !d.value)}
+          className={`shrink-0 w-10 px-0.5 py-0.5 rounded-full transition ${
+            d.value ? 'bg-teal-600' : 'bg-stone-700'
+          }`}
+          aria-label={d.label}
+        >
+          <span className={`block w-4 h-4 rounded-full bg-white transition-transform ${
+            d.value ? 'translate-x-5' : ''
+          }`} />
+        </button>
+      );
+    }
+    if (d.type === 'enum') {
+      return (
+        <select
+          value={String(d.value)}
+          onChange={e => save(d.key, e.target.value)}
+          className="shrink-0 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+        >
+          {(d.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+    }
+    if (d.type === 'number' && d.min != null && d.max != null && d.max - d.min <= 20) {
+      return (
+        <span className="shrink-0 flex items-center gap-2">
+          <input
+            type="range" min={d.min} max={d.max}
+            step={(d.max - d.min) / 20}
+            value={Number(d.value)}
+            onChange={e => save(d.key, Number(e.target.value))}
+            className="w-28 accent-teal-500"
+          />
+          <span className="text-xs font-mono text-stone-400 w-8 text-right">{Number(d.value).toFixed(1)}</span>
+        </span>
+      );
+    }
+    return (
+      <input
+        className="shrink-0 w-40 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200 text-right focus:outline-none focus:ring-1 focus:ring-teal-500"
+        defaultValue={String(d.value)}
+        onBlur={e => {
+          const raw = e.target.value.trim();
+          const v = d.type === 'number' ? Number(raw) : raw;
+          if (v !== d.value) save(d.key, v);
+        }}
+      />
+    );
   }
 
   const sections = [...new Set(defs.map(d => d.section))];
@@ -67,34 +135,15 @@ function SettingsTab() {
           <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>
           <div className="space-y-3">
             {defs.filter(d => d.section === section).map(d => (
-              <div key={d.key} className="flex items-start justify-between gap-4">
+              <div key={d.key}
+                className={d.key === 'brain.view'
+                  ? 'space-y-2'
+                  : 'flex items-start justify-between gap-4'}>
                 <div className="min-w-0">
                   <div className="text-sm text-stone-200">{d.label}</div>
                   <div className="text-xs text-stone-500">{d.description}</div>
                 </div>
-                {d.type === 'boolean' ? (
-                  <button
-                    onClick={() => save(d.key, !d.value)}
-                    className={`shrink-0 w-10 h-5.5 px-0.5 py-0.5 rounded-full transition ${
-                      d.value ? 'bg-teal-600' : 'bg-stone-700'
-                    }`}
-                    aria-label={d.label}
-                  >
-                    <span className={`block w-4 h-4 rounded-full bg-white transition-transform ${
-                      d.value ? 'translate-x-5' : ''
-                    }`} />
-                  </button>
-                ) : (
-                  <input
-                    className="shrink-0 w-28 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200 text-right focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    defaultValue={String(d.value)}
-                    onBlur={e => {
-                      const raw = e.target.value.trim();
-                      const v = d.type === 'number' ? Number(raw) : raw;
-                      if (v !== d.value) save(d.key, v);
-                    }}
-                  />
-                )}
+                {field(d)}
               </div>
             ))}
           </div>
