@@ -118,3 +118,11 @@ async def memory_stats():
 @router.get("/api/v1/memory/graph")
 async def memory_graph():
     return await memory.graph()
+
+
+@router.get("/api/v1/memory/item/{item_id:path}")
+async def memory_item(item_id: str):
+    item = await memory.read_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="memory item not found")
+    return item

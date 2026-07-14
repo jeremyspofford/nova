@@ -13,7 +13,12 @@ export interface RendererHandle {
   destroy(): void;
 }
 
-export type RendererFactory = (canvas: HTMLCanvasElement) => RendererHandle;
+export interface RendererOpts {
+  /** Fired on a genuine click (not a pan) on a node. */
+  onNodeClick?: (id: string) => void;
+}
+
+export type RendererFactory = (canvas: HTMLCanvasElement, opts?: RendererOpts) => RendererHandle;
 
 export const THEMES: Record<string, { label: string; create: RendererFactory }> = {
   graph: { label: 'Graph', create: createGraph2D },

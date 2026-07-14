@@ -5,7 +5,7 @@ import {
   type Simulation, type SimulationNodeDatum,
 } from 'd3';
 import type { GraphNode, GraphEdge } from '../api';
-import type { RendererHandle } from './theme';
+import type { RendererHandle, RendererOpts } from './theme';
 
 interface SimNode extends SimulationNodeDatum {
   id: string;
@@ -22,7 +22,7 @@ const NODE_COLORS: Record<string, string> = {
   source: '#60A5FA',   // blue — external
 };
 
-export function createGraph2D(canvas: HTMLCanvasElement): RendererHandle {
+export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): RendererHandle {
   const ctx = canvas.getContext('2d')!;
   let nodes: SimNode[] = [];
   let links: SimLink[] = [];
@@ -33,6 +33,7 @@ export function createGraph2D(canvas: HTMLCanvasElement): RendererHandle {
   // pan/zoom transform
   let scale = 1, tx = 0, ty = 0;
   let panning = false, lastX = 0, lastY = 0;
+  let dragDistance = 0; // distinguishes a click from a pan
 
   const toWorld = (px: number, py: number) => ({ x: (px - tx) / scale, y: (py - ty) / scale });
 
@@ -113,10 +114,12 @@ export function createGraph2D(canvas: HTMLCanvasElement): RendererHandle {
 
   const onPointerDown = (e: PointerEvent) => {
     panning = true; lastX = e.offsetX; lastY = e.offsetY;
+    dragDistance = 0;
     canvas.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent) => {
     if (panning) {
+      dragDistance += Math.abs(e.offsetX - lastX) + Math.abs(e.offsetY - lastY);
       tx += e.offsetX - lastX; ty += e.offsetY - lastY;
       lastX = e.offsetX; lastY = e.offsetY;
     } else {
@@ -127,6 +130,10 @@ export function createGraph2D(canvas: HTMLCanvasElement): RendererHandle {
   const onPointerUp = (e: PointerEvent) => {
     panning = false;
     canvas.releasePointerCapture(e.pointerId);
+    if (dragDistance < 4) {
+      const hit = hitTest(e.offsetX, e.offsetY);
+      if (hit) opts?.onNodeClick?.(hit.id);
+    }
   };
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();

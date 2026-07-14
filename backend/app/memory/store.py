@@ -103,8 +103,10 @@ class OkfStore:
     # ── reads ────────────────────────────────────────────────────────────
 
     def read_file(self, doc_id: str) -> Optional[tuple[dict, str]]:
-        path = self.base_dir / doc_id
-        if not path.exists() or not path.is_file():
+        # doc_ids come from LLM tool calls and API paths — refuse traversal.
+        path = (self.base_dir / doc_id).resolve()
+        if (not path.is_relative_to(self.base_dir.resolve())
+                or path.suffix != ".md" or not path.is_file()):
             return None
         return self.parse_frontmatter(path.read_text())
 

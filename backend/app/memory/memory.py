@@ -156,12 +156,25 @@ class OkfMemory:
                 continue
             fm, body = parsed
             title = fm.get("title", doc_id)
-            nodes.append({
+            # Metadata-only index view: frontmatter rides along, bodies never
+            # do — full content is fetched on demand via /memory/item/{id}.
+            node = {
                 "id": doc_id,
                 "label": title,
                 "type": fm.get("type", "topic"),
                 "mtime": mtime,
-            })
+            }
+            if fm.get("description"):
+                node["description"] = fm["description"]
+            node_tags = self.store.extract_tags(fm)
+            if node_tags:
+                node["tags"] = node_tags
+            if fm.get("source_url"):
+                node["source_url"] = fm["source_url"]
+            learned = str(fm.get("timestamp", ""))[:10]
+            if learned:
+                node["learned"] = learned
+            nodes.append(node)
             by_title[title.lower()] = doc_id
             for tag in self.store.extract_tags(fm):
                 tag_map.setdefault(tag, []).append(doc_id)

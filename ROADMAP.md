@@ -35,6 +35,13 @@ See README for what works. This file is the ordered backlog.
   cold-subject research created a tagged topic; provider fallback fires when
   searxng is stopped; stable facts stay memory-only.
 
+- **Brain graph = metadata index with pointers** (2026-07-13) — graph nodes
+  carry frontmatter only (description, tags, source_url, learned date; bodies
+  never ship); clicking a node fetches full content on demand
+  (`GET /api/v1/memory/item/{id}`) into a detail panel with a "View source"
+  external link. Path-traversal guard added to `store.read_file` (item ids are
+  LLM/user-supplied).
+
 ## Next up
 
 1. **Per-agent granting of DB tools** — today every enabled `tools` row is
@@ -45,11 +52,7 @@ See README for what works. This file is the ordered backlog.
    style renderer), add a theme picker in the HUD, persist choice in
    localStorage.
 
-3. **Node detail on click** — clicking a brain node opens the memory item
-   (`read_memory_item` already exists server-side; needs a
-   `GET /api/v1/memory/item?id=` endpoint + a side panel).
-
-4. **Conversation compaction** — history is the most recent 50 messages; long
+3. **Conversation compaction** — history is the most recent 50 messages; long
    sessions silently lose older turns. Periodically distill older history into
    a topic/journal memory (the retrieval path then recalls it).
 

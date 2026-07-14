@@ -97,11 +97,32 @@ export async function getMemoryStats(): Promise<Record<string, number>> {
   return r.json();
 }
 
-export interface GraphNode { id: string; label: string; type: string; mtime: number }
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: string;
+  mtime: number;
+  description?: string;
+  tags?: string[];
+  source_url?: string;
+  learned?: string;
+}
 export interface GraphEdge { source: string; target: string; kind: string }
 
 export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   const r = await fetch(`${API_URL}/api/v1/memory/graph`);
   if (!r.ok) throw new Error('Failed to load memory graph');
+  return r.json();
+}
+
+export interface MemoryItem {
+  id: string;
+  frontmatter: Record<string, string>;
+  content: string;
+}
+
+export async function getMemoryItem(id: string): Promise<MemoryItem> {
+  const r = await fetch(`${API_URL}/api/v1/memory/item/${id}`);
+  if (!r.ok) throw new Error('Memory item not found');
   return r.json();
 }
