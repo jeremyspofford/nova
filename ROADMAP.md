@@ -14,6 +14,15 @@ See README for what works. This file is the ordered backlog.
   RFC1918 / docker-internal targets all refused; later questions answered
   from memory without refetching.
 
+- **Memory freshness** (2026-07-13) — memory is a cache with provenance, not
+  a terminal archive. Retrieval headers now show `(learned <date>, source:
+  <url>)`; main's policy: memory-first for stable facts, refresh-then-answer
+  for volatile/aged knowledge, "as of <date>" attribution otherwise; ingestion
+  updates topics **in place** via `write_memory(item_id=...)` (prompt-only
+  title matching failed live — the id pin is mechanical). Verified: backdated
+  topic + "right now" question → re-fetch + in-place update (timestamp bumped,
+  no duplicate); stable-fact question → zero fetches.
+
 ## Next up
 
 1. **Per-agent granting of DB tools** — today every enabled `tools` row is
@@ -34,6 +43,10 @@ See README for what works. This file is the ordered backlog.
 
 ## Later
 
+- **Scheduled staleness sweep** — background loop that periodically re-ingests
+  topics whose `source_url` + age exceed a threshold. Nova's first autonomous
+  background behavior; needs its own design (scheduler, budget, failure
+  policy). The on-demand refresh path is its foundation.
 - **Rules/guardrail layer** — pre-execution checks on tool calls (regex or
   allowlist-based blocks), the v1 exclusion that matters most once agents
   multiply.

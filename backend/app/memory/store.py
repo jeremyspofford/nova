@@ -58,18 +58,32 @@ class OkfStore:
     # ── writes ───────────────────────────────────────────────────────────
 
     def write_concept(self, title: str, content: str, concept_type: str = "topic",
-                      metadata: Optional[dict] = None) -> str:
-        """Write (or overwrite) a concept file. Returns the doc id (relative path)."""
+                      metadata: Optional[dict] = None,
+                      doc_id: Optional[str] = None) -> str:
+        """Write (or overwrite) a concept file. Returns the doc id (relative path).
+
+        doc_id pins the write to an existing file (in-place update even when the
+        title differs) — it must resolve inside the memory dir and already exist.
+        """
         fm = dict(metadata or {})
         fm.setdefault("type", concept_type)
         fm.setdefault("title", title)
         fm["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-        subdir = TYPE_DIRS.get(concept_type, "topics")
-        path = self.base_dir / subdir / f"{_slugify(title)}.md"
+        if doc_id:
+            pinned = (self.base_dir / doc_id).resolve()
+            base = self.base_dir.resolve()
+            if not (pinned.is_relative_to(base) and pinned.suffix == ".md"
+                    and pinned.exists()):
+                raise FileNotFoundError(f"memory item '{doc_id}' not found")
+            path = pinned
+        else:
+            subdir = TYPE_DIRS.get(concept_type, "topics")
+            path = self.base_dir / subdir / f"{_slugify(title)}.md"
         path.write_text(f"{self.render_frontmatter(fm)}\n\n{content}\n")
         log.info("Memory write: %s", path)
-        return str(path.relative_to(self.base_dir))
+        return str(path.relative_to(self.base_dir.resolve() if path.is_absolute()
+                                    else self.base_dir))
 
     def append_journal(self, date: str, content: str) -> str:
         """Append a dated entry to the day's journal. Returns the doc id."""

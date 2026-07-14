@@ -43,6 +43,7 @@ async def _write_memory(args, ctx):
         priority=int(args.get("priority", 0)),
         tags=args.get("tags"),
         source_url=args.get("source_url"),
+        item_id=args.get("item_id"),
         source_type="tool",
     ))
 
@@ -219,6 +220,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "tags": {"type": "array", "items": {"type": "string"},
                      "description": "2-4 short lowercase tags"},
             "source_url": {"type": "string"},
+            "item_id": {"type": "string",
+                        "description": ("To UPDATE an existing memory item in place, pass its "
+                                        "id (e.g. topics/foo.md from search results). Omit to "
+                                        "create a new item.")},
         }, "required": ["content"]},
         "execute": _write_memory,
     },

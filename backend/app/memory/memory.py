@@ -53,6 +53,7 @@ class OkfMemory:
                     title: Optional[str] = None, description: Optional[str] = None,
                     category: Optional[str] = None, priority: int = 0,
                     tags: Optional[list[str]] = None, source_url: Optional[str] = None,
+                    item_id: Optional[str] = None,
                     source_type: str = "chat") -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept file."""
         async with self._lock:
@@ -70,7 +71,11 @@ class OkfMemory:
                     metadata["tags"] = [str(t).strip().lower() for t in tags if str(t).strip()]
                 if source_url:
                     metadata["source_url"] = source_url
-                doc_id = self.store.write_concept(title, content, type, metadata)
+                try:
+                    doc_id = self.store.write_concept(title, content, type, metadata,
+                                                      doc_id=item_id)
+                except FileNotFoundError as e:
+                    return {"status": "error", "error": str(e)}
             else:
                 today = datetime.now(timezone.utc).date().isoformat()
                 doc_id = self.store.append_journal(today, content)
@@ -89,7 +94,17 @@ class OkfMemory:
                 continue
             fm, body = parsed
             snippet = body[:snippet_chars].strip()
-            line = f"### {fm.get('title', doc_id)}\n{snippet}"
+            header = f"### {fm.get('title', doc_id)}"
+            # Age + provenance make staleness reasoning possible: an agent can
+            # only decide to refresh knowledge it can see the age and source of.
+            if fm.get("type") in ("topic", "source"):
+                learned = str(fm.get("timestamp", ""))[:10]
+                meta = [f"learned {learned}"] if learned else []
+                if fm.get("source_url"):
+                    meta.append(f"source: {fm['source_url']}")
+                if meta:
+                    header += f" ({', '.join(meta)})"
+            line = f"{header}\n{snippet}"
             if used + len(line) > max_chars:
                 break
             lines.append(line)
