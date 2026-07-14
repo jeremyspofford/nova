@@ -179,7 +179,7 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto nice-scroll p-4 space-y-2">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-4 space-y-2">
         {items.length === 0 && (
           <div className="text-center text-stone-500 mt-10">
             <p className="text-base font-medium text-stone-400">Talk to Nova</p>
@@ -204,7 +204,7 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
           }
           return (
             <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+              <div className={`max-w-[85%] min-w-0 break-words px-3 py-2 rounded-lg text-sm ${
                 item.role === 'user'
                   ? 'bg-teal-700 text-white whitespace-pre-wrap'
                   : 'bg-stone-800 text-stone-100'

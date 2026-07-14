@@ -256,6 +256,23 @@ See README for what works. This file is the ordered backlog.
   OpenRouter's actual claude-sonnet-4.6 — dots, not dashes; fixed in 018
   and live).
 
+- **Settings IA reorg + chat overflow fix (2026-07-14)** — the Inference
+  section had become a junk drawer; split by concern instead of location:
+  *Settings → Inference* = machine infra only (bundled toggle, Ollama URL,
+  fallback model, memory override); new *Models tab* = inventory +
+  governance (keep-warm, pull, the curated/approved table, a full-catalog
+  browser for authenticated providers); *Agents tab* = assignment + its
+  consequences (Detect & suggest and the concurrent-load bars now sit next
+  to the model pickers they react to — change a model, watch the bar move).
+  Decision from discussion: NO per-agent keep-warm toggles — pinning is
+  model-scoped, not agent-scoped (shared models make per-agent toggles
+  conflict), and latency value concentrates in main; if finer control is
+  ever needed, it'll be per-model pin buttons on the load bar. Chat fix:
+  fenced code without a language tag fell into the inline style inside a
+  bare <pre> and overflowed the bubble — block chrome + horizontal scroll
+  now live on <pre> itself (child selectors neutralize the inline chip),
+  bubbles get min-w-0/break-words, the scroll column clips x.
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM

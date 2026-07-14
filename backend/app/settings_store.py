@@ -45,7 +45,7 @@ SETTING_DEFS: list[dict] = [
      "label": "Local fallback model",
      "description": "Ollama model used when no OpenRouter key is configured."},
     {"key": "inference.keep_chat_model_warm", "type": "boolean", "default": False,
-     "section": "Inference", "label": "Keep chat model loaded",
+     "section": "Models", "label": "Keep chat model loaded",
      "description": ("Pin main's local model in Ollama memory so chat answers "
                      "without a multi-second reload (re-pins after Ollama "
                      "restarts; unpins when main moves to cloud). Ollama may "

@@ -39,19 +39,26 @@ export function Markdown({ children }: { children: string }) {
         blockquote: ({ children: kids }) => (
           <blockquote className="border-l-2 border-stone-600 pl-3 my-2 text-stone-400 italic">{kids}</blockquote>
         ),
+        // Block chrome + horizontal scrolling live on <pre> so EVERY fenced
+        // block is contained, language tag or not (untagged fences used to
+        // fall into the inline style inside a bare pre and overflow the
+        // bubble). The child selectors neutralize the inline-chip styling
+        // when that code lands inside a pre.
         code: ({ className, children: kids }) => {
           const isBlock = /language-/.test(className ?? '');
           return isBlock ? (
-            <code className={`${className} block bg-stone-950/70 border border-stone-700 rounded-md p-2.5 my-2 text-xs font-mono overflow-x-auto nice-scroll`}>
-              {kids}
-            </code>
+            <code className={`${className} block text-xs font-mono`}>{kids}</code>
           ) : (
-            <code className="bg-stone-950/70 border border-stone-700/60 rounded px-1 py-0.5 text-xs font-mono">
+            <code className="bg-stone-950/70 border border-stone-700/60 rounded px-1 py-0.5 text-xs font-mono break-words">
               {kids}
             </code>
           );
         },
-        pre: ({ children: kids }) => <pre className="my-0">{kids}</pre>,
+        pre: ({ children: kids }) => (
+          <pre className="my-2 bg-stone-950/70 border border-stone-700 rounded-md p-2.5 text-xs font-mono overflow-x-auto nice-scroll max-w-full [&>code]:bg-transparent [&>code]:border-0 [&>code]:p-0 [&>code]:rounded-none [&>code]:block [&>code]:break-normal">
+            {kids}
+          </pre>
+        ),
         table: ({ children: kids }) => (
           <div className="overflow-x-auto nice-scroll my-2">
             <table className="text-xs border-collapse">{kids}</table>
