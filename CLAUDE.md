@@ -53,4 +53,6 @@ Read `README.md` for what works and `ROADMAP.md` for the ordered backlog
 ## Definition of done
 
 Verify in the running app (real chat flow through :5173), not just tests or
-code review. Commit on `main` and push. Never delete `LICENSE`.
+code review. Leave changes **uncommitted** and summarize them — Jeremy
+reviews and decides when to commit/push; never commit or push unprompted
+(rule set 2026-07-14). Never delete `LICENSE`.
