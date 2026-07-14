@@ -150,20 +150,40 @@ See README for what works. This file is the ordered backlog.
 
 ## Next up
 
-1. **Model recommendations (brainstorm needed)** — help users pick models
-   instead of guessing. Axes to work through together:
-   - *Bring-your-own vs guided*: user names a model or two they want, OR Nova
-     reads system resources (GPU vendor/VRAM via nvidia-smi/rocm, RAM, CPU)
-     and suggests a shortlist.
-   - *Per-role suggestions*: chat wants speed; ingestion/research wants tool
-     reliability; compaction can be tiny. Suggest per-agent models, not one
-     global pick.
-   - *Curation source*: a small hand-maintained table (model → min RAM/VRAM,
-     tool-calling quality tier) beats a live registry for v1.
-   - *Where it lives*: first-run experience? Settings → Inference panel with
-     a "detect & suggest" button? Both?
-   - *Validation*: offer a one-click "test this model" (short tool-calling
-     probe) so suggestions are verified on the user's actual hardware.
+1. **Model recommendations (designed 2026-07-14, ready to build)** — help
+   users pick models instead of guessing. Decisions from the brainstorm:
+   - *Hybrid-aware*: recommend local models from detected hardware; when
+     `OPENROUTER_API_KEY` is present, tool-heavy roles (ingestion/research)
+     may suggest cloud where local judgment falls short — always with a
+     fully-local alternate listed. Local-first, cloud opt-in.
+   - *Detection = cheap + empirical*: RAM/CPU from `/proc` in-container
+     (WSL2-honest numbers); GPU presence via ONE new fixed verb on the
+     inference-control sidecar (`GET /gpu` — docker nvidia runtime check,
+     nothing parameterized); real VRAM truth observed empirically from
+     Ollama `/api/ps` during probes. No host script, no stale
+     `hardware.json` (the v2 trap). Detection on demand, timestamped in UI.
+   - *Curated table DB-seeded + editable*: migration seeds ~12 rows
+     (model → provider, min RAM/VRAM, tool-calling tier A/B/C, speed class,
+     suited roles, notes); editable under operator edit mode with the same
+     invariants as rules/tools (system rows toggle-only). DB home means an
+     ingestion automation can refresh curation later.
+   - *Per-agent suggestions, not one global pick*: engine input = hardware +
+     curated table + role profile (main: speed + decent tools;
+     ingestion/research: tool reliability; guardian: small + strict;
+     compaction: tiny, no tools; user-created agents: heuristic from tool
+     grants). Output = per-agent {current, suggested, reason, alternates}
+     with per-row apply and apply-all.
+   - *Surfaces*: Settings → Inference "Detect & suggest" card AND a
+     `recommend_models` tool for the model-manager agent — both thin
+     wrappers over one engine function.
+   - *Validation probe*: one-click "test this model" — short completion
+     (TTFT, tok/s) + a forced tool call verified MECHANICALLY at the
+     dispatch layer (never model self-report — the glm-5.2 fabrication
+     lesson); results stamped onto the row ("verified on your hardware,
+     12 tok/s") and VRAM observations fed back into the hardware snapshot.
+     Pulls are always explicit with size shown, never automatic.
+   - *Pin guard (v2 harvest)*: flag any agent whose model isn't in the live
+     catalog — no config may point at a nonexistent model.
 
 2. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
