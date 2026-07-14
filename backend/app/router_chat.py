@@ -385,6 +385,46 @@ async def delete_skill_endpoint(skill_id: str):
     return {"status": "deleted"}
 
 
+@router.post("/api/v1/models/uninstall")
+async def uninstall_model_endpoint(body: dict):
+    """Remove an installed Ollama model (native /api/delete). Refuses while
+    any agent or setting still points at it — uninstalling a model in use
+    would break those turns at request time."""
+    import httpx
+    from app import models_catalog
+
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="model name is required")
+
+    model_id = f"ollama:{name}"
+    users = [a["name"] for a in await agent_registry.list_agents(enabled_only=False)
+             if a["model"] == model_id]
+    if settings_store.get("compaction.model") == model_id:
+        users.append("compaction (setting)")
+    if settings_store.get("inference.local_fallback_model") == name:
+        users.append("local fallback (setting)")
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{name}' is in use by: {', '.join(users)} — reassign first")
+
+    base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.request("DELETE", f"{base}/api/delete",
+                                        json={"name": name})
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"cannot reach Ollama: {e}")
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"'{name}' is not installed")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code,
+                            detail=resp.text[:200] or "uninstall failed")
+    models_catalog.invalidate()
+    return {"status": "uninstalled", "name": name}
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

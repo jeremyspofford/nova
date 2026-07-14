@@ -9,7 +9,7 @@ import {
   getCuratedModels, getMemoryItem, getModelBudget, getModels,
   getRecommendations, getRules, getSettings, getSkills, getTools, patchAgent,
   patchAutomation, patchCuratedModel, patchRule, patchSettings, patchTool,
-  pullModel, setBundledInference, testModel, updateSkill,
+  pullModel, setBundledInference, testModel, uninstallModel, updateSkill,
 } from '../api';
 import { Markdown } from './Markdown';
 import { THEMES } from '../brain/theme';
@@ -82,6 +82,29 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** One switch to rule all the tabs — a real toggle with a label that says
+ *  what it controls, replacing the ambiguous "enabled" text chips. Disable
+ *  is the ONLY off-switch for undeletable system entities, so this control
+ *  must exist; it just has to explain itself. */
+function Toggle({ on, onChange, label, title }: {
+  on: boolean; onChange: () => void; label: string; title: string;
+}) {
+  return (
+    <span title={title} className="flex items-center gap-1.5 shrink-0 select-none">
+      <span className={`text-[11px] ${on ? 'text-teal-300' : 'text-stone-500'}`}>{label}</span>
+      <button
+        type="button"
+        onClick={onChange}
+        aria-pressed={on}
+        aria-label={label}
+        className={`w-8 px-0.5 py-0.5 rounded-full transition ${on ? 'bg-teal-600' : 'bg-stone-700'}`}
+      >
+        <span className={`block w-3 h-3 rounded-full bg-white transition-transform ${on ? 'translate-x-4' : ''}`} />
+      </button>
+    </span>
   );
 }
 
@@ -711,6 +734,20 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
     .catch(() => {});
   useEffect(() => { load(); loadInstalled(); }, []);
 
+  async function uninstallRow(m: CuratedModel) {
+    const name = m.model.startsWith('ollama:') ? m.model.slice(7) : m.model;
+    if (!window.confirm(`Uninstall "${name}"? The download is gone from disk; you can pull it again later.`)) return;
+    try {
+      await uninstallModel(name);
+      setPulls(p => {
+        const next = { ...p };
+        delete next[m.model];
+        return next;
+      });
+      loadInstalled();
+    } catch (e) { setStatus(String(e)); }
+  }
+
   async function pullRow(m: CuratedModel) {
     const name = m.model.startsWith('ollama:') ? m.model.slice(7) : m.model;
     setPulls(p => ({ ...p, [m.model]: 'starting…' }));
@@ -842,7 +879,14 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                   <div className="flex items-center gap-1.5 shrink-0">
                     {m.provider === 'ollama' && (
                       installed.has(m.model) ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ installed</span>
+                        <>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ installed</span>
+                          <button onClick={() => uninstallRow(m)}
+                            title="Free the disk space — refuses while an agent or setting still uses this model."
+                            className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
+                            uninstall
+                          </button>
+                        </>
                       ) : (
                         <button onClick={() => pullRow(m)}
                           disabled={pulls[m.model] !== undefined && !pulls[m.model].startsWith('✗')}
@@ -863,13 +907,8 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                         </button>
                       </>
                     )}
-                    <button onClick={() => toggle(m)}
-                      title="Enabled rows feed suggestions and the approved dropdown list; disable to veto."
-                      className={`text-xs px-2 py-0.5 rounded border ${
-                        m.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                      }`}>
-                      {m.enabled ? 'enabled' : 'disabled'}
-                    </button>
+                    <Toggle on={m.enabled} onChange={() => toggle(m)} label="approved"
+                      title="Approved rows feed suggestions and the model dropdowns; switch off to veto a model without deleting it." />
                   </div>
                 </div>
                 <div className="mt-0.5 text-[11px] text-stone-500">
@@ -1102,9 +1141,22 @@ function ModelsTab({ editMode }: { editMode: boolean }) {
   );
 }
 
-/** Read-only view of everything the configured credentials can reach. */
+/** Everything the configured credentials can reach; installed local models
+ *  can be uninstalled from here (covers pulls that aren't in the curated
+ *  table). */
 function FullCatalog() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
+  const [status, setStatus] = useState('');
+
+  async function uninstall(m: ModelInfo) {
+    if (!window.confirm(`Uninstall "${m.name}"? You can pull it again later.`)) return;
+    try {
+      await uninstallModel(m.name);
+      setStatus(`✓ ${m.name} uninstalled`);
+      getModels(true).then(setModels).catch(() => {});
+    } catch (e) { setStatus(String(e)); }
+  }
+
   return (
     <details
       className="rounded-lg border border-stone-700 bg-stone-800/30"
@@ -1132,10 +1184,19 @@ function FullCatalog() {
             </div>
           ) : (
             models.map(m => (
-              <div key={m.id} className="text-xs font-mono text-stone-400 truncate">{m.id}</div>
+              <div key={m.id} className="flex items-center justify-between gap-2">
+                <span className="text-xs font-mono text-stone-400 truncate">{m.id}</span>
+                {m.provider === 'ollama' && (
+                  <button onClick={() => uninstall(m)}
+                    className="text-[10px] px-1.5 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800 shrink-0">
+                    uninstall
+                  </button>
+                )}
+              </div>
             ))
           )}
         </div>
+        {status && <div className="mt-1 text-xs text-amber-400">{status}</div>}
       </div>
     </details>
   );
@@ -1356,14 +1417,8 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
                       delete
                     </button>
                   )}
-                  <button
-                    onClick={() => toggle(a)}
-                    className={`text-xs px-2 py-0.5 rounded border ${
-                      a.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                    }`}
-                  >
-                    {a.enabled ? 'enabled' : 'disabled'}
-                  </button>
+                  <Toggle on={a.enabled} onChange={() => toggle(a)} label="active"
+                    title="Inactive agents leave the dispatch index and can't run — the off switch for system agents, which can't be deleted." />
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>
@@ -1533,16 +1588,8 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                       delete
                     </button>
                   )}
-                  <button
-                    onClick={() => toggle(a)}
-                    className={`text-xs px-2 py-0.5 rounded border ${
-                      a.enabled
-                        ? 'border-teal-700 text-teal-300 bg-teal-900/30'
-                        : 'border-stone-600 text-stone-500'
-                    }`}
-                  >
-                    {a.enabled ? 'enabled' : 'disabled'}
-                  </button>
+                  <Toggle on={a.enabled} onChange={() => toggle(a)} label="active"
+                    title="The kill switch — paused automations don't run until switched back on." />
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500">
@@ -1740,12 +1787,8 @@ function RulesTab({ editMode }: { editMode: boolean }) {
                       delete
                     </button>
                   )}
-                  <button onClick={() => toggle(r)}
-                    className={`text-xs px-2 py-0.5 rounded border ${
-                      r.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                    }`}>
-                    {r.enabled ? 'enabled' : 'disabled'}
-                  </button>
+                  <Toggle on={r.enabled} onChange={() => toggle(r)} label="enforcing"
+                    title="Switched-off rules don't check tool calls — the off switch for system protections, which can't be deleted." />
                 </div>
               </div>
               {r.description && <div className="mt-1 text-xs text-stone-400">{r.description}</div>}
@@ -1852,14 +1895,8 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
                   delete
                 </button>
               )}
-              <button
-                onClick={() => toggle(t)}
-                className={`text-xs px-2 py-0.5 rounded border ${
-                  t.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                }`}
-              >
-                {t.enabled ? 'enabled' : 'disabled'}
-              </button>
+              <Toggle on={t.enabled} onChange={() => toggle(t)} label="active"
+                title="Inactive tools can't be called by any agent — the off switch, since system tools can't be deleted." />
             </div>
           </div>
           {t.description && <div className="mt-1 text-xs text-stone-400 line-clamp-2">{t.description}</div>}

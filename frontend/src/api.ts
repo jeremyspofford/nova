@@ -559,6 +559,15 @@ export async function deleteCuratedModel(id: string): Promise<void> {
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
+export async function uninstallModel(name: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/models/uninstall`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Uninstall failed');
+}
+
 export async function* pullModel(name: string): AsyncGenerator<Record<string, unknown>> {
   const r = await fetch(`${API_URL}/api/v1/models/pull`, {
     method: 'POST',

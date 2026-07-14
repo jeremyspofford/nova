@@ -330,6 +330,20 @@ See README for what works. This file is the ordered backlog.
   8/8; a live chat turn produces no false banner. Works at any dispatch
   depth and for automations (single choke point in run_agent).
 
+- **Real toggles + model uninstall (2026-07-14)** — the "enabled" text
+  chips confused even their owner; they're now real switches with
+  domain-specific labels and self-explaining tooltips: agents "active"
+  (leaves the dispatch index), curated models "approved" (feeds
+  suggestions + dropdowns), automations "active" (kill switch), rules
+  "enforcing", tools "active". The control itself stays — disable is the
+  ONLY off-switch for undeletable system entities, so removal was never an
+  option; it just has to explain itself. Plus uninstall for installed
+  local models (curated rows + full catalog): proxies Ollama's native
+  /api/delete, invalidates the catalog, and REFUSES with a 409 naming the
+  users while any agent or setting still points at the model. Verified:
+  409 correctly listed "compaction (setting), local fallback (setting)"
+  for qwen2.5:3b; full pull → uninstall → gone cycle on qwen2.5:0.5b.
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's
