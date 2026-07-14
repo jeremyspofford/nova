@@ -2,7 +2,7 @@ version: '3.8'
 
 # Pinned so container labels/names are stable regardless of the checkout
 # directory — the inference-control sidecar targets this project by name.
-name: nova-rebuild
+name: nova
 
 services:
   postgres:

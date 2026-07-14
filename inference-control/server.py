@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("inference-control")
 
 COMPOSE_FILE = os.environ.get("COMPOSE_FILE", "/compose/docker-compose.yml")
-PROJECT = os.environ.get("COMPOSE_PROJECT", "nova-rebuild")
+PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
 SERVICE = "ollama"
 PORT = 9911
 

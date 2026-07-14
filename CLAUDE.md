@@ -1,13 +1,16 @@
-# Nova v3 (rebuild/fable)
+# Nova v3
 
-## This is the canonical lane
+## Canonical setup
 
-- This worktree (`~/workspace/nova-rebuild`, branch `rebuild/fable`) is the
-  **one canonical Nova v3**, pushed to origin. Other folders (`nova`,
-  `nova-brain`, `nova/.claude/worktrees/model-pool`) are separate worktrees
-  of the same repo for other lanes — do not work in them, and run
-  `git status` before any branch operation in case another session has
-  uncommitted work here.
+- The repo lives at `~/workspace/nova` — a **standalone clone** of
+  github.com/jeremyspofford/nova, working directly on `main`. This is the
+  only working folder on this machine. The old sibling-worktree sprawl
+  (`nova` as the parent checkout, `nova-brain`, `nova-rebuild`) is gone:
+  the v3 lane `rebuild/fable` was merged to `main` via PR #61 on
+  2026-07-14 and deleted, and this folder (formerly `nova-rebuild`) was
+  renamed to `nova`.
+- If a task needs an isolated worktree, create it **inside the repo** under
+  `.worktrees/<name>` (gitignored) — never as a sibling folder.
 - A deleted lane called `nova-v3-dev` used to exist; it's archived at tag
   `archive/v3-vite-scaffold`. If you see references to it or to
   `NOVA_PLAN.md`, that lane is dead — `ROADMAP.md` in this repo is the only
@@ -19,7 +22,8 @@
 
 ## The running stack
 
-The live stack is the `nova-rebuild-*` docker compose containers:
+The live stack is the `nova-*` docker compose containers (compose project
+`nova`, pinned in `docker-compose.yml`):
 
 | Service  | Port  | Notes                          |
 |----------|-------|--------------------------------|
@@ -45,4 +49,4 @@ Read `README.md` for what works and `ROADMAP.md` for the ordered backlog
 ## Definition of done
 
 Verify in the running app (real chat flow through :5173), not just tests or
-code review. Commit on this branch and push. Never delete `LICENSE`.
+code review. Commit on `main` and push. Never delete `LICENSE`.
