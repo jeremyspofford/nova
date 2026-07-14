@@ -150,6 +150,42 @@ See README for what works. This file is the ordered backlog.
   chat or curl.
 - **Journal polish** — pre-rewrite journal files lack a `title:` frontmatter
   key, so the brain labels them by path. Cosmetic; fix by backfilling titles.
+- **Device control agent** — computer-use loop (screenshot → reason → act)
+  with per-platform drivers: ADB for Android, AppleScript/JXA + cliclick for
+  macOS, xdotool/ydotool for Linux, pywinauto for Windows, plain SSH for WSL;
+  iPhone is hardest (WebDriverAgent needs a dev cert — research). Must route
+  through the guardrail/consent layer; highest-risk item on this list.
+- **YouTube comprehension** — transcript-first (captions via yt-dlp), local
+  Whisper fallback when captions are missing, keyframes + vision model for
+  visual-heavy videos; decide summarize-into-memory vs index-full-transcript.
+- **Coding agent(s)** — one general coding agent with strong tools (repo
+  access, shell, file editing, test runner) first; specializations (reviewer,
+  architect) as personas on the same harness, not bespoke agents. Needs
+  sandboxed workspaces + branch/PR git discipline.
+- **Diagramming agent** — Mermaid as the workhorse, raw SVG for freeform;
+  render–verify loop (render, inspect with vision, self-correct) because
+  text-only generation fails silently on layout; render inline in chat.
+
+## Reference releases (mine for ideas, never build from)
+
+Two tags preserve the pre-rebuild attempts. Neither worked as a product, so
+this rebuild takes recipes and lessons from them (as the Galaxy theme already
+did) — never code wholesale.
+
+- **`v0.1.0-alpha`** — the v1 platform (May 2026). Worth mining: consent gate
+  + capability audit log, AES-256-GCM secrets store (keys out of .env),
+  benchmarks harness with LLM-judge quality cases, voice chat design
+  (push-to-talk, sentence-buffered TTS), feature flags with kill switches.
+- **`v0.5.0-alpha`** — the final v2 state (July 2026, tip of old main). Worth
+  mining: the complete DESIGN.md design system (Plus Jakarta Sans / Geist
+  Mono scale, Nova teal palette), model-accuracy guarantees (validated live
+  discovery, pin guard — no config may point at a nonexistent model), local
+  backend pool, safety rails (wall-clock kill, tool idempotency ledger,
+  notification outbox), MCP lazy tool loading, cancel-and-replace chat
+  streaming, the arialabs.ai website under `website/`.
+- **`archive/v3-vite-scaffold`** — an abandoned June-22 restart (bare Vite
+  scaffold, never ran); its NOVA_PLAN.md ideas are folded into "Later" above.
+  Nothing else worth keeping.
 
 ## Operational notes
 
