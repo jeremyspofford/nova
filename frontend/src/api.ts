@@ -494,6 +494,7 @@ export interface ProbeResult {
   model: string;
   ok: boolean;
   tool_call_ok: boolean | null;
+  agentic_ok?: boolean | null;
   ttft_ms: number | null;
   tok_s: number | null;
   gpu_active: boolean | null;

@@ -296,9 +296,46 @@ See README for what works. This file is the ordered backlog.
   6/6 gating checks (403 off, CRUD on, traversal 404), skill created,
   updated, deleted through the API.
 
+- **Agentic-judgment probe (2026-07-14)** — "test this model" now measures
+  judgment, not just capability. New stage after the forced call: a
+  two-round dispatch scenario verified mechanically — the model must CALL
+  dispatch_to_agent (not describe one) and its final answer must contain a
+  nonce that exists only in the tool result we feed back (consumed, not
+  hallucinated). The history is deliberately poisoned with a
+  narrated-but-never-performed dispatch — the exact live failure this
+  exists to catch — so imitators fail. `ok` now requires both checks; the
+  UI warns "⚠ calls tools when forced, but NARRATES in agentic context".
+  Honest finding from live runs: glm-5.2, qwen3-vl-235b-thinking, AND
+  qwen2.5:3b all pass, including the poisoned variant — vl-thinking's real
+  narration required full production context (long compacted history, big
+  prompt, ten tools). The probe is a floor/screen, not a guarantee;
+  migration 019 + tier discipline remain the operative protection, and
+  live narration detection belongs to the observability item below.
+
 ## Next up
 
-1. **Named local-inference endpoints (multi-backend)** — users run LM
+1. **Observability / turn tracing (brainstorm needed)** — today's
+   narration bug was diagnosed by hand-querying the messages table; that
+   should be a click. Axes to work through together:
+   - *What exists*: messages journal tool activity (kind/name/agent +
+     2000-char detail), automation run outcomes, rule hit counts, docker
+     logs. Enough for autopsies, only via psql.
+   - *Trace model*: turn → dispatch → tool-call spans (args, result,
+     status, latency, tokens), correlation id through dispatch depth;
+     Postgres tables vs OpenTelemetry; retention/pruning policy.
+   - *Surfaces*: per-message "inspect" in chat expanding the turn tree; a
+     Traces tab; errors surfaced in the UI instead of vanishing into
+     docker logs.
+   - *Metrics*: per-model latency/tokens/cost per turn — real usage data
+     that could feed back into curated tiers and recommendations.
+   - *Failure detectors*: a live narration detector (final text announces
+     a dispatch, zero tool calls in the turn → flag the turn, journal it)
+     — cheap, and catches today's bug class as it happens rather than in
+     autopsy.
+   - *Redaction*: tool args can carry secrets; interplay with guardian
+     rules and the no-secret-in-requests pattern.
+
+2. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -308,7 +345,7 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
-2. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+3. **Chat activity in the brain views (designed 2026-07-14, build later)** —
    while Nova is answering, the brain should visibly "think", whatever theme
    is active. Design:
    - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
@@ -327,7 +364,7 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
-3. **Platform entities in the brain graph** — agents, automations, tools,
+4. **Platform entities in the brain graph** — agents, automations, tools,
    and rules join the galaxy/graph as first-class nodes (skills are already
    there via memory). The brain becomes the full map of what Nova *is*:
    knowledge (topics), experience (journals), capabilities (skills, tools,
@@ -342,7 +379,7 @@ See README for what works. This file is the ordered backlog.
    - HUD filter chips (or a Settings toggle) so the memory-only view stays
      one click away — ~40 extra nodes shouldn't drown the knowledge graph.
 
-4. **PWA — Nova on the phone (until a native app)** — installable web app
+5. **PWA — Nova on the phone (until a native app)** — installable web app
    served from the same stack. The manifest/service-worker part is easy;
    the real prerequisites are exposure and layout. Ordered plan:
    1. *Auth first* (pulls the "Later" auth item forward): single admin

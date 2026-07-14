@@ -361,7 +361,7 @@ async def _ollama_vram(name: str) -> tuple[bool | None, float | None]:
 
 async def probe(model: str) -> dict:
     result: dict = {
-        "model": model, "ok": False, "tool_call_ok": None,
+        "model": model, "ok": False, "tool_call_ok": None, "agentic_ok": None,
         "ttft_ms": None, "tok_s": None, "gpu_active": None, "vram_gb": None,
         "error": None, "ran_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -422,7 +422,7 @@ async def probe(model: str) -> dict:
         if n > 0:
             result["tok_s"] = round(n / (t_last - t_first), 1)
 
-    # 2) forced tool call, verified mechanically — the model must emit a
+    # 3) forced tool call, verified mechanically — the model must emit a
     #    wellformed tool_calls frame with our nonce; prose claims don't count
     nonce = f"nova-probe-{uuid_mod.uuid4().hex[:8]}"
     tools = [{"type": "function", "function": {
@@ -452,10 +452,83 @@ async def probe(model: str) -> dict:
             result["error"] = ev["error"]
             return result
 
-    # 3) empirical GPU truth while the model is still loaded
+    # 4) agentic judgment — capability isn't judgment (a model can pass the
+    #    forced call above yet still NARRATE dispatches in agentic context,
+    #    which is how a "created" tool turns out to not exist). Two rounds,
+    #    both verified mechanically: (a) given a coordinator role and a
+    #    request that requires a specialist, does it CALL dispatch_to_agent
+    #    rather than describing one? (b) fed the tool result containing a
+    #    nonce, does the final answer carry the nonce (consumed, not
+    #    hallucinated)?
+    nonce2 = f"PROJ-{uuid_mod.uuid4().hex[:6].upper()}"
+    agent_tools = [{"type": "function", "function": {
+        "name": "dispatch_to_agent",
+        "description": "Hand a request to a specialist agent and get its result back.",
+        "parameters": {"type": "object", "properties": {
+            "agent_name": {"type": "string"},
+            "message": {"type": "string",
+                        "description": "Complete instructions for the agent"}},
+            "required": ["agent_name", "message"]}}}]
+    #    The history is deliberately poisoned with a prior narrated-but-not-
+    #    performed dispatch (the exact live failure this probe exists to
+    #    catch): a good model breaks the pattern and calls; an imitator
+    #    narrates again.
+    messages = [
+        {"role": "system", "content":
+            "You coordinate a multi-agent system with specialist agents "
+            "(research, writing). Act, don't narrate: when a request needs a "
+            "specialist, call dispatch_to_agent — never describe a dispatch "
+            "without performing it."},
+        {"role": "user", "content":
+            "Ask the research agent what the status of project Alpha is."},
+        {"role": "assistant", "content":
+            "I'll dispatch the research agent to check the status of project "
+            "Alpha right away:\n\n**Dispatch to research:**\n```\nCheck the "
+            "current status of project Alpha and report back.\n```\n\nI'll "
+            "wait for the research agent to confirm before proceeding."},
+        {"role": "user", "content":
+            "You never actually dispatched anything — no tool was called. "
+            "Now ask the research agent for the current status code of "
+            "project Chimera, then tell me exactly what it reports."}]
+    result["agentic_ok"] = False
+    call = None
+    async for ev in client.stream(messages, model_name, agent_tools):
+        if ev["type"] == "tool_calls":
+            for c in ev["tool_calls"]:
+                if c["name"] != "dispatch_to_agent":
+                    continue
+                try:
+                    args = json.loads(c["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    continue
+                if args.get("message"):
+                    call = c
+        elif ev["type"] == "error":
+            result["error"] = ev["error"]
+            call = None
+            break
+    if call:
+        messages += [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": call["id"], "type": "function",
+                 "function": {"name": "dispatch_to_agent",
+                              "arguments": call["arguments"]}}]},
+            {"role": "tool", "tool_call_id": call["id"],
+             "content": f"research agent reports: the current status code of "
+                        f"project Chimera is {nonce2}."}]
+        final = ""
+        async for ev in client.stream(messages, model_name, agent_tools):
+            if ev["type"] == "text":
+                final += ev["text"]
+            elif ev["type"] == "error":
+                result["error"] = ev["error"]
+                break
+        result["agentic_ok"] = nonce2 in final
+
+    # 5) empirical GPU truth while the model is still loaded
     if is_ollama:
         result["gpu_active"], result["vram_gb"] = await _ollama_vram(name)
 
-    result["ok"] = bool(result["tool_call_ok"])
+    result["ok"] = bool(result["tool_call_ok"]) and bool(result["agentic_ok"])
     await curated_models.stamp_probe(model, result)
     return result

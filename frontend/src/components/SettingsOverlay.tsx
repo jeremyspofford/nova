@@ -382,9 +382,18 @@ function probeLine(p: ProbeResult | 'running' | undefined) {
   if (p === 'running') return <span className="text-amber-400">probing… (local models can take a minute)</span>;
   if (p.error) return <span className="text-red-400">✗ {p.error}</span>;
   if (!p.tool_call_ok) return <span className="text-red-400">✗ tool call failed the mechanical check</span>;
+  if (p.agentic_ok === false) {
+    return (
+      <span className="text-amber-400">
+        ⚠ calls tools when forced, but NARRATES in agentic context — dispatches
+        it describes won't actually happen · {p.tok_s != null && `${p.tok_s} tok/s · `}TTFT {p.ttft_ms} ms
+      </span>
+    );
+  }
   return (
     <span className="text-emerald-400">
-      ✓ tool call verified · {p.tok_s != null && `${p.tok_s} tok/s · `}
+      ✓ tool call{p.agentic_ok ? ' + agentic judgment' : ''} verified ·{' '}
+      {p.tok_s != null && `${p.tok_s} tok/s · `}
       TTFT {p.ttft_ms} ms · {p.gpu_active ? `GPU (${p.vram_gb ?? '?'} GB VRAM)` : p.gpu_active === false ? 'CPU' : 'cloud'}
     </span>
   );
