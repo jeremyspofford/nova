@@ -273,6 +273,29 @@ See README for what works. This file is the ordered backlog.
   now live on <pre> itself (child selectors neutralize the inline chip),
   bubbles get min-w-0/break-words, the scroll column clips x.
 
+- **Skills tab + act-don't-narrate (2026-07-14)** — investigated "Nova's
+  created tool never showed in the Tools menu": the pipeline was fine (a
+  created tool = a `tools` row = a Tools-tab card); the DB showed **no
+  creation ever happened** — main streamed a complete spec plus "I'll wait
+  for the tool-creator to confirm" without calling dispatch_to_agent.
+  Countermeasures: migration 019 appends an explicit act-don't-narrate rule
+  to main ("saying you're dispatching without calling the tool in the same
+  turn is a failure"), and the probe earned its keep diagnosing the rest:
+  the experimental main model (qwen3-vl-235b-thinking) PASSES the
+  mechanical tool-call probe yet still narrates in rich agentic context —
+  capability ≠ judgment, which is precisely what curated tool tiers encode.
+  With main back on tier-A glm-5.2 the acid test landed end-to-end:
+  dispatch → tool-creator → manage_tools → `github-profile-fetch` row,
+  verified in the DB, not the transcript. **Skills tab**: skills join the
+  overlay (7th tab) — list with title/description/category, expandable
+  markdown view, edit-mode-gated create/edit/delete through the memory
+  store (index reindexes on write; files in `data/memory/skills/` stay
+  hand-editable). New endpoints GET/POST/PUT/DELETE `/api/v1/skills` with
+  the same 403 gating + path-traversal guard as everything else; store
+  gains a guarded delete_file and the index drops deleted docs. Verified:
+  6/6 gating checks (403 off, CRUD on, traversal 404), skill created,
+  updated, deleted through the API.
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM

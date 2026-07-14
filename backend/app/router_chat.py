@@ -329,6 +329,62 @@ async def delete_curated_endpoint(row_id: str):
     return {"status": "deleted"}
 
 
+# ── skills (operator surface; agents use write_memory type='skill') ──────
+
+@router.get("/api/v1/skills")
+async def list_skills_endpoint():
+    return await memory.list_skills()
+
+
+@router.post("/api/v1/skills", status_code=201)
+async def create_skill_endpoint(body: dict):
+    _require_edit_mode()
+    title = str(body.get("title", "")).strip()
+    content = str(body.get("content", "")).strip()
+    if not title or not content:
+        raise HTTPException(status_code=422, detail="title and content are required")
+    result = await memory.write(
+        content, type="skill", title=title,
+        description=str(body.get("description", "")).strip() or None,
+        category=str(body.get("category", "")).strip() or None,
+        source_type="operator")
+    if result.get("status") != "written":
+        raise HTTPException(status_code=422, detail=result.get("error", "write failed"))
+    return result
+
+
+@router.put("/api/v1/skills/{skill_id:path}")
+async def update_skill_endpoint(skill_id: str, body: dict):
+    _require_edit_mode()
+    if not skill_id.startswith("skills/"):
+        raise HTTPException(status_code=404, detail="not a skill")
+    existing = await memory.read_item(skill_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="skill not found")
+    title = str(body.get("title", "")).strip() \
+        or existing["frontmatter"].get("title", skill_id)
+    content = str(body.get("content", "")).strip() or existing["content"]
+    result = await memory.write(
+        content, type="skill", title=title, item_id=skill_id,
+        description=str(body.get("description", "")).strip()
+        or existing["frontmatter"].get("description"),
+        category=existing["frontmatter"].get("category"),
+        source_type="operator")
+    if result.get("status") != "written":
+        raise HTTPException(status_code=422, detail=result.get("error", "write failed"))
+    return result
+
+
+@router.delete("/api/v1/skills/{skill_id:path}")
+async def delete_skill_endpoint(skill_id: str):
+    _require_edit_mode()
+    if not skill_id.startswith("skills/"):
+        raise HTTPException(status_code=404, detail="not a skill")
+    if not await memory.delete_item(skill_id):
+        raise HTTPException(status_code=404, detail="skill not found")
+    return {"status": "deleted"}
+
+
 @router.get("/api/v1/memory/stats")
 async def memory_stats():
     return await memory.stats()

@@ -366,6 +366,49 @@ export async function deleteTool(id: string): Promise<void> {
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
+export interface SkillInfo {
+  id: string;
+  title: string;
+  description: string;
+  category: string | null;
+  priority: number;
+  updated: string;
+}
+
+export async function getSkills(): Promise<SkillInfo[]> {
+  const r = await fetch(`${API_URL}/api/v1/skills`);
+  if (!r.ok) throw new Error('Failed to load skills');
+  return r.json();
+}
+
+export async function createSkill(body: {
+  title: string; content: string; description?: string; category?: string;
+}): Promise<{ id: string }> {
+  const r = await fetch(`${API_URL}/api/v1/skills`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function updateSkill(id: string, body: {
+  title?: string; content?: string; description?: string;
+}): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/skills/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/skills/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
 export interface MemoryItem {
   id: string;
   frontmatter: Record<string, string>;

@@ -110,6 +110,15 @@ class OkfStore:
             return None
         return self.parse_frontmatter(path.read_text())
 
+    def delete_file(self, doc_id: str) -> bool:
+        # same traversal guard as read_file — ids arrive from the API
+        path = (self.base_dir / doc_id).resolve()
+        if (not path.is_relative_to(self.base_dir.resolve())
+                or path.suffix != ".md" or not path.is_file()):
+            return False
+        path.unlink()
+        return True
+
     def iter_files(self) -> list[tuple[str, float]]:
         """All markdown files as (doc_id, mtime)."""
         out = []

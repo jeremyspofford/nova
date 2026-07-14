@@ -165,6 +165,30 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         fm, body = parsed
         return {"id": doc_id, "frontmatter": fm, "content": body}
 
+    async def list_skills(self) -> list[dict]:
+        """Skill inventory for the operator UI — frontmatter only."""
+        out = []
+        for doc_id, _mtime in self.store.iter_files():
+            if not doc_id.startswith("skills/"):
+                continue
+            parsed = self.store.read_file(doc_id)
+            if not parsed:
+                continue
+            fm, _body = parsed
+            out.append({"id": doc_id, "title": fm.get("title", doc_id),
+                        "description": fm.get("description", ""),
+                        "category": fm.get("category"),
+                        "priority": fm.get("priority", 0),
+                        "updated": str(fm.get("timestamp", ""))[:10]})
+        return out
+
+    async def delete_item(self, doc_id: str) -> bool:
+        async with self._lock:
+            if not self.store.delete_file(doc_id):
+                return False
+            self.index.remove(doc_id)
+            return True
+
     async def stats(self) -> dict:
         return {"indexed": self.index.total_docs, **self.store.get_stats()}
 
