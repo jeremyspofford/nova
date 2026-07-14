@@ -468,15 +468,22 @@ function DetectSuggest() {
 
       {hw && (
         <div className="text-xs font-mono text-stone-400 border-t border-stone-700/60 pt-2">
-          {hw.ram_gb ?? '?'} GB RAM · {hw.cpu_cores ?? '?'} cores ·
+          {hw.ram_gb ?? '?'} GB RAM
+          {hw.memory_override_gb ? ` (sizing vs ${hw.sizing_ram_gb} GB — operator override)` : ''} ·{' '}
+          {hw.cpu_cores ?? '?'} cores ·
           {hw.gpu_name
             ? ` ${hw.gpu_name} · ${hw.vram_total_gb} GB VRAM`
+            : hw.unified_gpu
+            ? ' unified-memory GPU (observed)'
             : hw.nvidia_runtime
             ? ` NVIDIA runtime ✓ · VRAM ${hw.vram_observed_gb != null ? `${hw.vram_observed_gb} GB observed` : 'unmeasured'}`
             : hw.nvidia_runtime === false ? ' no GPU runtime' : ' GPU unknown'} ·
           detected {new Date(hw.detected_at).toLocaleTimeString()}
           {!recs?.cloud_available && <span className="text-stone-500"> · no cloud key — local only</span>}
         </div>
+      )}
+      {hw?.memory_note && (
+        <div className="text-[11px] text-stone-500">{hw.memory_note}</div>
       )}
       {hw?.nvidia_runtime && hw.vram_total_gb == null && (
         <div className="text-xs text-amber-400/90">

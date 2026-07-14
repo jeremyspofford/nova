@@ -44,6 +44,15 @@ SETTING_DEFS: list[dict] = [
      "default": "qwen2.5:3b", "section": "Inference",
      "label": "Local fallback model",
      "description": "Ollama model used when no OpenRouter key is configured."},
+    {"key": "inference.memory_gb_override", "type": "number", "default": 0,
+     "min": 0, "max": 2048, "section": "Inference",
+     "label": "Memory override for model sizing (GB)",
+     "description": ("Total system/unified memory to size local models against, "
+                     "for setups where Nova's container can't see it — e.g. "
+                     "macOS with host-run Ollama, where the Docker VM hides the "
+                     "real unified memory. 0 = use the measured value. Don't use "
+                     "this for the bundled Ollama: the VM's memory really is its "
+                     "ceiling.")},
     # ── Appearance (brain) ───────────────────────────────────────────────
     {"key": "brain.view", "type": "enum", "default": "graph",
      "options": ["graph", "galaxy"], "section": "Appearance",

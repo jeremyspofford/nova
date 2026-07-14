@@ -294,11 +294,11 @@ async def _recommend_models(args, ctx):
     recs = await model_recs.recommendations()
     hw = recs["hardware"]
     return _j({
-        "hardware": {"ram_gb": hw["ram_gb"], "cpu_cores": hw["cpu_cores"],
-                     "nvidia_runtime": hw["nvidia_runtime"],
-                     "gpu_name": hw["gpu_name"],
-                     "vram_total_gb": hw["vram_total_gb"],
-                     "vram_observed_gb": hw["vram_observed_gb"]},
+        "hardware": {k: hw[k] for k in
+                     ("ram_gb", "sizing_ram_gb", "memory_override_gb",
+                      "cpu_cores", "platform", "memory_note",
+                      "nvidia_runtime", "gpu_name", "vram_total_gb",
+                      "vram_observed_gb", "unified_gpu")},
         "cloud_available": recs["cloud_available"],
         "recommendations": [
             {k: r[k] for k in ("agent", "profile", "current_model", "status",

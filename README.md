@@ -44,8 +44,17 @@ Per platform:
   limitation, not Nova's). Run [Ollama natively](https://ollama.com)
   (it uses Metal) and point **Settings → Inference → Ollama URL** at
   `http://host.docker.internal:11434`; probes still observe GPU usage via
-  Ollama's own reporting.
+  Ollama's own reporting, and detection labels the machine as
+  unified-memory. Set **Settings → Inference → Memory override** to the
+  Mac's real unified memory — the Docker VM hides it, and models are sized
+  against system memory there (no separate VRAM pool to require).
 - **AMD (ROCm)** — not wired yet; the stack falls back to CPU cleanly.
+
+Memory numbers are the VM's truth, stated as such: on WSL2 the VM defaults
+to ~50% of host RAM (raise it in `.wslconfig`; that VM allocation IS the
+real ceiling for the bundled Ollama), and on Docker Desktop the VM hides
+the host's memory entirely (that's what the override is for). The Detect &
+suggest card names the platform and says exactly which number sizing used.
 
 Nova never guesses at hardware: GPU presence comes from `docker info`, the
 GPU name and total VRAM from `nvidia-smi` inside the ollama container, and

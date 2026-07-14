@@ -383,10 +383,15 @@ export async function getMemoryItem(id: string): Promise<MemoryItem> {
 export interface HardwareInfo {
   ram_gb: number | null;
   cpu_cores: number | null;
+  platform: 'wsl2' | 'docker-desktop' | 'linux';
+  memory_note: string | null;
+  memory_override_gb: number | null;
+  sizing_ram_gb: number | null;
   nvidia_runtime: boolean | null;
   gpu_name: string | null;
   vram_total_gb: number | null;
   vram_observed_gb: number | null;
+  unified_gpu: boolean;
   detected_at: string;
 }
 

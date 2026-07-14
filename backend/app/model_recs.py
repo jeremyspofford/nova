@@ -62,15 +62,17 @@ def _vram_known(hw: dict) -> float | None:
 
 
 def _fits_local(row: dict, hw: dict) -> tuple[bool, str]:
-    """(fits, 'gpu'|'cpu'|''). VRAM fit only counts when VRAM has actually
-    been measured or observed; a bare nvidia runtime sizes by RAM."""
+    """(fits, 'gpu'|'unified'|'cpu'|''). VRAM fit only counts when VRAM has
+    actually been measured or observed. Unified-memory systems (GPU-active
+    probes with no NVIDIA runtime, e.g. Apple Metal) size by system memory —
+    there is no separate VRAM pool to require."""
     vram = _vram_known(hw)
     if hw.get("nvidia_runtime") and vram and row["min_vram_gb"] \
             and vram >= row["min_vram_gb"]:
         return True, "gpu"
-    ram = hw.get("ram_gb")
+    ram = hw.get("sizing_ram_gb") or hw.get("ram_gb")
     if ram and row["min_ram_gb"] and ram >= row["min_ram_gb"]:
-        return True, "cpu"
+        return True, "unified" if hw.get("unified_gpu") else "cpu"
     return False, ""
 
 
@@ -122,8 +124,11 @@ def _pick_for(current: str, cands: list[dict]) -> dict:
 
 
 def _reason(profile: str, pick: dict, hw: dict) -> str:
+    sizing = hw.get("sizing_ram_gb") or hw.get("ram_gb")
+    override = " (operator override)" if hw.get("memory_override_gb") else ""
     where = {"gpu": f"fits your {_vram_known(hw)} GB VRAM (GPU)",
-             "cpu": f"fits your {hw.get('ram_gb')} GB RAM (CPU)",
+             "unified": f"fits your {sizing} GB unified memory{override}",
+             "cpu": f"fits your {sizing} GB RAM{override} (CPU)",
              "cloud": "cloud (OpenRouter key configured)"}[pick["how"]]
     why = {"tools": "tool-heavy role — reliability first",
            "chat": "conversation — quality with low latency",

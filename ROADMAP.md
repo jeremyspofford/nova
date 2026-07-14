@@ -198,6 +198,24 @@ See README for what works. This file is the ordered backlog.
   `OLLAMA_GPU=on`; macOS = host-run Ollama via the settings URL — containers
   can't reach Apple GPUs; AMD/ROCm not wired yet, clean CPU fallback).
 
+- **Platform-aware memory sizing + unified memory (2026-07-14)** — answers
+  "why does Nova see 31.2 GB when I have 64?" honestly and sizes models on
+  machines it can't fully see. Detection now names its world from
+  /proc/version (`wsl2` / `docker-desktop` / `linux`) and states the memory
+  caveat in the UI: on WSL2 the VM defaults to ~50% of host RAM and that
+  allocation IS the bundled Ollama's real ceiling (fix in .wslconfig, not in
+  Nova); on Docker Desktop the VM hides the host's memory entirely. For the
+  genuinely unmeasurable case (macOS unified memory with host-run Ollama) a
+  new `inference.memory_gb_override` setting feeds `sizing_ram_gb`, clearly
+  labeled "(operator override)" in every reason string. Unified-memory GPUs
+  are inferred, not configured: GPU-active probe stamps with no NVIDIA
+  runtime ⇒ fit by system memory with "fits your X GB unified memory"
+  (Metal has no separate VRAM pool to require). Verified live: platform
+  "wsl2" + note detected; override 48 GB made llama3.3:70b a tools
+  candidate with the override label, reset restored measured sizing. The
+  unified path itself needs a Mac to exercise — logic shipped, untested on
+  real Metal (this box has an NVIDIA runtime, so the branch can't trigger).
+
 ## Next up
 
 1. **Named local-inference endpoints (multi-backend)** — users run LM
