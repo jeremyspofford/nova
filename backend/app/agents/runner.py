@@ -40,16 +40,22 @@ async def _build_system_prompt(agent: dict, query: str) -> str:
 
 
 async def run_agent(agent: dict, turn_messages: list[dict], *,
-                    dispatch_depth: int = 0) -> AsyncIterator[dict]:
+                    dispatch_depth: int = 0,
+                    conversation_summary: str | None = None) -> AsyncIterator[dict]:
     """Run one agent turn (with tool rounds) and stream events.
 
     turn_messages: chat-format messages for this turn (history + new user msg),
     WITHOUT a system message — that is assembled here so dispatched agents get
     the same memory/skills injection as the main agent.
+    conversation_summary: rolling summary of turns aged out of the verbatim
+    window (top-level chat only; dispatch sub-turns are self-contained).
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
     system_prompt = await _build_system_prompt(agent, query)
+    if conversation_summary:
+        system_prompt += ("\n\n## Conversation so far (running summary)\n"
+                          + conversation_summary)
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()

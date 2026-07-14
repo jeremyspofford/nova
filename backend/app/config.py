@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     # Agent loop
     max_tool_rounds: int = 6
 
+    # Context budgets (tokens, chars/4 heuristic) — provider-aware defaults:
+    # OpenRouter models are uniformly large-context; Ollama's effective limit
+    # is the runtime num_ctx (often 4-8k), NOT the model's advertised max.
+    context_budget_openrouter: int = 24000
+    context_budget_ollama: int = 6000
+
+    # Conversation compaction (rolling summary of turns aged out of the window)
+    compaction_min_aged: int = 10
+    compaction_model: str = ""  # empty -> the main agent's model
+
     # Web search (bundled SearXNG primary; keyless DDG fallback lives in code)
     searxng_url: str = "http://searxng:8080"
 

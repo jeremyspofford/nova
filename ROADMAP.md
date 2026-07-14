@@ -48,15 +48,21 @@ See README for what works. This file is the ordered backlog.
   execution-layer enforcement: `execute_tool` refuses names not offered to the
   calling agent, so a hallucinated tool name is refused, not executed.
 
+- **Conversation compaction** (2026-07-13) — token-budgeted history window
+  (provider-aware: 24k OpenRouter / 6k Ollama defaults, env-overridable;
+  chars/4 estimation; 4-message floor) + rolling summary: turns aged out of
+  the window are distilled into `conversations.summary` (watermarked by
+  `summary_upto`, fire-and-forget post-turn, no-op below 10 aged messages)
+  and injected as "Conversation so far". Verified: forced 3k budget compacted
+  47 messages into a summary that correctly answered "what did we do at the
+  beginning"; idempotent (no re-compaction); raw exchanges stay journaled.
+
 ## Next up
 
 1. **Second brain theme** — exercise the `THEMES` seam for real (orbit/galaxy
    style renderer), add a theme picker in the HUD, persist choice in
    localStorage.
 
-2. **Conversation compaction** — history is the most recent 50 messages; long
-   sessions silently lose older turns. Periodically distill older history into
-   a topic/journal memory (the retrieval path then recalls it).
 
 ## Later
 
@@ -83,5 +89,8 @@ See README for what works. This file is the ordered backlog.
   `docker compose up -d backend` after env changes.
 - Migrations auto-run at backend startup from `backend/app/migrations/*.sql`
   (tracked in `schema_migrations`).
+- Context budgets: `CONTEXT_BUDGET_OPENROUTER` / `CONTEXT_BUDGET_OLLAMA`
+  (tokens); compaction: `COMPACTION_MIN_AGED`, `COMPACTION_MODEL` — all
+  passed through compose to the backend.
 - Memory files live in `./data/memory/` (gitignored) — human-readable, safe to
   edit by hand; the index rescans on startup and reindexes on write.

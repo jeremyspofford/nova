@@ -15,9 +15,10 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import conversations
+from app import compaction, conversations
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
+from app.config import settings
 from app.llm.router import effective_model
 from app.memory.memory import memory
 from app.schemas import ChatRequest
@@ -43,8 +44,17 @@ async def chat_stream(request: ChatRequest):
     if not main_agent:
         raise HTTPException(status_code=500, detail="main agent missing from registry")
 
+    model_eff = effective_model(main_agent["model"])
+    total_budget = (settings.context_budget_ollama if model_eff.startswith("ollama:")
+                    else settings.context_budget_openrouter)
+    # Reserve for system prompt + memory + skills + summary + response headroom.
+    overhead = (settings.memory_context_max_chars // 4) + 2500
+    history_budget = max(1500, total_budget - overhead)
+
     history = await conversations.load_history(conversation_id)
-    turn_messages = conversations.to_llm_history(history) + [
+    window, _aged = conversations.window_history(history, history_budget)
+    window_oldest_at = window[0]["created_at"] if window else None
+    turn_messages = conversations.to_llm_history(window) + [
         {"role": "user", "content": request.message}]
 
     await conversations.append_message(conversation_id, "user", request.message)
@@ -54,7 +64,9 @@ async def chat_stream(request: ChatRequest):
                              "model": effective_model(main_agent["model"])}})
         final_text = ""
         try:
-            async for event in agent_runner.run_agent(main_agent, turn_messages):
+            async for event in agent_runner.run_agent(
+                    main_agent, turn_messages,
+                    conversation_summary=conversation.get("summary")):
                 etype = event["type"]
                 if etype == "text":
                     yield _sse({"t": event["text"]})
@@ -86,6 +98,8 @@ async def chat_stream(request: ChatRequest):
                     type="journal", source_type="chat")
             except Exception:
                 log.exception("failed to persist assistant turn")
+            asyncio.ensure_future(compaction.maybe_compact(
+                conversation_id, main_agent["model"], window_oldest_at))
 
         yield "data: [DONE]\n\n"
 
