@@ -1,58 +1,14 @@
-# Secrets
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
 .env
 .env.local
-.env.backup*
-.env.bak*
+.env.*.local
 
-# Worktrees
-.worktrees/
-
-# Superpowers brainstorm sessions
-.superpowers/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
-.venv/
-build/
-
-# Node
-node_modules/
-dist/
-*.tsbuildinfo
-
-# Cache
-.cache/
-
-# Claude Code local settings
-.claude/
-
-# Backups
-backups/
-
-# Machine-specific runtime data (hardware detection output, etc.)
-/data/
-
-# OS
+# Editor / OS
 .DS_Store
 *.log
-
-# Playwright MCP snapshots
-.playwright-mcp/
-
-# Screenshots
-*.png
-!dashboard/public/icons/*.png
-
-# Website
-website/node_modules/
-website/dist/
-website/.astro/
-.gstack/
-
-# Audit security reports stay local-only (public repo)
-docs/audits/*/security.md

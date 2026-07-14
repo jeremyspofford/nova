@@ -1,8 +1,0 @@
-- name: health_check_tool
-  category: tool_selection
-  seed_engrams: []
-  conversation:
-    - user: "Is the memory service healthy right now?"
-  scoring:
-    tool_accuracy:
-      expect_tool_call: check_service_health

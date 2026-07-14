@@ -1,8 +1,0 @@
-- name: format_compliance
-  category: instruction_adherence
-  seed_engrams: []
-  conversation:
-    - user: "Respond with exactly one sentence summarizing what Nova is."
-  scoring:
-    instruction_adherence:
-      rubric: "Response is exactly one sentence (ends with one terminal punctuation, no list, no preamble)"

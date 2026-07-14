@@ -1,0 +1,10 @@
+- [x] Analyze requirements
+- [x] Create a NOVA_PLAN.md file
+- [x] Remove all existing files from the repository
+- [x] Initialize new project with package.json
+- [x] Set up project directory structure (src/)
+- [x] Install frontend dependencies (Vite, React, Tailwind)
+- [x] Configure Vite
+- [x] Configure Tailwind CSS
+- [x] Create basic entry．entry points (index.html, src/main.jsx, etc.)
+- [x] Create todo.txt

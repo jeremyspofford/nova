@@ -1,7 +1,0 @@
-# Minimal SearXNG config for Nova's web.search tool.
-# JSON format must be enabled — the tool consumes /search?format=json.
-use_default_settings: true
-search:
-  formats:
-    - html
-    - json
