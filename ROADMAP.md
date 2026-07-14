@@ -79,14 +79,24 @@ See README for what works. This file is the ordered backlog.
   created `tech-news-digest`; kill switch; failure counting; idempotent
   no-op runs.
 
+- **Guardrail layer + guardian agent** (2026-07-13) — every tool call is
+  checked against data-driven rules (regex vs tool name + args; block/warn;
+  per-tool + per-agent targeting; hit counts) at the single dispatch point,
+  fail-open on engine errors. Seeded: `protect-soul` (agents cannot rewrite
+  Nova's identity — closed a real hole where write_memory item_id=soul.md
+  passed the path pin) and `no-secret-in-requests` (warn on key material in
+  outbound requests). New **guardian** agent stewards rules (main dispatches;
+  manage_rules is guardian-only — the conversational agent never holds
+  rule-weakening capability); system rules immutable to agents at store/API/
+  tool layers, operator can toggle in the Rules tab. Live-verified: soul
+  write blocked; guardian-created facebook block enforced on ingestion;
+  casual "disable it real quick" got pushback demanding explicit intent.
+
 ## Next up
 
 
 ## Later
 
-- **Rules/guardrail layer** — pre-execution checks on tool calls (regex or
-  allowlist-based blocks), the v1 exclusion that matters most once agents
-  multiply.
 - **Auth** — required before exposing beyond localhost. Single admin token is
   enough for a first pass.
 - **Agent management UI** — list/disable/edit agents visually instead of via

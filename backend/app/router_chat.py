@@ -15,7 +15,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, conversations, settings_store
+from app import automations, compaction, conversations, rules, settings_store
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.config import settings
@@ -198,4 +198,47 @@ async def delete_automation_endpoint(automation_id: str):
     if result == "is_system":
         raise HTTPException(status_code=403,
                             detail="system automations can be disabled but not deleted")
+    return {"status": "deleted"}
+
+
+# ── guardrail rules ──────────────────────────────────────────────────────
+
+@router.get("/api/v1/rules")
+async def list_rules_endpoint():
+    return await rules.list_rules()
+
+
+@router.post("/api/v1/rules", status_code=201)
+async def create_rule_endpoint(body: dict):
+    try:
+        return await rules.create(
+            name=str(body.get("name", "")).strip(),
+            pattern=str(body.get("pattern", "")),
+            action=str(body.get("action", "block")),
+            description=str(body.get("description", "")),
+            target_tools=body.get("target_tools"),
+            target_agents=body.get("target_agents"))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/api/v1/rules/{rule_id}")
+async def patch_rule_endpoint(rule_id: str, body: dict):
+    try:
+        ok = await rules.update(rule_id, **body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="rule not found or no valid fields")
+    return {"status": "updated"}
+
+
+@router.delete("/api/v1/rules/{rule_id}")
+async def delete_rule_endpoint(rule_id: str):
+    result = await rules.delete(rule_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="rule not found")
+    if result == "is_system":
+        raise HTTPException(status_code=403,
+                            detail="system protections can be disabled but not deleted")
     return {"status": "deleted"}

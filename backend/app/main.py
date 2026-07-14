@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import db, scheduler, settings_store
+from app import db, rules, scheduler, settings_store
 from app.config import settings
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()
+    await rules.warm()
     await memory.startup()
     scheduler_task = asyncio.create_task(scheduler.loop())
     log.info("Backend ready")

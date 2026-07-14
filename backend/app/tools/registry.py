@@ -85,6 +85,22 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     if granted is not None and name not in granted:
         return f"Error: tool '{name}' is not granted to this agent"
 
+    # guardrails — fail-open on engine errors, never on rule matches
+    try:
+        from app import rules
+        verdict = rules.check(name, args, ctx.get("agent_name"))
+        if verdict:
+            action, rule = verdict
+            if action == "block":
+                log.warning("Rule '%s' BLOCKED %s by agent %s",
+                            rule["name"], name, ctx.get("agent_name"))
+                return (f"Blocked by rule '{rule['name']}': "
+                        f"{rule['description'] or 'no description'}")
+            log.warning("Rule '%s' warned on %s by agent %s",
+                        rule["name"], name, ctx.get("agent_name"))
+    except Exception:
+        log.exception("rules engine failed; allowing call (fail-open)")
+
     if name in BUILTIN_TOOLS:
         try:
             return await BUILTIN_TOOLS[name]["execute"](args, ctx)

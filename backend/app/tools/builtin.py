@@ -276,6 +276,59 @@ async def _manage_automations(args, ctx):
     return f"Error: unknown action '{action}' (use list/create/update/enable/disable/delete)"
 
 
+# ── guardrail rules (guardian agent only) ───────────────────────────────
+
+async def _manage_rules(args, ctx):
+    from app import rules as rules_store
+    action = (args.get("action") or "").lower()
+
+    if action == "list":
+        rows = await rules_store.list_rules()
+        return _j([{k: r[k] for k in ("name", "description", "pattern", "target_tools",
+                                      "target_agents", "action", "enabled", "is_system",
+                                      "hit_count")} for r in rows])
+
+    if action == "create":
+        try:
+            row = await rules_store.create(
+                name=args.get("name", "").strip(),
+                pattern=args.get("pattern", ""),
+                action=args.get("rule_action", "block"),
+                description=args.get("description", ""),
+                target_tools=args.get("target_tools"),
+                target_agents=args.get("target_agents"))
+        except Exception as e:
+            return f"Error creating rule: {e}"
+        return _j({"status": "created", "name": row["name"], "action": row["action"]})
+
+    if action in ("update", "enable", "disable", "delete"):
+        row = await rules_store.get_by_name(args.get("name", ""))
+        if not row:
+            return f"Error: rule '{args.get('name')}' not found"
+        if row["is_system"] and action != "list":
+            return (f"Error: '{row['name']}' is a system protection — it cannot be "
+                    f"modified or deleted by agents. Only the operator can change it "
+                    f"in Settings.")
+        if action == "delete":
+            result = await rules_store.delete(row["id"])
+            return _j({"status": result, "name": row["name"]})
+        updates = {k: v for k, v in args.items()
+                   if k in ("description", "pattern", "target_tools", "target_agents")}
+        if args.get("rule_action"):
+            updates["action"] = args["rule_action"]
+        if action == "enable":
+            updates["enabled"] = True
+        elif action == "disable":
+            updates["enabled"] = False
+        try:
+            ok = await rules_store.update(row["id"], **updates)
+        except ValueError as e:
+            return f"Error: {e}"
+        return _j({"status": "updated" if ok else "failed", "name": row["name"]})
+
+    return f"Error: unknown action '{action}' (use list/create/update/enable/disable/delete)"
+
+
 # ── dispatch (declaration; execution is runner-inlined) ─────────────────
 
 async def _dispatch_stub(args, ctx):
@@ -417,6 +470,27 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "interval_minutes": {"type": "integer"},
         }, "required": ["action"]},
         "execute": _manage_automations,
+    },
+    "manage_rules": {
+        "name": "manage_rules",
+        "description": ("Manage guardrail rules that check every tool call before it "
+                        "executes (block or warn on regex match against the call's "
+                        "arguments). System protections cannot be modified or deleted "
+                        "by agents. Prefer narrow patterns and targeted tools."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["list", "create", "update", "enable", "disable", "delete"]},
+            "name": {"type": "string", "description": "kebab-case unique name"},
+            "description": {"type": "string",
+                            "description": "What this protects against (shown when it blocks)"},
+            "pattern": {"type": "string", "description": "Regex matched against tool name + args"},
+            "rule_action": {"type": "string", "enum": ["block", "warn"]},
+            "target_tools": {"type": "array", "items": {"type": "string"},
+                             "description": "Omit for all tools"},
+            "target_agents": {"type": "array", "items": {"type": "string"},
+                              "description": "Omit for all agents"},
+        }, "required": ["action"]},
+        "execute": _manage_rules,
     },
     "dispatch_to_agent": {
         "name": "dispatch_to_agent",

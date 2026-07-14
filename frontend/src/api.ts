@@ -190,6 +190,53 @@ export async function deleteAutomation(id: string): Promise<void> {
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
+export interface Rule {
+  id: string;
+  name: string;
+  description: string;
+  pattern: string;
+  target_tools: string[] | null;
+  target_agents: string[] | null;
+  action: 'block' | 'warn';
+  enabled: boolean;
+  is_system: boolean;
+  hit_count: number;
+  last_hit_at: string | null;
+}
+
+export async function getRules(): Promise<Rule[]> {
+  const r = await fetch(`${API_URL}/api/v1/rules`);
+  if (!r.ok) throw new Error('Failed to load rules');
+  return r.json();
+}
+
+export async function createRule(body: {
+  name: string; pattern: string; action: string; description?: string;
+  target_tools?: string[] | null;
+}): Promise<Rule> {
+  const r = await fetch(`${API_URL}/api/v1/rules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchRule(id: string, body: Record<string, unknown>): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/rules/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/rules/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
 export interface AgentInfo { name: string; enabled: boolean; description: string }
 
 export async function getAgents(): Promise<AgentInfo[]> {
