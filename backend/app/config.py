@@ -9,6 +9,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://nova:nova-dev-password@postgres:5432/nova"
 
+    # Auth: empty = open (localhost-only dev). Set NOVA_AUTH_TOKEN before
+    # exposing beyond localhost (tailscale serve, tunnels) — every /api/*
+    # request must then carry Authorization: Bearer <token>.
+    nova_auth_token: str = ""
+
     # LLM providers
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"

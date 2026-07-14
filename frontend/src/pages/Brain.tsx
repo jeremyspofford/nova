@@ -50,6 +50,11 @@ export function Brain() {
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
+  // small screens: chat IS the app, full-width, brain one tap away
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [mobileChat, setMobileChat] = useState(true);
+  const mobileRef = useRef(isMobile);
+
   const [chatWidth, setChatWidth] = useState(() =>
     parseInt(localStorage.getItem('nova.chat.width') ?? '384'));
   const chatWidthRef = useRef(chatWidth);
@@ -137,8 +142,13 @@ export function Brain() {
       labelScale: prefsRef.current.labelScale,
     });
 
-    const size = () =>
-      renderer.resize(window.innerWidth - chatWidthRef.current, window.innerHeight);
+    const size = () => {
+      mobileRef.current = window.innerWidth < 768;
+      setIsMobile(mobileRef.current);
+      renderer.resize(
+        window.innerWidth - (mobileRef.current ? 0 : chatWidthRef.current),
+        window.innerHeight);
+    };
     size();
     window.addEventListener('resize', size);
 
@@ -263,7 +273,7 @@ export function Brain() {
           onClick={() => setDetail(null)}
         >
           <div
-            className="w-[42rem] max-w-[calc(100vw-26rem)] max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+            className="w-[42rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
             onClick={e => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -272,17 +282,30 @@ export function Brain() {
           </div>
         </div>
       ) : detail && (
-        <aside className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
+        <aside className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
           {renderDetail(false)}
         </aside>
       )}
 
       {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
 
-      <ChatPanel
-        width={chatWidth}
-        onWidthChange={changeChatWidth}
-      />
+      {(!isMobile || mobileChat) && (
+        <ChatPanel
+          width={isMobile ? window.innerWidth : chatWidth}
+          onWidthChange={changeChatWidth}
+          mobile={isMobile}
+          onShowBrain={() => setMobileChat(false)}
+        />
+      )}
+      {isMobile && !mobileChat && (
+        <button
+          onClick={() => setMobileChat(true)}
+          className="absolute bottom-6 right-5 z-30 w-12 h-12 rounded-full bg-teal-700 hover:bg-teal-600 text-white text-xl shadow-2xl"
+          aria-label="Open chat"
+        >
+          💬
+        </button>
+      )}
     </div>
   );
 }

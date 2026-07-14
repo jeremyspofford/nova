@@ -72,6 +72,35 @@ GPU name and total VRAM from `nvidia-smi` inside the ollama container, and
 per-model VRAM/GPU usage from Ollama `/api/ps` during "test this model"
 probes (Settings → Inference → Detect & suggest).
 
+## Nova on your phone (PWA)
+
+The `web` service serves the built app and the API behind **one origin** on
+`127.0.0.1:8080` — deliberately not exposed beyond the machine. Three steps:
+
+1. **Set the admin token** (required before any exposure): in `.env`, set
+   `NOVA_AUTH_TOKEN` (e.g. `openssl rand -hex 24`), then
+   `docker compose up -d backend web`. Every API request now needs the
+   token; the app shows a one-time login on each device.
+2. **Expose it privately with Tailscale** (recommended):
+   `tailscale serve --bg 8080` — Nova appears at
+   `https://<machine>.<tailnet>.ts.net` with a valid certificate, visible
+   only to your tailnet. HTTPS matters: iOS refuses to install PWAs from
+   insecure origins.
+3. **Install on the phone**: open the URL, enter the token, then
+   Add to Home Screen (iOS: share sheet; Android: install prompt). The
+   service worker caches the app shell only — chat needs the network and
+   doesn't pretend otherwise.
+
+Why Tailscale is the recommendation and not a built-in: reachability is
+deployment, not app code — Nova's job is to be safe when exposed (token
+auth, localhost-only binds) and origin-agnostic; the transport is yours.
+Tailscale fits the product principles best (private by default — nothing
+public, TLS for free, zero server config). If you need public access
+instead, **Cloudflare Tunnel** (`cloudflared tunnel --url
+http://127.0.0.1:8080`) works identically — the app doesn't care, but then
+the token is all that stands between Nova and the internet, so treat it
+accordingly.
+
 ## Where memory lives
 
 Nova's memory is plain markdown under `./data/memory/` — human-readable,

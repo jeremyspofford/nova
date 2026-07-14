@@ -383,6 +383,30 @@ See README for what works. This file is the ordered backlog.
   Obsidian vault (README documents it); cloud sync stays a designed-later
   item (see Later).
 
+- **PWA — Nova on the phone (2026-07-14)** — the whole ordered plan shipped
+  in one pass. **Auth**: single admin token (`NOVA_AUTH_TOKEN`, empty =
+  open localhost dev), constant-time-compared middleware on /api/* with
+  /health public, a login gate in the UI (token stored per device);
+  every host port now binds 127.0.0.1 only. **Same-origin**: API URLs are
+  relative everywhere; the vite dev server proxies /api (dev stays :5173 +
+  HMR) and a new `web` service (multi-stage build → nginx, 127.0.0.1:8080)
+  serves the built PWA + proxies the API with SSE-safe settings — one
+  origin, so the service worker and the token behave. **Responsive**:
+  under 768px chat IS the app (full width, no drag handle) with a 🧠/💬
+  toggle to visit the brain; overlays fit small screens. **Shell**:
+  vite-plugin-pwa manifest + autoupdating service worker that caches the
+  app shell ONLY (chat is useless offline; don't pretend otherwise);
+  icons generated programmatically (pure-python PNG writer — no image
+  tooling on the host). **Reachability is deployment, not app code** —
+  zero provider integrations, README documents `tailscale serve --bg 8080`
+  as the recommendation (private by default, TLS certs for free — iOS
+  refuses PWAs without HTTPS) and Cloudflare Tunnel as the public
+  alternative. Live-verified: 401 without token / 200 with; manifest, SW,
+  icons served; a real SSE chat turn streamed through :8080 with auth.
+  NOT yet verified on an actual phone — no device in this loop. Bonus bug:
+  a stale tracked `vite.config.js` (old tsc emit) was silently shadowing
+  `vite.config.ts` — vite prefers .js; removed + git/dockerignored.
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's
@@ -447,35 +471,15 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
-5. **PWA — Nova on the phone (until a native app)** — installable web app
-   served from the same stack. The manifest/service-worker part is easy;
-   the real prerequisites are exposure and layout. Ordered plan:
-   1. *Auth first* (pulls the "Later" auth item forward): single admin
-      token, required the moment anything binds beyond localhost.
-   2. *Same-origin serving*: frontend built + served behind one origin
-      with the API (nginx or FastAPI static) so cookies/tokens and the
-      service worker scope behave; drop the hardcoded VITE_API_URL.
-   3. *Responsive chat-first layout*: on small screens chat is the app
-      (full-width, brain reachable via a tab/swipe); the galaxy stays a
-      desktop-first surface.
-   4. *PWA shell*: vite-plugin-pwa — manifest (name, icons, theme color),
-      service worker caching the app shell only (chat is useless offline;
-      don't pretend otherwise). iOS notes: needs HTTPS, install is manual
-      "Add to Home Screen", web push works from iOS 16.4+ if wanted later.
-   5. *Reachability*: recommend Tailscale (batteries-included,
-      privacy-first — no public exposure, TLS via `tailscale serve`) with
-      Cloudflare Tunnel as the public-facing alternative.
-
 ## Later
 
-- **Auth** — required before exposing beyond localhost. Single admin token is
-  enough for a first pass. (The PWA item above pulls this forward.)
 - **In-UI secrets store** — the real "configure in the UI, not .env" win:
   OpenRouter (and future provider) keys entered in Settings, encrypted at
   rest, hot-reloaded — no .env edit, no restart. Mine `v0.1.0-alpha`'s
   AES-256-GCM secrets store design (keys out of .env was its explicit
-  goal); interacts with auth (a secrets UI must not ship before the app
-  has one) and the guardian's no-secret-in-requests rule.
+  goal). Auth shipped 2026-07-14 (single admin token), so the gate this
+  needed now exists; still interacts with the guardian's
+  no-secret-in-requests rule.
 - **Memory sync pipeline (local-first cloud/NAS/vault)** — `NOVA_MEMORY_DIR`
   already points the store anywhere mountable; this item is about SYNC, not
   location. Direction from the 2026-07-14 discussion: local stays the

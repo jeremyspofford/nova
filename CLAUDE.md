@@ -25,13 +25,17 @@
 The live stack is the `nova-*` docker compose containers (compose project
 `nova`, pinned in `docker-compose.yml`):
 
-| Service  | Port  | Notes                          |
-|----------|-------|--------------------------------|
-| frontend | :5173 | the UI                         |
-| backend  | :8000 | FastAPI                        |
-| postgres | :5432 |                                |
-| searxng  | :8380 | keyless web search             |
-| ollama   | :11434| optional `inference` profile   |
+| Service  | Port  | Notes                                    |
+|----------|-------|------------------------------------------|
+| frontend | :5173 | dev UI (vite, HMR, proxies /api)         |
+| web      | :8080 | built PWA + API, one origin (phone path) |
+| backend  | :8000 | FastAPI                                  |
+| postgres | :5432 |                                          |
+| searxng  | :8380 | keyless web search                       |
+| ollama   | :11434| optional `inference` profile             |
+
+All host ports bind 127.0.0.1 only. NOVA_AUTH_TOKEN in .env gates the API —
+API calls need `Authorization: Bearer <token>` (read it from .env).
 
 Read `README.md` for what works and `ROADMAP.md` for the ordered backlog
 ("Next up" is the priority order).

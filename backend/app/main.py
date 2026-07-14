@@ -1,11 +1,13 @@
 """Nova backend — FastAPI app."""
 
 import asyncio
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import db, model_warmer, rules, scheduler, settings_store
 from app.config import settings
@@ -46,6 +48,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Single admin token, required the moment anything binds beyond
+    localhost. Empty token = open (dev default). /health stays public for
+    container healthchecks."""
+    token = settings.nova_auth_token
+    if token and request.url.path.startswith("/api/"):
+        supplied = request.headers.get("authorization", "")
+        if not hmac.compare_digest(supplied, f"Bearer {token}"):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 app.include_router(chat_router)
 

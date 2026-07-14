@@ -110,12 +110,14 @@ const activityLabel = (a: Activity): string => {
 interface ChatPanelProps {
   width: number;
   onWidthChange: (w: number) => void;
+  mobile?: boolean;
+  onShowBrain?: () => void;
 }
 
 const MIN_W = 320;
 const MAX_W = 760;
 
-export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
+export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -244,15 +246,29 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
       className="absolute top-0 right-0 bottom-0 bg-stone-900/95 backdrop-blur border-l border-stone-700 flex flex-col shadow-2xl"
       style={{ width }}
     >
-      {/* drag handle — widen/narrow the chat */}
-      <div
-        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-700/50 transition-colors"
-        onPointerDown={() => { resizing.current = true; document.body.style.cursor = 'col-resize'; }}
-        onDoubleClick={() => onWidthChange(384)}
-        title="Drag to resize (double-click to reset)"
-      />
+      {/* drag handle — widen/narrow the chat (desktop only) */}
+      {!mobile && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-700/50 transition-colors"
+          onPointerDown={() => { resizing.current = true; document.body.style.cursor = 'col-resize'; }}
+          onDoubleClick={() => onWidthChange(384)}
+          title="Drag to resize (double-click to reset)"
+        />
+      )}
       <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-2">
-        <span className="text-teal-400 font-semibold shrink-0">Nova</span>
+        <span className="flex items-center gap-2 shrink-0">
+          <span className="text-teal-400 font-semibold">Nova</span>
+          {mobile && onShowBrain && (
+            <button
+              onClick={onShowBrain}
+              className="text-base leading-none px-1.5 py-0.5 rounded border border-stone-700 text-stone-400"
+              title="Show the brain"
+              aria-label="Show the brain"
+            >
+              🧠
+            </button>
+          )}
+        </span>
         <div className="flex items-center gap-2 min-w-0">
           {mainAgent && models.length > 0 && (
             <select

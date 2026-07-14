@@ -1,6 +1,39 @@
-/** API client for the Nova backend. */
+/** API client for the Nova backend.
+ *
+ * URLs are relative (same-origin) by default: the vite dev server proxies
+ * /api to the backend, and the production `web` service (nginx) does the
+ * same — one origin, so the PWA service worker and auth behave.
+ */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || '';
+
+// ── auth: single admin token (NOVA_AUTH_TOKEN backend-side) ───────────────
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem('nova.token');
+}
+
+export function setAuthToken(token: string | null) {
+  if (token) localStorage.setItem('nova.token', token);
+  else localStorage.removeItem('nova.token');
+}
+
+async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    ...(init.headers as Record<string, string> ?? {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  const r = await fetch(input, { ...init, headers });
+  if (r.status === 401) window.dispatchEvent(new Event('nova:unauthorized'));
+  return r;
+}
+
+/** true = authorized (or auth disabled); false = the token gate is up. */
+export async function checkAuth(): Promise<boolean> {
+  const r = await apiFetch(`${API_URL}/api/v1/settings`);
+  return r.status !== 401;
+}
 
 export interface Activity {
   kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration';
@@ -17,7 +50,7 @@ export type ChatEvent =
   | { type: 'done' };
 
 export async function* streamChat(message: string, conversationId?: string): AsyncGenerator<ChatEvent> {
-  const response = await fetch(`${API_URL}/api/v1/chat/stream`, {
+  const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, conversation_id: conversationId }),
@@ -73,7 +106,7 @@ export async function* streamChat(message: string, conversationId?: string): Asy
 }
 
 export async function getActiveConversation(): Promise<{ id: string; title: string | null }> {
-  const r = await fetch(`${API_URL}/api/v1/conversations/active`);
+  const r = await apiFetch(`${API_URL}/api/v1/conversations/active`);
   if (!r.ok) throw new Error('Failed to load conversation');
   return r.json();
 }
@@ -87,13 +120,13 @@ export interface StoredMessage {
 }
 
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
-  const r = await fetch(`${API_URL}/api/v1/conversations/${conversationId}/messages`);
+  const r = await apiFetch(`${API_URL}/api/v1/conversations/${conversationId}/messages`);
   if (!r.ok) throw new Error('Failed to load messages');
   return r.json();
 }
 
 export async function getMemoryStats(): Promise<Record<string, number>> {
-  const r = await fetch(`${API_URL}/api/v1/memory/stats`);
+  const r = await apiFetch(`${API_URL}/api/v1/memory/stats`);
   if (!r.ok) throw new Error('Failed to load memory stats');
   return r.json();
 }
@@ -112,7 +145,7 @@ export interface GraphNode {
 export interface GraphEdge { source: string; target: string; kind: string }
 
 export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-  const r = await fetch(`${API_URL}/api/v1/memory/graph`);
+  const r = await apiFetch(`${API_URL}/api/v1/memory/graph`);
   if (!r.ok) throw new Error('Failed to load memory graph');
   return r.json();
 }
@@ -125,13 +158,13 @@ export interface StorageInfo {
 }
 
 export async function getStorageInfo(): Promise<StorageInfo> {
-  const r = await fetch(`${API_URL}/api/v1/storage`);
+  const r = await apiFetch(`${API_URL}/api/v1/storage`);
   if (!r.ok) throw new Error('Failed to load storage info');
   return r.json();
 }
 
 export async function getBrainGraph(platform: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-  const r = await fetch(`${API_URL}/api/v1/brain/graph?platform=${platform}`);
+  const r = await apiFetch(`${API_URL}/api/v1/brain/graph?platform=${platform}`);
   if (!r.ok) throw new Error('Failed to load brain graph');
   return r.json();
 }
@@ -153,19 +186,19 @@ export interface SettingDef {
 export interface ModelInfo { id: string; provider: string; name: string }
 
 export async function getModels(full = false): Promise<ModelInfo[]> {
-  const r = await fetch(`${API_URL}/api/v1/models${full ? '?full=true' : ''}`);
+  const r = await apiFetch(`${API_URL}/api/v1/models${full ? '?full=true' : ''}`);
   if (!r.ok) throw new Error('Failed to load models');
   return r.json();
 }
 
 export async function getSettings(): Promise<SettingDef[]> {
-  const r = await fetch(`${API_URL}/api/v1/settings`);
+  const r = await apiFetch(`${API_URL}/api/v1/settings`);
   if (!r.ok) throw new Error('Failed to load settings');
   return r.json();
 }
 
 export async function patchSettings(changes: Record<string, unknown>): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/settings`, {
+  const r = await apiFetch(`${API_URL}/api/v1/settings`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(changes),
@@ -184,13 +217,13 @@ export interface BundledInferenceStatus {
 }
 
 export async function getBundledInference(): Promise<BundledInferenceStatus> {
-  const r = await fetch(`${API_URL}/api/v1/inference/bundled`);
+  const r = await apiFetch(`${API_URL}/api/v1/inference/bundled`);
   if (!r.ok) throw new Error('Failed to load bundled inference status');
   return r.json();
 }
 
 export async function setBundledInference(action: 'start' | 'stop'): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/inference/bundled`, {
+  const r = await apiFetch(`${API_URL}/api/v1/inference/bundled`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action }),
@@ -215,7 +248,7 @@ export interface Automation {
 }
 
 export async function getAutomations(): Promise<Automation[]> {
-  const r = await fetch(`${API_URL}/api/v1/automations`);
+  const r = await apiFetch(`${API_URL}/api/v1/automations`);
   if (!r.ok) throw new Error('Failed to load automations');
   return r.json();
 }
@@ -223,7 +256,7 @@ export async function getAutomations(): Promise<Automation[]> {
 export async function createAutomation(body: {
   name: string; instruction: string; agent_name: string; interval_minutes: number;
 }): Promise<Automation> {
-  const r = await fetch(`${API_URL}/api/v1/automations`, {
+  const r = await apiFetch(`${API_URL}/api/v1/automations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -233,7 +266,7 @@ export async function createAutomation(body: {
 }
 
 export async function patchAutomation(id: string, body: Record<string, unknown>): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/automations/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/automations/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -242,7 +275,7 @@ export async function patchAutomation(id: string, body: Record<string, unknown>)
 }
 
 export async function deleteAutomation(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/automations/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/automations/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
@@ -261,7 +294,7 @@ export interface Rule {
 }
 
 export async function getRules(): Promise<Rule[]> {
-  const r = await fetch(`${API_URL}/api/v1/rules`);
+  const r = await apiFetch(`${API_URL}/api/v1/rules`);
   if (!r.ok) throw new Error('Failed to load rules');
   return r.json();
 }
@@ -270,7 +303,7 @@ export async function createRule(body: {
   name: string; pattern: string; action: string; description?: string;
   target_tools?: string[] | null;
 }): Promise<Rule> {
-  const r = await fetch(`${API_URL}/api/v1/rules`, {
+  const r = await apiFetch(`${API_URL}/api/v1/rules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -280,7 +313,7 @@ export async function createRule(body: {
 }
 
 export async function patchRule(id: string, body: Record<string, unknown>): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/rules/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/rules/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -289,7 +322,7 @@ export async function patchRule(id: string, body: Record<string, unknown>): Prom
 }
 
 export async function deleteRule(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/rules/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/rules/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
@@ -306,13 +339,13 @@ export interface AgentInfo {
 }
 
 export async function getAgents(): Promise<AgentInfo[]> {
-  const r = await fetch(`${API_URL}/api/v1/agents`);
+  const r = await apiFetch(`${API_URL}/api/v1/agents`);
   if (!r.ok) throw new Error('Failed to load agents');
   return r.json();
 }
 
 export async function patchAgent(id: string, body: Record<string, unknown>): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/agents/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/agents/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -324,7 +357,7 @@ export async function createAgent(body: {
   name: string; description: string; system_prompt: string; model: string;
   allowed_tools?: string[] | null; routing_keywords?: string[] | null;
 }): Promise<{ id: string; name: string }> {
-  const r = await fetch(`${API_URL}/api/v1/agents`, {
+  const r = await apiFetch(`${API_URL}/api/v1/agents`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -334,7 +367,7 @@ export async function createAgent(body: {
 }
 
 export async function deleteAgent(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/agents/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/agents/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
@@ -356,7 +389,7 @@ export interface ToolsCatalog {
 }
 
 export async function getTools(): Promise<ToolsCatalog> {
-  const r = await fetch(`${API_URL}/api/v1/tools`);
+  const r = await apiFetch(`${API_URL}/api/v1/tools`);
   if (!r.ok) throw new Error('Failed to load tools');
   return r.json();
 }
@@ -364,7 +397,7 @@ export async function getTools(): Promise<ToolsCatalog> {
 export async function createTool(body: {
   name: string; description: string; url_template: string; method?: string;
 }): Promise<{ id: string; name: string }> {
-  const r = await fetch(`${API_URL}/api/v1/tools`, {
+  const r = await apiFetch(`${API_URL}/api/v1/tools`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -374,7 +407,7 @@ export async function createTool(body: {
 }
 
 export async function patchTool(id: string, enabled: boolean): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/tools/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/tools/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -383,7 +416,7 @@ export async function patchTool(id: string, enabled: boolean): Promise<void> {
 }
 
 export async function deleteTool(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/tools/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/tools/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
@@ -397,7 +430,7 @@ export interface SkillInfo {
 }
 
 export async function getSkills(): Promise<SkillInfo[]> {
-  const r = await fetch(`${API_URL}/api/v1/skills`);
+  const r = await apiFetch(`${API_URL}/api/v1/skills`);
   if (!r.ok) throw new Error('Failed to load skills');
   return r.json();
 }
@@ -405,7 +438,7 @@ export async function getSkills(): Promise<SkillInfo[]> {
 export async function createSkill(body: {
   title: string; content: string; description?: string; category?: string;
 }): Promise<{ id: string }> {
-  const r = await fetch(`${API_URL}/api/v1/skills`, {
+  const r = await apiFetch(`${API_URL}/api/v1/skills`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -417,7 +450,7 @@ export async function createSkill(body: {
 export async function updateSkill(id: string, body: {
   title?: string; content?: string; description?: string;
 }): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/skills/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/skills/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -426,7 +459,7 @@ export async function updateSkill(id: string, body: {
 }
 
 export async function deleteSkill(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/skills/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/skills/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
@@ -437,7 +470,7 @@ export interface MemoryItem {
 }
 
 export async function getMemoryItem(id: string): Promise<MemoryItem> {
-  const r = await fetch(`${API_URL}/api/v1/memory/item/${id}`);
+  const r = await apiFetch(`${API_URL}/api/v1/memory/item/${id}`);
   if (!r.ok) throw new Error('Memory item not found');
   return r.json();
 }
@@ -500,13 +533,13 @@ export interface RecommendationsResponse {
 }
 
 export async function getModelBudget(): Promise<ModelBudget & { hardware: HardwareInfo }> {
-  const r = await fetch(`${API_URL}/api/v1/models/budget`);
+  const r = await apiFetch(`${API_URL}/api/v1/models/budget`);
   if (!r.ok) throw new Error('Failed to load model budget');
   return r.json();
 }
 
 export async function getRecommendations(): Promise<RecommendationsResponse> {
-  const r = await fetch(`${API_URL}/api/v1/models/recommendations`);
+  const r = await apiFetch(`${API_URL}/api/v1/models/recommendations`);
   if (!r.ok) throw new Error('Failed to load recommendations');
   return r.json();
 }
@@ -525,7 +558,7 @@ export interface ProbeResult {
 }
 
 export async function testModel(model: string): Promise<ProbeResult> {
-  const r = await fetch(`${API_URL}/api/v1/models/test`, {
+  const r = await apiFetch(`${API_URL}/api/v1/models/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model }),
@@ -551,13 +584,13 @@ export interface CuratedModel {
 }
 
 export async function getCuratedModels(): Promise<CuratedModel[]> {
-  const r = await fetch(`${API_URL}/api/v1/models/curated`);
+  const r = await apiFetch(`${API_URL}/api/v1/models/curated`);
   if (!r.ok) throw new Error('Failed to load curated models');
   return r.json();
 }
 
 export async function createCuratedModel(body: Partial<CuratedModel>): Promise<CuratedModel> {
-  const r = await fetch(`${API_URL}/api/v1/models/curated`, {
+  const r = await apiFetch(`${API_URL}/api/v1/models/curated`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -567,7 +600,7 @@ export async function createCuratedModel(body: Partial<CuratedModel>): Promise<C
 }
 
 export async function patchCuratedModel(id: string, body: Record<string, unknown>): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/models/curated/${id}`, {
+  const r = await apiFetch(`${API_URL}/api/v1/models/curated/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -576,12 +609,12 @@ export async function patchCuratedModel(id: string, body: Record<string, unknown
 }
 
 export async function deleteCuratedModel(id: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/models/curated/${id}`, { method: 'DELETE' });
+  const r = await apiFetch(`${API_URL}/api/v1/models/curated/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
 export async function uninstallModel(name: string): Promise<void> {
-  const r = await fetch(`${API_URL}/api/v1/models/uninstall`, {
+  const r = await apiFetch(`${API_URL}/api/v1/models/uninstall`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -590,7 +623,7 @@ export async function uninstallModel(name: string): Promise<void> {
 }
 
 export async function* pullModel(name: string): AsyncGenerator<Record<string, unknown>> {
-  const r = await fetch(`${API_URL}/api/v1/models/pull`, {
+  const r = await apiFetch(`${API_URL}/api/v1/models/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),

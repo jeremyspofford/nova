@@ -12,3 +12,9 @@ venv/
 data/
 .claude/
 .worktrees/
+
+# compiled config artifacts (vite prefers .js over .ts — a stale one shadows the real config)
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.tsbuildinfo
+frontend/dev-dist/

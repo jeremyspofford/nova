@@ -12,7 +12,7 @@ services:
       POSTGRES_USER: nova
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova-dev-password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql://nova:${POSTGRES_PASSWORD:-nova-dev-password}@postgres:5432/nova
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
       OKF_MEMORY_DIR: /app/data/memory
       # shown read-only in Settings → Storage — the mount itself is fixed at
       # container-create time and can't be changed from inside the container
@@ -34,7 +35,7 @@ services:
       INFERENCE_CONTROL_URL: http://inference-control:9911
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,14 +99,26 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: dev
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     volumes:
       - ./frontend/src:/app/src:cached
       - ./frontend/public:/app/public:cached
-    environment:
-      VITE_API_URL: http://localhost:8000
+
+  # The phone-facing entry: built PWA + API behind one origin. Bound to
+  # localhost only — expose it via `tailscale serve` (recommended) or a
+  # tunnel, and set NOVA_AUTH_TOKEN first.
+  web:
+    build:
+      context: ./frontend
+      target: web
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
