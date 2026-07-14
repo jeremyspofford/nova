@@ -27,6 +27,9 @@ services:
       DATABASE_URL: postgresql://nova:${POSTGRES_PASSWORD:-nova-dev-password}@postgres:5432/nova
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OKF_MEMORY_DIR: /app/data/memory
+      # shown read-only in Settings → Storage — the mount itself is fixed at
+      # container-create time and can't be changed from inside the container
+      NOVA_MEMORY_DIR_HOST: ${NOVA_MEMORY_DIR:-./data/memory}
       SEARXNG_URL: http://searxng:8080
       INFERENCE_CONTROL_URL: http://inference-control:9911
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

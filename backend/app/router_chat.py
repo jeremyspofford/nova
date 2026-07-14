@@ -449,6 +449,20 @@ async def uninstall_model_endpoint(body: dict):
     return {"status": "uninstalled", "name": name}
 
 
+@router.get("/api/v1/storage")
+async def storage_info_endpoint():
+    """Where memory physically lives. The host path is a bind mount resolved
+    at container-create time — the UI can show and verify it, but changing
+    it is a deployment action by nature (.env + `docker compose up -d`)."""
+    import os
+    return {
+        "host_path": os.environ.get("NOVA_MEMORY_DIR_HOST", "./data/memory"),
+        "container_path": settings.okf_memory_dir,
+        "writable": os.access(settings.okf_memory_dir, os.W_OK),
+        "counts": await memory.stats(),
+    }
+
+
 # ── brain graph: memory + platform entities (the full map of what Nova IS) ─
 
 @router.get("/api/v1/brain/graph")

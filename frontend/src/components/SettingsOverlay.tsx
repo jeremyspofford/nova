@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   AgentInfo, Automation, BundledInferenceStatus, CuratedModel, DbToolInfo,
   ModelBudget, ModelInfo, ModelRecommendation, ProbeResult,
-  RecommendationsResponse, Rule, SettingDef, SkillInfo, ToolsCatalog,
+  RecommendationsResponse, Rule, SettingDef, SkillInfo,
+  StorageInfo as StorageInfoData, ToolsCatalog,
   createAgent, createAutomation, createCuratedModel, createRule, createSkill,
   createTool, deleteAgent, deleteAutomation, deleteCuratedModel, deleteRule,
   deleteSkill, deleteTool, getAgents, getAutomations, getBundledInference,
   getCuratedModels, getMemoryItem, getModelBudget, getModels,
-  getRecommendations, getRules, getSettings, getSkills, getTools, patchAgent,
+  getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
+  getTools, patchAgent,
   patchAutomation, patchCuratedModel, patchRule, patchSettings, patchTool,
   pullModel, setBundledInference, testModel, uninstallModel, updateSkill,
 } from '../api';
@@ -240,6 +242,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
     .filter(s => (!only || only.includes(s)) && !(exclude ?? []).includes(s));
   return (
     <div className="space-y-5">
+      {!only && <StorageCard />}
       {sections.map(section => (
         <section key={section}>
           <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>
@@ -266,6 +269,42 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
       ))}
       {status && <div className="text-xs text-teal-400">{status}</div>}
     </div>
+  );
+}
+
+/** Where memory physically lives — shown and verified in the UI; changing
+ *  it is the ONE deployment-time setting (a docker bind mount can't be
+ *  remounted from inside the container it serves). */
+function StorageCard() {
+  const [info, setInfo] = useState<StorageInfoData | null>(null);
+  useEffect(() => { getStorageInfo().then(setInfo).catch(() => {}); }, []);
+  if (!info) return null;
+  const counts = Object.entries(info.counts).filter(([, v]) => typeof v === 'number');
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Storage</h3>
+      <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-1.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm text-stone-200">Memory home</div>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+            info.writable ? 'border-emerald-800 text-emerald-400' : 'border-red-900 text-red-400'
+          }`}>
+            {info.writable ? '✓ writable' : '✗ not writable'}
+          </span>
+        </div>
+        <div className="text-xs font-mono text-teal-300">{info.host_path}</div>
+        <div className="text-xs text-stone-500">
+          Plain markdown — point it at a NAS mount or an Obsidian vault. The
+          location is a docker bind mount fixed when the container starts, so
+          it's the one setting that lives in <code className="font-mono">.env</code>:
+          set <code className="font-mono">NOVA_MEMORY_DIR</code>, then run{' '}
+          <code className="font-mono">docker compose up -d backend</code>.
+        </div>
+        <div className="text-[11px] font-mono text-stone-600">
+          {counts.map(([k, v]) => `${v} ${k}`).join(' · ')}
+        </div>
+      </div>
+    </section>
   );
 }
 

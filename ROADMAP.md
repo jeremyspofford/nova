@@ -470,6 +470,12 @@ See README for what works. This file is the ordered backlog.
 
 - **Auth** — required before exposing beyond localhost. Single admin token is
   enough for a first pass. (The PWA item above pulls this forward.)
+- **In-UI secrets store** — the real "configure in the UI, not .env" win:
+  OpenRouter (and future provider) keys entered in Settings, encrypted at
+  rest, hot-reloaded — no .env edit, no restart. Mine `v0.1.0-alpha`'s
+  AES-256-GCM secrets store design (keys out of .env was its explicit
+  goal); interacts with auth (a secrets UI must not ship before the app
+  has one) and the guardian's no-secret-in-requests rule.
 - **Memory sync pipeline (local-first cloud/NAS/vault)** — `NOVA_MEMORY_DIR`
   already points the store anywhere mountable; this item is about SYNC, not
   location. Direction from the 2026-07-14 discussion: local stays the

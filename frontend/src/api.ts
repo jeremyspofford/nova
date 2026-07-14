@@ -117,6 +117,19 @@ export async function getMemoryGraph(): Promise<{ nodes: GraphNode[]; edges: Gra
   return r.json();
 }
 
+export interface StorageInfo {
+  host_path: string;
+  container_path: string;
+  writable: boolean;
+  counts: Record<string, number>;
+}
+
+export async function getStorageInfo(): Promise<StorageInfo> {
+  const r = await fetch(`${API_URL}/api/v1/storage`);
+  if (!r.ok) throw new Error('Failed to load storage info');
+  return r.json();
+}
+
 export async function getBrainGraph(platform: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   const r = await fetch(`${API_URL}/api/v1/brain/graph?platform=${platform}`);
   if (!r.ok) throw new Error('Failed to load brain graph');
