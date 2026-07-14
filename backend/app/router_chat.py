@@ -200,6 +200,56 @@ async def memory_item(item_id: str):
     return item
 
 
+# ── bundled inference (docker control via the inference-control sidecar) ─
+
+@router.get("/api/v1/inference/bundled")
+async def bundled_inference_status():
+    """Container state from the sidecar + a direct API probe. Fail-soft:
+    without the sidecar the UI simply hides the toggle."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(f"{settings.inference_control_url}/status")
+            resp.raise_for_status()
+            status = resp.json()
+        except Exception as e:
+            log.warning("inference-control unreachable: %s", e)
+            return {"available": False}
+        api_ok = False
+        if status.get("running"):
+            try:
+                r = await client.get(f"{settings.bundled_ollama_url}/api/tags")
+                api_ok = r.status_code == 200
+            except httpx.HTTPError:
+                pass
+    return {"available": True, "api_ok": api_ok, **status}
+
+
+@router.post("/api/v1/inference/bundled")
+async def bundled_inference_action(body: dict):
+    import httpx
+    from app import models_catalog
+
+    action = str(body.get("action", "")).strip()
+    if action not in ("start", "stop"):
+        raise HTTPException(status_code=422, detail="action must be 'start' or 'stop'")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{settings.inference_control_url}/{action}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"inference-control sidecar unreachable: {e}")
+    if resp.status_code not in (200, 202):
+        try:
+            detail = resp.json().get("error", resp.text)
+        except ValueError:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    models_catalog.invalidate()  # the ollama model list is about to change
+    return resp.json()
+
+
 # ── settings (UI-configured runtime behavior) ────────────────────────────
 
 @router.get("/api/v1/settings")

@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     # NOTE: ollama URL + local fallback model are runtime settings now
     # (Settings -> Inference), not env.
 
+    # Bundled-inference control sidecar (the only holder of the docker
+    # socket; fixed-verb start/stop/status API, compose network only)
+    inference_control_url: str = "http://inference-control:9911"
+    # The bundled ollama compose service, definitionally — status probes hit
+    # this even when inference.ollama_url points at a host-run instance.
+    bundled_ollama_url: str = "http://ollama:11434"
+
     # Agent loop
     max_tool_rounds: int = 6
 

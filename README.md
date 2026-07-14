@@ -16,8 +16,11 @@ docker compose up -d
 - UI: http://localhost:5173 (brain graph + chat)
 - API: http://localhost:8000 (`/health`, `/docs`)
 
-Without an OpenRouter key, models fall back to local Ollama
-(`OLLAMA_BASE_URL`, default `host.docker.internal:11434`).
+Without an OpenRouter key, models fall back to local Ollama. The bundled
+Ollama container is started/stopped from **Settings → Inference** (toggle +
+live status) — no CLI needed; `docker compose --profile inference up -d`
+still works. Its URL and the fallback model are runtime settings there too
+(point the URL at `http://host.docker.internal:11434` for a host-run Ollama).
 
 ## What works (all live-verified)
 
@@ -30,14 +33,18 @@ Without an OpenRouter key, models fall back to local Ollama
 | **Skills** | `skill-manager` writes `skills/*.md`; BM25 retrieval injects applicable skills into agent prompts; behavior demonstrably follows them |
 | Memory | OKF-style markdown files + in-process BM25 (no embeddings); topics/journals/skills; recall survives full `docker compose down && up --build` |
 | Brain view | d3-force canvas of the real memory graph (teal topics, amber skills, dim journals), refreshes every 20s; renderers live behind a theme registry (`frontend/src/brain/theme.ts`) |
+| **Hot-swappable bundled inference** | Settings → Inference toggle starts/stops the bundled Ollama container via the `inference-control` sidecar — the only holder of the docker socket, exposing a fixed-verb start/stop/status API on the compose network only |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.
 
 ## Architecture
 
-3 containers: **postgres** (16-alpine), **backend** (FastAPI + asyncpg),
-**frontend** (Vite/React/Tailwind). Memory is an in-process library over
+Compose services: **postgres** (16-alpine), **backend** (FastAPI + asyncpg),
+**frontend** (Vite/React/Tailwind), **searxng** (keyless web search),
+**inference-control** (docker-socket sidecar: start/stop/status of the
+bundled ollama, nothing else), and optional **ollama** (`inference`
+profile, toggleable from Settings). Memory is an in-process library over
 `./data/memory/*.md` (git-friendly, human-readable). LLM routing is a
 prefix on the agent's model string: `openrouter:<model>` or `ollama:<model>`.
 

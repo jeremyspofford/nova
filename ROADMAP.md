@@ -103,20 +103,27 @@ See README for what works. This file is the ordered backlog.
   "look up" — but the machinery is fully compatible. Local users should
   prefer 7B+ models and a GPU for interactive latency.
 
+- **Hot-swappable bundled inference from Settings** (2026-07-14) — the
+  bundled Ollama container starts/stops from Settings → Inference (status
+  dot + toggle, 4s poll; card hides when the sidecar is absent). The docker
+  socket (root-equivalent on the host) is held ONLY by a new
+  `inference-control` sidecar (`inference-control/server.py`, ~120 lines,
+  stdlib): fixed-verb API — GET /status, POST /start, POST /stop of the
+  `ollama` compose service, nothing parameterized — on the compose network
+  only, no published ports. Start/stop shell out to `docker compose
+  --profile inference` against the mounted compose file, so operator edits
+  (e.g. a GPU block) are honored; compose project name is now pinned
+  (`name: nova-rebuild`). Backend proxies at
+  `GET/POST /api/v1/inference/bundled`, adding an `api_ok` probe of the
+  bundled URL and invalidating the models cache on toggle. Live-verified
+  via Playwright through :5173: stop → container exits, card shows
+  stopped; start → running + api_ok; then a real chat turn on
+  `ollama:qwen2.5:3b` through the recycled container; sidecar rejects
+  non-verb paths (404/501) and is unreachable from the host.
+
 ## Next up
 
-1. **Hot-swappable bundled inference from Settings** — the Ollama *URL* and
-   fallback model are now runtime settings (done), but starting/stopping the
-   bundled container still requires the CLI (`--profile inference`). Full
-   hot-swap needs the backend to control Docker — a security design decision:
-   the socket is root-equivalent on the host. Plan: a minimal control
-   sidecar (or socket-proxy-gated mount) exposing exactly two verbs
-   (start/stop ollama) to the backend, surfaced as a toggle + status
-   indicator in Settings → Inference. Old Nova solved this with a dedicated
-   recovery service + docker-socket-proxy; borrow that shape, radically
-   smaller.
-
-2. **Model recommendations (brainstorm needed)** — help users pick models
+1. **Model recommendations (brainstorm needed)** — help users pick models
    instead of guessing. Axes to work through together:
    - *Bring-your-own vs guided*: user names a model or two they want, OR Nova
      reads system resources (GPU vendor/VRAM via nvidia-smi/rocm, RAM, CPU)
@@ -131,7 +138,7 @@ See README for what works. This file is the ordered backlog.
    - *Validation*: offer a one-click "test this model" (short tool-calling
      probe) so suggestions are verified on the user's actual hardware.
 
-3. **Named local-inference endpoints (multi-backend)** — users run LM
+2. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named

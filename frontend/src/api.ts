@@ -152,6 +152,31 @@ export async function patchSettings(changes: Record<string, unknown>): Promise<v
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Save failed');
 }
 
+export interface BundledInferenceStatus {
+  available: boolean;
+  present?: boolean;
+  running?: boolean;
+  state?: string;
+  op?: 'start' | 'stop' | null;
+  error?: string | null;
+  api_ok?: boolean;
+}
+
+export async function getBundledInference(): Promise<BundledInferenceStatus> {
+  const r = await fetch(`${API_URL}/api/v1/inference/bundled`);
+  if (!r.ok) throw new Error('Failed to load bundled inference status');
+  return r.json();
+}
+
+export async function setBundledInference(action: 'start' | 'stop'): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/inference/bundled`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? `${action} failed`);
+}
+
 export interface Automation {
   id: string;
   name: string;

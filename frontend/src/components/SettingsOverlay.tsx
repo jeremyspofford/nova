@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
-  AgentInfo, Automation, ModelInfo, Rule, SettingDef, createAutomation,
-  createRule, deleteAutomation, deleteRule, getAgents, getAutomations,
-  getModels, getRules, getSettings, patchAgent, patchAutomation, patchRule,
-  patchSettings, pullModel,
+  AgentInfo, Automation, BundledInferenceStatus, ModelInfo, Rule, SettingDef,
+  createAutomation, createRule, deleteAutomation, deleteRule, getAgents,
+  getAutomations, getBundledInference, getModels, getRules, getSettings,
+  patchAgent, patchAutomation, patchRule, patchSettings, pullModel,
+  setBundledInference,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { ThemePreview } from './ThemePreview';
@@ -164,6 +165,9 @@ function SettingsTab() {
         <section key={section}>
           <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>
           <div className="space-y-3">
+            {section === 'Inference' && (
+              <BundledInference onChanged={() => getModels().then(setModels)} />
+            )}
             {defs.filter(d => d.section === section).map(d => (
               <div key={d.key}
                 className={d.key === 'brain.view'
@@ -181,6 +185,75 @@ function SettingsTab() {
         </section>
       ))}
       {status && <div className="text-xs text-teal-400">{status}</div>}
+    </div>
+  );
+}
+
+/** Start/stop the bundled Ollama container via the inference-control
+ *  sidecar. Hidden entirely when the sidecar isn't running. */
+function BundledInference({ onChanged }: { onChanged: () => void }) {
+  const [st, setSt] = useState<BundledInferenceStatus | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    const load = () => getBundledInference().then(setSt).catch(() => setSt(null));
+    load();
+    const iv = setInterval(load, 4000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!st?.available) return null;
+
+  const busy = !!st.op;
+  const [dot, text] =
+    st.op === 'start' ? ['bg-amber-400 animate-pulse', 'starting…'] :
+    st.op === 'stop' ? ['bg-amber-400 animate-pulse', 'stopping…'] :
+    st.running && st.api_ok ? ['bg-emerald-400', 'running'] :
+    st.running ? ['bg-amber-400', 'running — API warming up'] :
+    st.present ? ['bg-stone-500', 'stopped'] :
+    ['bg-stone-500', 'not installed'];
+
+  async function toggle() {
+    if (!st || busy) return;
+    setErr('');
+    const action = st.running ? 'stop' : 'start';
+    try {
+      await setBundledInference(action);
+      setSt({ ...st, op: action });
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm text-stone-200 flex items-center gap-2">
+            Bundled Ollama
+            <span className={`w-2 h-2 rounded-full ${dot}`} />
+            <span className="text-xs text-stone-400">{text}</span>
+          </div>
+          <div className="text-xs text-stone-500">
+            The local-inference container. Stop it to free RAM/VRAM — pulled
+            models persist across stops.
+            {!st.present && ' First start downloads the Ollama image (~1 GB).'}
+          </div>
+        </div>
+        <button
+          onClick={toggle}
+          disabled={busy}
+          className={`shrink-0 text-xs rounded px-3 py-1 text-white disabled:bg-stone-700 ${
+            st.running ? 'bg-stone-600 hover:bg-stone-500' : 'bg-teal-700 hover:bg-teal-600'
+          }`}
+        >
+          {busy ? 'working…' : st.running ? 'stop' : 'start'}
+        </button>
+      </div>
+      {(err || st.error) && (
+        <div className="mt-1.5 text-xs text-red-400">{err || st.error}</div>
+      )}
     </div>
   );
 }
