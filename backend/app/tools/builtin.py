@@ -41,6 +41,8 @@ async def _write_memory(args, ctx):
         description=args.get("description"),
         category=args.get("category"),
         priority=int(args.get("priority", 0)),
+        tags=args.get("tags"),
+        source_url=args.get("source_url"),
         source_type="tool",
     ))
 
@@ -173,6 +175,16 @@ async def _manage_tools(args, ctx):
     return f"Error: unknown action '{action}' (use list/create/disable)"
 
 
+# ── web fetch (ingestion primitive) ─────────────────────────────────────
+
+async def _fetch_url(args, ctx):
+    url = args.get("url", "").strip()
+    if not url:
+        return "Error: url is required"
+    from app.tools.web_fetch import fetch_url
+    return await fetch_url(url)
+
+
 # ── dispatch (declaration; execution is runner-inlined) ─────────────────
 
 async def _dispatch_stub(args, ctx):
@@ -193,7 +205,9 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "name": "write_memory",
         "description": ("Write to long-term memory. type='journal' appends a note to today's "
                         "journal; type='topic' or type='skill' creates a durable concept file "
-                        "(title required). Skills are guidance other agents retrieve and follow."),
+                        "(title required). Skills are guidance other agents retrieve and follow. "
+                        "Tags connect related topics in the brain graph; source_url records "
+                        "provenance for ingested content."),
         "parameters": {"type": "object", "properties": {
             "content": {"type": "string"},
             "type": {"type": "string", "enum": ["journal", "topic", "skill"]},
@@ -202,8 +216,21 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "category": {"type": "string",
                          "enum": ["workflow", "knowledge", "tool-use", "custom"]},
             "priority": {"type": "integer"},
+            "tags": {"type": "array", "items": {"type": "string"},
+                     "description": "2-4 short lowercase tags"},
+            "source_url": {"type": "string"},
         }, "required": ["content"]},
         "execute": _write_memory,
+    },
+    "fetch_url": {
+        "name": "fetch_url",
+        "description": ("Fetch a public web URL (GET only) and return its readable text. "
+                        "Private/internal addresses are refused. Content is size-capped; "
+                        "distill it before storing to memory."),
+        "parameters": {"type": "object",
+                       "properties": {"url": {"type": "string"}},
+                       "required": ["url"]},
+        "execute": _fetch_url,
     },
     "read_memory_item": {
         "name": "read_memory_item",

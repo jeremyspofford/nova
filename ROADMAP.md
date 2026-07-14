@@ -4,16 +4,19 @@ v1 is complete and live-verified (2026-07-13): streamed chat, agent index +
 dispatch, runtime agent/tool/skill creation, file-backed memory, brain graph.
 See README for what works. This file is the ordered backlog.
 
+## Shipped
+
+- **Knowledge ingestion agent** (2026-07-13) — `fetch_url` builtin
+  (GET-only, 20s/200KB caps, per-redirect-hop SSRF guard in
+  `backend/app/tools/web_fetch.py`) + seeded `ingestion` agent that distills
+  URLs into tagged, provenance-stamped topic files. Live-verified: Wikipedia
+  article ingested through an http→https redirect; localhost / link-local /
+  RFC1918 / docker-internal targets all refused; later questions answered
+  from memory without refetching.
+
 ## Next up
 
-1. **Knowledge ingestion agent** — the proof case for "read from any source."
-   Add a `fetch_url` builtin (GET-only, response-size + timeout caps, hard
-   SSRF guard: refuse RFC1918/loopback/link-local targets regardless of the
-   tool allowlist), then seed or agent-create an `ingestion` agent granted
-   `fetch_url` + `write_memory`. Demo: "ingest this article into memory" →
-   new topic file appears in the brain.
-
-2. **Per-agent granting of DB tools** — today every enabled `tools` row is
+1. **Per-agent granting of DB tools** — today every enabled `tools` row is
    visible to all agents. Honor `allowed_tools` for DB tools the same way as
    builtins (an agent sees a DB tool only if named, or via a `db:*` grant).
 

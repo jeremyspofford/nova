@@ -49,6 +49,8 @@ class OkfStore:
         for key, value in fm.items():
             if isinstance(value, bool):
                 value = str(value).lower()
+            elif isinstance(value, (list, tuple)):
+                value = "[" + ", ".join(str(v) for v in value) + "]"
             lines.append(f"{key}: {value}")
         lines.append("---")
         return "\n".join(lines)

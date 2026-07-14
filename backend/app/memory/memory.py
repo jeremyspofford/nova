@@ -52,6 +52,7 @@ class OkfMemory:
     async def write(self, content: str, *, type: str = "journal",
                     title: Optional[str] = None, description: Optional[str] = None,
                     category: Optional[str] = None, priority: int = 0,
+                    tags: Optional[list[str]] = None, source_url: Optional[str] = None,
                     source_type: str = "chat") -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept file."""
         async with self._lock:
@@ -65,6 +66,10 @@ class OkfMemory:
                     metadata["description"] = description
                 if category:
                     metadata["category"] = category
+                if tags:
+                    metadata["tags"] = [str(t).strip().lower() for t in tags if str(t).strip()]
+                if source_url:
+                    metadata["source_url"] = source_url
                 doc_id = self.store.write_concept(title, content, type, metadata)
             else:
                 today = datetime.now(timezone.utc).date().isoformat()
