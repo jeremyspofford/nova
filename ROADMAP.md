@@ -175,13 +175,62 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
+4. **Platform entities in the brain graph** — agents, automations, tools,
+   and rules join the galaxy/graph as first-class nodes (skills are already
+   there via memory). The brain becomes the full map of what Nova *is*:
+   knowledge (topics), experience (journals), capabilities (skills, tools,
+   agents), habits (automations), boundaries (rules). Design:
+   - New `GET /api/v1/brain/graph` merges the memory graph with platform
+     entities as typed nodes; distinct cluster colors (agents violet,
+     automations blue, tools sage, rules red).
+   - Real edges, not decoration: automation → its agent; agent → its
+     allowed tools; rule → its target tools; disabled entities dimmed.
+   - Clicking opens a per-type detail card (agent config, rule pattern +
+     hit count, automation last-run) instead of the markdown panel.
+   - HUD filter chips (or a Settings toggle) so the memory-only view stays
+     one click away — ~40 extra nodes shouldn't drown the knowledge graph.
+
+5. **Operator edit mode (manual CRUD everywhere, gated)** — a single
+   Settings toggle `ui.edit_mode` (default OFF). Off: everything is
+   view-only plus enable/disable — safe to wander. On: create/edit/delete
+   for rules, automations, agents, and tools from the UI. Design notes:
+   - Enforce at the **API layer** (endpoints check the setting), not just
+     hidden buttons — a UI-only gate is a placebo. Reads and
+     enable/disable stay always-allowed.
+   - The agent **tool layer is untouched**: agent-manager, model-manager,
+     guardian etc. keep their manage_* powers regardless of the toggle —
+     it gates the human surface only, and existing protections (system
+     entities undeletable, guardian-only manage_rules) still apply.
+   - Needs new backend surface: DELETE /agents (non-system), PATCH
+     extended to system_prompt / allowed_tools / routing_keywords, agent
+     create form, and a tools tab (list DB tools + create http_call specs).
+   - Absorbs the old "Agent management UI" item from Later.
+   - When auth lands, the toggle naturally becomes a per-operator setting.
+
+6. **PWA — Nova on the phone (until a native app)** — installable web app
+   served from the same stack. The manifest/service-worker part is easy;
+   the real prerequisites are exposure and layout. Ordered plan:
+   1. *Auth first* (pulls the "Later" auth item forward): single admin
+      token, required the moment anything binds beyond localhost.
+   2. *Same-origin serving*: frontend built + served behind one origin
+      with the API (nginx or FastAPI static) so cookies/tokens and the
+      service worker scope behave; drop the hardcoded VITE_API_URL.
+   3. *Responsive chat-first layout*: on small screens chat is the app
+      (full-width, brain reachable via a tab/swipe); the galaxy stays a
+      desktop-first surface.
+   4. *PWA shell*: vite-plugin-pwa — manifest (name, icons, theme color),
+      service worker caching the app shell only (chat is useless offline;
+      don't pretend otherwise). iOS notes: needs HTTPS, install is manual
+      "Add to Home Screen", web push works from iOS 16.4+ if wanted later.
+   5. *Reachability*: recommend Tailscale (batteries-included,
+      privacy-first — no public exposure, TLS via `tailscale serve`) with
+      Cloudflare Tunnel as the public-facing alternative.
+
 
 ## Later
 
 - **Auth** — required before exposing beyond localhost. Single admin token is
-  enough for a first pass.
-- **Agent management UI** — list/disable/edit agents visually instead of via
-  chat or curl.
+  enough for a first pass. (The PWA item above pulls this forward.)
 - **Journal polish** — pre-rewrite journal files lack a `title:` frontmatter
   key, so the brain labels them by path. Cosmetic; fix by backfilling titles.
 - **Device control agent** — computer-use loop (screenshot → reason → act)
