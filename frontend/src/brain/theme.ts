@@ -12,11 +12,13 @@ export interface RendererHandle {
   setData(nodes: GraphNode[], edges: GraphEdge[]): void;
   resize(width: number, height: number): void;
   destroy(): void;
+  /** Optional runtime settings (e.g. rotationSpeed, labelMode). */
+  configure?(options: Record<string, unknown>): void;
 }
 
 export interface RendererOpts {
-  /** Fired on a genuine click (not a pan) on a node. */
-  onNodeClick?: (id: string) => void;
+  /** Fired on a genuine click (not a pan/orbit). null = clicked empty space. */
+  onNodeClick?: (id: string | null) => void;
 }
 
 export type RendererFactory = (canvas: HTMLCanvasElement, opts?: RendererOpts) => RendererHandle;

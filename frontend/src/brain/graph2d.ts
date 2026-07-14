@@ -132,7 +132,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
     canvas.releasePointerCapture(e.pointerId);
     if (dragDistance < 4) {
       const hit = hitTest(e.offsetX, e.offsetY);
-      if (hit) opts?.onNodeClick?.(hit.id);
+      opts?.onNodeClick?.(hit ? hit.id : null);
     }
   };
   const onWheel = (e: WheelEvent) => {

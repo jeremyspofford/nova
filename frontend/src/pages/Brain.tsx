@@ -23,13 +23,34 @@ export function Brain() {
     const saved = localStorage.getItem('nova.brain.theme');
     return saved && saved in THEMES ? saved : DEFAULT_THEME;
   });
+  const [rotation, setRotation] = useState(() =>
+    parseFloat(localStorage.getItem('nova.brain.rotation') ?? '2'));
+  const [labelMode, setLabelMode] = useState(() =>
+    localStorage.getItem('nova.brain.labels') ?? 'auto');
 
   const pickTheme = (key: string) => {
     setTheme(key);
     localStorage.setItem('nova.brain.theme', key);
   };
 
-  const openDetail = useCallback(async (id: string) => {
+  const changeRotation = (v: number) => {
+    setRotation(v);
+    localStorage.setItem('nova.brain.rotation', String(v));
+    rendererRef.current?.configure?.({ rotationSpeed: v });
+  };
+
+  const cycleLabels = () => {
+    const next = labelMode === 'auto' ? 'on' : labelMode === 'on' ? 'off' : 'auto';
+    setLabelMode(next);
+    localStorage.setItem('nova.brain.labels', next);
+    rendererRef.current?.configure?.({ labelMode: next });
+  };
+
+  const openDetail = useCallback(async (id: string | null) => {
+    if (id === null) {
+      setDetail(null); // click-away on empty space closes the pane
+      return;
+    }
     try {
       setDetail(await getMemoryItem(id));
     } catch (err) {
@@ -43,6 +64,10 @@ export function Brain() {
 
     const renderer = THEMES[theme].create(canvas, { onNodeClick: openDetail });
     rendererRef.current = renderer;
+    renderer.configure?.({
+      rotationSpeed: parseFloat(localStorage.getItem('nova.brain.rotation') ?? '2'),
+      labelMode: localStorage.getItem('nova.brain.labels') ?? 'auto',
+    });
 
     const size = () =>
       renderer.resize(window.innerWidth - CHAT_WIDTH, window.innerHeight);
@@ -103,6 +128,27 @@ export function Brain() {
             </button>
           ))}
         </div>
+        {theme === 'galaxy' && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs text-stone-400">
+            <span title="Rotation speed">spin</span>
+            <input
+              type="range"
+              min={0}
+              max={6}
+              step={0.25}
+              value={rotation}
+              onChange={e => changeRotation(parseFloat(e.target.value))}
+              className="w-24 accent-teal-500"
+            />
+            <button
+              onClick={cycleLabels}
+              className="px-2 py-0.5 rounded border border-stone-700 text-stone-300 hover:text-white capitalize"
+              title="Label visibility: auto = titles up close, categories zoomed out"
+            >
+              labels: {labelMode}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Node detail — the graph is a metadata index; full content on demand */}

@@ -64,7 +64,19 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
   let yaw = 0.4, pitch = 0.25, dist = 620;
   const FOV = 520;
   let dragging = false, lastX = 0, lastY = 0, dragDist = 0;
-  let autoRotate = true;
+  const autoRotate = true;
+
+  // runtime settings (Brain HUD -> configure())
+  let rotationSpeed = 2;                       // multiplier on the base spin
+  let labelMode: 'auto' | 'on' | 'off' = 'auto';
+
+  // clusters: category groupings labelled when zoomed out
+  let clusters = new Map<string, { label: string; color: string; ids: string[] }>();
+
+  function clusterKey(n: GraphNode): string {
+    if (n.type === 'topic') return n.tags?.[0] ?? 'topics';
+    return n.type === 'skill' ? 'skills' : n.type === 'journal' ? 'journals' : 'sources';
+  }
 
   // deterministic backdrop
   const rand = mulberry32(1337);
@@ -99,6 +111,14 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       };
     });
     byId = new Map(stars.map(s => [s.node.id, s]));
+
+    clusters = new Map();
+    for (const s of stars) {
+      const key = clusterKey(s.node);
+      const c = clusters.get(key) ?? { label: key, color: s.color, ids: [] };
+      c.ids.push(s.node.id);
+      clusters.set(key, c);
+    }
 
     // few relaxation passes: springs on links, mild repulsion inside clusters
     for (let pass = 0; pass < 60; pass++) {
@@ -143,7 +163,17 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
 
   function draw(now: number) {
     const w = canvas.width, h = canvas.height;
-    if (autoRotate && !dragging) yaw += 0.0016;
+    if (autoRotate && !dragging) yaw += 0.0016 * rotationSpeed;
+
+    // semantic zoom: g grows as you zoom in. Node titles fade in up close;
+    // cluster/category names fade in when zoomed out (like the original's
+    // giant topic labels).
+    const g0 = FOV / dist;
+    const nodeLabelAlpha = labelMode === 'on' ? 1
+      : labelMode === 'off' ? 0
+      : Math.max(0, Math.min(1, (g0 - 1.0) / 0.4));
+    const clusterLabelAlpha = labelMode === 'off' ? 0
+      : Math.max(0, Math.min(1, (0.95 - g0) / 0.3));
 
     // deep space + nebula
     ctx.globalCompositeOperation = 'source-over';
@@ -210,23 +240,60 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       ctx.globalAlpha = 1;
     }
 
-    // neon labels — topics + skills (and anything hovered), fading with depth
     ctx.globalCompositeOperation = 'source-over';
     ctx.textAlign = 'center';
+
+    // core identity label — the golden orb is Nova itself, the anchor the
+    // memories orbit
+    if (core.px != null) {
+      ctx.font = `600 ${Math.max(11, 13 * (core.pscale ?? 1))}px system-ui`;
+      ctx.shadowColor = '#ffd682';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = 'rgba(255, 236, 200, 0.9)';
+      ctx.fillText('Nova', core.px, core.py! + coreR * 2.4 + 16);
+      ctx.shadowBlur = 0;
+    }
+
+    // node titles — fade in as you zoom near (or forced by label mode);
+    // hover always shows
     for (const s of ordered) {
       if (s.px == null) continue;
-      const labelled = s.node.type !== 'journal' || s === hovered;
-      if (!labelled) continue;
+      const alphaBase = s === hovered ? 1 : nodeLabelAlpha;
+      if (alphaBase <= 0.02) continue;
+      if (s.node.type === 'journal' && s !== hovered && labelMode !== 'on') continue;
       const depthFade = Math.min(1, 380 / (s.pdepth ?? 380));
-      if (depthFade < 0.35 && s !== hovered) continue;
+      const alpha = alphaBase * (s === hovered ? 1 : 0.9 * depthFade);
+      if (alpha <= 0.03) continue;
       const size = Math.max(10, 15 * (s.pscale ?? 1));
       ctx.font = `600 ${size}px system-ui`;
       ctx.shadowColor = s.color;
       ctx.shadowBlur = 14;
-      ctx.fillStyle = s === hovered ? '#ffffff' : `rgba(235, 250, 250, ${0.9 * depthFade})`;
+      ctx.fillStyle = s === hovered ? '#ffffff' : `rgba(235, 250, 250, ${alpha})`;
       const text = s.node.label.length > 30 ? s.node.label.slice(0, 28) + '…' : s.node.label;
       ctx.fillText(text, s.px, s.py! + s.size * (s.pscale ?? 1) * 2.6 + size);
       ctx.shadowBlur = 0;
+    }
+
+    // cluster/category names — the zoomed-out view (big neon words)
+    if (clusterLabelAlpha > 0.02) {
+      for (const c of clusters.values()) {
+        let cx = 0, cy = 0, cd = 0, count = 0;
+        for (const id of c.ids) {
+          const s = byId.get(id);
+          if (!s?.px) continue;
+          cx += s.px; cy += s.py!; cd += s.pdepth ?? dist; count++;
+        }
+        if (!count) continue;
+        cx /= count; cy /= count; cd /= count;
+        const depthFade = Math.min(1, 500 / cd);
+        const size = Math.max(16, 26 * (FOV / cd));
+        ctx.font = `700 ${size}px system-ui`;
+        ctx.shadowColor = c.color;
+        ctx.shadowBlur = 22;
+        ctx.fillStyle = `rgba(240, 253, 250, ${0.85 * clusterLabelAlpha * depthFade})`;
+        ctx.fillText(c.label, cx, cy - size * 0.4);
+        ctx.shadowBlur = 0;
+      }
     }
 
     raf = requestAnimationFrame(draw);
@@ -264,7 +331,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     canvas.releasePointerCapture(e.pointerId);
     if (dragDist < 4) {
       const hit = hitTest(e.offsetX, e.offsetY);
-      if (hit) opts?.onNodeClick?.(hit.node.id);
+      opts?.onNodeClick?.(hit ? hit.node.id : null);
     }
   };
   const onWheel = (e: WheelEvent) => {
@@ -289,6 +356,12 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     resize(width: number, height: number) {
       canvas.width = width;
       canvas.height = height;
+    },
+    configure(options: Record<string, unknown>) {
+      if (typeof options.rotationSpeed === 'number') rotationSpeed = options.rotationSpeed;
+      if (options.labelMode === 'auto' || options.labelMode === 'on' || options.labelMode === 'off') {
+        labelMode = options.labelMode;
+      }
     },
     destroy() {
       cancelAnimationFrame(raf);
