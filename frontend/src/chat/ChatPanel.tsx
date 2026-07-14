@@ -189,6 +189,14 @@ export function ChatPanel({ width, onWidthChange }: ChatPanelProps) {
 
         {items.map(item => {
           if (item.kind === 'activity') {
+            if (item.activity.kind === 'narration') {
+              return (
+                <div key={item.id} className="text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5">
+                  ⚠ {displayName(item.activity.name)} announced an action but
+                  called no tool — the described work did <b>not</b> happen.
+                </div>
+              );
+            }
             return (
               <div key={item.id} className="text-xs text-amber-400/80 font-mono px-1">
                 {activityLabel(item.activity)}

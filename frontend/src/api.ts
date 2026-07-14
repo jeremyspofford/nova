@@ -3,7 +3,7 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export interface Activity {
-  kind: 'tool_start' | 'tool_result' | 'dispatch';
+  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration';
   name: string;
   agent?: string;
   detail?: string;

@@ -312,6 +312,24 @@ See README for what works. This file is the ordered backlog.
   migration 019 + tier discipline remain the operative protection, and
   live narration detection belongs to the observability item below.
 
+- **Narration detector (2026-07-14)** — the observability item's cheapest
+  piece, pulled forward. At end of every agent turn the runner knows two
+  facts with certainty: the final text and how many tools actually
+  executed. If the text ANNOUNCES actions ("I'll dispatch…", "let me
+  create…", "is now live", "waiting for X to confirm") while zero tools
+  ran, the turn is flagged: an amber banner in chat ("announced an action
+  but called no tool — the described work did NOT happen"), a WARNING log
+  with agent+model, and a system journal entry so narration rates per
+  model accumulate as searchable memory. Questions, conditionals, and
+  past-tense recaps are deliberately not matched — asking permission is
+  correct behavior. Heuristic by design: a floor that turns silent
+  failures loud, not a guarantee. Verified against reality: both of
+  today's actual narrated turns (pulled from the messages table) flag; a
+  fabricated "is now created and live!" with zero calls flags while the
+  same words after real calls don't; questions/recaps/plain answers pass
+  8/8; a live chat turn produces no false banner. Works at any dispatch
+  depth and for automations (single choke point in run_agent).
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's

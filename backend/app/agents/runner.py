@@ -11,10 +11,12 @@ sub-agent's own tool loop can stream activity through the same event channel.
 Sub-agents get their own allowed_tools, minus dispatch — depth is capped at 1.
 """
 
+import asyncio
 import json
 import logging
 from typing import AsyncIterator, Optional
 
+from app import narration
 from app.config import settings
 from app.llm import router as llm_router
 from app.memory.memory import memory
@@ -88,6 +90,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
            "granted": {t["function"]["name"] for t in tools}}
 
     final_text = ""
+    calls_made = 0
 
     for round_no in range(settings.max_tool_rounds):
         round_text = ""
@@ -127,6 +130,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         })
 
         for tc in tool_calls:
+            calls_made += 1
             name = tc["name"]
             try:
                 args = json.loads(tc["arguments"]) if tc["arguments"] else {}
@@ -158,6 +162,21 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         final_text += note
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
+
+    # narration detector: text that announces actions + zero tool calls =
+    # the described work silently never happened. Make it loud.
+    snippet = narration.detect(final_text, calls_made)
+    if snippet:
+        yield {"type": "activity", "kind": "narration",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": f"announced an action but called no tool (matched {snippet!r})"}
+        log.warning("Narration detected: agent=%s model=%s matched=%r",
+                    agent.get("name"), agent.get("model"), snippet)
+        asyncio.ensure_future(memory.write(
+            f"Narration detected: agent '{agent.get('name')}' on model "
+            f"{agent.get('model')} announced an action but called no tool "
+            f"this turn (matched {snippet!r}). The described work did NOT "
+            f"happen.", type="journal", source_type="system"))
 
     yield {"type": "final", "text": final_text}
 
