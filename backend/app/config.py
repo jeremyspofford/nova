@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # exposing beyond localhost (tailscale serve, tunnels) — every /api/*
     # request must then carry Authorization: Bearer <token>.
     nova_auth_token: str = ""
+    # With a token set, requests from THIS machine stay tokenless (the token
+    # exists for remote devices). Set false if a host-side public tunnel
+    # points at :8080 — the tunnel's requests look local.
+    nova_trust_localhost: bool = True
 
     # LLM providers
     openrouter_api_key: str = ""

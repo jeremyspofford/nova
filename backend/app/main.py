@@ -49,15 +49,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _docker_gateway() -> str:
+    """The bridge gateway IP — how connections from THIS host appear to
+    containers (docker's userland proxy for 127.0.0.1-published ports)."""
+    try:
+        with open("/proc/net/route") as f:
+            for line in f.readlines()[1:]:
+                fields = line.split()
+                if fields[1] == "00000000":  # default route
+                    raw = bytes.fromhex(fields[2])
+                    return ".".join(str(b) for b in reversed(raw))
+    except (OSError, ValueError, IndexError):
+        pass
+    return "172.17.0.1"
+
+
+_GATEWAY_IP = _docker_gateway()
+
+
+def _is_local(request: Request) -> bool:
+    """True when the ORIGINAL client is this machine. nginx overwrites
+    X-Real-IP with its own view of the client; no X-Real-IP means the
+    request came direct to :8000 or via the vite dev proxy — both bound to
+    127.0.0.1 on the host, so only this machine can reach them."""
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip is None:
+        return True
+    return real_ip in (_GATEWAY_IP, "127.0.0.1", "::1")
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Single admin token, required the moment anything binds beyond
-    localhost. Empty token = open (dev default). /health stays public for
-    container healthchecks."""
+    """Single admin token for REMOTE devices; this machine stays tokenless
+    (default; NOVA_TRUST_LOCALHOST=false to require it everywhere). Empty
+    token = fully open. /health stays public for container healthchecks."""
     token = settings.nova_auth_token
     if token and request.url.path.startswith("/api/"):
         supplied = request.headers.get("authorization", "")
-        if not hmac.compare_digest(supplied, f"Bearer {token}"):
+        authed = hmac.compare_digest(supplied, f"Bearer {token}")
+        if not authed and not (settings.nova_trust_localhost and _is_local(request)):
+            # masked forensics: enough to diagnose entry/transport issues,
+            # never the secret itself
+            log.warning(
+                "auth failed: path=%s real_ip=%s got_len=%d got_prefix=%r",
+                request.url.path, request.headers.get("x-real-ip"),
+                len(supplied), supplied[:14])
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 

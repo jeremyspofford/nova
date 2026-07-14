@@ -449,6 +449,14 @@ async def uninstall_model_endpoint(body: dict):
     return {"status": "uninstalled", "name": name}
 
 
+@router.get("/api/v1/auth/token")
+async def auth_token_endpoint():
+    """The admin token, for the phone-setup QR. Reachable only by callers
+    the middleware already trusts: this machine (which can read .env
+    anyway) or a device that presented the token to get here."""
+    return {"token": settings.nova_auth_token or ""}
+
+
 @router.get("/api/v1/storage")
 async def storage_info_endpoint():
     """Where memory physically lives. The host path is a bind mount resolved

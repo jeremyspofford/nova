@@ -10,6 +10,14 @@ export default function App() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    // login-by-link: a token in the URL FRAGMENT (#token=…) — fragments
+    // never cross the network or reach server logs. This is what the
+    // phone-setup QR encodes, and it kills manual token entry entirely.
+    const m = window.location.hash.match(/token=([^&]+)/);
+    if (m) {
+      setAuthToken(decodeURIComponent(m[1]).trim());
+      history.replaceState(null, '', window.location.pathname);
+    }
     checkAuth().then(ok => setLocked(!ok)).catch(() => setLocked(false));
     const onUnauthorized = () => setLocked(true);
     window.addEventListener('nova:unauthorized', onUnauthorized);

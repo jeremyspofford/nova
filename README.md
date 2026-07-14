@@ -79,14 +79,58 @@ The `web` service serves the built app and the API behind **one origin** on
 
 1. **Set the admin token** (required before any exposure): in `.env`, set
    `NOVA_AUTH_TOKEN` (e.g. `openssl rand -hex 24`), then
-   `docker compose up -d backend web`. Every API request now needs the
-   token; the app shows a one-time login on each device.
-2. **Expose it privately with Tailscale** (recommended):
-   `tailscale serve --bg 8080` — Nova appears at
-   `https://<machine>.<tailnet>.ts.net` with a valid certificate, visible
-   only to your tailnet. HTTPS matters: iOS refuses to install PWAs from
-   insecure origins.
-3. **Install on the phone**: open the URL, enter the token, then
+   `docker compose up -d backend web`. The token is for **remote devices
+   only** — browsers on the Nova machine itself stay tokenless (set
+   `NOVA_TRUST_LOCALHOST=false` to change that, e.g. if a host-side
+   public tunnel points at :8080). Phones never type it either: once
+   exposed, open **Settings → Phone setup** on the desktop and scan the
+   QR — it carries the token in the URL fragment (never crosses the
+   network, scrubbed from the address bar after login).
+2. **Expose it privately with Tailscale** (recommended). Two ways:
+
+   **The sidecar (easiest — identical on WSL2/Linux/macOS, no host
+   install):** Nova joins your tailnet as its own node.
+   1. Grab an auth key: https://login.tailscale.com/admin/settings/keys
+      (defaults are fine; the key is consumed once — identity then lives
+      in the `tailscale_state` volume).
+   2. Put it in `.env` as `TS_AUTHKEY=tskey-auth-...`
+   3. `docker compose --profile tailscale up -d`
+   4. Nova is at `https://nova.<tailnet>.ts.net`. One-time tailnet
+      prerequisite: MagicDNS + HTTPS certificates enabled in the admin
+      console (Settings → DNS) — that's where the valid cert comes from,
+      and iOS refuses to install PWAs without HTTPS.
+
+   **Host-side Tailscale** (if you already run it): any node that can
+   reach `127.0.0.1:8080` runs `tailscale serve --bg 8080`, and Nova
+   appears at `https://<machine>.<tailnet>.ts.net`. Per platform:
+
+   - **Linux**: `curl -fsSL https://tailscale.com/install.sh | sh`, then
+     `sudo tailscale up`, then `tailscale serve --bg 8080`. Done.
+   - **macOS**: install the Tailscale app (App Store or
+     `brew install --cask tailscale`), sign in, then
+     `tailscale serve --bg 8080` (App Store build: the CLI lives at
+     `/Applications/Tailscale.app/Contents/MacOS/Tailscale` — alias it).
+     Otherwise identical to Linux.
+   - **Windows + WSL2** — two ways; the Windows-side one is simpler:
+     1. *Tailscale on Windows (recommended)*: install the
+        [Windows client](https://tailscale.com/download/windows), sign in,
+        then in PowerShell: `tailscale serve --bg 8080`. This works
+        because WSL2 forwards ports listening inside the distro to
+        Windows `localhost` — verify first that
+        `http://localhost:8080` opens in your Windows browser; if it
+        doesn't, check `localhostForwarding` in `.wslconfig` (on by
+        default).
+     2. *Tailscale inside WSL2*: needs systemd — in `/etc/wsl.conf` set
+        `[boot]` `systemd=true`, run `wsl --shutdown` from Windows,
+        reopen, then follow the Linux steps. The machine appears as its
+        own tailnet node. Caveat: Nova is only reachable while the distro
+        is running (true of the docker stack anyway).
+
+   Check what's being served with `tailscale serve status`.
+3. **Put the phone on the tailnet**: install the Tailscale app on the
+   phone and sign into the same account — without this the `ts.net` URL
+   won't resolve at all.
+4. **Install on the phone**: open the URL, enter the token, then
    Add to Home Screen (iOS: share sheet; Android: install prompt). The
    service worker caches the app shell only — chat needs the network and
    doesn't pretend otherwise.

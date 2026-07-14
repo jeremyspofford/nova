@@ -86,6 +86,11 @@ SETTING_DEFS: list[dict] = [
      "label": "Label text size",
      "description": "Scales all graph label text."},
     # ── Operator ─────────────────────────────────────────────────────────
+    {"key": "ui.public_url", "type": "string", "default": "",
+     "section": "Operator", "label": "Public URL (for phone setup)",
+     "description": ("The URL other devices use to reach Nova, e.g. "
+                     "https://nova.<tailnet>.ts.net — feeds the phone-setup "
+                     "QR code in Settings. Leave empty to hide the QR card.")},
     {"key": "ui.edit_mode", "type": "boolean", "default": False,
      "section": "Operator", "label": "Edit mode",
      "description": ("Allow manual create/edit/delete of agents, automations, rules, "

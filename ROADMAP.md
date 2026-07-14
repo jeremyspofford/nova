@@ -407,6 +407,22 @@ See README for what works. This file is the ordered backlog.
   a stale tracked `vite.config.js` (old tsc emit) was silently shadowing
   `vite.config.ts` — vite prefers .js; removed + git/dockerignored.
 
+- **Tailscale sidecar + per-platform reachability walkthrough
+  (2026-07-14)** — the platform matrix (WSL2 vs Linux vs macOS) collapsed
+  two ways. Docs: the README phone section now walks each host-side path
+  (Linux/mac near-identical; WSL2 gets both the Windows-client route with
+  the localhost-forwarding check and the systemd-in-WSL route). Product:
+  an optional `tailscale` compose profile — the official image in
+  USERSPACE mode (no NET_ADMIN, no /dev/net/tun; inbound proxy only)
+  joins the tailnet as node "nova" and serves the web origin at
+  https://nova.<tailnet>.ts.net via a baked serve.json (${TS_CERT_DOMAIN}
+  → proxy http://web:80). TS_AUTHKEY consumed once, identity persists in
+  the tailscale_state volume; requires MagicDNS + HTTPS certs enabled on
+  the tailnet (documented). Verified to the honest limit: compose
+  validates, sidecar boots to NeedsLogin with the serve config mounted —
+  the last hop needs a real tailnet key, which only the operator holds.
+  Also removed the obsolete compose `version:` attribute.
+
 ## Next up
 
 1. **Observability / turn tracing (brainstorm needed)** — today's
@@ -430,7 +446,17 @@ See README for what works. This file is the ordered backlog.
    - *Redaction*: tool args can carry secrets; interplay with guardian
      rules and the no-secret-in-requests pattern.
 
-2. **Self-updating model curation (proposal flow)** — the curated table
+2. **Mobile PWA routes/pages (needs design)** — the phone build reuses the
+   desktop single-view (chat over brain with a toggle); real phone UX
+   wants distinct routes/pages sized for the form factor. To design with
+   Jeremy after first real on-device usage: which surfaces earn a page
+   (chat, brain, settings/models/agents management?), navigation pattern
+   (bottom tabs vs drawer), whether deep links matter
+   (nova.ts.net/settings), and what stays desktop-only (the galaxy is
+   desktop-first by design). Frontend currently has no router — adding
+   one (react-router or hash-based) is part of this item.
+
+3. **Self-updating model curation (proposal flow)** — the curated table
    must not rot, or recommendations rot with it. A scheduled automation has
    model-manager (with web_search/fetch_url) research newly released local
    and cloud models and PROPOSE curated rows: inserted **disabled**, never
@@ -442,7 +468,7 @@ See README for what works. This file is the ordered backlog.
    pin guard says providers no longer serve). Needs a `manage_curated`
    tool granted to model-manager whose writes always land disabled.
 
-3. **Named local-inference endpoints (multi-backend)** — users run LM
+4. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -452,7 +478,7 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
-4. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+5. **Chat activity in the brain views (designed 2026-07-14, build later)** —
    while Nova is answering, the brain should visibly "think", whatever theme
    is active. Design:
    - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with

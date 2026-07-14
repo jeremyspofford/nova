@@ -35,6 +35,14 @@ export async function checkAuth(): Promise<boolean> {
   return r.status !== 401;
 }
 
+/** The admin token from the server — only answers for already-trusted
+ *  callers (this machine, or a device holding the token). Feeds the QR. */
+export async function getServerToken(): Promise<string> {
+  const r = await apiFetch(`${API_URL}/api/v1/auth/token`);
+  if (!r.ok) return '';
+  return (await r.json()).token ?? '';
+}
+
 export interface Activity {
   kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration';
   name: string;

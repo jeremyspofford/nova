@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Pinned so container labels/names are stable regardless of the checkout
 # directory — the inference-control sidecar targets this project by name.
 name: nova
@@ -27,6 +25,7 @@ services:
       DATABASE_URL: postgresql://nova:${POSTGRES_PASSWORD:-nova-dev-password}@postgres:5432/nova
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
+      NOVA_TRUST_LOCALHOST: ${NOVA_TRUST_LOCALHOST:-true}
       OKF_MEMORY_DIR: /app/data/memory
       # shown read-only in Settings → Storage — the mount itself is fixed at
       # container-create time and can't be changed from inside the container
@@ -87,6 +86,29 @@ services:
       OLLAMA_GPU: ${OLLAMA_GPU:-auto}
     restart: unless-stopped
 
+  # Optional batteries-included reachability: joins YOUR tailnet as node
+  # "nova" and serves the web origin at https://nova.<tailnet>.ts.net with
+  # a real certificate — identical on WSL2/Linux/macOS, no host Tailscale
+  # install. Opt in: put TS_AUTHKEY in .env, then
+  #   docker compose --profile tailscale up -d
+  # Userspace networking: no NET_ADMIN, no /dev/net/tun — inbound proxy only.
+  # Node identity persists in the volume; the auth key is consumed once.
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: ["tailscale"]
+    hostname: nova
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+
   searxng:
     image: searxng/searxng:latest
     environment:
@@ -123,3 +145,4 @@ services:
 volumes:
   postgres_data:
   ollama_models:
+  tailscale_state:
