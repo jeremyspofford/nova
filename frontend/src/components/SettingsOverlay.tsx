@@ -1,19 +1,35 @@
 import { useEffect, useState } from 'react';
 import {
-  AgentInfo, Automation, BundledInferenceStatus, ModelInfo, Rule, SettingDef,
-  createAutomation, createRule, deleteAutomation, deleteRule, getAgents,
-  getAutomations, getBundledInference, getModels, getRules, getSettings,
-  patchAgent, patchAutomation, patchRule, patchSettings, pullModel,
-  setBundledInference,
+  AgentInfo, Automation, BundledInferenceStatus, DbToolInfo, ModelInfo, Rule,
+  SettingDef, ToolsCatalog, createAgent, createAutomation, createRule,
+  createTool, deleteAgent, deleteAutomation, deleteRule, deleteTool,
+  getAgents, getAutomations, getBundledInference, getModels, getRules,
+  getSettings, getTools, patchAgent, patchAutomation, patchRule,
+  patchSettings, patchTool, pullModel, setBundledInference,
 } from '../api';
 import { THEMES } from '../brain/theme';
 import { displayName } from '../names';
 import { ThemePreview } from './ThemePreview';
 
-type Tab = 'settings' | 'agents' | 'automations' | 'rules';
+type Tab = 'settings' | 'agents' | 'automations' | 'rules' | 'tools';
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('settings');
+
+  // ui.edit_mode gates manual create/edit/delete across the tabs (the API
+  // enforces it too — hiding buttons is UX, not the security boundary)
+  const [editMode, setEditMode] = useState(false);
+  useEffect(() => {
+    getSettings().then(defs =>
+      setEditMode(Boolean(defs.find(d => d.key === 'ui.edit_mode')?.value))
+    ).catch(() => {});
+    const onChange = (e: Event) => {
+      const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
+      if (key === 'ui.edit_mode') setEditMode(Boolean(value));
+    };
+    window.addEventListener('nova:setting-changed', onChange);
+    return () => window.removeEventListener('nova:setting-changed', onChange);
+  }, []);
 
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
@@ -23,7 +39,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
           <div className="flex gap-1 text-sm">
-            {(['settings', 'agents', 'automations', 'rules'] as Tab[]).map(t => (
+            {(['settings', 'agents', 'automations', 'rules', 'tools'] as Tab[]).map(t => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -35,20 +51,44 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
+          <div className="flex items-center gap-2">
+            {/* status badge only — the switch itself lives in Settings → Operator */}
+            <span
+              title="Whether manual create/edit/delete is allowed in these tabs. Change it under Settings → Operator → Edit mode."
+              className={`text-xs px-2.5 py-1 rounded-full border select-none ${
+                editMode
+                  ? 'border-amber-600 text-amber-300 bg-amber-900/30'
+                  : 'border-stone-600 text-stone-500'
+              }`}
+            >
+              {editMode ? '✏️ edit mode' : '🔒 view only'}
+            </span>
+            <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
+          </div>
         </header>
         <div className="flex-1 overflow-y-auto nice-scroll p-4">
-          {tab === 'settings' ? <SettingsTab />
-            : tab === 'agents' ? <AgentsTab />
-            : tab === 'automations' ? <AutomationsTab />
-            : <RulesTab />}
+          {tab === 'settings' ? <SettingsTab exclude={['Automations']} />
+            : tab === 'agents' ? <AgentsTab editMode={editMode} />
+            : tab === 'automations' ? <AutomationsTab editMode={editMode} />
+            : tab === 'rules' ? <RulesTab editMode={editMode} />
+            : <ToolsTab editMode={editMode} />}
         </div>
       </div>
     </div>
   );
 }
 
-function SettingsTab() {
+/** Shown wherever create/edit/delete affordances are hidden. */
+function EditModeHint() {
+  return (
+    <p className="text-xs text-stone-500">
+      🔒 View mode: you can enable/disable, but not create, edit, or delete.
+      Turn on <b className="text-stone-400">Settings → Operator → Edit mode</b> to change that.
+    </p>
+  );
+}
+
+function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
@@ -56,6 +96,13 @@ function SettingsTab() {
   useEffect(() => {
     getSettings().then(setDefs).catch(e => setStatus(String(e)));
     getModels().then(setModels).catch(() => {});
+    // stay in sync when a setting is changed elsewhere (e.g. the header chip)
+    const onExternal = (e: Event) => {
+      const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
+      setDefs(prev => prev.map(d => d.key === key ? { ...d, value } : d));
+    };
+    window.addEventListener('nova:setting-changed', onExternal);
+    return () => window.removeEventListener('nova:setting-changed', onExternal);
   }, []);
 
   async function save(key: string, value: unknown) {
@@ -159,7 +206,8 @@ function SettingsTab() {
     );
   }
 
-  const sections = [...new Set(defs.map(d => d.section))];
+  const sections = [...new Set(defs.map(d => d.section))]
+    .filter(s => (!only || only.includes(s)) && !(exclude ?? []).includes(s));
   return (
     <div className="space-y-5">
       {sections.map(section => (
@@ -322,11 +370,18 @@ function PullModel({ onPulled }: { onPulled: () => void }) {
 }
 
 /** Per-agent model + status — every agent has its OWN model. */
-function AgentsTab() {
+function AgentsTab({ editMode }: { editMode: boolean }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [allModel, setAllModel] = useState('');
   const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<AgentInfo | null>(null);
+  const emptyForm = {
+    name: '', description: '', system_prompt: '', model: '',
+    allowed_tools: '', routing_keywords: '',
+  };
+  const [form, setForm] = useState(emptyForm);
 
   const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)));
   useEffect(() => {
@@ -362,6 +417,91 @@ function AgentsTab() {
     } catch (e) { setStatus(String(e)); }
   }
 
+  // comma-separated → list; empty = null (null allowed_tools = all builtins)
+  const parseList = (s: string): string[] | null => {
+    const items = s.split(',').map(t => t.trim()).filter(Boolean);
+    return items.length ? items : null;
+  };
+
+  function startEdit(a: AgentInfo) {
+    setEditing(a);
+    setForm({
+      name: a.name, description: a.description, system_prompt: a.system_prompt,
+      model: a.model,
+      allowed_tools: a.allowed_tools?.join(', ') ?? '',
+      routing_keywords: a.routing_keywords?.join(', ') ?? '',
+    });
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    try {
+      await patchAgent(editing.id, {
+        description: form.description,
+        system_prompt: form.system_prompt,
+        allowed_tools: parseList(form.allowed_tools),
+        routing_keywords: parseList(form.routing_keywords),
+      });
+      setEditing(null);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  async function submitCreate(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await createAgent({
+        name: form.name, description: form.description,
+        system_prompt: form.system_prompt, model: form.model,
+        allowed_tools: parseList(form.allowed_tools),
+        routing_keywords: parseList(form.routing_keywords),
+      });
+      setCreating(false);
+      setForm(emptyForm);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  async function remove(a: AgentInfo) {
+    if (!window.confirm(`Delete agent "${displayName(a.name)}"? This cannot be undone.`)) return;
+    try { await deleteAgent(a.id); load(); } catch (err) { setStatus(String(err)); }
+  }
+
+  const agentFields = (
+    <>
+      <input
+        placeholder="description"
+        value={form.description}
+        onChange={e => setForm({ ...form, description: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+      />
+      <textarea
+        required placeholder="system prompt…"
+        value={form.system_prompt}
+        onChange={e => setForm({ ...form, system_prompt: e.target.value })}
+        rows={6}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200"
+      />
+      <div className="flex gap-2">
+        <input
+          placeholder="allowed tools (comma-sep, empty = all builtins)"
+          value={form.allowed_tools}
+          onChange={e => setForm({ ...form, allowed_tools: e.target.value })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200"
+        />
+        <input
+          placeholder="routing keywords (comma-sep)"
+          value={form.routing_keywords}
+          onChange={e => setForm({ ...form, routing_keywords: e.target.value })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200"
+        />
+      </div>
+    </>
+  );
+
   const modelSelect = (value: string, onChange: (v: string) => void, placeholder?: string) => (
     <select
       value={value}
@@ -394,32 +534,87 @@ function AgentsTab() {
 
       {agents.map(a => (
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm text-stone-100">{displayName(a.name)}</span>
-              {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {modelSelect(a.model, v => setModel(a, v))}
-              <button
-                onClick={() => toggle(a)}
-                className={`text-xs px-2 py-0.5 rounded border ${
-                  a.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
-                }`}
-              >
-                {a.enabled ? 'enabled' : 'disabled'}
-              </button>
-            </div>
-          </div>
-          <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>
+          {editing?.id === a.id ? (
+            <form onSubmit={saveEdit} className="space-y-2">
+              <div className="text-sm text-stone-100">{displayName(a.name)}</div>
+              {agentFields}
+              <div className="flex gap-2 justify-end">
+                <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
+                <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-stone-100">{displayName(a.name)}</span>
+                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {modelSelect(a.model, v => setModel(a, v))}
+                  {editMode && (
+                    <button
+                      onClick={() => startEdit(a)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
+                    >
+                      edit
+                    </button>
+                  )}
+                  {editMode && !a.is_system && (
+                    <button
+                      onClick={() => remove(a)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
+                    >
+                      delete
+                    </button>
+                  )}
+                  <button
+                    onClick={() => toggle(a)}
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      a.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
+                    }`}
+                  >
+                    {a.enabled ? 'enabled' : 'disabled'}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>
+            </>
+          )}
         </div>
       ))}
+
+      {editMode && creating ? (
+        <form onSubmit={submitCreate} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
+          <div className="flex gap-2">
+            <input
+              required placeholder="name (kebab-case)"
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+            />
+            {modelSelect(form.model, v => setForm({ ...form, model: v }), 'model…')}
+          </div>
+          {agentFields}
+          <div className="flex gap-2 justify-end">
+            <button type="button" onClick={() => { setCreating(false); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+            <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
+          </div>
+        </form>
+      ) : editMode ? (
+        <button
+          onClick={() => { setForm(emptyForm); setCreating(true); }}
+          className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
+        >
+          + new agent
+        </button>
+      ) : <EditModeHint />}
       {status && <div className="text-xs text-amber-400">{status}</div>}
     </div>
   );
 }
 
-function AutomationsTab() {
+function AutomationsTab({ editMode }: { editMode: boolean }) {
   const [rows, setRows] = useState<Automation[]>([]);
   const [agents, setAgents] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -488,6 +683,11 @@ function AutomationsTab() {
 
   return (
     <div className="space-y-3">
+      {/* subsystem settings live with the subsystem, not in the Settings tab */}
+      <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3">
+        <SettingsTab only={['Automations']} />
+      </div>
+
       {rows.map(a => (
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
           {editing?.id === a.id ? (
@@ -529,13 +729,15 @@ function AutomationsTab() {
                   {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => startEdit(a)}
-                    className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
-                  >
-                    edit
-                  </button>
-                  {!a.is_system && (
+                  {editMode && (
+                    <button
+                      onClick={() => startEdit(a)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
+                    >
+                      edit
+                    </button>
+                  )}
+                  {editMode && !a.is_system && (
                     <button
                       onClick={() => remove(a)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
@@ -574,7 +776,7 @@ function AutomationsTab() {
         </div>
       ))}
 
-      {creating ? (
+      {editMode && creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <input
             required placeholder="name (kebab-case)"
@@ -612,20 +814,20 @@ function AutomationsTab() {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : (
+      ) : editMode ? (
         <button
           onClick={() => setCreating(true)}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
         >
           + new automation
         </button>
-      )}
+      ) : <EditModeHint />}
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
   );
 }
 
-function RulesTab() {
+function RulesTab({ editMode }: { editMode: boolean }) {
   const [rows, setRows] = useState<Rule[]>([]);
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
@@ -738,11 +940,13 @@ function RulesTab() {
                   {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => startEdit(r)}
-                    className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
-                    edit
-                  </button>
-                  {!r.is_system && (
+                  {editMode && (
+                    <button onClick={() => startEdit(r)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
+                      edit
+                    </button>
+                  )}
+                  {editMode && !r.is_system && (
                     <button onClick={() => remove(r)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
                       delete
@@ -766,7 +970,7 @@ function RulesTab() {
         </div>
       ))}
 
-      {creating ? (
+      {editMode && creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <input required placeholder="name (kebab-case)" value={form.name}
             onChange={e => setForm({ ...form, name: e.target.value })}
@@ -792,12 +996,153 @@ function RulesTab() {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : (
+      ) : editMode ? (
         <button onClick={() => setCreating(true)}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2">
           + new rule
         </button>
+      ) : <EditModeHint />}
+      {status && <div className="text-xs text-red-400">{status}</div>}
+    </div>
+  );
+}
+
+/** DB-created HTTP tools (toggleable, creatable in edit mode) + read-only builtins. */
+function ToolsTab({ editMode }: { editMode: boolean }) {
+  const [catalog, setCatalog] = useState<ToolsCatalog | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [status, setStatus] = useState('');
+  const [form, setForm] = useState({ name: '', description: '', method: 'GET', url_template: '' });
+
+  const load = () => getTools().then(setCatalog).catch(e => setStatus(String(e)));
+  useEffect(() => { load(); }, []);
+
+  async function toggle(t: DbToolInfo) {
+    try { await patchTool(t.id, !t.enabled); load(); } catch (e) { setStatus(String(e)); }
+  }
+
+  async function remove(t: DbToolInfo) {
+    if (!window.confirm(`Delete tool "${displayName(t.name)}"? This cannot be undone.`)) return;
+    try { await deleteTool(t.id); load(); } catch (e) { setStatus(String(e)); }
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await createTool(form);
+      setCreating(false);
+      setForm({ name: '', description: '', method: 'GET', url_template: '' });
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  if (!catalog) return <div className="text-xs text-stone-500">loading…</div>;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-stone-500">
+        Created tools are declarative HTTP calls against operator-allowlisted hosts
+        ({catalog.allowed_hosts.join(', ') || 'none yet'}). Builtins are code and
+        always present; which agent may use what lives on each agent's grants.
+      </p>
+
+      {catalog.db_tools.map(t => (
+        <div key={t.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm text-stone-100 truncate">{displayName(t.name)}</span>
+              <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{t.execution_type}</span>
+              {t.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {editMode && !t.is_system && (
+                <button
+                  onClick={() => remove(t)}
+                  className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
+                >
+                  delete
+                </button>
+              )}
+              <button
+                onClick={() => toggle(t)}
+                className={`text-xs px-2 py-0.5 rounded border ${
+                  t.enabled ? 'border-teal-700 text-teal-300 bg-teal-900/30' : 'border-stone-600 text-stone-500'
+                }`}
+              >
+                {t.enabled ? 'enabled' : 'disabled'}
+              </button>
+            </div>
+          </div>
+          {t.description && <div className="mt-1 text-xs text-stone-400 line-clamp-2">{t.description}</div>}
+          {t.url_template && (
+            <div className="mt-1 text-xs text-stone-500 font-mono truncate">
+              {t.method} {t.url_template}
+            </div>
+          )}
+        </div>
+      ))}
+      {catalog.db_tools.length === 0 && (
+        <div className="text-xs text-stone-500 italic">No created tools yet.</div>
       )}
+
+      {editMode && creating ? (
+        <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
+          <input
+            required placeholder="name (kebab-case)"
+            value={form.name}
+            onChange={e => setForm({ ...form, name: e.target.value })}
+            className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+          />
+          <input
+            required placeholder="description — when should an agent reach for this?"
+            value={form.description}
+            onChange={e => setForm({ ...form, description: e.target.value })}
+            className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+          />
+          <div className="flex gap-2">
+            <select
+              value={form.method}
+              onChange={e => setForm({ ...form, method: e.target.value })}
+              className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+            >
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+            </select>
+            <input
+              required placeholder="url template, e.g. https://api.example.com/{q}"
+              value={form.url_template}
+              onChange={e => setForm({ ...form, url_template: e.target.value })}
+              className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200"
+            />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button type="button" onClick={() => setCreating(false)} className="text-xs text-stone-400 px-2">cancel</button>
+            <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
+          </div>
+        </form>
+      ) : editMode ? (
+        <button
+          onClick={() => setCreating(true)}
+          className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
+        >
+          + new tool
+        </button>
+      ) : <EditModeHint />}
+
+      <details className="rounded-lg border border-stone-700 bg-stone-800/30">
+        <summary className="px-3 py-2 text-sm text-stone-300 cursor-pointer select-none">
+          Builtins ({catalog.builtins.length}) — read-only
+        </summary>
+        <div className="px-3 pb-2 space-y-1.5">
+          {catalog.builtins.map(b => (
+            <div key={b.name} className="text-xs">
+              <span className="text-stone-200">{displayName(b.name)}</span>
+              <span className="text-stone-500"> — {b.description}</span>
+            </div>
+          ))}
+        </div>
+      </details>
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
   );

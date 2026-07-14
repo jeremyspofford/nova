@@ -277,7 +277,10 @@ export interface AgentInfo {
   name: string;
   enabled: boolean;
   description: string;
+  system_prompt: string;
   model: string;
+  allowed_tools: string[] | null;
+  routing_keywords: string[] | null;
   is_system: boolean;
 }
 
@@ -294,6 +297,73 @@ export async function patchAgent(id: string, body: Record<string, unknown>): Pro
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function createAgent(body: {
+  name: string; description: string; system_prompt: string; model: string;
+  allowed_tools?: string[] | null; routing_keywords?: string[] | null;
+}): Promise<{ id: string; name: string }> {
+  const r = await fetch(`${API_URL}/api/v1/agents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/agents/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
+export interface BuiltinToolInfo { name: string; description: string }
+export interface DbToolInfo {
+  id: string;
+  name: string;
+  description: string;
+  execution_type: string;
+  enabled: boolean;
+  is_system: boolean;
+  method?: string | null;
+  url_template?: string | null;
+}
+export interface ToolsCatalog {
+  builtins: BuiltinToolInfo[];
+  db_tools: DbToolInfo[];
+  allowed_hosts: string[];
+}
+
+export async function getTools(): Promise<ToolsCatalog> {
+  const r = await fetch(`${API_URL}/api/v1/tools`);
+  if (!r.ok) throw new Error('Failed to load tools');
+  return r.json();
+}
+
+export async function createTool(body: {
+  name: string; description: string; url_template: string; method?: string;
+}): Promise<{ id: string; name: string }> {
+  const r = await fetch(`${API_URL}/api/v1/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchTool(id: string, enabled: boolean): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/tools/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function deleteTool(id: string): Promise<void> {
+  const r = await fetch(`${API_URL}/api/v1/tools/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
 export interface MemoryItem {

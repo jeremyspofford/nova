@@ -34,6 +34,7 @@ still works. Its URL and the fallback model are runtime settings there too
 | Memory | OKF-style markdown files + in-process BM25 (no embeddings); topics/journals/skills; recall survives full `docker compose down && up --build` |
 | Brain view | d3-force canvas of the real memory graph (teal topics, amber skills, dim journals), refreshes every 20s; renderers live behind a theme registry (`frontend/src/brain/theme.ts`) |
 | **Hot-swappable bundled inference** | Settings → Inference toggle starts/stops the bundled Ollama container via the `inference-control` sidecar — the only holder of the docker socket, exposing a fixed-verb start/stop/status API on the compose network only |
+| **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.

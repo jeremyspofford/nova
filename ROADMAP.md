@@ -92,6 +92,25 @@ See README for what works. This file is the ordered backlog.
   write blocked; guardian-created facebook block enforced on ingestion;
   casual "disable it real quick" got pushback demanding explicit intent.
 
+- **Operator edit mode** (2026-07-14) — `ui.edit_mode` Settings toggle
+  (default OFF) gates manual create/edit/delete of agents, automations,
+  rules, and tools, **enforced at the API layer** (403s), not just hidden
+  buttons; reads, enable/disable, and model changes stay open. New surface:
+  agent create/delete endpoints + full agent editor (system prompt, tool
+  grants, routing keywords), a Tools tab (DB tools toggleable/creatable
+  against the host allowlist, builtins listed read-only), and view-mode
+  hints. A 🔒/✏️ badge in the overlay header shows the current mode from
+  any tab (the switch itself lives in Settings → Operator), and the
+  `automations.*` subsystem settings moved into the Automations tab where
+  the automations live. System entities remain undeletable even in edit
+  mode. Live-verified end-to-end: 7 gated endpoints 403 when off / work
+  when on, agent + tool created and deleted through the UI, and — the key
+  invariant — Nova's own `manage_*` tools work with the toggle OFF
+  (chat-created automation while locked). Bonus finding: glm-5.2
+  fabricated a "created!" success without
+  calling the tool on the first attempt — never trust self-report, verify
+  against the DB (old-Nova lesson holds).
+
 - **Bundled Ollama + local-path validation** (2026-07-13) — optional
   `inference` compose profile ships Ollama (batteries-included local
   inference; `OLLAMA_BASE_URL` defaults to the bundled service, override for
@@ -190,24 +209,7 @@ See README for what works. This file is the ordered backlog.
    - HUD filter chips (or a Settings toggle) so the memory-only view stays
      one click away — ~40 extra nodes shouldn't drown the knowledge graph.
 
-5. **Operator edit mode (manual CRUD everywhere, gated)** — a single
-   Settings toggle `ui.edit_mode` (default OFF). Off: everything is
-   view-only plus enable/disable — safe to wander. On: create/edit/delete
-   for rules, automations, agents, and tools from the UI. Design notes:
-   - Enforce at the **API layer** (endpoints check the setting), not just
-     hidden buttons — a UI-only gate is a placebo. Reads and
-     enable/disable stay always-allowed.
-   - The agent **tool layer is untouched**: agent-manager, model-manager,
-     guardian etc. keep their manage_* powers regardless of the toggle —
-     it gates the human surface only, and existing protections (system
-     entities undeletable, guardian-only manage_rules) still apply.
-   - Needs new backend surface: DELETE /agents (non-system), PATCH
-     extended to system_prompt / allowed_tools / routing_keywords, agent
-     create form, and a tools tab (list DB tools + create http_call specs).
-   - Absorbs the old "Agent management UI" item from Later.
-   - When auth lands, the toggle naturally becomes a per-operator setting.
-
-6. **PWA — Nova on the phone (until a native app)** — installable web app
+5. **PWA — Nova on the phone (until a native app)** — installable web app
    served from the same stack. The manifest/service-worker part is easy;
    the real prerequisites are exposure and layout. Ordered plan:
    1. *Auth first* (pulls the "Later" auth item forward): single admin
@@ -225,7 +227,6 @@ See README for what works. This file is the ordered backlog.
    5. *Reachability*: recommend Tailscale (batteries-included,
       privacy-first — no public exposure, TLS via `tailscale serve`) with
       Cloudflare Tunnel as the public-facing alternative.
-
 
 ## Later
 
