@@ -92,6 +92,17 @@ See README for what works. This file is the ordered backlog.
   write blocked; guardian-created facebook block enforced on ingestion;
   casual "disable it real quick" got pushback demanding explicit intent.
 
+- **Bundled Ollama + local-path validation** (2026-07-13) — optional
+  `inference` compose profile ships Ollama (batteries-included local
+  inference; `OLLAMA_BASE_URL` defaults to the bundled service, override for
+  host-run). Validated the full loop on `qwen2.5:3b` (CPU): chat (~40s/turn),
+  memory recall, tool calling (clean list_agents call, no malformed calls in
+  any test), and dispatch + multi-round tools (main -> ingestion -> search ->
+  write -> report). Honest finding: the 3B model's *judgment* trails cloud —
+  it journaled already-known facts instead of fetching fresh when asked to
+  "look up" — but the machinery is fully compatible. Local users should
+  prefer 7B+ models and a GPU for interactive latency.
+
 ## Next up
 
 
@@ -101,9 +112,6 @@ See README for what works. This file is the ordered backlog.
   enough for a first pass.
 - **Agent management UI** — list/disable/edit agents visually instead of via
   chat or curl.
-- **Ollama live validation** — the fallback path is code-complete but Ollama
-  isn't installed on this machine; verify tool-calling quality with a local
-  model before relying on it.
 - **Journal polish** — pre-rewrite journal files lack a `title:` frontmatter
   key, so the brain labels them by path. Cosmetic; fix by backfilling titles.
 
