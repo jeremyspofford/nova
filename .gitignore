@@ -18,3 +18,4 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 *.tsbuildinfo
 frontend/dev-dist/
+frontend/public/mockups/

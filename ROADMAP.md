@@ -425,7 +425,45 @@ See README for what works. This file is the ordered backlog.
 
 ## Next up
 
-1. **Observability / turn tracing (brainstorm needed)** — today's
+1. **Voice — talking to and hearing Nova (decided 2026-07-14; phase 1 +
+   1b SHIPPED 2026-07-15)** — full spec + phase status in
+   `docs/plans/voice.md`. Phase 1 (spoken replies: kokoro TTS service,
+   sentence-buffered streaming, emoji/number normalization, list pauses,
+   pause/resume/stop controls) and phase 1b (54-voice picker with preview,
+   swappable `voice.model_override` LLM) are live-verified. Phases 2–4
+   (STT: push-to-talk → VAD → wake word) are the remaining build.
+   Original decisions: **TTS** local-first Kokoro-class as the batteries-included
+   default with premium cloud (ElevenLabs/OpenAI) as keyed opt-in; **STT**
+   local faster-whisper (the 3090 makes this fast) with silero-VAD for
+   utterance endpointing; **interaction: wake word** ("Nova …") as the
+   target UX — Jeremy chose it over my push-to-talk recommendation, so:
+   wake detection runs server-side (openWakeOrd-class, tiny CPU) on a
+   continuous mic stream over the tailnet WebSocket while the app is OPEN;
+   push-to-talk ships anyway as the built-in fallback (same capture path,
+   needed for mic-denied/failed-wake cases). HONEST PLATFORM LIMIT: a PWA
+   cannot listen in the background or with the screen locked (iOS
+   foreground-only mic) — always-on ambient listening needs a native app
+   or dedicated device (later item). Streaming: sentence-buffered TTS
+   (speech starts before the reply finishes — v0.1.0-alpha recipe), audio
+   levels drive the entity view. New compose services: whisper (STT+VAD)
+   and kokoro (TTS), both local, both optional profiles like ollama.
+
+2. **Nova entity view (mockups first — no repo code until approved)** — a
+   third brain view: Nova as a particle/filament presence, per the
+   references (2026-07-14): a face that CONDENSES when engaged and
+   DISSOLVES to an ambient particle wisp when idle — never "closed", just
+   dispersed. State machine: ACTIVE (bright, energy filaments,
+   voice/activity-reactive) → FADING (~5s after interaction stops) →
+   IDLE/DISSOLVED (~15s, faint drifting cloud). Decided 2026-07-14: the
+   face is **stylized androgynous** (a presence, not a person — no uncanny
+   valley, no implied identity); asset needs sourcing/sculpting, the
+   mockup's scanned head is a stand-in for feel only. Slots into the
+   THEMES registry as a third renderer; the planned `setActivity` contract
+   (brain-activity item) is the same plumbing it needs, and voice audio
+   levels are its energy input. Interactive HTML mockups live in
+   references_delete_when_done/mockups/ until Jeremy approves.
+
+3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
    should be a click. Axes to work through together:
    - *What exists*: messages journal tool activity (kind/name/agent +
@@ -446,7 +484,7 @@ See README for what works. This file is the ordered backlog.
    - *Redaction*: tool args can carry secrets; interplay with guardian
      rules and the no-secret-in-requests pattern.
 
-2. **Mobile PWA routes/pages (needs design)** — the phone build reuses the
+4. **Mobile PWA routes/pages (needs design)** — the phone build reuses the
    desktop single-view (chat over brain with a toggle); real phone UX
    wants distinct routes/pages sized for the form factor. To design with
    Jeremy after first real on-device usage: which surfaces earn a page
@@ -456,7 +494,7 @@ See README for what works. This file is the ordered backlog.
    desktop-first by design). Frontend currently has no router — adding
    one (react-router or hash-based) is part of this item.
 
-3. **Self-updating model curation (proposal flow)** — the curated table
+5. **Self-updating model curation (proposal flow)** — the curated table
    must not rot, or recommendations rot with it. A scheduled automation has
    model-manager (with web_search/fetch_url) research newly released local
    and cloud models and PROPOSE curated rows: inserted **disabled**, never
@@ -468,7 +506,7 @@ See README for what works. This file is the ordered backlog.
    pin guard says providers no longer serve). Needs a `manage_curated`
    tool granted to model-manager whose writes always land disabled.
 
-4. **Named local-inference endpoints (multi-backend)** — users run LM
+6. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
    *serving* (our existing client already speaks it); none but Ollama expose
    a pull API (they manage their own downloads). Design: a registry of named
@@ -478,7 +516,7 @@ See README for what works. This file is the ordered backlog.
    pull_model/list_models tool contracts are already backend-scoped in
    anticipation.
 
-5. **Chat activity in the brain views (designed 2026-07-14, build later)** —
+7. **Chat activity in the brain views (designed 2026-07-14, build later)** —
    while Nova is answering, the brain should visibly "think", whatever theme
    is active. Design:
    - *Contract*: extend `RendererHandle` (`frontend/src/brain/theme.ts`) with
@@ -497,6 +535,29 @@ See README for what works. This file is the ordered backlog.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
 
+8. **Video ingestion — watch a video or a source, source-agnostic
+   (requested 2026-07-15, spec'd; generalized beyond YouTube per Jeremy's
+   same-day follow-up)** — point Nova at a video from any supported site
+   (or a direct media URL) and she ingests the content into memory; point
+   her at a source (a creator/channel/playlist page) and she backfills
+   past uploads and monitors for new ones. Full spec: `docs/plans/video-
+   ingestion.md`. Shape: a small `media` worker service built on **yt-dlp
+   (1000+ sites — YouTube, Vimeo, Twitch, …) + ffmpeg** pulls captions
+   when a site offers them and falls back to the **same whisper service
+   the voice lane builds** for audio→text — that fallback is the universal
+   path that makes it source-agnostic (real synergy: build voice phase 2
+   first and this gets STT for free). Transcripts land as chunked,
+   timestamped markdown notes in memory (retrieval cites the video with
+   the site's native deep link); "watch a source" is a subscriptions table
+   polled by a scheduled automation that re-enumerates the source (YouTube
+   RSS as an optional fast-path). Dedupe is source-neutral
+   (`<extractor>:<id>`). Batteries-included (no API keys — yt-dlp is
+   keyless). Depends on: whisper service (voice phase 2) for the
+   transcription fallback; the automations/scheduler infra (exists) for
+   source polling. Open decisions flagged in the spec (backfill caps,
+   per-video summarization, auth/ToS posture, which non-YouTube sources to
+   target first).
+
 ## Later
 
 - **In-UI secrets store** — the real "configure in the UI, not .env" win:
@@ -506,6 +567,26 @@ See README for what works. This file is the ordered backlog.
   goal). Auth shipped 2026-07-14 (single admin token), so the gate this
   needed now exists; still interacts with the guardian's
   no-secret-in-requests rule.
+- **Remote shared state — one brain, many machines (feasible, designed
+  2026-07-14)** — Jeremy's personal/work-computer case: postgres + data
+  live centrally, every Nova instance points at them and behaves as the
+  same entity. Verdict: feasible with three known engineering points.
+  (1) *Postgres remote* is standard: `DATABASE_URL` already env — point it
+  at one PG over the tailnet (home server/NAS/managed); per-turn query
+  latency over WireGuard is fine; the local postgres service simply goes
+  unused on secondary instances. (2) *Memory over a network mount*:
+  `NOVA_MEMORY_DIR` at NFS/SMB works today, BUT each instance's BM25
+  index is in-process and only rescans at startup — instance B sees A's
+  new memories after restart until a file-watcher lands (same watcher the
+  sync-pipeline item needs); concurrent same-file writes (two instances
+  appending today's journal) need per-file locking or accepted
+  last-writer-wins. (3) *Singleton background work*: automations
+  scheduler, model warmer, and compaction would DOUBLE-RUN with two
+  backends on one DB — they need leader election (postgres advisory lock:
+  one line to take, holder runs the loops, others stand by). Local
+  inference (ollama) stays per-instance by design — same brain, different
+  muscles. Until built, the working answer is one instance + tailnet PWA
+  from every device (verified live today).
 - **Memory sync pipeline (local-first cloud/NAS/vault)** — `NOVA_MEMORY_DIR`
   already points the store anywhere mountable; this item is about SYNC, not
   location. Direction from the 2026-07-14 discussion: local stays the
