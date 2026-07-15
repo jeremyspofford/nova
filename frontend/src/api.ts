@@ -44,6 +44,20 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Ar
   return r.arrayBuffer();
 }
 
+/** Transcribe a recorded push-to-talk utterance; resolves to the text. */
+export async function transcribeSpeech(blob: Blob): Promise<string> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+    body: blob,
+  });
+  if (!r.ok) {
+    const detail = await r.json().then(j => j.detail).catch(() => r.statusText);
+    throw new Error(`Transcription failed: ${detail}`);
+  }
+  return (await r.json()).text ?? '';
+}
+
 export interface VoiceHealth { status: string; detail?: string | null; voices: string[] }
 
 /** Kokoro status + available voice ids (for the Settings voice picker). */
@@ -81,11 +95,12 @@ export type ChatEvent =
   | { type: 'error'; error: string }
   | { type: 'done' };
 
-export async function* streamChat(message: string, conversationId?: string): AsyncGenerator<ChatEvent> {
+export async function* streamChat(message: string, conversationId?: string,
+                                  source?: string): AsyncGenerator<ChatEvent> {
   const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
+    body: JSON.stringify({ message, conversation_id: conversationId, source }),
   });
 
   if (!response.ok || !response.body) {

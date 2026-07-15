@@ -1,17 +1,19 @@
-"""Voice API — phase 1: spoken replies (TTS only).
+"""Voice API — spoken replies (TTS) + push-to-talk transcription (STT).
 
-Plan: docs/plans/voice.md. The frontend sentence-buffers the chat SSE
-deltas and calls /tts per sentence; later phases add the mic WebSocket.
+Plan: docs/plans/voice.md. Phase 1: the frontend sentence-buffers the chat
+SSE deltas and calls /tts per sentence. Phase 2: a recorded push-to-talk
+utterance is POSTed to /transcribe, proxied to whisper.
 
-    POST /api/v1/voice/tts    {"text": ..., "voice"?: ..., "speed"?: ...}
-                              -> audio/wav (24 kHz mono s16le)
-    GET  /api/v1/voice/health -> kokoro status + voice list (Settings UI)
+    POST /api/v1/voice/tts        {"text": ..., "voice"?, "speed"?}
+                                  -> audio/wav (24 kHz mono s16le)
+    GET  /api/v1/voice/health     -> kokoro status + voice list (Settings UI)
+    POST /api/v1/voice/transcribe (raw audio body) -> {"text", "language"}
 """
 
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -25,6 +27,10 @@ router = APIRouter()
 _UNREACHABLE = (
     "TTS engine unreachable at {url} — is the voice profile running? "
     "(docker compose --profile voice up -d kokoro)"
+)
+_STT_UNREACHABLE = (
+    "STT engine unreachable at {url} — is the voice profile running? "
+    "(docker compose --profile voice up -d whisper)"
 )
 
 
@@ -70,3 +76,28 @@ async def tts(req: TTSRequest):
         log.warning("kokoro /tts %s: %s", r.status_code, detail)
         raise HTTPException(status_code=r.status_code, detail=f"TTS engine: {detail}")
     return Response(content=r.content, media_type="audio/wav")
+
+
+@router.post("/api/v1/voice/transcribe")
+async def transcribe(request: Request):
+    """Proxy a recorded push-to-talk utterance to whisper. The browser sends
+    the raw MediaRecorder blob (webm/opus, mp4, …); whisper's PyAV decodes it."""
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="no audio")
+    content_type = request.headers.get("content-type", "application/octet-stream")
+    try:
+        # generous timeout covers first-call model download/warmup
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{settings.whisper_url}/transcribe",
+                                  content=audio,
+                                  headers={"content-type": content_type})
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=_STT_UNREACHABLE.format(url=settings.whisper_url) + f" ({e})")
+    if r.status_code != 200:
+        detail = r.text[:300]
+        log.warning("whisper /transcribe %s: %s", r.status_code, detail)
+        raise HTTPException(status_code=r.status_code, detail=f"STT engine: {detail}")
+    return r.json()

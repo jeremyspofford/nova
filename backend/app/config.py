@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # Voice (optional `voice` compose profile; plan: docs/plans/voice.md)
     kokoro_url: str = "http://kokoro:8880"
+    whisper_url: str = "http://whisper:9000"
 
     # Memory
     okf_memory_dir: str = "./data/memory"

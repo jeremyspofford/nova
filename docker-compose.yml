@@ -122,6 +122,21 @@ services:
       - kokoro_models:/models
     restart: unless-stopped
 
+  # Nova's ears (optional, same `voice` profile): faster-whisper STT for
+  # push-to-talk. CPU + int8 by default (sub-second for short utterances);
+  # model files download to the volume on first start. Set WHISPER_MODEL to
+  # trade speed for accuracy (tiny|base|small|medium).
+  whisper:
+    build: ./whisper
+    profiles: ["voice"]
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - whisper_models:/models
+    restart: unless-stopped
+
   searxng:
     image: searxng/searxng:latest
     environment:
@@ -160,3 +175,4 @@ volumes:
   ollama_models:
   tailscale_state:
   kokoro_models:
+  whisper_models:

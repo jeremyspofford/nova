@@ -149,12 +149,24 @@ markdown/code fences before synthesis (code blocks are summarized as
      send a chat message and hear the new voice; set the override and
      confirm (via the SSE `meta.model`) that a `source:"voice"` request
      uses it while typed chat does not.
-2. **PTT STT.** whisper service (`/transcribe` only) + WS endpoint + worklet
-   capture + hold-to-talk → transcript → normal chat turn → spoken reply.
-   Full loop with zero wake-word complexity.
+2. **PTT STT.** whisper service (`/transcribe`) + hold-to-talk → transcript
+   → normal chat turn → spoken reply. Full loop, zero wake-word complexity.
+   *(DONE 2026-07-15 — built on Opus. DEVIATED from the plan sketch:
+   record-then-POST, NOT a WebSocket/worklet. Rationale: a PTT utterance is
+   bounded and faster-whisper transcribes a whole clip in one shot, so
+   streaming frames buy nothing here; the WS/worklet is deferred to phase 3
+   where continuous VAD actually needs frame-level capture. Implementation:
+   `whisper` compose service (faster-whisper base/int8 CPU + silero
+   vad_filter), backend `POST /api/v1/voice/transcribe` proxy, frontend
+   MediaRecorder capture (`src/voice/mic.ts`) + a hold-to-talk mic button;
+   the transcript posts as a `source:"voice"` turn and the reply is always
+   spoken (voice in → voice out). Live-verified end-to-end via a headless
+   fake-audio device, incl. the :8080 phone path. Whisper on GPU is a clean
+   additive follow-up — matters more for video ingestion's long audio.)*
 3. **VAD endpointing.** whisper `WS /listen` with silero — PTT becomes
    tap-to-talk (auto end on silence). Tune: 300 ms min speech, ~700 ms
-   silence to endpoint.
+   silence to endpoint. NOTE: this is where the WebSocket + AudioWorklet
+   frame capture (deferred from phase 2) gets built.
 4. **Wake word.** openWakeWord on the continuous stream; "Nova" custom or
    nearest prebuilt model to start; sensitivity setting; barge-in (wake or
    PTT during speech cancels playback). This phase is the UX polish loop —

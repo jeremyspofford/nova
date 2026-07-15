@@ -6,6 +6,8 @@ import {
 import { Markdown } from '../components/Markdown';
 import { displayName } from '../names';
 import { speaker } from '../voice/speech';
+import { Mic } from '../voice/mic';
+import { transcribeSpeech } from '../api';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -140,6 +142,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const [mainAgent, setMainAgent] = useState<{ id: string; model: string } | null>(null);
   const [speech, setSpeech] = useState(() => localStorage.getItem('nova.speech') === '1');
   const [voiceState, setVoiceState] = useState({ speaking: false, paused: false });
+  const [micState, setMicState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const mic = useRef(new Mic());
 
   function toggleSpeech() {
     const next = !speech;
@@ -147,6 +151,41 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     localStorage.setItem('nova.speech', next ? '1' : '0');
     if (next) speaker.enable();     // inside the click gesture — autoplay policy
     else speaker.disable();
+  }
+
+  // push-to-talk: hold the mic, speak, release → transcribe → voice turn.
+  // The reply is always spoken (voice in implies voice out), so entering PTT
+  // flips the speech toggle on and turns on the speaker within this gesture.
+  async function pttStart(e: React.PointerEvent) {
+    if (busy || micState !== 'idle') return;
+    // release fires on this element even if the pointer drifts off it
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
+    speaker.enable();               // reserve the audio context in the gesture
+    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    try {
+      await mic.current.start();
+      setMicState('recording');
+    } catch (err) {
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Microphone unavailable: ${err instanceof Error ? err.message : String(err)}` }]);
+    }
+  }
+
+  async function pttEnd() {
+    if (micState !== 'recording') { mic.current.cancel(); return; }
+    setMicState('transcribing');
+    try {
+      const blob = await mic.current.stop();
+      const text = await transcribeSpeech(blob);
+      setMicState('idle');
+      if (text.trim()) await send({ text, source: 'voice', speak: true });
+      else setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: "Didn't catch that — try holding the mic a moment longer." }]);
+    } catch (err) {
+      setMicState('idle');
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Transcription failed: ${err instanceof Error ? err.message : String(err)}` }]);
+    }
   }
 
   useEffect(() => {
@@ -214,28 +253,30 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
-  async function send() {
-    const message = input.trim();
+  async function send(opts?: { text?: string; source?: string; speak?: boolean }) {
+    const message = (opts?.text ?? input).trim();
     if (!message || busy) return;
-    setInput('');
+    if (opts?.text === undefined) setInput('');   // voice passes its own text
     setBusy(true);
+    // voice turns speak the reply even if the mute toggle is off
+    const speakThisTurn = opts?.speak ?? speech;
 
     setItems(prev => [...prev, { id: uid(), kind: 'msg', role: 'user', content: message }]);
     const assistantId = uid();
     setItems(prev => [...prev, { id: assistantId, kind: 'msg', role: 'assistant', content: '', streaming: true }]);
 
     speaker.cancel();               // a new turn silences the previous one
-    if (speech) speaker.enable();   // send is a gesture too — covers page reloads
+    if (speakThisTurn) speaker.enable();   // gesture-adjacent — covers autoplay
 
     const appendToAssistant = (text: string) =>
       setItems(prev => prev.map(it =>
         it.id === assistantId && it.kind === 'msg' ? { ...it, content: it.content + text } : it));
 
     try {
-      for await (const event of streamChat(message, conversationId ?? undefined)) {
+      for await (const event of streamChat(message, conversationId ?? undefined, opts?.source)) {
         if (event.type === 'text') {
           appendToAssistant(event.text);
-          speaker.feed(event.text);
+          if (speakThisTurn) speaker.feed(event.text);
         } else if (event.type === 'activity') {
           // insert activity line just before the streaming assistant bubble
           setItems(prev => {
@@ -253,7 +294,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
     } finally {
-      speaker.flush();              // speak whatever the last sentence held
+      if (speakThisTurn) speaker.flush();   // speak whatever the last sentence held
       setItems(prev => prev
         .map(it => it.id === assistantId && it.kind === 'msg' ? { ...it, streaming: false } : it)
         .filter(it => !(it.id === assistantId && it.kind === 'msg' && !it.content)));
@@ -370,6 +411,22 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           title="Enter to send, Shift+Enter for a new line"
           className="flex-1 resize-none overflow-y-auto nice-scroll bg-stone-800 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
         />
+        <button
+          type="button"
+          onPointerDown={pttStart}
+          onPointerUp={pttEnd}
+          onPointerCancel={pttEnd}
+          disabled={busy || micState === 'transcribing'}
+          title="Hold to talk"
+          aria-label={micState === 'recording' ? 'Recording — release to send'
+            : micState === 'transcribing' ? 'Transcribing' : 'Hold to talk'}
+          className={`px-3 py-2 rounded text-sm transition select-none touch-none ${
+            micState === 'recording' ? 'bg-red-600 text-white animate-pulse'
+              : micState === 'transcribing' ? 'bg-stone-700 text-stone-400'
+                : 'bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50'}`}
+        >
+          {micState === 'transcribing' ? '…' : '🎤'}
+        </button>
         <button
           type="submit"
           disabled={busy || !input.trim()}
