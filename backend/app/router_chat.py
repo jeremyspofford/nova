@@ -57,6 +57,15 @@ async def chat_stream(request: ChatRequest):
     if not main_agent:
         raise HTTPException(status_code=500, detail="main agent missing from registry")
 
+    # Voice-initiated turns may answer with a dedicated model (Settings →
+    # Voice → "Voice reply model") — a faster/chattier LLM when spoken to,
+    # without touching the agent's own model. Empty override = same as chat.
+    # Shallow-copy so the registry dict is never mutated.
+    if request.source == "voice":
+        override = settings_store.get("voice.model_override")
+        if override:
+            main_agent = {**main_agent, "model": override}
+
     model_eff = effective_model(main_agent["model"])
     total_budget = settings_store.get(
         "context.budget_ollama" if model_eff.startswith("ollama:")

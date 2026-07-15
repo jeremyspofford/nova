@@ -13,6 +13,7 @@ from app import db, model_warmer, rules, scheduler, settings_store
 from app.config import settings
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
+from app.router_voice import router as voice_router
 
 logging.basicConfig(level=settings.get_log_level())
 log = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ async def auth_middleware(request: Request, call_next):
 
 
 app.include_router(chat_router)
+app.include_router(voice_router)
 
 
 @app.get("/health")

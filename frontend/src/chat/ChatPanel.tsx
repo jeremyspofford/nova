@@ -5,6 +5,7 @@ import {
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { displayName } from '../names';
+import { speaker } from '../voice/speech';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -137,6 +138,21 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   // model picker — changes main's model live (applies on the next turn)
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [mainAgent, setMainAgent] = useState<{ id: string; model: string } | null>(null);
+  const [speech, setSpeech] = useState(() => localStorage.getItem('nova.speech') === '1');
+  const [voiceState, setVoiceState] = useState({ speaking: false, paused: false });
+
+  function toggleSpeech() {
+    const next = !speech;
+    setSpeech(next);
+    localStorage.setItem('nova.speech', next ? '1' : '0');
+    if (next) speaker.enable();     // inside the click gesture — autoplay policy
+    else speaker.disable();
+  }
+
+  useEffect(() => {
+    speaker.onChange = setVoiceState;
+    return () => { speaker.onChange = undefined; };
+  }, []);
 
   useEffect(() => {
     getModels().then(setModels).catch(() => {});
@@ -208,6 +224,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     const assistantId = uid();
     setItems(prev => [...prev, { id: assistantId, kind: 'msg', role: 'assistant', content: '', streaming: true }]);
 
+    speaker.cancel();               // a new turn silences the previous one
+    if (speech) speaker.enable();   // send is a gesture too — covers page reloads
+
     const appendToAssistant = (text: string) =>
       setItems(prev => prev.map(it =>
         it.id === assistantId && it.kind === 'msg' ? { ...it, content: it.content + text } : it));
@@ -216,6 +235,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       for await (const event of streamChat(message, conversationId ?? undefined)) {
         if (event.type === 'text') {
           appendToAssistant(event.text);
+          speaker.feed(event.text);
         } else if (event.type === 'activity') {
           // insert activity line just before the streaming assistant bubble
           setItems(prev => {
@@ -233,6 +253,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
     } finally {
+      speaker.flush();              // speak whatever the last sentence held
       setItems(prev => prev
         .map(it => it.id === assistantId && it.kind === 'msg' ? { ...it, streaming: false } : it)
         .filter(it => !(it.id === assistantId && it.kind === 'msg' && !it.content)));
@@ -283,6 +304,36 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
               )}
             </select>
           )}
+          {speech && voiceState.speaking && (
+            <>
+              <button
+                onClick={() => (voiceState.paused ? speaker.resume() : speaker.pause())}
+                className="text-base leading-none px-1.5 py-0.5 rounded border border-teal-700 text-teal-400"
+                title={voiceState.paused ? 'Resume speaking' : 'Pause speaking'}
+                aria-label={voiceState.paused ? 'Resume speaking' : 'Pause speaking'}
+              >
+                {voiceState.paused ? '▶️' : '⏸️'}
+              </button>
+              <button
+                onClick={() => speaker.cancel()}
+                className="text-base leading-none px-1.5 py-0.5 rounded border border-stone-700 text-stone-400 hover:text-red-400"
+                title="Stop speaking (skip the rest)"
+                aria-label="Stop speaking"
+              >
+                ⏹️
+              </button>
+            </>
+          )}
+          <button
+            onClick={toggleSpeech}
+            className={`text-base leading-none px-1.5 py-0.5 rounded border ${
+              speech ? 'border-teal-700 text-teal-400' : 'border-stone-700 text-stone-500'}`}
+            title={speech ? 'Nova speaks her replies — click to mute'
+                          : 'Speak replies aloud (needs the voice compose profile)'}
+            aria-label={speech ? 'Mute spoken replies' : 'Speak replies aloud'}
+          >
+            {speech ? '🔊' : '🔇'}
+          </button>
           <span className="text-xs text-stone-500 shrink-0">{busy ? 'thinking…' : 'ready'}</span>
         </div>
       </header>

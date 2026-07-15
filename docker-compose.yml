@@ -109,6 +109,19 @@ services:
       - web
     restart: unless-stopped
 
+  # Nova's voice (optional): docker compose --profile voice up -d
+  # Local Kokoro TTS (kokoro-onnx, CPU — faster than realtime on a modern
+  # CPU; no GPU wiring needed). Model files (~340 MB) download to the
+  # volume on first start; watch `docker compose logs -f kokoro`.
+  kokoro:
+    build: ./kokoro
+    profiles: ["voice"]
+    ports:
+      - "127.0.0.1:8880:8880"
+    volumes:
+      - kokoro_models:/models
+    restart: unless-stopped
+
   searxng:
     image: searxng/searxng:latest
     environment:
@@ -146,3 +159,4 @@ volumes:
   postgres_data:
   ollama_models:
   tailscale_state:
+  kokoro_models:

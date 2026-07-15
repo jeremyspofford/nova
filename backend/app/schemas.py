@@ -8,6 +8,9 @@ class ChatRequest(BaseModel):
     """Chat request payload."""
     message: str
     conversation_id: Optional[str] = None
+    # "voice" = the turn was initiated by speaking (phase 2+); lets the main
+    # agent answer with the voice.model_override LLM. Typed chat leaves it None.
+    source: Optional[str] = None
 
 
 class ConversationInfo(BaseModel):

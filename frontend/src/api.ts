@@ -29,6 +29,30 @@ async function apiFetch(input: string, init: RequestInit = {}): Promise<Response
   return r;
 }
 
+/** Synthesize one sentence of speech; resolves to WAV bytes.
+ *  `voice` overrides the saved setting (used to preview a candidate). */
+export async function synthesizeSpeech(text: string, voice?: string): Promise<ArrayBuffer> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(voice ? { text, voice } : { text }),
+  });
+  if (!r.ok) {
+    const detail = await r.json().then(j => j.detail).catch(() => r.statusText);
+    throw new Error(`TTS failed: ${detail}`);
+  }
+  return r.arrayBuffer();
+}
+
+export interface VoiceHealth { status: string; detail?: string | null; voices: string[] }
+
+/** Kokoro status + available voice ids (for the Settings voice picker). */
+export async function getVoiceHealth(): Promise<VoiceHealth> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/health`);
+  if (!r.ok) throw new Error(`voice health failed: ${r.status}`);
+  return r.json();
+}
+
 /** true = authorized (or auth disabled); false = the token gate is up. */
 export async function checkAuth(): Promise<boolean> {
   const r = await apiFetch(`${API_URL}/api/v1/settings`);

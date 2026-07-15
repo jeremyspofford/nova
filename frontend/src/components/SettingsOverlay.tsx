@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AgentInfo, Automation, BundledInferenceStatus, CuratedModel, DbToolInfo,
   ModelBudget, ModelInfo, ModelRecommendation, ProbeResult,
@@ -9,9 +9,10 @@ import {
   deleteSkill, deleteTool, getAgents, getAutomations, getBundledInference,
   getCuratedModels, getMemoryItem, getModelBudget, getModels,
   getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
-  getTools, patchAgent,
+  getTools, getVoiceHealth, patchAgent,
   patchAutomation, patchCuratedModel, patchRule, patchSettings, patchTool,
-  pullModel, setBundledInference, testModel, uninstallModel, updateSkill,
+  pullModel, setBundledInference, synthesizeSpeech, testModel, uninstallModel,
+  updateSkill,
 } from '../api';
 import { Markdown } from './Markdown';
 import qrcode from 'qrcode-generator';
@@ -163,6 +164,9 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
         </div>
       );
     }
+    if (d.key === 'voice.tts_voice') {
+      return <VoiceField value={String(d.value)} onSelect={v => save(d.key, v)} />;
+    }
     if (d.type === 'boolean') {
       return (
         <button
@@ -271,6 +275,84 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
         </section>
       ))}
       {status && <div className="text-xs text-teal-400">{status}</div>}
+    </div>
+  );
+}
+
+/** Voice picker fed by the kokoro /health voice list, with an inline
+ *  preview so you can hear a candidate before saving. Falls back to a
+ *  free-text input when the voice service isn't running. */
+function VoiceField({ value, onSelect }: { value: string; onSelect: (v: string) => void }) {
+  const [voices, setVoices] = useState<string[]>([]);
+  const [status, setStatus] = useState('');
+  const [previewing, setPreviewing] = useState(false);
+  const ctxRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    getVoiceHealth()
+      .then(h => {
+        setVoices(h.voices);
+        if (h.status !== 'ready') {
+          setStatus(h.status === 'unreachable'
+            ? 'voice service not running (compose profile "voice")'
+            : `voice service ${h.status}…`);
+        }
+      })
+      .catch(() => setStatus('voice service unavailable'));
+  }, []);
+
+  async function preview() {
+    if (previewing) return;
+    setPreviewing(true);
+    setStatus('');
+    try {
+      // the click is a user gesture — safe to create/resume the context here
+      if (!ctxRef.current) ctxRef.current = new AudioContext();
+      await ctxRef.current.resume();
+      const wav = await synthesizeSpeech("Hi, I'm Nova — this is how I sound.", value);
+      const buf = await ctxRef.current.decodeAudioData(wav);
+      const src = ctxRef.current.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctxRef.current.destination);
+      src.onended = () => setPreviewing(false);
+      src.start();
+    } catch (e) {
+      setStatus(String(e));
+      setPreviewing(false);
+    }
+  }
+
+  return (
+    <div className="shrink-0 flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2">
+        {voices.length > 0 ? (
+          <select
+            value={value}
+            onChange={e => onSelect(e.target.value)}
+            className="max-w-[12rem] bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+          >
+            {voices.map(v => <option key={v} value={v}>{v}</option>)}
+            {value && !voices.includes(value) && (
+              <option value={value}>{value} (unknown)</option>
+            )}
+          </select>
+        ) : (
+          <input
+            className="w-40 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200 text-right focus:outline-none focus:ring-1 focus:ring-teal-500"
+            defaultValue={value}
+            onBlur={e => { const v = e.target.value.trim(); if (v !== value) onSelect(v); }}
+          />
+        )}
+        <button
+          onClick={preview}
+          disabled={previewing}
+          title="Hear this voice"
+          className="text-xs px-2 py-1 rounded border border-stone-600 text-stone-300 hover:text-teal-300 hover:border-teal-800 disabled:opacity-50"
+        >
+          {previewing ? '▶ playing…' : '▶ preview'}
+        </button>
+      </div>
+      {status && <span className="text-[11px] text-amber-400/90 text-right max-w-[16rem]">{status}</span>}
     </div>
   );
 }

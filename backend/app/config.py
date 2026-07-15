@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Web search (bundled SearXNG primary; keyless DDG fallback lives in code)
     searxng_url: str = "http://searxng:8080"
 
+    # Voice (optional `voice` compose profile; plan: docs/plans/voice.md)
+    kokoro_url: str = "http://kokoro:8880"
+
     # Memory
     okf_memory_dir: str = "./data/memory"
     memory_context_max_chars: int = 4000

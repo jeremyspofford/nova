@@ -108,6 +108,20 @@ SETTING_DEFS: list[dict] = [
      "min": 60, "max": 900, "section": "Automations",
      "label": "Run timeout (seconds)",
      "description": "Hard cap on a single automation run."},
+    # ── Voice (phase 1: spoken replies; plan: docs/plans/voice.md) ───────
+    {"key": "voice.tts_voice", "type": "string", "default": "af_heart",
+     "section": "Voice", "label": "Nova's voice",
+     "description": ("Kokoro voice id for spoken replies (e.g. af_heart, af_bella, "
+                     "am_adam — full list at /api/v1/voice/health).")},
+    {"key": "voice.tts_speed", "type": "number", "default": 1.0,
+     "min": 0.5, "max": 2.0, "section": "Voice", "label": "Speaking speed",
+     "description": "Speech rate multiplier for synthesized replies."},
+    {"key": "voice.model_override", "type": "model", "default": "",
+     "model_scope": "any", "allow_empty": True,
+     "section": "Voice", "label": "Voice reply model",
+     "description": ("LLM used when a turn is started by voice (empty = the "
+                     "main agent's model). Pick a faster/more conversational "
+                     "model for spoken exchanges without changing the agent.")},
 ]
 
 _DEFS = {d["key"]: d for d in SETTING_DEFS}
