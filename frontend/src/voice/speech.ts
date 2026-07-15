@@ -64,15 +64,26 @@ function addSeriesAnd(text: string): string {
 
 export function normalizeForSpeech(text: string): string {
   return addSeriesAnd(text
-    // symbols first: "%"/"&" need the adjacent digit before the number rules
-    // rewrite it (e.g. "99.5%" -> percent, then the decimal becomes words)
+    // units & symbols → spoken words FIRST, so a number glued to a unit
+    // ("85.4°F", "19.9 mph") separates and the number rules can then see it
+    .replace(/°\s*F\b/gi, ' degrees Fahrenheit')
+    .replace(/°\s*C\b/gi, ' degrees Celsius')
+    .replace(/℉/g, ' degrees Fahrenheit')
+    .replace(/℃/g, ' degrees Celsius')
+    .replace(/°/g, ' degrees')
+    .replace(/\bmph\b/gi, ' miles per hour')
+    .replace(/\b(?:km\/h|kph)\b/gi, ' kilometers per hour')
     .replace(/(\d)\s*%/g, '$1 percent')
     .replace(/\s*&\s*/g, ' and ')
     // comma-grouped integers: 10,000 / 1,234,567 -> words (the main complaint)
     .replace(/\b\d{1,3}(?:,\d{3})+\b/g, m => intToWords(parseInt(m.replace(/,/g, ''), 10)))
-    // decimals: 3.5 -> "three point five" (fraction read as digits)
-    .replace(/\b(\d+)\.(\d+)\b/g, (_, i: string, f: string) =>
-      `${intToWords(parseInt(i, 10))} point ${[...f].map(d => ONES[+d]).join(' ')}`));
+    // decimals: 3.5 -> "three point five"; a whole ".0" drops ("63.0" ->
+    // "sixty-three"). Lookahead (not \b) so a number touching a unit letter
+    // still converts, while version numbers like 1.2.3 stay untouched.
+    .replace(/\b(\d+)\.(\d+)(?![.\d])/g, (_, i: string, f: string) =>
+      /^0+$/.test(f)
+        ? intToWords(parseInt(i, 10))
+        : `${intToWords(parseInt(i, 10))} point ${[...f].map(d => ONES[+d]).join(' ')}`));
 }
 
 /** Markdown reads terribly aloud — strip it; code is summarized. Emojis are

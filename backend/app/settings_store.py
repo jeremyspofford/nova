@@ -86,6 +86,11 @@ SETTING_DEFS: list[dict] = [
      "label": "Label text size",
      "description": "Scales all graph label text."},
     # ── Operator ─────────────────────────────────────────────────────────
+    {"key": "nova.timezone", "type": "string", "default": "America/New_York",
+     "section": "Operator", "label": "Timezone",
+     "description": ("IANA timezone (e.g. America/New_York) Nova treats as "
+                     "'local' for dates, times, and today/tomorrow. The server "
+                     "runs UTC, so this is the source of truth for the clock.")},
     {"key": "ui.public_url", "type": "string", "default": "",
      "section": "Operator", "label": "Public URL (for phone setup)",
      "description": ("The URL other devices use to reach Nova, e.g. "
@@ -122,6 +127,16 @@ SETTING_DEFS: list[dict] = [
      "description": ("LLM used when a turn is started by voice (empty = the "
                      "main agent's model). Pick a faster/more conversational "
                      "model for spoken exchanges without changing the agent.")},
+    {"key": "voice.listen_mode", "type": "enum", "default": "ptt",
+     "options": ["ptt", "tap"], "section": "Voice", "label": "Mic mode",
+     "description": ("How the mic button works. Hold-to-talk always works; "
+                     "tap-to-talk auto-stops when you pause, using an "
+                     "in-browser speech detector.")},
+    {"key": "voice.vad_silence_ms", "type": "number", "default": 1100,
+     "min": 500, "max": 2500, "section": "Voice",
+     "label": "Tap-to-talk pause tolerance (ms)",
+     "description": ("How long a silence ends your turn in tap-to-talk. Higher "
+                     "= more forgiving of mid-sentence pauses before Nova answers.")},
 ]
 
 _DEFS = {d["key"]: d for d in SETTING_DEFS}

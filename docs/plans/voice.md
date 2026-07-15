@@ -11,10 +11,18 @@ one phase per session). Decisions below marked LOCKED were made by Jeremy on
 - **TTS**: local Kokoro-class as the batteries-included default; premium
   cloud voices (ElevenLabs/OpenAI) as *keyed opt-in extras* — never required
   (product principle: no API-key collecting).
-- **Interaction**: wake word ("Nova …") is the target UX. Wake detection
-  runs SERVER-side (openWakeWord-class, tiny CPU) on a continuous mic
-  stream while the app is OPEN. Push-to-talk ships anyway as the built-in
-  fallback (same capture path) for mic-denied/failed-wake cases.
+- **Interaction**: wake word ("Nova …") is the target UX, while the app
+  is OPEN. Push-to-talk ships as the built-in fallback for
+  mic-denied/failed-wake cases. UPDATED 2026-07-15 (supersedes the
+  2026-07-14 "wake runs server-side" call): **the listening engine is
+  user-selectable** — on-device (browser, keyless, continuous audio never
+  leaves the device; the privacy-first DEFAULT) or on-server (turnkey,
+  robust, streams the mic over the tailnet WS while the app is open).
+  Nova ships BOTH; Settings presents honest per-option requirements and
+  readiness ("what you need for this to work"), the same hybrid shape as
+  bundled-vs-external inference. Tap-to-talk (plain VAD endpointing) is
+  browser-only by design — a server variant would add a WS stack for zero
+  quality gain.
 - **Streaming**: sentence-buffered TTS — Nova starts speaking before the
   reply finishes (v0.1.0-alpha had this recipe; mine `git show
   v0.1.0-alpha` for ideas only, never code).
@@ -106,12 +114,16 @@ markdown/code fences before synthesis (code blocks are summarized as
   `voice.enabled`, `voice.mode`, `voice.tts_engine` (`kokoro` |
   `elevenlabs` | `openai`), `voice.tts_voice`, `voice.tts_speed`,
   `voice.stt_model` (whisper size), `voice.wake_sensitivity`,
-  `voice.model_override` (see phase 1b).
+  `voice.model_override` (see phase 1b), `voice.listen_mode`
+  (`ptt | tap | wake`), `voice.wake_engine` (`device | server`).
 - Swappability is a product requirement (Jeremy, 2026-07-15): when better
   voice/LLM models come out, replacing them must be a UI action, never a
-  code change — the engine setting, the voice picker, and the model
-  override are the three swap points, and every new engine/backend must
-  slot into them rather than adding parallel config.
+  code change — the engine setting, the voice picker, the model override,
+  and (added 2026-07-15) the listening choices `voice.listen_mode` +
+  `voice.wake_engine` are the swap points; every new engine/backend must
+  slot into them rather than adding parallel config. Options with unmet
+  prerequisites render their requirements ("what you need"), not a
+  silent failure.
 - Phone path: everything must work through `web:8080` same-origin — nginx
   needs `proxy_set_header Upgrade/Connection` for the WS route (check
   `frontend/` nginx conf, target `web`). Verify on the actual phone over
@@ -163,14 +175,71 @@ markdown/code fences before synthesis (code blocks are summarized as
    spoken (voice in → voice out). Live-verified end-to-end via a headless
    fake-audio device, incl. the :8080 phone path. Whisper on GPU is a clean
    additive follow-up — matters more for video ingestion's long audio.)*
-3. **VAD endpointing.** whisper `WS /listen` with silero — PTT becomes
-   tap-to-talk (auto end on silence). Tune: 300 ms min speech, ~700 ms
-   silence to endpoint. NOTE: this is where the WebSocket + AudioWorklet
-   frame capture (deferred from phase 2) gets built.
-4. **Wake word.** openWakeWord on the continuous stream; "Nova" custom or
-   nearest prebuilt model to start; sensitivity setting; barge-in (wake or
-   PTT during speech cancels playback). This phase is the UX polish loop —
-   budget iteration time.
+3. **Tap-to-talk — browser VAD endpointing (frontend-only).** silero-vad
+   runs IN the browser (onnxruntime-web/WASM; the `@ricky0123/vad-web`
+   wrapper is the known-good path — but SELF-HOST its model + worklet
+   assets with the app, never its CDN defaults: batteries-included and
+   no runtime third-party fetches). Tap to arm → speak → auto-endpoint on
+   ~700 ms silence (300 ms min speech) → the captured utterance takes the
+   SAME blob→/transcribe→`source:"voice"` path phase 2 built. ZERO
+   backend changes; no server variant on purpose (silero is silero on
+   either side — a server version would only add transport). UI: the mic
+   button becomes mode-aware via `voice.listen_mode` (hold=ptt /
+   tap=arm), with visible armed/capturing states. Settings hint: modern
+   browser (WASM SIMD), ~2 MB one-time model download (PWA-cached), mic
+   requires the secure context the tailnet HTTPS already provides.
+   *(DONE 2026-07-15 — built on Opus. vad-web 0.0.30 + onnxruntime-web
+   1.27; four assets self-hosted under `frontend/public/vad/` (worklet +
+   silero_vad_v5.onnx + ort simd wasm/mjs, ~15 MB — the ORT wasm is the
+   bulk, not ~2 MB; hint copy updated to say so). `src/voice/vad.ts`
+   (dynamic-imported so ORT stays out of the main bundle), `voice.listen_mode`
+   enum (ptt|tap, default ptt) + a friendly Settings selector with the
+   honest requirement hint. THREE gotchas fixed & worth remembering: (1)
+   Vite dev 500s transforming ORT's `.mjs` glue → a `configureServer`
+   middleware serves `/vad/*.mjs` raw; (2) nginx must give `/vad/` .js+.mjs
+   a JS MIME and .wasm application/wasm or addModule/import reject them
+   (a location-level `types{}` REPLACES the global map — list js too); (3)
+   calling the VAD's `destroy()` from inside its own `onSpeechEnd` callback
+   wedges the async continuation — defer with `setTimeout(0)`. Workbox
+   `globIgnores: ['**/vad/**']` keeps the 13.5 MB wasm out of precache.
+   Live-verified on :5173 AND :8080 via a headless fake-audio device:
+   tap→speech→endpoint→transcript→spoken reply, source:"voice", and
+   ZERO third-party hosts contacted.)*
+4. **Wake word ("Nova") — dual engine, user's choice.**
+   - *4·0 — the "Nova" model (shared prerequisite, both engines)*:
+     openWakeWord has no pretrained "Nova". Train it locally with the
+     openWakeWord recipe — synthetic positives generated by the bundled
+     TTS (54 kokoro voices × speed/pitch jitter), standard negatives; the
+     3090 handles training. Artifact is a small ONNX shipped with the
+     app/backend (self-hosted). Until it exists, the nearest pretrained
+     model ("hey Jarvis") stands in behind the same setting, clearly
+     labeled as such in the UI.
+   - *4a — on-device engine (privacy-first default)*: openWakeWord's
+     pipeline (melspec → embedding → wake head) via onnxruntime-web,
+     assets self-hosted (~10 MB, PWA-cached). Listens only while the app
+     is open and `listen_mode=wake`; a wake fire arms the phase-3 VAD
+     capture → same transcribe path. Continuous audio NEVER leaves the
+     device. Hints: model download size, phone battery cost,
+     foreground-only (the PWA platform limit).
+   - *4b — on-server engine (robust alternative)*: this is where the
+     WebSocket finally earns its build: AudioWorklet 16 kHz s16 frames →
+     `WS /api/v1/voice/listen` (auth via `?token=` — browsers can't set
+     WS headers; nginx on :8080 needs Upgrade/Connection headers) →
+     silero + openWakeWord inside the whisper service → events back
+     (`wake`, `speech_end`, `transcript`). Hints: voice profile must be
+     running; the mic streams to your Nova continuously while the app is
+     open (~32 KB/s — trivial on the tailnet at home, ~115 MB/hour on
+     cellular).
+   - `voice.wake_engine` (`device | server`): Settings shows both with
+     honest requirement copy + a readiness dot each (model
+     downloaded/trained? voice profile up?); an option whose
+     prerequisites are missing shows what's needed instead of failing
+     silently.
+   - *Barge-in (both engines)*: a wake fire — or any PTT/tap capture —
+     during playback cancels the current speech.
+   - De-risk: if the 4a browser port fights back, ship 4b first — the
+     setting's shape doesn't change and 4a slots in later. This phase is
+     the UX polish loop; budget iteration time for wake accuracy.
 5. **Keyed cloud TTS (opt-in extra)** behind the same engine interface;
    secrets via the admin secrets pattern, never in requests to the LLM
    (guardian rule).

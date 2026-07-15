@@ -1,9 +1,35 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { createReadStream } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+// The onnxruntime-web loader does a runtime `import()` of its .mjs glue; the
+// Vite DEV server otherwise tries to transform that emscripten module and
+// 500s ("no available backend"). Serve the self-hosted /vad/ .mjs raw.
+// Production (nginx :8080) already serves it statically, so this is dev-only.
+function serveVadAssetsRaw(): Plugin {
+  const publicDir = path.dirname(fileURLToPath(import.meta.url))
+  return {
+    name: 'serve-vad-mjs-raw',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url?.split('?')[0]
+        if (url && url.startsWith('/vad/') && url.endsWith('.mjs')) {
+          res.setHeader('Content-Type', 'text/javascript')
+          createReadStream(path.join(publicDir, 'public', url)).pipe(res)
+          return
+        }
+        next()
+      })
+    },
+  }
+}
 
 export default defineConfig({
   plugins: [
+    serveVadAssetsRaw(),
     react(),
     VitePWA({
       registerType: 'autoUpdate',
@@ -25,6 +51,9 @@ export default defineConfig({
         // cache the app shell only — chat is useless offline, don't pretend
         navigateFallbackDenylist: [/^\/api/, /^\/health/],
         runtimeCaching: [],
+        // the self-hosted VAD assets (~15 MB wasm + model) load on demand and
+        // browser-cache — never precache them into the service worker
+        globIgnores: ['**/vad/**'],
       },
     }),
   ],

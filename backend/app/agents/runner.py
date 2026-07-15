@@ -14,9 +14,11 @@ Sub-agents get their own allowed_tools, minus dispatch — depth is capped at 1.
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import AsyncIterator, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app import narration
+from app import narration, settings_store
 from app.config import settings
 from app.llm import router as llm_router
 from app.memory.memory import memory
@@ -27,9 +29,25 @@ log = logging.getLogger(__name__)
 MAX_DISPATCH_DEPTH = 1
 
 
+def _now_block() -> str:
+    """The current date/time in the operator's timezone — injected fresh every
+    turn so Nova never has to guess the date from memories (it got the weekday
+    wrong doing that). The server clock is UTC, so the tz setting is authoritative."""
+    tz_name = settings_store.get("nova.timezone") or "America/New_York"
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = ZoneInfo("America/New_York")
+    now = datetime.now(tz)
+    return ("## Current date and time\n"
+            f"Right now it is {now:%A, %B %-d, %Y, %-I:%M %p %Z}. This is the "
+            "authoritative current time — use it for today/tomorrow/dates; do "
+            "not infer the date from memories or the conversation.")
+
+
 async def _build_system_prompt(agent: dict, query: str,
                                include_index: bool = False) -> str:
-    parts = [agent["system_prompt"]]
+    parts = [agent["system_prompt"], _now_block()]
     try:
         soul = await memory.soul()
         if soul:

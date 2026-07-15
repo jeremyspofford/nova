@@ -7,7 +7,8 @@ import { Markdown } from '../components/Markdown';
 import { displayName } from '../names';
 import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
-import { transcribeSpeech } from '../api';
+import { transcribeSpeech, getSettings } from '../api';
+import type { TapVad } from '../voice/vad';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
@@ -142,8 +143,29 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const [mainAgent, setMainAgent] = useState<{ id: string; model: string } | null>(null);
   const [speech, setSpeech] = useState(() => localStorage.getItem('nova.speech') === '1');
   const [voiceState, setVoiceState] = useState({ speaking: false, paused: false });
-  const [micState, setMicState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const [micState, setMicState] = useState<
+    'idle' | 'recording' | 'arming' | 'armed' | 'capturing' | 'transcribing'>('idle');
+  const [listenMode, setListenMode] = useState<'ptt' | 'tap'>('ptt');
   const mic = useRef(new Mic());
+  const tapVad = useRef<TapVad | null>(null);
+  const vadSilenceMs = useRef(1100);
+
+  // mic mode + VAD tuning are shared settings — read them and track live changes
+  useEffect(() => {
+    getSettings().then(defs => {
+      const m = defs.find(d => d.key === 'voice.listen_mode')?.value;
+      if (m === 'tap' || m === 'ptt') setListenMode(m);
+      const s = defs.find(d => d.key === 'voice.vad_silence_ms')?.value;
+      if (typeof s === 'number') vadSilenceMs.current = s;
+    }).catch(() => {});
+    const onChange = (e: Event) => {
+      const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
+      if (key === 'voice.listen_mode' && (value === 'tap' || value === 'ptt')) setListenMode(value);
+      if (key === 'voice.vad_silence_ms' && typeof value === 'number') vadSilenceMs.current = value;
+    };
+    window.addEventListener('nova:setting-changed', onChange);
+    return () => window.removeEventListener('nova:setting-changed', onChange);
+  }, []);
 
   function toggleSpeech() {
     const next = !speech;
@@ -153,9 +175,63 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     else speaker.disable();
   }
 
+  // a captured utterance (from PTT or tap-VAD) → transcribe → voice turn.
+  // The reply is always spoken (voice in implies voice out).
+  async function submitUtterance(blob: Blob) {
+    setMicState('transcribing');
+    try {
+      const text = await transcribeSpeech(blob);
+      setMicState('idle');
+      if (text.trim()) await send({ text, source: 'voice', speak: true });
+      else setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: "Didn't catch that — try again." }]);
+    } catch (err) {
+      setMicState('idle');
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Transcription failed: ${err instanceof Error ? err.message : String(err)}` }]);
+    }
+  }
+
+  // ── tap-to-talk: tap arms the in-browser VAD, it auto-ends on silence ──
+  async function tapToggle() {
+    if (busy || micState === 'transcribing' || micState === 'arming') return;
+    if (micState === 'armed' || micState === 'capturing') {   // tap again = cancel
+      await tapVad.current?.disarm();
+      tapVad.current = null;
+      setMicState('idle');
+      return;
+    }
+    speaker.enable();               // reserve the audio context in the gesture
+    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    setMicState('arming');          // first use downloads the detector (~15 MB)
+    try {
+      const { TapVad } = await import('../voice/vad');
+      const v = new TapVad();
+      tapVad.current = v;
+      await v.arm({
+        onSpeechStart: () => setMicState('capturing'),
+        onMisfire: () => setMicState('armed'),
+        onSpeechEnd: (wav) => {
+          // defer out of the VAD's own callback stack before tearing it down —
+          // calling destroy() synchronously from within onSpeechEnd wedges the
+          // async continuation and the utterance never gets submitted
+          setTimeout(async () => {
+            await v.disarm();
+            tapVad.current = null;
+            await submitUtterance(wav);
+          }, 0);
+        },
+      }, { silenceMs: vadSilenceMs.current });
+      setMicState(s => (s === 'arming' ? 'armed' : s));
+    } catch (err) {
+      tapVad.current = null;
+      setMicState('idle');
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Voice detector unavailable: ${err instanceof Error ? err.message : String(err)}` }]);
+    }
+  }
+
   // push-to-talk: hold the mic, speak, release → transcribe → voice turn.
-  // The reply is always spoken (voice in implies voice out), so entering PTT
-  // flips the speech toggle on and turns on the speaker within this gesture.
   async function pttStart(e: React.PointerEvent) {
     if (busy || micState !== 'idle') return;
     // release fires on this element even if the pointer drifts off it
@@ -173,18 +249,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
 
   async function pttEnd() {
     if (micState !== 'recording') { mic.current.cancel(); return; }
-    setMicState('transcribing');
     try {
       const blob = await mic.current.stop();
-      const text = await transcribeSpeech(blob);
-      setMicState('idle');
-      if (text.trim()) await send({ text, source: 'voice', speak: true });
-      else setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: "Didn't catch that — try holding the mic a moment longer." }]);
+      await submitUtterance(blob);
     } catch (err) {
       setMicState('idle');
       setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: `Transcription failed: ${err instanceof Error ? err.message : String(err)}` }]);
+        content: `Recording failed: ${err instanceof Error ? err.message : String(err)}` }]);
     }
   }
 
@@ -413,19 +484,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         />
         <button
           type="button"
-          onPointerDown={pttStart}
-          onPointerUp={pttEnd}
-          onPointerCancel={pttEnd}
-          disabled={busy || micState === 'transcribing'}
-          title="Hold to talk"
-          aria-label={micState === 'recording' ? 'Recording — release to send'
-            : micState === 'transcribing' ? 'Transcribing' : 'Hold to talk'}
+          onClick={listenMode === 'tap' ? tapToggle : undefined}
+          onPointerDown={listenMode === 'tap' ? undefined : pttStart}
+          onPointerUp={listenMode === 'tap' ? undefined : pttEnd}
+          onPointerCancel={listenMode === 'tap' ? undefined : pttEnd}
+          disabled={busy || micState === 'transcribing' || micState === 'arming'}
+          title={listenMode === 'tap'
+            ? (micState === 'armed' ? 'Listening — tap to cancel'
+              : micState === 'capturing' ? 'Hearing you…'
+              : micState === 'arming' ? 'Loading speech detector…'
+              : 'Tap to talk (auto-stops when you pause)')
+            : (micState === 'recording' ? 'Recording — release to send' : 'Hold to talk')}
+          aria-label={listenMode === 'tap' ? 'Tap to talk' : 'Hold to talk'}
           className={`px-3 py-2 rounded text-sm transition select-none touch-none ${
-            micState === 'recording' ? 'bg-red-600 text-white animate-pulse'
-              : micState === 'transcribing' ? 'bg-stone-700 text-stone-400'
+            micState === 'recording' || micState === 'capturing'
+              ? 'bg-red-600 text-white animate-pulse'
+              : micState === 'armed' ? 'bg-teal-700 text-teal-100 animate-pulse'
                 : 'bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50'}`}
         >
-          {micState === 'transcribing' ? '…' : '🎤'}
+          {micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳' : '🎤'}
         </button>
         <button
           type="submit"

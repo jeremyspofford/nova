@@ -28,6 +28,16 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Appended to the system prompt for voice-initiated turns — the reply is read
+# aloud, so keep it short and speakable (no tables/markdown to narrate).
+_VOICE_BREVITY = (
+    "\n\n## This reply will be spoken aloud\n"
+    "Answer in one or two short, natural spoken sentences — the way you'd say "
+    "it out loud to someone. ABSOLUTELY no tables, lists, headers, markdown, or "
+    "emoji, and no 'let me know if...' sign-off. Give the key answer and stop; "
+    "if they want more they'll ask."
+)
+
 
 def _sse(obj) -> str:
     return f"data: {json.dumps(obj)}\n\n"
@@ -57,14 +67,16 @@ async def chat_stream(request: ChatRequest):
     if not main_agent:
         raise HTTPException(status_code=500, detail="main agent missing from registry")
 
-    # Voice-initiated turns may answer with a dedicated model (Settings →
-    # Voice → "Voice reply model") — a faster/chattier LLM when spoken to,
-    # without touching the agent's own model. Empty override = same as chat.
-    # Shallow-copy so the registry dict is never mutated.
+    # Voice-initiated turns: (1) may answer with a dedicated model (Settings →
+    # Voice → "Voice reply model"); (2) get an extra brevity instruction, since
+    # the reply is read ALOUD — spoken tables/paragraphs are painful. Shallow-
+    # copy so the registry dict is never mutated.
     if request.source == "voice":
+        patch = {"system_prompt": main_agent["system_prompt"] + _VOICE_BREVITY}
         override = settings_store.get("voice.model_override")
         if override:
-            main_agent = {**main_agent, "model": override}
+            patch["model"] = override
+        main_agent = {**main_agent, **patch}
 
     model_eff = effective_model(main_agent["model"])
     total_budget = settings_store.get(

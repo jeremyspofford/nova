@@ -204,6 +204,95 @@ async def _web_search(args, ctx):
     return await search(query, int(args.get("max_results", 6)))
 
 
+# WMO weather codes → plain English (open-meteo's `weather_code`)
+_WMO = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Rime fog", 51: "Light drizzle", 53: "Drizzle",
+    55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Freezing drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Freezing rain",
+    67: "Freezing rain", 71: "Light snow", 73: "Snow", 75: "Heavy snow",
+    77: "Snow grains", 80: "Light rain showers", 81: "Rain showers",
+    82: "Violent rain showers", 85: "Snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with hail",
+}
+
+
+async def _get_weather(args, ctx):
+    """Structured weather via open-meteo (keyless). Deterministic — geocode the
+    place, pull the actual current + daily forecast; the model just relays it."""
+    import httpx
+    from datetime import date
+
+    location = (args.get("location") or "").strip()
+    if not location:
+        return "Error: location is required (e.g. 'Portland, Maine')"
+    days = max(1, min(int(args.get("days", 3)), 7))
+    # the geocoder matches on a single name; "Portland, Maine" finds nothing.
+    # Search the primary token, then disambiguate by the trailing hints.
+    loc_parts = [p.strip() for p in location.split(",") if p.strip()]
+    primary = loc_parts[0]
+    hints = [p.lower() for p in loc_parts[1:]]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            geo = (await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": primary, "count": 10, "language": "en",
+                        "format": "json"})).json()
+            results = geo.get("results") or []
+            if not results:
+                return _j({"error": f"Couldn't find a place named {location!r}. "
+                                     "Try adding a state or country."})
+
+            def _match(g):
+                hay = " ".join(str(g.get(k, "")) for k in
+                               ("admin1", "admin2", "country", "country_code")).lower()
+                return sum(1 for h in hints if h in hay)
+            g = max(results, key=_match) if hints else results[0]
+            lat, lon = g["latitude"], g["longitude"]
+            resolved = ", ".join(str(x) for x in
+                                 (g.get("name"), g.get("admin1"), g.get("country")) if x)
+            fc = (await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat, "longitude": lon,
+                    "current": "temperature_2m,relative_humidity_2m,weather_code,"
+                               "wind_speed_10m,precipitation",
+                    "daily": "weather_code,temperature_2m_max,temperature_2m_min,"
+                             "precipitation_probability_max,precipitation_sum",
+                    "temperature_unit": "fahrenheit", "wind_speed_unit": "mph",
+                    "precipitation_unit": "inch", "timezone": "auto",
+                    "forecast_days": days})).json()
+    except (httpx.HTTPError, KeyError, ValueError) as e:
+        log.warning("get_weather failed: %s", e)
+        return _j({"error": f"Weather lookup failed: {e}"})
+
+    cur = fc.get("current", {})
+    d = fc.get("daily", {})
+    daily = []
+    for i, day in enumerate(d.get("time", [])):
+        wd = date.fromisoformat(day).strftime("%A")
+        daily.append({
+            "date": day, "weekday": wd,
+            "high_f": d["temperature_2m_max"][i], "low_f": d["temperature_2m_min"][i],
+            "precip_chance_pct": d["precipitation_probability_max"][i],
+            "precip_in": d["precipitation_sum"][i],
+            "conditions": _WMO.get(d["weather_code"][i], "Unknown"),
+        })
+    return _j({
+        "location": resolved, "timezone": fc.get("timezone"),
+        "current": {
+            "temp_f": cur.get("temperature_2m"),
+            "conditions": _WMO.get(cur.get("weather_code"), "Unknown"),
+            "humidity_pct": cur.get("relative_humidity_2m"),
+            "wind_mph": cur.get("wind_speed_10m"),
+            "precip_in": cur.get("precipitation"), "as_of": cur.get("time"),
+        },
+        "forecast": daily,
+        "note": "Actual open-meteo values. Report ONLY these fields; never invent "
+                "a temperature or condition that isn't here.",
+    })
+
+
 # ── staleness scanner (mechanical; the ingestion agent acts on it) ──────
 
 async def _list_stale_topics(args, ctx):
@@ -461,6 +550,21 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "properties": {"url": {"type": "string"}},
                        "required": ["url"]},
         "execute": _fetch_url,
+    },
+    "get_weather": {
+        "name": "get_weather",
+        "description": ("Current conditions and daily forecast for a place, from a "
+                        "structured weather service (keyless). ALWAYS use this for "
+                        "weather instead of web search — it returns exact temps, "
+                        "precipitation chance, and conditions. Report only the values "
+                        "it returns; never guess a temperature or forecast."),
+        "parameters": {"type": "object", "properties": {
+            "location": {"type": "string",
+                         "description": "Place name, e.g. 'Portland, Maine'"},
+            "days": {"type": "integer",
+                     "description": "Forecast days to return, 1-7 (default 3)"},
+        }, "required": ["location"]},
+        "execute": _get_weather,
     },
     "read_memory_item": {
         "name": "read_memory_item",

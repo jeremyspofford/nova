@@ -167,6 +167,9 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
     if (d.key === 'voice.tts_voice') {
       return <VoiceField value={String(d.value)} onSelect={v => save(d.key, v)} />;
     }
+    if (d.key === 'voice.listen_mode') {
+      return <ListenModeField value={String(d.value)} onSelect={v => save(d.key, v)} />;
+    }
     if (d.type === 'boolean') {
       return (
         <button
@@ -353,6 +356,32 @@ function VoiceField({ value, onSelect }: { value: string; onSelect: (v: string) 
         </button>
       </div>
       {status && <span className="text-[11px] text-amber-400/90 text-right max-w-[16rem]">{status}</span>}
+    </div>
+  );
+}
+
+/** Mic mode with friendly labels and the honest tap-to-talk requirement —
+ *  the in-browser speech detector is a one-time download, so say so. */
+function ListenModeField({ value, onSelect }: { value: string; onSelect: (v: string) => void }) {
+  const LABELS: Record<string, string> = {
+    ptt: 'Hold to talk', tap: 'Tap to talk (auto-stop)',
+  };
+  return (
+    <div className="shrink-0 flex flex-col items-end gap-1">
+      <select
+        value={value}
+        onChange={e => onSelect(e.target.value)}
+        className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+      >
+        {Object.entries(LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      {value === 'tap' && (
+        <span className="text-[11px] text-stone-500 text-right max-w-[16rem]">
+          Downloads a ~15 MB on-device speech detector the first time (cached
+          after); needs a modern browser and mic access. Audio never leaves
+          your device.
+        </span>
+      )}
     </div>
   );
 }
