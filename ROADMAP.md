@@ -930,6 +930,13 @@ See README for what works. This file is the ordered backlog.
    (d) persist the per-run tool timeline (activity events are log-only
    today) — this half belongs to observability #3 and feeds its audit
    log.
+   **(a)–(c) SHIPPED 2026-07-17 (93282bb):** `automation_runs` table
+   (migration 025, last 50 runs kept per automation), failed runs
+   journaled, `manage_automations` list returns summary + failure streak
+   plus a new `runs` action, `GET /api/v1/automations/{id}/runs`, and an
+   expandable run-history view in the Automations tab. Live-verified
+   end-to-end, including a chat probe where main chose the `runs` action
+   unprompted to answer "why did the digest fail?". (d) stays with #3.
 
 26. **CRITICAL — tech-news-digest timeout (2026-07-17, diagnosed)** —
    both failures are `timed out after 300s`. Log timeline: every tool
@@ -943,6 +950,15 @@ See README for what works. This file is the ordered backlog.
    writes only the delta, and consider a per-automation timeout override
    on top of the global `automations.run_timeout_seconds` for
    legitimately long jobs.
+   **SHIPPED 2026-07-17 (f5b05c6):** `write_memory` gained a mechanical
+   append mode (item_id + append=true — existing text preserved by code,
+   not by the model), the digest instruction was rewritten to
+   append-only month-capped topics (migration 026, failure streak
+   reset), and automations gained an optional `timeout_seconds` override
+   (min 30, NULL = global). Live-verified: the restructured digest run
+   succeeded in 63s where the previous two timed out at 300s — earlier
+   sections preserved verbatim, delta appended; a 30s-override probe
+   timed out at exactly 30s.
 
 27. **CRITICAL — memory linking at write time (2026-07-17, from the
    flat-orb question)** — flat gray orbs in Universe are working as
