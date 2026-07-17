@@ -35,6 +35,8 @@ const EDGE_COLORS: Record<string, string> = {
   grant: 'rgba(132,169,140,0.25)',
   guard: 'rgba(239,68,68,0.35)',
   bond: 'rgba(250,204,21,0.35)',
+  about: 'rgba(250,204,21,0.28)',   // personal fact → the operator (bond family)
+  writes: 'rgba(59,130,246,0.30)',  // automation → the doc it maintains
 };
 
 export const GRAPH_LEGEND: LegendEntry[] = [

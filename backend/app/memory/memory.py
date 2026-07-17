@@ -96,6 +96,51 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
 
     # ── writes ───────────────────────────────────────────────────────────
 
+    _MAX_LINKED_TAGS = 5
+    _MAX_RELATED = 3
+
+    def _link_pass(self, title: str, content: str, description: str,
+                   tags: list[str], item_id: Optional[str]) -> tuple[list[str], list[str]]:
+        """Mechanical linking at write time: compare a new/updated topic
+        against the existing corpus and return (extra_tags, related_titles).
+
+        A tag is adopted when another doc already uses it AND its phrase
+        appears in this doc's text — shared tags are what cluster memories
+        into systems, so an untagged doc that literally says "Bear Mountain"
+        must not float unconnected next to a bear-mountain system. Titles
+        mentioned verbatim come back as related_titles for a wiki-link line.
+        """
+        text = f"{title}\n{description}\n{content}".lower()
+        own = {t.lower() for t in tags}
+        tag_hits: list[str] = []
+        title_hits: list[str] = []
+        seen_titles = {title.lower()}
+        for doc_id, _mtime in self.store.iter_files():
+            if not (doc_id.startswith("topics/") or doc_id.startswith("sources/")):
+                continue
+            if item_id and doc_id == item_id:
+                continue
+            parsed = self.store.read_file(doc_id)
+            if not parsed:
+                continue
+            fm, _body = parsed
+            other_title = str(fm.get("title", "")).strip()
+            if other_title and other_title.lower() not in seen_titles:
+                seen_titles.add(other_title.lower())
+                if (len(other_title) >= 4
+                        and re.search(rf"\b{re.escape(other_title.lower())}\b", text)
+                        and f"[[{other_title.lower()}]]" not in content.lower()):
+                    title_hits.append(other_title)
+            for tag in self.store.extract_tags(fm):
+                t = tag.lower()
+                if t in own or t in tag_hits or len(t) < 3:
+                    continue
+                # slug tags match their spoken form: bear-mountain ~ "bear mountain"
+                phrase = re.escape(t).replace(r"\-", r"[\s_-]+")
+                if re.search(rf"\b{phrase}\b", text):
+                    tag_hits.append(t)
+        return tag_hits[:self._MAX_LINKED_TAGS], title_hits[:self._MAX_RELATED]
+
     async def write(self, content: str, *, type: str = "journal",
                     title: Optional[str] = None, description: Optional[str] = None,
                     category: Optional[str] = None, priority: int = 0,
@@ -126,8 +171,18 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     metadata["description"] = description
                 if category:
                     metadata["category"] = category
-                if tags:
-                    metadata["tags"] = [str(t).strip().lower() for t in tags if str(t).strip()]
+                clean_tags = [str(t).strip().lower() for t in (tags or []) if str(t).strip()]
+                linked_tags: list[str] = []
+                related: list[str] = []
+                if type == "topic":
+                    linked_tags, related = self._link_pass(
+                        title, content, description or "", clean_tags, item_id)
+                    clean_tags.extend(linked_tags)
+                    if related:
+                        content = (content.rstrip() + "\n\nRelated: "
+                                   + ", ".join(f"[[{t}]]" for t in related))
+                if clean_tags:
+                    metadata["tags"] = clean_tags
                 if source_url:
                     metadata["source_url"] = source_url
                 try:
@@ -135,12 +190,20 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                                                       doc_id=item_id)
                 except FileNotFoundError as e:
                     return {"status": "error", "error": str(e)}
-            else:
-                # Local date, not UTC — an evening entry belongs to the
-                # operator's today, not tomorrow's file.
-                today = timefmt.now_local().date().isoformat()
-                doc_id = self.store.append_journal(today, content)
-
+                if linked_tags or related:
+                    log.info("Memory link pass: %s gained tags=%s related=%s",
+                             doc_id, linked_tags, related)
+                self._index_file(doc_id)
+                out = {"status": "written", "type": type, "id": doc_id}
+                if linked_tags:
+                    out["linked_tags"] = linked_tags
+                if related:
+                    out["related"] = related
+                return out
+            # Local date, not UTC — an evening entry belongs to the
+            # operator's today, not tomorrow's file.
+            today = timefmt.now_local().date().isoformat()
+            doc_id = self.store.append_journal(today, content)
             self._index_file(doc_id)
             return {"status": "written", "type": type, "id": doc_id}
 
@@ -263,6 +326,14 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 node["tags"] = node_tags
             if fm.get("source_url"):
                 node["source_url"] = fm["source_url"]
+            # relationship markers (#28): resolved into edges by the platform
+            # merge — `about: user` arcs a personal fact to the operator's
+            # node; `maintained_by: <automation>` credits the automation that
+            # keeps this document current.
+            if fm.get("about"):
+                node["about"] = str(fm["about"]).strip().lower()
+            if fm.get("maintained_by"):
+                node["maintained_by"] = str(fm["maintained_by"]).strip()
             learned = str(fm.get("timestamp", ""))[:10]
             if learned:
                 node["learned"] = learned

@@ -882,6 +882,8 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     // the Atlas panel groups from the very same call) ═══
     const memIds = new Set(nodes.filter(n => MEMORY_BODY_TYPES.has(n.type)).map(n => n.id));
     const linkEdges = edges.filter(e => e.kind === 'link');
+    // personal facts — docs carrying an `about: user` arc to the operator
+    const aboutIds = new Set(edges.filter(e => e.kind === 'about').map(e => e.source));
     const { systems, rogues: singles } = computeSystems(nodes, edges);
 
     // degree over link edges only — moon determination uses real relations,
@@ -1064,21 +1066,41 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       });
     }
 
-    // ═══ singles — rogue planets (orphaned topics) and lone visitors ═══
+    // ═══ singles — rogue planets (orphaned topics) and lone visitors.
+    // Personal facts are not rogues: a doc with an about-user arc orbits
+    // the operator's star at full color instead of drifting grey in the
+    // deep — connected to a person, not lost in space. ═══
     singles.forEach(n => {
       const rand = mulberry32(hash(n.id));
+      const personal = aboutIds.has(n.id) && posOf.has('user');
       const base = new THREE.Vector3(rand() - 0.5, (rand() - 0.5) * 0.7, rand() - 0.5)
         .normalize().multiplyScalar(ROGUE_R * (0.85 + rand() * 0.35));
       const size = n.type === 'source' ? 2.6 : 3.2;
       const color = n.type === 'source' ? COLOR.source
+        : personal ? tagColor(n)
         : new THREE.Color(tagColor(n)).lerp(new THREE.Color('#6b7280'), 0.55).getStyle();
       const mesh = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.8,
+        color, transparent: !personal, opacity: personal ? 1 : 0.8,
       }));
       if (n.type === 'source') mesh.scale.set(size * 2.1, size * 0.7, size * 0.7);
       else mesh.scale.setScalar(size);
-      const group = makeBody(n.id, mesh, size, n.label, color, base);
+      const group = makeBody(n.id, mesh, size, n.label, color,
+                             personal ? HOME_CENTER : base);
       freshFlare(group, n, color, size);
+      if (personal) {
+        group.add(makeGlowSprite(color, size * 4.5, 0.3));
+        const r = USER_R + 12 + rand() * 10;
+        const q = orbitQuat(rand, 0.5);
+        const phase = rand() * Math.PI * 2;
+        const period = 13 + rand() * 9;
+        const userPos = posOf.get('user')!;
+        updaters.push(({ t }) => {
+          const a = phase + t * (Math.PI * 2 / period);
+          group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r)
+            .applyQuaternion(q).add(userPos);
+        });
+        return;
+      }
       const h1 = rand() * 6.28, h2 = rand() * 6.28, h3 = rand() * 6.28;
       updaters.push(({ t }) => {
         group.position.set(
@@ -1087,6 +1109,50 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
           base.z + Math.sin(t * 0.027 + h3) * 20);
       });
     });
+
+    // ═══ relationship arcs (#28) — personal facts arc to the operator's
+    // star; automations arc to the documents they maintain. Drawn after
+    // every body exists so rogue/user positions are live in posOf. ═══
+    const relationSets: { kinds: GraphEdge[]; color: string; opacity: number }[] = [
+      { kinds: edges.filter(e => e.kind === 'about'), color: COLOR.nova, opacity: 0.22 },
+      { kinds: edges.filter(e => e.kind === 'writes'), color: '#9fd4ff', opacity: 0.3 },
+    ];
+    for (const set of relationSets) {
+      const drawable = set.kinds.filter(e =>
+        posOf.has(e.source) && posOf.has(e.target) &&
+        byId.get(e.source)?.type !== 'journal' && byId.get(e.target)?.type !== 'journal');
+      if (!drawable.length) continue;
+      const SEG = 12;
+      const arcs = drawable.map(() => {
+        const g = new THREE.BufferGeometry();
+        const attr = new THREE.BufferAttribute(new Float32Array((SEG + 1) * 3), 3);
+        g.setAttribute('position', attr);
+        const line = new THREE.Line(g, new THREE.LineBasicMaterial({
+          color: set.color, transparent: true, opacity: set.opacity,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        line.frustumCulled = false;
+        dataRoot.add(line);
+        return attr;
+      });
+      const mid = new THREE.Vector3();
+      updaters.push(() => {
+        drawable.forEach((e, i) => {
+          const a = posOf.get(e.source)!, b = posOf.get(e.target)!;
+          mid.copy(a).add(b).multiplyScalar(0.5);
+          mid.y += a.distanceTo(b) * 0.18;
+          const attr = arcs[i];
+          for (let s = 0; s <= SEG; s++) {
+            const u = s / SEG;
+            const x = (1 - u) * (1 - u) * a.x + 2 * (1 - u) * u * mid.x + u * u * b.x;
+            const y = (1 - u) * (1 - u) * a.y + 2 * (1 - u) * u * mid.y + u * u * b.y;
+            const z = (1 - u) * (1 - u) * a.z + 2 * (1 - u) * u * mid.z + u * u * b.z;
+            attr.setXYZ(s, x, y, z);
+          }
+          attr.needsUpdate = true;
+        });
+      });
+    }
 
     // carry an active selection across the rebuild: re-point the follow at
     // the new body group, or clear everything if the node is gone

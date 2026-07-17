@@ -513,6 +513,7 @@ async def brain_graph_endpoint(platform: bool = True):
     if not platform:
         return g
     nodes, edges = g["nodes"], g["edges"]
+    mem_nodes = list(nodes)   # snapshot before platform nodes join the list
     now = _time.time()
 
     nodes.append({"id": "nova", "label": "Nova", "type": "core", "mtime": now,
@@ -587,6 +588,18 @@ async def brain_graph_endpoint(platform: bool = True):
             if f"agent:{aname}" in node_ids:
                 edges.append({"source": f"rule:{r['name']}",
                               "target": f"agent:{aname}", "kind": "guard"})
+
+    # relationship edges from memory frontmatter markers (#28). Personal
+    # facts arc to the operator's star; automations arc to the documents
+    # they maintain. Only edges whose platform endpoint actually exists —
+    # a stale maintained_by (deleted automation) must not dangle.
+    for n in mem_nodes:
+        if n.get("about") == "user":
+            edges.append({"source": n["id"], "target": "user", "kind": "about"})
+        maintainer = n.get("maintained_by")
+        if maintainer and f"automation:{maintainer}" in node_ids:
+            edges.append({"source": f"automation:{maintainer}",
+                          "target": n["id"], "kind": "writes"})
 
     return {"nodes": nodes, "edges": edges}
 
