@@ -113,6 +113,11 @@ SETTING_DEFS: list[dict] = [
      "description": ("IANA timezone (e.g. America/New_York) Nova treats as "
                      "'local' for dates, times, and today/tomorrow. The server "
                      "runs UTC, so this is the source of truth for the clock.")},
+    {"key": "nova.time_format", "type": "enum", "default": "12h",
+     "options": ["12h", "24h"], "section": "Operator", "label": "Time format",
+     "description": ("How clock times are written and spoken — 2:44 PM (12h) "
+                     "or 14:44 (24h). Applies to Nova's replies, journal "
+                     "entry headers, and timestamps in this UI.")},
     {"key": "ui.public_url", "type": "string", "default": "",
      "section": "Operator", "label": "Public URL (for phone setup)",
      "description": ("The URL other devices use to reach Nova, e.g. "

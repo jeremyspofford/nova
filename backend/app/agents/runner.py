@@ -15,11 +15,9 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
 from typing import AsyncIterator, Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app import narration, settings_store
+from app import narration, settings_store, timefmt
 from app.llm import router as llm_router
 from app.memory.memory import memory
 from app.tools import registry as tool_registry
@@ -74,17 +72,13 @@ def _now_block() -> str:
     current time" sentence read like an answer, and small voice models
     parroted it verbatim into spoken replies (2026-07-16). Nothing in this
     block should work as a standalone answer sentence."""
-    tz_name = settings_store.get("nova.timezone") or "America/New_York"
-    try:
-        tz = ZoneInfo(tz_name)
-    except (ZoneInfoNotFoundError, ValueError):
-        tz = ZoneInfo("America/New_York")
-    now = datetime.now(tz)
+    now = timefmt.now_local()
     return ("## Current date and time\n"
-            f"{now:%A, %B %-d, %Y, %-I:%M %p %Z}\n"
+            f"{now:%A, %B %-d, %Y}, {timefmt.fmt_clock(now)} {now:%Z}\n"
             "Fresh each turn — trust it over memories or conversation for "
             "all date/time reasoning. If asked the time or date, answer "
-            f"with just that, said naturally (\"It's {now:%-I:%M}.\"), then "
+            f"with just that, said naturally (\"It's "
+            f"{timefmt.fmt_clock(now, ampm=False)}.\"), then "
             "stop — no timezone, no source, none of this section's wording.")
 
 

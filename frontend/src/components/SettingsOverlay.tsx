@@ -19,6 +19,7 @@ import qrcode from 'qrcode-generator';
 import { getAuthToken, getServerToken } from '../api';
 import { THEMES } from '../brain/theme';
 import { agentDisplayName, displayName } from '../names';
+import { fmtDateTime, fmtTime } from '../time';
 import { ThemePreview } from './ThemePreview';
 import { WAKE_CATALOG } from '../voice/wakeCatalog';
 
@@ -842,7 +843,7 @@ function DetectSuggest() {
             : hw.nvidia_runtime
             ? ` NVIDIA runtime ✓ · VRAM ${hw.vram_observed_gb != null ? `${hw.vram_observed_gb} GB observed` : 'unmeasured'}`
             : hw.nvidia_runtime === false ? ' no GPU runtime' : ' GPU unknown'} ·
-          detected {new Date(hw.detected_at).toLocaleTimeString()}
+          detected {fmtTime(hw.detected_at)}
           {!recs?.cloud_available && <span className="text-stone-500"> · no cloud key — local only</span>}
         </div>
       )}
@@ -1156,7 +1157,7 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                 )}
                 {m.last_probe && (
                   <div className="mt-0.5 text-[11px] font-mono">{probeLine(m.last_probe)}
-                    {m.probed_at && <span className="text-stone-600"> · {new Date(m.probed_at).toLocaleString()}</span>}
+                    {m.probed_at && <span className="text-stone-600"> · {fmtDateTime(m.probed_at)}</span>}
                   </div>
                 )}
               </>

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from app import timefmt
+
 log = logging.getLogger(__name__)
 
 TYPE_DIRS = {"topic": "topics", "skill": "skills", "journal": "journals", "source": "sources"}
@@ -89,7 +91,9 @@ class OkfStore:
     def append_journal(self, date: str, content: str) -> str:
         """Append a dated entry to the day's journal. Returns the doc id."""
         path = self.base_dir / TYPE_DIRS["journal"] / f"{date}.md"
-        stamp = datetime.now(timezone.utc).strftime("%H:%M")
+        # Header stamps are read by the operator — local wall-clock time, not
+        # UTC (a 10:44 AM chat was landing as "## 14:44", 2026-07-17).
+        stamp = timefmt.fmt_clock(timefmt.now_local())
         entry = f"## {stamp}\n\n{content.strip()}\n"
         if not path.exists():
             fm = self.render_frontmatter({

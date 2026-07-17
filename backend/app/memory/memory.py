@@ -7,9 +7,9 @@ so retrieval can always read the file back.
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Optional
 
+from app import timefmt
 from app.config import settings
 from app.memory.index import BM25Index
 from app.memory.store import OkfStore
@@ -124,7 +124,9 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 except FileNotFoundError as e:
                     return {"status": "error", "error": str(e)}
             else:
-                today = datetime.now(timezone.utc).date().isoformat()
+                # Local date, not UTC — an evening entry belongs to the
+                # operator's today, not tomorrow's file.
+                today = timefmt.now_local().date().isoformat()
                 doc_id = self.store.append_journal(today, content)
 
             self._index_file(doc_id)
