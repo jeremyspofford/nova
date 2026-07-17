@@ -664,6 +664,47 @@ See README for what works. This file is the ordered backlog.
    voice model now answers accurately (qwen3:8b), remaining work is
    prompt/persona — stop the system blocks being parroted, terseness
    guidance, soul.md voice. Jeremy asked to run this session on Fable.
+   **SHIPPED 2026-07-16 (Fable session):** `_now_block`/`_platform_block`
+   rewritten as bare data + imperatives — nothing answer-shaped left to
+   parrot; migration 024 swaps main's "helpful AI assistant" opener for
+   the companion register; soul.md "How I communicate" rewritten (live
+   file + `_DEFAULT_SOUL` seed); voice brevity moved to the END of the
+   assembled prompt (`run_agent(system_suffix=...)`) — patched into the
+   front it sat mid-prompt and the 8b ignored it — and given paired
+   register examples, which steer an 8b far better than adjectives.
+   Live-verified through :5173: "what time is it?" → "It's 10:59 PM.";
+   "what day is it" (voice) → "It's Thursday."; passthrough-poisoned
+   question still grounds on live platform facts ("Nope — I can see your
+   RTX 3090..."); "goodnight" → "Night — sleep well." Residual: qwen3:8b
+   still sneaks an occasional emoji into the *transcript* despite three
+   bans (speech.ts strips it pre-TTS, so it is never spoken) — that last
+   inch is model curation (Ornith eval), not prompting.
+
+14. **Chat latency — confirm, then profile (observed 2026-07-16 night)** —
+   chat can be / is much slower now. Confirm it persists on 2026-07-17
+   before digging (could be one-off: parallel heavy sessions were running).
+   Suspects, roughly in order: `_platform_block()` hardware detection
+   (shells out to nvidia-smi on 5-min cache expiry — turn-blocking on the
+   miss; shipped with item 12); qwen3:8b thinking tokens on voice turns;
+   ollama model contention (voice override + main both resident in VRAM);
+   memory/BM25 retrieval growth. The real fix starts with per-stage turn
+   timing — fold into docs/plans/observability-turn-tracing.md if not
+   already covered there.
+
+15. **Persona layer — a structural home for what makes Nova *Nova*
+   (requested 2026-07-16)** — the persona pass proved position beats
+   emphasis: the voice brevity block was silently ignored while patched
+   into the FRONT of the agent prompt, and worked the moment it was
+   appended LAST (`run_agent(system_suffix=...)`). Identity must never
+   depend on where some agent prompt happens to put it. Investigate and
+   design a dedicated persona layer in prompt assembly: explicit slots
+   with guaranteed order (role/task first → live facts → memories →
+   identity/register/speech habits LAST, so they win small-model recency
+   bias); ONE home for soul.md, the register, and brevity/speakability
+   rules — today they're scattered across seed prompts, migrations, and a
+   per-route suffix; applies to every reply path (typed, voice, dispatched
+   agents' final answers). Success test: a new agent or route gets Nova's
+   voice by default, with no way to bury it.
 
 ## Later
 
