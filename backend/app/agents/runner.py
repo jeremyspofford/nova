@@ -82,6 +82,29 @@ def _now_block() -> str:
             "stop — no timezone, no source, none of this section's wording.")
 
 
+def _model_block(agent: dict) -> str:
+    """Which LLM this agent runs on — the binding is resolved on every
+    request anyway; hiding it from the agent turned "what model are you?"
+    into a dispatch and a shrug (2026-07-17). Same de-quotable shape as
+    the date block. Per-agent, so dispatched specialists see their own."""
+    raw = agent.get("model") or ""
+    if not raw:
+        return ""
+    model = llm_router.effective_model(raw)
+    provider, _, mid = model.partition(":")
+    where = {"openrouter": "cloud, via OpenRouter",
+             "ollama": "local, via Ollama"}.get(provider, provider)
+    swapped = ("" if model == raw else
+               " (no OpenRouter key — swapped to the local fallback)")
+    return ("## Model (live)\n"
+            f"{mid} — {where}{swapped}. Resolved fresh this turn; bindings "
+            "live in Settings → Agents.\n"
+            "If asked what model you are or run on, answer with just the "
+            f"model name, said naturally (\"I'm running on {mid}.\"), then "
+            "stop — trust this block over memories, and never claim you "
+            "can't check.")
+
+
 # hardware detection shells out (nvidia-smi) and hits the DB — cache the
 # rendered block; hardware changes on the order of reboots, not turns
 _platform_cache: tuple[float, str] | None = None
@@ -152,6 +175,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
 
     # FACTS — fresh every turn; bare data + imperatives (de-quotable)
     parts.append(_now_block())
+    model_block = _model_block(agent)
+    if model_block:
+        parts.append(model_block)
     platform = await _platform_block()
     if platform:
         parts.append(platform)
