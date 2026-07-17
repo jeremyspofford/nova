@@ -233,7 +233,8 @@ async def _build_system_prompt(agent: dict, query: str, *,
 async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
                     conversation_summary: str | None = None,
-                    system_suffix: str | None = None) -> AsyncIterator[dict]:
+                    system_suffix: str | None = None,
+                    automation: str | None = None) -> AsyncIterator[dict]:
     """Run one agent turn (with tool rounds) and stream events.
 
     turn_messages: chat-format messages for this turn (history + new user msg),
@@ -245,6 +246,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     where it wins small-model recency bias (voice brevity; patched into the
     front of the agent prompt it got buried mid-prompt and ignored). For
     Nova it replaces the typed-chat default register.
+    automation: name of the automation this turn runs inside (None for chat).
+    Rides the tool ctx — never the prompt — so tools can record run
+    provenance mechanically (write_memory stamps maintained_by on created
+    topics); propagates through dispatch so a sub-agent's writes carry it too.
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
@@ -259,7 +264,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
-           "dispatch_depth": dispatch_depth,
+           "dispatch_depth": dispatch_depth, "automation": automation,
            "granted": {t["function"]["name"] for t in tools}}
 
     final_text = ""
@@ -316,7 +321,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
             if name == "dispatch_to_agent":
                 result = ""
-                async for sub in _run_dispatch(args, dispatch_depth):
+                async for sub in _run_dispatch(args, dispatch_depth, automation):
                     if sub["type"] == "final":
                         result = sub["text"]
                     elif sub["type"] in ("activity", "error"):
@@ -361,7 +366,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     yield {"type": "final", "text": final_text}
 
 
-async def _run_dispatch(args: dict, parent_depth: int) -> AsyncIterator[dict]:
+async def _run_dispatch(args: dict, parent_depth: int,
+                        automation: str | None = None) -> AsyncIterator[dict]:
     """Inline execution of dispatch_to_agent: run the target agent as a nested turn."""
     from app.agents import registry as agent_registry  # late import (cycle-safe)
 
@@ -389,7 +395,8 @@ async def _run_dispatch(args: dict, parent_depth: int) -> AsyncIterator[dict]:
 
     sub_final = ""
     async for event in run_agent(agent, [{"role": "user", "content": message}],
-                                 dispatch_depth=parent_depth + 1):
+                                 dispatch_depth=parent_depth + 1,
+                                 automation=automation):
         if event["type"] == "final":
             sub_final = event["text"]
         elif event["type"] == "activity":

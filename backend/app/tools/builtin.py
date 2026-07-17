@@ -1,6 +1,7 @@
 """Builtin tools. Each entry: {name, description, parameters, execute(args, ctx)}.
 
-ctx is a plain dict: {conversation_id, agent_id, agent_name, dispatch_depth}.
+ctx is a plain dict: {conversation_id, agent_id, agent_name, dispatch_depth,
+automation (name of the automation the turn runs inside, else None)}.
 dispatch_to_agent is declared here so it appears in agent toolsets, but its
 execution is inlined by the runner (it needs to stream the sub-agent's events);
 the execute function below only fires if something calls it outside the runner.
@@ -45,6 +46,10 @@ async def _write_memory(args, ctx):
         source_url=args.get("source_url"),
         item_id=args.get("item_id"),
         append=bool(args.get("append")),
+        # run-context provenance, never an agent-suppliable argument: topics
+        # created during an automation run get maintained_by stamped so the
+        # brain's writes-arc survives month rollovers mechanically
+        maintained_by=ctx.get("automation"),
         source_type="tool",
     ))
 

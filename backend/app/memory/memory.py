@@ -146,10 +146,14 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     category: Optional[str] = None, priority: int = 0,
                     tags: Optional[list[str]] = None, source_url: Optional[str] = None,
                     item_id: Optional[str] = None, append: bool = False,
+                    maintained_by: Optional[str] = None,
                     source_type: str = "chat") -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept
         file. append=True + item_id adds content to the end of an existing item
-        instead of replacing it (running logs/digests write only the delta)."""
+        instead of replacing it (running logs/digests write only the delta).
+        maintained_by (an automation name, plumbed from the run context — never
+        agent-supplied) stamps provenance on topics CREATED during an automation
+        run, so the brain's writes-arc survives month rollovers mechanically."""
         async with self._lock:
             if append:
                 if not item_id:
@@ -185,6 +189,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     metadata["tags"] = clean_tags
                 if source_url:
                     metadata["source_url"] = source_url
+                # creation only — in-place updates keep their existing
+                # attribution (write_concept's merge), so a refresh by a
+                # different automation never steals the arc
+                if maintained_by and type == "topic" and not item_id:
+                    metadata["maintained_by"] = maintained_by
                 try:
                     doc_id = self.store.write_concept(title, content, type, metadata,
                                                       doc_id=item_id)

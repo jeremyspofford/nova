@@ -80,6 +80,11 @@ class OkfStore:
                     and pinned.exists()):
                 raise FileNotFoundError(f"memory item '{doc_id}' not found")
             path = pinned
+            # In-place updates preserve frontmatter keys the caller doesn't
+            # set: data-level markers (maintained_by, about, hand-added keys)
+            # must survive a REFRESH, not just an append.
+            existing, _body = self.parse_frontmatter(path.read_text())
+            fm = {**existing, **fm}
         else:
             subdir = TYPE_DIRS.get(concept_type, "topics")
             path = self.base_dir / subdir / f"{_slugify(title)}.md"

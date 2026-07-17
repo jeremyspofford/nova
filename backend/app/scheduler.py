@@ -35,7 +35,7 @@ async def run_one(automation: dict) -> tuple[bool, str]:
         nonlocal final
         async for event in agent_runner.run_agent(
                 agent, [{"role": "user", "content": automation["instruction"]}],
-                dispatch_depth=1):
+                dispatch_depth=1, automation=automation["name"]):
             if event["type"] == "final":
                 final = event["text"]
             elif event["type"] == "error":

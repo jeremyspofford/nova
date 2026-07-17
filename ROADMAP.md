@@ -977,6 +977,9 @@ See README for what works. This file is the ordered backlog.
    instructions. Not covered by any existing plan
    (model-curation-proposals is models, not memory) — this is the
    memory-curation lane's first concrete item.
+   **SHIPPED 2026-07-17 (0287c6d, parallel session):** write-time
+   `_link_pass` in memory.write (shared-tag adoption + verbatim-title
+   wiki-links) + migration 027 tag hygiene.
 
 28. **CRITICAL — relationship edges: user-facts + automation provenance
    (2026-07-17)** — two missing edge kinds in the brain graph: (a)
@@ -994,6 +997,21 @@ See README for what works. This file is the ordered backlog.
    `automation:tech-news-digest` to its digest topic — today the comet
    and its document are strangers. Both halves are small: graph endpoint
    + one renderer arc treatment each.
+   **SHIPPED 2026-07-17 (0287c6d, parallel session):** `about: user` and
+   `maintained_by: <automation>` frontmatter markers → `about`/`writes`
+   edges + renderer arcs; July digest hand-stamped.
+   **HARDENED same day (follow-up):** the markers were convention-only —
+   `write_memory` had no way to emit `maintained_by`, so the month-capped
+   digest (#26) would have been born arc-less each new month, and an
+   in-place REFRESH rebuilt frontmatter from scratch, wiping both
+   markers. Now mechanical: the scheduler passes the automation name
+   through the runner's tool ctx (dispatch-propagated, never
+   agent-suppliable), `write_memory` stamps `maintained_by` on topics
+   CREATED during an automation run, and `write_concept` merge-preserves
+   existing frontmatter keys on pinned updates — first maintainer wins,
+   refreshes never steal or strip attribution. Live-verified: scheduler
+   run created a stamped topic whose `writes` edge appeared in the
+   graph; refresh survival + no-theft covered by mechanical tests.
 
 ## Later
 
