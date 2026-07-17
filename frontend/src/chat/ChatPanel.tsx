@@ -166,6 +166,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const wakeOn = useRef(false);
   const wakeThreshold = useRef(0.5);
   const wakeWord = useRef(DEFAULT_WAKE);
+  const followupS = useRef(8);        // conversation mode: 0 = off
+  const inFollowup = useRef(false);   // current VAD arm is a follow-up window
   const assistantName = useAssistantName();
 
   // mic mode + VAD/wake tuning are shared settings — read + track live changes
@@ -180,6 +182,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       if (typeof w === 'number') wakeThreshold.current = w;
       const ph = defs.find(d => d.key === 'voice.wake_word')?.value;
       if (typeof ph === 'string' && ph) wakeWord.current = ph;
+      const fw = defs.find(d => d.key === 'voice.followup_window_s')?.value;
+      if (typeof fw === 'number') followupS.current = fw;
     }).catch(() => {});
     const onChange = (e: Event) => {
       const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
@@ -187,6 +191,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       if (key === 'voice.vad_silence_ms' && typeof value === 'number') vadSilenceMs.current = value;
       if (key === 'voice.wake_threshold' && typeof value === 'number') wakeThreshold.current = value;
       if (key === 'voice.wake_word' && typeof value === 'string' && value) wakeWord.current = value;
+      if (key === 'voice.followup_window_s' && typeof value === 'number') followupS.current = value;
     };
     window.addEventListener('nova:setting-changed', onChange);
     return () => window.removeEventListener('nova:setting-changed', onChange);
@@ -222,7 +227,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   // armTimeoutMs: if NOTHING is spoken within it, give up and run afterSubmit
   // anyway — without this, a false wake-fire strands the VAD armed forever
   // and wake listening never resumes ("it only activated once").
-  async function startVadCapture(afterSubmit?: () => void | Promise<void>,
+  // afterSubmit(captured): true = an utterance was captured and submitted,
+  // false = timeout/failure — conversation mode branches on it.
+  async function startVadCapture(afterSubmit?: (captured: boolean) => void | Promise<void>,
                                  armTimeoutMs?: number) {
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
@@ -243,7 +250,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
             await v.disarm();
             tapVad.current = null;
             await submitUtterance(wav);
-            await afterSubmit?.();
+            await afterSubmit?.(true);
           }, 0);
         },
       }, { silenceMs: vadSilenceMs.current });
@@ -253,7 +260,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           if (tapVad.current !== v) return;      // already captured/cancelled
           await v.disarm();
           tapVad.current = null;
-          await afterSubmit?.();                  // back to wake listening
+          await afterSubmit?.(false);             // back to wake listening
         }, armTimeoutMs);
       }
     } catch (err) {
@@ -261,7 +268,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       setMicState('idle');
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `Voice detector unavailable: ${errText(err)}` }]);
-      await afterSubmit?.();
+      await afterSubmit?.(false);
     }
   }
 
@@ -292,18 +299,42 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     }
   }
 
+  // ── conversation mode: after a captured voice turn, keep the conversation
+  // open — wake listening resumes DURING Nova's reply (barge-in stays live),
+  // then once she finishes speaking the VAD arms directly for a follow-up
+  // window: just talk, no wake phrase. Silence closes it back to wake-only.
+  async function voiceTurnDone(captured: boolean) {
+    inFollowup.current = false;
+    if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
+    if (!captured || followupS.current <= 0) { await resumeWake(); return; }
+    await resumeWake();                              // barge-in while she talks
+    while (speaker.speaking) {                       // let the reply finish
+      await new Promise(r => setTimeout(r, 200));
+      if (!wakeOn.current) return;                   // toggled off mid-reply
+    }
+    // a barge-in mid-reply already started its own capture — don't double-arm
+    if (tapVad.current || !wakeOn.current || !wakeRef.current) return;
+    await wakeRef.current.stop();
+    inFollowup.current = true;
+    await startVadCapture(voiceTurnDone, followupS.current * 1000);
+  }
+
   async function onWake() {
     speaker.cancel();                    // barge-in: stop any current reply
     await wakeRef.current?.stop();        // release the wake mic while capturing
-    // capture the command, then re-listen; if nothing is said within 10 s
-    // (false fire), give up on the capture and resume wake listening
-    await startVadCapture(resumeWake, 10_000);
+    inFollowup.current = false;
+    // capture the command, then hand off to conversation mode; if nothing is
+    // said within 10 s (false fire), give up and resume wake listening
+    await startVadCapture(voiceTurnDone, 10_000);
   }
 
   async function wakeToggle() {
     if (micState === 'arming' || micState === 'transcribing') return;
     if (wakeOn.current) {                 // turn off
       wakeOn.current = false;
+      inFollowup.current = false;
+      await tapVad.current?.disarm();     // an open follow-up window holds the mic
+      tapVad.current = null;
       await wakeRef.current?.stop();
       wakeRef.current = null;
       setMicState('idle');
@@ -588,7 +619,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           disabled={micState === 'transcribing' || micState === 'arming'}
           title={listenMode === 'wake'
             ? (micState === 'wake' ? `Listening for “${wakeLabel(wakeWord.current)}” — click to stop`
-              : micState === 'armed' ? 'Wake word heard — speak now'
+              : micState === 'armed' ? (inFollowup.current
+                ? 'Still listening — just talk, no wake phrase needed'
+                : 'Wake word heard — speak now')
               : micState === 'capturing' ? 'Heard you — capturing…'
               : micState === 'arming' ? 'Loading wake word…'
               : `Click to listen hands-free for “${wakeLabel(wakeWord.current)}”`)

@@ -156,6 +156,13 @@ SETTING_DEFS: list[dict] = [
      "label": "Wake word sensitivity",
      "description": ("Detection threshold for the wake word (lower = more "
                      "sensitive / more false triggers). Tune it to your voice.")},
+    {"key": "voice.followup_window_s", "type": "number", "default": 8,
+     "min": 0, "max": 20, "section": "Voice",
+     "label": "Follow-up window (seconds)",
+     "description": ("Conversation mode: after Nova's spoken reply, keep "
+                     "listening this long so you can just keep talking — no "
+                     "wake phrase needed. The mic button pulses while the "
+                     "window is open. 0 = every turn needs the wake phrase.")},
     {"key": "voice.vad_silence_ms", "type": "number", "default": 1100,
      "min": 500, "max": 2500, "section": "Voice",
      "label": "Tap-to-talk pause tolerance (ms)",

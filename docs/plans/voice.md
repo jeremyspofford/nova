@@ -330,9 +330,34 @@ constants, don't remove them.
      running; the mic streams to your Nova continuously while the app is
      open (~32 KB/s — trivial on the tailnet at home, ~115 MB/hour on
      cellular).
-   - *4e — conversation mode / follow-up window (requested 2026-07-16,
-     ROADMAP #10)*: one "Hey Nova" opens a CONVERSATION, not a single
-     exchange. After Nova's spoken reply finishes (or is barged in on),
+   - *4e — conversation mode / follow-up window (requested AND SHIPPED
+     2026-07-16, ROADMAP #10)*: one "Hey Nova" opens a CONVERSATION, not a
+     single exchange.
+     *(DONE: `voice.followup_window_s` (default 8 s, 0 = off);
+     `voiceTurnDone(captured)` continuation in ChatPanel — wake listening
+     resumes DURING Nova's reply (barge-in stays live), then when she
+     finishes speaking the VAD arms directly with the window as its arm
+     timeout: speech chains the next turn (no wake phrase), timeout falls
+     back to wake-only. Mic button pulses + "Still listening — just talk"
+     while the window is open; toggling wake off disarms an open window
+     (mic release). Live-verified in-browser: captured follow-up turn with
+     NO wake fire between turns, both entry paths alternating over 6+
+     cycles, no stuck states.
+     KNOWN GAP — barge-in (operator report 2026-07-16: "couldn't interrupt
+     her while she was talking"). INVESTIGATE, likely causes in order:
+     (1) during the STREAMING part of a reply nothing is listening — wake
+     only resumes after send() returns (SSE stream end), but TTS starts
+     speaking sentences early, so interrupting early-to-mid reply lands on
+     a dead mic. Fix direction: resume wake as soon as the utterance is
+     submitted (concurrent with the stream), which then needs real
+     in-flight turn cancellation — abort the SSE fetch + speaker.cancel +
+     guard against the still-streaming reply re-feeding the speaker after
+     cancel (feed() after cancel starts a new generation and would resume
+     speaking the tail). (2) browser echo cancellation suppresses mic
+     input while the speakers play her voice — the classic reason smart
+     speakers pair hardware AEC with wake models trained through AEC.
+     Diagnose with nova.wakeDebug scores while she talks.)*
+     After Nova's spoken reply finishes (or is barged in on),
      re-arm the VAD capture directly — no wake phrase — for a follow-up
      window (`voice.followup_window_s`, ~8 s default; 0 = off). Speech in
      the window starts the next turn and the loop continues; silence closes

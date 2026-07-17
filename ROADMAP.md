@@ -576,7 +576,8 @@ See README for what works. This file is the ordered backlog.
    Brain.tsx has nodes+edges in hand; the detail panel just never got the
    adjacency list.
 
-10. **Voice conversation mode — follow-up window (requested 2026-07-16)** —
+10. **Voice conversation mode — follow-up window (requested 2026-07-16;
+   SHIPPED same day — see voice.md §4e for the record)** —
    NotebookLM-style back-and-forth: after waking her once, keep the
    conversation open so replies don't each need "Hey Nova". Spec sketch in
    `docs/plans/voice.md` §4e: after Nova's spoken reply ends (or is
