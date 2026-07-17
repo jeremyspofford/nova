@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNode, GraphEdge } from '../api';
 import { computeSystems, tagColor } from '../brain/systems';
 
@@ -33,14 +33,23 @@ interface Section {
 
 const byLabel = (a: GraphNode, b: GraphNode) => a.label.localeCompare(b.label);
 
-export function MemoryAtlas({ nodes, edges, onOpen, onClose }: {
+export function MemoryAtlas({ nodes, edges, focus, onOpen, onClose }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Jump target from the inventory chip — nonce re-fires on every click. */
+  focus?: { type: string; nonce: number } | null;
   onOpen: (id: string) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const listRef = useRef<HTMLDivElement>(null);
+  // the section a chip last opened, so re-clicking that chip collapses it
+  // (the Atlas itself stays open — only the × button closes the panel)
+  const chipSection = useRef<string | null>(null);
+  // each chip click carries a fresh nonce; record the one we've handled so a
+  // replayed effect (StrictMode's double-invoked mount) can't double-toggle
+  const handledNonce = useRef<number | null>(null);
 
   const sections = useMemo<Section[]>(() => {
     const out: Section[] = [];
@@ -103,6 +112,36 @@ export function MemoryAtlas({ nodes, edges, onOpen, onClose }: {
     return out;
   }, [nodes, edges]);
 
+  // chip click → toggle its section, keeping the Atlas open. Clicking the
+  // same chip that opened a section collapses it; a different chip expands
+  // and scrolls to its own. Topics/sources live inside the tag systems, so
+  // they aim at the first system (or the drifters when nothing links yet).
+  useEffect(() => {
+    if (!focus || handledNonce.current === focus.nonce) return;
+    handledNonce.current = focus.nonce;
+    const id =
+      focus.type === 'topic' || focus.type === 'source'
+        ? (sections.find(s => s.id.startsWith('sys:'))?.id
+           ?? (sections.some(s => s.id === 'rogues') ? 'rogues' : undefined))
+        : focus.type === 'journal' ? 'journals'
+        : sections.some(s => s.id === focus.type) ? focus.type : undefined;
+    if (!id) return;
+    if (chipSection.current === id) {
+      setOpen(prev => ({ ...prev, [id]: false }));   // second click → collapse
+      chipSection.current = null;
+      return;
+    }
+    setOpen(prev => ({ ...prev, [id]: true }));
+    chipSection.current = id;
+    // scroll after the newly-expanded section is in the DOM
+    requestAnimationFrame(() => {
+      listRef.current?.querySelector(`[data-section="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+    // sections deliberately not a dep: jumps fire on chip clicks (nonce), not data refreshes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
+
   const ql = q.trim().toLowerCase();
   const visible = sections
     .map(s => ({
@@ -123,28 +162,38 @@ export function MemoryAtlas({ nodes, edges, onOpen, onClose }: {
 
   return (
     <aside className="absolute top-16 left-4 bottom-4 z-20 w-[19rem] max-w-[calc(100vw-2rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
-      <header className="px-3 py-2.5 border-b border-stone-700 flex items-center gap-2">
+      <header className="px-3 py-2.5 border-b border-stone-700 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="uppercase tracking-wide text-xs text-stone-500">Atlas</span>
+          <button
+            onClick={onClose}
+            className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
+            aria-label="Close atlas"
+          >
+            ×
+          </button>
+        </div>
         <input
           autoFocus
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Search everything…"
-          className="flex-1 min-w-0 bg-stone-800/80 border border-stone-700 rounded-md px-2.5 py-1.5 text-sm text-stone-200 placeholder-stone-500 outline-none focus:border-teal-600"
+          className="min-w-0 bg-stone-800/80 border border-stone-700 rounded-md px-2.5 py-1.5 text-sm text-stone-200 placeholder-stone-500 outline-none focus:border-teal-600"
         />
-        <button
-          onClick={onClose}
-          className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
-          aria-label="Close atlas"
-        >
-          ×
-        </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto nice-scroll py-1.5">
+      <div ref={listRef} className="flex-1 overflow-y-auto nice-scroll py-1.5">
         {visible.map(s => (
-          <div key={s.id}>
+          <div key={s.id} data-section={s.id}>
             <button
-              onClick={() => setOpen(prev => ({ ...prev, [s.id]: !isOpen(s) }))}
+              onClick={() => {
+                const next = !isOpen(s);
+                setOpen(prev => ({ ...prev, [s.id]: next }));
+                // keep the chip tracker honest: a manual toggle of this
+                // section becomes the reference for the next chip click
+                chipSection.current = next ? s.id
+                  : chipSection.current === s.id ? null : chipSection.current;
+              }}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs uppercase tracking-wide text-stone-400 hover:text-stone-200"
             >
               <span className={`transition-transform ${isOpen(s) ? 'rotate-90' : ''}`}>▸</span>

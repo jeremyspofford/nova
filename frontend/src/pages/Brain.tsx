@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { deleteMemoryItem, getBrainGraph, getMemoryItem, getMemoryStats, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
+import { deleteMemoryItem, getBrainGraph, getMemoryItem, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
@@ -43,17 +43,26 @@ const DEFAULT_PREFS: BrainPrefs = {
   rotationSpeed: 2, labelMode: 'auto', labelScale: 1, showPlatform: true,
 };
 
+// The inventory chip: each count is the doorway to its Atlas section.
+// Memory types always ride in the chip; platform types join on md+ screens
+// (they'd crowd a phone toolbar). Topic renders even at 0 so the Atlas
+// always has an entry point.
+const CHIP_COLOR: Record<string, string> = { ...TYPE_COLOR, topic: '#2dd4bf' };
+const MEMORY_CHIPS = ['topic', 'skill', 'journal', 'source'];
+const PLATFORM_CHIPS = ['agent', 'tool', 'automation', 'rule'];
+
 export function Brain() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<RendererHandle | null>(null);
-  const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prefs, setPrefs] = useState<BrainPrefs>(DEFAULT_PREFS);
-  // latest graph as state — the Atlas and the legend counts render from it
+  // latest graph as state — the Atlas, the chip, and the legend render from it
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
     { nodes: [], edges: [] });
   const [atlasOpen, setAtlasOpen] = useState(false);
+  // nonce so re-clicking the same count re-scrolls an already-open Atlas
+  const [atlasFocus, setAtlasFocus] = useState<{ type: string; nonce: number } | null>(null);
   const [legendOpen, setLegendOpen] = useState(() =>
     window.innerWidth >= 768 && localStorage.getItem('nova.brain.legend') !== '0');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -181,8 +190,7 @@ export function Brain() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [graph, s] = await Promise.all([
-          getBrainGraph(prefsRef.current.showPlatform), getMemoryStats()]);
+        const graph = await getBrainGraph(prefsRef.current.showPlatform);
         if (!cancelled) {
           // the core orb is labelled with the assistant's name (nova.assistant_name);
           // skills/platform names are feature names — Title Case them;
@@ -193,7 +201,6 @@ export function Brain() {
           nodesRef.current = new Map(nodes.map(n => [n.id, n]));
           renderer.setData(nodes, graph.edges);
           setGraphData({ nodes, edges: graph.edges });
-          setStats(s);
         }
       } catch (err) {
         console.error('brain refresh failed:', err);
@@ -230,6 +237,15 @@ export function Brain() {
     localStorage.setItem('nova.brain.legend', o ? '0' : '1');
     return !o;
   });
+
+  // chip counts open the Atlas and aim it at their section; the section
+  // toggle (same count again collapses that section, Atlas stays open until
+  // the × button) lives in MemoryAtlas — the chip only signals intent, and
+  // the nonce re-fires the jump even when the same count is clicked twice.
+  const openAtlasSection = (t: string) => {
+    setAtlasOpen(true);
+    setAtlasFocus({ type: t, nonce: Date.now() });
+  };
 
   // clickable relations for the open card — real edges only (tag chains are
   // clustering artifacts, and tags already show as chips in the header)
@@ -379,21 +395,41 @@ export function Brain() {
       />
 
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
-        {stats && (
-          <div className="px-3 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-xs font-mono text-stone-400 space-x-3">
-            <span className="text-teal-400">{stats.topic ?? 0} topics</span>
-            <span className="text-amber-400">{stats.skill ?? 0} skills</span>
-            <span>{stats.journal ?? 0} journals</span>
-          </div>
-        )}
-        <button
-          onClick={() => setAtlasOpen(o => !o)}
-          className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none ${atlasOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
-          title="Browse everything in the brain"
-          aria-label="Atlas"
-        >
-          Atlas
-        </button>
+        <div className={`px-1 py-1 rounded-lg bg-stone-900/80 backdrop-blur border text-xs font-mono flex items-center ${atlasOpen ? 'border-teal-700' : 'border-stone-700'}`}>
+          {MEMORY_CHIPS
+            .filter(t => t === 'topic' || (typeCounts[t] ?? 0) > 0)
+            .map(t => (
+              <button
+                key={t}
+                onClick={() => openAtlasSection(t)}
+                className="px-1.5 py-1 rounded hover:bg-stone-800 hover:underline underline-offset-2 decoration-stone-500"
+                style={{ color: CHIP_COLOR[t] }}
+                title={`Browse ${t}s in the Atlas`}
+                aria-label={`Browse ${t}s in the Atlas`}
+              >
+                {typeCounts[t] ?? 0} {t}{(typeCounts[t] ?? 0) === 1 ? '' : 's'}
+              </button>
+            ))}
+          {PLATFORM_CHIPS.some(t => (typeCounts[t] ?? 0) > 0) && (
+            <span className="hidden md:inline-flex items-center">
+              <span className="mx-1 h-3 w-px bg-stone-700" />
+              {PLATFORM_CHIPS
+                .filter(t => (typeCounts[t] ?? 0) > 0)
+                .map(t => (
+                  <button
+                    key={t}
+                    onClick={() => openAtlasSection(t)}
+                    className="px-1.5 py-1 rounded hover:bg-stone-800 hover:underline underline-offset-2 decoration-stone-500"
+                    style={{ color: CHIP_COLOR[t] }}
+                    title={`Browse ${t}s in the Atlas`}
+                    aria-label={`Browse ${t}s in the Atlas`}
+                  >
+                    {typeCounts[t]} {t}{typeCounts[t] === 1 ? '' : 's'}
+                  </button>
+                ))}
+            </span>
+          )}
+        </div>
         <button
           onClick={toggleLegend}
           className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none ${legendOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
@@ -432,6 +468,7 @@ export function Brain() {
               ×
             </button>
           </div>
+          {/* pure decoder — counts live in the inventory chip, browsing in the Atlas */}
           {legend
             .filter(e => !e.key || (typeCounts[e.key] ?? 0) > 0)
             .map(e => (
@@ -439,7 +476,6 @@ export function Brain() {
                 <span className="mt-1 w-2.5 h-2.5 rounded-full shrink-0" style={{ background: e.color }} />
                 <span className="text-stone-300 leading-snug">
                   {e.label}
-                  {e.key && <span className="text-stone-500 font-mono"> · {typeCounts[e.key]}</span>}
                   {e.note && <span className="block text-stone-500">{e.note}</span>}
                 </span>
               </div>
@@ -451,6 +487,7 @@ export function Brain() {
         <MemoryAtlas
           nodes={graphData.nodes}
           edges={graphData.edges}
+          focus={atlasFocus}
           onOpen={id => { openDetail(id); rendererRef.current?.focusNode?.(id); }}
           onClose={() => setAtlasOpen(false)}
         />
