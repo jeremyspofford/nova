@@ -44,6 +44,11 @@ Read `README.md` for what works and `ROADMAP.md` for the ordered backlog
 
 - `docker compose restart backend` does **not** re-read `.env` — use
   `docker compose up -d backend` after env changes.
+- The `web` service (:8080, the phone/one-origin path) serves a **baked
+  build** — frontend source changes reach :5173 via HMR but NOT :8080
+  until `docker compose build web && docker compose up -d web`. If a
+  feature "isn't there" on the phone or labels look stale, rebuild web
+  before debugging anything else (bit us twice on 2026-07-16).
 - Migrations auto-run at backend startup from
   `backend/app/migrations/*.sql` — check the directory for the next free
   number before adding one.

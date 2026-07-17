@@ -14,6 +14,7 @@ Sub-agents get their own allowed_tools, minus dispatch — depth is capped at 1.
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import AsyncIterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -45,10 +46,60 @@ def _now_block() -> str:
             "not infer the date from memories or the conversation.")
 
 
+# hardware detection shells out (nvidia-smi) and hits the DB — cache the
+# rendered block; hardware changes on the order of reboots, not turns
+_platform_cache: tuple[float, str] | None = None
+_PLATFORM_TTL_S = 300
+
+
+async def _platform_block() -> str:
+    """Live platform facts — the date-block pattern applied to hardware.
+
+    Exists because Nova asserted stale journal memories as current platform
+    state ("GPU passthrough is broken" while detection reported the GPU
+    fine — 2026-07-17, ROADMAP item 12). Memories describe the past; this
+    block is the present. Empty string on detection failure: a missing
+    block must never break a turn."""
+    global _platform_cache
+    now = time.monotonic()
+    if _platform_cache and now - _platform_cache[0] < _PLATFORM_TTL_S:
+        return _platform_cache[1]
+    try:
+        from app import hardware
+        hw = await hardware.detect()
+        if hw.get("gpu_name"):
+            gpu = f"{hw['gpu_name']} with {hw['vram_total_gb']} GB VRAM"
+        elif hw.get("unified_gpu"):
+            gpu = "a unified-memory GPU (Apple-class, sized by system RAM)"
+        elif hw.get("nvidia_runtime"):
+            gpu = "an NVIDIA runtime (VRAM not yet measured)"
+        else:
+            gpu = "no GPU (CPU-only inference)"
+        block = (
+            "## Platform facts (live, authoritative)\n"
+            f"This machine has {gpu}, {hw.get('sizing_ram_gb') or '?'} GB RAM, "
+            f"and {hw.get('cpu_cores') or '?'} CPU cores — detected just now, "
+            "not remembered. Hardware detection WORKS; never claim it is "
+            "broken or ask the operator for these numbers.\n"
+            "Your memories and journals describe the PAST — problems in them "
+            "may be long fixed, and features they say are missing may have "
+            "shipped since. For current platform state (hardware, installed "
+            "models, available capabilities), trust this block and your "
+            "tools, never a memory.")
+        _platform_cache = (now, block)
+        return block
+    except Exception:
+        log.exception("Platform facts unavailable; continuing without them")
+        return ""
+
+
 async def _build_system_prompt(agent: dict, query: str,
                                include_index: bool = False) -> str:
     name = settings_store.get("nova.assistant_name") or "Nova"
     parts = [agent["system_prompt"], _now_block()]
+    platform = await _platform_block()
+    if platform:
+        parts.append(platform)
     try:
         soul = await memory.soul(name)
         if soul:

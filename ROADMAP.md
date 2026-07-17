@@ -639,6 +639,13 @@ See README for what works. This file is the ordered backlog.
    main/model-manager a self-inventory tool (what's shipped, what tools
    exist, roadmap awareness) so "what would make you better" gets answered
    from ground truth.
+   **(a)+(b) SHIPPED 2026-07-17:** `_platform_block()` in runner.py —
+   live-detected GPU/VRAM/RAM/cores in every agent's prompt (5-min cache;
+   detection shells out) plus the memories-are-the-past guidance.
+   Live-verified with the poisoned question that caused the incident:
+   "is the passthrough issue still blocking you?" now answers "No — I can
+   see your GPU just fine (RTX 3090, 24GB)" instead of asserting the
+   stale journal belief. (c) remains open.
 
 13. **Human-like replies — the persona pass (requested 2026-07-16)** —
    Jarvis-from-Iron-Man / Sarah-from-Eureka register: warm, wry, concise,
