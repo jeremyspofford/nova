@@ -432,6 +432,10 @@ See README for what works. This file is the ordered backlog.
 
 ## Next up
 
+> **Priority note (2026-07-17):** items **#25–#28 are the CRITICAL front
+> of the queue** — do them first. Numbering stays append-only so the
+> cross-references between items (#5, #8, #21, #23, …) stay stable.
+
 1. **Voice — talking to and hearing Nova (decided 2026-07-14; CORE ARC
    SHIPPED — status corrected 2026-07-17)** — full spec + phase status in
    `docs/plans/voice.md`. Shipped and live-verified: phase 1 (kokoro TTS,
@@ -899,6 +903,72 @@ See README for what works. This file is the ordered backlog.
    approval (#5) — and pushes the digest via ntfy (#21). Calendar joins
    when the Later calendar item lands. Needs #21 first; everything else
    it consumes already exists.
+
+25. **CRITICAL — Automation run visibility (2026-07-17, from the
+   tech-news-digest failures)** — the operator saw "failed ×2" with no
+   way to drill in, and Nova sees even less. Today only ONE run survives:
+   `record_run` overwrites `last_status`/`last_summary` in place, so a
+   future success erases all trace of the failures; the per-run tool
+   timeline exists only in docker logs. Fixes, in effort order: (a) the
+   `manage_automations` list tool must return `last_summary` +
+   `consecutive_failures` — the slim projection in `tools/builtin.py`
+   drops both, so asking Nova "why did the digest fail?" dead-ends at
+   "failed"; (b) journal FAILED runs — `scheduler.py` journals successes
+   and the 5-strike auto-disable but nothing on individual failures, so
+   Nova's own memory holds no trace of her automations breaking; (c) an
+   `automation_runs` history table (status, summary, started_at,
+   duration) + an expandable run-history view in the Automations panel;
+   (d) persist the per-run tool timeline (activity events are log-only
+   today) — this half belongs to observability #3 and feeds its audit
+   log.
+
+26. **CRITICAL — tech-news-digest timeout (2026-07-17, diagnosed)** —
+   both failures are `timed out after 300s`. Log timeline: every tool
+   call returns in <1s; the 90–110s gaps BETWEEN calls are glm-5.2
+   generation time. Structural root cause: the digest doc ("running
+   digest, earlier entries preserved", 28+ entries and growing) is
+   re-read and re-generated whole every run, so runtime grows with the
+   doc — it succeeded 2026-07-16 and outgrew the budget the next day. It
+   will keep failing (3 more consecutive = auto-disable). Fix:
+   restructure to append-only / month-capped digest files so each run
+   writes only the delta, and consider a per-automation timeout override
+   on top of the global `automations.run_timeout_seconds` for
+   legitimately long jobs.
+
+27. **CRITICAL — memory linking at write time (2026-07-17, from the
+   flat-orb question)** — flat gray orbs in Universe are working as
+   designed (rogues get no glow + 55% desaturation toward gray,
+   `universe.ts`) but they expose a real data problem: tool-driven memory
+   writes do NO linking pass. `users-favorite-hiking-spot.md` has zero
+   tags and zero wiki-links despite its body literally saying "Bear
+   Mountain" — while a glowing bear-mountain system (3 docs sharing the
+   `bear-mountain` tag) floats nearby; the AI-news digest and Big Blue
+   View topics carry tags nothing else shares. Fix the data, not the
+   renderer: (a) immediate: tag/link the three current orphans by hand
+   (`data/memory` is hand-editable); (b) the real fix: the
+   ingestion/write path gets a linking step — compare a new memory
+   against the existing index (titles + tags) and add wiki-links /
+   shared tags before writing, plus tag-hygiene guidance in agent
+   instructions. Not covered by any existing plan
+   (model-curation-proposals is models, not memory) — this is the
+   memory-curation lane's first concrete item.
+
+28. **CRITICAL — relationship edges: user-facts + automation provenance
+   (2026-07-17)** — two missing edge kinds in the brain graph: (a)
+   memories ABOUT the operator should connect to the user node. The
+   universe's own copy says "everything here exists in orbit around this
+   relationship," yet zero memories link to the user star —
+   `memory.graph()` only links memory↔memory, and the user node is
+   bolted on at the platform layer with a single bond edge to Nova.
+   Design: an `about: user` frontmatter key → `kind: "about"` edge to
+   the user node, drawn as an arc, so personal facts (favorite hiking
+   spot, Giants fandom) visibly orbit the user star. Composes cleanly:
+   `computeSystems` only unions memory↔memory edges, so an about-edge
+   never drags a topic out of its tag system. (b) automations → the docs
+   they maintain: a provenance edge (`kind: "writes"`) from
+   `automation:tech-news-digest` to its digest topic — today the comet
+   and its document are strangers. Both halves are small: graph endpoint
+   + one renderer arc treatment each.
 
 ## Later
 
