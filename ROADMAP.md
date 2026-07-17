@@ -763,6 +763,35 @@ See README for what works. This file is the ordered backlog.
    badge each row; applies to the chat-header picker and every model
    select in Settings (agents, voice override, "set all"). Small.
 
+18. **Executable skill payloads — RESEARCH FIRST (requested 2026-07-17)** —
+   Jeremy: shipping executable payloads with skills is critical to Nova
+   eventually. Today skills (`data/memory/skills/*.md`) are prompt-steering
+   markdown only, agent-authored at runtime by skill-manager. This item is
+   a research task, not a build: (a) how critical is it really — what does
+   an executable skill provide that Nova's existing runtime tool creation
+   (tool-creator + tools registry) and MCP servers don't already cover, and
+   where's the boundary between "skill with a script" and "tool"; (b) prior
+   art — Anthropic Agent Skills (SKILL.md bundles, progressive disclosure),
+   MCP, how comparable agent products gate agent-authored executable
+   content; (c) edge cases and issues an implementation would introduce —
+   the core one being self-escalation: an agent-writable directory whose
+   contents execute is a prompt-injection→code-execution path, so execution
+   rights must be an out-of-band grant (nothing an agent can write — file
+   location, frontmatter — can be the switch). Design sketch from the
+   2026-07-17 discussion, as research input not decisions: two provenances
+   (bundled skills in-repo, trusted via PR review, read-only at runtime;
+   learned skills in data/memory, born prompt-only), promotion to
+   executable via the approvals/inbox surface (PR #56 machinery) with a
+   content hash pinned in Postgres — any file change (agent rewrite or
+   hand edit) degrades it back to prompt-only until re-approved (soul.md
+   hash-sync pattern); execution in a sandboxed runner container (no
+   secrets, restricted network, wall-clock kill rail) never the backend
+   process. Also flag: `data/memory/` is currently root-owned and
+   world-writable — fine for markdown, needs tightening before anything in
+   it is even indirectly executable. Deliverable: findings + a go/no-go
+   recommendation; if go, write the full spec in
+   `docs/plans/executable-skills.md` and plan phases before any code.
+
 ## Later
 
 - **Speaker identification + per-person context (family, requested
