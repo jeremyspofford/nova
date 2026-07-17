@@ -3,7 +3,7 @@
 SSE contract for POST /api/v1/chat/stream:
     data: {"meta": {"conversation_id": ..., "model": ...}}
     data: {"t": "text delta"}
-    data: {"activity": {"kind": "tool_start|tool_result|dispatch", "name": ..., "agent": ..., "detail": ...}}
+    data: {"activity": {"kind": "tool_start|tool_result|dispatch|agent_reply", "name": ..., "agent": ..., "detail": ...}}
     data: {"error": "..."}
     data: [DONE]
 """
@@ -519,6 +519,16 @@ async def brain_graph_endpoint(platform: bool = True):
                   "description": "The coordinating mind — main is the front "
                                  "door; every specialist hangs off it."})
 
+    # The operator is a first-class node: Nova exists in relation to a person.
+    # Universe draws the pair as a binary star; older themes get a color entry.
+    user_name = str(settings_store.get("nova.user_name") or "").strip()
+    nodes.append({"id": "user", "label": user_name or "You", "type": "user",
+                  "mtime": now,
+                  "description": "The operator — the human this mind works "
+                                 "with. Everything here exists in orbit "
+                                 "around this relationship."})
+    edges.append({"source": "nova", "target": "user", "kind": "bond"})
+
     agents = await agent_registry.list_agents(enabled_only=False)
     catalog = await tool_registry.list_all_tools()
     db_tool_names = [t["name"] for t in catalog["db_tools"]]
@@ -558,6 +568,7 @@ async def brain_graph_endpoint(platform: bool = True):
         nodes.append({"id": f"automation:{auto['name']}", "label": auto["name"],
                       "type": "automation", "mtime": now,
                       "enabled": auto["enabled"],
+                      "interval_minutes": auto.get("interval_minutes"),
                       "description": auto.get("description")
                       or (auto.get("instruction") or "")[:200]})
         edges.append({"source": f"automation:{auto['name']}",
@@ -596,6 +607,16 @@ async def memory_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="memory item not found")
     return item
+
+
+@router.delete("/api/v1/memory/item/{item_id:path}")
+async def delete_memory_item(item_id: str):
+    _require_edit_mode()
+    if item_id == "soul.md":
+        raise HTTPException(status_code=403, detail="the soul is not deletable")
+    if not await memory.delete_item(item_id):
+        raise HTTPException(status_code=404, detail="memory item not found")
+    return {"status": "deleted"}
 
 
 # ── bundled inference (docker control via the inference-control sidecar) ─

@@ -82,7 +82,7 @@ export async function getServerToken(): Promise<string> {
 }
 
 export interface Activity {
-  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration';
+  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'agent_reply';
   name: string;
   agent?: string;
   detail?: string;
@@ -188,6 +188,8 @@ export interface GraphNode {
   source_url?: string;
   learned?: string;
   enabled?: boolean;
+  /** Automations only: run cadence — the universe view log-scales comet periods from it. */
+  interval_minutes?: number | null;
 }
 export interface GraphEdge { source: string; target: string; kind: string }
 
@@ -520,6 +522,11 @@ export async function getMemoryItem(id: string): Promise<MemoryItem> {
   const r = await apiFetch(`${API_URL}/api/v1/memory/item/${id}`);
   if (!r.ok) throw new Error('Memory item not found');
   return r.json();
+}
+
+export async function deleteMemoryItem(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/memory/item/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
 }
 
 // ── model recommendations ─────────────────────────────────────────────────

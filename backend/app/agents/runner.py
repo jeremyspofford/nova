@@ -237,11 +237,17 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         yield sub
                 if not result:
                     result = "Error: dispatched agent produced no result"
+                # the specialist's reply, near-full (matches the 2000-char
+                # tool-row persistence cap) — the chat trace renders it as an
+                # expandable "← <agent> replied" item
+                yield {"type": "activity", "kind": "agent_reply",
+                       "name": args.get("agent_name", ""),
+                       "agent": args.get("agent_name", ""),
+                       "detail": result[:2000]}
             else:
                 result = await tool_registry.execute_tool(name, args, ctx)
-
-            yield {"type": "activity", "kind": "tool_result", "name": name,
-                   "agent": agent.get("name"), "detail": result[:200]}
+                yield {"type": "activity", "kind": "tool_result", "name": name,
+                       "agent": agent.get("name"), "detail": result[:200]}
 
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "content": result[:8000]})

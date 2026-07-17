@@ -18,7 +18,7 @@ import { Markdown } from './Markdown';
 import qrcode from 'qrcode-generator';
 import { getAuthToken, getServerToken } from '../api';
 import { THEMES } from '../brain/theme';
-import { displayName } from '../names';
+import { agentDisplayName, displayName } from '../names';
 import { ThemePreview } from './ThemePreview';
 import { WAKE_CATALOG } from '../voice/wakeCatalog';
 
@@ -872,7 +872,7 @@ function DetectSuggest() {
             <div key={r.agent} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-xs text-stone-100">{displayName(r.agent)}</span>
+                  <span className="text-xs text-stone-100">{agentDisplayName(r.agent)}</span>
                   <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{r.profile}</span>
                   {r.current_valid === false && (
                     <span
@@ -1532,7 +1532,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
   }
 
   async function remove(a: AgentInfo) {
-    if (!window.confirm(`Delete agent "${displayName(a.name)}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete agent "${agentDisplayName(a.name)}"? This cannot be undone.`)) return;
     try { await deleteAgent(a.id); load(); } catch (err) { setStatus(String(err)); }
   }
 
@@ -1615,7 +1615,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
           {editing?.id === a.id ? (
             <form onSubmit={saveEdit} className="space-y-2">
-              <div className="text-sm text-stone-100">{displayName(a.name)}</div>
+              <div className="text-sm text-stone-100">{agentDisplayName(a.name)}</div>
               {agentFields}
               <div className="flex gap-2 justify-end">
                 <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
@@ -1626,7 +1626,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
             <>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm text-stone-100">{displayName(a.name)}</span>
+                  <span className="text-sm text-stone-100">{agentDisplayName(a.name)}</span>
                   {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -1786,7 +1786,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                   onChange={e => setEditForm({ ...editForm, agent_name: e.target.value })}
                   className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
                 >
-                  {agents.map(n => <option key={n} value={n}>{displayName(n)}</option>)}
+                  {agents.map(n => <option key={n} value={n}>{agentDisplayName(n)}</option>)}
                 </select>
                 <input
                   type="number" min={5}
@@ -1830,7 +1830,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500">
-                {displayName(a.agent_name)} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
+                {agentDisplayName(a.agent_name)} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
                 {a.last_status && (
                   <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
                     {' '}· last: {a.last_status}
@@ -1871,7 +1871,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
               className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
             >
               <option value="">agent…</option>
-              {agents.map(a => <option key={a} value={a}>{displayName(a)}</option>)}
+              {agents.map(a => <option key={a} value={a}>{agentDisplayName(a)}</option>)}
             </select>
             <input
               type="number" min={5}

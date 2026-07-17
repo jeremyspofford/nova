@@ -4,7 +4,7 @@ import {
   patchAgent, Activity, ModelInfo,
 } from '../api';
 import { Markdown } from '../components/Markdown';
-import { displayName } from '../names';
+import { agentDisplayName, displayName } from '../names';
 import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
 import { transcribeSpeech, getSettings } from '../api';
@@ -36,9 +36,23 @@ function renderItem(item: Item) {
     if (item.activity.kind === 'narration') {
       return (
         <div key={item.id} className={`text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
-          ⚠ {displayName(item.activity.name)} announced an action but
+          ⚠ {agentDisplayName(item.activity.name)} announced an action but
           called no tool — the described work did <b>not</b> happen.
         </div>
+      );
+    }
+    if (item.activity.kind === 'agent_reply') {
+      // the specialist's reply back to Nova — collapsed to one line,
+      // expandable to the (near-)full text
+      return (
+        <details key={item.id} className="text-xs font-mono px-1">
+          <summary className="text-amber-400/80 cursor-pointer select-none">
+            ← {agentDisplayName(item.activity.name)} replied…
+          </summary>
+          <div className="mt-1 ml-3 px-2 py-1.5 whitespace-pre-wrap break-words font-sans text-stone-300 bg-stone-800/60 border-l border-stone-700 rounded-r">
+            {item.activity.detail}
+          </div>
+        </details>
       );
     }
     return (
@@ -117,8 +131,8 @@ function renderGrouped(items: Item[]) {
 
 const activityLabel = (a: Activity): string => {
   switch (a.kind) {
-    case 'dispatch': return `→ dispatching to ${displayName(a.name)}`;
-    case 'tool_start': return `⚙ ${a.agent ? `${displayName(a.agent)}: ` : ''}${displayName(a.name)}…`;
+    case 'dispatch': return `→ dispatching to ${agentDisplayName(a.name)}`;
+    case 'tool_start': return `⚙ ${a.agent ? `${agentDisplayName(a.agent)}: ` : ''}${displayName(a.name)}…`;
     case 'tool_result': return `✓ ${displayName(a.name)}`;
     default: return displayName(a.name);
   }
