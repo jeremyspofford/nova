@@ -81,18 +81,25 @@ by convention. This plan makes it survive by construction.
 
 ## Phases
 
-**Phase 1 — slots in the runner (no file moves).** Restructure
-`_build_system_prompt` into the slot order above. Stop injecting soul +
-name backstop into specialists; add the house-rules block for them. Give
-TYPED chat a channel-register block in Nova's slot 4 (voice already has
-one via system_suffix) — typed parity is the biggest immediate win.
-Verify: dispatch turn (specialist prompt has no soul, has house rules);
-typed "goodnight" register on a small model.
+**Phase 1 — slots in the runner (no file moves). SHIPPED 2026-07-17.**
+Restructure `_build_system_prompt` into the slot order above. Stop
+injecting soul + name backstop into specialists; add the house-rules
+block for them. Give TYPED chat a channel-register block in Nova's
+slot 4 (voice already has one via system_suffix) — typed parity is the
+biggest immediate win. Verify: dispatch turn (specialist prompt has no
+soul, has house rules); typed register probe.
+*Shipped as designed: `MAIN_AGENT`/`_TYPED_REGISTER`/`_HOUSE_RULES` in
+runner.py; conversation_summary + system_suffix moved inside the
+assembler (they used to be appended after it, putting the summary
+behind the soul). Live-verified per the plan.*
 
 **Phase 2 — role sheets.** `data/agents/<name>.md` seeded from repo
 templates; loader; `manage_agents` validates structure at write time;
-capability fields remain in the DB. Verify: agent-creator makes a new
-agent → it conforms and speaks to Nova in machine register.
+capability fields remain in the DB. Frontmatter gets a per-agent
+`max_tool_rounds` override (research specialists need ~3× the rounds of
+managers; the global default is the `agents.max_tool_rounds` setting,
+live since 2026-07-17). Verify: agent-creator makes a new agent → it
+conforms and speaks to Nova in machine register.
 
 **Phase 3 — soul kernel/extended + capability docs.** Kernel budget +
 startup lint; extended sections + `capabilities/*.md` into the lazy layer

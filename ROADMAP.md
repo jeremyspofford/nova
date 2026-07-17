@@ -697,6 +697,10 @@ See README for what works. This file is the ordered backlog.
    memory/BM25 retrieval growth. The real fix starts with per-stage turn
    timing — fold into docs/plans/observability-turn-tracing.md if not
    already covered there.
+   **CLOSED 2026-07-17:** chat confirmed fine the next day (and had been
+   fine on the 8b too) — it was load from parallel heavy sessions, not a
+   regression. No profiling done; per-stage turn timing still arrives
+   with item #3 (observability) for the next time this question comes up.
 
 15. **Persona layer — a structural home for what makes Nova *Nova*
    (requested 2026-07-16)** — the persona pass proved position beats
@@ -716,8 +720,41 @@ See README for what works. This file is the ordered backlog.
    in docs/plans/persona-layer.md (Nova-as-proxy: specialists are their
    own entities, no soul injection for them; slot-based assembly owned by
    the runner; soul kernel/extended split; house rules ≠ persona).
+   **PHASE 1 SHIPPED 2026-07-17:** `_build_system_prompt` is slot-based
+   (ROLE → FACTS → CONTEXT → LAST WORD); summary and channel suffix moved
+   inside the assembler so the last word is actually last. Specialists no
+   longer wear the soul or the name backstop — they end with house rules
+   ("your reader is Nova": dense, no pleasantries; act-don't-narrate;
+   memories are the past). Typed chat gained the end-position register
+   voice already had (_TYPED_REGISTER). Live-verified: container prompt
+   inspection for both entity kinds (soul/backstop absent for specialist,
+   house rules last; register last for Nova, voice suffix replaces it);
+   typed "thanks" → "Anytime."; voice "goodnight" register intact;
+   dispatch end-to-end with a notably denser specialist reply.
+   Phases 2–4 (role sheets, soul kernel/extended + capability docs,
+   proxy invariant) remain.
 
-16. **Model labels should show their provider (requested 2026-07-17)** —
+16. **Usage caps by cost, not rounds (requested 2026-07-17)** — evolve the
+   per-turn tool-round cap into operator-set budgets: daily / weekly /
+   monthly spend caps on Nova's usage, or explicitly no cap. Cloud spend
+   is the real quantity (OpenRouter reports per-request cost/usage; local
+   models are free — a local cap would be about tokens/time, optional).
+   The action ledger from the autonomous-safety-rails work is the natural
+   accounting substrate, and per-turn cost capture overlaps with item #3
+   (observability turn tracing) — build them together. Behavior at the
+   cap must degrade gracefully: warn → prefer local models → pause cloud,
+   never a mid-turn hard cut. The round cap (now the live
+   `agents.max_tool_rounds` setting) stays as the per-turn sanity bound.
+   DEPENDENCY (2026-07-17): "prefer local" presumes per-agent model
+   chains, which don't exist yet — today each agent has ONE model and the
+   only fallback is the global keyless-bootstrap swap in effective_model()
+   (fires only when no OpenRouter key is set; a failed/over-budget cloud
+   request has no failover and just errors the turn). Chains are phase 2
+   of the models/inference unified plan (role → chains, on the pool from
+   #57) — build chains first; the cost cap then becomes a budget-aware
+   filter on the chain walk (cloud entries ineligible while over cap).
+
+17. **Model labels should show their provider (requested 2026-07-17)** —
    the picker says "z-ai/glm-5.2" with nothing indicating it runs via
    OpenRouter (internally `openrouter:z-ai/glm-5.2`; models_catalog.py
    strips the provider prefix when building display names). The API
