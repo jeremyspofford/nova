@@ -17,6 +17,8 @@ import { synthesizeSpeech } from '../api';
 const MAX_BUFFER = 220;          // flush unpunctuated ramble at this length
 const MAX_INFLIGHT = 2;          // bounded pipeline: cheap to barge in on
 const LIST_GAP = 0.35;           // seconds of breath before a list item
+const PARA_GAP = 0.5;            // longer beat when a new paragraph starts
+const DASH_GAP = 0.18;           // brief breath after a spoken (spaced) dash
 
 // ── number/symbol normalization: kokoro reads "10,000" digit-by-digit and
 //    narrates bare symbols; convert to how a person would say them ──────────
@@ -106,6 +108,12 @@ export function stripForSpeech(md: string): string {
 
 const isListItem = (raw: string) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(raw);
 
+/** Split on a dash used as a spoken pause — one with whitespace on both sides
+ *  (em/en/hyphen). Intra-word hyphens ("co-operate", "twenty-one") and number
+ *  ranges ("5-10") have no surrounding spaces, so they stay intact. */
+const splitOnDashes = (text: string): string[] =>
+  text.split(/\s+[—–-]\s+/).map(s => s.trim()).filter(s => s.length > 1);
+
 interface Chunk { text: string; gap: number }
 
 class Speaker {
@@ -119,6 +127,7 @@ class Speaker {
 
   private textBuffer = '';
   private pending: Chunk[] = [];
+  private leadGap = 0;                 // pause to place before the NEXT chunk
   private listItems: string[] = [];   // buffered contiguous bullet/numbered items
   private inflight = 0;
 
@@ -184,6 +193,7 @@ class Speaker {
     this.generation++;
     this.textBuffer = '';
     this.pending = [];
+    this.leadGap = 0;
     this.listItems = [];
     this.decoded.clear();
     this.gapBySeq.clear();
@@ -222,16 +232,22 @@ class Speaker {
   }
 
   private pushRaw(raw: string) {
+    const lead = this.leadGap;      // paragraph beat, set by the last cut
+    this.leadGap = 0;
     // buffer contiguous list items so we know which one is LAST — a bullet
     // list should read "red … green … and blue", not three loose words
     if (isListItem(raw)) {
       const text = stripForSpeech(raw);
-      if (text.length > 1) this.listItems.push(text);
+      if (text.length > 1) this.listItems.push(text);  // gets LIST_GAP in flushList
       return;
     }
     this.flushList();               // a non-list line ends any open list
     const text = stripForSpeech(raw);
-    if (text.length > 1) this.pending.push({ text, gap: 0 });
+    if (text.length <= 1) return;
+    // a spaced dash becomes a brief breath: split into sub-chunks, the first
+    // carrying the paragraph lead, each later one a short dash pause
+    splitOnDashes(text).forEach((part, i) =>
+      this.pending.push({ text: part, gap: i === 0 ? lead : DASH_GAP }));
   }
 
   private flushList() {
@@ -254,11 +270,15 @@ class Speaker {
     for (;;) {
       const m = this.textBuffer.match(/[.!?:]["')\]]*\s+|\n+/);
       let cut = -1;
-      if (m && m.index !== undefined) cut = m.index + m[0].length;
-      else if (this.textBuffer.length > MAX_BUFFER) cut = MAX_BUFFER;
+      let paraBreak = false;
+      if (m && m.index !== undefined) {
+        cut = m.index + m[0].length;
+        paraBreak = /\n\s*\n/.test(m[0]);   // a blank line = a paragraph boundary
+      } else if (this.textBuffer.length > MAX_BUFFER) cut = MAX_BUFFER;
       else break;
       this.pushRaw(this.textBuffer.slice(0, cut));
       this.textBuffer = this.textBuffer.slice(cut);
+      if (paraBreak) this.leadGap = PARA_GAP;   // the NEXT chunk opens a paragraph
     }
     if (force && this.textBuffer.trim()) {
       this.pushRaw(this.textBuffer);

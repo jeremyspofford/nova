@@ -6,6 +6,7 @@ so retrieval can always read the file back.
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -60,10 +61,21 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 self._index_file(doc_id, mtime)
         log.info("Memory index ready: %d documents", self.index.total_docs)
 
-    async def soul(self) -> Optional[str]:
-        """The identity file's body (injected into every agent's prompt)."""
+    async def soul(self, name: Optional[str] = None) -> Optional[str]:
+        """The identity file's body (injected into every agent's prompt).
+
+        If `name` is given and differs from the file's own self-name (its
+        frontmatter title), the self-name is swapped throughout the body so a
+        renamed assistant never sees a conflicting name in its own identity.
+        """
         parsed = self.store.read_file(self.SOUL_ID)
-        return parsed[1] if parsed else None
+        if not parsed:
+            return None
+        fm, body = parsed
+        self_name = str(fm.get("title") or "").strip()
+        if name and self_name and name != self_name:
+            body = re.sub(rf"\b{re.escape(self_name)}\b", name, body)
+        return body
 
     def _index_file(self, doc_id: str, mtime: float = 0.0):
         parsed = self.store.read_file(doc_id)

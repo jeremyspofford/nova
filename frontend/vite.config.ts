@@ -51,9 +51,9 @@ export default defineConfig({
         // cache the app shell only — chat is useless offline, don't pretend
         navigateFallbackDenylist: [/^\/api/, /^\/health/],
         runtimeCaching: [],
-        // the self-hosted VAD assets (~15 MB wasm + model) load on demand and
+        // wasm runtimes + onnx models (VAD, wake) load on demand and
         // browser-cache — never precache them into the service worker
-        globIgnores: ['**/vad/**'],
+        globIgnores: ['**/vad/**', '**/wake/**', '**/*.wasm'],
       },
     }),
   ],

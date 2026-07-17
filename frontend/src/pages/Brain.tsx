@@ -79,10 +79,20 @@ export function Brain() {
         labelScale: Number(v('brain.label_scale') ?? 1),
         showPlatform: v('brain.show_platform') !== false,
       });
+      const nm = v('nova.assistant_name');
+      if (typeof nm === 'string' && nm.trim()) {
+        nameRef.current = nm.trim();
+        reloadRef.current?.();   // relabel the core orb once the name resolves
+      }
     }).catch(() => {});
 
     const onChange = (e: Event) => {
       const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
+      if (key === 'nova.assistant_name' && typeof value === 'string' && value.trim()) {
+        nameRef.current = value.trim();
+        reloadRef.current?.();   // live rename → re-fetch + relabel the orb now
+        return;
+      }
       if (!key.startsWith('brain.')) return;
       setPrefs(prev => {
         const next = { ...prev };
@@ -106,6 +116,10 @@ export function Brain() {
 
   // latest graph nodes — platform node cards are built from these
   const nodesRef = useRef<Map<string, GraphNode>>(new Map());
+  // the assistant's name (nova.assistant_name) labels the core orb; reloadRef
+  // lets a live rename re-fetch + relabel without waiting for the poll tick
+  const nameRef = useRef('Nova');
+  const reloadRef = useRef<(() => void) | null>(null);
 
   const openDetail = useCallback(async (id: string | null) => {
     if (id === null) {
@@ -158,10 +172,12 @@ export function Brain() {
         const [graph, s] = await Promise.all([
           getBrainGraph(prefsRef.current.showPlatform), getMemoryStats()]);
         if (!cancelled) {
+          // the core orb is labelled with the assistant's name (nova.assistant_name);
           // skills/platform names are feature names — Title Case them;
           // topic/journal labels are document titles and pass through
           const nodes = graph.nodes.map(n =>
-            PLATFORM_LABELED.has(n.type) ? { ...n, label: displayName(n.label) } : n);
+            n.type === 'core' ? { ...n, label: nameRef.current }
+            : PLATFORM_LABELED.has(n.type) ? { ...n, label: displayName(n.label) } : n);
           nodesRef.current = new Map(nodes.map(n => [n.id, n]));
           renderer.setData(nodes, graph.edges);
           setStats(s);
@@ -171,10 +187,12 @@ export function Brain() {
       }
     };
     load();
+    reloadRef.current = load;   // let a live rename trigger an immediate relabel
     const interval = setInterval(load, REFRESH_MS);
 
     return () => {
       cancelled = true;
+      reloadRef.current = null;
       clearInterval(interval);
       window.removeEventListener('resize', size);
       renderer.destroy();

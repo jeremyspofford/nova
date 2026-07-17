@@ -9,11 +9,24 @@ import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
 import { transcribeSpeech, getSettings } from '../api';
 import type { TapVad } from '../voice/vad';
+import type { WakeWord } from '../voice/wake';
+import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
+import { useAssistantName } from '../useAssistantName';
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
   | { id: string; kind: 'error'; content: string };
+
+// getUserMedia / AudioWorklet failures are DOMExceptions — the useful bit is
+// .name (NotAllowedError = mic blocked, NotSupportedError = insecure context /
+// unsupported). Surface it so the chat error is diagnosable, not just "Not supported".
+function errText(err: unknown): string {
+  if (err instanceof Error) {
+    return err.name && err.name !== 'Error' ? `${err.name}: ${err.message}` : err.message;
+  }
+  return String(err);
+}
 
 let nextId = 0;
 const uid = () => `ui-${++nextId}`;
@@ -144,24 +157,36 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const [speech, setSpeech] = useState(() => localStorage.getItem('nova.speech') === '1');
   const [voiceState, setVoiceState] = useState({ speaking: false, paused: false });
   const [micState, setMicState] = useState<
-    'idle' | 'recording' | 'arming' | 'armed' | 'capturing' | 'transcribing'>('idle');
-  const [listenMode, setListenMode] = useState<'ptt' | 'tap'>('ptt');
+    'idle' | 'recording' | 'arming' | 'armed' | 'capturing' | 'transcribing' | 'wake'>('idle');
+  const [listenMode, setListenMode] = useState<'ptt' | 'tap' | 'wake'>('ptt');
   const mic = useRef(new Mic());
   const tapVad = useRef<TapVad | null>(null);
   const vadSilenceMs = useRef(1100);
+  const wakeRef = useRef<WakeWord | null>(null);
+  const wakeOn = useRef(false);
+  const wakeThreshold = useRef(0.5);
+  const wakeWord = useRef(DEFAULT_WAKE);
+  const assistantName = useAssistantName();
 
-  // mic mode + VAD tuning are shared settings — read them and track live changes
+  // mic mode + VAD/wake tuning are shared settings — read + track live changes
   useEffect(() => {
+    const isMode = (v: unknown): v is 'ptt' | 'tap' | 'wake' => v === 'ptt' || v === 'tap' || v === 'wake';
     getSettings().then(defs => {
       const m = defs.find(d => d.key === 'voice.listen_mode')?.value;
-      if (m === 'tap' || m === 'ptt') setListenMode(m);
+      if (isMode(m)) setListenMode(m);
       const s = defs.find(d => d.key === 'voice.vad_silence_ms')?.value;
       if (typeof s === 'number') vadSilenceMs.current = s;
+      const w = defs.find(d => d.key === 'voice.wake_threshold')?.value;
+      if (typeof w === 'number') wakeThreshold.current = w;
+      const ph = defs.find(d => d.key === 'voice.wake_word')?.value;
+      if (typeof ph === 'string' && ph) wakeWord.current = ph;
     }).catch(() => {});
     const onChange = (e: Event) => {
       const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
-      if (key === 'voice.listen_mode' && (value === 'tap' || value === 'ptt')) setListenMode(value);
+      if (key === 'voice.listen_mode' && isMode(value)) setListenMode(value);
       if (key === 'voice.vad_silence_ms' && typeof value === 'number') vadSilenceMs.current = value;
+      if (key === 'voice.wake_threshold' && typeof value === 'number') wakeThreshold.current = value;
+      if (key === 'voice.wake_word' && typeof value === 'string' && value) wakeWord.current = value;
     };
     window.addEventListener('nova:setting-changed', onChange);
     return () => window.removeEventListener('nova:setting-changed', onChange);
@@ -188,21 +213,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch (err) {
       setMicState('idle');
       setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: `Transcription failed: ${err instanceof Error ? err.message : String(err)}` }]);
+        content: `Transcription failed: ${errText(err)}` }]);
     }
   }
 
-  // ── tap-to-talk: tap arms the in-browser VAD, it auto-ends on silence ──
-  async function tapToggle() {
-    if (busy || micState === 'transcribing' || micState === 'arming') return;
-    if (micState === 'armed' || micState === 'capturing') {   // tap again = cancel
-      await tapVad.current?.disarm();
-      tapVad.current = null;
-      setMicState('idle');
-      return;
-    }
-    speaker.enable();               // reserve the audio context in the gesture
-    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+  // arm the in-browser VAD to capture ONE utterance, then submit it. Shared
+  // by tap-to-talk (button) and the wake word (after the trigger fires).
+  async function startVadCapture(afterSubmit?: () => void | Promise<void>) {
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
       const { TapVad } = await import('../voice/vad');
@@ -219,6 +236,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
             await v.disarm();
             tapVad.current = null;
             await submitUtterance(wav);
+            await afterSubmit?.();
           }, 0);
         },
       }, { silenceMs: vadSilenceMs.current });
@@ -227,7 +245,63 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       tapVad.current = null;
       setMicState('idle');
       setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: `Voice detector unavailable: ${err instanceof Error ? err.message : String(err)}` }]);
+        content: `Voice detector unavailable: ${errText(err)}` }]);
+      await afterSubmit?.();
+    }
+  }
+
+  // ── tap-to-talk: tap arms the VAD, it auto-ends on silence ──
+  async function tapToggle() {
+    if (busy || micState === 'transcribing' || micState === 'arming') return;
+    if (micState === 'armed' || micState === 'capturing') {   // tap again = cancel
+      await tapVad.current?.disarm();
+      tapVad.current = null;
+      setMicState('idle');
+      return;
+    }
+    speaker.enable();               // reserve the audio context in the gesture
+    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    await startVadCapture();
+  }
+
+  // ── wake word: listen hands-free; the trigger arms a VAD capture ──
+  async function resumeWake() {
+    if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
+    try { await wakeRef.current.start(); setMicState('wake'); }
+    catch { wakeOn.current = false; setMicState('idle'); }
+  }
+
+  async function onWake() {
+    speaker.cancel();                    // barge-in: stop any current reply
+    await wakeRef.current?.stop();        // release the wake mic while capturing
+    await startVadCapture(resumeWake);    // capture the command, then re-listen
+  }
+
+  async function wakeToggle() {
+    if (micState === 'arming' || micState === 'transcribing') return;
+    if (wakeOn.current) {                 // turn off
+      wakeOn.current = false;
+      await wakeRef.current?.stop();
+      wakeRef.current = null;
+      setMicState('idle');
+      return;
+    }
+    speaker.enable();
+    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    setMicState('arming');
+    try {
+      const { WakeWord } = await import('../voice/wake');
+      const w = wakeRef.current ?? await WakeWord.create({
+        model: wakeWord.current, threshold: wakeThreshold.current, onWake });
+      wakeRef.current = w;
+      wakeOn.current = true;
+      await w.start();
+      setMicState('wake');
+    } catch (err) {
+      wakeOn.current = false; wakeRef.current = null;
+      setMicState('idle');
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Wake word unavailable: ${errText(err)}` }]);
     }
   }
 
@@ -243,7 +317,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       setMicState('recording');
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: `Microphone unavailable: ${err instanceof Error ? err.message : String(err)}` }]);
+        content: `Microphone unavailable: ${errText(err)}` }]);
     }
   }
 
@@ -255,7 +329,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch (err) {
       setMicState('idle');
       setItems(prev => [...prev, { id: uid(), kind: 'error',
-        content: `Recording failed: ${err instanceof Error ? err.message : String(err)}` }]);
+        content: `Recording failed: ${errText(err)}` }]);
     }
   }
 
@@ -390,7 +464,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       )}
       <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 shrink-0">
-          <span className="text-teal-400 font-semibold">Nova</span>
+          <span className="text-teal-400 font-semibold">{assistantName}</span>
           {mobile && onShowBrain && (
             <button
               onClick={onShowBrain}
@@ -440,7 +514,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
             onClick={toggleSpeech}
             className={`text-base leading-none px-1.5 py-0.5 rounded border ${
               speech ? 'border-teal-700 text-teal-400' : 'border-stone-700 text-stone-500'}`}
-            title={speech ? 'Nova speaks her replies — click to mute'
+            title={speech ? `${assistantName} speaks replies aloud — click to mute`
                           : 'Speak replies aloud (needs the voice compose profile)'}
             aria-label={speech ? 'Mute spoken replies' : 'Speak replies aloud'}
           >
@@ -453,7 +527,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       <div className="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-4 space-y-2">
         {items.length === 0 && (
           <div className="text-center text-stone-500 mt-10">
-            <p className="text-base font-medium text-stone-400">Talk to Nova</p>
+            <p className="text-base font-medium text-stone-400">Talk to {assistantName}</p>
             <p className="text-sm mt-1">One continuous conversation — it remembers.</p>
           </div>
         )}
@@ -484,25 +558,32 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         />
         <button
           type="button"
-          onClick={listenMode === 'tap' ? tapToggle : undefined}
-          onPointerDown={listenMode === 'tap' ? undefined : pttStart}
-          onPointerUp={listenMode === 'tap' ? undefined : pttEnd}
-          onPointerCancel={listenMode === 'tap' ? undefined : pttEnd}
-          disabled={busy || micState === 'transcribing' || micState === 'arming'}
-          title={listenMode === 'tap'
+          onClick={listenMode === 'tap' ? tapToggle : listenMode === 'wake' ? wakeToggle : undefined}
+          onPointerDown={listenMode === 'ptt' ? pttStart : undefined}
+          onPointerUp={listenMode === 'ptt' ? pttEnd : undefined}
+          onPointerCancel={listenMode === 'ptt' ? pttEnd : undefined}
+          disabled={micState === 'transcribing' || micState === 'arming'}
+          title={listenMode === 'wake'
+            ? (micState === 'wake' ? `Listening for “${wakeLabel(wakeWord.current)}” — click to stop`
+              : micState === 'capturing' ? 'Heard you — capturing…'
+              : micState === 'arming' ? 'Loading wake word…'
+              : `Click to listen hands-free for “${wakeLabel(wakeWord.current)}”`)
+            : listenMode === 'tap'
             ? (micState === 'armed' ? 'Listening — tap to cancel'
               : micState === 'capturing' ? 'Hearing you…'
               : micState === 'arming' ? 'Loading speech detector…'
               : 'Tap to talk (auto-stops when you pause)')
             : (micState === 'recording' ? 'Recording — release to send' : 'Hold to talk')}
-          aria-label={listenMode === 'tap' ? 'Tap to talk' : 'Hold to talk'}
+          aria-label={listenMode === 'wake' ? 'Wake word' : listenMode === 'tap' ? 'Tap to talk' : 'Hold to talk'}
           className={`px-3 py-2 rounded text-sm transition select-none touch-none ${
             micState === 'recording' || micState === 'capturing'
               ? 'bg-red-600 text-white animate-pulse'
-              : micState === 'armed' ? 'bg-teal-700 text-teal-100 animate-pulse'
+              : micState === 'armed' || micState === 'wake'
+                ? 'bg-teal-700 text-teal-100 animate-pulse'
                 : 'bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50'}`}
         >
-          {micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳' : '🎤'}
+          {micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳'
+            : listenMode === 'wake' && micState === 'wake' ? '👂' : '🎤'}
         </button>
         <button
           type="submit"

@@ -577,6 +577,7 @@ export interface RecommendationsResponse {
   curated_count: number;
   recommendations: ModelRecommendation[];
   budget: ModelBudget;
+  catalog_freshness?: { age_days: number | null; stale: boolean };
 }
 
 export async function getModelBudget(): Promise<ModelBudget & { hardware: HardwareInfo }> {

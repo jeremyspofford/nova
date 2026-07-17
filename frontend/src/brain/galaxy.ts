@@ -127,6 +127,9 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     for (const s of stars) {
       const key = clusterKey(s.node);
       const c = clusters.get(key) ?? { label: key, color: s.color, ids: [] };
+      // the core cluster is labelled with the assistant's name, not the "nova"
+      // grouping key — so a rename shows up zoomed out too
+      if (s.node.type === 'core') c.label = s.node.label;
       c.ids.push(s.node.id);
       clusters.set(key, c);
     }
@@ -182,7 +185,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     const g0 = FOV / dist;
     const nodeLabelAlpha = labelMode === 'on' ? 1
       : labelMode === 'off' ? 0
-      : Math.max(0, Math.min(1, (g0 - 1.0) / 0.4));
+        : Math.max(0, Math.min(1, (g0 - 1.0) / 0.4));
     const clusterLabelAlpha = labelMode === 'off' ? 0
       : Math.max(0, Math.min(1, (0.95 - g0) / 0.3));
 
@@ -256,14 +259,16 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     ctx.globalCompositeOperation = 'source-over';
     ctx.textAlign = 'center';
 
-    // core identity label — the golden orb is Nova itself, the anchor the
-    // memories orbit
+    // core identity label — the golden orb is the assistant itself, the anchor
+    // the memories orbit. Its name follows the core node's data label (driven
+    // by nova.assistant_name), so a renamed assistant relabels here too.
     if (core.px != null) {
+      const coreLabel = stars.find(s => s.node.type === 'core')?.node.label || 'Nova';
       ctx.font = `500 ${Math.min(14, Math.max(11, 12 * (core.pscale ?? 1))) * labelScale}px system-ui`;
       ctx.shadowColor = '#ffd682';
       ctx.shadowBlur = 12;
       ctx.fillStyle = 'rgba(255, 236, 200, 0.9)';
-      ctx.fillText('Nova', core.px, core.py! + coreR * 2.4 + 16);
+      ctx.fillText(coreLabel, core.px, core.py! + coreR * 2.4 + 16);
       ctx.shadowBlur = 0;
     }
 

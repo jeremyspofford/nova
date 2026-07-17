@@ -20,6 +20,7 @@ import { getAuthToken, getServerToken } from '../api';
 import { THEMES } from '../brain/theme';
 import { displayName } from '../names';
 import { ThemePreview } from './ThemePreview';
+import { WAKE_CATALOG } from '../voice/wakeCatalog';
 
 type Tab = 'settings' | 'agents' | 'models' | 'automations' | 'rules' | 'tools' | 'skills';
 
@@ -169,6 +170,9 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
     }
     if (d.key === 'voice.listen_mode') {
       return <ListenModeField value={String(d.value)} onSelect={v => save(d.key, v)} />;
+    }
+    if (d.key === 'voice.wake_word') {
+      return <WakeWordField value={String(d.value)} onSelect={v => save(d.key, v)} />;
     }
     if (d.type === 'boolean') {
       return (
@@ -364,7 +368,11 @@ function VoiceField({ value, onSelect }: { value: string; onSelect: (v: string) 
  *  the in-browser speech detector is a one-time download, so say so. */
 function ListenModeField({ value, onSelect }: { value: string; onSelect: (v: string) => void }) {
   const LABELS: Record<string, string> = {
-    ptt: 'Hold to talk', tap: 'Tap to talk (auto-stop)',
+    ptt: 'Hold to talk', tap: 'Tap to talk (auto-stop)', wake: 'Wake word (hands-free)',
+  };
+  const HINTS: Record<string, string> = {
+    tap: 'Downloads a ~15 MB on-device speech detector the first time (cached after); needs a modern browser and mic access. Audio never leaves your device.',
+    wake: 'Listens hands-free on-device for the wake phrase you pick below (separate from the assistant’s name — a spoken trigger is a trained model). ~4 MB of models; works only while this tab is open and focused; audio never leaves your device until the phrase fires.',
   };
   return (
     <div className="shrink-0 flex flex-col items-end gap-1">
@@ -375,14 +383,25 @@ function ListenModeField({ value, onSelect }: { value: string; onSelect: (v: str
       >
         {Object.entries(LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
       </select>
-      {value === 'tap' && (
-        <span className="text-[11px] text-stone-500 text-right max-w-[16rem]">
-          Downloads a ~15 MB on-device speech detector the first time (cached
-          after); needs a modern browser and mic access. Audio never leaves
-          your device.
-        </span>
+      {HINTS[value] && (
+        <span className="text-[11px] text-stone-500 text-right max-w-[16rem]">{HINTS[value]}</span>
       )}
     </div>
+  );
+}
+
+/** Wake phrase — a fixed catalog because each phrase is its own trained model.
+ *  Deliberately separate from the assistant's name; a matching custom phrase
+ *  needs a trained model (roadmap in docs/plans/voice.md). */
+function WakeWordField({ value, onSelect }: { value: string; onSelect: (v: string) => void }) {
+  return (
+    <select
+      value={value}
+      onChange={e => onSelect(e.target.value)}
+      className="shrink-0 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+    >
+      {Object.entries(WAKE_CATALOG).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
+    </select>
   );
 }
 
@@ -836,6 +855,14 @@ function DetectSuggest() {
           it may be stopped, or running without the GPU override
           (docker-compose.gpu.yml, merged automatically by the sidecar).
           Restart it with the toggle above, then re-detect.
+        </div>
+      )}
+      {recs?.catalog_freshness?.stale && (
+        <div className="text-xs text-amber-400/90">
+          The model catalog's newest entry is {recs.catalog_freshness.age_days} days
+          old — models move fast, so these suggestions may trail the frontier.
+          Ask the model-manager (chat: "any newer models I should run?") to check
+          for current releases and propose additions.
         </div>
       )}
 

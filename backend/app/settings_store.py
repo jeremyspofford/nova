@@ -86,6 +86,13 @@ SETTING_DEFS: list[dict] = [
      "label": "Label text size",
      "description": "Scales all graph label text."},
     # ── Operator ─────────────────────────────────────────────────────────
+    {"key": "nova.assistant_name", "type": "string", "default": "Nova",
+     "section": "Operator", "label": "Assistant name",
+     "description": ("What your assistant calls itself. Renaming updates its "
+                     "identity in every reply and across the UI. The wake word "
+                     "is a separate setting — a spoken trigger has to be a "
+                     "trained model, so it won't automatically match a new "
+                     "name (see Voice → Wake phrase).")},
     {"key": "nova.timezone", "type": "string", "default": "America/New_York",
      "section": "Operator", "label": "Timezone",
      "description": ("IANA timezone (e.g. America/New_York) Nova treats as "
@@ -126,12 +133,27 @@ SETTING_DEFS: list[dict] = [
      "section": "Voice", "label": "Voice reply model",
      "description": ("LLM used when a turn is started by voice (empty = the "
                      "main agent's model). Pick a faster/more conversational "
-                     "model for spoken exchanges without changing the agent.")},
+                     "model for spoken exchanges without changing the agent. "
+                     "A local model is strongly recommended if the mic is "
+                     "always listening — cloud here means ambient speech "
+                     "leaves the machine and bills per utterance.")},
     {"key": "voice.listen_mode", "type": "enum", "default": "ptt",
-     "options": ["ptt", "tap"], "section": "Voice", "label": "Mic mode",
-     "description": ("How the mic button works. Hold-to-talk always works; "
-                     "tap-to-talk auto-stops when you pause, using an "
-                     "in-browser speech detector.")},
+     "options": ["ptt", "tap", "wake"], "section": "Voice", "label": "Mic mode",
+     "description": ("How the mic engages. Hold-to-talk always works; "
+                     "tap-to-talk auto-stops when you pause; wake word listens "
+                     "hands-free for a spoken trigger. All on-device.")},
+    {"key": "voice.wake_word", "type": "enum", "default": "hey_jarvis",
+     "options": ["hey_jarvis"], "section": "Voice", "label": "Wake phrase",
+     "description": ("The spoken phrase that wakes hands-free listening. Each "
+                     "phrase is its own on-device model, so this is a fixed "
+                     "list — independent of the assistant's name. A custom "
+                     "phrase matching your assistant's name needs a trained "
+                     "model (roadmap: docs/plans/voice.md).")},
+    {"key": "voice.wake_threshold", "type": "number", "default": 0.5,
+     "min": 0.1, "max": 0.95, "section": "Voice",
+     "label": "Wake word sensitivity",
+     "description": ("Detection threshold for the wake word (lower = more "
+                     "sensitive / more false triggers). Tune it to your voice.")},
     {"key": "voice.vad_silence_ms", "type": "number", "default": 1100,
      "min": 500, "max": 2500, "section": "Voice",
      "label": "Tap-to-talk pause tolerance (ms)",

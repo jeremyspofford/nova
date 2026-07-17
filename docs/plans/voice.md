@@ -94,6 +94,14 @@ queue with a small bound (2) so barge-in cancels cheaply. Strip
 markdown/code fences before synthesis (code blocks are summarized as
 "…code omitted…" in speech, full text still lands in chat).
 
+**Speech cadence (DONE 2026-07-16):** each synth chunk carries a `gap` — a
+silent breath scheduled before it plays (`speech.ts`). Beyond the existing
+list-item breath (LIST_GAP 0.35s), a new paragraph opens with PARA_GAP (0.5s)
+and a spaced dash (` — `/` – `/` - `) splits the phrase with a brief DASH_GAP
+(0.18s). Sentence-to-sentence stays gap-free (flow); intra-word hyphens
+(co-operate, twenty-one) don't split. Deliberate per Jeremy — tune the
+constants, don't remove them.
+
 ## Frontend
 
 - Mic capture: `getUserMedia` → `AudioWorklet` (do NOT use the deprecated
@@ -221,6 +229,70 @@ markdown/code fences before synthesis (code blocks are summarized as
      capture → same transcribe path. Continuous audio NEVER leaves the
      device. Hints: model download size, phone battery cost,
      foreground-only (the PWA platform limit).
+     *(DONE 2026-07-15 — built on Opus. openWakeWord's 3 ONNX models
+     (melspec+embedding+hey_jarvis) self-hosted in `frontend/public/wake/`,
+     pipeline ported to `src/voice/wake.ts` (onnxruntime-web/wasm, sharing
+     the phase-3 ORT runtime at /vad/). The port was VERIFIED NUMERICALLY
+     against openWakeWord's Python reference — zero per-chunk error — and
+     the same scores reproduced live in-browser (fires at 0.925 on the
+     reference clip, hands off to the VAD cleanly). listen_mode gains
+     "wake"; `voice.wake_threshold` setting + honest Settings hint;
+     ChatPanel wake toggle → continuous detect → barge-in + VAD capture →
+     voice turn → resume. KEY LIMITATION: openWakeWord is trained on real
+     human speech, so wake ACCURACY and threshold tuning need a real voice
+     — can't be validated with synthetic TTS (both positive and negative
+     kokoro clips score ~0.93). Uses "hey Jarvis" as a labeled stand-in.
+     Build gotcha: import `onnxruntime-web/wasm`, NOT `onnxruntime-web`
+     (the latter bundles a 26 MB WebGPU wasm); wasm excluded from PWA
+     precache via globIgnores.)*
+   - *4a·1 — assistant rename + wake-phrase decoupling (DONE 2026-07-16)*:
+     the assistant's name is now a first-class setting
+     (`nova.assistant_name`, default "Nova"), authoritative in every reply —
+     `runner._build_system_prompt` rewrites the soul's self-name to match
+     (`memory.soul(name)` swaps the frontmatter title throughout the body)
+     and appends a "## Your name" backstop, so a renamed assistant never
+     sees a conflicting name. Live-verified: rename→"Aria"→ask its name→
+     "Aria" through the real chat stream. Frontend threads the name via
+     `useAssistantName()` (chat header, speak-toggle title, empty state).
+     Brain view also follows the name (DONE 2026-07-16): the graph's `core`
+     node is relabelled to `nova.assistant_name` at the data layer in
+     `Brain.tsx` (both renderers read it — `graph2d` via `n.label`, `galaxy`
+     via the core star's `node.label` instead of a hardcoded string), with a
+     `reloadRef` so a live rename re-fetches and relabels immediately rather
+     than waiting for the 20s poll. STILL INTENTIONALLY "Nova": the pre-auth
+     login gate (`App.tsx`) — no name is available before auth, and it reads
+     as product branding, not the assistant persona.
+     CRUCIAL: the wake phrase is DELIBERATELY separate from the name. A
+     spoken trigger is a trained model, not a string, so `voice.wake_word`
+     is a fixed catalog (`src/voice/wakeCatalog.ts`, currently just
+     `hey_jarvis`), chosen independently — the Amazon model (rename the
+     device; wake word stays one of a trained set). The catalog module is
+     kept ORT-free so the UI can name phrases without bundling the runtime.
+     Renaming to "Aria" does NOT give you an "Aria" wake word — that needs
+     4c.*
+   - *4c — custom wake word for a renamed assistant (ROADMAP, "train
+     later")*: mint an openWakeWord model for an arbitrary phrase so a
+     renamed assistant can be woken by its own name. Pipeline (offline,
+     GPU — the 3090): (1) generate synthetic positives of the phrase with
+     the bundled Kokoro TTS (54 voices × speed/pitch jitter) + hard
+     negatives/background from the openWakeWord recipe; (2) train the wake
+     head on the shared melspec+embedding front-end (unchanged, already
+     self-hosted); (3) export a small ONNX; (4) drop it in
+     `public/wake/<key>.onnx` and register `{key, label, file}` in
+     `wakeCatalog.ts` — the picker and detector pick it up with no other
+     code change (that seam is the whole point of 4a·1). Delivery options:
+     a `backend/scripts/train_wake_word.py` an operator runs for a phrase,
+     or eventually an in-app "train a wake word for '<name>'" flow that
+     shells out to it. HONEST CONSTRAINTS: synthetic-only training gives a
+     usable-but-not-great model (openWakeWord expects real human speech; TTS
+     positives/negatives score alike ~0.93 — see 4a), training is minutes-
+     to-an-hour on a GPU (not on-device, not per-request), and each phrase
+     is ~1 MB. Alternative sketched + rejected: few-shot voice enrollment
+     via the existing embedding model (speak it 3×, nearest-neighbour) —
+     elegant reuse but lower accuracy and real research; revisit if
+     per-phrase training proves too heavy. Picovoice/Porcupine would give
+     arbitrary keywords but needs an account key → OUT (batteries-included,
+     no API-key collecting).*
    - *4b — on-server engine (robust alternative)*: this is where the
      WebSocket finally earns its build: AudioWorklet 16 kHz s16 frames →
      `WS /api/v1/voice/listen` (auth via `?token=` — browsers can't set
@@ -240,6 +312,46 @@ markdown/code fences before synthesis (code blocks are summarized as
    - De-risk: if the 4a browser port fights back, ship 4b first — the
      setting's shape doesn't change and 4a slots in later. This phase is
      the UX polish loop; budget iteration time for wake accuracy.
+   - *4d — open-vocabulary "wake by name" (local ASR, ROADMAP — approved
+     direction 2026-07-16)*: the way to make "Nova" / "Hey Nova" the trigger
+     WITHOUT training an acoustic model (supersedes 4c for the naming case).
+     Instead of matching a fixed trained phrase, transcribe continuously and
+     spot the NAME anywhere in the transcript, so "Hey Nova …", "Nova, …",
+     and "…, Nova?" all fire. Pipeline (extends 4b's server-listen path):
+     always-on mic → silero VAD (gate: only run ASR on actual speech, not
+     silence — the cost lever) → faster-whisper (already running) →
+     name-spot in the transcript → optional tiny local intent check (is this
+     a command, or an incidental "I watched NOVA on PBS"?) → hand the
+     utterance to the chat turn. The name spotter should prefer vocative
+     position (sentence start/end, comma-adjacent) to cut incidental hits.
+     WHY THIS over 4c: no per-name training, positional flexibility for
+     free, and it directly answers "make the wake word Nova." COST: local
+     compute only (VAD-gated ASR on the 3090 — electricity/heat, not
+     credits); nothing leaves the machine and zero API credits until an
+     utterance actually earns a response. PRIVACY (must be explicit +
+     opt-in, NOT default, visible "listening" indicator): unlike 4a/4c which
+     only ever "hear" the trigger phrase, continuous ASR transcribes ALL
+     nearby speech locally — a real surface change even though it never
+     leaves the device. New `voice.listen_mode` value (`name`/`open`)
+     alongside ptt/tap/wake. MODEL POLICY (2026-07-16): the voice-reply
+     model stays separate from the main agent's and is recommended
+     per-hardware from the curated catalog's `voice` role (migration 022:
+     qwen3:4b tiny/CPU fallback, qwen3:8b ~8 GB GPU, gemma4:e2b no-GPU
+     frontier MoE, gemma4:12b 10 GB+ GPU). When always-listening is ON,
+     steer hard to LOCAL (cloud = ambient speech leaves the machine and
+     bills per utterance — the Settings hint says so). Follow-up
+     suggestion, only when always-listening is enabled with a local model
+     resident: offer to point compaction+guard at that same model and drop
+     the tiny 3B (one resident model beats two loaded ones); when
+     always-listening is off, the small model remains the efficient choice. EXPLICITLY REJECTED — nameless addressee
+     detection ("is she being talked to?" with no name): addressee is
+     genuinely ambiguous audio-only ("what time do you go to work?" to a
+     spouse vs. Nova), and the failure is asymmetric — a false interject is
+     creepy and means she's interpreting every conversation. The name is the
+     consent signal (why every commercial assistant requires a wake word).
+     Capability-awareness ("who's at the door?" → do I have a camera?)
+     belongs AFTER the name is said — a responding refinement, not a
+     trigger.
 5. **Keyed cloud TTS (opt-in extra)** behind the same engine interface;
    secrets via the admin secrets pattern, never in requests to the LLM
    (guardian rule).

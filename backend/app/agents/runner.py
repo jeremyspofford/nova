@@ -47,13 +47,18 @@ def _now_block() -> str:
 
 async def _build_system_prompt(agent: dict, query: str,
                                include_index: bool = False) -> str:
+    name = settings_store.get("nova.assistant_name") or "Nova"
     parts = [agent["system_prompt"], _now_block()]
     try:
-        soul = await memory.soul()
+        soul = await memory.soul(name)
         if soul:
             parts.append(f"## Who I am\n{soul}")
     except Exception:
         log.exception("Soul read failed; continuing without identity block")
+    # Authoritative name, asserted AFTER the persona so it wins any lingering
+    # reference — the soul is already rewritten to match, this is the backstop.
+    parts.append(f"## Your name\nYour name is {name}. If asked your name, "
+                 f"answer exactly \"{name}\".")
     if include_index:
         # An agent that can dispatch always SEES the index — "remember to
         # check" proved unreliable in live testing.
