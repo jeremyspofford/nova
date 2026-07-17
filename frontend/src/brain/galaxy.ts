@@ -177,7 +177,10 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
 
   function draw(now: number) {
     const w = canvas.width, h = canvas.height;
-    if (autoRotate && !dragging) yaw += 0.0016 * rotationSpeed;
+    // base rate rescaled 0.0016 -> 0.0002 (2026-07-16): the old scale made
+    // everything above ~0.3 on the 0-6 slider uncomfortably fast — now the
+    // whole slider is usable (1 = calm drift, 6 = the old ~0.75)
+    if (autoRotate && !dragging) yaw += 0.0002 * rotationSpeed;
 
     // semantic zoom: g grows as you zoom in. Node titles fade in up close;
     // cluster/category names fade in when zoomed out (like the original's

@@ -219,16 +219,23 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
 
   // arm the in-browser VAD to capture ONE utterance, then submit it. Shared
   // by tap-to-talk (button) and the wake word (after the trigger fires).
-  async function startVadCapture(afterSubmit?: () => void | Promise<void>) {
+  // armTimeoutMs: if NOTHING is spoken within it, give up and run afterSubmit
+  // anyway — without this, a false wake-fire strands the VAD armed forever
+  // and wake listening never resumes ("it only activated once").
+  async function startVadCapture(afterSubmit?: () => void | Promise<void>,
+                                 armTimeoutMs?: number) {
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
       const { TapVad } = await import('../voice/vad');
       const v = new TapVad();
       tapVad.current = v;
+      let armTimer: number | undefined;
+      const clearArmTimer = () => { if (armTimer) { clearTimeout(armTimer); armTimer = undefined; } };
       await v.arm({
-        onSpeechStart: () => setMicState('capturing'),
+        onSpeechStart: () => { clearArmTimer(); setMicState('capturing'); },
         onMisfire: () => setMicState('armed'),
         onSpeechEnd: (wav) => {
+          clearArmTimer();
           // defer out of the VAD's own callback stack before tearing it down —
           // calling destroy() synchronously from within onSpeechEnd wedges the
           // async continuation and the utterance never gets submitted
@@ -241,6 +248,14 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         },
       }, { silenceMs: vadSilenceMs.current });
       setMicState(s => (s === 'arming' ? 'armed' : s));
+      if (armTimeoutMs) {
+        armTimer = window.setTimeout(async () => {
+          if (tapVad.current !== v) return;      // already captured/cancelled
+          await v.disarm();
+          tapVad.current = null;
+          await afterSubmit?.();                  // back to wake listening
+        }, armTimeoutMs);
+      }
     } catch (err) {
       tapVad.current = null;
       setMicState('idle');
@@ -268,13 +283,21 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   async function resumeWake() {
     if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
     try { await wakeRef.current.start(); setMicState('wake'); }
-    catch { wakeOn.current = false; setMicState('idle'); }
+    catch (err) {
+      // say so — dying silently here is "wake worked once, then never again"
+      wakeOn.current = false;
+      setMicState('idle');
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Wake listening could not resume: ${errText(err)} — click the mic to restart it.` }]);
+    }
   }
 
   async function onWake() {
     speaker.cancel();                    // barge-in: stop any current reply
     await wakeRef.current?.stop();        // release the wake mic while capturing
-    await startVadCapture(resumeWake);    // capture the command, then re-listen
+    // capture the command, then re-listen; if nothing is said within 10 s
+    // (false fire), give up on the capture and resume wake listening
+    await startVadCapture(resumeWake, 10_000);
   }
 
   async function wakeToggle() {
@@ -565,6 +588,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           disabled={micState === 'transcribing' || micState === 'arming'}
           title={listenMode === 'wake'
             ? (micState === 'wake' ? `Listening for “${wakeLabel(wakeWord.current)}” — click to stop`
+              : micState === 'armed' ? 'Wake word heard — speak now'
               : micState === 'capturing' ? 'Heard you — capturing…'
               : micState === 'arming' ? 'Loading wake word…'
               : `Click to listen hands-free for “${wakeLabel(wakeWord.current)}”`)

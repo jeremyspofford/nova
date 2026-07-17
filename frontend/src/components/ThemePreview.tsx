@@ -15,7 +15,8 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
     if (!canvas) return;
     const renderer = THEMES[themeKey].create(canvas);
     renderer.resize(220, 130);
-    renderer.configure?.({ rotationSpeed: 1.5, labelMode: 'off', labelScale: 0.7 });
+    // preview cards keep visible motion under the rescaled galaxy base rate
+    renderer.configure?.({ rotationSpeed: 6, labelMode: 'off', labelScale: 0.7 });
     renderer.setData(SAMPLE_NODES, SAMPLE_EDGES);
     // the force layout's natural spread dwarfs a 220x130 canvas — fit the
     // view once the simulation has roughly settled (twice, to be sure)

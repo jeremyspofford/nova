@@ -586,7 +586,25 @@ See README for what works. This file is the ordered backlog.
    ChatPanel plus settings (window length, on/off) and a visible
    "still listening" indicator.
 
-11. **Human-like replies — the persona pass (requested 2026-07-16)** —
+11. **Wake word learns from use (requested 2026-07-16: "can that get
+   better with use?" — yes)** — the training pipeline
+   (tools/wake-training) can retrain in minutes; what's missing is REAL
+   examples of the operator's voice. Design: (a) **enrollment** (fastest
+   win): a Settings flow records N repetitions of the phrase (+ a few
+   sentences of the operator's normal speech as negatives), drops them in
+   the training corpus with heavy weight, retrains, hot-swaps the ONNX.
+   (b) **passive improvement** (opt-in, all local): on each wake fire,
+   keep the trigger audio; fires followed by a completed voice turn =
+   confirmed positives, fires the user immediately cancels = false-fire
+   negatives; a "shadow threshold" (log score peaks above ~0.05 that
+   DIDN'T fire) catches the near-misses — Jeremy's exact symptom (had to
+   slow-enunciate; natural cadence under-scores). Periodic retrain folds
+   them in. Voice audio is biometric-adjacent: explicit opt-in, local
+   only, browsable/deletable clips. The nova.wakeDebug console readout
+   (shipped) is the manual precursor — read your scores, tune the
+   threshold.
+
+12. **Human-like replies — the persona pass (requested 2026-07-16)** —
    Jarvis-from-Iron-Man / Sarah-from-Eureka register: warm, wry, concise,
    context-aware; "what time is it?" gets the time, not a paragraph.
    Queued with root-cause notes in auto-memory (fable-humanize-responses):
