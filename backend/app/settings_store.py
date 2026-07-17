@@ -32,6 +32,15 @@ SETTING_DEFS: list[dict] = [
      "model_scope": "any", "allow_empty": True,
      "section": "Context", "label": "Compaction model",
      "description": "Model for summary passes (empty = the main agent's model)."},
+    # ── Agents ───────────────────────────────────────────────────────────
+    {"key": "agents.max_tool_rounds", "type": "number", "default": 10,
+     "min": 1, "max": 50, "section": "Agents",
+     "label": "Tool rounds per turn",
+     "description": ("Max LLM rounds (each may call tools) one agent turn "
+                     "gets before it must answer with what it has. Research "
+                     "dispatches burn a round per search/fetch, so raise "
+                     "this if specialists keep getting cut off — the "
+                     "wall-clock kill switch remains the hard runaway stop.")},
     # ── Inference ────────────────────────────────────────────────────────
     {"key": "inference.ollama_url", "type": "string",
      "default": "http://ollama:11434", "section": "Inference",

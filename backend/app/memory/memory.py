@@ -64,7 +64,9 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         log.info("Memory index ready: %d documents", self.index.total_docs)
 
     async def soul(self, name: Optional[str] = None) -> Optional[str]:
-        """The identity file's body (injected into every agent's prompt).
+        """The identity file's body — injected into Nova's prompt only
+        (persona-layer phase 1: specialists are their own entities and
+        never wear the soul).
 
         If `name` is given and differs from the file's own self-name (its
         frontmatter title), the self-name is swapped throughout the body so a
@@ -203,9 +205,16 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
 
     async def delete_item(self, doc_id: str) -> bool:
         async with self._lock:
+            parsed = self.store.read_file(doc_id)
             if not self.store.delete_file(doc_id):
                 return False
             self.index.remove(doc_id)
+            # de-reference: [[links]] to the deleted title become plain text
+            # everywhere, so no surviving memory points at a missing document
+            title = parsed[0].get("title") if parsed else None
+            if title:
+                for changed_id, mtime in self.store.unlink_references(title):
+                    self._index_file(changed_id, mtime)
             return True
 
     async def stats(self) -> dict:

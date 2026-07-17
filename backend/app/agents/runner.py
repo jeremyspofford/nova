@@ -20,7 +20,6 @@ from typing import AsyncIterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import narration, settings_store
-from app.config import settings
 from app.llm import router as llm_router
 from app.memory.memory import memory
 from app.tools import registry as tool_registry
@@ -28,6 +27,42 @@ from app.tools import registry as tool_registry
 log = logging.getLogger(__name__)
 
 MAX_DISPATCH_DEPTH = 1
+MAIN_AGENT = "main"  # the agent that IS the assistant — the only soul-wearer
+
+# ── persona-layer phase 1 (docs/plans/persona-layer.md): the runner owns
+# prompt assembly in fixed slots — ROLE → FACTS → CONTEXT → LAST WORD.
+# Small models obey the END of the prompt, so what lands last is a design
+# decision, never an accident. Only Nova gets the soul; specialists are
+# their own entities and end with the house rules instead.
+
+# Nova's default channel register (typed chat). Voice turns pass their own
+# via system_suffix, which replaces this. Short on purpose — the soul
+# carries the full statement; this is the recency-position echo of it.
+_TYPED_REGISTER = (
+    '## Register\n'
+    'Reply as yourself — someone in the room, not a report generator. Size '
+    'the answer to the question: simple question, one plain sentence. No '
+    'emoji, no sign-offs, no restating the question; structure only when '
+    'the answer genuinely is a list or comparison. "thanks" gets '
+    '"Anytime.", never "You\'re welcome! Is there anything else I can help '
+    'you with today?".'
+)
+
+# Specialists' last word: operating norms earned from real incidents (the
+# narration incident, the stale-journal platform incident) plus the output
+# contract — their reader is Nova, not the operator.
+_HOUSE_RULES = (
+    "## House rules\n"
+    "You are one of {name}'s specialist agents. Your reply goes to {name} "
+    "(another model), not to the operator: be dense, structured, and "
+    "complete — facts, findings, and references, no pleasantries, no "
+    "offers of further help.\n"
+    "Act, don't narrate: if you say you are doing something, make the tool "
+    "call in the same turn; never claim work you have not started.\n"
+    "Memories and journals describe the PAST — for current state, trust "
+    "the live facts above and your tools. Say plainly what you don't know "
+    "or couldn't do."
+)
 
 
 def _now_block() -> str:
@@ -101,23 +136,33 @@ async def _platform_block() -> str:
         return ""
 
 
-async def _build_system_prompt(agent: dict, query: str,
-                               include_index: bool = False) -> str:
+async def _build_system_prompt(agent: dict, query: str, *,
+                               include_index: bool = False,
+                               conversation_summary: str | None = None,
+                               system_suffix: str | None = None) -> str:
+    """Slot-based prompt assembly — persona-layer phase 1.
+
+    ROLE → FACTS → CONTEXT → LAST WORD, in that order, always. The agent
+    supplies only its ROLE slot (its system_prompt); everything after it is
+    owned here, so no agent prompt can bury the last word. Nova (the main
+    agent) ends with identity + channel register; specialists are their own
+    entities and end with the house rules — they never wear the soul (five
+    agents each told "I am Nova" was a real identity confusion, and their
+    replies are read by Nova, not the operator).
+    """
     name = settings_store.get("nova.assistant_name") or "Nova"
-    parts = [agent["system_prompt"], _now_block()]
+    is_nova = agent.get("name") == MAIN_AGENT
+
+    # ROLE — the one slot the agent controls
+    parts = [agent["system_prompt"]]
+
+    # FACTS — fresh every turn; bare data + imperatives (de-quotable)
+    parts.append(_now_block())
     platform = await _platform_block()
     if platform:
         parts.append(platform)
-    try:
-        soul = await memory.soul(name)
-        if soul:
-            parts.append(f"## Who I am\n{soul}")
-    except Exception:
-        log.exception("Soul read failed; continuing without identity block")
-    # Authoritative name, asserted AFTER the persona so it wins any lingering
-    # reference — the soul is already rewritten to match, this is the backstop.
-    parts.append(f"## Your name\nYour name is {name}. If asked your name, "
-                 f"answer exactly \"{name}\".")
+
+    # CONTEXT — specialist index, memories, skills, rolling summary
     if include_index:
         # An agent that can dispatch always SEES the index — "remember to
         # check" proved unreliable in live testing.
@@ -139,6 +184,29 @@ async def _build_system_prompt(agent: dict, query: str,
             parts.append(f"## Applicable Skills\n{skills['context']}")
     except Exception:
         log.exception("Memory retrieval failed; continuing without context")
+    if conversation_summary:
+        parts.append("## Conversation so far (running summary)\n"
+                     + conversation_summary)
+
+    # LAST WORD — identity + register for Nova, house rules for specialists
+    if is_nova:
+        try:
+            soul = await memory.soul(name)
+            if soul:
+                parts.append(f"## Who I am\n{soul}")
+        except Exception:
+            log.exception("Soul read failed; continuing without identity block")
+        # Authoritative name, asserted AFTER the persona so it wins any
+        # lingering reference — the soul is rewritten to match, this is the
+        # backstop.
+        parts.append(f"## Your name\nYour name is {name}. If asked your "
+                     f"name, answer exactly \"{name}\".")
+        # channel register: the caller's suffix (voice) or the typed default
+        parts.append(system_suffix or _TYPED_REGISTER)
+    else:
+        parts.append(_HOUSE_RULES.format(name=name))
+        if system_suffix:
+            parts.append(system_suffix)
     return "\n\n".join(parts)
 
 
@@ -153,9 +221,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     the same memory/skills injection as the main agent.
     conversation_summary: rolling summary of turns aged out of the verbatim
     window (top-level chat only; dispatch sub-turns are self-contained).
-    system_suffix: appended LAST, after everything else — for instructions
-    that must win small-model recency bias (voice brevity; patched into the
-    front of the agent prompt it got buried mid-prompt and ignored).
+    system_suffix: the channel register, landing in the prompt's LAST slot
+    where it wins small-model recency bias (voice brevity; patched into the
+    front of the agent prompt it got buried mid-prompt and ignored). For
+    Nova it replaces the typed-chat default register.
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
@@ -164,13 +233,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
-    system_prompt = await _build_system_prompt(agent, query,
-                                               include_index=can_dispatch)
-    if conversation_summary:
-        system_prompt += ("\n\n## Conversation so far (running summary)\n"
-                          + conversation_summary)
-    if system_suffix:
-        system_prompt += "\n\n" + system_suffix
+    system_prompt = await _build_system_prompt(
+        agent, query, include_index=can_dispatch,
+        conversation_summary=conversation_summary, system_suffix=system_suffix)
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
@@ -180,7 +245,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     final_text = ""
     calls_made = 0
 
-    for round_no in range(settings.max_tool_rounds):
+    max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
+    for round_no in range(max_rounds):
         round_text = ""
         tool_calls: list[dict] = []
         errored = False

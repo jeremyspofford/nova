@@ -34,10 +34,8 @@ class Settings(BaseSettings):
     # this even when inference.ollama_url points at a host-run instance.
     bundled_ollama_url: str = "http://ollama:11434"
 
-    # Agent loop
-    max_tool_rounds: int = 6
-
-    # NOTE: behavioral knobs (context budgets, compaction, automations) live
+    # NOTE: behavioral knobs (context budgets, compaction, automations, the
+    # agent tool-round cap) live
     # in the DB-backed settings store (settings_store.py) — UI-configured,
     # never env. Env here is infra bootstrap + secrets only.
 
