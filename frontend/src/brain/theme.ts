@@ -5,8 +5,9 @@
  */
 
 import type { GraphNode, GraphEdge } from '../api';
-import { createGalaxy } from './galaxy';
-import { createGraph2D } from './graph2d';
+import { createGalaxy, GALAXY_LEGEND } from './galaxy';
+import { createGraph2D, GRAPH_LEGEND } from './graph2d';
+import { createUniverse, UNIVERSE_LEGEND } from './universe';
 
 export interface RendererHandle {
   setData(nodes: GraphNode[], edges: GraphEdge[]): void;
@@ -16,6 +17,8 @@ export interface RendererHandle {
   configure?(options: Record<string, unknown>): void;
   /** Reset the camera/viewport to frame the whole scene. */
   recenter?(): void;
+  /** Navigate to a node (Atlas click): fly the camera there, select it. */
+  focusNode?(id: string): void;
 }
 
 export interface RendererOpts {
@@ -25,9 +28,19 @@ export interface RendererOpts {
 
 export type RendererFactory = (canvas: HTMLCanvasElement, opts?: RendererOpts) => RendererHandle;
 
-export const THEMES: Record<string, { label: string; create: RendererFactory }> = {
-  graph: { label: 'Graph', create: createGraph2D },
-  galaxy: { label: 'Galaxy', create: createGalaxy },
+/** One legend row. `key` ties it to a node type for live counts; rows
+ *  without a key are visual vocabulary (flares, disabled, black hole). */
+export interface LegendEntry {
+  key?: string;
+  label: string;
+  color: string;
+  note?: string;
+}
+
+export const THEMES: Record<string, { label: string; create: RendererFactory; legend: LegendEntry[] }> = {
+  graph: { label: 'Graph', create: createGraph2D, legend: GRAPH_LEGEND },
+  galaxy: { label: 'Galaxy', create: createGalaxy, legend: GALAXY_LEGEND },
+  universe: { label: 'Universe', create: createUniverse, legend: UNIVERSE_LEGEND },
 };
 
 export const DEFAULT_THEME = 'graph';

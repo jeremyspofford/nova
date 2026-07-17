@@ -8,7 +8,7 @@
  */
 
 import type { GraphNode, GraphEdge } from '../api';
-import type { RendererHandle, RendererOpts } from './theme';
+import type { LegendEntry, RendererHandle, RendererOpts } from './theme';
 
 const NODE_COLORS: Record<string, string> = {
   topic: '#22d3ee',
@@ -16,12 +16,26 @@ const NODE_COLORS: Record<string, string> = {
   journal: '#a8a29e',
   source: '#818cf8',
   core: '#facc15',
+  user: '#93c5fd',
   agent: '#a78bfa',
   tool: '#84a98c',
   automation: '#60a5fa',
   rule: '#f87171',
 };
 const CLUSTER_COLORS = ['#22d3ee', '#4ade80', '#a78bfa', '#fb923c', '#f472b6', '#facc15'];
+
+export const GALAXY_LEGEND: LegendEntry[] = [
+  { key: 'core', color: NODE_COLORS.core, label: 'Nova' },
+  { key: 'user', color: NODE_COLORS.user, label: 'You' },
+  { key: 'topic', color: NODE_COLORS.topic, label: 'Memories' },
+  { key: 'journal', color: NODE_COLORS.journal, label: 'Journals' },
+  { key: 'source', color: NODE_COLORS.source, label: 'Sources' },
+  { key: 'agent', color: NODE_COLORS.agent, label: 'Agents' },
+  { key: 'tool', color: NODE_COLORS.tool, label: 'Tools' },
+  { key: 'automation', color: NODE_COLORS.automation, label: 'Automations' },
+  { key: 'rule', color: NODE_COLORS.rule, label: 'Rules' },
+  { key: 'skill', color: NODE_COLORS.skill, label: 'Skills' },
+];
 
 interface Star3D {
   node: GraphNode;

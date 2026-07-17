@@ -5,7 +5,7 @@ import {
   type Simulation, type SimulationNodeDatum,
 } from 'd3';
 import type { GraphNode, GraphEdge } from '../api';
-import type { RendererHandle, RendererOpts } from './theme';
+import type { LegendEntry, RendererHandle, RendererOpts } from './theme';
 
 interface SimNode extends SimulationNodeDatum {
   id: string;
@@ -22,6 +22,7 @@ const NODE_COLORS: Record<string, string> = {
   journal: '#78716C',    // stone — episodic, dim
   source: '#60A5FA',     // blue — external
   core: '#FACC15',       // gold — Nova herself
+  user: '#93C5FD',       // blue-white — the operator, Nova's companion star
   agent: '#8B5CF6',      // violet — capabilities
   tool: '#84A98C',       // sage — what agents may do
   automation: '#3B82F6', // blue — habits
@@ -33,7 +34,21 @@ const EDGE_COLORS: Record<string, string> = {
   platform: 'rgba(139,92,246,0.30)',
   grant: 'rgba(132,169,140,0.25)',
   guard: 'rgba(239,68,68,0.35)',
+  bond: 'rgba(250,204,21,0.35)',
 };
+
+export const GRAPH_LEGEND: LegendEntry[] = [
+  { key: 'core', color: NODE_COLORS.core, label: 'Nova' },
+  { key: 'user', color: NODE_COLORS.user, label: 'You' },
+  { key: 'topic', color: NODE_COLORS.topic, label: 'Memories' },
+  { key: 'journal', color: NODE_COLORS.journal, label: 'Journals' },
+  { key: 'source', color: NODE_COLORS.source, label: 'Sources' },
+  { key: 'agent', color: NODE_COLORS.agent, label: 'Agents' },
+  { key: 'tool', color: NODE_COLORS.tool, label: 'Tools' },
+  { key: 'automation', color: NODE_COLORS.automation, label: 'Automations' },
+  { key: 'rule', color: NODE_COLORS.rule, label: 'Rules' },
+  { key: 'skill', color: NODE_COLORS.skill, label: 'Skills' },
+];
 
 export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): RendererHandle {
   const ctx = canvas.getContext('2d')!;

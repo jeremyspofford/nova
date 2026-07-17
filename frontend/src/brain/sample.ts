@@ -15,8 +15,10 @@ export const SAMPLE_NODES: GraphNode[] = [
   { id: 'j2', label: 'Journal', type: 'journal', mtime: now - 86400 },
   { id: 'src1', label: 'Wikipedia', type: 'source', mtime: now - 259200 },
   { id: 'nova', label: 'Nova', type: 'core', mtime: now },
+  { id: 'user', label: 'You', type: 'user', mtime: now },
   { id: 'a1', label: 'Ingestion', type: 'agent', mtime: now },
   { id: 'tool1', label: 'Web Search', type: 'tool', mtime: now },
+  { id: 'auto1', label: 'News digest', type: 'automation', mtime: now, enabled: true, interval_minutes: 720 },
 ];
 
 export const SAMPLE_EDGES: GraphEdge[] = [
@@ -25,5 +27,7 @@ export const SAMPLE_EDGES: GraphEdge[] = [
   { source: 't1', target: 'src1', kind: 'link' },
   { source: 't2', target: 's1', kind: 'link' },
   { source: 'nova', target: 'a1', kind: 'platform' },
+  { source: 'nova', target: 'user', kind: 'bond' },
   { source: 'a1', target: 'tool1', kind: 'grant' },
+  { source: 'auto1', target: 'a1', kind: 'platform' },
 ];

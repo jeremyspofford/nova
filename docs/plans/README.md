@@ -22,6 +22,7 @@ In roadmap priority order:
 | [video-ingestion.md](video-ingestion.md) | #8 | depends on voice phase 2 (whisper) for the transcription fallback |
 | [persona-layer.md](persona-layer.md) | #15 | phase 1 (runner slot assembly) is standalone; locked decisions inside — Nova-as-proxy, specialists get house rules, not the soul |
 | [remote-shared-state.md](remote-shared-state.md) | parked/designed | phase 1 (leader election) is a standalone win, safe now |
+| [universe-view.md](universe-view.md) | phases 1–4 BUILT 2026-07-16 + interaction round 2026-07-17 (right-drag pan, click-focus/highlight, crisp label overlay, delete→black-hole, legend, Atlas explorer), live-verified at :5173 + :8080; awaiting Jeremy's review + Galaxy-retirement call | 3D celestial brain view built alongside Galaxy; replaces Galaxy when Jeremy signs off |
 
 Not planned here (deliberately):
 - **Mobile PWA routes (#4)** — roadmap says design WITH Jeremy after real

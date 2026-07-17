@@ -1,6 +1,7 @@
 """OKF-style markdown file store. Every memory item is a real file on disk."""
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,6 +119,31 @@ class OkfStore:
             return False
         path.unlink()
         return True
+
+    def unlink_references(self, title: str) -> list[tuple[str, float]]:
+        """Rewrite [[wiki-links]] pointing at `title` into plain text in every
+        file. Called after a delete so no surviving memory links to a document
+        that no longer exists. Matching mirrors graph resolution (title,
+        case-insensitive). File mtimes are preserved — a mechanical unlink is
+        not new knowledge and must not trip recency cues (fresh flares,
+        planet sizing). Returns (doc_id, mtime) for each changed file."""
+        target = title.lower().strip()
+        changed: list[tuple[str, float]] = []
+        for doc_id, _mtime in self.iter_files():
+            path = self.base_dir / doc_id
+            text = path.read_text()
+            new = _WIKILINK_RE.sub(
+                lambda m: m.group(1) if m.group(1).lower().strip() == target
+                else m.group(0),
+                text)
+            if new == text:
+                continue
+            stat = path.stat()
+            path.write_text(new)
+            os.utime(path, (stat.st_atime, stat.st_mtime))
+            changed.append((doc_id, stat.st_mtime))
+            log.info("Memory unlink: removed [[%s]] from %s", title, doc_id)
+        return changed
 
     def iter_files(self) -> list[tuple[str, float]]:
         """All markdown files as (doc_id, mtime)."""

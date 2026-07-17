@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { getBrainGraph, getMemoryItem, getMemoryStats, getSettings, GraphNode, MemoryItem } from '../api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { deleteMemoryItem, getBrainGraph, getMemoryItem, getMemoryStats, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
+import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
 import { SettingsOverlay } from '../components/SettingsOverlay';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
+import { tagColor } from '../brain/systems';
 import { displayName } from '../names';
 
 const REFRESH_MS = 20000;
@@ -15,6 +17,7 @@ const TYPE_BADGE: Record<string, string> = {
   source: 'bg-blue-900/40 text-blue-300 border-blue-700',
   self: 'bg-yellow-900/40 text-yellow-200 border-yellow-600',
   core: 'bg-yellow-900/40 text-yellow-200 border-yellow-600',
+  user: 'bg-sky-900/40 text-sky-200 border-sky-700',
   agent: 'bg-violet-900/40 text-violet-300 border-violet-700',
   tool: 'bg-lime-900/30 text-lime-300 border-lime-800',
   automation: 'bg-blue-900/40 text-blue-300 border-blue-700',
@@ -23,7 +26,7 @@ const TYPE_BADGE: Record<string, string> = {
 
 // platform nodes carry their card content in the graph payload — no
 // markdown file behind them to fetch
-const PLATFORM_TYPES = new Set(['core', 'agent', 'tool', 'automation', 'rule']);
+const PLATFORM_TYPES = new Set(['core', 'user', 'agent', 'tool', 'automation', 'rule']);
 const PLATFORM_LABELED = new Set(['skill', 'agent', 'tool', 'automation', 'rule']);
 
 interface BrainPrefs {
@@ -47,6 +50,14 @@ export function Brain() {
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prefs, setPrefs] = useState<BrainPrefs>(DEFAULT_PREFS);
+  // latest graph as state — the Atlas and the legend counts render from it
+  const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
+    { nodes: [], edges: [] });
+  const [atlasOpen, setAtlasOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(() =>
+    window.innerWidth >= 768 && localStorage.getItem('nova.brain.legend') !== '0');
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -128,10 +139,11 @@ export function Brain() {
     }
     const node = nodesRef.current.get(id);
     if (node && PLATFORM_TYPES.has(node.type)) {
+      // description goes in the body only — filling both slots rendered the
+      // same text twice (italic summary + markdown content)
       setDetail({
         id,
-        frontmatter: { type: node.type, title: node.label,
-                       description: node.description ?? '' },
+        frontmatter: { type: node.type, title: node.label },
         content: node.description ?? '*(no description)*',
       });
       return;
@@ -180,6 +192,7 @@ export function Brain() {
             : PLATFORM_LABELED.has(n.type) ? { ...n, label: displayName(n.label) } : n);
           nodesRef.current = new Map(nodes.map(n => [n.id, n]));
           renderer.setData(nodes, graph.edges);
+          setGraphData({ nodes, edges: graph.edges });
           setStats(s);
         }
       } catch (err) {
@@ -202,6 +215,69 @@ export function Brain() {
 
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
+
+  // two-step delete resets whenever the card changes
+  useEffect(() => { setConfirmingDelete(false); setDeleteErr(null); }, [detail?.id]);
+
+  const legend = (THEMES[prefs.view] ?? THEMES[DEFAULT_THEME]).legend;
+  const typeCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const n of graphData.nodes) c[n.type] = (c[n.type] ?? 0) + 1;
+    return c;
+  }, [graphData.nodes]);
+
+  const toggleLegend = () => setLegendOpen(o => {
+    localStorage.setItem('nova.brain.legend', o ? '0' : '1');
+    return !o;
+  });
+
+  // clickable relations for the open card — real edges only (tag chains are
+  // clustering artifacts, and tags already show as chips in the header)
+  const TYPE_ORDER = ['core', 'user', 'topic', 'source', 'journal',
+                      'agent', 'tool', 'skill', 'automation', 'rule'];
+  const connections = useMemo(() => {
+    if (!detail) return [];
+    const byId = new Map(graphData.nodes.map(n => [n.id, n]));
+    // the Nova star card opens as soul.md; its graph node is the core
+    const id = detail.id === 'soul.md'
+      ? graphData.nodes.find(n => n.type === 'core')?.id ?? detail.id
+      : detail.id;
+    const seen = new Set<string>();
+    const out: GraphNode[] = [];
+    for (const e of graphData.edges) {
+      if (e.kind === 'tag') continue;
+      const other = e.source === id ? e.target : e.target === id ? e.source : null;
+      if (!other || seen.has(other)) continue;
+      seen.add(other);
+      const node = byId.get(other);
+      if (node) out.push(node);
+    }
+    return out.sort((a, b) =>
+      TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) ||
+      a.label.localeCompare(b.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.id, graphData]);
+
+  const openConnection = (node: GraphNode) => {
+    const target = node.type === 'core' ? 'soul.md' : node.id;
+    openDetail(target);
+    rendererRef.current?.focusNode?.(target);
+  };
+
+  // file-backed memories only — platform entities delete from Settings, the
+  // soul is not deletable at all (the API enforces both)
+  const deletable = !!detail && !PLATFORM_TYPES.has(fm.type ?? 'topic') && detail.id !== 'soul.md';
+  const doDelete = async () => {
+    if (!detail) return;
+    if (!confirmingDelete) { setConfirmingDelete(true); return; }
+    try {
+      await deleteMemoryItem(detail.id);
+      setDetail(null);
+      reloadRef.current?.();   // immediate refetch — the body falls into the black hole
+    } catch (err) {
+      setDeleteErr(err instanceof Error ? err.message : 'Delete failed');
+    }
+  };
 
   // roomy = the centered modal; the sidebar keeps its tighter density
   const renderDetail = (roomy: boolean) => detail && (
@@ -237,27 +313,70 @@ export function Brain() {
           <p className="text-stone-400 italic mb-3">{fm.description}</p>
         )}
         <Markdown>{detail.content}</Markdown>
+        {connections.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-stone-800">
+            <div className="text-[10px] uppercase tracking-wide text-stone-500 mb-1.5">
+              Connections
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {connections.map(node => (
+                <button
+                  key={node.id}
+                  onClick={() => openConnection(node)}
+                  title={node.type}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-stone-700 bg-stone-800/60 text-xs text-stone-300 hover:border-teal-600 hover:text-teal-200"
+                >
+                  <span
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ background: node.type === 'topic' ? tagColor(node) : TYPE_COLOR[node.type] ?? '#a8a29e' }}
+                  />
+                  <span className="truncate max-w-[14rem]">{node.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <footer className={`${roomy ? 'px-6 py-3' : 'px-4 py-2.5'} border-t border-stone-700 flex items-center justify-between gap-2 text-xs`}>
         <span className="font-mono text-stone-600 truncate">{detail.id}</span>
-        {fm.source_url && (
-          <a
-            href={fm.source_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 text-teal-400 hover:text-teal-300"
-          >
-            View source ↗
-          </a>
-        )}
+        <div className="shrink-0 flex items-center gap-3">
+          {deleteErr && <span className="text-red-400">{deleteErr}</span>}
+          {deletable && (
+            <button
+              onClick={doDelete}
+              className={confirmingDelete
+                ? 'px-2 py-0.5 rounded border border-red-800 bg-red-950/60 text-red-300'
+                : 'text-stone-500 hover:text-red-300'}
+            >
+              {confirmingDelete ? 'Really delete?' : 'Delete'}
+            </button>
+          )}
+          {fm.source_url && (
+            <a
+              href={fm.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-teal-400 hover:text-teal-300"
+            >
+              View source ↗
+            </a>
+          )}
+        </div>
       </footer>
     </>
   );
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-stone-950">
-      <canvas ref={canvasRef} className="absolute top-0 left-0" />
+      {/* keyed per renderer-recreate: a canvas that ever held a WebGL context
+          can never hand out a 2d context again (and a force-lost WebGL context
+          can't be revived) — every setup-effect run needs a fresh element */}
+      <canvas
+        key={`${prefs.view}:${prefs.showPlatform}`}
+        ref={canvasRef}
+        className="absolute top-0 left-0"
+      />
 
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
         {stats && (
@@ -267,6 +386,22 @@ export function Brain() {
             <span>{stats.journal ?? 0} journals</span>
           </div>
         )}
+        <button
+          onClick={() => setAtlasOpen(o => !o)}
+          className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none ${atlasOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
+          title="Browse everything in the brain"
+          aria-label="Atlas"
+        >
+          Atlas
+        </button>
+        <button
+          onClick={toggleLegend}
+          className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none ${legendOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
+          title="What each shape means"
+          aria-label="Legend"
+        >
+          Legend
+        </button>
         <button
           onClick={() => rendererRef.current?.recenter?.()}
           className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
@@ -285,6 +420,42 @@ export function Brain() {
         </button>
       </div>
 
+      {legendOpen && (
+        <div className="absolute bottom-4 left-4 z-10 w-64 max-h-[45vh] overflow-y-auto nice-scroll rounded-xl bg-stone-900/85 backdrop-blur border border-stone-700 px-3 py-2.5 text-xs">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="uppercase tracking-wide text-stone-500">Legend</span>
+            <button
+              onClick={toggleLegend}
+              className="text-stone-500 hover:text-stone-200 leading-none"
+              aria-label="Close legend"
+            >
+              ×
+            </button>
+          </div>
+          {legend
+            .filter(e => !e.key || (typeCounts[e.key] ?? 0) > 0)
+            .map(e => (
+              <div key={e.label} className="flex items-start gap-2 py-0.5">
+                <span className="mt-1 w-2.5 h-2.5 rounded-full shrink-0" style={{ background: e.color }} />
+                <span className="text-stone-300 leading-snug">
+                  {e.label}
+                  {e.key && <span className="text-stone-500 font-mono"> · {typeCounts[e.key]}</span>}
+                  {e.note && <span className="block text-stone-500">{e.note}</span>}
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {atlasOpen && (
+        <MemoryAtlas
+          nodes={graphData.nodes}
+          edges={graphData.edges}
+          onOpen={id => { openDetail(id); rendererRef.current?.focusNode?.(id); }}
+          onClose={() => setAtlasOpen(false)}
+        />
+      )}
+
       {detail && prefs.detailStyle === 'modal' ? (
         <div
           className="absolute inset-0 z-20 flex items-center justify-center bg-black/50"
@@ -300,7 +471,7 @@ export function Brain() {
           </div>
         </div>
       ) : detail && (
-        <aside className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
+        <aside className={`absolute top-16 ${atlasOpen ? 'left-4 md:left-[21rem]' : 'left-4'} bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl`}>
           {renderDetail(false)}
         </aside>
       )}

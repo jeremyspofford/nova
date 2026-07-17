@@ -75,7 +75,7 @@ SETTING_DEFS: list[dict] = [
                      "graph as first-class nodes with their real relationships "
                      "as edges. Off = knowledge-only view.")},
     {"key": "brain.view", "type": "enum", "default": "graph",
-     "options": ["graph", "galaxy"], "section": "Appearance",
+     "options": ["graph", "galaxy", "universe"], "section": "Appearance",
      "label": "Brain view",
      "description": "How the memory graph is rendered."},
     {"key": "brain.detail_style", "type": "enum", "default": "sidebar",
@@ -84,8 +84,9 @@ SETTING_DEFS: list[dict] = [
      "description": "Open memory details as a side panel or a centered modal."},
     {"key": "brain.rotation_speed", "type": "number", "default": 1,
      "min": 0, "max": 6, "section": "Appearance",
-     "label": "Galaxy rotation speed",
-     "description": "Auto-orbit speed of the galaxy view (0 = still)."},
+     "label": "Motion speed",
+     "description": ("Auto-orbit speed of the galaxy view and orbital "
+                     "time-scale of the universe view (0 = still).")},
     {"key": "brain.label_mode", "type": "enum", "default": "auto",
      "options": ["auto", "on", "off"], "section": "Appearance",
      "label": "Galaxy labels",
@@ -102,6 +103,11 @@ SETTING_DEFS: list[dict] = [
                      "is a separate setting — a spoken trigger has to be a "
                      "trained model, so it won't automatically match a new "
                      "name (see Voice → Wake phrase).")},
+    {"key": "nova.user_name", "type": "string", "default": "",
+     "section": "Operator", "label": "Your name",
+     "description": ("What Nova calls you in the brain views — the companion "
+                     "star of the universe view wears this label. Empty = "
+                     "\"You\".")},
     {"key": "nova.timezone", "type": "string", "default": "America/New_York",
      "section": "Operator", "label": "Timezone",
      "description": ("IANA timezone (e.g. America/New_York) Nova treats as "
