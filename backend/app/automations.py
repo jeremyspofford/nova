@@ -97,10 +97,28 @@ async def due() -> list[dict]:
             "ORDER BY next_run_at")]
 
 
+_RUNS_KEPT = 50  # per-automation history retention
+
+
 async def record_run(automation_id: str, status: str, summary: str,
-                     interval_minutes: int, failed: bool):
-    next_run = datetime.now(timezone.utc) + timedelta(minutes=interval_minutes)
+                     interval_minutes: int, failed: bool,
+                     started_at: Optional[datetime] = None):
+    now = datetime.now(timezone.utc)
+    next_run = now + timedelta(minutes=interval_minutes)
+    started = started_at or now
+    aid = uuid.UUID(automation_id)
     async with db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO automation_runs (automation_id, status, summary,
+                                            started_at, duration_seconds)
+               VALUES ($1, $2, $3, $4, $5)""",
+            aid, status, summary[:1000], started,
+            max((now - started).total_seconds(), 0.0))
+        await conn.execute(
+            """DELETE FROM automation_runs
+               WHERE automation_id = $1 AND id NOT IN (
+                   SELECT id FROM automation_runs WHERE automation_id = $1
+                   ORDER BY started_at DESC LIMIT $2)""", aid, _RUNS_KEPT)
         if failed:
             row = await conn.fetchrow(
                 """UPDATE automations
@@ -125,3 +143,16 @@ async def record_run(automation_id: str, status: str, summary: str,
                    WHERE id = $1""",
                 uuid.UUID(automation_id), next_run, status, summary[:1000])
     return None
+
+
+async def list_runs(automation_id: str, limit: int = 20) -> list[dict]:
+    """Recent run history, newest first."""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, status, summary, started_at, duration_seconds
+               FROM automation_runs WHERE automation_id = $1
+               ORDER BY started_at DESC LIMIT $2""",
+            uuid.UUID(automation_id), min(max(limit, 1), _RUNS_KEPT))
+    return [{"id": str(r["id"]), "status": r["status"], "summary": r["summary"],
+             "started_at": r["started_at"].isoformat(),
+             "duration_seconds": round(r["duration_seconds"], 1)} for r in rows]

@@ -332,9 +332,18 @@ async def _manage_automations(args, ctx):
         rows = await auto.list_automations()
         slim = [{k: r[k] for k in ("name", "description", "agent_name",
                                    "interval_minutes", "enabled", "is_system",
-                                   "last_status", "last_run_at", "next_run_at")}
+                                   "last_status", "last_summary",
+                                   "consecutive_failures",
+                                   "last_run_at", "next_run_at")}
                 for r in rows]
         return _j(slim)
+
+    if action == "runs":
+        row = await auto.get_by_name(args.get("name", ""))
+        if not row:
+            return f"Error: automation '{args.get('name')}' not found"
+        runs = await auto.list_runs(row["id"], limit=int(args.get("limit") or 10))
+        return _j({"automation": row["name"], "runs": runs})
 
     if action == "create":
         try:
@@ -372,7 +381,7 @@ async def _manage_automations(args, ctx):
             return f"Error: '{row['name']}' is a system automation — it can be disabled but not deleted"
         return _j({"status": result, "name": row["name"]})
 
-    return f"Error: unknown action '{action}' (use list/create/update/enable/disable/delete)"
+    return f"Error: unknown action '{action}' (use list/runs/create/update/enable/disable/delete)"
 
 
 # ── model management (model-manager agent) ──────────────────────────────
@@ -632,10 +641,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": ("Manage scheduled automations (a schedule + an instruction + the "
                         "agent that executes it). Use to list existing automations or "
                         "create new recurring behaviors, e.g. periodic research or "
-                        "refresh jobs. Minimum interval 5 minutes."),
+                        "refresh jobs. Minimum interval 5 minutes. 'list' includes each "
+                        "automation's last outcome and failure streak; 'runs' returns "
+                        "one automation's recent run history (status, summary, "
+                        "duration) — use it to diagnose WHY an automation failed."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string",
-                       "enum": ["list", "create", "update", "enable", "disable", "delete"]},
+                       "enum": ["list", "runs", "create", "update", "enable",
+                                "disable", "delete"]},
             "name": {"type": "string", "description": "kebab-case unique name"},
             "description": {"type": "string"},
             "instruction": {"type": "string",
@@ -643,6 +656,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "agent_name": {"type": "string",
                            "description": "Which agent executes it (see list_agents)"},
             "interval_minutes": {"type": "integer"},
+            "limit": {"type": "integer",
+                      "description": "For 'runs': how many recent runs (default 10)"},
         }, "required": ["action"]},
         "execute": _manage_automations,
     },

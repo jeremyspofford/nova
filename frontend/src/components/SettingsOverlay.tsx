@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  AgentInfo, Automation, BundledInferenceStatus, CuratedModel, DbToolInfo,
+  AgentInfo, Automation, AutomationRun, BundledInferenceStatus, CuratedModel, DbToolInfo,
   ModelBudget, ModelInfo, ModelRecommendation, ProbeResult,
   RecommendationsResponse, Rule, SettingDef, SkillInfo,
   StorageInfo as StorageInfoData, ToolsCatalog,
   createAgent, createAutomation, createCuratedModel, createRule, createSkill,
   createTool, deleteAgent, deleteAutomation, deleteCuratedModel, deleteRule,
-  deleteSkill, deleteTool, getAgents, getAutomations, getBundledInference,
+  deleteSkill, deleteTool, getAgents, getAutomationRuns, getAutomations, getBundledInference,
   getCuratedModels, getMemoryItem, getModelBudget, getModels,
   getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
   getTools, getVoiceHealth, patchAgent,
@@ -1713,6 +1713,19 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
   const [editing, setEditing] = useState<Automation | null>(null);
   const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', interval_minutes: 60 });
 
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [runs, setRuns] = useState<AutomationRun[]>([]);
+
+  async function toggleHistory(a: Automation) {
+    if (historyFor === a.id) { setHistoryFor(null); return; }
+    try {
+      setRuns(await getAutomationRuns(a.id));
+      setHistoryFor(a.id);
+    } catch (err) {
+      setStatus(String(err));
+    }
+  }
+
   async function toggle(a: Automation) {
     await patchAutomation(a.id, { enabled: !a.enabled });
     load();
@@ -1840,9 +1853,42 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                 {a.consecutive_failures > 0 && (
                   <span className="text-amber-400"> · {a.consecutive_failures} fails</span>
                 )}
+                {a.last_run_at && (
+                  <>
+                    {' · '}
+                    <button
+                      onClick={() => toggleHistory(a)}
+                      className="text-stone-500 hover:text-teal-300 underline decoration-dotted"
+                    >
+                      {historyFor === a.id ? 'hide runs' : 'runs'}
+                    </button>
+                  </>
+                )}
               </div>
               {a.last_summary && (
                 <div className="mt-1.5 text-xs text-stone-400 line-clamp-2">{a.last_summary}</div>
+              )}
+              {historyFor === a.id && (
+                <div className="mt-2 border-t border-stone-700/60 pt-2 space-y-1.5">
+                  {runs.length === 0 && (
+                    <div className="text-xs text-stone-500">
+                      No recorded runs yet — history starts with the next run.
+                    </div>
+                  )}
+                  {runs.map(r => (
+                    <div key={r.id} className="text-xs">
+                      <span className={r.status === 'ok' ? 'text-emerald-500' : 'text-red-400'}>
+                        {r.status}
+                      </span>
+                      <span className="text-stone-500">
+                        {' '}· {fmtDateTime(r.started_at)} · {r.duration_seconds}s
+                      </span>
+                      {r.summary && (
+                        <div className="text-stone-400 line-clamp-2">{r.summary}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}

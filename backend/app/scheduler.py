@@ -7,6 +7,7 @@ live `automations.enabled` setting — togglable from the UI, no restart.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from app import automations, settings_store
 from app.agents import registry as agent_registry
@@ -60,10 +61,22 @@ async def tick():
         for automation in await automations.due():
             log.info("Automation due: %s (agent=%s)",
                      automation["name"], automation["agent_name"])
+            started = datetime.now(timezone.utc)
             ok, summary = await run_one(automation)
             outcome = await automations.record_run(
                 automation["id"], "ok" if ok else "failed", summary,
-                automation["interval_minutes"], failed=not ok)
+                automation["interval_minutes"], failed=not ok,
+                started_at=started)
+            # failures land in the journal too — Nova's own memory must hold
+            # a trace of her automations breaking, not just docker logs
+            if not ok and outcome != "auto_disabled":
+                try:
+                    await memory.write(
+                        f"Automation '{automation['name']}' run FAILED: "
+                        f"{summary[:300]}",
+                        type="journal", source_type="automation")
+                except Exception:
+                    log.exception("journal write for failed automation failed")
             if ok and "nothing stale" not in summary.lower():
                 try:
                     await memory.write(

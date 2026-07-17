@@ -739,6 +739,14 @@ async def list_automations_endpoint():
     return await automations.list_automations()
 
 
+@router.get("/api/v1/automations/{automation_id}/runs")
+async def list_automation_runs_endpoint(automation_id: str, limit: int = 20):
+    try:
+        return await automations.list_runs(automation_id, limit=limit)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="automation not found")
+
+
 @router.post("/api/v1/automations", status_code=201)
 async def create_automation_endpoint(body: dict):
     _require_edit_mode()

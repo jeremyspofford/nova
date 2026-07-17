@@ -302,6 +302,20 @@ export async function getAutomations(): Promise<Automation[]> {
   return r.json();
 }
 
+export interface AutomationRun {
+  id: string;
+  status: string;
+  summary: string;
+  started_at: string;
+  duration_seconds: number;
+}
+
+export async function getAutomationRuns(id: string): Promise<AutomationRun[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/automations/${id}/runs`);
+  if (!r.ok) throw new Error('Failed to load run history');
+  return r.json();
+}
+
 export async function createAutomation(body: {
   name: string; instruction: string; agent_name: string; interval_minutes: number;
 }): Promise<Automation> {
