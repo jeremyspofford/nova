@@ -20,6 +20,7 @@ In roadmap priority order:
 | [model-curation-proposals.md](model-curation-proposals.md) | #5 | reuses gateway-lane discovery fetcher |
 | [named-inference-endpoints.md](named-inference-endpoints.md) | #6 | resolve pool-table convergence question in phase 1 |
 | [video-ingestion.md](video-ingestion.md) | #8 | depends on voice phase 2 (whisper) for the transcription fallback |
+| [persona-layer.md](persona-layer.md) | #15 | phase 1 (runner slot assembly) is standalone; locked decisions inside — Nova-as-proxy, specialists get house rules, not the soul |
 | [remote-shared-state.md](remote-shared-state.md) | parked/designed | phase 1 (leader election) is a standalone win, safe now |
 
 Not planned here (deliberately):

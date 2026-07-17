@@ -65,6 +65,13 @@ See README for what works. This file is the ordered backlog.
   labels, starfield + nebula backdrop, golden core anchor. HUD theme picker
   (Graph/Galaxy) persisted in localStorage. Upgrade path: true Three.js +
   UnrealBloom behind the same theme key if fidelity falls short.
+  *2026-07-16: that upgrade path got realized as a NEW theme key instead —
+  the **Universe** view (docs/plans/universe-view.md), true Three.js +
+  UnrealBloom with deterministic orbital mechanics: Nova+operator binary
+  star, memory components as star systems, journals as a chronological
+  asteroid belt, automations as interval-scaled comets, plus black hole /
+  shooting stars / fresh-memory flares. Galaxy stays selectable until
+  Jeremy declares Universe polished (retirement is his call).*
 
 - **Automations + Settings platform** (2026-07-13) — behavioral config moved
   to a DB-backed, UI-editable settings store (defs registry in
@@ -705,6 +712,19 @@ See README for what works. This file is the ordered backlog.
    per-route suffix; applies to every reply path (typed, voice, dispatched
    agents' final answers). Success test: a new agent or route gets Nova's
    voice by default, with no way to bury it.
+   **DESIGNED 2026-07-17** — full spec with locked decisions and 4 phases
+   in docs/plans/persona-layer.md (Nova-as-proxy: specialists are their
+   own entities, no soul injection for them; slot-based assembly owned by
+   the runner; soul kernel/extended split; house rules ≠ persona).
+
+16. **Model labels should show their provider (requested 2026-07-17)** —
+   the picker says "z-ai/glm-5.2" with nothing indicating it runs via
+   OpenRouter (internally `openrouter:z-ai/glm-5.2`; models_catalog.py
+   strips the provider prefix when building display names). The API
+   already returns a `provider` field per model — the UI just never
+   renders it. Group picker options by provider (Local / OpenRouter) or
+   badge each row; applies to the chat-header picker and every model
+   select in Settings (agents, voice override, "set all"). Small.
 
 ## Later
 
