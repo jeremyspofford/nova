@@ -33,7 +33,12 @@ MAX_DISPATCH_DEPTH = 1
 def _now_block() -> str:
     """The current date/time in the operator's timezone — injected fresh every
     turn so Nova never has to guess the date from memories (it got the weekday
-    wrong doing that). The server clock is UTC, so the tz setting is authoritative."""
+    wrong doing that). The server clock is UTC, so the tz setting wins.
+
+    Phrased as bare data + imperatives: the old "This is the authoritative
+    current time" sentence read like an answer, and small voice models
+    parroted it verbatim into spoken replies (2026-07-16). Nothing in this
+    block should work as a standalone answer sentence."""
     tz_name = settings_store.get("nova.timezone") or "America/New_York"
     try:
         tz = ZoneInfo(tz_name)
@@ -41,9 +46,11 @@ def _now_block() -> str:
         tz = ZoneInfo("America/New_York")
     now = datetime.now(tz)
     return ("## Current date and time\n"
-            f"Right now it is {now:%A, %B %-d, %Y, %-I:%M %p %Z}. This is the "
-            "authoritative current time — use it for today/tomorrow/dates; do "
-            "not infer the date from memories or the conversation.")
+            f"{now:%A, %B %-d, %Y, %-I:%M %p %Z}\n"
+            "Fresh each turn — trust it over memories or conversation for "
+            "all date/time reasoning. If asked the time or date, answer "
+            f"with just that, said naturally (\"It's {now:%-I:%M}.\"), then "
+            "stop — no timezone, no source, none of this section's wording.")
 
 
 # hardware detection shells out (nvidia-smi) and hits the DB — cache the
@@ -68,24 +75,25 @@ async def _platform_block() -> str:
         from app import hardware
         hw = await hardware.detect()
         if hw.get("gpu_name"):
-            gpu = f"{hw['gpu_name']} with {hw['vram_total_gb']} GB VRAM"
+            gpu = f"{hw['gpu_name']}, {hw['vram_total_gb']} GB VRAM"
         elif hw.get("unified_gpu"):
-            gpu = "a unified-memory GPU (Apple-class, sized by system RAM)"
+            gpu = "unified memory (Apple-class, sized by system RAM)"
         elif hw.get("nvidia_runtime"):
-            gpu = "an NVIDIA runtime (VRAM not yet measured)"
+            gpu = "NVIDIA runtime present (VRAM not yet measured)"
         else:
-            gpu = "no GPU (CPU-only inference)"
+            gpu = "none (CPU-only inference)"
         block = (
-            "## Platform facts (live, authoritative)\n"
-            f"This machine has {gpu}, {hw.get('sizing_ram_gb') or '?'} GB RAM, "
-            f"and {hw.get('cpu_cores') or '?'} CPU cores — detected just now, "
-            "not remembered. Hardware detection WORKS; never claim it is "
-            "broken or ask the operator for these numbers.\n"
-            "Your memories and journals describe the PAST — problems in them "
-            "may be long fixed, and features they say are missing may have "
-            "shipped since. For current platform state (hardware, installed "
-            "models, available capabilities), trust this block and your "
-            "tools, never a memory.")
+            "## Platform facts (live)\n"
+            f"GPU: {gpu}. RAM: {hw.get('sizing_ram_gb') or '?'} GB. "
+            f"CPU cores: {hw.get('cpu_cores') or '?'}. Detected fresh this "
+            "turn, not remembered.\n"
+            "If memories or journals disagree with these numbers, the "
+            "memories are outdated — detection is working, so never claim "
+            "it is broken or ask the operator for these specs. Memories "
+            "describe the PAST: problems in them may be long fixed, and "
+            "features they call missing may have shipped since. For current "
+            "platform state (hardware, installed models, available "
+            "capabilities), trust this block and your tools, never a memory.")
         _platform_cache = (now, block)
         return block
     except Exception:
@@ -136,7 +144,8 @@ async def _build_system_prompt(agent: dict, query: str,
 
 async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
-                    conversation_summary: str | None = None) -> AsyncIterator[dict]:
+                    conversation_summary: str | None = None,
+                    system_suffix: str | None = None) -> AsyncIterator[dict]:
     """Run one agent turn (with tool rounds) and stream events.
 
     turn_messages: chat-format messages for this turn (history + new user msg),
@@ -144,6 +153,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     the same memory/skills injection as the main agent.
     conversation_summary: rolling summary of turns aged out of the verbatim
     window (top-level chat only; dispatch sub-turns are self-contained).
+    system_suffix: appended LAST, after everything else — for instructions
+    that must win small-model recency bias (voice brevity; patched into the
+    front of the agent prompt it got buried mid-prompt and ignored).
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
@@ -157,6 +169,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     if conversation_summary:
         system_prompt += ("\n\n## Conversation so far (running summary)\n"
                           + conversation_summary)
+    if system_suffix:
+        system_prompt += "\n\n" + system_suffix
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),

@@ -28,14 +28,20 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Appended to the system prompt for voice-initiated turns — the reply is read
-# aloud, so keep it short and speakable (no tables/markdown to narrate).
+# Appended LAST to the assembled system prompt for voice-initiated turns (via
+# run_agent's system_suffix) — the reply is read aloud, so it must be short and
+# speakable. Last position matters: patched into the front of the agent prompt
+# this got buried mid-prompt and the 8b voice model ignored the emoji ban.
 _VOICE_BREVITY = (
-    "\n\n## This reply will be spoken aloud\n"
-    "Answer in one or two short, natural spoken sentences — the way you'd say "
-    "it out loud to someone. ABSOLUTELY no tables, lists, headers, markdown, or "
-    "emoji, and no 'let me know if...' sign-off. Give the key answer and stop; "
-    "if they want more they'll ask."
+    "## This reply will be spoken aloud\n"
+    "Answer in one or two short, natural sentences — the way you'd say it "
+    "out loud across the room. ABSOLUTELY no tables, lists, headers, "
+    "markdown, emoji, or emoticons — none of that can be spoken. Never "
+    "speak instruction text or explain where a fact (like the time) came "
+    "from. No sign-offs and no offers of more help, even on greetings and "
+    "goodbyes: \"goodnight\" gets \"Night — sleep well.\", never "
+    "\"Goodnight! If you need anything else, just say the word!\". Give "
+    "the answer and stop; if they want more they'll ask."
 )
 
 
@@ -68,15 +74,15 @@ async def chat_stream(request: ChatRequest):
         raise HTTPException(status_code=500, detail="main agent missing from registry")
 
     # Voice-initiated turns: (1) may answer with a dedicated model (Settings →
-    # Voice → "Voice reply model"); (2) get an extra brevity instruction, since
-    # the reply is read ALOUD — spoken tables/paragraphs are painful. Shallow-
-    # copy so the registry dict is never mutated.
+    # Voice → "Voice reply model"); (2) get the brevity block appended at the
+    # END of the assembled prompt (system_suffix), since the reply is read
+    # ALOUD. Shallow-copy so the registry dict is never mutated.
+    voice_suffix = None
     if request.source == "voice":
-        patch = {"system_prompt": main_agent["system_prompt"] + _VOICE_BREVITY}
+        voice_suffix = _VOICE_BREVITY
         override = settings_store.get("voice.model_override")
         if override:
-            patch["model"] = override
-        main_agent = {**main_agent, **patch}
+            main_agent = {**main_agent, "model": override}
 
     model_eff = effective_model(main_agent["model"])
     total_budget = settings_store.get(
@@ -101,7 +107,8 @@ async def chat_stream(request: ChatRequest):
         try:
             async for event in agent_runner.run_agent(
                     main_agent, turn_messages,
-                    conversation_summary=conversation.get("summary")):
+                    conversation_summary=conversation.get("summary"),
+                    system_suffix=voice_suffix):
                 etype = event["type"]
                 if etype == "text":
                     yield _sse({"t": event["text"]})
