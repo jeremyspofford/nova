@@ -819,6 +819,87 @@ See README for what works. This file is the ordered backlog.
    recommendation; if go, write the full spec in
    `docs/plans/executable-skills.md` and plan phases before any code.
 
+19. **MCP client — connect Nova to the tool ecosystem (requested
+   2026-07-17)** — v3 has ZERO MCP code (verified by grep); today every
+   capability is hand-built, and an MCP client makes Nova a consumer of
+   the ecosystem (GitHub, Home Assistant, filesystems, calendars) without
+   authoring each one. Full spec: `docs/plans/mcp-client.md`. Shape: MCP
+   tools flow through the EXISTING choke points — namespaced
+   `mcp:<server>/<tool>` names through `execute_tool`, grants via named
+   or `mcp:<server>:*` wildcards (the `db:*` precedent, deliberately no
+   global `mcp:*`), guardian rules and the narration detector inherited
+   for free. Server registration is operator-only (edit-mode API, no
+   agent tool — the #18 self-escalation lesson applied preemptively);
+   tool descriptions hash-pinned at approval (poisoning defense, the
+   soul.md pattern). Lazy loading (index + meta-tool) ports the
+   live-verified `v0.5.0-alpha` design (old-repo PR #54) — designs only,
+   never code. HTTP transport first (pip `mcp` SDK, no new service);
+   stdio via an `mcp-runner` sidecar in the last phase. Overlaps #18:
+   much of "executable skills" may really be "an MCP server exists for
+   that" — the #18 research must evaluate them together.
+
+20. **ACP coding delegation — coding via protocol, not a bespoke harness
+   (requested 2026-07-17)** — Nova as an Agent Client Protocol CLIENT
+   driving existing coding agents (Claude Code via the `claude-code-acp`
+   adapter, Gemini CLI) instead of building repo/shell/test tooling from
+   scratch. Full spec: `docs/plans/acp-coding-delegation.md` — phase 0 is
+   a validation spike (the protocol landscape moves monthly; findings may
+   reshape the build). Shape: a secretless `coder` sidecar (session
+   broker in the inference-control style) with operator-registered repos
+   mounted ONLY there; every session runs in a fresh worktree under
+   `.worktrees/nova/<task>` (never main, never pushes — merge is always
+   the operator's move); sessions are BACKGROUND jobs
+   (`delegate_coding_task` returns immediately, progress streams to the
+   activity trail, completion journals branch + diffstat + report);
+   v1 permission posture is sandboxed-autonomous (worktree-confined
+   edits + allowlisted commands, diff review as the real gate). Keyed
+   opt-in extra by nature (runs on the operator's Anthropic/Google
+   credentials); the local-model lane (Ornith-35b, per the Later note)
+   is end-phase research. SUPERSEDES the harness assumption in the Later
+   "Coding agent(s)" item. Build AFTER #3 — delegated code edits without
+   an audit trail is flying blind.
+
+21. **Notifications — ntfy wiring (2026-07-17)** — small, and the
+   prerequisite for proactive Nova: v3 currently has NO way to reach the
+   operator when the app is closed (verified: zero ntfy references in the
+   backend). A minimal `notify.py` + `notify_operator` builtin +
+   settings (server URL, topic — self-hostable, keyless, fits
+   batteries-included), guardian-visible like every tool. Unlocks #5's
+   upgrade alerts (which already assume ntfy), #20's session-complete
+   pings, automation failure alerts, and #24. Mine the v2 notification
+   outbox design for delivery receipts (operator-visible-outcomes
+   lesson: "accepted by transport" ≠ "received").
+
+22. **File/attachment ingestion in chat (2026-07-17)** — Nova ingests
+   URLs (and soon videos) but you cannot hand her a FILE: no upload path
+   exists. Add attach-to-chat (button + drag-drop; the PWA phone path
+   makes this a share-sheet target later): upload endpoint (auth-gated,
+   size-capped), text extraction per type (PDF/markdown/txt/docx first),
+   then the EXISTING ingestion pipeline — distilled, tagged,
+   provenance-stamped topic files (`source: upload:<filename>`), same
+   in-place refresh semantics. Images route to #23's vision path instead
+   of extraction. Design questions: keep originals (a `data/uploads/`
+   store) vs. distill-and-discard; per-file size caps.
+
+23. **Vision input (2026-07-17)** — paste or attach a screenshot/image
+   into chat and Nova sees it. The gateway already fronts VL-capable
+   models (qwen3-vl class locally, most cloud models); work is: image
+   content in the message path (multimodal content arrays through the
+   OpenAI-compat client), a `vision: bool` column on curated rows so
+   routing knows which models can look, and a fallback answer when the
+   active model is text-only ("switch to a vision model or let me
+   dispatch one"). Feeds #22 (image uploads) and is a PREREQUISITE for
+   the Later device-control item (screenshot → reason → act loop).
+
+24. **Daily briefing (2026-07-17)** — pure composition on existing
+   infra, cheap Jarvis points: a seeded automation (default-disabled)
+   that assembles a morning journal — yesterday's conversation/journal
+   recap, topics refreshed by the staleness sweep, new items from video
+   subscriptions (#8) once they exist, curation proposals awaiting
+   approval (#5) — and pushes the digest via ntfy (#21). Calendar joins
+   when the Later calendar item lands. Needs #21 first; everything else
+   it consumes already exists.
+
 ## Later
 
 - **Speaker identification + per-person context (family, requested
@@ -840,6 +921,14 @@ See README for what works. This file is the ordered backlog.
   subscription first (keyless — covers Google/Outlook exported calendars,
   Nextcloud, iCloud public links), full Google Calendar OAuth as a keyed
   opt-in extra later (same posture as the mailbox decision).
+
+- **Home Assistant integration (2026-07-17)** — the ambient-presence /
+  smart-home half of the Jarvis register: "turn off the lights", "is the
+  garage closed". Rides #19 for free — Home Assistant ships its own MCP
+  server, so this is "register a preset server + grant it" rather than a
+  bespoke integration; local and keyless (fits batteries-included).
+  Guardian rules should watch actuation tools from day one (lights are
+  reversible; locks and garage doors are consent-gate material).
 
 - **Location capability (from Nova's self-assessment, 2026-07-17)** —
   IP-based geolocation as the keyless v1 (feeds weather defaults +
@@ -905,10 +994,15 @@ See README for what works. This file is the ordered backlog.
 - **YouTube comprehension** — transcript-first (captions via yt-dlp), local
   Whisper fallback when captions are missing, keyframes + vision model for
   visual-heavy videos; decide summarize-into-memory vs index-full-transcript.
-- **Coding agent(s)** — one general coding agent with strong tools (repo
-  access, shell, file editing, test runner) first; specializations (reviewer,
-  architect) as personas on the same harness, not bespoke agents. Needs
-  sandboxed workspaces + branch/PR git discipline.
+- **Coding agent(s)** — SUPERSEDED as the primary path by #20 (ACP
+  delegation, 2026-07-17): drive existing coding agents over the Agent
+  Client Protocol instead of building a bespoke harness. This item
+  remains only as the fully-local fallback lane (a local model on an
+  ACP-speaking harness — #20 phase 4 researches it). Original sketch:
+  one general coding agent with strong tools (repo access, shell, file
+  editing, test runner); specializations (reviewer, architect) as
+  personas on the same harness. Needs sandboxed workspaces + branch/PR
+  git discipline (now specified in the #20 plan).
   Model note (evaluated 2026-07-16): **Ornith-1.0** (DeepReinforce, MIT,
   256K ctx, RL-trained agentic-coding family — 9b/35b/397b, on Ollama) is
   the first local candidate to probe when this starts. Probed 9b live:
@@ -917,6 +1011,37 @@ See README for what works. This file is the ordered backlog.
   NOT adopted for the general tools role; qwen3 passes consistently. The
   35b (21 GB, fits a 3090) is untested and is the one this item should
   evaluate. ornith:9b left pulled on the dev box.
+
+- **Self-improvement pipeline — how Nova changes her own code (discussed
+  2026-07-17)** — direction settled, full spec once #20 lands. TWO-TIER
+  RULE: the *soft layer* (agents, tools, automations, skills, prompts,
+  soul — DB rows + markdown) is already runtime-self-modifiable, guarded
+  by guardian rules, edit-mode gating, and toggles; the *hard layer*
+  (code, compose, migrations — the machinery every guardrail runs on) is
+  NEVER modified in place by the running Nova. No live self-editing: an
+  agent that can edit its running code can edit its own guardrails — the
+  #18 lesson ("nothing an agent can write may be the switch") applied to
+  the deployment itself; promotion is out-of-band by construction. Path:
+  #20 ACP coding sessions with Nova's own repo as a registered workspace
+  (worktree branch, never main) → **staging stack**: a second compose
+  project built from the candidate branch with a COPY of postgres + the
+  memory dir, own ports, zero shared state, and outbound side effects
+  disabled by env flag (automations off, notifications to a staging
+  topic — a staging Nova must not act on the world twice) → automated
+  verification against staging (test suite + real e2e chat flows;
+  report journaled) → operator review + merge stays the gate
+  INDEFINITELY (autonomy grows in generating and validating changes,
+  never in promoting them) → promote = pull + build with git-SHA-tagged
+  images, DB backup FIRST; rollback = previous image tag + restore.
+  Honest notes: for a single-operator stack "blue/green" reduces to
+  staging-then-promote with instant image rollback — the hard part is
+  state, not traffic switching; migrations auto-run at backend startup,
+  so a candidate booted against the live DB could corrupt the real brain
+  — staging DB copies and backup-before-promote are non-negotiable, and
+  the pre-release "clean breaking changes" policy needs revisiting the
+  day Nova authors migrations herself. Dependencies: #20 (the hands),
+  #3 (audit what a candidate session did), #21 (review-ready pings).
+
 - **Diagramming agent** — Mermaid as the workhorse, raw SVG for freeform;
   render–verify loop (render, inspect with vision, self-correct) because
   text-only generation fails silently on layout; render inline in chat.

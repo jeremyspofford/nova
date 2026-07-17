@@ -1,7 +1,7 @@
 # Implementation plans
 
-Specs authored 2026-07-15 with Fable, written to be executed by any model
-(Sonnet/Opus), one phase per session. ROADMAP.md stays the priority list;
+Specs authored with Fable (2026-07-15 onward), written to be executed by
+any model (Sonnet/Opus), one phase per session. ROADMAP.md stays the priority list;
 these are the how.
 
 How to run one: give the implementing session the plan file + CLAUDE.md,
@@ -21,6 +21,8 @@ In roadmap priority order:
 | [named-inference-endpoints.md](named-inference-endpoints.md) | #6 | resolve pool-table convergence question in phase 1 |
 | [video-ingestion.md](video-ingestion.md) | #8 | depends on voice phase 2 (whisper) for the transcription fallback |
 | [persona-layer.md](persona-layer.md) | #15 | phase 1 (runner slot assembly) is standalone; locked decisions inside — Nova-as-proxy, specialists get house rules, not the soul |
+| [mcp-client.md](mcp-client.md) | #19 | HTTP transport first (pip `mcp` SDK); stdio via sidecar last; mines v0.5.0-alpha lazy-loading + consent designs; #18 research must weigh it |
+| [acp-coding-delegation.md](acp-coding-delegation.md) | #20 | phase 0 is a validation spike — ACP landscape moves fast; build after #3 (observability) |
 | [remote-shared-state.md](remote-shared-state.md) | parked/designed | phase 1 (leader election) is a standalone win, safe now |
 | [universe-view.md](universe-view.md) | phases 1–4 BUILT 2026-07-16 + interaction round 2026-07-17 (right-drag pan, click-focus/highlight, crisp label overlay, delete→black-hole, legend, Atlas explorer), live-verified at :5173 + :8080; awaiting Jeremy's review + Galaxy-retirement call | 3D celestial brain view built alongside Galaxy; replaces Galaxy when Jeremy signs off |
 
