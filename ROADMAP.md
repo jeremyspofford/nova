@@ -514,6 +514,25 @@ See README for what works. This file is the ordered backlog.
    rows (pricing, superseded models) and flagging dead ones (models the
    pin guard says providers no longer serve). Needs a `manage_curated`
    tool granted to model-manager whose writes always land disabled.
+   **Operator requirements (2026-07-17, from Jeremy's chat with Nova —
+   journals 02:29):** cadence DAILY; sources start with OpenRouter (public
+   API — the catalog already consumes it), Ollama library (page fetch,
+   proven), modelfit.io (page fetch), HF API, vendor blogs — list will
+   grow, so sources belong in a table/setting, not code; **alert on clear
+   upgrades** (ntfy): fits measured VRAM + candidate for a role an agent
+   actually uses + beats the current row's tier/size — and always paired
+   with the disabled-row proposal, never replacing the approval gate.
+   Storage: curated table = current state, a memory topic = release
+   history. v1 needs NO crawler or headless browser: targeted fetch +
+   web_search + APIs cover the start list; revisit only when a source
+   demands JS rendering. Foundation shipped 2026-07-16: model-manager has
+   web_search + frontier instructions, catalog freshness guard, probe.
+   RELATED FIX (same conversation): main asserted a STALE journal belief
+   ("GPU passthrough broken") as current fact — detection actually reports
+   the 3090/24GB fine. Agents need platform-state grounding: a live
+   hardware/platform-facts line in the system prompt (the date-block
+   pattern exists for exactly this reason) and/or guidance that memories
+   describe the past — dispatch to tools for current platform state.
 
 6. **Named local-inference endpoints (multi-backend)** — users run LM
    Studio, llama.cpp, vLLM, not just Ollama. All are OpenAI-compatible for
@@ -605,7 +624,23 @@ See README for what works. This file is the ordered backlog.
    (shipped) is the manual precursor — read your scores, tune the
    threshold.
 
-12. **Human-like replies — the persona pass (requested 2026-07-16)** —
+12. **Platform-state grounding for agents (elevated 2026-07-17)** — three
+   incidents in 24h of Nova asserting stale/wrong facts about HERSELF:
+   claimed GPU detection was broken (it reports the 3090/24GB fine),
+   claimed no YouTube ingestion exists (designed, item #8), proposed
+   building a narration guardrail that SHIPPED 2026-07-14 (migration 019 +
+   live detector). Root cause: agents answer platform-state questions from
+   episodic journal memory instead of live facts. Fix directions, in
+   effort order: (a) a "## Platform facts" system-prompt block built like
+   the date block (hardware summary, service health, feature flags — the
+   date block exists because she used to guess dates from memories the
+   same way); (b) prompt guidance that memories describe the PAST — for
+   current platform state, dispatch/use tools; (c) longer-term, give
+   main/model-manager a self-inventory tool (what's shipped, what tools
+   exist, roadmap awareness) so "what would make you better" gets answered
+   from ground truth.
+
+13. **Human-like replies — the persona pass (requested 2026-07-16)** —
    Jarvis-from-Iron-Man / Sarah-from-Eureka register: warm, wry, concise,
    context-aware; "what time is it?" gets the time, not a paragraph.
    Queued with root-cause notes in auto-memory (fable-humanize-responses):
@@ -628,6 +663,25 @@ See README for what works. This file is the ordered backlog.
   scopes, what the shared brain knows vs. what stays operator-only) —
   that's a product decision before it's an ML one. Voice fingerprints are
   biometrics: on-device only, explicit enrollment, easy deletion.
+
+- **Calendar integration (from Nova's self-assessment, 2026-07-17)** — "what
+  time is my meeting?" should work. Batteries-included order: CalDAV/ICS
+  subscription first (keyless — covers Google/Outlook exported calendars,
+  Nextcloud, iCloud public links), full Google Calendar OAuth as a keyed
+  opt-in extra later (same posture as the mailbox decision).
+
+- **Location capability (from Nova's self-assessment, 2026-07-17)** —
+  IP-based geolocation as the keyless v1 (feeds weather defaults +
+  "near me" questions); device GPS via the PWA later (permission-gated,
+  per-device). Small.
+
+- **Operator profile — structured, guaranteed (from Nova's self-assessment,
+  2026-07-17)** — memory CAN hold preferences/family/projects today, but
+  nothing guarantees a well-formed operator profile exists or stays
+  current. Seed a structured `operator` topic (like soul.md is seeded),
+  inject it alongside the soul, and give Nova explicit instructions to
+  maintain it. Prerequisite for speaker-ID/per-person context (the family
+  item) — per-person profiles generalize from one.
 
 - **In-UI secrets store** — the real "configure in the UI, not .env" win:
   OpenRouter (and future provider) keys entered in Settings, encrypted at
@@ -684,6 +738,14 @@ See README for what works. This file is the ordered backlog.
   access, shell, file editing, test runner) first; specializations (reviewer,
   architect) as personas on the same harness, not bespoke agents. Needs
   sandboxed workspaces + branch/PR git discipline.
+  Model note (evaluated 2026-07-16): **Ornith-1.0** (DeepReinforce, MIT,
+  256K ctx, RL-trained agentic-coding family — 9b/35b/397b, on Ollama) is
+  the first local candidate to probe when this starts. Probed 9b live:
+  vanilla tool calls pass, ~110 tok/s @ 6 GB VRAM, but agentic judgment
+  went 1/2 across runs (borderline on the narrated-dispatch trap) — so
+  NOT adopted for the general tools role; qwen3 passes consistently. The
+  35b (21 GB, fits a 3090) is untested and is the one this item should
+  evaluate. ornith:9b left pulled on the dev box.
 - **Diagramming agent** — Mermaid as the workhorse, raw SVG for freeform;
   render–verify loop (render, inspect with vision, self-correct) because
   text-only generation fails silently on layout; render inline in chat.
