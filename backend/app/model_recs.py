@@ -330,7 +330,31 @@ async def recommendations() -> dict:
     budget = _consolidate(out, per_profile, rows, hw)
     return {"hardware": hw, "cloud_available": cloud_ok,
             "curated_count": len(rows), "recommendations": out,
-            "budget": budget}
+            "budget": budget, "catalog_freshness": _catalog_freshness(rows)}
+
+
+def _catalog_freshness(rows: list[dict]) -> dict:
+    """Age of the newest curated entry — models move fast, so a catalog whose
+    newest row is months old is probably recommending a superseded generation.
+    Surfaced in Settings and by recommend_models; the model-manager can
+    web-search for newer releases and propose additions."""
+    newest = None
+    for r in rows:
+        ts = r.get("created_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if newest is None or dt > newest:
+            newest = dt
+    if newest is None:
+        return {"age_days": None, "stale": False}
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - newest).days
+    return {"age_days": age, "stale": age > 60}
 
 
 # ── the probe: verified on YOUR hardware, mechanically ───────────────────

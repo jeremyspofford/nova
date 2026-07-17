@@ -18,7 +18,7 @@ _FIELDS = ("id", "model", "provider", "min_ram_gb", "min_vram_gb", "tool_tier",
 _EDIT_FIELDS = {"min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles", "notes"}
 _TIERS = ("A", "B", "C")
 _SPEEDS = ("fast", "medium", "slow")
-_ROLES = ("chat", "tools", "guard", "compaction")
+_ROLES = ("chat", "tools", "guard", "compaction", "voice")
 
 
 def _row(r) -> dict:
