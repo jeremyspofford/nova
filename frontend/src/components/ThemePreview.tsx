@@ -28,14 +28,12 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
     <button
       type="button"
       onClick={onSelect}
-      className={`text-left rounded-lg overflow-hidden border-2 transition ${
-        selected ? 'border-teal-500' : 'border-stone-700 hover:border-stone-500'
-      }`}
+      className={`text-left rounded-lg overflow-hidden border-2 transition ${selected ? 'border-teal-500' : 'border-stone-700 hover:border-stone-500'
+        }`}
     >
       <canvas ref={canvasRef} width={220} height={130} className="block pointer-events-none" />
-      <div className={`px-2 py-1 text-xs capitalize ${
-        selected ? 'bg-teal-900/50 text-teal-200' : 'bg-stone-800 text-stone-400'
-      }`}>
+      <div className={`px-2 py-1 text-xs capitalize ${selected ? 'bg-teal-900/50 text-teal-200' : 'bg-stone-800 text-stone-400'
+        }`}>
         {THEMES[themeKey].label}{selected ? ' ✓' : ''}
       </div>
     </button>

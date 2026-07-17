@@ -462,6 +462,15 @@ See README for what works. This file is the ordered backlog.
    (brain-activity item) is the same plumbing it needs, and voice audio
    levels are its energy input. Interactive HTML mockups live in
    references_delete_when_done/mockups/ until Jeremy approves.
+   **Refined 2026-07-16 (Jeremy):** rename the picker "Brain view" →
+   "Nova view" with three options: Graph (obsidian-like), Galaxy (current),
+   and **Nova** — no memory nodes at all, just a glowing orb or line with
+   distinct animations per state (listening / speaking / thinking /
+   working), in the vein of the Gemini/ChatGPT app orbs and movie AIs
+   (Jarvis). This is a SIMPLER v1 than the particle-face concept above —
+   ship the orb first (state machine + `setActivity` + `speaker.level()`
+   are the inputs; micState/wake give "listening"), keep the face as the
+   aspirational later pass. Each state animation is its own design task.
 
 3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
@@ -558,7 +567,48 @@ See README for what works. This file is the ordered backlog.
    per-video summarization, auth/ToS posture, which non-YouTube sources to
    target first).
 
+9. **Memory-link traversal in node details (requested 2026-07-16)** — graph
+   and galaxy edges exist visually, but clicking an orb shows a detail
+   panel with NO list of its connections. Add a "Linked" section to the
+   detail panel (sidebar + modal): the node's neighbors from the already-
+   fetched edge list, each clickable → `openDetail(neighborId)`, so you can
+   traverse memory-to-memory without hunting the canvas. Small, contained:
+   Brain.tsx has nodes+edges in hand; the detail panel just never got the
+   adjacency list.
+
+10. **Voice conversation mode — follow-up window (requested 2026-07-16)** —
+   NotebookLM-style back-and-forth: after waking her once, keep the
+   conversation open so replies don't each need "Hey Nova". Spec sketch in
+   `docs/plans/voice.md` §4e: after Nova's spoken reply ends (or is
+   interrupted), re-arm the VAD for an N-second follow-up window (no wake
+   needed); speech within it = next turn, silence closes it back to
+   wake-only. Barge-in already exists; this is state-machine work in
+   ChatPanel plus settings (window length, on/off) and a visible
+   "still listening" indicator.
+
+11. **Human-like replies — the persona pass (requested 2026-07-16)** —
+   Jarvis-from-Iron-Man / Sarah-from-Eureka register: warm, wry, concise,
+   context-aware; "what time is it?" gets the time, not a paragraph.
+   Queued with root-cause notes in auto-memory (fable-humanize-responses):
+   voice model now answers accurately (qwen3:8b), remaining work is
+   prompt/persona — stop the system blocks being parroted, terseness
+   guidance, soul.md voice. Jeremy asked to run this session on Fable.
+
 ## Later
+
+- **Speaker identification + per-person context (family, requested
+  2026-07-16)** — Nova detects WHO she's talking with and adjusts tone and
+  context (kid vs. spouse vs. operator). Technically feasible on-device:
+  speaker-embedding models (ECAPA-class) + a short enrollment per family
+  member ("say a few sentences"), match each utterance's embedding at
+  wake/capture time. HONEST CAUTIONS that make this a "dig in deeper"
+  design, not a weekend build: misidentification is worse than no
+  identification (wrong-person context leaking across family members is a
+  privacy failure inside the household); kids' voices drift; and
+  per-person context implies a real multi-user model (per-person memory
+  scopes, what the shared brain knows vs. what stays operator-only) —
+  that's a product decision before it's an ML one. Voice fingerprints are
+  biometrics: on-device only, explicit enrollment, easy deletion.
 
 - **In-UI secrets store** — the real "configure in the UI, not .env" win:
   OpenRouter (and future provider) keys entered in Settings, encrypted at
