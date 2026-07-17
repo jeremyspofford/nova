@@ -676,10 +676,15 @@ See README for what works. This file is the ordered backlog.
    see your GPU just fine (RTX 3090, 24GB)" instead of asserting the
    stale journal belief. (c) remains open — and gained fresh evidence
    2026-07-17 (journal 14:06/14:44): "what model are you using?" → Nova
-   has no way to self-check, and dispatching model-manager didn't help
+   had no way to self-check, and dispatching model-manager didn't help
    because agent→model bindings live only in Settings, reachable by no
-   tool. The self-inventory tool must cover agent→model bindings, not
-   just shipped features. Same conversation, second request: Jeremy wants
+   tool. PARTIALLY FIXED same day (b9a3b5e, parallel session): every
+   agent's prompt now carries a live "## Model (live)" FACTS block with
+   its own resolved binding — the self-question now answers directly.
+   Still open for (c): cross-agent visibility (model-manager seeing ALL
+   bindings for upgrade recommendations) and the broader self-inventory
+   (shipped features, tools, roadmap awareness). Same conversation,
+   second request: Jeremy wants
    PROACTIVE dispatch — low-risk lookups (statuses, info fetches, agent
    questions) should be acted on directly, never "want me to dispatch?";
    confirmation reserved for irreversible/costly/config-changing actions.
