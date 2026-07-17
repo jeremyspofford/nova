@@ -474,7 +474,17 @@ See README for what works. This file is the ordered backlog.
 
 3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
-   should be a click. Axes to work through together:
+   should be a click.
+   **Confirmed in scope (Jeremy, 2026-07-17): audit log + system/service
+   health.** Audit log: a durable, queryable record of who/what did what
+   when — tool calls with args/results, settings changes, approvals,
+   automation runs, model swaps; distinct from debugging traces (audit
+   answers "what happened", traces answer "why"). Service health: one
+   surface showing every service (backend, postgres, ollama, kokoro,
+   whisper, searxng, tailscale, web) up/down + versions + disk/VRAM
+   pressure — feeds the Settings readiness dots the voice plan wants AND
+   the platform-facts block (#12), which currently covers hardware but
+   not service state. Axes to work through together:
    - *What exists*: messages journal tool activity (kind/name/agent +
      2000-char detail), automation run outcomes, rule hit counts, docker
      logs. Enough for autopsies, only via psql.
