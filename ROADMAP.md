@@ -432,13 +432,18 @@ See README for what works. This file is the ordered backlog.
 
 ## Next up
 
-1. **Voice — talking to and hearing Nova (decided 2026-07-14; phase 1 +
-   1b SHIPPED 2026-07-15)** — full spec + phase status in
-   `docs/plans/voice.md`. Phase 1 (spoken replies: kokoro TTS service,
-   sentence-buffered streaming, emoji/number normalization, list pauses,
-   pause/resume/stop controls) and phase 1b (54-voice picker with preview,
-   swappable `voice.model_override` LLM) are live-verified. Phases 2–4
-   (STT: push-to-talk → VAD → wake word) are the remaining build.
+1. **Voice — talking to and hearing Nova (decided 2026-07-14; CORE ARC
+   SHIPPED — status corrected 2026-07-17)** — full spec + phase status in
+   `docs/plans/voice.md`. Shipped and live-verified: phase 1 (kokoro TTS,
+   sentence-buffered streaming, controls), 1b (54-voice picker, swappable
+   `voice.model_override`), 2 (PTT STT via whisper service), 3
+   (tap-to-talk with in-browser silero VAD), 4a (on-device openWakeWord
+   engine), 4a·1 (assistant rename + wake-phrase decoupling), 4c (trained
+   "Hey Nova" model v0.2 + training pipeline), 4e (conversation-mode
+   follow-up window). Still open: 4b (server-side wake engine — optional
+   robustness alternative, unbuilt) and 4d (open-vocab wake-by-name —
+   DEMOTED to a possible later opt-in). Ongoing wake-quality work
+   continues as item #11; this item is otherwise done.
    Original decisions: **TTS** local-first Kokoro-class as the batteries-included
    default with premium cloud (ElevenLabs/OpenAI) as keyed opt-in; **STT**
    local faster-whisper (the 3090 makes this fast) with silero-VAD for
@@ -478,6 +483,11 @@ See README for what works. This file is the ordered backlog.
    ship the orb first (state machine + `setActivity` + `speaker.level()`
    are the inputs; micState/wake give "listening"), keep the face as the
    aspirational later pass. Each state animation is its own design task.
+   **Status check 2026-07-17:** the Universe theme shipped 2026-07-16
+   (commit 8f05849) as a third registered view, so the picker is now
+   Graph / Galaxy / Universe — the orb becomes the FOURTH entry, and the
+   "Brain view" → "Nova view" rename is still pending. No orb code exists
+   yet (`THEMES` in frontend/src/brain/theme.ts has no `nova` entry).
 
 3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
@@ -597,9 +607,11 @@ See README for what works. This file is the ordered backlog.
    polled by a scheduled automation that re-enumerates the source (YouTube
    RSS as an optional fast-path). Dedupe is source-neutral
    (`<extractor>:<id>`). Batteries-included (no API keys — yt-dlp is
-   keyless). Depends on: whisper service (voice phase 2) for the
-   transcription fallback; the automations/scheduler infra (exists) for
-   source polling. Open decisions flagged in the spec (backfill caps,
+   keyless). Dependencies now SATISFIED (2026-07-17 check): the whisper
+   service shipped with voice phase 2 and is live in compose, so the
+   transcription fallback exists; the automations/scheduler infra exists
+   for source polling — this item is unblocked and buildable.
+   Open decisions flagged in the spec (backfill caps,
    per-video summarization, auth/ToS posture, which non-YouTube sources to
    target first).
 
@@ -662,7 +674,17 @@ See README for what works. This file is the ordered backlog.
    Live-verified with the poisoned question that caused the incident:
    "is the passthrough issue still blocking you?" now answers "No — I can
    see your GPU just fine (RTX 3090, 24GB)" instead of asserting the
-   stale journal belief. (c) remains open.
+   stale journal belief. (c) remains open — and gained fresh evidence
+   2026-07-17 (journal 14:06/14:44): "what model are you using?" → Nova
+   has no way to self-check, and dispatching model-manager didn't help
+   because agent→model bindings live only in Settings, reachable by no
+   tool. The self-inventory tool must cover agent→model bindings, not
+   just shipped features. Same conversation, second request: Jeremy wants
+   PROACTIVE dispatch — low-risk lookups (statuses, info fetches, agent
+   questions) should be acted on directly, never "want me to dispatch?";
+   confirmation reserved for irreversible/costly/config-changing actions.
+   That's house-rules material — fold into the persona layer's house
+   rules (#15, phases 2+) so it applies to every agent by construction.
 
 13. **Human-like replies — the persona pass (requested 2026-07-16)** —
    Jarvis-from-Iron-Man / Sarah-from-Eureka register: warm, wry, concise,
