@@ -7,10 +7,11 @@
  *  A wake phrase is a trained model, so this list is fixed and INDEPENDENT of
  *  the assistant's display name — renaming the assistant does not change it. */
 export const WAKE_CATALOG: Record<string, { label: string; file: string }> = {
+  hey_nova: { label: 'Hey Nova', file: 'hey_nova_v0.2.onnx' },
   hey_jarvis: { label: 'Hey Jarvis', file: 'hey_jarvis_v0.1.onnx' },
 };
 
-export const DEFAULT_WAKE = 'hey_jarvis';
+export const DEFAULT_WAKE = 'hey_nova';
 
 export function wakeLabel(key: string): string {
   return WAKE_CATALOG[key]?.label ?? WAKE_CATALOG[DEFAULT_WAKE].label;

@@ -19,3 +19,7 @@ frontend/vite.config.d.ts
 *.tsbuildinfo
 frontend/dev-dist/
 frontend/public/mockups/
+
+# wake-word training artifacts (audio corpus + venv are local-only)
+tools/wake-training/.venv/
+tools/wake-training/data/

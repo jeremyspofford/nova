@@ -64,6 +64,11 @@ export class WakeWord {
   private cooldownUntil = 0;          // debounce repeat fires
   private threshold: number;
   private onWake: () => void;
+  // threshold tuning: localStorage.setItem('nova.wakeDebug','1') logs the
+  // rolling 1s max score to the console — watch how close your voice gets
+  private debug = localStorage.getItem('nova.wakeDebug') === '1';
+  private dbgMax = 0;
+  private dbgAt = 0;
 
   private constructor(opts: WakeOptions) {
     this.threshold = opts.threshold ?? 0.5;
@@ -169,6 +174,14 @@ export class WakeWord {
           if (this.embBuf.length > EMB_WIN) this.embBuf = this.embBuf.slice(-EMB_WIN);
         }
         const s = await this.score(this.embBuf);
+        if (this.debug) {
+          this.dbgMax = Math.max(this.dbgMax, s);
+          if (performance.now() - this.dbgAt > 1000) {
+            console.debug(`[wake] max score ${this.dbgMax.toFixed(3)} (threshold ${this.threshold})`);
+            this.dbgMax = 0;
+            this.dbgAt = performance.now();
+          }
+        }
         if (s >= this.threshold && performance.now() >= this.cooldownUntil) {
           this.cooldownUntil = performance.now() + 2000;   // debounce
           this.onWake();

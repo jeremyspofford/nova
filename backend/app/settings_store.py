@@ -73,7 +73,7 @@ SETTING_DEFS: list[dict] = [
      "options": ["sidebar", "modal"], "section": "Appearance",
      "label": "Memory detail style",
      "description": "Open memory details as a side panel or a centered modal."},
-    {"key": "brain.rotation_speed", "type": "number", "default": 2,
+    {"key": "brain.rotation_speed", "type": "number", "default": 1,
      "min": 0, "max": 6, "section": "Appearance",
      "label": "Galaxy rotation speed",
      "description": "Auto-orbit speed of the galaxy view (0 = still)."},
@@ -142,13 +142,15 @@ SETTING_DEFS: list[dict] = [
      "description": ("How the mic engages. Hold-to-talk always works; "
                      "tap-to-talk auto-stops when you pause; wake word listens "
                      "hands-free for a spoken trigger. All on-device.")},
-    {"key": "voice.wake_word", "type": "enum", "default": "hey_jarvis",
-     "options": ["hey_jarvis"], "section": "Voice", "label": "Wake phrase",
+    {"key": "voice.wake_word", "type": "enum", "default": "hey_nova",
+     "options": ["hey_nova", "hey_jarvis"], "section": "Voice",
+     "label": "Wake phrase",
      "description": ("The spoken phrase that wakes hands-free listening. Each "
                      "phrase is its own on-device model, so this is a fixed "
-                     "list — independent of the assistant's name. A custom "
-                     "phrase matching your assistant's name needs a trained "
-                     "model (roadmap: docs/plans/voice.md).")},
+                     "list — independent of the assistant's name. \"Hey Nova\" "
+                     "is trained on synthetic voices: if it misses you or "
+                     "false-fires, tune the sensitivity below (training "
+                     "pipeline: tools/wake-training/).")},
     {"key": "voice.wake_threshold", "type": "number", "default": 0.5,
      "min": 0.1, "max": 0.95, "section": "Voice",
      "label": "Wake word sensitivity",

@@ -270,9 +270,37 @@ constants, don't remove them.
      kept ORT-free so the UI can name phrases without bundling the runtime.
      Renaming to "Aria" does NOT give you an "Aria" wake word — that needs
      4c.*
-   - *4c — custom wake word for a renamed assistant (ROADMAP, "train
-     later")*: mint an openWakeWord model for an arbitrary phrase so a
-     renamed assistant can be woken by its own name. Pipeline (offline,
+   - *4c — custom wake word for a renamed assistant (CHOSEN PATH as of
+     2026-07-16 — see the 4d pivot note)*: mint an openWakeWord model for
+     an arbitrary phrase so a renamed assistant can be woken by its own
+     name.
+     *("Hey Nova" TRAINED AND SHIPPED 2026-07-16 — pipeline in
+     `tools/wake-training/` (generate via bundled Kokoro → featurize via an
+     exact Python port of wake.ts's streaming pipeline → tiny ~200k-param
+     torch head → self-contained ONNX, 822 kB). Corpus: 306 positives (34
+     voices × 3 texts × 3 speeds) + 510 hard negatives (near-collisions,
+     aboutness sentences, commands) + noise/silence, augmented ×2. The
+     featurizer was validated against ground truth first: the shipped
+     hey_jarvis head scores 0.999/0.000 (its phrase/control) through it.
+     Results on two HELD-OUT voices never trained on: positives all 1.000,
+     negatives ≤0.012 — including "I was talking about nova yesterday" —
+     and full mutual exclusion with hey_jarvis (0.000 both directions).
+     Val sweep: recall 0.993 / false-accept 0.35% at threshold 0.5.
+     Live-verified in-browser end-to-end: wake mode → "Listening for Hey
+     Nova" → held-out voice clip via fake mic → fire ~0.9 s → VAD capture.
+     hey_nova is now the DEFAULT wake phrase (catalog + settings);
+     hey_jarvis stays selectable. v0.1 MISSED Jeremy's real voice (clean
+     TTS training vs real-mic acoustics — reverb, mic coloring, browser
+     AGC/echo-cancel; NOT accents, which scored 1.000 OOD). v0.2 (same
+     day) retrains through simulated acoustics (reverb, spectral tilt,
+     rate perturbation, harder noise) on all 54 voices: room-sim clips
+     that dropped v0.1 to 0.314 (missed wake) hold >=0.997 on v0.2, and
+     it fires in-browser on the clip v0.1 missed. Live tuning aid:
+     localStorage nova.wakeDebug=1 logs the rolling max score so a real
+     voice can be measured, not guessed. Full numbers:
+     tools/wake-training/README.md. STILL TO BUILD from the pivot
+     architecture: pre-roll buffer (trailing-name utterances) and the
+     post-fire addressee check.)* Pipeline (offline,
      GPU — the 3090): (1) generate synthetic positives of the phrase with
      the bundled Kokoro TTS (54 voices × speed/pitch jitter) + hard
      negatives/background from the openWakeWord recipe; (2) train the wake
@@ -302,6 +330,20 @@ constants, don't remove them.
      running; the mic streams to your Nova continuously while the app is
      open (~32 KB/s — trivial on the tailnet at home, ~115 MB/hour on
      cellular).
+   - *4e — conversation mode / follow-up window (requested 2026-07-16,
+     ROADMAP #10)*: one "Hey Nova" opens a CONVERSATION, not a single
+     exchange. After Nova's spoken reply finishes (or is barged in on),
+     re-arm the VAD capture directly — no wake phrase — for a follow-up
+     window (`voice.followup_window_s`, ~8 s default; 0 = off). Speech in
+     the window starts the next turn and the loop continues; silence closes
+     it back to wake-only listening. Requires: a visible "still listening"
+     state (the mic button + a distinct chime/indicator — the user must
+     KNOW the mic is hot without the wake phrase), interruption support
+     (already have barge-in), and the wake detector staying paused during
+     the window (mic ownership handoff, same pattern as wake→VAD today).
+     NotebookLM's interaction is the reference feel. Builds purely on
+     existing pieces (wake, VAD, speech state) — ChatPanel state-machine
+     work, no new services.
    - `voice.wake_engine` (`device | server`): Settings shows both with
      honest requirement copy + a readiness dot each (model
      downloaded/trained? voice profile up?); an option whose
@@ -312,8 +354,25 @@ constants, don't remove them.
    - De-risk: if the 4a browser port fights back, ship 4b first — the
      setting's shape doesn't change and 4a slots in later. This phase is
      the UX polish loop; budget iteration time for wake accuracy.
-   - *4d — open-vocabulary "wake by name" (local ASR, ROADMAP — approved
-     direction 2026-07-16)*: the way to make "Nova" / "Hey Nova" the trigger
+   - *4d — open-vocabulary "wake by name" (local ASR) — DEMOTED 2026-07-16
+     after discussion: continuous ASR can't run in the phone PWA, burns GPU
+     whenever anyone speaks, and its headline advantage (aboutness
+     filtering) is achievable far cheaper. Jeremy's call: wake word wins on
+     resources. Note the aboutness problem afflicts BOTH designs — an
+     acoustic model fires on the SOUND of the phrase ("I renamed Nova
+     yesterday" trips a "nova" model, same as saying "Alexa" trips an
+     Alexa) — so the chosen architecture is 4c + two cheap additions:
+     (1) train "Hey Nova" as the primary phrase (people discussing her say
+     "Nova", almost never "Hey Nova" — dodges most collisions by
+     construction); (2) PRE-ROLL BUFFER: keep the last ~8 s of audio
+     on-device, continuously discarded; on a wake fire, transcribe the
+     buffer too, so "Will it be rainy tomorrow, Nova?" — where the command
+     precedes the name — still works (how commercial assistants support
+     trailing wake words); (3) POST-FIRE CHECK: one cheap local-model call
+     per fire (not per utterance) — "is this addressed to the assistant?" —
+     to catch residual aboutness. 4d survives only as a possible opt-in
+     "open listening" mode for GPU-rich desktop setups, if ever. The
+     original 4d design is kept below for that case: the way to make "Nova" / "Hey Nova" the trigger
      WITHOUT training an acoustic model (supersedes 4c for the naming case).
      Instead of matching a fixed trained phrase, transcribe continuously and
      spot the NAME anywhere in the transcript, so "Hey Nova …", "Nova, …",
