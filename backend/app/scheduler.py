@@ -26,7 +26,9 @@ async def run_one(automation: dict) -> tuple[bool, str]:
     if not agent or not agent["enabled"]:
         return False, f"agent '{automation['agent_name']}' not found or disabled"
 
-    timeout = settings_store.get("automations.run_timeout_seconds")
+    # per-automation override for legitimately long jobs; NULL = global default
+    timeout = (automation.get("timeout_seconds")
+               or settings_store.get("automations.run_timeout_seconds"))
     final, errors = "", []
 
     async def consume():

@@ -44,6 +44,7 @@ async def _write_memory(args, ctx):
         tags=args.get("tags"),
         source_url=args.get("source_url"),
         item_id=args.get("item_id"),
+        append=bool(args.get("append")),
         source_type="tool",
     ))
 
@@ -352,7 +353,9 @@ async def _manage_automations(args, ctx):
                 instruction=args.get("instruction", "").strip(),
                 agent_name=args.get("agent_name", "").strip(),
                 interval_minutes=int(args.get("interval_minutes", 0)),
-                description=args.get("description", ""))
+                description=args.get("description", ""),
+                timeout_seconds=(int(args["timeout_seconds"])
+                                 if args.get("timeout_seconds") else None))
         except Exception as e:
             return f"Error creating automation: {e}"
         return _j({"status": "created", "name": row["name"],
@@ -364,7 +367,7 @@ async def _manage_automations(args, ctx):
             return f"Error: automation '{args.get('name')}' not found"
         updates = {k: v for k, v in args.items()
                    if k in ("description", "instruction", "agent_name",
-                            "interval_minutes")}
+                            "interval_minutes", "timeout_seconds")}
         if action == "enable":
             updates["enabled"] = True
         elif action == "disable":
@@ -520,7 +523,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "journal; type='topic' or type='skill' creates a durable concept file "
                         "(title required). Skills are guidance other agents retrieve and follow. "
                         "Tags connect related topics in the brain graph; source_url records "
-                        "provenance for ingested content."),
+                        "provenance for ingested content. For running documents (digests, "
+                        "logs) use item_id + append=true and send only the new entries."),
         "parameters": {"type": "object", "properties": {
             "content": {"type": "string"},
             "type": {"type": "string", "enum": ["journal", "topic", "skill"]},
@@ -536,6 +540,12 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "description": ("To UPDATE an existing memory item in place, pass its "
                                         "id (e.g. topics/foo.md from search results). Omit to "
                                         "create a new item.")},
+            "append": {"type": "boolean",
+                       "description": ("With item_id: add content to the END of the existing "
+                                       "item instead of replacing it — the right mode for "
+                                       "running logs and digests. Existing text is preserved "
+                                       "mechanically, so send ONLY the new entries, never "
+                                       "the whole document.")},
         }, "required": ["content"]},
         "execute": _write_memory,
     },
@@ -656,6 +666,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "agent_name": {"type": "string",
                            "description": "Which agent executes it (see list_agents)"},
             "interval_minutes": {"type": "integer"},
+            "timeout_seconds": {"type": "integer",
+                                "description": ("Per-run timeout override in seconds "
+                                                "(min 30) for legitimately long jobs; "
+                                                "omit to use the global setting")},
             "limit": {"type": "integer",
                       "description": "For 'runs': how many recent runs (default 10)"},
         }, "required": ["action"]},

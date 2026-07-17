@@ -287,6 +287,7 @@ export interface Automation {
   instruction: string;
   agent_name: string;
   interval_minutes: number;
+  timeout_seconds: number | null;
   enabled: boolean;
   is_system: boolean;
   consecutive_failures: number;

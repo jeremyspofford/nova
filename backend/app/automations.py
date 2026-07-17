@@ -11,10 +11,12 @@ from app import db
 log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "name", "description", "instruction", "agent_name",
-           "interval_minutes", "enabled", "is_system", "consecutive_failures",
-           "last_run_at", "next_run_at", "last_status", "last_summary", "created_at")
+           "interval_minutes", "timeout_seconds", "enabled", "is_system",
+           "consecutive_failures", "last_run_at", "next_run_at", "last_status",
+           "last_summary", "created_at")
 
-_UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes", "enabled"}
+_UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes",
+              "timeout_seconds", "enabled"}
 
 
 def _row(r) -> dict:
@@ -38,9 +40,13 @@ async def get_by_name(name: str) -> Optional[dict]:
 
 
 async def create(name: str, instruction: str, agent_name: str,
-                 interval_minutes: int, description: str = "") -> dict:
+                 interval_minutes: int, description: str = "",
+                 timeout_seconds: Optional[int] = None) -> dict:
     if interval_minutes < 5:
         raise ValueError("interval_minutes must be at least 5")
+    if timeout_seconds is not None and timeout_seconds < 30:
+        raise ValueError("timeout_seconds must be at least 30 (or omitted "
+                         "for the global default)")
     async with db.acquire() as conn:
         agent = await conn.fetchrow(
             "SELECT 1 FROM agents WHERE name = $1 AND enabled", agent_name)
@@ -48,10 +54,11 @@ async def create(name: str, instruction: str, agent_name: str,
             raise ValueError(f"agent '{agent_name}' not found or disabled")
         r = await conn.fetchrow(
             """INSERT INTO automations (name, description, instruction, agent_name,
-                                        interval_minutes, next_run_at)
-               VALUES ($1, $2, $3, $4, $5, now() + make_interval(mins => $5))
+                                        interval_minutes, timeout_seconds, next_run_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(mins => $5))
                RETURNING *""",
-            name, description, instruction, agent_name, interval_minutes)
+            name, description, instruction, agent_name, interval_minutes,
+            timeout_seconds)
     log.info("Automation created: %s (every %dm, agent=%s)",
              name, interval_minutes, agent_name)
     return _row(r)

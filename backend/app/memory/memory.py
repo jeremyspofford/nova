@@ -100,10 +100,22 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     title: Optional[str] = None, description: Optional[str] = None,
                     category: Optional[str] = None, priority: int = 0,
                     tags: Optional[list[str]] = None, source_url: Optional[str] = None,
-                    item_id: Optional[str] = None,
+                    item_id: Optional[str] = None, append: bool = False,
                     source_type: str = "chat") -> dict:
-        """Write to memory. journal → append to today's file; skill/topic → concept file."""
+        """Write to memory. journal → append to today's file; skill/topic → concept
+        file. append=True + item_id adds content to the end of an existing item
+        instead of replacing it (running logs/digests write only the delta)."""
         async with self._lock:
+            if append:
+                if not item_id:
+                    return {"status": "error",
+                            "error": "append=true requires item_id"}
+                try:
+                    doc_id = self.store.append_concept(item_id, content)
+                except FileNotFoundError as e:
+                    return {"status": "error", "error": str(e)}
+                self._index_file(doc_id)
+                return {"status": "appended", "type": type, "id": doc_id}
             if type in ("skill", "topic"):
                 if not title:
                     return {"status": "error",

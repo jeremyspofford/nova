@@ -1711,7 +1711,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
   }, []);
 
   const [editing, setEditing] = useState<Automation | null>(null);
-  const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', interval_minutes: 60 });
+  const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', interval_minutes: 60, timeout_seconds: '' });
 
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
@@ -1738,6 +1738,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
       instruction: a.instruction,
       agent_name: a.agent_name,
       interval_minutes: a.interval_minutes,
+      timeout_seconds: a.timeout_seconds == null ? '' : String(a.timeout_seconds),
     });
   }
 
@@ -1745,7 +1746,10 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
     e.preventDefault();
     if (!editing) return;
     try {
-      await patchAutomation(editing.id, editForm);
+      await patchAutomation(editing.id, {
+        ...editForm,
+        timeout_seconds: editForm.timeout_seconds === '' ? null : Number(editForm.timeout_seconds),
+      });
       setEditing(null);
       load();
     } catch (err) {
@@ -1809,6 +1813,14 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                   className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
                   title="Interval (minutes)"
                 />
+                <input
+                  type="number" min={30}
+                  placeholder="timeout"
+                  value={editForm.timeout_seconds}
+                  onChange={e => setEditForm({ ...editForm, timeout_seconds: e.target.value })}
+                  className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+                  title="Per-run timeout override in seconds — empty uses the global automations setting"
+                />
               </div>
               <div className="flex gap-2 justify-end">
                 <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
@@ -1845,6 +1857,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
               </div>
               <div className="mt-1 text-xs text-stone-500">
                 {agentDisplayName(a.agent_name)} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
+                {a.timeout_seconds != null && <span> · timeout {a.timeout_seconds}s</span>}
                 {a.last_status && (
                   <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
                     {' '}· last: {a.last_status}
