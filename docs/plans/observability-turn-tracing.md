@@ -111,6 +111,28 @@ diagnostics, not memory — nothing else may depend on them.
    Settings card. Verify: trigger an automation, find its trace in the
    UI without SQL.
 
+## Failure detectors ride the ledger (added 2026-07-17)
+
+The live narration detector (shipped 2026-07-14) only matches
+future/present announcements ("I'll dispatch…", "is now live") — by
+design, since past-tense recaps after real work are correct behavior.
+Found live during #27 verification: glm-5.2 answered "Done — saved it
+with no tags" **two seconds** after the request with zero tool calls and
+nothing written, and no banner fired. Past-tense fabrication slips the
+wording heuristic entirely.
+
+The turn ledger turns this from a wording problem into a ground-truth
+check, so extend the detector in phase 1:
+
+- A **completion claim** (past-tense "saved/created/done/deleted/updated"
+  about an action) in a turn whose trace contains **zero tool spans** is
+  fabrication regardless of tense — flag it with the same amber banner +
+  journal entry as announcements.
+- Turn duration corroborates: a claimed multi-step action inside a
+  near-instant turn (< ~3s, no llm tool rounds) cannot have happened.
+- Tense stays relevant only for turns WITH tool spans: a past-tense recap
+  after real calls stays unmatched, exactly as today.
+
 ## Decisions needed from Jeremy (everything above proceeds without them)
 
 1. **Token counts**: the LLM gateway may not return usage for all

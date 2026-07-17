@@ -520,7 +520,16 @@ See README for what works. This file is the ordered backlog.
    - *Failure detectors*: a live narration detector (final text announces
      a dispatch, zero tool calls in the turn → flag the turn, journal it)
      — cheap, and catches today's bug class as it happens rather than in
-     autopsy.
+     autopsy. **Tense gap found live 2026-07-17 (#27 verification):** the
+     shipped detector matches only future/present announcements — glm-5.2
+     fabricated "Done — saved it with no tags" two seconds after the
+     request, zero tool calls, no file written, and no banner fired,
+     because past-tense recaps are deliberately unmatched (a genuine
+     recap after real calls must not flag). The turn ledger dissolves the
+     ambiguity: a completion CLAIM in a turn whose trace holds zero tool
+     spans is fabrication regardless of tense — extend the detector to
+     past-tense claims gated on trace ground truth, not wording alone
+     (near-instant turn duration is a corroborating signal).
    - *Redaction*: tool args can carry secrets; interplay with guardian
      rules and the no-secret-in-requests pattern.
 
