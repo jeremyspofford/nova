@@ -492,6 +492,27 @@ See README for what works. This file is the ordered backlog.
    Graph / Galaxy / Universe — the orb becomes the FOURTH entry, and the
    "Brain view" → "Nova view" rename is still pending. No orb code exists
    yet (`THEMES` in frontend/src/brain/theme.ts has no `nova` entry).
+   **ORB V1 SHIPPED 2026-07-17 (parallel session, uncommitted):**
+   `frontend/src/brain/nova.ts` — canvas-2D presence view (no memory
+   nodes): breathing orb + ambient mote field, five states with eased
+   crossfades — idle (teal), listening (cyan, inward rings), thinking
+   (violet, circling arcs), working (amber, counter-rotating arcs +
+   sparks per tool event), speaking (glow/radius follow
+   `speaker.level()`). Clicking the orb opens the soul card. Registered
+   as the 4th picker entry; `brain.view` enum + "Nova view" rename done.
+   Wiring: #7's `setActivity` contract now exists on `RendererHandle`
+   with a `nova:chat-activity` → renderer bridge in Brain.tsx —
+   idle/speaking are live today; thinking/working/listening fire once
+   ChatPanel dispatches the events (#7's other half, deferred to avoid
+   colliding with the observability session's ChatPanel work; verified
+   meanwhile by dispatching the events manually). Screenshot-verified
+   through :5173 (all four states + picker). Bonus hardening found by
+   verification: a machine that can't create a WebGL context used to
+   white-screen the whole app (unguarded THREE constructor) — ThemePreview
+   now degrades to a dead card and Brain.tsx falls back to the 2D graph.
+   Remaining for later passes: the aspirational particle-face concept
+   above, wake/mic "listening" wiring, per-state polish with Jeremy's
+   eyes on it.
 
 3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
@@ -636,6 +657,11 @@ See README for what works. This file is the ordered backlog.
    traverse memory-to-memory without hunting the canvas. Small, contained:
    Brain.tsx has nodes+edges in hand; the detail panel just never got the
    adjacency list.
+   **ALREADY SHIPPED — status noted 2026-07-17:** the Universe-view commit
+   (8f05849, 2026-07-16) added exactly this: a "Connections" section in the
+   detail panel (sidebar AND modal), built from the fetched edge list (real
+   edges only, tag chains excluded), each neighbor clickable →
+   `openDetail` + `focusNode`. Nothing left to build.
 
 10. **Voice conversation mode — follow-up window (requested 2026-07-16;
    SHIPPED same day — see voice.md §4e for the record)** —

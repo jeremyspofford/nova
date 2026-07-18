@@ -75,9 +75,10 @@ SETTING_DEFS: list[dict] = [
                      "graph as first-class nodes with their real relationships "
                      "as edges. Off = knowledge-only view.")},
     {"key": "brain.view", "type": "enum", "default": "graph",
-     "options": ["graph", "galaxy", "universe"], "section": "Appearance",
-     "label": "Brain view",
-     "description": "How the memory graph is rendered."},
+     "options": ["graph", "galaxy", "universe", "nova"], "section": "Appearance",
+     "label": "Nova view",
+     "description": ("How Nova is rendered — as a knowledge graph, a galaxy, "
+                     "a universe, or just her presence.")},
     {"key": "brain.detail_style", "type": "enum", "default": "sidebar",
      "options": ["sidebar", "modal"], "section": "Appearance",
      "label": "Memory detail style",

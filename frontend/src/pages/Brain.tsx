@@ -169,7 +169,15 @@ export function Brain() {
     if (!canvas) return;
     const themeKey = prefs.view in THEMES ? prefs.view : DEFAULT_THEME;
 
-    const renderer = THEMES[themeKey].create(canvas, { onNodeClick: openDetail });
+    // a theme that can't start (no WebGL context on this machine) falls back
+    // to the 2D graph instead of white-screening the app with no way back
+    let renderer: RendererHandle;
+    try {
+      renderer = THEMES[themeKey].create(canvas, { onNodeClick: openDetail });
+    } catch (err) {
+      console.error(`brain view "${themeKey}" failed to start:`, err);
+      renderer = THEMES[DEFAULT_THEME].create(canvas, { onNodeClick: openDetail });
+    }
     rendererRef.current = renderer;
     renderer.configure?.({
       rotationSpeed: prefsRef.current.rotationSpeed,
@@ -186,6 +194,15 @@ export function Brain() {
     };
     size();
     window.addEventListener('resize', size);
+
+    // live-activity bridge (the brain-activity item's contract): anything
+    // dispatching nova:chat-activity reaches the active renderer here
+    const onActivity = (e: Event) => {
+      renderer.setActivity?.((e as CustomEvent).detail as {
+        active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening';
+      });
+    };
+    window.addEventListener('nova:chat-activity', onActivity);
 
     let cancelled = false;
     const load = async () => {
@@ -215,6 +232,7 @@ export function Brain() {
       reloadRef.current = null;
       clearInterval(interval);
       window.removeEventListener('resize', size);
+      window.removeEventListener('nova:chat-activity', onActivity);
       renderer.destroy();
       rendererRef.current = null;
     };

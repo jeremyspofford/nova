@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { THEMES } from '../brain/theme';
+import { THEMES, RendererHandle } from '../brain/theme';
 import { SAMPLE_NODES, SAMPLE_EDGES } from '../brain/sample';
 
 /** Live mini-preview of a brain theme — the actual renderer on sample data. */
@@ -13,16 +13,23 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const renderer = THEMES[themeKey].create(canvas);
-    renderer.resize(220, 130);
-    // preview cards keep visible motion under the rescaled galaxy base rate
-    renderer.configure?.({ rotationSpeed: 6, labelMode: 'off', labelScale: 0.7 });
-    renderer.setData(SAMPLE_NODES, SAMPLE_EDGES);
+    // a machine that can't create a WebGL context (headless, old GPU) must
+    // lose one preview card, not the whole app
+    let renderer: RendererHandle | undefined;
+    try {
+      renderer = THEMES[themeKey].create(canvas);
+      renderer.resize(220, 130);
+      // preview cards keep visible motion under the rescaled galaxy base rate
+      renderer.configure?.({ rotationSpeed: 6, labelMode: 'off', labelScale: 0.7 });
+      renderer.setData(SAMPLE_NODES, SAMPLE_EDGES);
+    } catch (err) {
+      console.error(`theme preview "${themeKey}" failed:`, err);
+    }
     // the force layout's natural spread dwarfs a 220x130 canvas — fit the
     // view once the simulation has roughly settled (twice, to be sure)
-    const t1 = setTimeout(() => renderer.recenter?.(), 500);
-    const t2 = setTimeout(() => renderer.recenter?.(), 1400);
-    return () => { clearTimeout(t1); clearTimeout(t2); renderer.destroy(); };
+    const t1 = setTimeout(() => renderer?.recenter?.(), 500);
+    const t2 = setTimeout(() => renderer?.recenter?.(), 1400);
+    return () => { clearTimeout(t1); clearTimeout(t2); renderer?.destroy(); };
   }, [themeKey]);
 
   return (

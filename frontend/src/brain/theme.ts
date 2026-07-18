@@ -7,6 +7,7 @@
 import type { GraphNode, GraphEdge } from '../api';
 import { createGalaxy, GALAXY_LEGEND } from './galaxy';
 import { createGraph2D, GRAPH_LEGEND } from './graph2d';
+import { createNova, NOVA_LEGEND } from './nova';
 import { createUniverse, UNIVERSE_LEGEND } from './universe';
 
 export interface RendererHandle {
@@ -19,6 +20,9 @@ export interface RendererHandle {
   recenter?(): void;
   /** Navigate to a node (Atlas click): fly the camera there, select it. */
   focusNode?(id: string): void;
+  /** Live activity for presence-style views: chat stream / dispatch / tool
+   *  events (`nova:chat-activity` bridge) and mic state. Data views ignore it. */
+  setActivity?(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }): void;
 }
 
 export interface RendererOpts {
@@ -41,6 +45,7 @@ export const THEMES: Record<string, { label: string; create: RendererFactory; le
   graph: { label: 'Graph', create: createGraph2D, legend: GRAPH_LEGEND },
   galaxy: { label: 'Galaxy', create: createGalaxy, legend: GALAXY_LEGEND },
   universe: { label: 'Universe', create: createUniverse, legend: UNIVERSE_LEGEND },
+  nova: { label: 'Nova', create: createNova, legend: NOVA_LEGEND },
 };
 
 export const DEFAULT_THEME = 'graph';
