@@ -1,7 +1,8 @@
-/** Nova theme — no memory nodes, just presence: a breathing orb whose light
- * and motion follow what Nova is doing (idle / listening / thinking /
- * working / speaking). The Gemini/Jarvis register — an entity, not a data
- * visualization.
+/** Nova theme — no memory nodes, just presence: a breathing particle-shell
+ * orb whose light and motion follow what Nova is doing (idle / listening /
+ * thinking / working / speaking). The Gemini/Jarvis register — an entity,
+ * not a data visualization. Particles ride true 3D orbits; dragging the
+ * canvas orbits the view around her.
  *
  * Inputs: `speaker` (voice output amplitude drives the speaking glow — live
  * today) and the `setActivity` contract (chat stream / dispatch / tool / mic
@@ -27,7 +28,7 @@ const MODE_COLOR: Record<Mode, string> = {
 
 // target intensity per mode — everything eases toward it, nothing snaps
 const MODE_ENERGY: Record<Mode, number> = {
-  idle: 0.16, listening: 0.42, thinking: 0.6, working: 0.85, speaking: 0.55,
+  idle: 0.20, listening: 0.42, thinking: 0.6, working: 0.85, speaking: 0.38,
 };
 
 export const NOVA_LEGEND: LegendEntry[] = [
@@ -55,12 +56,15 @@ function rgb(hex: string): [number, number, number] {
 export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): RendererHandle {
   const ctx = canvas.getContext('2d')!;
   let raf = 0;
-  let name = 'Nova';
 
   // runtime settings (Brain HUD -> configure())
   let pace = 1;                                // rotationSpeed / 2 (0 = still)
   let labelMode: 'auto' | 'on' | 'off' = 'auto';
   let labelScale = 1;
+
+  // view orientation — drag orbits the whole particle system around her
+  let yaw = 0;
+  let pitch = 0.15;
 
   // ── state machine ────────────────────────────────────────────────────
   // chat activity arrives via setActivity; speaking is polled off the
@@ -88,23 +92,36 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   const bgStars = Array.from({ length: 140 }, () => ({
     x: rand(), y: rand(), r: rand() * 1.1 + 0.2, a: rand() * 0.35 + 0.08,
   }));
-  // motes on tilted elliptical orbits — pseudo-3D without a camera
+  // true 3D orbits (random plane through the center) — real enough that
+  // dragging the view genuinely rotates around her
+  const orbit3 = (radius: number) => {
+    const t = rand() * Math.PI * 2, z = rand() * 2 - 1;
+    const s = Math.sqrt(1 - z * z);
+    const n = [s * Math.cos(t), s * Math.sin(t), z];       // orbit normal
+    const ref = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    let u = [n[1] * ref[2] - n[2] * ref[1], n[2] * ref[0] - n[0] * ref[2],
+             n[0] * ref[1] - n[1] * ref[0]];
+    const ul = Math.hypot(u[0], u[1], u[2]);
+    u = [u[0] / ul, u[1] / ul, u[2] / ul];
+    const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2],
+               n[0] * u[1] - n[1] * u[0]];
+    return { radius, u, v, ang: rand() * Math.PI * 2 };
+  };
+  // ambient motes drifting far out
   const motes = Array.from({ length: 110 }, () => {
     const a = 1.7 + rand() * 2.9;              // orbit radius, in units of R
-    return {
-      a,
-      ang: rand() * Math.PI * 2,
-      speed: (0.25 + rand() * 0.5) / a,        // outer orbits drift slower
-      tilt: 0.3 + rand() * 0.55,
-      plane: rand() * Math.PI * 2,
-      size: 0.6 + rand() * 1.4,
-      tw: rand() * Math.PI * 2,
-    };
+    return { ...orbit3(a), speed: (0.25 + rand() * 0.5) / a,
+             size: 0.6 + rand() * 1.4, tw: rand() * Math.PI * 2 };
   });
-  let ripples: { life: number; dir: 1 | -1 }[] = [];   // dir 1 = outward (speech)
+  // the orb body itself — a fuzzy shell of matter, not a solid ball
+  const shell = Array.from({ length: 640 }, () => {
+    const rad = 1 + (rand() + rand() + rand() - 1.5) * 0.16;  // soft gaussian shell
+    return { ...orbit3(rad), speed: 0.10 + rand() * 0.22,
+             size: 0.5 + rand() * 1.1, tw: rand() * Math.PI * 2 };
+  });
+  let ripples: { life: number; dir: 1 | -1 }[] = [];   // listening rings (inward)
   let sparks: { x: number; y: number; vx: number; vy: number; life: number }[] = [];
   let lastInRipple = 0;                        // listening ring cadence
-  let lastOutRipple = 0;                       // speech ripple cooldown
   let lastNow = performance.now();
 
   function spawnSparks(cx: number, cy: number, ringR: number) {
@@ -131,14 +148,17 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     const mode = resolveMode(now);
     const k = 1 - Math.exp(-dt / 300);
     for (const m of MODES) weight[m] += ((m === mode ? 1 : 0) - weight[m]) * k;
-    lvlS += (speaker.level() - lvlS) * 0.35;
+    // asymmetric envelope: quick to light up, slow to settle — her voice
+    // breathes through the orb instead of strobing it
+    const lv = speaker.level();
+    lvlS += (lv - lvlS) * (1 - Math.exp(-dt / (lv > lvlS ? 90 : 450)));
     let cr = 0, cg = 0, cb = 0, energy = 0;
     for (const m of MODES) {
       const [r0, g0, b0] = rgb(MODE_COLOR[m]);
       cr += r0 * weight[m]; cg += g0 * weight[m]; cb += b0 * weight[m];
       energy += MODE_ENERGY[m] * weight[m];
     }
-    energy = Math.min(1, energy + lvlS * 0.5 * weight.speaking);
+    energy = Math.min(1, energy + lvlS * 0.15 * weight.speaking);
     const col = (a: number) => `rgba(${cr | 0}, ${cg | 0}, ${cb | 0}, ${a})`;
 
     // deep space + a nebula halo that warms with activity
@@ -156,34 +176,78 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
 
     ctx.globalCompositeOperation = 'lighter';
 
+    // shared view rotation: slow idle orbit + whatever the user dragged
+    yaw += dt * 0.00004 * pace;
+    const cyw = Math.cos(yaw), syw = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    // project a 3D orbiter to screen; d = normalized depth (-1 back, +1 front)
+    const proj = (o: { radius: number; u: number[]; v: number[]; ang: number },
+                  scale: number) => {
+      const ca = Math.cos(o.ang), sa = Math.sin(o.ang);
+      const px = o.radius * (ca * o.u[0] + sa * o.v[0]);
+      const py = o.radius * (ca * o.u[1] + sa * o.v[1]);
+      const pz = o.radius * (ca * o.u[2] + sa * o.v[2]);
+      const x1 = px * cyw + pz * syw, z1 = pz * cyw - px * syw;
+      const y2 = py * cp - z1 * sp, z2 = py * sp + z1 * cp;
+      return { x: cx + x1 * scale, y: cy + y2 * scale, d: z2 / o.radius };
+    };
+
     // motes — the ambient field that quickens as she engages
-    const drift = dt * (0.3 + energy * 1.9) * pace;
+    const drift = dt * (0.3 + energy * 1.0) * pace;
     for (const mo of motes) {
       mo.ang += mo.speed * drift * 0.001;
-      const ex = Math.cos(mo.ang) * mo.a * R, ey = Math.sin(mo.ang) * mo.a * R * mo.tilt;
-      const x = cx + ex * Math.cos(mo.plane) - ey * Math.sin(mo.plane);
-      const y = cy + ex * Math.sin(mo.plane) + ey * Math.cos(mo.plane);
+      const s = proj(mo, R);
       const twinkle = 0.55 + 0.45 * Math.sin(now / 700 + mo.tw);
-      ctx.fillStyle = col((0.1 + energy * 0.4) * twinkle);
-      ctx.beginPath(); ctx.arc(x, y, mo.size, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = col((0.1 + energy * 0.4) * twinkle * (0.7 + 0.3 * s.d));
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, mo.size * (1 + 0.2 * s.d), 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // the orb: wide halo, colored body, white-hot center — breathing at rest,
-    // swelling with her voice
-    const breathe = 1 + Math.sin(now / 2600) * 0.04 * (0.5 + pace * 0.5);
-    const r = R * breathe * (1 + lvlS * 0.22 * weight.speaking);
-    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * (2.6 + energy * 1.3));
-    halo.addColorStop(0, col(0.5 + energy * 0.3));
-    halo.addColorStop(0.35, col(0.16 + energy * 0.18));
+    // the orb: a fuzzy shell of matter around a soft inner light whose
+    // focus slowly wanders — glow and dust, nothing solid, nothing static
+    // breathing is pace-independent — even a stilled orb is alive; the glow
+    // inhales with the radius so the breath is unmistakable
+    const bphase = Math.sin(now / 2600);
+    const breathe = 1 + bphase * 0.06;
+    const bpulse = 0.5 + 0.5 * bphase;
+    const r = R * breathe * (1 + lvlS * 0.06 * weight.speaking);
+    const haloR = r * (2.4 + energy * 1.0);
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+    halo.addColorStop(0, col(0.28 + energy * 0.20 + bpulse * 0.07));
+    halo.addColorStop(0.4, col(0.09 + energy * 0.10 + bpulse * 0.03));
     halo.addColorStop(1, col(0));
     ctx.fillStyle = halo;
-    ctx.beginPath(); ctx.arc(cx, cy, r * (2.6 + energy * 1.3), 0, Math.PI * 2); ctx.fill();
-    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    core.addColorStop(0, `rgba(255,255,255,${0.75 + energy * 0.25})`);
-    core.addColorStop(0.45, col(0.85));
-    core.addColorStop(1, col(0));
-    ctx.fillStyle = core;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, haloR, 0, Math.PI * 2); ctx.fill();
+    // inner light: gradual multi-stop falloff from a wandering focal point
+    const fx = cx + Math.cos(now / 4700) * r * 0.18;
+    const fy = cy + Math.sin(now / 6100) * r * 0.14;
+    const body = ctx.createRadialGradient(fx, fy, 0, cx, cy, r * 1.05);
+    body.addColorStop(0, `rgba(255,255,255,${0.27 + energy * 0.25 + bpulse * 0.07})`);
+    body.addColorStop(0.3, col(0.45 + energy * 0.2));
+    body.addColorStop(0.65, col(0.26));
+    body.addColorStop(0.85, col(0.10));
+    body.addColorStop(1, col(0));
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2); ctx.fill();
+    // the shell: slow-swirling dust; her voice brightens and gently
+    // swells it — no snapping, no rings
+    const swell = 1 + lvlS * 0.10 * weight.speaking;
+    const spin = dt * (0.3 + energy * 0.6) * pace * 0.001;
+    for (const p of shell) {
+      p.ang += p.speed * spin;
+      const s = proj(p, r * swell);
+      const tw = 0.55 + 0.45 * Math.sin(now / 900 + p.tw);
+      const a = (0.14 + bpulse * 0.05 + energy * 0.40 + lvlS * 0.15 * weight.speaking)
+                * tw * (0.7 + 0.3 * s.d);
+      ctx.fillStyle = col(a);
+      const sz = p.size * (1 + 0.2 * s.d);
+      if (sz < 1.1) {
+        ctx.fillRect(s.x, s.y, sz + 0.4, sz + 0.4);
+      } else {
+        ctx.beginPath(); ctx.arc(s.x, s.y, sz, 0, Math.PI * 2); ctx.fill();
+      }
+    }
 
     // thinking / working arcs — segments circling the core; working adds a
     // faster counter-rotating outer ring
@@ -205,14 +269,11 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       }
     }
 
-    // ripples: listening pulls rings inward, speech pushes them out
+    // ripples: listening pulls rings inward (speech ripples removed —
+    // Jeremy 2026-07-19: too chaotic; her voice lives in the shell now)
     if (weight.listening > 0.25 && now - lastInRipple > 1400 / Math.max(pace, 0.25)) {
       ripples.push({ life: 0, dir: -1 });
       lastInRipple = now;
-    }
-    if (weight.speaking > 0.3 && lvlS > 0.28 && now - lastOutRipple > 300) {
-      ripples.push({ life: 0, dir: 1 });
-      lastOutRipple = now;
     }
     ripples = ripples.filter(rp => (rp.life += dt / 1600) < 1);
     ctx.lineWidth = 1.2;
@@ -231,41 +292,53 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.6, 0, Math.PI * 2); ctx.fill();
     }
 
-    // identity + state — her name anchors the orb; the state word only
-    // surfaces when something is happening
+    // state word only — the name tag is gone (Jeremy 2026-07-19: the orb
+    // needs no caption); the word still surfaces when something happens
     ctx.globalCompositeOperation = 'source-over';
     if (labelMode !== 'off') {
-      ctx.textAlign = 'center';
-      ctx.font = `500 ${14 * labelScale}px system-ui`;
-      ctx.shadowColor = col(1); ctx.shadowBlur = 12;
-      ctx.fillStyle = 'rgba(235, 250, 250, 0.9)';
-      ctx.fillText(name, cx, cy + r * 2.5 + 18 * labelScale);
       let sw: Mode | null = null;
       for (const m of MODES) if (m !== 'idle' && weight[m] > 0.35) sw = m;
       if (sw) {
+        ctx.textAlign = 'center';
         ctx.font = `600 ${10 * labelScale}px system-ui`;
+        ctx.shadowColor = col(1); ctx.shadowBlur = 12;
         ctx.fillStyle = col(0.75 * weight[sw]);
-        ctx.fillText(sw.toUpperCase(), cx, cy + r * 2.5 + 34 * labelScale);
+        ctx.fillText(sw.toUpperCase(), cx, cy + r * 2.5 + 18 * labelScale);
+        ctx.shadowBlur = 0;
       }
-      ctx.shadowBlur = 0;
     }
 
     raf = requestAnimationFrame(draw);
   }
 
-  // click the orb = open the soul (the orb IS Nova, same as the galaxy core)
-  let downX = 0, downY = 0;
+  // click the orb = open the soul (the orb IS Nova, same as the galaxy
+  // core); drag anywhere = orbit the view around her
+  let dragging = false, dragDist = 0, lastX = 0, lastY = 0;
   const inOrb = (x: number, y: number) => {
     const R = Math.max(22, Math.min(110, Math.min(canvas.width, canvas.height) * 0.14));
     return (x - canvas.width / 2) ** 2 + (y - canvas.height / 2) ** 2 <= (R * 2) ** 2;
   };
-  const onPointerDown = (e: PointerEvent) => { downX = e.offsetX; downY = e.offsetY; };
+  const onPointerDown = (e: PointerEvent) => {
+    dragging = true; dragDist = 0; lastX = e.offsetX; lastY = e.offsetY;
+    canvas.setPointerCapture(e.pointerId);
+  };
   const onPointerUp = (e: PointerEvent) => {
-    if (Math.abs(e.offsetX - downX) + Math.abs(e.offsetY - downY) > 6) return;
+    dragging = false;
+    canvas.style.cursor = inOrb(e.offsetX, e.offsetY) ? 'pointer' : 'grab';
+    if (dragDist > 6) return;                  // that was an orbit, not a click
     opts?.onNodeClick?.(inOrb(e.offsetX, e.offsetY) ? 'soul.md' : null);
   };
   const onPointerMove = (e: PointerEvent) => {
-    canvas.style.cursor = inOrb(e.offsetX, e.offsetY) ? 'pointer' : 'default';
+    if (dragging) {
+      const dx = e.offsetX - lastX, dy = e.offsetY - lastY;
+      dragDist += Math.abs(dx) + Math.abs(dy);
+      yaw += dx * 0.005;
+      pitch += dy * 0.004;                     // unclamped — tumble freely
+      lastX = e.offsetX; lastY = e.offsetY;
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+    canvas.style.cursor = inOrb(e.offsetX, e.offsetY) ? 'pointer' : 'grab';
   };
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointerup', onPointerUp);
@@ -274,9 +347,9 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   raf = requestAnimationFrame(t => { lastNow = t; draw(t); });
 
   return {
-    setData(nodes: GraphNode[], _edges: GraphEdge[]) {
-      // presence view — the only thing taken from the graph is her name
-      name = nodes.find(n => n.type === 'core')?.label ?? name;
+    setData(_nodes: GraphNode[], _edges: GraphEdge[]) {
+      // presence view — nothing is drawn from the graph (the name tag was
+      // removed 2026-07-19; the orb needs no caption)
     },
     resize(width: number, height: number) {
       canvas.width = width;

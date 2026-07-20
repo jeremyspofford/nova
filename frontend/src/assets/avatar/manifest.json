@@ -1,0 +1,37 @@
+{
+  "plate": {
+    "file": "plate.webp",
+    "width": 848,
+    "height": 842
+  },
+  "regions": {
+    "mouth-small": {
+      "file": "mouth-small.webp",
+      "x": 344,
+      "y": 234,
+      "w": 192,
+      "h": 148
+    },
+    "mouth-open": {
+      "file": "mouth-open.webp",
+      "x": 344,
+      "y": 234,
+      "w": 192,
+      "h": 148
+    },
+    "mouth-round": {
+      "file": "mouth-round.webp",
+      "x": 344,
+      "y": 234,
+      "w": 192,
+      "h": 148
+    },
+    "eyes-closed": {
+      "file": "eyes-closed.webp",
+      "x": 310,
+      "y": 135,
+      "w": 240,
+      "h": 107
+    }
+  }
+}

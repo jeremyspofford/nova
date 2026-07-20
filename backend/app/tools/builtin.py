@@ -46,6 +46,7 @@ async def _write_memory(args, ctx):
         source_url=args.get("source_url"),
         item_id=args.get("item_id"),
         append=bool(args.get("append")),
+        prepend=bool(args.get("prepend")),
         # run-context provenance, never an agent-suppliable argument: topics
         # created during an automation run get maintained_by stamped so the
         # brain's writes-arc survives month rollovers mechanically
@@ -529,7 +530,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "(title required). Skills are guidance other agents retrieve and follow. "
                         "Tags connect related topics in the brain graph; source_url records "
                         "provenance for ingested content. For running documents (digests, "
-                        "logs) use item_id + append=true and send only the new entries."),
+                        "logs) use item_id + append=true (or prepend=true for latest-first "
+                        "documents) and send only the new entries."),
         "parameters": {"type": "object", "properties": {
             "content": {"type": "string"},
             "type": {"type": "string", "enum": ["journal", "topic", "skill"]},
@@ -551,6 +553,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                        "running logs and digests. Existing text is preserved "
                                        "mechanically, so send ONLY the new entries, never "
                                        "the whole document.")},
+            "prepend": {"type": "boolean",
+                        "description": ("Like append, but the new content goes at the TOP of "
+                                        "the body — for latest-first documents (news digests "
+                                        "where the newest day should read first).")},
         }, "required": ["content"]},
         "execute": _write_memory,
     },

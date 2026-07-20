@@ -513,10 +513,72 @@ See README for what works. This file is the ordered backlog.
    Remaining for later passes: the aspirational particle-face concept
    above, wake/mic "listening" wiring, per-state polish with Jeremy's
    eyes on it.
+   **Speaking-calm + particle-body pass 2026-07-19 (Jeremy's review:
+   "chaotic, crazy fast, too many rings, gradients too static"):** speech
+   ripples deleted; voice envelope now asymmetric (70ms attack / 320ms
+   release — glow breathes instead of strobing); speaking energy + mote
+   speedup roughly halved; the solid two-gradient ball replaced by a
+   640-particle gaussian shell on tilted orbits around a soft multi-stop
+   inner light whose focal point slowly wanders. Verified at :5173
+   (idle/thinking/working screenshots, tsc clean); speaking feel needs
+   Jeremy's ear+eye with a real voice reply. Uncommitted; :8080 needs
+   the usual web rebuild after commit.
+   **Round 2 same day (Jeremy):** "Nova" name tag removed (state word
+   stays, moved up); particles upgraded from tilted-ellipse fakery to
+   TRUE 3D orbits with depth-scaled size/alpha — dragging the canvas now
+   genuinely orbits the view around her (slow auto-orbit continues from
+   wherever you leave it; drag>6px suppresses the soul-click); 8 larger
+   companion orbs float slow and wide (the "alive" layer); speaking
+   calmed further (envelope 90/450ms, energy coupling 0.15, speaking
+   energy 0.38, swell 0.10). Drag-orbit screenshot-verified at :5173
+   (companion constellation rearranges), tsc clean.
+   **Face lane resumed 2026-07-19:** Jeremy brought a Midjourney concept
+   (blue wireframe hologram figure) and wants it speaking with real
+   lip-sync — spec'd as `docs/plans/avatar-view.md` (local-only: rigged
+   still composited in canvas-2D, mouth driven by the live Kokoro audio
+   via `speaker.level()`; cloud avatar APIs ruled out, MuseTalk behind a
+   phase-5 decision gate). Builds alongside the orb; phase 0 is Jeremy's
+   Midjourney asset kit.
+   **SHELVED again same day:** phase 0 (assets + local SD-inpaint
+   pipeline + alignment-gated kit) completed and preserved, but the
+   animation preview failed Jeremy's review (blink blend shows eyes
+   through lids, blinks too fast/frequent, mouth flicker when speaking,
+   framing too close). Critique + diagnosis + resume directions are at
+   the top of the plan doc. The orb remains the presence view.
 
 3. **Observability / turn tracing (brainstorm needed)** — today's
    narration bug was diagnosed by hand-querying the messages table; that
    should be a click.
+   **PHASE 1 SHIPPED 2026-07-17** (full spec + status in
+   `docs/plans/observability-turn-tracing.md`): the turn ledger is live —
+   migration 028 (`turn_traces` + `turn_spans`), `app/trace.py`
+   (contextvar spans, buffered flush, built-in redaction — the plan's
+   "guardian scrubber" turned out not to exist in v3), spans through
+   `run_agent`/`chat_stream` (prompt build, memory retrieval, per-round
+   LLM calls with exact token counts from BOTH providers via
+   `include_usage`, tools with redacted args, dispatch subtrees), and
+   assistant messages stamped with their `trace_id`. The tense-gap
+   detector extension shipped in the same pass: past-tense completion
+   claims ("Done — saved it") now flag on zero-tool turns, with recap
+   exemptions. Live-verified through :5173.
+   **PHASE 2 SHIPPED same day:** every assistant message wears a duration
+   chip ("7.5s · 1 tool", red on failure) that opens the Turn Inspector —
+   a drawer with the span waterfall (indented subtrees, colored duration
+   bars, token totals, expandable details), fed by `GET
+   /api/v1/traces/{id}` + trace summaries in the messages API + trace_id
+   in the stream meta. Click path walked live on :5173. Phone path needs
+   a `web` rebuild to see it.
+   **PHASE 3 SHIPPED 2026-07-18 — this item's build is COMPLETE:**
+   automation runs and compaction passes now write traces too
+   (timeout = status cancelled), Settings → Observability holds the
+   retention setting (`trace.retention_days`, default 14; daily prune on
+   the scheduler tick) and the Recent turns list — every traced turn
+   across all sources, click-through to the Turn Inspector. Live-verified
+   with a probe automation found in the UI without SQL, and a planted
+   30-day-old trace pruned on the next tick. Also closes #25's (d) —
+   the per-run tool timeline persists as automation trace spans. Still
+   open here (never spec'd into the ledger plan): the service-health
+   surface and richer audit-log queries from the original brainstorm.
    **Confirmed in scope (Jeremy, 2026-07-17): audit log + system/service
    health.** Audit log: a durable, queryable record of who/what did what
    when — tool calls with args/results, settings changes, approvals,
@@ -623,6 +685,15 @@ See README for what works. This file is the ordered backlog.
      the center while active.
    - Chat-side feedback (bouncing dots + streaming cursor) shipped
      2026-07-14; this item is the brain-side half.
+   **ChatPanel half SHIPPED 2026-07-19** (the orb's setActivity contract
+   + Brain.tsx bridge had shipped 2026-07-17 with the dispatch side
+   deferred): ChatPanel now emits `nova:chat-activity` on send
+   (thinking), on tool_start/dispatch activity frames, throttled
+   re-thinking during long streams, and inactive in finally.
+   Live-verified end-to-end at :5173: real message → orb crossfades to
+   violet thinking with arcs → settles to idle when the reply lands.
+   Remaining from the design: galaxy/graph/universe treatments (they
+   ignore setActivity today — optional method, safe).
 
 8. **Video ingestion — watch a video or a source, source-agnostic
    (requested 2026-07-15, spec'd; generalized beyond YouTube per Jeremy's
@@ -985,6 +1056,13 @@ See README for what works. This file is the ordered backlog.
    succeeded in 63s where the previous two timed out at 300s — earlier
    sections preserved verbatim, delta appended; a 30s-override probe
    timed out at exactly 30s.
+   **Newest-first flip (Jeremy, 2026-07-19):** `write_memory` gained a
+   `prepend` flag (memory/store.py `append_concept(prepend=)` — same
+   delta-only mechanics, delta lands at the TOP), the digest
+   automation's DB instruction now says prepend=true with newest day at
+   the top, and the existing July digest file was re-sorted
+   newest-first (stale "(Latest)/(Historical)" labels dropped). Any
+   future running document can choose append or prepend per call.
 
 27. **CRITICAL — memory linking at write time (2026-07-17, from the
    flat-orb question)** — flat gray orbs in Universe are working as
@@ -1038,6 +1116,25 @@ See README for what works. This file is the ordered backlog.
    refreshes never steal or strip attribution. Live-verified: scheduler
    run created a stamped topic whose `writes` edge appeared in the
    graph; refresh survival + no-theft covered by mechanical tests.
+
+29. **CRITICAL — operator consent for guarded/destructive actions
+   (2026-07-19, from a live refusal)** — Jeremy asked twice in chat to
+   remove the `block-facebook-domain` rule; guardian refused both times
+   and was RIGHT to: its charter forbids weakening protections on
+   second-hand instructions, and a dispatch from Nova is structurally
+   second-hand ("the user wants..." is hearsay by construction — trace
+   evidence in turns ff49a1f7/9581ce95: guardian listed rules, never
+   called delete). The fix is not a softer guardian; it's making
+   operator consent a MECHANICAL FACT: guardian requests confirmation →
+   an inline option card renders in chat (the Claude-Code
+   AskUserQuestion register, per Jeremy's instinct) → the operator's
+   authenticated click creates a single-use, TTL'd consent record →
+   destructive tool actions require and validate that consent id at the
+   TOOL layer, not by LLM judgment. Embedded/fetched-content
+   "instructions" still die at the prompt (no card, no consent, no
+   path). Spec: `docs/plans/guarded-actions-consent.md`. Interim
+   operator path (used 2026-07-19 to clear the blocker): Settings →
+   Operator → Edit mode + the rules UI / `DELETE /api/v1/rules/{id}`.
 
 ## Later
 

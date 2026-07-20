@@ -358,7 +358,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     if (dragging) {
       dragDist += Math.abs(e.offsetX - lastX) + Math.abs(e.offsetY - lastY);
       yaw += (e.offsetX - lastX) * 0.005;
-      pitch = Math.max(-1.3, Math.min(1.3, pitch + (e.offsetY - lastY) * 0.005));
+      pitch += (e.offsetY - lastY) * 0.005;    // unclamped — tumble freely
       lastX = e.offsetX; lastY = e.offsetY;
     } else {
       hovered = hitTest(e.offsetX, e.offsetY);

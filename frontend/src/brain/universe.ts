@@ -213,6 +213,8 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       camTarget.x + dist * cp * Math.cos(yaw),
       camTarget.y + dist * sp,
       camTarget.z + dist * cp * Math.sin(yaw));
+    // flip up when past a pole so the tumble is continuous (infinite rotate)
+    camera.up.set(0, cp >= 0 ? 1 : -1, 0);
     camera.lookAt(camTarget);
   }
 
@@ -1241,8 +1243,12 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       if (panning) {
         panBy(e.clientX - lastX, e.clientY - lastY);
       } else {
-        yaw += (e.clientX - lastX) * 0.005;
-        pitch = Math.max(-1.35, Math.min(1.35, pitch + (e.clientY - lastY) * 0.005));
+        // unclamped tumble; yaw sense flips when the camera is upside down
+        // so dragging always feels natural
+        yaw += (e.clientX - lastX) * 0.005 * (Math.cos(pitch) >= 0 ? 1 : -1);
+        pitch += (e.clientY - lastY) * 0.005;
+        if (pitch > Math.PI) pitch -= 2 * Math.PI;
+        if (pitch < -Math.PI) pitch += 2 * Math.PI;
       }
       lastX = e.clientX; lastY = e.clientY;
     } else {

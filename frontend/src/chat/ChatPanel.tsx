@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   streamChat, getActiveConversation, getAgents, getMessages, getModels,
-  patchAgent, Activity, ModelInfo,
+  patchAgent, Activity, ModelInfo, TraceSummary,
 } from '../api';
 import { Markdown } from '../components/Markdown';
+import { TurnInspector } from './TurnInspector';
 import { agentDisplayName, displayName } from '../names';
 import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
@@ -14,9 +15,19 @@ import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
 import { useAssistantName } from '../useAssistantName';
 
 type Item =
-  | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string; streaming?: boolean }
+  | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
+      streaming?: boolean; trace?: TraceSummary }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
   | { id: string; kind: 'error'; content: string };
+
+// the duration chip under an assistant message — click opens the Turn Inspector
+const chipLabel = (t: TraceSummary): string => {
+  const parts = [t.secs !== null ? `${t.secs < 10 ? t.secs.toFixed(1) : Math.round(t.secs)}s` : '—'];
+  if (t.tools) parts.push(`${t.tools} tool${t.tools > 1 ? 's' : ''}`);
+  if (t.dispatches) parts.push(`${t.dispatches} dispatch${t.dispatches > 1 ? 'es' : ''}`);
+  if (t.status !== 'ok') parts.push(t.status);
+  return parts.join(' · ');
+};
 
 // getUserMedia / AudioWorklet failures are DOMExceptions — the useful bit is
 // .name (NotAllowedError = mic blocked, NotSupportedError = insecure context /
@@ -31,7 +42,7 @@ function errText(err: unknown): string {
 let nextId = 0;
 const uid = () => `ui-${++nextId}`;
 
-function renderItem(item: Item) {
+function renderItem(item: Item, onInspect?: (traceId: string) => void) {
   if (item.kind === 'activity') {
     if (item.activity.kind === 'narration') {
       return (
@@ -70,27 +81,41 @@ function renderItem(item: Item) {
   }
   return (
     <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[85%] min-w-0 break-words px-3 py-2 rounded-lg text-sm ${
-        item.role === 'user'
-          ? 'bg-teal-700 text-white whitespace-pre-wrap'
-          : 'bg-stone-800 text-stone-100'
-      }`}>
-        {item.streaming && !item.content ? (
-          // waiting for the first token — bouncing "typing" dots
-          <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
-            {[0, 150, 300].map(delay => (
-              <span
-                key={delay}
-                className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
-                style={{ animationDelay: `${delay}ms` }}
-              />
-            ))}
-          </span>
-        ) : (
-          <>
-            {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
-            {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
-          </>
+      <div className="max-w-[85%] min-w-0 flex flex-col">
+        <div className={`break-words px-3 py-2 rounded-lg text-sm ${
+          item.role === 'user'
+            ? 'bg-teal-700 text-white whitespace-pre-wrap'
+            : 'bg-stone-800 text-stone-100'
+        }`}>
+          {item.streaming && !item.content ? (
+            // waiting for the first token — bouncing "typing" dots
+            <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
+              {[0, 150, 300].map(delay => (
+                <span
+                  key={delay}
+                  className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce"
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
+            </span>
+          ) : (
+            <>
+              {item.role === 'assistant' ? <Markdown>{item.content}</Markdown> : item.content}
+              {item.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-teal-400 animate-pulse align-text-bottom" />}
+            </>
+          )}
+        </div>
+        {item.role === 'assistant' && item.trace && !item.streaming && (
+          <button
+            onClick={() => onInspect?.(item.trace!.id)}
+            className={`self-start mt-0.5 px-1 text-[10px] font-mono transition-colors ${
+              item.trace.status === 'ok'
+                ? 'text-stone-500 hover:text-teal-400'
+                : 'text-red-400/80 hover:text-red-300'}`}
+            title="Inspect this turn — timings, tools, tokens"
+          >
+            {chipLabel(item.trace)}
+          </button>
         )}
       </div>
     </div>
@@ -100,7 +125,7 @@ function renderItem(item: Item) {
 /** Past turns' activity trail collapses into a dim expandable trace so it's
  *  reviewable without competing with the conversation; narration warnings
  *  stay visible (dimmed). Live activity renders inline as it happens. */
-function renderGrouped(items: Item[]) {
+function renderGrouped(items: Item[], onInspect?: (traceId: string) => void) {
   const blocks: React.ReactNode[] = [];
   let trace: Extract<Item, { kind: 'activity' }>[] = [];
   const flush = () => {
@@ -111,7 +136,7 @@ function renderGrouped(items: Item[]) {
           ⚙ {trace.length} agent action{trace.length > 1 ? 's' : ''}
         </summary>
         <div className="space-y-1 mt-1 pl-2 border-l border-stone-800">
-          {trace.map(renderItem)}
+          {trace.map(it => renderItem(it))}
         </div>
       </details>,
     );
@@ -122,7 +147,7 @@ function renderGrouped(items: Item[]) {
       trace.push(item);
     } else {
       flush();
-      blocks.push(renderItem(item));
+      blocks.push(renderItem(item, onInspect));
     }
   }
   flush();
@@ -153,6 +178,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [inspectTraceId, setInspectTraceId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const resizing = useRef(false);
@@ -455,7 +481,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
                 detail: m.content,
               },
             }
-          : { id: m.id, kind: 'msg', role: m.role, content: m.content }));
+          : { id: m.id, kind: 'msg', role: m.role, content: m.content,
+              trace: m.trace ?? undefined }));
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
       }
@@ -466,11 +493,17 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
+  // #7's ChatPanel half: presence views (the orb) listen for these events
+  const emitPresence = (active: boolean, kind?: 'thinking' | 'dispatch' | 'tool') =>
+    window.dispatchEvent(new CustomEvent('nova:chat-activity', { detail: { active, kind } }));
+
   async function send(opts?: { text?: string; source?: string; speak?: boolean }) {
     const message = (opts?.text ?? input).trim();
     if (!message || busy) return;
     if (opts?.text === undefined) setInput('');   // voice passes its own text
     setBusy(true);
+    emitPresence(true, 'thinking');
+    let lastPresence = Date.now();
     // voice turns speak the reply even if the mute toggle is off
     const speakThisTurn = opts?.speak ?? speech;
 
@@ -485,12 +518,36 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       setItems(prev => prev.map(it =>
         it.id === assistantId && it.kind === 'msg' ? { ...it, content: it.content + text } : it));
 
+    // live turn-ledger summary for the duration chip: trace id arrives in
+    // meta, duration/counts are measured client-side (the inspector fetches
+    // the authoritative trace on click)
+    const turnStart = Date.now();
+    let liveTraceId: string | null = null;
+    let liveTools = 0;
+    let liveDispatches = 0;
+
     try {
       for await (const event of streamChat(message, conversationId ?? undefined, opts?.source)) {
-        if (event.type === 'text') {
+        if (event.type === 'meta') {
+          liveTraceId = event.traceId ?? null;
+        } else if (event.type === 'text') {
           appendToAssistant(event.text);
           if (speakThisTurn) speaker.feed(event.text);
+          if (Date.now() - lastPresence > 5000) {   // long streams stay "thinking"
+            emitPresence(true, 'thinking');
+            lastPresence = Date.now();
+          }
         } else if (event.type === 'activity') {
+          if (event.activity.kind === 'tool_start') {
+            liveTools++;
+            emitPresence(true, 'tool');
+            lastPresence = Date.now();
+          }
+          if (event.activity.kind === 'dispatch') {
+            liveDispatches++;
+            emitPresence(true, 'dispatch');
+            lastPresence = Date.now();
+          }
           // insert activity line just before the streaming assistant bubble
           setItems(prev => {
             const idx = prev.findIndex(it => it.id === assistantId);
@@ -507,9 +564,18 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
     } finally {
+      emitPresence(false);
       if (speakThisTurn) speaker.flush();   // speak whatever the last sentence held
+      const liveTrace: TraceSummary | undefined = liveTraceId ? {
+        id: liveTraceId, status: 'ok',
+        secs: Math.round((Date.now() - turnStart) / 100) / 10,
+        // tool_start also fires for the dispatch call itself — count it once
+        tools: Math.max(0, liveTools - liveDispatches),
+        dispatches: liveDispatches,
+      } : undefined;
       setItems(prev => prev
-        .map(it => it.id === assistantId && it.kind === 'msg' ? { ...it, streaming: false } : it)
+        .map(it => it.id === assistantId && it.kind === 'msg'
+          ? { ...it, streaming: false, trace: liveTrace ?? it.trace } : it)
         .filter(it => !(it.id === assistantId && it.kind === 'msg' && !it.content)));
       setBusy(false);
       inputRef.current?.focus();
@@ -600,9 +666,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           </div>
         )}
 
-        {renderGrouped(items)}
+        {renderGrouped(items, setInspectTraceId)}
         <div ref={endRef} />
       </div>
+
+      {inspectTraceId && (
+        <TurnInspector traceId={inspectTraceId} onClose={() => setInspectTraceId(null)} />
+      )}
 
       <form
         onSubmit={e => { e.preventDefault(); send(); }}

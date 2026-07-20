@@ -146,25 +146,29 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     category: Optional[str] = None, priority: int = 0,
                     tags: Optional[list[str]] = None, source_url: Optional[str] = None,
                     item_id: Optional[str] = None, append: bool = False,
+                    prepend: bool = False,
                     maintained_by: Optional[str] = None,
                     source_type: str = "chat") -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept
         file. append=True + item_id adds content to the end of an existing item
-        instead of replacing it (running logs/digests write only the delta).
+        instead of replacing it (running logs/digests write only the delta);
+        prepend=True puts the delta at the TOP instead (latest-first documents).
         maintained_by (an automation name, plumbed from the run context — never
         agent-supplied) stamps provenance on topics CREATED during an automation
         run, so the brain's writes-arc survives month rollovers mechanically."""
         async with self._lock:
-            if append:
+            if append or prepend:
                 if not item_id:
                     return {"status": "error",
-                            "error": "append=true requires item_id"}
+                            "error": "append/prepend requires item_id"}
                 try:
-                    doc_id = self.store.append_concept(item_id, content)
+                    doc_id = self.store.append_concept(item_id, content,
+                                                       prepend=prepend)
                 except FileNotFoundError as e:
                     return {"status": "error", "error": str(e)}
                 self._index_file(doc_id)
-                return {"status": "appended", "type": type, "id": doc_id}
+                return {"status": "prepended" if prepend else "appended",
+                        "type": type, "id": doc_id}
             if type in ("skill", "topic"):
                 if not title:
                     return {"status": "error",

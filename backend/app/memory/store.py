@@ -93,11 +93,14 @@ class OkfStore:
         return str(path.relative_to(self.base_dir.resolve() if path.is_absolute()
                                     else self.base_dir))
 
-    def append_concept(self, doc_id: str, content: str) -> str:
-        """Append content to an existing concept file, preserving its body and
+    def append_concept(self, doc_id: str, content: str,
+                       prepend: bool = False) -> str:
+        """Add content to an existing concept file, preserving its body and
         frontmatter (timestamp bumped). The mechanical half of running
         logs/digests: the caller sends ONLY the delta, so generation cost
-        stays constant no matter how large the document grows."""
+        stays constant no matter how large the document grows. prepend=True
+        puts the delta at the TOP of the body instead — for latest-first
+        documents like news digests."""
         base = self.base_dir.resolve()
         path = (self.base_dir / doc_id).resolve()
         if not (path.is_relative_to(base) and path.suffix == ".md"
@@ -105,9 +108,10 @@ class OkfStore:
             raise FileNotFoundError(f"memory item '{doc_id}' not found")
         fm, body = self.parse_frontmatter(path.read_text())
         fm["timestamp"] = datetime.now(timezone.utc).isoformat()
-        path.write_text(f"{self.render_frontmatter(fm)}\n\n{body}\n\n"
-                        f"{content.strip()}\n")
-        log.info("Memory append: %s", path)
+        new_body = (f"{content.strip()}\n\n{body}" if prepend
+                    else f"{body}\n\n{content.strip()}")
+        path.write_text(f"{self.render_frontmatter(fm)}\n\n{new_body}\n")
+        log.info("Memory %s: %s", "prepend" if prepend else "append", path)
         return str(path.relative_to(base))
 
     def append_journal(self, date: str, content: str) -> str:
