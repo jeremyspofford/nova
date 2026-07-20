@@ -61,6 +61,12 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
   let hovered: SimNode | null = null;
   let labelScale = 1;
 
+  // chat-activity engagement (#7): soft rings ripple out from the core
+  // while Nova is answering
+  let act = { active: false, at: 0 };
+  let eng = 0;
+  let ringPhase = 0;
+
   // pan/zoom transform
   let scale = 1, tx = 0, ty = 0;
   let panning = false, lastX = 0, lastY = 0;
@@ -127,6 +133,24 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
         ctx.fillStyle = n === hovered ? '#F5F5F4' : 'rgba(214,211,209,0.75)';
         ctx.textAlign = 'center';
         ctx.fillText(n.label.slice(0, 32), n.x!, n.y! + r + 12 / scale);
+      }
+    }
+
+    // engagement ripples — expanding rings from the core node, eased in/out
+    const engaged = act.active && performance.now() - act.at < 90_000;
+    eng += ((engaged ? 1 : 0) - eng) * 0.03;
+    if (eng > 0.02) {
+      const core = nodes.find(n => n.type === 'core');
+      if (core?.x != null) {
+        ringPhase = (ringPhase + 0.006) % 1;
+        for (const off of [0, 0.34, 0.67]) {
+          const p = (ringPhase + off) % 1;
+          ctx.strokeStyle = `rgba(45, 212, 191, ${0.28 * eng * Math.sin(p * Math.PI)})`;
+          ctx.lineWidth = 1.2 / scale;
+          ctx.beginPath();
+          ctx.arc(core.x!, core.y!, 20 + p * 260, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
     }
     ctx.restore();
@@ -222,6 +246,10 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
         Math.min(canvas.width / (w + 160), canvas.height / (h + 160))));
       tx = canvas.width / 2 - ((minX + maxX) / 2) * scale;
       ty = canvas.height / 2 - ((minY + maxY) / 2) * scale;
+    },
+    setActivity(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }) {
+      if (state.kind === 'listening') return;   // mic state has no graph treatment
+      act = { active: state.active, at: performance.now() };
     },
     destroy() {
       cancelAnimationFrame(raf);

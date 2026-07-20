@@ -223,6 +223,11 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   let labelMode: 'auto' | 'on' | 'off' = 'auto';
   let labelScale = 1;
 
+  // chat-activity engagement (#7): the universe glows warmer and time runs
+  // a touch faster while Nova is working — eased, never snapping
+  let act = { active: false, at: 0 };
+  let eng = 0;
+
   // ── ambient dressing (built once, survives setData) ─────────────────────
   const ambient = new THREE.Group();
   scene.add(ambient);
@@ -1312,10 +1317,13 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     raf = requestAnimationFrame(frame);
     const dtReal = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
-    const dt = dtReal * rotationSpeed;
+    const engaged = act.active && performance.now() - act.at < 90_000;
+    eng += ((engaged ? 1 : 0) - eng) * Math.min(1, 2.5 * dtReal);
+    bloom.strength = 1.05 + eng * 0.3;
+    const dt = dtReal * rotationSpeed * (1 + eng * 0.5);
     simT += dt;
 
-    if (!dragging) yaw += 0.012 * rotationSpeed * dtReal;   // idle auto-orbit
+    if (!dragging) yaw += 0.012 * rotationSpeed * dtReal * (1 + eng * 0.5);   // idle auto-orbit
     const k = 1 - Math.exp(-4 * dtReal);
     if (followObj) {
       followObj.getWorldPosition(followPos);   // world: belt journals spin as one
@@ -1488,6 +1496,10 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       if (options.labelMode === 'auto' || options.labelMode === 'on' || options.labelMode === 'off') {
         labelMode = options.labelMode;
       }
+    },
+    setActivity(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }) {
+      if (state.kind === 'listening') return;   // mic state has no universe treatment
+      act = { active: state.active, at: performance.now() };
     },
     destroy() {
       destroyed = true;

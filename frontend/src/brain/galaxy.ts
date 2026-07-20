@@ -194,7 +194,9 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     // base rate rescaled 0.0016 -> 0.0002 (2026-07-16): the old scale made
     // everything above ~0.3 on the 0-6 slider uncomfortably fast — now the
     // whole slider is usable (1 = calm drift, 6 = the old ~0.75)
-    if (autoRotate && !dragging) yaw += 0.0002 * rotationSpeed;
+    const engaged = act.active && performance.now() - act.at < 90_000;
+    eng += ((engaged ? 1 : 0) - eng) * 0.04;   // eased, never snaps
+    if (autoRotate && !dragging) yaw += 0.0002 * rotationSpeed * (1 + eng * 0.8);
 
     // semantic zoom: g grows as you zoom in. Node titles fade in up close;
     // cluster/category names fade in when zoomed out (like the original's
@@ -231,7 +233,8 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     ctx.globalCompositeOperation = 'lighter';
     const core = { x: 0, y: 0, z: 0 } as unknown as Star3D;
     project(core);
-    const coreR = 34 * (core.pscale ?? 1) * (1 + Math.sin(now / 1400) * 0.05);
+    const coreR = 34 * (core.pscale ?? 1)
+      * (1 + Math.sin(now / (1400 - eng * 650)) * (0.05 + eng * 0.05));
     corePx = core.px!; corePy = core.py!; coreHitR = coreR * 1.4;
     const cg = ctx.createRadialGradient(core.px!, core.py!, 0, core.px!, core.py!, coreR * 2.4);
     cg.addColorStop(0, 'rgba(255, 214, 130, 0.85)');
@@ -271,6 +274,25 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.beginPath(); ctx.arc(s.px, s.py!, r * 0.32, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
+    }
+
+    // shooting stars — one per tool/dispatch event, arcing between nodes
+    shots = shots.filter(sh => (sh.life += 0.016) < 1);
+    for (const sh of shots) {
+      const a = byId.get(sh.a), b = byId.get(sh.b);
+      if (!a?.px || !b?.px) continue;
+      const t = sh.life;
+      const hx = a.px + (b.px - a.px) * t, hy = a.py! + (b.py! - a.py!) * t;
+      const t0 = Math.max(0, t - 0.12);
+      const tx = a.px + (b.px - a.px) * t0, ty = a.py! + (b.py! - a.py!) * t0;
+      const trail = ctx.createLinearGradient(tx, ty, hx, hy);
+      trail.addColorStop(0, 'rgba(255,230,160,0)');
+      trail.addColorStop(1, `rgba(255,235,180,${0.9 * (1 - t)})`);
+      ctx.strokeStyle = trail;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.fillStyle = `rgba(255,245,210,${0.9 * (1 - t)})`;
+      ctx.beginPath(); ctx.arc(hx, hy, 1.8, 0, Math.PI * 2); ctx.fill();
     }
 
     ctx.globalCompositeOperation = 'source-over';
@@ -337,6 +359,12 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
 
   // the core's projected position, refreshed each frame for hit-testing
   let corePx = 0, corePy = 0, coreHitR = 0;
+
+  // chat-activity engagement (#7): eased weight quickens the core + orbit
+  // while Nova works; tool/dispatch events launch shooting stars
+  let act = { active: false, at: 0 };
+  let eng = 0;
+  let shots: { a: string; b: string; life: number }[] = [];
 
   function hitTest(x: number, y: number): Star3D | null {
     let best: Star3D | null = null;
@@ -410,6 +438,17 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       if (typeof options.labelScale === 'number') labelScale = options.labelScale;
       if (options.labelMode === 'auto' || options.labelMode === 'on' || options.labelMode === 'off') {
         labelMode = options.labelMode;
+      }
+    },
+    setActivity(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }) {
+      if (state.kind === 'listening') return;   // mic state has no galaxy treatment
+      act = { active: state.active, at: performance.now() };
+      if (state.active && (state.kind === 'tool' || state.kind === 'dispatch')
+          && stars.length >= 2) {
+        const i = Math.floor(Math.random() * stars.length);
+        let j = Math.floor(Math.random() * stars.length);
+        if (j === i) j = (j + 1) % stars.length;
+        shots.push({ a: stars[i].node.id, b: stars[j].node.id, life: 0 });
       }
     },
     destroy() {
