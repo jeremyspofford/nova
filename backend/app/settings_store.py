@@ -141,6 +141,14 @@ SETTING_DEFS: list[dict] = [
      "min": 60, "max": 900, "section": "Automations",
      "label": "Run timeout (seconds)",
      "description": "Hard cap on a single automation run."},
+    # ── Observability (turn ledger; plan: docs/plans/observability-turn-tracing.md)
+    {"key": "trace.retention_days", "type": "number", "default": 14,
+     "min": 1, "max": 365, "section": "Observability",
+     "label": "Trace retention (days)",
+     "description": ("How long turn traces (the timings/tools/tokens ledger "
+                     "behind the duration chips) are kept. Traces are "
+                     "diagnostics, not memory — pruning them loses nothing "
+                     "Nova knows.")},
     # ── Voice (phase 1: spoken replies; plan: docs/plans/voice.md) ───────
     {"key": "voice.tts_voice", "type": "string", "default": "af_heart",
      "section": "Voice", "label": "Nova's voice",

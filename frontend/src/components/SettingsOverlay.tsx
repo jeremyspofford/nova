@@ -15,6 +15,7 @@ import {
   updateSkill,
 } from '../api';
 import { Markdown } from './Markdown';
+import { RecentTurns } from './RecentTurns';
 import qrcode from 'qrcode-generator';
 import { getAuthToken, getServerToken } from '../api';
 import { THEMES } from '../brain/theme';
@@ -265,6 +266,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
             {section === 'Inference' && (
               <BundledInference onChanged={() => getModels().then(setModels)} />
             )}
+            {section === 'Observability' && <RecentTurns />}
             {defs.filter(d => d.section === section).map(d => (
               <div key={d.key}
                 className={d.key === 'brain.view'

@@ -9,9 +9,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app import automations, settings_store
+from app import automations, settings_store, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
+from app.llm import router as llm_router
 from app.memory.memory import memory
 
 log = logging.getLogger(__name__)
@@ -33,16 +34,22 @@ async def run_one(automation: dict) -> tuple[bool, str]:
 
     async def consume():
         nonlocal final
-        async for event in agent_runner.run_agent(
-                agent, [{"role": "user", "content": automation["instruction"]}],
-                dispatch_depth=1, automation=automation["name"]):
-            if event["type"] == "final":
-                final = event["text"]
-            elif event["type"] == "error":
-                errors.append(event["error"])
-            elif event["type"] == "activity":
-                log.info("automation[%s] %s %s", automation["name"],
-                         event.get("kind"), event.get("name"))
+        # one ledger trace per run — a timeout cancels consume(), which the
+        # turn records as status=cancelled on its way out
+        async with trace.turn(
+                "automation", automation=automation["name"],
+                model=llm_router.effective_model(agent["model"])) as t:
+            async for event in agent_runner.run_agent(
+                    agent, [{"role": "user", "content": automation["instruction"]}],
+                    dispatch_depth=1, automation=automation["name"]):
+                if event["type"] == "final":
+                    final = event["text"]
+                elif event["type"] == "error":
+                    errors.append(event["error"])
+                    t.set_error(event["error"])
+                elif event["type"] == "activity":
+                    log.info("automation[%s] %s %s", automation["name"],
+                             event.get("kind"), event.get("name"))
 
     try:
         await asyncio.wait_for(consume(), timeout=timeout)
@@ -55,6 +62,7 @@ async def run_one(automation: dict) -> tuple[bool, str]:
 
 
 async def tick():
+    await trace.maybe_prune()   # self-limits to once a day
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

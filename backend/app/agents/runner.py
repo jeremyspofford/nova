@@ -17,7 +17,7 @@ import logging
 import time
 from typing import AsyncIterator, Optional
 
-from app import narration, settings_store, timefmt
+from app import narration, settings_store, timefmt, trace
 from app.llm import router as llm_router
 from app.memory.memory import memory
 from app.tools import registry as tool_registry
@@ -196,12 +196,15 @@ async def _build_system_prompt(agent: dict, query: str, *,
         except Exception:
             log.exception("Agent index injection failed; continuing without it")
     try:
-        mem = await memory.context(query)
-        if mem["context"]:
-            parts.append(f"## Relevant Memories\n{mem['context']}")
-        skills = await memory.skills_context(query)
-        if skills["context"]:
-            parts.append(f"## Applicable Skills\n{skills['context']}")
+        async with trace.span("stage", "memory_retrieval") as sp:
+            mem = await memory.context(query)
+            if mem["context"]:
+                parts.append(f"## Relevant Memories\n{mem['context']}")
+            skills = await memory.skills_context(query)
+            if skills["context"]:
+                parts.append(f"## Applicable Skills\n{skills['context']}")
+            sp["memory_chars"] = len(mem["context"])
+            sp["skills_chars"] = len(skills["context"])
     except Exception:
         log.exception("Memory retrieval failed; continuing without context")
     if conversation_summary:
@@ -258,9 +261,12 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
-    system_prompt = await _build_system_prompt(
-        agent, query, include_index=can_dispatch,
-        conversation_summary=conversation_summary, system_suffix=system_suffix)
+    async with trace.span("stage", "build_prompt") as psp:
+        system_prompt = await _build_system_prompt(
+            agent, query, include_index=can_dispatch,
+            conversation_summary=conversation_summary, system_suffix=system_suffix)
+        psp["prompt_chars"] = len(system_prompt)
+        psp["agent"] = agent.get("name")
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
@@ -276,19 +282,30 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         tool_calls: list[dict] = []
         errored = False
 
-        async for event in llm_router.stream_chat(messages, agent["model"],
-                                                  tools or None):
-            etype = event.get("type")
-            if etype == "text":
-                round_text += event["text"]
-                if dispatch_depth == 0:
-                    yield {"type": "text", "text": event["text"]}
-            elif etype == "tool_calls":
-                tool_calls = event["tool_calls"]
-            elif etype == "error":
-                yield {"type": "error", "error": event["error"]}
-                errored = True
-                break
+        async with trace.span(
+                "llm_call", llm_router.effective_model(agent["model"])) as lsp:
+            lsp["agent"] = agent.get("name")
+            lsp["round"] = round_no + 1
+            async for event in llm_router.stream_chat(messages, agent["model"],
+                                                      tools or None):
+                etype = event.get("type")
+                if etype == "text":
+                    round_text += event["text"]
+                    if dispatch_depth == 0:
+                        yield {"type": "text", "text": event["text"]}
+                elif etype == "tool_calls":
+                    tool_calls = event["tool_calls"]
+                elif etype == "usage":
+                    u = event.get("usage") or {}
+                    lsp["prompt_tokens"] = u.get("prompt_tokens")
+                    lsp["completion_tokens"] = u.get("completion_tokens")
+                elif etype == "error":
+                    lsp["error"] = event["error"]
+                    yield {"type": "error", "error": event["error"]}
+                    errored = True
+                    break
+            lsp["completion_chars"] = len(round_text)
+            lsp["tool_calls_requested"] = len(tool_calls)
 
         if errored:
             return
@@ -321,13 +338,20 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
             if name == "dispatch_to_agent":
                 result = ""
-                async for sub in _run_dispatch(args, dispatch_depth, automation):
-                    if sub["type"] == "final":
-                        result = sub["text"]
-                    elif sub["type"] in ("activity", "error"):
-                        yield sub
-                if not result:
-                    result = "Error: dispatched agent produced no result"
+                # the sub-agent's own spans nest under this one (parent_span_id)
+                async with trace.span(
+                        "dispatch", args.get("agent_name", "")) as dsp:
+                    dsp["message"] = trace.redact_text(
+                        args.get("message") or "", 200)
+                    async for sub in _run_dispatch(args, dispatch_depth,
+                                                   automation):
+                        if sub["type"] == "final":
+                            result = sub["text"]
+                        elif sub["type"] in ("activity", "error"):
+                            yield sub
+                    if not result:
+                        result = "Error: dispatched agent produced no result"
+                    dsp["result_size"] = len(result)
                 # the specialist's reply, near-full (matches the 2000-char
                 # tool-row persistence cap) — the chat trace renders it as an
                 # expandable "← <agent> replied" item
@@ -336,7 +360,12 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                        "agent": args.get("agent_name", ""),
                        "detail": result[:2000]}
             else:
-                result = await tool_registry.execute_tool(name, args, ctx)
+                async with trace.span("tool", name) as tsp:
+                    tsp["agent"] = agent.get("name")
+                    tsp["args"] = trace.redact_args(args)
+                    result = await tool_registry.execute_tool(name, args, ctx)
+                    tsp["result_size"] = len(result)
+                    tsp["result_head"] = trace.redact_text(result)
                 yield {"type": "activity", "kind": "tool_result", "name": name,
                        "agent": agent.get("name"), "detail": result[:200]}
 

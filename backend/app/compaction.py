@@ -12,7 +12,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from app import conversations, db, settings_store
+from app import conversations, db, settings_store, trace
 from app.llm import router as llm_router
 
 log = logging.getLogger(__name__)
@@ -68,18 +68,30 @@ async def maybe_compact(conversation_id: str, model: str,
                 user_prompt += f"Previous summary:\n{prev}\n\n"
             user_prompt += f"Newly aged-out messages:\n{transcript}\n\nUpdated summary:"
 
-            compaction_model = settings_store.get("compaction.model") or model
+            compaction_model = llm_router.effective_model(
+                settings_store.get("compaction.model") or model)
             summary = ""
-            async for event in llm_router.stream_chat(
-                    [{"role": "system", "content": _SYSTEM},
-                     {"role": "user", "content": user_prompt}],
-                    compaction_model):
-                if event.get("type") == "text":
-                    summary += event["text"]
-                elif event.get("type") == "error":
-                    log.warning("compaction LLM error (will retry on a later "
-                                "turn): %s", event["error"])
-                    return
+            async with trace.turn("compaction", conversation_id=conversation_id,
+                                  model=compaction_model) as t:
+                async with trace.span("llm_call", compaction_model) as lsp:
+                    lsp["prompt_chars"] = len(_SYSTEM) + len(user_prompt)
+                    async for event in llm_router.stream_chat(
+                            [{"role": "system", "content": _SYSTEM},
+                             {"role": "user", "content": user_prompt}],
+                            compaction_model):
+                        if event.get("type") == "text":
+                            summary += event["text"]
+                        elif event.get("type") == "usage":
+                            u = event.get("usage") or {}
+                            lsp["prompt_tokens"] = u.get("prompt_tokens")
+                            lsp["completion_tokens"] = u.get("completion_tokens")
+                        elif event.get("type") == "error":
+                            lsp["error"] = event["error"]
+                            t.set_error(event["error"])
+                            log.warning("compaction LLM error (will retry on a "
+                                        "later turn): %s", event["error"])
+                            return
+                    lsp["completion_chars"] = len(summary)
 
             summary = summary.strip()
             if not summary:

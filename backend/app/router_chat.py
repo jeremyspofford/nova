@@ -11,11 +11,12 @@ SSE contract for POST /api/v1/chat/stream:
 import asyncio
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, conversations, rules, settings_store
+from app import automations, compaction, conversations, db, rules, settings_store, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -101,40 +102,49 @@ async def chat_stream(request: ChatRequest):
     await conversations.append_message(conversation_id, "user", request.message)
 
     async def generate():
-        yield _sse({"meta": {"conversation_id": conversation_id,
-                             "model": effective_model(main_agent["model"])}})
         final_text = ""
-        try:
-            async for event in agent_runner.run_agent(
-                    main_agent, turn_messages,
-                    conversation_summary=conversation.get("summary"),
-                    system_suffix=voice_suffix):
-                etype = event["type"]
-                if etype == "text":
-                    yield _sse({"t": event["text"]})
-                elif etype == "activity":
-                    yield _sse({"activity": {k: event.get(k) for k in
-                                             ("kind", "name", "agent", "detail")}})
-                    # persist tool activity as an audit row (fire and forget)
-                    asyncio.ensure_future(conversations.append_message(
-                        conversation_id, "tool",
-                        content=(event.get("detail") or "")[:2000],
-                        tool_calls={"kind": event.get("kind"),
-                                    "name": event.get("name"),
-                                    "agent": event.get("agent")}))
-                elif etype == "final":
-                    final_text = event["text"]
-                elif etype == "error":
-                    yield _sse({"error": event["error"]})
-        except Exception as e:
-            log.exception("chat stream failed")
-            yield _sse({"error": str(e)})
+        # one ledger trace per chat turn — spans land from run_agent's
+        # instrumentation; the assistant message is stamped with the trace id,
+        # and meta carries it so the live turn's inspector chip needs no lookup
+        async with trace.turn("chat", conversation_id=conversation_id,
+                              model=model_eff) as turn:
+            yield _sse({"meta": {"conversation_id": conversation_id,
+                                 "model": model_eff,
+                                 "trace_id": str(turn.id)}})
+            try:
+                async for event in agent_runner.run_agent(
+                        main_agent, turn_messages,
+                        conversation_summary=conversation.get("summary"),
+                        system_suffix=voice_suffix):
+                    etype = event["type"]
+                    if etype == "text":
+                        yield _sse({"t": event["text"]})
+                    elif etype == "activity":
+                        yield _sse({"activity": {k: event.get(k) for k in
+                                                 ("kind", "name", "agent", "detail")}})
+                        # persist tool activity as an audit row (fire and forget)
+                        asyncio.ensure_future(conversations.append_message(
+                            conversation_id, "tool",
+                            content=(event.get("detail") or "")[:2000],
+                            tool_calls={"kind": event.get("kind"),
+                                        "name": event.get("name"),
+                                        "agent": event.get("agent")}))
+                    elif etype == "final":
+                        final_text = event["text"]
+                    elif etype == "error":
+                        turn.set_error(event["error"])
+                        yield _sse({"error": event["error"]})
+            except Exception as e:
+                log.exception("chat stream failed")
+                turn.set_error(str(e))
+                yield _sse({"error": str(e)})
 
         if final_text.strip():
             try:
                 await conversations.append_message(
                     conversation_id, "assistant", final_text,
-                    effective_model(main_agent["model"]))
+                    effective_model(main_agent["model"]),
+                    metadata={"trace_id": str(turn.id)})
                 await memory.write(
                     f"User: {request.message}\n\nNova: {final_text}",
                     type="journal", source_type="chat")
@@ -158,13 +168,26 @@ async def get_active_conversation():
 @router.get("/api/v1/conversations/{conversation_id}/messages")
 async def get_messages(conversation_id: str):
     """User/assistant turns plus the persisted activity trail (tool rows) —
-    the UI shows past turns' actions as a dim, collapsible trace."""
+    the UI shows past turns' actions as a dim, collapsible trace. Assistant
+    rows carry their turn-ledger summary (duration, tool count) when one
+    exists, feeding the duration chip → Turn Inspector."""
     history = await conversations.load_history(conversation_id, limit=100)
     out = []
+    trace_ids: dict[str, list[dict]] = {}   # trace_id -> messages wearing it
     for m in history:
         if m["role"] in ("user", "assistant") and m["content"]:
-            out.append({"id": m["id"], "role": m["role"], "content": m["content"],
-                        "created_at": m["created_at"]})
+            row = {"id": m["id"], "role": m["role"], "content": m["content"],
+                   "created_at": m["created_at"]}
+            meta = m.get("metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = {}
+            tid = (meta or {}).get("trace_id")
+            if m["role"] == "assistant" and tid:
+                trace_ids.setdefault(tid, []).append(row)
+            out.append(row)
         elif m["role"] == "tool" and m["tool_calls"]:
             tc = m["tool_calls"]
             if isinstance(tc, str):
@@ -174,7 +197,90 @@ async def get_messages(conversation_id: str):
                     continue
             out.append({"id": m["id"], "role": "tool", "content": m["content"] or "",
                         "created_at": m["created_at"], "tool_calls": tc})
+    if trace_ids:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT t.id, t.status,
+                          extract(epoch FROM t.finished_at - t.started_at) AS secs,
+                          count(s.id) FILTER (WHERE s.kind = 'tool')     AS tools,
+                          count(s.id) FILTER (WHERE s.kind = 'dispatch') AS dispatches
+                   FROM turn_traces t
+                   LEFT JOIN turn_spans s ON s.trace_id = t.id
+                   WHERE t.id = ANY($1::uuid[])
+                   GROUP BY t.id""",
+                list(trace_ids.keys()))
+        for r in rows:
+            summary = {"id": str(r["id"]), "status": r["status"],
+                       "secs": round(float(r["secs"]), 2) if r["secs"] is not None else None,
+                       "tools": r["tools"], "dispatches": r["dispatches"]}
+            for row in trace_ids[str(r["id"])]:
+                row["trace"] = summary
     return out
+
+
+@router.get("/api/v1/traces")
+async def list_traces(limit: int = 50):
+    """Recent turn traces across ALL sources (chat, automations,
+    compaction) — the Settings → Observability "Recent turns" list.
+    Automations show up here with no chat message to click."""
+    limit = max(1, min(200, limit))
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT t.id, t.source, t.automation, t.model, t.status,
+                      t.started_at,
+                      extract(epoch FROM t.finished_at - t.started_at) AS secs,
+                      count(s.id) FILTER (WHERE s.kind = 'tool')     AS tools,
+                      count(s.id) FILTER (WHERE s.kind = 'dispatch') AS dispatches,
+                      count(s.id) FILTER (WHERE s.kind = 'llm_call') AS llm_calls
+               FROM turn_traces t
+               LEFT JOIN turn_spans s ON s.trace_id = t.id
+               GROUP BY t.id
+               ORDER BY t.started_at DESC
+               LIMIT $1""", limit)
+    return [{
+        "id": str(r["id"]), "source": r["source"], "automation": r["automation"],
+        "model": r["model"], "status": r["status"],
+        "started_at": r["started_at"].isoformat(),
+        "secs": round(float(r["secs"]), 2) if r["secs"] is not None else None,
+        "tools": r["tools"], "dispatches": r["dispatches"],
+        "llm_calls": r["llm_calls"],
+    } for r in rows]
+
+
+@router.get("/api/v1/traces/{trace_id}")
+async def get_trace(trace_id: str):
+    """One turn's full ledger: the trace row + its spans in order — the
+    Turn Inspector's data source."""
+    try:
+        tid = uuid.UUID(trace_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="trace not found")
+    async with db.acquire() as conn:
+        t = await conn.fetchrow("SELECT * FROM turn_traces WHERE id = $1", tid)
+        if not t:
+            raise HTTPException(status_code=404, detail="trace not found")
+        spans = await conn.fetch(
+            "SELECT * FROM turn_spans WHERE trace_id = $1 ORDER BY seq", tid)
+    return {
+        "trace": {
+            "id": str(t["id"]), "source": t["source"],
+            "automation": t["automation"],
+            "conversation_id": str(t["conversation_id"]) if t["conversation_id"] else None,
+            "model": t["model"], "status": t["status"], "error": t["error"],
+            "started_at": t["started_at"].isoformat(),
+            "finished_at": t["finished_at"].isoformat() if t["finished_at"] else None,
+        },
+        "spans": [{
+            "id": str(s["id"]),
+            "parent_span_id": str(s["parent_span_id"]) if s["parent_span_id"] else None,
+            "seq": s["seq"], "kind": s["kind"], "name": s["name"],
+            "status": s["status"],
+            "started_at": s["started_at"].isoformat(),
+            "finished_at": s["finished_at"].isoformat() if s["finished_at"] else None,
+            "detail": json.loads(s["detail"]) if isinstance(s["detail"], str)
+                      else (s["detail"] or {}),
+        } for s in spans],
+    }
 
 
 @router.get("/api/v1/agents")

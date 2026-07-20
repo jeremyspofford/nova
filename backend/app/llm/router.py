@@ -41,5 +41,8 @@ def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
 async def stream_chat(messages: list, model: str,
                       tools: Optional[list] = None) -> AsyncIterator[dict]:
     client, model_name = _resolve(effective_model(model))
-    async for event in client.stream(messages, model_name, tools):
+    # include_usage: exact token counts in a final usage chunk — feeds the
+    # turn ledger; providers that don't support it simply omit the event
+    async for event in client.stream(messages, model_name, tools,
+                                     include_usage=True):
         yield event

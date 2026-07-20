@@ -40,14 +40,16 @@ async def set_summary(conversation_id: str, summary: str, upto):
 
 async def append_message(conversation_id: str, role: str, content: Optional[str] = None,
                          model_used: Optional[str] = None,
-                         tool_calls: Optional[list | dict] = None) -> str:
+                         tool_calls: Optional[list | dict] = None,
+                         metadata: Optional[dict] = None) -> str:
     message_id = uuid.uuid4()
     async with db.acquire() as conn:
         await conn.execute(
-            """INSERT INTO messages (id, conversation_id, role, content, model_used, tool_calls)
-               VALUES ($1, $2, $3, $4, $5, $6)""",
+            """INSERT INTO messages (id, conversation_id, role, content, model_used, tool_calls, metadata)
+               VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '{}'::jsonb))""",
             message_id, uuid.UUID(conversation_id), role, content, model_used,
-            json.dumps(tool_calls) if tool_calls is not None else None)
+            json.dumps(tool_calls) if tool_calls is not None else None,
+            json.dumps(metadata) if metadata is not None else None)
         await conn.execute(
             "UPDATE conversations SET updated_at = now(), last_message_at = now() "
             "WHERE id = $1", uuid.UUID(conversation_id))
@@ -58,7 +60,7 @@ async def load_history(conversation_id: str, limit: int = 200) -> list[dict]:
     """The most recent `limit` messages, in chronological order."""
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT id, role, content, model_used, tool_calls, created_at FROM (
+            """SELECT id, role, content, model_used, tool_calls, metadata, created_at FROM (
                    SELECT * FROM messages
                    WHERE conversation_id = $1
                    ORDER BY created_at DESC
@@ -71,6 +73,7 @@ async def load_history(conversation_id: str, limit: int = 200) -> list[dict]:
         "content": r["content"],
         "model_used": r["model_used"],
         "tool_calls": r["tool_calls"],
+        "metadata": r["metadata"],
         "created_at": str(r["created_at"]) if r["created_at"] else None,
     } for r in rows]
 

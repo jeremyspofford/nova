@@ -89,7 +89,7 @@ export interface Activity {
 }
 
 export type ChatEvent =
-  | { type: 'meta'; conversationId: string; model: string }
+  | { type: 'meta'; conversationId: string; model: string; traceId?: string }
   | { type: 'text'; text: string }
   | { type: 'activity'; activity: Activity }
   | { type: 'error'; error: string }
@@ -136,8 +136,9 @@ export async function* streamChat(message: string, conversationId?: string,
           continue;
         }
         if (parsed.meta) {
-          const meta = parsed.meta as { conversation_id: string; model: string };
-          yield { type: 'meta', conversationId: meta.conversation_id, model: meta.model };
+          const meta = parsed.meta as { conversation_id: string; model: string; trace_id?: string };
+          yield { type: 'meta', conversationId: meta.conversation_id, model: meta.model,
+                  traceId: meta.trace_id };
         } else if (typeof parsed.t === 'string') {
           yield { type: 'text', text: parsed.t };
         } else if (parsed.activity) {
@@ -158,17 +159,81 @@ export async function getActiveConversation(): Promise<{ id: string; title: stri
   return r.json();
 }
 
+/** One turn's ledger summary — feeds the duration chip on assistant messages. */
+export interface TraceSummary {
+  id: string;
+  status: string;
+  secs: number | null;
+  tools: number;
+  dispatches: number;
+}
+
 export interface StoredMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
   created_at: string;
   tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
+  trace?: TraceSummary | null;
 }
 
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
   const r = await apiFetch(`${API_URL}/api/v1/conversations/${conversationId}/messages`);
   if (!r.ok) throw new Error('Failed to load messages');
+  return r.json();
+}
+
+export interface TraceSpan {
+  id: string;
+  parent_span_id: string | null;
+  seq: number;
+  kind: 'stage' | 'llm_call' | 'tool' | 'dispatch';
+  name: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface TraceDetail {
+  trace: {
+    id: string;
+    source: string;
+    automation: string | null;
+    conversation_id: string | null;
+    model: string | null;
+    status: string;
+    error: string | null;
+    started_at: string;
+    finished_at: string | null;
+  };
+  spans: TraceSpan[];
+}
+
+/** The full turn ledger for one trace — the Turn Inspector's data source. */
+export async function getTrace(id: string): Promise<TraceDetail> {
+  const r = await apiFetch(`${API_URL}/api/v1/traces/${id}`);
+  if (!r.ok) throw new Error('Failed to load trace');
+  return r.json();
+}
+
+/** Recent turns across all sources — chat, automations, compaction. */
+export interface TraceListItem {
+  id: string;
+  source: 'chat' | 'automation' | 'compaction';
+  automation: string | null;
+  model: string | null;
+  status: string;
+  started_at: string;
+  secs: number | null;
+  tools: number;
+  dispatches: number;
+  llm_calls: number;
+}
+
+export async function getTraces(limit = 50): Promise<TraceListItem[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/traces?limit=${limit}`);
+  if (!r.ok) throw new Error('Failed to load traces');
   return r.json();
 }
 
