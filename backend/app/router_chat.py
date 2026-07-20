@@ -16,7 +16,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, conversations, db, rules, settings_store, trace
+from app import automations, compaction, consents, conversations, db, rules, settings_store, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -949,3 +949,39 @@ async def delete_rule_endpoint(rule_id: str):
         raise HTTPException(status_code=403,
                             detail="system protections can be disabled but not deleted")
     return {"status": "deleted"}
+
+
+# ── operator consents (guarded destructive actions, roadmap #29) ─────────
+
+@router.get("/api/v1/consents")
+async def list_consents_endpoint(conversation_id: str | None = None):
+    """Fresh pending consents — the chat UI renders these as decision cards.
+
+    Each rule.* consent is enriched with the rule's AUTHORITATIVE facts from
+    the database (2026-07-20 hardening): the card must show what approving
+    actually touches, not the requesting agent's summary of it — an agent
+    that read attacker-influenced content could word the question
+    misleadingly, but it cannot forge this block."""
+    rows = await consents.list_pending(conversation_id)
+    for row in rows:
+        if row["kind"].startswith("rule."):
+            rule = await rules.get_by_name(row["subject"])
+            row["rule"] = None if not rule else {
+                k: rule[k] for k in ("description", "pattern", "action",
+                                     "target_tools", "enabled", "is_system",
+                                     "hit_count")}
+    return rows
+
+
+@router.post("/api/v1/consents/{consent_id}/decide")
+async def decide_consent_endpoint(consent_id: str, body: dict):
+    """The operator's authenticated click. This endpoint is the ONLY writer
+    of approvals — agents can request consents but never decide them."""
+    chosen = str(body.get("chosen", "")).lower()
+    if chosen not in ("approve", "deny"):
+        raise HTTPException(status_code=422, detail="chosen must be 'approve' or 'deny'")
+    row = await consents.decide(consent_id, chosen)
+    if not row:
+        raise HTTPException(status_code=410,
+                            detail="consent is no longer pending (expired or already decided)")
+    return row

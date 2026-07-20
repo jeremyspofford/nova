@@ -694,6 +694,14 @@ See README for what works. This file is the ordered backlog.
    violet thinking with arcs → settles to idle when the reply lands.
    Remaining from the design: galaxy/graph/universe treatments (they
    ignore setActivity today — optional method, safe).
+   **View treatments SHIPPED 2026-07-20 (overnight run):** galaxy —
+   eased core pulse + faster auto-orbit while engaged, golden shooting
+   star arcing between random nodes per tool/dispatch event; graph —
+   teal engagement rings rippling out from the core node; universe —
+   bloom warms (1.05→1.35) and orbital time runs 1.5x while engaged.
+   All eased via the orb's freshness recipe (90s window), all
+   screenshot-verified idle-vs-active at :5173 with console-dispatched
+   events. #7 is now fully realized across all four views.
 
 8. **Video ingestion — watch a video or a source, source-agnostic
    (requested 2026-07-15, spec'd; generalized beyond YouTube per Jeremy's
@@ -791,6 +799,16 @@ See README for what works. This file is the ordered backlog.
    tool. PARTIALLY FIXED same day (b9a3b5e, parallel session): every
    agent's prompt now carries a live "## Model (live)" FACTS block with
    its own resolved binding — the self-question now answers directly.
+   **ENTITY SNAPSHOT SHIPPED 2026-07-20:** `_entities_block()` in
+   runner.py — live rules/agents/automations (names, actions, enabled,
+   last_status; 15s cache) in every agent's FACTS slot, with the
+   anything-not-listed-does-not-exist guidance. Built after the overnight
+   incident where main (ornith:9b) narrated invented rule deletions from
+   a polluted conversation with zero tool calls. Live-verified in that
+   same polluted conversation: "exactly which guardrail rules exist?" →
+   both system rules named correctly with "the rules we discussed
+   earlier are gone" (model was glm-5.2 at test time — Jeremy had
+   switched the dropdown; re-spot-check on ornith:9b when it's active).
    Still open for (c): cross-agent visibility (model-manager seeing ALL
    bindings for upgrade recommendations) and the broader self-inventory
    (shipped features, tools, roadmap awareness). Same conversation,
@@ -1135,6 +1153,13 @@ See README for what works. This file is the ordered backlog.
    path). Spec: `docs/plans/guarded-actions-consent.md`. Interim
    operator path (used 2026-07-19 to clear the blocker): Settings →
    Operator → Edit mode + the rules UI / `DELETE /api/v1/rules/{id}`.
+   **PHASE 1 BUILT 2026-07-20** (migration 029, consents store +
+   endpoints, request_operator_confirmation, manage_rules enforcement,
+   guardian charter update, ChatPanel Approve/Deny card). All enforcement
+   seams mechanically verified + card UI live-verified; deviations and
+   one caveat (organic main→guardian relay untested in the polluted
+   conversation — ornith:9b made zero tool calls there all night)
+   recorded in the plan doc. Awaiting Jeremy's review.
 
 ## Later
 

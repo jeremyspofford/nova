@@ -422,6 +422,44 @@ export interface Rule {
   last_hit_at: string | null;
 }
 
+// ── operator consents (guarded destructive actions, roadmap #29) ─────────
+
+export interface Consent {
+  id: string;
+  kind: string;
+  subject: string;
+  question: string;
+  requested_by: string;
+  conversation_id: string | null;
+  status: string;
+  chosen: string | null;
+  created_at: string | null;
+  /** Authoritative DB facts about the targeted rule — what approving
+   *  actually touches. null = the rule no longer exists. */
+  rule?: {
+    description: string; pattern: string; action: string;
+    target_tools: string[] | null; enabled: boolean;
+    is_system: boolean; hit_count: number;
+  } | null;
+}
+
+export async function getPendingConsents(conversationId?: string): Promise<Consent[]> {
+  const q = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : '';
+  const r = await apiFetch(`${API_URL}/api/v1/consents${q}`);
+  if (!r.ok) throw new Error('Failed to load consents');
+  return r.json();
+}
+
+export async function decideConsent(id: string, chosen: 'approve' | 'deny'): Promise<Consent> {
+  const r = await apiFetch(`${API_URL}/api/v1/consents/${id}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chosen }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Decide failed');
+  return r.json();
+}
+
 export async function getRules(): Promise<Rule[]> {
   const r = await apiFetch(`${API_URL}/api/v1/rules`);
   if (!r.ok) throw new Error('Failed to load rules');

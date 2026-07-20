@@ -84,6 +84,60 @@ level regardless of consent.
 Migration, tool, SSE event + ChatPanel card, decide endpoint, resumption
 dispatch, manage_rules enforcement, guardian prompt update.
 
+**PHASE 1 BUILT 2026-07-20 (overnight autonomous run; uncommitted).**
+Implementation deviations from the sketch above, all in the
+simpler-mechanism direction:
+- **Cards are fetch-based, not SSE**: ChatPanel loads pending consents on
+  conversation load and after every turn (`GET /api/v1/consents`) — no
+  runner/SSE surgery, reload-safe by construction.
+- **Options are a fixed Approve/Deny pair** (the question text carries the
+  specifics). Free-form options deferred to phase 2 — unambiguous for a
+  Haiku guardian to act on.
+- **Consent lookup is kind+subject with optional id**: the tool executor
+  finds the newest fresh approval for the exact operation, so a small
+  model garbling a uuid can't break the flow (security unchanged — the
+  record itself only exists via the authenticated click).
+- `request_operator_confirmation` refuses system-rule subjects outright
+  (no pointless cards) and expires any older pending card for the same
+  operation (re-ask supersedes).
+
+**HARDENING ROUND 2026-07-20 (Jeremy's security review; all BUILT +
+mechanically verified same day):**
+- **Pattern/target gap closed**: `update` touching pattern or
+  target_tools/target_agents now requires a `rule.modify` consent (a
+  rewritten pattern that never matches is a deletion in disguise);
+  disable/downgrade stays `rule.weaken`; description-only edits stay
+  free. Guardian charter updated via migration 030.
+- **Authoritative cards**: `GET /consents` enriches rule.* consents with
+  the rule's LIVE database facts (description, pattern, action, targets,
+  enabled, hit_count) and the card renders them — a misleadingly-worded
+  question can no longer misrepresent what Approve touches.
+- **Agent binding**: a consent burns only for the agent that requested it.
+- **Rate limit**: max 6 consent requests per agent per hour — card-spam
+  and operator-fatigue guard.
+- **Use-window tightened** to 3 minutes (decide window stays 10).
+- Also verified: the pre-existing SSRF guard in web_fetch (public-IPs
+  only, per redirect hop, GET-only) already blocks the
+  agent-clicks-its-own-consent-via-localhost attack class.
+
+**Verification results**: mechanical seams all green via the real tool
+executor under guardian ctx — no-consent delete refused with instructive
+error; request → pending row; operator Approve click in the live UI
+(card rendered from the real conversation, screenshot) → decided; delete
+with approval burned the single-use consent and deleted the rule;
+second destructive attempt refused; deny path refused weaken; system
+rules: no delete, no disable, no card. Live UI verified: card renders,
+Approve flips state, auto follow-up message posts.
+**Caveat for the organic last hop**: main (ornith:9b) made ZERO tool
+calls in the polluted live conversation (hallucinating rule states), so
+main→guardian relay after approval wasn't observed end-to-end — that's
+conversation-state + small-model routing, not consent machinery (the
+same model dispatched guardian correctly twice on 2026-07-19 in cleaner
+context). Re-run the organic probe after compaction or in a fresher
+conversation; the chat-level injection probe is deferred to the same
+occasion (the structural guarantee — no authenticated click, no action —
+is what the mechanical tests proved).
+
 **Verify at :5173, real chat flow**: create a throwaway rule; ask Nova to
 delete it → card appears in chat; choose "Delete" → rule gone, receipt
 span in Turn Inspector; repeat with "Keep it" → rule stays; let one

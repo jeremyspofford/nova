@@ -25,7 +25,7 @@ In roadmap priority order:
 | [acp-coding-delegation.md](acp-coding-delegation.md) | #20 | phase 0 is a validation spike — ACP landscape moves fast; build after #3 (observability) |
 | [remote-shared-state.md](remote-shared-state.md) | parked/designed | phase 1 (leader election) is a standalone win, safe now |
 | [universe-view.md](universe-view.md) | phases 1–4 BUILT 2026-07-16 + interaction round 2026-07-17 (right-drag pan, click-focus/highlight, crisp label overlay, delete→black-hole, legend, Atlas explorer), live-verified at :5173 + :8080; awaiting Jeremy's review + Galaxy-retirement call | 3D celestial brain view built alongside Galaxy; replaces Galaxy when Jeremy signs off |
-| [guarded-actions-consent.md](guarded-actions-consent.md) | #29 (CRITICAL, elevated 2026-07-19) | operator consent as a mechanical fact — inline chat option card + single-use consent records validated at the tool layer; phase-1 shape needs Jeremy's confirmation before building |
+| [guarded-actions-consent.md](guarded-actions-consent.md) | #29 (CRITICAL) — phase 1 BUILT 2026-07-20, uncommitted, awaiting Jeremy's review | Approve/Deny card + single-use consents validated at the tool layer; all seams verified (one caveat in the plan: organic main→guardian relay needs a re-probe in a cleaner conversation) |
 | [avatar-view.md](avatar-view.md) | #2 (entity view) — SHELVED 2026-07-19 after Jeremy reviewed the animation preview | phase 0 assets + pipeline DONE and preserved; the motion layer failed review (blink occlusion, mouth flicker — critique + resume notes at the top of the plan); do not build phase 1+ without a motion prototype Jeremy approves |
 
 Not planned here (deliberately):

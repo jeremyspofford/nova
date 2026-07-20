@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   streamChat, getActiveConversation, getAgents, getMessages, getModels,
-  patchAgent, Activity, ModelInfo, TraceSummary,
+  patchAgent, getPendingConsents, decideConsent, Activity, Consent,
+  ModelInfo, TraceSummary,
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { TurnInspector } from './TurnInspector';
@@ -18,7 +19,11 @@ type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
       streaming?: boolean; trace?: TraceSummary }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
-  | { id: string; kind: 'error'; content: string };
+  | { id: string; kind: 'error'; content: string }
+  | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
+
+type ConsentItem = Extract<Item, { kind: 'consent' }>;
+type OnConsent = (item: ConsentItem, chosen: 'approve' | 'deny') => void;
 
 // the duration chip under an assistant message — click opens the Turn Inspector
 const chipLabel = (t: TraceSummary): string => {
@@ -42,7 +47,58 @@ function errText(err: unknown): string {
 let nextId = 0;
 const uid = () => `ui-${++nextId}`;
 
-function renderItem(item: Item, onInspect?: (traceId: string) => void) {
+function renderItem(item: Item, onInspect?: (traceId: string) => void,
+                    onConsent?: OnConsent) {
+  if (item.kind === 'consent') {
+    // an agent (via request_operator_confirmation) is asking the OPERATOR
+    // to decide a guarded action — roadmap #29's card
+    const c = item.consent;
+    const decided = item.decided
+      ?? (c.status === 'decided' ? (c.chosen as 'approve' | 'deny') : undefined);
+    return (
+      <div key={item.id} className="text-sm bg-indigo-950/40 border border-indigo-800 rounded-lg px-3 py-2.5 space-y-2">
+        <div className="text-[11px] uppercase tracking-wide text-indigo-300/80">
+          {agentDisplayName(c.requested_by)} asks for your decision
+        </div>
+        <div className="text-stone-100">{c.question}</div>
+        <div className="text-xs text-stone-400 font-mono">{c.kind} · {c.subject}</div>
+        {/* authoritative facts from the DB — what approving actually
+            touches; the agent cannot word its way around this block */}
+        {c.rule === null ? (
+          <div className="text-xs text-amber-400">This rule no longer exists.</div>
+        ) : c.rule && (
+          <div className="text-xs bg-stone-900/70 border border-stone-700 rounded px-2 py-1.5 space-y-0.5">
+            <div className="text-stone-300">{c.rule.description || 'No description.'}</div>
+            <div className="font-mono text-stone-400 break-all">pattern: {c.rule.pattern}</div>
+            <div className="text-stone-400">
+              {c.rule.action} · {c.rule.target_tools?.join(', ') || 'all tools'} ·
+              {c.rule.enabled ? ' enabled' : ' disabled'} · hits: {c.rule.hit_count}
+            </div>
+          </div>
+        )}
+        {decided ? (
+          <div className={`text-xs font-semibold ${decided === 'approve' ? 'text-teal-400' : 'text-stone-400'}`}>
+            {decided === 'approve' ? 'Approved' : 'Denied'}
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => onConsent?.(item, 'approve')}
+              className="px-3 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white text-xs font-medium"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => onConsent?.(item, 'deny')}
+              className="px-3 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs font-medium"
+            >
+              Deny
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
   if (item.kind === 'activity') {
     if (item.activity.kind === 'narration') {
       return (
@@ -125,7 +181,8 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void) {
 /** Past turns' activity trail collapses into a dim expandable trace so it's
  *  reviewable without competing with the conversation; narration warnings
  *  stay visible (dimmed). Live activity renders inline as it happens. */
-function renderGrouped(items: Item[], onInspect?: (traceId: string) => void) {
+function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
+                       onConsent?: OnConsent) {
   const blocks: React.ReactNode[] = [];
   let trace: Extract<Item, { kind: 'activity' }>[] = [];
   const flush = () => {
@@ -147,7 +204,7 @@ function renderGrouped(items: Item[], onInspect?: (traceId: string) => void) {
       trace.push(item);
     } else {
       flush();
-      blocks.push(renderItem(item, onInspect));
+      blocks.push(renderItem(item, onInspect, onConsent));
     }
   }
   flush();
@@ -465,6 +522,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     };
   }, [onWidthChange]);
 
+  // pending consent cards (roadmap #29) — appended for any consent not
+  // already shown; called on load and after every turn
+  const loadConsents = async (convId?: string | null) => {
+    const id = convId ?? conversationId;
+    if (!id) return;
+    try {
+      const pending = await getPendingConsents(id);
+      setItems(prev => {
+        const shown = new Set(prev
+          .filter((it): it is ConsentItem => it.kind === 'consent')
+          .map(it => it.consent.id));
+        const fresh = pending
+          .filter(c => !shown.has(c.id))
+          .map((c): Item => ({ id: `consent-${c.id}`, kind: 'consent', consent: c }));
+        return fresh.length ? [...prev, ...fresh] : prev;
+      });
+    } catch { /* cards are best-effort; the next turn retries */ }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -483,6 +559,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
             }
           : { id: m.id, kind: 'msg', role: m.role, content: m.content,
               trace: m.trace ?? undefined }));
+        void loadConsents(conv.id);
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
       }
@@ -579,7 +656,29 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         .filter(it => !(it.id === assistantId && it.kind === 'msg' && !it.content)));
       setBusy(false);
       inputRef.current?.focus();
+      void loadConsents();   // an agent may have asked for a decision this turn
     }
+  }
+
+  // the operator's click: record the decision, then tell Nova in-channel so
+  // the requesting agent acts on it (the tool layer re-validates mechanically)
+  async function handleConsent(item: ConsentItem, chosen: 'approve' | 'deny') {
+    try {
+      await decideConsent(item.consent.id, chosen);
+    } catch (err) {
+      setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
+      void loadConsents();   // it may have expired — refresh the cards
+      return;
+    }
+    setItems(prev => prev.map(it =>
+      it.id === item.id && it.kind === 'consent' ? { ...it, decided: chosen } : it));
+    const c = item.consent;
+    void send({
+      text: chosen === 'approve'
+        ? `I approve consent ${c.id}: ${c.kind} on "${c.subject}". Proceed now.`
+        : `I deny consent ${c.id} (${c.kind} on "${c.subject}"). Keep the rule as it is.`,
+      source: 'consent',
+    });
   }
 
   return (
@@ -666,7 +765,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           </div>
         )}
 
-        {renderGrouped(items, setInspectTraceId)}
+        {renderGrouped(items, setInspectTraceId, handleConsent)}
         <div ref={endRef} />
       </div>
 
