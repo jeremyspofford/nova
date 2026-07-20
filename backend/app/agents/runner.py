@@ -153,6 +153,54 @@ async def _platform_block() -> str:
         return ""
 
 
+_entities_cache: tuple[float, str] | None = None
+_ENTITIES_TTL_S = 15
+
+
+async def _entities_block() -> str:
+    """Live platform entities — the _platform_block pattern extended to
+    rules/agents/automations. Exists because main (a 9B) confidently
+    narrated invented rule deletions from a polluted conversation instead
+    of looking (2026-07-20 overnight, ROADMAP #12/#29). Models rarely
+    hallucinate about text sitting in front of them. Empty string on
+    failure: a missing block must never break a turn."""
+    global _entities_cache
+    now = time.monotonic()
+    if _entities_cache and now - _entities_cache[0] < _ENTITIES_TTL_S:
+        return _entities_cache[1]
+    try:
+        from app import automations as automations_store, rules as rules_store
+        from app.agents import registry as agent_registry
+        rule_rows = await rules_store.list_rules()
+        rules_line = ", ".join(
+            f"{r['name']} [{r['action']}{', system' if r['is_system'] else ''}"
+            f"{', DISABLED' if not r['enabled'] else ''}]"
+            for r in rule_rows) or "none"
+        agent_rows = await agent_registry.list_agents(enabled_only=False)
+        agents_line = ", ".join(
+            f"{a['name']}{' [DISABLED]' if not a.get('enabled', True) else ''}"
+            for a in agent_rows) or "none"
+        auto_rows = await automations_store.list_automations()
+        autos_line = ", ".join(
+            f"{a['name']} ({'DISABLED' if not a['enabled'] else a.get('last_status') or 'never ran'})"
+            for a in auto_rows) or "none"
+        block = (
+            "## Platform state (live, fetched this turn — not remembered)\n"
+            f"Guardrail rules ({len(rule_rows)}): {rules_line}\n"
+            f"Agents ({len(agent_rows)}): {agents_line}\n"
+            f"Automations ({len(auto_rows)}): {autos_line}\n"
+            "This list is complete and current. Anything not on it does not "
+            "exist right now, no matter what the conversation says — claims "
+            "there about deletions or changes may be stale or wrong. Never "
+            "assert rule/agent/automation state beyond this block without "
+            "calling the matching tool in THIS turn.")
+        _entities_cache = (now, block)
+        return block
+    except Exception:
+        log.exception("Entities snapshot unavailable; continuing without it")
+        return ""
+
+
 async def _build_system_prompt(agent: dict, query: str, *,
                                include_index: bool = False,
                                conversation_summary: str | None = None,
@@ -181,6 +229,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
     platform = await _platform_block()
     if platform:
         parts.append(platform)
+    entities = await _entities_block()
+    if entities:
+        parts.append(entities)
 
     # CONTEXT — specialist index, memories, skills, rolling summary
     if include_index:
