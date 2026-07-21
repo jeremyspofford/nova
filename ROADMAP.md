@@ -1227,6 +1227,27 @@ approve → test in staging → operator-test → promote to prod.**
 - **Paste images into chat** — paste/drop an image into the composer (needs
   image upload + a multimodal path). Plan pass needed.
 
+**Security / integrations.**
+- **Secrets management** *(plan drafted 2026-07-21 → `docs/plans/secrets-management.md`)*
+  — a home for tokens Nova's integrations need (GitHub PAT for the GitHub MCP
+  server, keyed-tool API keys). Today MCP auth headers sit **plaintext** in the DB;
+  provider keys are env-only; trace redaction is the only guardrail. Plan: a
+  built-in **encrypted** secret store, referenced by name (`{{secret:github_pat}}`),
+  resolved only at the outbound call, never shown to the model/trace; admin
+  Secrets UI; optional external-manager resolvers (1Password / Bitwarden /
+  Vaultwarden — "reference, don't mirror"). Reconciles [[nova-identity-decisions]].
+  Gates the keystone's GitHub-MCP recommendation being actionable.
+
+- **Data backups / restore / factory reset** *(plan drafted 2026-07-21 →
+  `docs/plans/data-backups.md`)* — snapshot all of Nova's state (Postgres +
+  memory files + control state; model weights excluded, re-downloadable) into
+  one portable bundle, store it **locally or in the cloud** (rclone — 50+
+  backends), **import** to restore, and a typed-confirm **factory reset**. A
+  backup-runner sidecar (fixed-verb, like inference-control) does the
+  pg_dump/restore; Settings → Backups UI; pre-restore safety snapshots.
+  Interlocks with `secrets-management.md` (the encryption key is the crown
+  jewel — excluded by default, warn on restore).
+
 **Brain / memory navigation.**
 - **Orphaned memory clusters** — auto-created topics (e.g. the two MCP topics)
   form isolated 2-node "systems" that float off the main map: they link to
