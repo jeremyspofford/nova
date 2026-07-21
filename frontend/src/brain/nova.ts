@@ -186,6 +186,11 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
 
     // shared view rotation: slow idle orbit + whatever the user dragged
     yaw += dt * 0.00004 * pace;
+    // particle drift keeps a gentle floor so the orb never freezes solid even
+    // at rotationSpeed 0 — a presence view should always feel alive (the same
+    // reason the breath is pace-independent). The camera auto-orbit above still
+    // honors 0, so "still" holds the view rather than killing Nova's motion.
+    const flow = Math.max(1, pace);
     const cyw = Math.cos(yaw), syw = Math.sin(yaw);
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
     // project a 3D orbiter to screen; d = normalized depth (-1 back, +1 front)
@@ -201,7 +206,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     };
 
     // motes — the ambient field that quickens as she engages
-    const drift = dt * (0.3 + energy * 1.0) * pace;
+    const drift = dt * (0.3 + energy * 1.0) * flow;
     for (const mo of motes) {
       mo.ang += mo.speed * drift * 0.001;
       const s = proj(mo, R);
@@ -241,7 +246,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     // the shell: slow-swirling dust; her voice brightens and gently
     // swells it — no snapping, no rings
     const swell = 1 + lvlS * 0.10 * weight.speaking;
-    const spin = dt * (0.3 + energy * 0.6) * pace * 0.001;
+    const spin = dt * (0.3 + energy * 0.6) * flow * 0.001;
     for (const p of shell) {
       p.ang += p.speed * spin;
       const s = proj(p, r * swell);
