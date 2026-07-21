@@ -1192,21 +1192,23 @@ the numbered queue. Grouped by theme.
 
 **Self-improving Nova (the strategic arc): learn from the web → recommend →
 approve → test in staging → operator-test → promote to prod.**
-- **YouTube watching** *(Important; plan being drafted → `docs/plans/youtube-watching.md`)*
-  — let Nova "watch" a video = pull its transcript + metadata (keyless, e.g.
-  `youtube-transcript-api`) and feed it through the existing ingestion agent.
-  Foundation for web-driven self-improvement (e.g. watch MCP-server videos,
-  spot gaps, recommend installs). The full autonomous test→promote loop is the
-  longer roadmap on top of this input primitive.
-- **Recommendation / notification surface** *(recommended keystone; plan being
-  drafted → `docs/plans/notification-surface.md`)* — a notifications/
-  recommendations store that automations + Nova write to, rendered as a
-  banner/inbox card in chat with approve/dismiss. Fixes the current gap
-  (Nova's own words: "I can't do banners/push" — true today; there's only the
-  consent gate). Directly resolves the mcpservers.org automation frustration:
-  it would raise an actionable card instead of quietly writing to a topic and
-  hoping to mention it at conversation start. Backbone for the approve→promote
-  loop above.
+- **YouTube watching** *(Important; plan ALREADY EXISTS →
+  `docs/plans/video-ingestion.md`, roadmap #8)* — "watch a video" = pull
+  transcript + metadata (yt-dlp, source-agnostic, whisper fallback) and feed it
+  through the ingestion agent. The existing spec covers single-video ingest,
+  follow-a-source, and citation-with-timestamp. NEW framing from Jeremy
+  2026-07-20: this is the learning INPUT for the self-improving loop (watch
+  MCP-server videos → spot gaps → recommend). The "recommend" half is the
+  surface below; the autonomous test→promote loop is the longer roadmap on top.
+- **Recommendation / notification surface** *(recommended keystone; plan drafted
+  2026-07-21 → `docs/plans/recommendation-surface.md`)* — a recommendations
+  store that automations + Nova write to via a `raise_recommendation` tool,
+  rendered as a banner + inbox card in chat with Approve/Later/Dismiss. Fixes
+  the current gap (Nova's own words: "I can't do banners/push" — true today;
+  only the consent gate exists). Directly resolves the mcpservers.org
+  frustration: the automation raises an actionable card instead of quietly
+  writing to a topic. Generalizes the model-curation review-queue pattern;
+  backbone for the approve→promote loop.
 
 **Model management UX.**
 - **Auto-fill curated-model metadata** — adding to the curated list shouldn't
