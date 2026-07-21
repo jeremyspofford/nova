@@ -142,6 +142,12 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     const w = canvas.width, h = canvas.height;
     const cx = w / 2, cy = h / 2;
     const R = Math.max(22, Math.min(110, Math.min(w, h) * 0.14));
+    // the mote/shell pixel sizes were tuned against the settings preview card,
+    // whose tiny canvas pins R at the 22px floor. On a full-screen canvas R
+    // hits the 110px cap, so fixed-size particles shrink ~5x relative to the
+    // orb and drown in the body glow — a smooth ball. Scaling them with R keeps
+    // the same dense particle cluster the preview shows, at any canvas size.
+    const psc = R / 22;
 
     // ease mode weights, then blend color + energy from them — crossfades,
     // never snaps; speaking energy rides the live amplitude on top
@@ -200,7 +206,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       const twinkle = 0.55 + 0.45 * Math.sin(now / 700 + mo.tw);
       ctx.fillStyle = col((0.1 + energy * 0.4) * twinkle * (0.7 + 0.3 * s.d));
       ctx.beginPath();
-      ctx.arc(s.x, s.y, mo.size * (1 + 0.2 * s.d), 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, mo.size * psc * (1 + 0.2 * s.d), 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -241,7 +247,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       const a = (0.14 + bpulse * 0.05 + energy * 0.40 + lvlS * 0.15 * weight.speaking)
                 * tw * (0.7 + 0.3 * s.d);
       ctx.fillStyle = col(a);
-      const sz = p.size * (1 + 0.2 * s.d);
+      const sz = p.size * psc * (1 + 0.2 * s.d);
       if (sz < 1.1) {
         ctx.fillRect(s.x, s.y, sz + 0.4, sz + 0.4);
       } else {
@@ -289,7 +295,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     for (const sp of sparks) {
       sp.x += sp.vx * dt; sp.y += sp.vy * dt;
       ctx.fillStyle = col(0.7 * sp.life);
-      ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.6 * psc, 0, Math.PI * 2); ctx.fill();
     }
 
     // state word only — the name tag is gone (Jeremy 2026-07-19: the orb

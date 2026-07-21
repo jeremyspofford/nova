@@ -103,6 +103,58 @@ function makeGlowTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
+/** A face-on spiral galaxy painted to a canvas: soft disc halo, logarithmic
+ *  arms of scattered stars, a bright core. White on transparent — the plane
+ *  material tints it. Rendered flat in 3D, so a random tilt makes each read as
+ *  a spiral, a squashed ellipse, or an edge-on "milky way" streak. */
+function makeGalaxyTexture(rand: () => number): THREE.CanvasTexture {
+  const S = 256, cx = S / 2, cy = S / 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d')!;
+  ctx.globalCompositeOperation = 'lighter';   // arms + core accumulate
+
+  // faint disc halo
+  const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, S / 2);
+  halo.addColorStop(0, 'rgba(255,255,255,0.20)');
+  halo.addColorStop(0.4, 'rgba(255,255,255,0.06)');
+  halo.addColorStop(0.75, 'rgba(255,255,255,0.015)');
+  halo.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, S, S);
+
+  // spiral arms — a few logarithmic sweeps of dots, fading and widening outward
+  const arms = 2 + Math.floor(rand() * 2);     // 2 or 3
+  const twist = 2.6 + rand() * 2.2;            // total wrap, in π
+  const maxR = S * 0.46;
+  for (let a = 0; a < arms; a++) {
+    const base = (a / arms) * Math.PI * 2;
+    for (let k = 0; k < 300; k++) {
+      const u = k / 300;
+      const rad = Math.pow(u, 0.85) * maxR;
+      const theta = base + u * twist * Math.PI;
+      const scatter = (rand() + rand() + rand() - 1.5) * (2 + u * 9);
+      const nx = Math.cos(theta + Math.PI / 2), ny = Math.sin(theta + Math.PI / 2);
+      const x = cx + Math.cos(theta) * rad + nx * scatter;
+      const y = cy + Math.sin(theta) * rad + ny * scatter;
+      ctx.fillStyle = `rgba(255,255,255,${(1 - u) * 0.5 * (0.4 + rand() * 0.6)})`;
+      ctx.beginPath(); ctx.arc(x, y, 0.6 + rand() * 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // bright core on top
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.14);
+  core.addColorStop(0, 'rgba(255,255,255,0.95)');
+  core.addColorStop(0.5, 'rgba(255,255,255,0.35)');
+  core.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, S, S);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 interface LabelKind { kind: 'body' | 'sysname' | 'anchor' | 'quiet' }
 
 interface LabelEntry extends LabelKind {
@@ -261,6 +313,34 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     const neb2 = makeGlowSprite('#3c3278', 1300, 0.045);
     neb2.position.set(-420, 160, 340);
     ambient.add(neb1, neb2);
+  }
+
+  // distant galaxies — far-background decoration well beyond the memory sky.
+  // Flat spiral disks tilted at random angles, so some face us as spirals and
+  // some go edge-on as "milky way" streaks. Dim + additive + depth-write-off,
+  // so they glow faintly behind everything and never compete with Nova. Each
+  // turns imperceptibly slowly, spun in the frame loop.
+  const galaxies: { mesh: THREE.Mesh; spin: number }[] = [];
+  {
+    const rand = mulberry32(2024);
+    const TINTS = ['#dfe6ff', '#ffe7c6', '#ffd6e6', '#cdeee6', '#e9ecf7', '#d9d0ff'];
+    const geo = new THREE.PlaneGeometry(1, 1);
+    shared.add(geo);
+    for (let i = 0; i < 6; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        map: makeGalaxyTexture(rand), color: TINTS[i % TINTS.length],
+        transparent: true, opacity: 0.28 + rand() * 0.2,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      const size = 520 + rand() * 620;
+      mesh.scale.set(size, size, 1);
+      // spread around the far sky (well past the SHELL_R=950 memory systems)
+      mesh.position.copy(fibonacciSphere(i, 6, 1).multiplyScalar(2600 + rand() * 1500));
+      mesh.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+      ambient.add(mesh);
+      galaxies.push({ mesh, spin: (rand() - 0.5) * 0.01 });
+    }
   }
 
   // black hole — a distant landmark, the one thing out here nobody orbits.
@@ -1343,6 +1423,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
 
     // ambient motion runs on real time — the backdrop never freezes
     blackHoleDisk.rotation.z += dtReal * 0.05;
+    for (const g of galaxies) g.mesh.rotateZ(g.spin * dtReal);   // slow galactic turn
     for (const m of meteors) {
       if (m.life > 0) {
         m.life -= dtReal;
