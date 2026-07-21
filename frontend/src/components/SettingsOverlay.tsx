@@ -1516,6 +1516,7 @@ function AgentsTab() {
   const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AgentInfo | null>(null);
+  const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const emptyForm = {
     name: '', description: '', system_prompt: '', model: '',
     allowed_tools: '', routing_keywords: '',
@@ -1609,19 +1610,26 @@ function AgentsTab() {
 
   const agentFields = (
     <>
-      <input
-        placeholder="description"
-        value={form.description}
-        onChange={e => setForm({ ...form, description: e.target.value })}
-        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
-      />
-      <textarea
-        required placeholder="system prompt…"
-        value={form.system_prompt}
-        onChange={e => setForm({ ...form, system_prompt: e.target.value })}
-        rows={6}
-        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm font-mono text-stone-200"
-      />
+      <label className="block">
+        <span className="text-[10px] uppercase tracking-wide text-stone-500">Note — your description (not sent to the agent)</span>
+        <textarea
+          placeholder="a short note: what this agent is for"
+          value={form.description}
+          onChange={e => setForm({ ...form, description: e.target.value })}
+          rows={2}
+          className="w-full mt-0.5 resize-y bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-sm text-stone-200 leading-relaxed"
+        />
+      </label>
+      <label className="block">
+        <span className="text-[10px] uppercase tracking-wide text-stone-500">System prompt — the agent's instructions</span>
+        <textarea
+          required placeholder="the agent's instructions…"
+          value={form.system_prompt}
+          onChange={e => setForm({ ...form, system_prompt: e.target.value })}
+          rows={8}
+          className="w-full mt-0.5 resize-y bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-sm text-stone-200 leading-relaxed"
+        />
+      </label>
       <div className="flex gap-2">
         <input
           placeholder="allowed tools (comma-sep, empty = all builtins)"
@@ -1729,7 +1737,25 @@ function AgentsTab() {
                   )}
                 </div>
               </div>
-              <div className="mt-1 text-xs text-stone-500 line-clamp-2">{a.description}</div>
+              {a.description && (
+                <div className="mt-1">
+                  <span className="text-[10px] uppercase tracking-wide text-stone-500">Note (yours)</span>
+                  <div className="mt-0.5 text-xs text-stone-400 line-clamp-2">{a.description}</div>
+                </div>
+              )}
+              {a.system_prompt && (
+                <div className="mt-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-stone-500">System prompt — its instructions</span>
+                  <div className={`mt-0.5 text-xs text-stone-400 whitespace-pre-wrap [overflow-wrap:anywhere] ${
+                    expandedPrompt === a.id ? '' : 'line-clamp-3'}`}>{a.system_prompt}</div>
+                  {a.system_prompt.length > 180 && (
+                    <button onClick={() => setExpandedPrompt(expandedPrompt === a.id ? null : a.id)}
+                      className="text-[11px] text-stone-500 hover:text-teal-300 mt-0.5">
+                      {expandedPrompt === a.id ? 'show less' : 'show full'}
+                    </button>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
