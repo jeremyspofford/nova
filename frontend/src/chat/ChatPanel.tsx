@@ -234,6 +234,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // follow-ups typed while Nova is still replying: queued and auto-sent FIFO
+  // when the current turn finishes; "interject" jumps the queue and cuts the
+  // reply short. abortRef cancels the in-flight turn for that interruption.
+  const [queue, setQueue] = useState<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [inspectTraceId, setInspectTraceId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -579,6 +584,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     if (!message || busy) return;
     if (opts?.text === undefined) setInput('');   // voice passes its own text
     setBusy(true);
+    const ac = new AbortController();   // interject aborts this turn
+    abortRef.current = ac;
     emitPresence(true, 'thinking');
     let lastPresence = Date.now();
     // voice turns speak the reply even if the mute toggle is off
@@ -604,7 +611,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     let liveDispatches = 0;
 
     try {
-      for await (const event of streamChat(message, conversationId ?? undefined, opts?.source)) {
+      for await (const event of streamChat(message, conversationId ?? undefined, opts?.source, ac.signal)) {
         if (event.type === 'meta') {
           liveTraceId = event.traceId ?? null;
         } else if (event.type === 'text') {
@@ -639,8 +646,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         }
       }
     } catch (err) {
-      setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
+      // an intentional interject cancels the fetch — keep the partial reply,
+      // no error card (the interjected message is already queued to send next)
+      if (!ac.signal.aborted) {
+        setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
+      }
     } finally {
+      if (abortRef.current === ac) abortRef.current = null;
       emitPresence(false);
       if (speakThisTurn) speaker.flush();   // speak whatever the last sentence held
       const liveTrace: TraceSummary | undefined = liveTraceId ? {
@@ -659,6 +671,41 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       void loadConsents();   // an agent may have asked for a decision this turn
     }
   }
+
+  // Enter / Send: send now when idle, otherwise queue the follow-up so it
+  // fires automatically when the current reply finishes.
+  function submitComposer() {
+    const msg = input.trim();
+    if (!msg) return;
+    if (busy) {
+      setQueue(q => [...q, msg]);
+      setInput('');
+    } else {
+      void send();
+    }
+    inputRef.current?.focus();
+  }
+
+  // interject: cut Nova's current reply short and send this message right now
+  // (it jumps to the front of the queue; the drain effect dispatches it once
+  // the aborted turn unwinds).
+  function interject() {
+    const msg = input.trim();
+    if (!msg || !busy) return;
+    setInput('');
+    setQueue(q => [msg, ...q]);
+    abortRef.current?.abort();
+  }
+
+  // drain the queue whenever Nova goes idle — one turn at a time
+  const sendRef = useRef(send);
+  useEffect(() => { sendRef.current = send; });
+  useEffect(() => {
+    if (busy || queue.length === 0) return;
+    const next = queue[0];
+    setQueue(q => q.slice(1));
+    void sendRef.current({ text: next });
+  }, [busy, queue]);
 
   // the operator's click: record the decision, then tell Nova in-channel so
   // the requesting agent acts on it (the tool layer re-validates mechanically)
@@ -773,8 +820,20 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
         <TurnInspector traceId={inspectTraceId} onClose={() => setInspectTraceId(null)} />
       )}
 
+      {queue.length > 0 && (
+        <div className="border-t border-stone-800 px-3 pt-2 -mb-1 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-stone-500">queued</span>
+          {queue.map((q, i) => (
+            <span key={i} className="inline-flex items-center gap-1 max-w-[15rem] text-[11px] bg-stone-800 border border-stone-700 rounded-full px-2 py-0.5 text-stone-300">
+              <span className="truncate">{q}</span>
+              <button type="button" onClick={() => setQueue(qq => qq.filter((_, j) => j !== i))}
+                className="text-stone-500 hover:text-red-400 leading-none" title="Remove from queue" aria-label="Remove from queue">×</button>
+            </span>
+          ))}
+        </div>
+      )}
       <form
-        onSubmit={e => { e.preventDefault(); send(); }}
+        onSubmit={e => { e.preventDefault(); submitComposer(); }}
         className="border-t border-stone-700 p-3 flex items-end gap-2"
       >
         <textarea
@@ -785,12 +844,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
-              send();
+              submitComposer();
             }
           }}
-          disabled={busy}
-          placeholder="Message Nova…"
-          title="Enter to send, Shift+Enter for a new line"
+          placeholder={busy ? 'Queue a follow-up… (or “Now” to interject)' : 'Message Nova…'}
+          title="Enter to send / queue, Shift+Enter for a new line"
           className="flex-1 resize-none overflow-y-auto nice-scroll bg-stone-800 text-white placeholder-stone-500 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
         />
         <button
@@ -825,12 +883,23 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           {micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳'
             : listenMode === 'wake' && micState === 'wake' ? '👂' : '🎤'}
         </button>
+        {busy && !!input.trim() && (
+          <button
+            type="button"
+            onClick={interject}
+            title="Interrupt Nova and send this now"
+            className="px-3 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded text-sm transition"
+          >
+            Now
+          </button>
+        )}
         <button
           type="submit"
-          disabled={busy || !input.trim()}
+          disabled={!input.trim()}
+          title={busy ? 'Nova is replying — this queues and sends when she finishes' : 'Send'}
           className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:bg-stone-700 disabled:text-stone-500 text-white rounded text-sm transition"
         >
-          Send
+          {busy ? 'Queue' : 'Send'}
         </button>
       </form>
     </aside>

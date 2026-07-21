@@ -96,11 +96,12 @@ export type ChatEvent =
   | { type: 'done' };
 
 export async function* streamChat(message: string, conversationId?: string,
-                                  source?: string): AsyncGenerator<ChatEvent> {
+                                  source?: string, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
   const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, conversation_id: conversationId, source }),
+    signal,
   });
 
   if (!response.ok || !response.body) {
