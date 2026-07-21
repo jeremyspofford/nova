@@ -1770,6 +1770,7 @@ function AutomationsTab() {
   const [agents, setAgents] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
+  const [expandedInstr, setExpandedInstr] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', instruction: '', agent_name: '', interval_minutes: 60 });
 
   const load = () => getAutomations().then(setRows).catch(e => setStatus(String(e)));
@@ -1861,13 +1862,26 @@ function AutomationsTab() {
           {editing?.id === a.id ? (
             <form onSubmit={saveEdit} className="space-y-2">
               <div className="text-sm text-stone-100">{displayName(a.name)}</div>
-              <textarea
-                required
-                value={editForm.instruction}
-                onChange={e => setEditForm({ ...editForm, instruction: e.target.value })}
-                rows={4}
-                className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
-              />
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-stone-500">Note — your description (not sent to the agent)</span>
+                <textarea
+                  value={editForm.description}
+                  onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+                  rows={3}
+                  placeholder="a short note: what this automation is for"
+                  className="w-full mt-0.5 resize-y bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-sm text-stone-200 leading-relaxed"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-stone-500">Instructions — the prompt Nova runs each time</span>
+                <textarea
+                  required
+                  value={editForm.instruction}
+                  onChange={e => setEditForm({ ...editForm, instruction: e.target.value })}
+                  rows={8}
+                  className="w-full mt-0.5 resize-y bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-sm text-stone-200 leading-relaxed"
+                />
+              </label>
               <div className="flex gap-2">
                 <select
                   value={editForm.agent_name}
@@ -1948,8 +1962,30 @@ function AutomationsTab() {
                   </>
                 )}
               </div>
+              {a.description && (
+                <div className="mt-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-stone-500">Note (yours)</span>
+                  <div className="mt-0.5 text-xs text-stone-300">{a.description}</div>
+                </div>
+              )}
+              {a.instruction && (
+                <div className="mt-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-stone-500">Instructions Nova runs</span>
+                  <div className={`mt-0.5 text-xs text-stone-400 whitespace-pre-wrap [overflow-wrap:anywhere] ${
+                    expandedInstr === a.id ? '' : 'line-clamp-3'}`}>{a.instruction}</div>
+                  {a.instruction.length > 180 && (
+                    <button onClick={() => setExpandedInstr(expandedInstr === a.id ? null : a.id)}
+                      className="text-[11px] text-stone-500 hover:text-teal-300 mt-0.5">
+                      {expandedInstr === a.id ? 'show less' : 'show full'}
+                    </button>
+                  )}
+                </div>
+              )}
               {a.last_summary && (
-                <div className="mt-1.5 text-xs text-stone-400 line-clamp-2">{a.last_summary}</div>
+                <div className="mt-1.5 text-xs text-stone-400 line-clamp-2">
+                  <span className="text-[10px] uppercase tracking-wide text-stone-500">Last run</span>{' '}
+                  {a.last_summary}
+                </div>
               )}
               {historyFor === a.id && (
                 <div className="mt-2 border-t border-stone-700/60 pt-2 space-y-1.5">
@@ -1987,11 +2023,11 @@ function AutomationsTab() {
             className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
           />
           <textarea
-            required placeholder="Instruction the agent runs each time…"
+            required placeholder="Instructions the agent runs each time… (a note is auto-written for you)"
             value={form.instruction}
             onChange={e => setForm({ ...form, instruction: e.target.value })}
-            rows={3}
-            className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
+            rows={6}
+            className="w-full resize-y bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-sm text-stone-200 leading-relaxed"
           />
           <div className="flex gap-2">
             <select

@@ -6,9 +6,41 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from app import db
+from app import db, settings_store
+from app.llm import router as llm_router
 
 log = logging.getLogger(__name__)
+
+_SUMMARY_SYSTEM = (
+    "In one plain sentence of at most 15 words, say what this scheduled "
+    "automation does — for a human scanning a list. Output only the sentence, "
+    "no preamble or quotes.")
+
+
+async def _auto_description(instruction: str) -> str:
+    """Best-effort one-line note when none was supplied, so the card is never
+    blank. Never blocks create: any failure falls back to a trim of the
+    instruction. (docs decision 2026-07-21: show the logic + auto-summary.)"""
+    flat = " ".join((instruction or "").split())
+    fallback = (flat[:117] + "…") if len(flat) > 120 else flat
+    try:
+        model = llm_router.effective_model(settings_store.get("compaction.model") or "")
+        if not model:
+            return fallback
+        text = ""
+        async for event in llm_router.stream_chat(
+                [{"role": "system", "content": _SUMMARY_SYSTEM},
+                 {"role": "user", "content": instruction}], model):
+            if event.get("type") == "text":
+                text += event["text"]
+            elif event.get("type") == "error":
+                return fallback
+        first = text.strip().strip('"').splitlines()[0] if text.strip() else ""
+        return first[:160] or fallback
+    except Exception:
+        log.warning("auto-description failed; using a trim of the instruction",
+                    exc_info=True)
+        return fallback
 
 _FIELDS = ("id", "name", "description", "instruction", "agent_name",
            "interval_minutes", "timeout_seconds", "enabled", "is_system",
@@ -47,6 +79,8 @@ async def create(name: str, instruction: str, agent_name: str,
     if timeout_seconds is not None and timeout_seconds < 30:
         raise ValueError("timeout_seconds must be at least 30 (or omitted "
                          "for the global default)")
+    if not (description or "").strip():
+        description = await _auto_description(instruction)   # never leave it blank
     async with db.acquire() as conn:
         agent = await conn.fetchrow(
             "SELECT 1 FROM agents WHERE name = $1 AND enabled", agent_name)
