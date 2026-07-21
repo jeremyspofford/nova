@@ -90,13 +90,26 @@ function Toggle({ on, onChange, label, title }: {
   );
 }
 
+/** Reserved-height placeholders shown until a tab's data loads, so each panel
+ *  renders once (no sparse-frame flash or layout shift on open). */
+function CardsSkeleton({ n = 4 }: { n?: number }) {
+  return (
+    <div className="space-y-2 animate-pulse" aria-hidden>
+      {Array.from({ length: n }).map((_, i) => (
+        <div key={i} className="h-14 rounded-lg border border-stone-800 bg-stone-800/30" />
+      ))}
+    </div>
+  );
+}
+
 function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    getSettings().then(setDefs).catch(e => setStatus(String(e)));
+    getSettings().then(setDefs).catch(e => setStatus(String(e))).finally(() => setLoaded(true));
     getModels().then(setModels).catch(() => {});
     // stay in sync when a setting is changed elsewhere (e.g. the header chip)
     const onExternal = (e: Event) => {
@@ -219,6 +232,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
 
   const sections = [...new Set(defs.map(d => d.section))]
     .filter(s => (!only || only.includes(s)) && !(exclude ?? []).includes(s));
+  if (!loaded) return <CardsSkeleton n={only ? 1 : 5} />;
   return (
     <div className="space-y-5">
       {!only && <StorageCard />}
@@ -1275,6 +1289,7 @@ function CuratedTable() {
  *  (the memory index rescans on every write). */
 function SkillsTab() {
   const [rows, setRows] = useState<SkillInfo[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState('');
   const [expanded, setExpanded] = useState<Record<string, string | null>>({});
   const [editing, setEditing] = useState<SkillInfo | null>(null);
@@ -1282,7 +1297,8 @@ function SkillsTab() {
   const emptyForm = { title: '', description: '', content: '' };
   const [form, setForm] = useState(emptyForm);
 
-  const load = () => getSkills().then(setRows).catch(e => setStatus(String(e)));
+  const load = () => getSkills().then(setRows).catch(e => setStatus(String(e)))
+    .finally(() => setLoaded(true));
   useEffect(() => { load(); }, []);
 
   async function toggleExpand(id: string) {
@@ -1346,6 +1362,7 @@ function SkillsTab() {
     </>
   );
 
+  if (!loaded) return <CardsSkeleton n={3} />;
   return (
     <div className="space-y-3">
       <p className="text-xs text-stone-500">
@@ -1517,13 +1534,15 @@ function AgentsTab() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AgentInfo | null>(null);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const emptyForm = {
     name: '', description: '', system_prompt: '', model: '',
     allowed_tools: '', routing_keywords: '',
   };
   const [form, setForm] = useState(emptyForm);
 
-  const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)));
+  const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)))
+    .finally(() => setLoaded(true));
   useEffect(() => {
     load();
   }, []);
@@ -1661,6 +1680,7 @@ function AgentsTab() {
     </select>
   );
 
+  if (!loaded) return <CardsSkeleton n={4} />;
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
@@ -1797,9 +1817,11 @@ function AutomationsTab() {
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
   const [expandedInstr, setExpandedInstr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [form, setForm] = useState({ name: '', instruction: '', agent_name: '', interval_minutes: 60 });
 
-  const load = () => getAutomations().then(setRows).catch(e => setStatus(String(e)));
+  const load = () => getAutomations().then(setRows).catch(e => setStatus(String(e)))
+    .finally(() => setLoaded(true));
   useEffect(() => {
     load();
     getAgents().then(a => setAgents(a.filter(x => x.enabled).map(x => x.name))).catch(() => {});
@@ -1876,6 +1898,7 @@ function AutomationsTab() {
     }
   }
 
+  if (!loaded) return <CardsSkeleton n={4} />;
   return (
     <div className="space-y-3">
       {/* subsystem settings live with the subsystem, not in the Settings tab */}
@@ -2093,11 +2116,13 @@ function AutomationsTab() {
 
 function RulesTab() {
   const [rows, setRows] = useState<Rule[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
   const [form, setForm] = useState({ name: '', pattern: '', action: 'block', description: '', target_tools: '' });
 
-  const load = () => getRules().then(setRows).catch(e => setStatus(String(e)));
+  const load = () => getRules().then(setRows).catch(e => setStatus(String(e)))
+    .finally(() => setLoaded(true));
   useEffect(() => { load(); }, []);
 
   async function toggle(r: Rule) {
@@ -2158,6 +2183,7 @@ function RulesTab() {
     } catch (err) { setStatus(String(err)); }
   }
 
+  if (!loaded) return <CardsSkeleton n={3} />;
   return (
     <div className="space-y-3">
       <p className="text-xs text-stone-500">
@@ -2297,7 +2323,7 @@ function ToolsTab() {
     } catch (err) { setStatus(String(err)); }
   }
 
-  if (!catalog) return <div className="text-xs text-stone-500">loading…</div>;
+  if (!catalog) return <CardsSkeleton n={4} />;
 
   return (
     <div className="space-y-3">
