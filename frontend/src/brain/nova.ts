@@ -113,11 +113,13 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     return { ...orbit3(a), speed: (0.25 + rand() * 0.5) / a,
              size: 0.6 + rand() * 1.4, tw: rand() * Math.PI * 2 };
   });
-  // the orb body itself — a fuzzy shell of matter, not a solid ball
-  const shell = Array.from({ length: 640 }, () => {
+  // the orb body itself — a fuzzy shell of matter, not a solid ball. `warm`
+  // shades each particle from the mode color toward white so the field reads
+  // as distinct stars, not one flat wash of a single hue.
+  const shell = Array.from({ length: 820 }, () => {
     const rad = 1 + (rand() + rand() + rand() - 1.5) * 0.16;  // soft gaussian shell
     return { ...orbit3(rad), speed: 0.10 + rand() * 0.22,
-             size: 0.5 + rand() * 1.1, tw: rand() * Math.PI * 2 };
+             size: 0.5 + rand() * 1.1, tw: rand() * Math.PI * 2, warm: rand() };
   });
   let ripples: { life: number; dir: 1 | -1 }[] = [];   // listening rings (inward)
   let sparks: { x: number; y: number; vx: number; vy: number; life: number }[] = [];
@@ -229,10 +231,10 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     const fx = cx + Math.cos(now / 4700) * r * 0.18;
     const fy = cy + Math.sin(now / 6100) * r * 0.14;
     const body = ctx.createRadialGradient(fx, fy, 0, cx, cy, r * 1.05);
-    body.addColorStop(0, `rgba(255,255,255,${0.27 + energy * 0.25 + bpulse * 0.07})`);
-    body.addColorStop(0.3, col(0.45 + energy * 0.2));
-    body.addColorStop(0.65, col(0.26));
-    body.addColorStop(0.85, col(0.10));
+    body.addColorStop(0, `rgba(255,255,255,${0.22 + energy * 0.22 + bpulse * 0.06})`);
+    body.addColorStop(0.3, col(0.32 + energy * 0.18));
+    body.addColorStop(0.65, col(0.17));
+    body.addColorStop(0.85, col(0.07));
     body.addColorStop(1, col(0));
     ctx.fillStyle = body;
     ctx.beginPath(); ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2); ctx.fill();
@@ -244,15 +246,23 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       p.ang += p.speed * spin;
       const s = proj(p, r * swell);
       const tw = 0.55 + 0.45 * Math.sin(now / 900 + p.tw);
+      const depth = 0.7 + 0.3 * s.d;             // the near face of the shell reads brighter
       const a = (0.14 + bpulse * 0.05 + energy * 0.40 + lvlS * 0.15 * weight.speaking)
-                * tw * (0.7 + 0.3 * s.d);
-      ctx.fillStyle = col(a);
-      const sz = p.size * psc * (1 + 0.2 * s.d);
-      if (sz < 1.1) {
-        ctx.fillRect(s.x, s.y, sz + 0.4, sz + 0.4);
-      } else {
-        ctx.beginPath(); ctx.arc(s.x, s.y, sz, 0, Math.PI * 2); ctx.fill();
-      }
+                * tw * depth;
+      // per-particle color: shade the mode hue toward white by the particle's
+      // own warmth and its depth. This gives the cluster dimension instead of
+      // one flat teal blur.
+      const wm = Math.min(1, 0.12 + p.warm * 0.55 + s.d * 0.28);
+      const pr = (cr + (255 - cr) * wm) | 0;
+      const pg = (cg + (255 - cg) * wm) | 0;
+      const pb = (cb + (255 - cb) * wm) | 0;
+      const sz = p.size * psc * depth;
+      // a crisp bright core (the star) sits on a soft halo (its glow) — the
+      // core is what keeps the field sharp instead of blurring into a ball
+      ctx.fillStyle = `rgba(${pr}, ${pg}, ${pb}, ${a * 0.4})`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, sz, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(${pr}, ${pg}, ${pb}, ${Math.min(0.95, a * 2.2)})`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, Math.max(0.55, sz * 0.32), 0, Math.PI * 2); ctx.fill();
     }
 
     // thinking / working arcs — segments circling the core; working adds a
