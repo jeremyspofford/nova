@@ -269,6 +269,10 @@ export interface StorageInfo {
   container_path: string;
   writable: boolean;
   counts: Record<string, number>;
+  models: {
+    host_path: string | null;   // null => default docker-managed volumes
+    relocated: boolean;
+  };
 }
 
 export async function getStorageInfo(): Promise<StorageInfo> {
@@ -325,9 +329,10 @@ export interface BundledInferenceStatus {
   present?: boolean;
   running?: boolean;
   state?: string;
-  op?: 'start' | 'stop' | null;
+  op?: 'start' | 'stop' | 'relocate' | null;
   error?: string | null;
   api_ok?: boolean;
+  models_dir?: string;   // '' = default docker volume
 }
 
 export async function getBundledInference(): Promise<BundledInferenceStatus> {
@@ -343,6 +348,30 @@ export async function setBundledInference(action: 'start' | 'stop'): Promise<voi
     body: JSON.stringify({ action }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? `${action} failed`);
+}
+
+export interface ModelsDirInfo {
+  path: string | null;   // null = default docker volume
+  relocated: boolean;
+}
+
+export async function getModelsDir(): Promise<ModelsDirInfo> {
+  const r = await apiFetch(`${API_URL}/api/v1/inference/models-dir`);
+  if (!r.ok) throw new Error('Failed to load model storage location');
+  return r.json();
+}
+
+/** Relocate the bundled model store to an absolute host path (empty = reset to
+ *  the default docker volume). The backend migrates + recreates ollama; poll
+ *  bundled-inference status for the `relocate` op to finish. */
+export async function setModelsDir(path: string): Promise<ModelsDirInfo> {
+  const r = await apiFetch(`${API_URL}/api/v1/inference/models-dir`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'relocation failed');
+  return r.json();
 }
 
 export interface Automation {
@@ -784,6 +813,71 @@ export async function patchCuratedModel(id: string, body: Record<string, unknown
 export async function deleteCuratedModel(id: string): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/models/curated/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  parameters_schema: Record<string, unknown>;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: 'http' | 'stdio';
+  url: string | null;
+  command: string | null;
+  args: string[];
+  headers: Record<string, string>;
+  enabled: boolean;
+  always_inject: boolean;
+  tools_hash: string | null;
+  status: 'connected' | 'error' | 'disabled';
+  status_detail: string | null;
+  last_seen: string | null;
+}
+
+export async function getMcpServers(): Promise<McpServer[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers`);
+  if (!r.ok) throw new Error('Failed to load MCP servers');
+  return r.json();
+}
+
+export async function getMcpServerTools(id: string): Promise<McpTool[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers/${id}/tools`);
+  if (!r.ok) throw new Error('Failed to load MCP server tools');
+  return r.json();
+}
+
+export async function createMcpServer(body: Partial<McpServer>): Promise<McpServer> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchMcpServer(id: string, body: Record<string, unknown>): Promise<McpServer> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+  return r.json();
+}
+
+export async function deleteMcpServer(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
+export async function approveMcpServer(id: string): Promise<McpServer> {
+  const r = await apiFetch(`${API_URL}/api/v1/mcp/servers/${id}/approve`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Approve failed');
+  return r.json();
 }
 
 export async function uninstallModel(name: string): Promise<void> {

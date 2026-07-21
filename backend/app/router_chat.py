@@ -11,6 +11,7 @@ SSE contract for POST /api/v1/chat/stream:
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
@@ -26,6 +27,14 @@ from app.memory.memory import memory
 from app.schemas import ChatRequest
 
 log = logging.getLogger(__name__)
+
+# Capability/platform nodes (core, user, agents, tools, automations, rules) are
+# live structure, not dated memories. Stamping them with a per-request time
+# churned the brain-graph fingerprint on every 20s poll — rebuilding the whole
+# universe view and snapping the camera back to the selected node — and tripped
+# the "freshly learned" 24h flare on every capability. One stable value (they
+# came online with this instance) keeps the payload identical across polls.
+_CAP_MTIME = time.time()
 
 router = APIRouter()
 
@@ -48,18 +57,6 @@ _VOICE_BREVITY = (
 
 def _sse(obj) -> str:
     return f"data: {json.dumps(obj)}\n\n"
-
-
-def _require_edit_mode():
-    """Gate for manual create/edit/delete from the UI, enforced at the API so
-    hiding buttons isn't the only defense. Reads and enable/disable stay open.
-    The agents' manage_* tools never pass through these endpoints, so Nova's
-    own management powers are unaffected."""
-    if not settings_store.get("ui.edit_mode"):
-        raise HTTPException(
-            status_code=403,
-            detail="Edit mode is off — enable it in Settings → Operator to "
-                   "create, edit, or delete manually.")
 
 
 @router.post("/api/v1/chat/stream")
@@ -288,19 +285,15 @@ async def list_agents_endpoint():
     return await agent_registry.list_agents(enabled_only=False)
 
 
-# operational knobs (always editable) vs structural fields (edit mode only)
-_AGENT_SAFE_FIELDS = {"model", "enabled"}
-_AGENT_EDIT_FIELDS = {"description", "system_prompt", "allowed_tools", "routing_keywords"}
+_AGENT_EDITABLE_FIELDS = {"model", "enabled", "description", "system_prompt",
+                          "allowed_tools", "routing_keywords"}
 
 
 @router.patch("/api/v1/agents/{agent_id}")
 async def patch_agent_endpoint(agent_id: str, body: dict):
-    allowed = {k: v for k, v in body.items()
-               if k in _AGENT_SAFE_FIELDS | _AGENT_EDIT_FIELDS}
+    allowed = {k: v for k, v in body.items() if k in _AGENT_EDITABLE_FIELDS}
     if not allowed:
         raise HTTPException(status_code=422, detail="no editable fields provided")
-    if any(k in _AGENT_EDIT_FIELDS for k in allowed):
-        _require_edit_mode()
     if allowed.get("enabled") is False:
         target = next((a for a in await agent_registry.list_agents(enabled_only=False)
                        if a["id"] == agent_id), None)
@@ -323,7 +316,6 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
 
 @router.post("/api/v1/agents", status_code=201)
 async def create_agent_endpoint(body: dict):
-    _require_edit_mode()
     name = str(body.get("name", "")).strip()
     description = str(body.get("description", "")).strip()
     system_prompt = str(body.get("system_prompt", "")).strip()
@@ -346,7 +338,6 @@ async def create_agent_endpoint(body: dict):
 
 @router.delete("/api/v1/agents/{agent_id}")
 async def delete_agent_endpoint(agent_id: str):
-    _require_edit_mode()
     result = await agent_registry.delete_agent(agent_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="agent not found")
@@ -443,7 +434,6 @@ async def list_curated_endpoint():
 @router.post("/api/v1/models/curated", status_code=201)
 async def create_curated_endpoint(body: dict):
     from app import curated_models
-    _require_edit_mode()
     try:
         return await curated_models.create(
             model=str(body.get("model", "")),
@@ -460,8 +450,6 @@ async def create_curated_endpoint(body: dict):
 @router.patch("/api/v1/models/curated/{row_id}")
 async def patch_curated_endpoint(row_id: str, body: dict):
     from app import curated_models
-    if any(k != "enabled" for k in body):  # enable/disable is always allowed
-        _require_edit_mode()
     try:
         result = await curated_models.update(row_id, **body)
     except ValueError as e:
@@ -477,7 +465,6 @@ async def patch_curated_endpoint(row_id: str, body: dict):
 @router.delete("/api/v1/models/curated/{row_id}")
 async def delete_curated_endpoint(row_id: str):
     from app import curated_models
-    _require_edit_mode()
     result = await curated_models.delete(row_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="curated model not found")
@@ -485,6 +472,70 @@ async def delete_curated_endpoint(row_id: str):
         raise HTTPException(status_code=403,
                             detail="seeded rows can be disabled but not deleted")
     return {"status": "deleted"}
+
+
+# ── MCP servers (docs/plans/mcp-client.md) — operator-only registry.
+#    No agent-facing tool exists here on purpose: an agent that could
+#    register a server could grant itself arbitrary capabilities. ───────
+
+@router.get("/api/v1/mcp/servers")
+async def list_mcp_servers_endpoint():
+    from app import mcp_servers
+    return await mcp_servers.list_all()
+
+
+@router.get("/api/v1/mcp/servers/{server_id}/tools")
+async def list_mcp_server_tools_endpoint(server_id: str):
+    from app import mcp_servers
+    return await mcp_servers.list_tools_for(server_id)
+
+
+@router.post("/api/v1/mcp/servers", status_code=201)
+async def create_mcp_server_endpoint(body: dict):
+    from app import mcp_servers
+    try:
+        return await mcp_servers.create(
+            name=str(body.get("name", "")),
+            transport=str(body.get("transport", "")),
+            **{k: body[k] for k in ("url", "command", "args", "headers") if k in body})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # duplicate name etc.
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/api/v1/mcp/servers/{server_id}")
+async def patch_mcp_server_endpoint(server_id: str, body: dict):
+    from app import mcp_servers
+    try:
+        result = await mcp_servers.update(server_id, **body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    # a field change or an enable flip needs a fresh connect to take effect
+    connection_fields = {"url", "command", "args", "headers", "enabled"}
+    if connection_fields & set(body) and body.get("enabled", True):
+        return await mcp_servers.refresh(server_id)
+    return await mcp_servers.get(server_id)
+
+
+@router.delete("/api/v1/mcp/servers/{server_id}")
+async def delete_mcp_server_endpoint(server_id: str):
+    from app import mcp_servers
+    result = await mcp_servers.delete(server_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return {"status": "deleted"}
+
+
+@router.post("/api/v1/mcp/servers/{server_id}/approve")
+async def approve_mcp_server_endpoint(server_id: str):
+    from app import mcp_servers
+    try:
+        return await mcp_servers.approve(server_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ── skills (operator surface; agents use write_memory type='skill') ──────
@@ -496,7 +547,6 @@ async def list_skills_endpoint():
 
 @router.post("/api/v1/skills", status_code=201)
 async def create_skill_endpoint(body: dict):
-    _require_edit_mode()
     title = str(body.get("title", "")).strip()
     content = str(body.get("content", "")).strip()
     if not title or not content:
@@ -513,7 +563,6 @@ async def create_skill_endpoint(body: dict):
 
 @router.put("/api/v1/skills/{skill_id:path}")
 async def update_skill_endpoint(skill_id: str, body: dict):
-    _require_edit_mode()
     if not skill_id.startswith("skills/"):
         raise HTTPException(status_code=404, detail="not a skill")
     existing = await memory.read_item(skill_id)
@@ -535,7 +584,6 @@ async def update_skill_endpoint(skill_id: str, body: dict):
 
 @router.delete("/api/v1/skills/{skill_id:path}")
 async def delete_skill_endpoint(skill_id: str):
-    _require_edit_mode()
     if not skill_id.startswith("skills/"):
         raise HTTPException(status_code=404, detail="not a skill")
     if not await memory.delete_item(skill_id):
@@ -593,15 +641,25 @@ async def auth_token_endpoint():
 
 @router.get("/api/v1/storage")
 async def storage_info_endpoint():
-    """Where memory physically lives. The host path is a bind mount resolved
-    at container-create time — the UI can show and verify it, but changing
-    it is a deployment action by nature (.env + `docker compose up -d`)."""
+    """Where memory and model weights physically live. Both are bind mounts
+    resolved at container-create time — the UI can show and verify memory, but
+    changing either is a deployment action by nature (.env + `docker compose
+    up -d`). Model weights live on other containers, so we can only report the
+    configured path, not verify it from here."""
     import os
+    models_dir = _effective_models_dir()
     return {
         "host_path": os.environ.get("NOVA_MEMORY_DIR_HOST", "./data/memory"),
         "container_path": settings.okf_memory_dir,
         "writable": os.access(settings.okf_memory_dir, os.W_OK),
         "counts": await memory.stats(),
+        # empty NOVA_MODELS_DIR = default docker-managed volumes; a set path
+        # means the operator relocated the bundled model store (ollama/kokoro/
+        # whisper subdirs) onto that host path via docker-compose.models.yml.
+        "models": {
+            "host_path": models_dir or None,
+            "relocated": bool(models_dir),
+        },
     }
 
 
@@ -613,16 +671,13 @@ async def brain_graph_endpoint(platform: bool = True):
     with capabilities and behaviors as first-class nodes: agents, granted
     tools, automations, rules. Real edges only (grants, executors, guard
     targets), never decoration."""
-    import time as _time
-
     g = await memory.graph()
     if not platform:
         return g
     nodes, edges = g["nodes"], g["edges"]
     mem_nodes = list(nodes)   # snapshot before platform nodes join the list
-    now = _time.time()
 
-    nodes.append({"id": "nova", "label": "Nova", "type": "core", "mtime": now,
+    nodes.append({"id": "nova", "label": "Nova", "type": "core", "mtime": _CAP_MTIME,
                   "description": "The coordinating mind — main is the front "
                                  "door; every specialist hangs off it."})
 
@@ -630,7 +685,7 @@ async def brain_graph_endpoint(platform: bool = True):
     # Universe draws the pair as a binary star; older themes get a color entry.
     user_name = str(settings_store.get("nova.user_name") or "").strip()
     nodes.append({"id": "user", "label": user_name or "You", "type": "user",
-                  "mtime": now,
+                  "mtime": _CAP_MTIME,
                   "description": "The operator — the human this mind works "
                                  "with. Everything here exists in orbit "
                                  "around this relationship."})
@@ -658,14 +713,14 @@ async def brain_graph_endpoint(platform: bool = True):
 
     for a in agents:
         nodes.append({"id": f"agent:{a['name']}", "label": a["name"],
-                      "type": "agent", "mtime": now, "enabled": a["enabled"],
+                      "type": "agent", "mtime": _CAP_MTIME, "enabled": a["enabled"],
                       "description": a["description"]})
         edges.append({"source": "nova", "target": f"agent:{a['name']}",
                       "kind": "platform"})
 
     for tool_name, users in granted.items():
         nodes.append({"id": f"tool:{tool_name}", "label": tool_name,
-                      "type": "tool", "mtime": now,
+                      "type": "tool", "mtime": _CAP_MTIME,
                       "description": tool_desc.get(tool_name, "")})
         for user in users:
             edges.append({"source": f"agent:{user}",
@@ -673,7 +728,7 @@ async def brain_graph_endpoint(platform: bool = True):
 
     for auto in await automations.list_automations():
         nodes.append({"id": f"automation:{auto['name']}", "label": auto["name"],
-                      "type": "automation", "mtime": now,
+                      "type": "automation", "mtime": _CAP_MTIME,
                       "enabled": auto["enabled"],
                       "interval_minutes": auto.get("interval_minutes"),
                       "description": auto.get("description")
@@ -684,7 +739,7 @@ async def brain_graph_endpoint(platform: bool = True):
     node_ids = {n["id"] for n in nodes}
     for r in await rules.list_rules():
         nodes.append({"id": f"rule:{r['name']}", "label": r["name"],
-                      "type": "rule", "mtime": now, "enabled": r["enabled"],
+                      "type": "rule", "mtime": _CAP_MTIME, "enabled": r["enabled"],
                       "description": r.get("description", "")})
         for t in (r.get("target_tools") or []):
             if f"tool:{t}" in node_ids:
@@ -730,7 +785,6 @@ async def memory_item(item_id: str):
 
 @router.delete("/api/v1/memory/item/{item_id:path}")
 async def delete_memory_item(item_id: str):
-    _require_edit_mode()
     if item_id == "soul.md":
         raise HTTPException(status_code=403, detail="the soul is not deletable")
     if not await memory.delete_item(item_id):
@@ -788,6 +842,71 @@ async def bundled_inference_action(body: dict):
     return resp.json()
 
 
+# ── model storage location (relocate the bundled store from the UI) ──────
+
+STATE_MODELS_FILE = "/state/models_dir"
+
+
+def _effective_models_dir() -> str:
+    """Operator-chosen host path for the bundled model store, or '' for the
+    default docker volume. The UI state file is authoritative when present
+    (even empty = an explicit "use the default"); otherwise the deployment-time
+    NOVA_MODELS_DIR applies. Mirrors the sidecar's own resolution."""
+    import os
+    try:
+        with open(STATE_MODELS_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return os.environ.get("NOVA_MODELS_DIR", "").strip()
+
+
+@router.get("/api/v1/inference/models-dir")
+async def get_models_dir():
+    """Where the bundled model weights live. Read-only view; POST to change."""
+    path = _effective_models_dir()
+    return {"path": path or None, "relocated": bool(path)}
+
+
+@router.post("/api/v1/inference/models-dir")
+async def set_models_dir(body: dict):
+    """Relocate the bundled model store. Writes the chosen absolute host path to
+    the shared control file and asks the sidecar to migrate + recreate ollama
+    there (non-destructive: the old copy is kept). Empty path resets to the
+    default docker volume. Operator surface only — agents never reach settings,
+    and the socket-holding sidecar reads this file read-only, so a path can only
+    be set here."""
+    import os
+    import httpx
+
+    path = str(body.get("path", "")).strip()
+    if path and not (path.startswith("/") and os.path.isabs(path)):
+        raise HTTPException(status_code=422,
+                            detail="path must be an absolute host path (e.g. /mnt/ssd/nova-models)")
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=422, detail="path must not contain '..'")
+    try:
+        os.makedirs(os.path.dirname(STATE_MODELS_FILE), exist_ok=True)
+        with open(STATE_MODELS_FILE, "w") as f:
+            f.write(path)
+    except OSError as e:
+        raise HTTPException(status_code=500,
+                            detail=f"could not write control file: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{settings.inference_control_url}/relocate")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"inference-control sidecar unreachable: {e}")
+    if resp.status_code not in (200, 202):
+        try:
+            detail = resp.json().get("error", resp.text)
+        except ValueError:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return {"path": path or None, "relocated": bool(path), "status": "relocating"}
+
+
 # ── tools (operator surface; agents use the manage_tools builtin) ────────
 
 @router.get("/api/v1/tools")
@@ -797,7 +916,6 @@ async def list_tools_endpoint():
 
 @router.post("/api/v1/tools", status_code=201)
 async def create_tool_endpoint(body: dict):
-    _require_edit_mode()
     try:
         return await tool_registry.create_http_tool(
             name=str(body.get("name", "")),
@@ -822,7 +940,6 @@ async def patch_tool_endpoint(tool_id: str, body: dict):
 
 @router.delete("/api/v1/tools/{tool_id}")
 async def delete_tool_endpoint(tool_id: str):
-    _require_edit_mode()
     result = await tool_registry.delete_tool(tool_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="tool not found")
@@ -868,7 +985,6 @@ async def list_automation_runs_endpoint(automation_id: str, limit: int = 20):
 
 @router.post("/api/v1/automations", status_code=201)
 async def create_automation_endpoint(body: dict):
-    _require_edit_mode()
     try:
         return await automations.create(
             name=str(body.get("name", "")).strip(),
@@ -884,8 +1000,6 @@ async def create_automation_endpoint(body: dict):
 
 @router.patch("/api/v1/automations/{automation_id}")
 async def patch_automation_endpoint(automation_id: str, body: dict):
-    if any(k != "enabled" for k in body):  # enable/disable is always allowed
-        _require_edit_mode()
     ok = await automations.update(automation_id, **body)
     if not ok:
         raise HTTPException(status_code=404, detail="automation not found or no valid fields")
@@ -894,7 +1008,6 @@ async def patch_automation_endpoint(automation_id: str, body: dict):
 
 @router.delete("/api/v1/automations/{automation_id}")
 async def delete_automation_endpoint(automation_id: str):
-    _require_edit_mode()
     result = await automations.delete(automation_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="automation not found")
@@ -913,7 +1026,6 @@ async def list_rules_endpoint():
 
 @router.post("/api/v1/rules", status_code=201)
 async def create_rule_endpoint(body: dict):
-    _require_edit_mode()
     try:
         return await rules.create(
             name=str(body.get("name", "")).strip(),
@@ -928,8 +1040,6 @@ async def create_rule_endpoint(body: dict):
 
 @router.patch("/api/v1/rules/{rule_id}")
 async def patch_rule_endpoint(rule_id: str, body: dict):
-    if any(k != "enabled" for k in body):  # enable/disable is always allowed
-        _require_edit_mode()
     try:
         ok = await rules.update(rule_id, **body)
     except ValueError as e:
@@ -941,7 +1051,6 @@ async def patch_rule_endpoint(rule_id: str, body: dict):
 
 @router.delete("/api/v1/rules/{rule_id}")
 async def delete_rule_endpoint(rule_id: str):
-    _require_edit_mode()
     result = await rules.delete(rule_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="rule not found")

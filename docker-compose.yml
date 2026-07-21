@@ -30,8 +30,13 @@ services:
       # shown read-only in Settings → Storage — the mount itself is fixed at
       # container-create time and can't be changed from inside the container
       NOVA_MEMORY_DIR_HOST: ${NOVA_MEMORY_DIR:-./data/memory}
+      # ditto: where the bundled model weights live (empty = default docker
+      # volumes). Display-only for the backend; the actual mounts are on the
+      # ollama/kokoro/whisper services via docker-compose.models.yml.
+      NOVA_MODELS_DIR: ${NOVA_MODELS_DIR:-}
       SEARXNG_URL: http://searxng:8080
       INFERENCE_CONTROL_URL: http://inference-control:9911
+      MCP_RUNNER_URL: http://mcp-runner:8100
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8000:8000"
@@ -44,6 +49,10 @@ services:
       # out; the index rescans on startup and reindexes on write.
       - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
       - ./backend:/app/backend:cached
+      # tiny shared control channel to the inference-control sidecar: the
+      # backend writes the operator-chosen model-store path here, the sidecar
+      # reads it when (re)creating ollama. Not a data path — one text file.
+      - nova_state:/state
     develop:
       watch:
         - path: ./backend/app
@@ -79,11 +88,28 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker-compose.yml:/compose/docker-compose.yml:ro
       - ./docker-compose.gpu.yml:/compose/docker-compose.gpu.yml:ro
+      - ./docker-compose.models.yml:/compose/docker-compose.models.yml:ro
+      # operator-chosen model-store path, written by the backend (read-only
+      # here — the sidecar only ever reads where to bind, never sets it)
+      - nova_state:/state:ro
     environment:
       # auto: use the GPU override when the docker NVIDIA runtime exists;
       # on/off force it (e.g. OLLAMA_GPU=on for Docker Desktop setups that
       # support --gpus without advertising an nvidia runtime)
       OLLAMA_GPU: ${OLLAMA_GPU:-auto}
+      # absolute host path to relocate the bundled model store; when set, the
+      # sidecar merges docker-compose.models.yml so the ollama toggle recreates
+      # the container binding $NOVA_MODELS_DIR/ollama. Empty = default volume.
+      NOVA_MODELS_DIR: ${NOVA_MODELS_DIR:-}
+    restart: unless-stopped
+
+  # stdio MCP server bridge (docs/plans/mcp-client.md, phase 4). Spawns
+  # operator-registered stdio MCP servers as subprocesses on the backend's
+  # behalf — no Docker socket, no DB credentials, no published ports.
+  # Every command it runs comes from an edit_mode-gated mcp_servers row,
+  # never from an agent or the network directly.
+  mcp-runner:
+    build: ./mcp-runner
     restart: unless-stopped
 
   # Optional batteries-included reachability: joins YOUR tailnet as node
@@ -176,3 +202,4 @@ volumes:
   tailscale_state:
   kokoro_models:
   whisper_models:
+  nova_state:

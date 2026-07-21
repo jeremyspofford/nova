@@ -124,11 +124,6 @@ SETTING_DEFS: list[dict] = [
      "description": ("The URL other devices use to reach Nova, e.g. "
                      "https://nova.<tailnet>.ts.net — feeds the phone-setup "
                      "QR code in Settings. Leave empty to hide the QR card.")},
-    {"key": "ui.edit_mode", "type": "boolean", "default": False,
-     "section": "Operator", "label": "Edit mode",
-     "description": ("Allow manual create/edit/delete of agents, automations, rules, "
-                     "and tools from this UI (enforced at the API layer). Off = view "
-                     "plus enable/disable. Nova's own management tools are unaffected.")},
     # ── Automations ──────────────────────────────────────────────────────
     {"key": "automations.enabled", "type": "boolean", "default": True,
      "section": "Automations", "label": "Automations enabled",
@@ -149,6 +144,22 @@ SETTING_DEFS: list[dict] = [
                      "behind the duration chips) are kept. Traces are "
                      "diagnostics, not memory — pruning them loses nothing "
                      "Nova knows.")},
+    # ── MCP (docs/plans/mcp-client.md) ──────────────────────────────────
+    {"key": "mcp.call_timeout_s", "type": "number", "default": 30,
+     "min": 5, "max": 120, "section": "MCP",
+     "label": "Tool call timeout (seconds)",
+     "description": "Wall-clock cap on a single MCP tool call."},
+    {"key": "mcp.result_size_cap_kb", "type": "number", "default": 200,
+     "min": 10, "max": 1000, "section": "MCP",
+     "label": "Result size cap (KB)",
+     "description": "Max size of a single MCP tool result, matching fetch_url's posture."},
+    {"key": "mcp.tools_refresh_ttl_min", "type": "number", "default": 15,
+     "min": 1, "max": 180, "section": "MCP",
+     "label": "Tool list refresh interval (minutes)",
+     "description": ("How often a granted, connected server's tool list is "
+                     "silently re-synced in the background. A description "
+                     "change still requires operator re-approval — this only "
+                     "controls how quickly a mismatch is noticed.")},
     # ── Voice (phase 1: spoken replies; plan: docs/plans/voice.md) ───────
     {"key": "voice.tts_voice", "type": "string", "default": "af_heart",
      "section": "Voice", "label": "Nova's voice",

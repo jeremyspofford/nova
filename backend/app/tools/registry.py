@@ -5,8 +5,10 @@ tools. allowed_tools = NULL means "all builtins". DB tools are data
 (execution_type='http_call'), so creating one takes effect immediately.
 """
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Optional
 from urllib.parse import urlparse
@@ -48,12 +50,139 @@ def _to_llm_def(tool: dict) -> dict:
     }}
 
 
+_MCP_REFRESH_INFLIGHT: set[str] = set()
+
+
+async def _load_mcp_tools() -> dict[str, dict]:
+    """Cached MCP tool defs for enabled+connected servers, namespaced
+    mcp:<server>/<tool> and tagged with '_server_name'/'_always_inject' —
+    extra keys _to_llm_def ignores, used by the eager/lazy split below and
+    by the phase-2 lazy-loading helpers. Reads mcp_tools_cache only — never
+    a live network call on the chat-turn hot path. A stale server
+    (last_seen older than the TTL setting) gets a fire-and-forget
+    background refresh, the same pattern as the background model pull in
+    models_catalog.py."""
+    from app import settings_store
+
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT s.id, s.name AS server_name, s.last_seen, s.always_inject, "
+            "       c.name AS tool_name, c.description, c.parameters_schema "
+            "FROM mcp_servers s JOIN mcp_tools_cache c ON c.server_id = s.id "
+            "WHERE s.enabled = true AND s.status = 'connected'")
+
+    ttl_min = float(settings_store.get("mcp.tools_refresh_ttl_min") or 15)
+    stale: dict[str, None] = {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        schema = r["parameters_schema"]
+        if isinstance(schema, str):
+            schema = json.loads(schema)
+        full_name = f"mcp:{r['server_name']}/{r['tool_name']}"
+        out[full_name] = {"name": full_name, "description": r["description"],
+                          "parameters": schema, "_server_name": r["server_name"],
+                          "_always_inject": r["always_inject"]}
+        last_seen = r["last_seen"]
+        if last_seen is None or (time.time() - last_seen.timestamp()) > ttl_min * 60:
+            stale[str(r["id"])] = None
+
+    for server_id in stale:
+        if server_id in _MCP_REFRESH_INFLIGHT:
+            continue
+        _MCP_REFRESH_INFLIGHT.add(server_id)
+
+        async def _bg(sid=server_id):
+            from app import mcp_servers
+            try:
+                await mcp_servers.refresh(sid)
+            except Exception:
+                log.exception("Background MCP refresh failed for %s", sid)
+            finally:
+                _MCP_REFRESH_INFLIGHT.discard(sid)
+
+        asyncio.ensure_future(_bg())
+
+    return out
+
+
+def _granted_mcp_tools(agent: dict) -> tuple[bool, set[str], set[str]]:
+    """(has_grants, named, wildcards) for an agent's MCP grants. MCP tools
+    are never implied by allowed_tools=None — each server is a distinct
+    trust decision, granted per agent via a named 'mcp:<server>/<tool>' or
+    wildcard 'mcp:<server>:*' entry, even for an otherwise-unrestricted
+    agent (docs/plans/mcp-client.md)."""
+    allowed = agent.get("allowed_tools")
+    if allowed is None:
+        return False, set(), set()
+    named = set(allowed)
+    wildcards = {n[:-2] for n in named if n.startswith("mcp:") and n.endswith(":*")}
+    return True, named, wildcards
+
+
+def _mcp_granted(full_name: str, named: set[str], wildcards: set[str]) -> bool:
+    return full_name in named or full_name.split("/", 1)[0] in wildcards
+
+
+_FIND_MCP_TOOLS_DEF = {
+    "name": "find_mcp_tools",
+    "description": ("Search the MCP servers listed in the '## MCP servers "
+                    "(not loaded)' block above — their tools aren't in your "
+                    "toolset yet. A match becomes callable IMMEDIATELY, in "
+                    "this same turn: call it right after finding it."),
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string",
+                  "description": "keyword(s) to match against tool names/descriptions"},
+    }, "required": ["query"]},
+}
+
+
+async def lazy_mcp_index(agent: dict) -> dict[str, int]:
+    """server name -> tool count, for this agent's granted MCP servers that
+    are enabled+connected+NOT always_inject. Drives the phase-2 system
+    -prompt index line and whether find_mcp_tools is offered at all."""
+    has_grants, named, wildcards = _granted_mcp_tools(agent)
+    if not has_grants:
+        return {}
+    counts: dict[str, int] = {}
+    for full_name, tool in (await _load_mcp_tools()).items():
+        if tool["_always_inject"]:
+            continue
+        if _mcp_granted(full_name, named, wildcards):
+            counts[tool["_server_name"]] = counts.get(tool["_server_name"], 0) + 1
+    return counts
+
+
+async def search_lazy_mcp_tools(agent: dict, query: str) -> list[dict]:
+    """LLM-shaped defs matching query among this agent's lazy (not
+    always_inject) granted MCP servers — backs the find_mcp_tools
+    meta-tool the runner special-cases mid-turn."""
+    has_grants, named, wildcards = _granted_mcp_tools(agent)
+    if not has_grants:
+        return []
+    # keyword match, not phrase match — a query like "uppercase echo text"
+    # must still find a tool named echo_upper with an unrelated description
+    words = [w for w in query.lower().split() if len(w) >= 3]
+    matches = []
+    for full_name, tool in (await _load_mcp_tools()).items():
+        if tool["_always_inject"] or not _mcp_granted(full_name, named, wildcards):
+            continue
+        haystack = f"{tool['name']} {tool['description']}".lower()
+        if not words or any(w in haystack for w in words):
+            matches.append(_to_llm_def(tool))
+    return matches
+
+
 async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> list[dict]:
     """LLM tool definitions for an agent.
 
     allowed_tools governs DB-defined tools exactly like builtins:
     None => everything; a list => only the named tools, with the special
-    grant 'db:*' meaning "all DB-defined tools".
+    grant 'db:*' meaning "all DB-defined tools". MCP tools follow the same
+    grant syntax but are never implied by allowed_tools=None (see
+    _granted_mcp_tools). always_inject servers ship full defs eagerly here;
+    other granted servers contribute only an index line (_mcp_index_block
+    in runner.py) plus the find_mcp_tools meta-tool, added below whenever
+    that index is non-empty (phase 2 lazy loading).
     """
     exclude = exclude or set()
     allowed = agent.get("allowed_tools")
@@ -73,6 +202,19 @@ async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> li
             continue
         if all_db or name in named:
             defs.append(_to_llm_def(tool))
+
+    has_grants, mcp_named, mcp_wildcards = _granted_mcp_tools(agent)
+    if has_grants:
+        has_lazy = False
+        for full_name, tool in (await _load_mcp_tools()).items():
+            if full_name in exclude or not _mcp_granted(full_name, mcp_named, mcp_wildcards):
+                continue
+            if tool["_always_inject"]:
+                defs.append(_to_llm_def(tool))
+            else:
+                has_lazy = True
+        if has_lazy and "find_mcp_tools" not in exclude:
+            defs.append(_to_llm_def(_FIND_MCP_TOOLS_DEF))
     return defs
 
 
@@ -201,5 +343,21 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
                 log.exception("HTTP tool %s failed", name)
                 return f"Error executing {name}: {e}"
         return f"Error: tool {name} has unsupported execution_type {tool['execution_type']}"
+
+    if name.startswith("mcp:"):
+        server_name, _, tool_name = name[len("mcp:"):].partition("/")
+        if not tool_name:
+            return f"Error: malformed MCP tool name '{name}'"
+        try:
+            from app import mcp_client, mcp_servers, settings_store
+            server = await mcp_servers.get_by_name(server_name)
+            if not server or not server["enabled"] or server["status"] != "connected":
+                return f"Error: MCP server '{server_name}' is not available"
+            timeout = float(settings_store.get("mcp.call_timeout_s") or 30)
+            size_cap_kb = int(settings_store.get("mcp.result_size_cap_kb") or 200)
+            return await mcp_client.call_tool(server, tool_name, args, timeout, size_cap_kb)
+        except Exception as e:
+            log.exception("MCP tool %s failed", name)
+            return f"Error executing {name}: {e}"
 
     return f"Error: unknown tool '{name}'"

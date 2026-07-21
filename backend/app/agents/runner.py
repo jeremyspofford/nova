@@ -201,6 +201,26 @@ async def _entities_block() -> str:
         return ""
 
 
+async def _mcp_index_block(agent: dict) -> str:
+    """Phase 2 lazy loading (docs/plans/mcp-client.md): one line per MCP
+    server granted to this agent but not always_inject — its tool defs
+    aren't in this turn's toolset at all, only this index line is, plus
+    the find_mcp_tools meta-tool (added in get_agent_tools whenever this
+    index is non-empty) to pull real defs in on demand. Empty string (no
+    block) when the agent has no lazy MCP grants."""
+    try:
+        counts = await tool_registry.lazy_mcp_index(agent)
+    except Exception:
+        log.exception("MCP index lookup failed; continuing without it")
+        return ""
+    if not counts:
+        return ""
+    lines = "\n".join(f"- server `{name}`: {n} tool{'s' if n != 1 else ''}"
+                      for name, n in sorted(counts.items()))
+    return ("## MCP servers (not loaded — call find_mcp_tools to search and "
+            "load matching tools into THIS turn)\n" + lines)
+
+
 async def _build_system_prompt(agent: dict, query: str, *,
                                include_index: bool = False,
                                conversation_summary: str | None = None,
@@ -232,6 +252,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
     entities = await _entities_block()
     if entities:
         parts.append(entities)
+    mcp_index = await _mcp_index_block(agent)
+    if mcp_index:
+        parts.append(mcp_index)
 
     # CONTEXT — specialist index, memories, skills, rolling summary
     if include_index:
@@ -410,6 +433,25 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                        "name": args.get("agent_name", ""),
                        "agent": args.get("agent_name", ""),
                        "detail": result[:2000]}
+            elif name == "find_mcp_tools":
+                # phase 2 lazy loading: mutate the LIVE round's toolset —
+                # tools/ctx["granted"] are otherwise fixed for the whole
+                # turn, but a found tool must be callable next round.
+                async with trace.span("tool", name) as tsp:
+                    tsp["agent"] = agent.get("name")
+                    tsp["args"] = trace.redact_args(args)
+                    query = str(args.get("query", ""))
+                    found = await tool_registry.search_lazy_mcp_tools(agent, query)
+                    have = {t["function"]["name"] for t in tools}
+                    new_defs = [d for d in found if d["function"]["name"] not in have]
+                    tools.extend(new_defs)
+                    ctx["granted"] = {t["function"]["name"] for t in tools}
+                    result = ("Loaded: " + ", ".join(
+                        d["function"]["name"] for d in new_defs)) if new_defs \
+                        else f"No unloaded MCP tools matched '{query}'."
+                    tsp["result_size"] = len(result)
+                yield {"type": "activity", "kind": "tool_result", "name": name,
+                       "agent": agent.get("name"), "detail": result[:200]}
             else:
                 async with trace.span("tool", name) as tsp:
                     tsp["agent"] = agent.get("name")

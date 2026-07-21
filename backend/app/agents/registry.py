@@ -1,8 +1,8 @@
 """Agent registry — CRUD over the agents table.
 
 is_system agents can be disabled but never deleted. Non-system agents are
-deletable via the operator API (gated by ui.edit_mode) and stay
-create/update-only at the tool layer (manage_agents has no delete action).
+deletable via the operator API and stay create/update-only at the tool
+layer (manage_agents has no delete action).
 """
 
 import logging

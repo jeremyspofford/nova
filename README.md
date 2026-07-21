@@ -72,6 +72,45 @@ GPU name and total VRAM from `nvidia-smi` inside the ollama container, and
 per-model VRAM/GPU usage from Ollama `/api/ps` during "test this model"
 probes (Settings → Inference → Detect & suggest).
 
+## Model storage (external drive / shared)
+
+By default the bundled model weights live in docker-managed volumes on your
+system disk. To move them onto an external SSD, a NAS mount, or a bigger disk —
+to reclaim space or share one store across machines — open **Settings →
+Inference → Model storage**, enter an absolute host path, and Save. Nova
+migrates the existing models (the old copy is kept until you remove it),
+recreates the services bound to the new path, and comes back running. This
+covers the Ollama LLM store plus the Kokoro/Whisper **voice** models whenever
+the voice profile is running. No files to edit, no restart of the rest of the
+stack. Clear the field to return to the default volumes; the current location
+also shows in **Settings → Storage**. The weights lay out as
+`$PATH/{ollama,kokoro,whisper}`.
+
+Under the hood the chosen path is handed to the `inference-control` sidecar
+(the only holder of the docker socket) through a **read-only** control file —
+the socket-holder never takes a path from the network, so a compromised chat
+client still can't set one. Migration is non-destructive: the old store is
+copied, never deleted, and pointing at an already-populated location just
+adopts it. Sharing one path between machines works read-mostly — don't pull
+models from two machines at once, as Ollama's content-addressed blob store
+isn't built for concurrent writers. (A service relocates when it's running; if
+you start the voice profile *after* relocating, re-Save to move it too.)
+
+### Advanced: relocate every model at the compose level
+
+The `docker-compose.models.yml` override can move **all** bundled weights
+(Ollama + Kokoro voice + Whisper STT) at deploy time. Set `NOVA_MODELS_DIR` to
+an absolute path — it lays out `$NOVA_MODELS_DIR/{ollama,kokoro,whisper}` — and,
+for host-launched services (the `voice` profile or a manual `docker compose
+up`), add the override to `COMPOSE_FILE`, chaining with `:`:
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.models.yml
+```
+
+The **Settings → Inference** control above takes precedence over
+`NOVA_MODELS_DIR` for the Ollama store.
+
 ## Nova on your phone (PWA)
 
 The `web` service serves the built app and the API behind **one origin** on
@@ -155,6 +194,49 @@ startup and reindexes on write, and edits made outside Nova are picked up
 on the next restart. Cloud sync is deliberately not built in yet — see the
 roadmap for the local-first sync pipeline design.
 
+## MCP servers (connect Nova to the tool ecosystem)
+
+Nova is an MCP (Model Context Protocol) client — Settings → Tools → **MCP
+servers** registers third-party tool servers instead of hand-authoring
+each integration. Registration is operator-only (`ui.edit_mode`, no
+agent-facing equivalent — an agent that could register a server could
+grant itself arbitrary capabilities) and nothing is granted to any agent
+automatically: after registering, add `mcp:<name>/<tool>` (one tool) or
+`mcp:<name>:*` (all of a server's tools) to an agent's allowed-tools field.
+A server's tool descriptions are hashed at approval time; if they change
+later the server flips to `error` and stops serving until reviewed again
+in Settings (tool-description poisoning defense).
+
+Two transports: `http` (streamable-HTTP, connects directly) and `stdio`
+(spawned as a subprocess by the `mcp-runner` sidecar — no Docker socket,
+no DB credentials, no published ports; every command it runs came from an
+edit_mode-gated registration, never from an agent or the network).
+
+A few servers worth trying, none pre-registered — fill in your own
+path/token and `POST` to `/api/v1/mcp/servers` with edit mode on (or use
+the Settings UI form directly):
+
+```bash
+# Filesystem — scope it to a scratch mount, not your whole disk
+curl -X POST $NOVA_URL/api/v1/mcp/servers -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"filesystem","transport":"stdio","command":"npx",
+       "args":["-y","@modelcontextprotocol/server-filesystem","/path/to/scratch/dir"]}'
+
+# Home Assistant — needs a long-lived access token from your HA profile
+curl -X POST $NOVA_URL/api/v1/mcp/servers -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"home-assistant","transport":"http",
+       "url":"http://homeassistant.local:8123/mcp_server/sse",
+       "headers":{"Authorization":"Bearer <your-ha-token>"}}'
+
+# A keyless fetch-class reference server (good for a first try)
+curl -X POST $NOVA_URL/api/v1/mcp/servers -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"everything","transport":"stdio","command":"npx",
+       "args":["-y","@modelcontextprotocol/server-everything"]}'
+```
+
+Then `PATCH .../{id}` with `{"enabled": true}` to connect, and grant it to
+an agent. See `docs/plans/mcp-client.md` for the full design.
+
 ## What works (all live-verified)
 
 | Capability | How |
@@ -168,6 +250,7 @@ roadmap for the local-first sync pipeline design.
 | Brain view | d3-force canvas of the real memory graph (teal topics, amber skills, dim journals), refreshes every 20s; renderers live behind a theme registry (`frontend/src/brain/theme.ts`) |
 | **Hot-swappable bundled inference** | Settings → Inference toggle starts/stops the bundled Ollama container via the `inference-control` sidecar — the only holder of the docker socket, exposing a fixed-verb start/stop/status API on the compose network only |
 | **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
+| **MCP client** (HTTP + stdio) | Settings → Tools → MCP servers; operator-registered, hash-approved tool descriptions, lazy loading (`find_mcp_tools`) for grants not marked always-on; stdio servers run via the `mcp-runner` sidecar |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.
@@ -177,8 +260,9 @@ Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 Compose services: **postgres** (16-alpine), **backend** (FastAPI + asyncpg),
 **frontend** (Vite/React/Tailwind), **searxng** (keyless web search),
 **inference-control** (docker-socket sidecar: start/stop/status of the
-bundled ollama, nothing else), and optional **ollama** (`inference`
-profile, toggleable from Settings). Memory is an in-process library over
+bundled ollama, nothing else), **mcp-runner** (stdio MCP sidecar: spawns
+operator-registered MCP servers as subprocesses, no published ports), and
+optional **ollama** (`inference` profile, toggleable from Settings). Memory is an in-process library over
 `./data/memory/*.md` (git-friendly, human-readable). LLM routing is a
 prefix on the agent's model string: `openrouter:<model>` or `ollama:<model>`.
 

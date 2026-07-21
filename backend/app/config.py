@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # this even when inference.ollama_url points at a host-run instance.
     bundled_ollama_url: str = "http://ollama:11434"
 
+    # stdio MCP sidecar (docs/plans/mcp-client.md phase 4) — spawns
+    # operator-registered stdio MCP servers as subprocesses; no Docker
+    # socket, no DB credentials, no published ports.
+    mcp_runner_url: str = "http://mcp-runner:8100"
+
     # NOTE: behavioral knobs (context budgets, compaction, automations, the
     # agent tool-round cap) live
     # in the DB-backed settings store (settings_store.py) — UI-configured,

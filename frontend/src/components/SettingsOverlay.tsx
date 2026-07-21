@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   AgentInfo, Automation, AutomationRun, BundledInferenceStatus, CuratedModel, DbToolInfo,
-  ModelBudget, ModelInfo, ModelRecommendation, ProbeResult,
+  McpServer, McpTool,
+  ModelBudget, ModelInfo, ModelRecommendation, ModelsDirInfo, ProbeResult,
   RecommendationsResponse, Rule, SettingDef, SkillInfo,
   StorageInfo as StorageInfoData, ToolsCatalog,
-  createAgent, createAutomation, createCuratedModel, createRule, createSkill,
-  createTool, deleteAgent, deleteAutomation, deleteCuratedModel, deleteRule,
+  approveMcpServer, createAgent, createAutomation, createCuratedModel, createMcpServer,
+  createRule, createSkill,
+  createTool, deleteAgent, deleteAutomation, deleteCuratedModel, deleteMcpServer, deleteRule,
   deleteSkill, deleteTool, getAgents, getAutomationRuns, getAutomations, getBundledInference,
-  getCuratedModels, getMemoryItem, getModelBudget, getModels,
-  getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
+  getCuratedModels, getMcpServerTools, getMcpServers, getMemoryItem, getModelBudget, getModels,
+  getModelsDir, getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
   getTools, getVoiceHealth, patchAgent,
-  patchAutomation, patchCuratedModel, patchRule, patchSettings, patchTool,
-  pullModel, setBundledInference, synthesizeSpeech, testModel, uninstallModel,
+  patchAutomation, patchCuratedModel, patchMcpServer, patchRule, patchSettings, patchTool,
+  pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, uninstallModel,
   updateSkill,
 } from '../api';
 import { Markdown } from './Markdown';
@@ -28,21 +30,6 @@ type Tab = 'settings' | 'agents' | 'models' | 'automations' | 'rules' | 'tools' 
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('settings');
-
-  // ui.edit_mode gates manual create/edit/delete across the tabs (the API
-  // enforces it too — hiding buttons is UX, not the security boundary)
-  const [editMode, setEditMode] = useState(false);
-  useEffect(() => {
-    getSettings().then(defs =>
-      setEditMode(Boolean(defs.find(d => d.key === 'ui.edit_mode')?.value))
-    ).catch(() => {});
-    const onChange = (e: Event) => {
-      const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
-      if (key === 'ui.edit_mode') setEditMode(Boolean(value));
-    };
-    window.addEventListener('nova:setting-changed', onChange);
-    return () => window.removeEventListener('nova:setting-changed', onChange);
-  }, []);
 
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
@@ -64,29 +51,16 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            {/* status badge only — the switch itself lives in Settings → Operator */}
-            <span
-              title="Whether manual create/edit/delete is allowed in these tabs. Change it under Settings → Operator → Edit mode."
-              className={`text-xs px-2.5 py-1 rounded-full border select-none ${
-                editMode
-                  ? 'border-amber-600 text-amber-300 bg-amber-900/30'
-                  : 'border-stone-600 text-stone-500'
-              }`}
-            >
-              {editMode ? '✏️ edit mode' : '🔒 view only'}
-            </span>
-            <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
-          </div>
+          <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
         </header>
         <div className="flex-1 overflow-y-auto nice-scroll p-4">
           {tab === 'settings' ? <SettingsTab exclude={['Automations', 'Models']} />
-            : tab === 'agents' ? <AgentsTab editMode={editMode} />
-            : tab === 'models' ? <ModelsTab editMode={editMode} />
-            : tab === 'automations' ? <AutomationsTab editMode={editMode} />
-            : tab === 'rules' ? <RulesTab editMode={editMode} />
-            : tab === 'tools' ? <ToolsTab editMode={editMode} />
-            : <SkillsTab editMode={editMode} />}
+            : tab === 'agents' ? <AgentsTab />
+            : tab === 'models' ? <ModelsTab />
+            : tab === 'automations' ? <AutomationsTab />
+            : tab === 'rules' ? <RulesTab />
+            : tab === 'tools' ? <ToolsTab />
+            : <SkillsTab />}
         </div>
       </div>
     </div>
@@ -113,16 +87,6 @@ function Toggle({ on, onChange, label, title }: {
         <span className={`block w-3 h-3 rounded-full bg-white transition-transform ${on ? 'translate-x-4' : ''}`} />
       </button>
     </span>
-  );
-}
-
-/** Shown wherever create/edit/delete affordances are hidden. */
-function EditModeHint() {
-  return (
-    <p className="text-xs text-stone-500">
-      🔒 View mode: you can enable/disable, but not create, edit, or delete.
-      Turn on <b className="text-stone-400">Settings → Operator → Edit mode</b> to change that.
-    </p>
   );
 }
 
@@ -266,6 +230,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
             {section === 'Inference' && (
               <BundledInference onChanged={() => getModels().then(setModels)} />
             )}
+            {section === 'Inference' && <ModelStorage />}
             {section === 'Observability' && <RecentTurns />}
             {defs.filter(d => d.section === section).map(d => (
               <div key={d.key}
@@ -416,28 +381,54 @@ function StorageCard() {
   useEffect(() => { getStorageInfo().then(setInfo).catch(() => {}); }, []);
   if (!info) return null;
   const counts = Object.entries(info.counts).filter(([, v]) => typeof v === 'number');
+  const models = info.models;
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Storage</h3>
-      <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-1.5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm text-stone-200">Memory home</div>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-            info.writable ? 'border-emerald-800 text-emerald-400' : 'border-red-900 text-red-400'
-          }`}>
-            {info.writable ? '✓ writable' : '✗ not writable'}
-          </span>
+      <div className="space-y-2">
+        <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-stone-200">Memory home</div>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+              info.writable ? 'border-emerald-800 text-emerald-400' : 'border-red-900 text-red-400'
+            }`}>
+              {info.writable ? '✓ writable' : '✗ not writable'}
+            </span>
+          </div>
+          <div className="text-xs font-mono text-teal-300">{info.host_path}</div>
+          <div className="text-xs text-stone-500">
+            Plain markdown — point it at a NAS mount or an Obsidian vault. The
+            location is a docker bind mount fixed when the container starts, so
+            it's the one setting that lives in <code className="font-mono">.env</code>:
+            set <code className="font-mono">NOVA_MEMORY_DIR</code>, then run{' '}
+            <code className="font-mono">docker compose up -d backend</code>.
+          </div>
+          <div className="text-[11px] font-mono text-stone-600">
+            {counts.map(([k, v]) => `${v} ${k}`).join(' · ')}
+          </div>
         </div>
-        <div className="text-xs font-mono text-teal-300">{info.host_path}</div>
-        <div className="text-xs text-stone-500">
-          Plain markdown — point it at a NAS mount or an Obsidian vault. The
-          location is a docker bind mount fixed when the container starts, so
-          it's the one setting that lives in <code className="font-mono">.env</code>:
-          set <code className="font-mono">NOVA_MEMORY_DIR</code>, then run{' '}
-          <code className="font-mono">docker compose up -d backend</code>.
-        </div>
-        <div className="text-[11px] font-mono text-stone-600">
-          {counts.map(([k, v]) => `${v} ${k}`).join(' · ')}
+
+        <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-stone-200">Model weights</div>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+              models.relocated ? 'border-teal-800 text-teal-400' : 'border-stone-600 text-stone-400'
+            }`}>
+              {models.relocated ? 'custom path' : 'default volumes'}
+            </span>
+          </div>
+          <div className="text-xs font-mono text-teal-300">
+            {models.host_path
+              ? `${models.host_path}/{ollama,kokoro,whisper}`
+              : 'docker-managed volumes'}
+          </div>
+          <div className="text-xs text-stone-500">
+            The bundled model stores (Ollama LLMs + Kokoro/Whisper voice). Move
+            them to an external drive or NAS to save space or share between
+            machines — change it in{' '}
+            <span className="text-stone-400">Settings → Inference → Model storage</span>.
+            Nova migrates your models and restarts the services; no files to edit.
+          </div>
         </div>
       </div>
     </section>
@@ -517,6 +508,7 @@ function BundledInference({ onChanged }: { onChanged: () => void }) {
   const [dot, text] =
     st.op === 'start' ? ['bg-amber-400 animate-pulse', 'starting…'] :
     st.op === 'stop' ? ['bg-amber-400 animate-pulse', 'stopping…'] :
+    st.op === 'relocate' ? ['bg-amber-400 animate-pulse', 'relocating store…'] :
     st.running && st.api_ok ? ['bg-emerald-400', 'running'] :
     st.running ? ['bg-amber-400', 'running — API warming up'] :
     st.present ? ['bg-stone-500', 'stopped'] :
@@ -562,6 +554,87 @@ function BundledInference({ onChanged }: { onChanged: () => void }) {
       </div>
       {(err || st.error) && (
         <div className="mt-1.5 text-xs text-red-400">{err || st.error}</div>
+      )}
+    </div>
+  );
+}
+
+/** Relocate the bundled Ollama model store to an external drive / bigger disk
+ *  from the UI — no .env or compose edits. Save writes the path; the sidecar
+ *  migrates the existing models (non-destructively) and rebinds Ollama. */
+function ModelStorage() {
+  const [info, setInfo] = useState<ModelsDirInfo | null>(null);
+  const [path, setPath] = useState('');
+  const [op, setOp] = useState<string | null>(null);   // 'relocate' while running
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+
+  const refresh = () =>
+    getModelsDir().then(i => { setInfo(i); setPath(i.path ?? ''); }).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+
+  // while a relocate runs, poll the sidecar op until it clears, then refresh
+  useEffect(() => {
+    if (!op) return;
+    const iv = setInterval(async () => {
+      try {
+        const st = await getBundledInference();
+        if (st.op !== 'relocate') {
+          setOp(null);
+          if (st.error) setErr(st.error); else setDone(true);
+          refresh();
+        }
+      } catch { /* keep polling */ }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [op]);
+
+  if (!info) return null;
+  const current = info.path ? `${info.path}/ollama` : 'default docker volume';
+  const dirty = path.trim() !== (info.path ?? '');
+
+  async function save() {
+    setErr(''); setDone(false);
+    try {
+      await setModelsDir(path.trim());
+      setOp('relocate');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
+      <div className="text-sm text-stone-200 flex items-center gap-2">
+        Model storage
+        {op === 'relocate' && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
+        {op === 'relocate' && <span className="text-xs text-amber-400">relocating — migrating models…</span>}
+      </div>
+      <div className="text-xs text-stone-500 mt-0.5">
+        Where the bundled model weights live — Ollama LLMs plus the Kokoro/Whisper
+        voice models when running. Point it at an external SSD, a NAS mount, or a
+        bigger disk to save space or share between machines. Save migrates your
+        existing models — the old copy is kept until you remove it — and restarts
+        the affected services. No files to edit.
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={path}
+          onChange={e => setPath(e.target.value)}
+          placeholder="/mnt/ssd/nova-models   (empty = default volume)"
+          disabled={op === 'relocate'}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200 disabled:opacity-50" />
+        <button onClick={save} disabled={op === 'relocate' || !dirty}
+          className="shrink-0 text-xs rounded px-3 py-1 text-white bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700">
+          {op === 'relocate' ? 'working…' : 'Save'}
+        </button>
+      </div>
+      <div className="mt-1 text-[11px] font-mono text-stone-500">current: {current}</div>
+      {err && <div className="mt-1 text-xs text-red-400">{err}</div>}
+      {done && !op && !err && (
+        <div className="mt-1 text-xs text-emerald-400">
+          relocated — Ollama now uses the new path.
+        </div>
       )}
     </div>
   );
@@ -952,7 +1025,7 @@ function DetectSuggest() {
 
 /** The curated model table behind recommendations — seeded knowledge,
  *  operator-editable (system rows toggle-only, like rules/tools). */
-function CuratedTable({ editMode }: { editMode: boolean }) {
+function CuratedTable() {
   const [rows, setRows] = useState<CuratedModel[]>([]);
   const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
@@ -1132,7 +1205,7 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
                         </button>
                       )
                     )}
-                    {editMode && !m.is_system && (
+                    {!m.is_system && (
                       <>
                         <button onClick={() => startEdit(m)}
                           className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
@@ -1167,7 +1240,7 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
           </div>
         ))}
 
-        {editMode && creating ? (
+        {creating ? (
           <form onSubmit={submit} className="rounded border border-teal-800 bg-stone-900/40 px-2.5 py-2 space-y-2">
             <div className="flex gap-2">
               <input required placeholder="model, e.g. ollama:gemma3:12b" value={form.model}
@@ -1185,16 +1258,11 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
               <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">add</button>
             </div>
           </form>
-        ) : editMode ? (
+        ) : (
           <button onClick={() => { setForm(emptyForm); setCreating(true); }}
             className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded py-1.5">
             + add a model
           </button>
-        ) : (
-          <p className="text-[11px] text-stone-600">
-            🔒 Enable/disable is always available; adding or editing rows needs
-            Settings → Operator → Edit mode.
-          </p>
         )}
         {status && <div className="text-xs text-red-400">{status}</div>}
       </div>
@@ -1203,9 +1271,9 @@ function CuratedTable({ editMode }: { editMode: boolean }) {
 }
 
 /** Skills — markdown behaviors Nova retrieves by relevance and follows.
- *  Written from chat by skill-manager; viewable here, editable in edit mode
+ *  Written from chat by skill-manager; viewable and editable here too
  *  (the memory index rescans on every write). */
-function SkillsTab({ editMode }: { editMode: boolean }) {
+function SkillsTab() {
   const [rows, setRows] = useState<SkillInfo[]>([]);
   const [status, setStatus] = useState('');
   const [expanded, setExpanded] = useState<Record<string, string | null>>({});
@@ -1305,7 +1373,7 @@ function SkillsTab({ editMode }: { editMode: boolean }) {
                   {s.category && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{s.category}</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {editMode && (
+                  {(
                     <>
                       <button onClick={() => startEdit(s)}
                         className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
@@ -1338,11 +1406,11 @@ function SkillsTab({ editMode }: { editMode: boolean }) {
       ))}
       {rows.length === 0 && (
         <div className="text-xs text-stone-500 italic">
-          No skills yet — ask Nova to learn one, or create it here in edit mode.
+          No skills yet — ask Nova to learn one, or create it here.
         </div>
       )}
 
-      {editMode && creating ? (
+      {creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           {formFields}
           <div className="flex gap-2 justify-end">
@@ -1350,12 +1418,12 @@ function SkillsTab({ editMode }: { editMode: boolean }) {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : editMode ? (
+      ) : (
         <button onClick={() => { setForm(emptyForm); setCreating(true); }}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2">
           + new skill
         </button>
-      ) : <EditModeHint />}
+      )}
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
   );
@@ -1365,14 +1433,14 @@ function SkillsTab({ editMode }: { editMode: boolean }) {
  *  table that feeds dropdowns and recommendations, and the full catalog of
  *  authenticated providers. Machine infra stays in Settings → Inference;
  *  per-agent assignment lives in Agents. */
-function ModelsTab({ editMode }: { editMode: boolean }) {
+function ModelsTab() {
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3">
         <SettingsTab only={['Models']} />
       </div>
       <PullModel onPulled={() => {}} />
-      <CuratedTable editMode={editMode} />
+      <CuratedTable />
       <FullCatalog />
     </div>
   );
@@ -1440,7 +1508,7 @@ function FullCatalog() {
 }
 
 /** Per-agent model + status — every agent has its OWN model. */
-function AgentsTab({ editMode }: { editMode: boolean }) {
+function AgentsTab() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [showAllModels, setShowAllModels] = useState(false);
@@ -1634,7 +1702,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {modelSelect(a.model, v => setModel(a, v))}
-                  {editMode && (
+                  {(
                     <button
                       onClick={() => startEdit(a)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
@@ -1642,7 +1710,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
                       edit
                     </button>
                   )}
-                  {editMode && !a.is_system && (
+                  {!a.is_system && (
                     <button
                       onClick={() => remove(a)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
@@ -1667,7 +1735,7 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
         </div>
       ))}
 
-      {editMode && creating ? (
+      {creating ? (
         <form onSubmit={submitCreate} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <div className="flex gap-2">
             <input
@@ -1684,20 +1752,20 @@ function AgentsTab({ editMode }: { editMode: boolean }) {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : editMode ? (
+      ) : (
         <button
           onClick={() => { setForm(emptyForm); setCreating(true); }}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
         >
           + new agent
         </button>
-      ) : <EditModeHint />}
+      )}
       {status && <div className="text-xs text-amber-400">{status}</div>}
     </div>
   );
 }
 
-function AutomationsTab({ editMode }: { editMode: boolean }) {
+function AutomationsTab() {
   const [rows, setRows] = useState<Automation[]>([]);
   const [agents, setAgents] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -1837,7 +1905,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                   {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {editMode && (
+                  {(
                     <button
                       onClick={() => startEdit(a)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
@@ -1845,7 +1913,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
                       edit
                     </button>
                   )}
-                  {editMode && !a.is_system && (
+                  {!a.is_system && (
                     <button
                       onClick={() => remove(a)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
@@ -1910,7 +1978,7 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
         </div>
       ))}
 
-      {editMode && creating ? (
+      {creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <input
             required placeholder="name (kebab-case)"
@@ -1948,20 +2016,20 @@ function AutomationsTab({ editMode }: { editMode: boolean }) {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : editMode ? (
+      ) : (
         <button
           onClick={() => setCreating(true)}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
         >
           + new automation
         </button>
-      ) : <EditModeHint />}
+      )}
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
   );
 }
 
-function RulesTab({ editMode }: { editMode: boolean }) {
+function RulesTab() {
   const [rows, setRows] = useState<Rule[]>([]);
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
@@ -2074,13 +2142,13 @@ function RulesTab({ editMode }: { editMode: boolean }) {
                   {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {editMode && (
+                  {(
                     <button onClick={() => startEdit(r)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
                       edit
                     </button>
                   )}
-                  {editMode && !r.is_system && (
+                  {!r.is_system && (
                     <button onClick={() => remove(r)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
                       delete
@@ -2100,7 +2168,7 @@ function RulesTab({ editMode }: { editMode: boolean }) {
         </div>
       ))}
 
-      {editMode && creating ? (
+      {creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <input required placeholder="name (kebab-case)" value={form.name}
             onChange={e => setForm({ ...form, name: e.target.value })}
@@ -2126,19 +2194,19 @@ function RulesTab({ editMode }: { editMode: boolean }) {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : editMode ? (
+      ) : (
         <button onClick={() => setCreating(true)}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2">
           + new rule
         </button>
-      ) : <EditModeHint />}
+      )}
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
   );
 }
 
-/** DB-created HTTP tools (toggleable, creatable in edit mode) + read-only builtins. */
-function ToolsTab({ editMode }: { editMode: boolean }) {
+/** DB-created HTTP tools (toggleable, creatable, editable) + read-only builtins. */
+function ToolsTab() {
   const [catalog, setCatalog] = useState<ToolsCatalog | null>(null);
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState('');
@@ -2171,6 +2239,8 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
 
   return (
     <div className="space-y-3">
+      <McpServersSection />
+
       <p className="text-xs text-stone-500">
         Created tools are declarative HTTP calls against operator-allowlisted hosts
         ({catalog.allowed_hosts.join(', ') || 'none yet'}). Builtins are code and
@@ -2186,7 +2256,7 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
               {t.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {editMode && !t.is_system && (
+              {!t.is_system && (
                 <button
                   onClick={() => remove(t)}
                   className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800"
@@ -2210,7 +2280,7 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
         <div className="text-xs text-stone-500 italic">No created tools yet.</div>
       )}
 
-      {editMode && creating ? (
+      {creating ? (
         <form onSubmit={submit} className="rounded-lg border border-teal-800 bg-stone-800/50 p-3 space-y-2">
           <input
             required placeholder="name (kebab-case)"
@@ -2245,14 +2315,14 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>
           </div>
         </form>
-      ) : editMode ? (
+      ) : (
         <button
           onClick={() => setCreating(true)}
           className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded-lg py-2"
         >
           + new tool
         </button>
-      ) : <EditModeHint />}
+      )}
 
       <details className="rounded-lg border border-stone-700 bg-stone-800/30">
         <summary className="px-3 py-2 text-sm text-stone-300 cursor-pointer select-none">
@@ -2269,5 +2339,251 @@ function ToolsTab({ editMode }: { editMode: boolean }) {
       </details>
       {status && <div className="text-xs text-red-400">{status}</div>}
     </div>
+  );
+}
+
+/** MCP servers — operator registry (docs/plans/mcp-client.md). No agent-facing
+ *  equivalent exists on purpose: registering a server is a trust decision only
+ *  the operator makes. Lives above the tools list in this same tab — one
+ *  callable-capability surface, not a separate one. */
+function McpServersSection() {
+  const [rows, setRows] = useState<McpServer[]>([]);
+  const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<McpServer | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, McpTool[] | null>>({});
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const emptyForm = { name: '', transport: 'http', url: '', command: '', args: '', headers: '{}' };
+  const [form, setForm] = useState(emptyForm);
+
+  const load = () => getMcpServers().then(setRows).catch(e => setStatus(String(e)));
+  useEffect(() => { load(); }, []);
+
+  async function toggleExpand(s: McpServer) {
+    if (expanded[s.id] !== undefined) {
+      setExpanded(prev => { const next = { ...prev }; delete next[s.id]; return next; });
+      return;
+    }
+    setExpanded(prev => ({ ...prev, [s.id]: null }));
+    try {
+      const tools = await getMcpServerTools(s.id);
+      setExpanded(prev => ({ ...prev, [s.id]: tools }));
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  async function toggleEnabled(s: McpServer) {
+    setBusy(b => ({ ...b, [s.id]: true }));
+    try { await patchMcpServer(s.id, { enabled: !s.enabled }); await load(); }
+    catch (e) { setStatus(String(e)); }
+    finally { setBusy(b => ({ ...b, [s.id]: false })); }
+  }
+
+  async function toggleAlwaysInject(s: McpServer) {
+    try { await patchMcpServer(s.id, { always_inject: !s.always_inject }); load(); }
+    catch (e) { setStatus(String(e)); }
+  }
+
+  async function approve(s: McpServer) {
+    setBusy(b => ({ ...b, [s.id]: true }));
+    try {
+      await approveMcpServer(s.id);
+      setExpanded(prev => { const next = { ...prev }; delete next[s.id]; return next; });
+      await load();
+    } catch (e) { setStatus(String(e)); }
+    finally { setBusy(b => ({ ...b, [s.id]: false })); }
+  }
+
+  async function remove(s: McpServer) {
+    if (!window.confirm(`Remove MCP server "${s.name}"? Every agent grant naming it stops working.`)) return;
+    try { await deleteMcpServer(s.id); load(); } catch (e) { setStatus(String(e)); }
+  }
+
+  function startEdit(s: McpServer) {
+    setEditing(s);
+    setForm({
+      name: s.name, transport: s.transport,
+      url: s.url ?? '', command: s.command ?? '',
+      args: (s.args ?? []).join(', '),
+      headers: JSON.stringify(s.headers ?? {}),
+    });
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    let headers: Record<string, string>;
+    try { headers = JSON.parse(form.headers || '{}'); }
+    catch { setStatus('headers must be valid JSON, e.g. {"Authorization": "Bearer ..."}'); return; }
+    const args = form.args.split(',').map(a => a.trim()).filter(Boolean);
+    try {
+      if (editing) {
+        await patchMcpServer(editing.id, {
+          url: form.url || null, command: form.command || null, args, headers,
+        });
+        setEditing(null);
+      } else {
+        await createMcpServer({
+          name: form.name, transport: form.transport as McpServer['transport'],
+          url: form.url || null, command: form.command || null, args, headers,
+        });
+        setCreating(false);
+      }
+      setForm(emptyForm);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  const formFields = (
+    <>
+      <div className="flex gap-2">
+        <input required disabled={!!editing} placeholder="name (slug, e.g. github)"
+          value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200 disabled:opacity-50" />
+        <select disabled={!!editing} value={form.transport}
+          onChange={e => setForm({ ...form, transport: e.target.value })}
+          className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 disabled:opacity-50">
+          <option value="http">http</option>
+          <option value="stdio">stdio (later phase)</option>
+        </select>
+      </div>
+      {form.transport === 'http' ? (
+        <input required placeholder="url, e.g. https://mcp.example.com/mcp"
+          value={form.url} onChange={e => setForm({ ...form, url: e.target.value })}
+          className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+      ) : (
+        <div className="flex gap-2">
+          <input required placeholder="command, e.g. npx"
+            value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
+            className="w-40 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+          <input placeholder="args (comma-sep)" value={form.args}
+            onChange={e => setForm({ ...form, args: e.target.value })}
+            className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+        </div>
+      )}
+      <input placeholder='headers JSON, e.g. {"Authorization": "Bearer ..."}' value={form.headers}
+        onChange={e => setForm({ ...form, headers: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+    </>
+  );
+
+  const statusDot = (s: McpServer): [string, string] =>
+    s.status === 'connected' ? ['bg-emerald-400', 'connected'] :
+    s.status === 'error' ? ['bg-red-400', s.status_detail || 'error'] :
+    ['bg-stone-500', 'disabled'];
+
+  return (
+    <details className="rounded-lg border border-stone-700 bg-stone-800/30" open>
+      <summary className="px-3 py-2 text-sm text-stone-300 cursor-pointer select-none">
+        MCP servers ({rows.length})
+      </summary>
+      <div className="px-3 pb-3 space-y-2">
+        <p className="text-xs text-stone-500">
+          Third-party tool servers (Model Context Protocol). Registering one is a
+          trust decision — no agent can do it, only you here. Grant a server's
+          tools to an agent from its allowed-tools field:{' '}
+          <code className="text-stone-400">mcp:&lt;name&gt;/&lt;tool&gt;</code>{' '}
+          for one tool or <code className="text-stone-400">mcp:&lt;name&gt;:*</code> for all of
+          them — nothing is granted automatically. If a server's tool list changes
+          after approval it flips to <b>error</b> and stops serving until reviewed
+          below.
+        </p>
+
+        {rows.map(s => {
+          const [dot, dotText] = statusDot(s);
+          return (
+            <div key={s.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
+              {editing?.id === s.id ? (
+                <form onSubmit={submit} className="space-y-2">
+                  <div className="text-xs font-mono text-stone-100">{s.name}</div>
+                  {formFields}
+                  <div className="flex gap-2 justify-end">
+                    <button type="button" onClick={() => { setEditing(null); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+                    <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} title={dotText} />
+                      <span className="text-xs font-mono text-stone-100 truncate">{s.name}</span>
+                      <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{s.transport}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {s.status === 'error' && (
+                        <button onClick={() => approve(s)} disabled={busy[s.id]}
+                          title="Re-run the connection, accept whatever tool list comes back as the new approved baseline."
+                          className="text-xs px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white">
+                          review &amp; re-approve
+                        </button>
+                      )}
+                      {(
+                        <>
+                          <button onClick={() => startEdit(s)}
+                            className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">
+                            edit
+                          </button>
+                          <button onClick={() => remove(s)}
+                            className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">
+                            delete
+                          </button>
+                        </>
+                      )}
+                      <Toggle on={s.always_inject} onChange={() => toggleAlwaysInject(s)}
+                        label="always inject"
+                        title="On: this server's tools are always fully loaded into agent prompts. Off (default): agents see one index line and pull tools in on demand via find_mcp_tools." />
+                      <Toggle on={s.enabled} onChange={() => toggleEnabled(s)} label="enabled"
+                        title="Disabled servers grant nothing, regardless of any agent's allowed_tools." />
+                    </div>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-stone-500 font-mono truncate">
+                    {s.transport === 'http' ? s.url : `${s.command} ${(s.args ?? []).join(' ')}`}
+                  </div>
+                  {s.status === 'error' && s.status_detail && (
+                    <div className="mt-0.5 text-[11px] text-red-400">{s.status_detail}</div>
+                  )}
+                  <button onClick={() => toggleExpand(s)} className="mt-1 text-[11px] text-stone-500 hover:text-teal-300">
+                    {expanded[s.id] !== undefined ? 'hide tools' : 'review tools'}
+                  </button>
+                  {expanded[s.id] !== undefined && (
+                    <div className="mt-1 pl-2 border-l border-stone-700 space-y-1">
+                      {expanded[s.id] === null ? (
+                        <div className="text-[11px] text-stone-600">loading…</div>
+                      ) : expanded[s.id]!.length === 0 ? (
+                        <div className="text-[11px] text-stone-600 italic">no tools cached — not connected yet</div>
+                      ) : expanded[s.id]!.map(t => (
+                        <div key={t.name} className="text-[11px]">
+                          <span className="font-mono text-stone-300">mcp:{s.name}/{t.name}</span>
+                          <span className="text-stone-500"> — {t.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+        {rows.length === 0 && (
+          <div className="text-xs text-stone-500 italic">No MCP servers registered yet.</div>
+        )}
+
+        {creating ? (
+          <form onSubmit={submit} className="rounded border border-teal-800 bg-stone-900/40 px-2.5 py-2 space-y-2">
+            {formFields}
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => { setCreating(false); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+              <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">add</button>
+            </div>
+          </form>
+        ) : (
+          <button onClick={() => { setForm(emptyForm); setCreating(true); }}
+            className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded py-1.5">
+            + add a server
+          </button>
+        )}
+        {status && <div className="text-xs text-red-400">{status}</div>}
+      </div>
+    </details>
   );
 }

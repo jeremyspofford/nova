@@ -30,12 +30,44 @@ log = logging.getLogger("inference-control")
 COMPOSE_FILE = os.environ.get("COMPOSE_FILE", "/compose/docker-compose.yml")
 GPU_COMPOSE_FILE = os.environ.get("GPU_COMPOSE_FILE",
                                   "/compose/docker-compose.gpu.yml")
+MODELS_COMPOSE_FILE = os.environ.get("MODELS_COMPOSE_FILE",
+                                     "/compose/docker-compose.models.yml")
 # auto: merge the GPU override when the docker NVIDIA runtime exists;
 # on/off force it either way (operator escape hatch for broken drivers)
 OLLAMA_GPU = os.environ.get("OLLAMA_GPU", "auto").lower()
+# Operator-chosen model-store path. Source of truth is /state/models_dir,
+# written by the backend from the UI (Settings → Inference). NOVA_MODELS_DIR
+# is the deployment-time fallback (the .env path). Read fresh on every use so
+# a relocation takes effect without restarting this sidecar.
+STATE_MODELS_FILE = os.environ.get("STATE_MODELS_FILE", "/state/models_dir")
 PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
-SERVICE = "ollama"
+SERVICE = "ollama"                       # the toggle target (start/stop)
+OLLAMA_TARGET = "/root/.ollama"          # where ollama keeps its store
 PORT = 9911
+
+# Every model-bearing service the store spans, and how to relocate each: the
+# in-container store path, the subdir under $NOVA_MODELS_DIR it binds to, and
+# the compose profile that owns it. A relocate migrates + rebinds each of these
+# that is currently present (voice services only when the voice profile is up).
+MANAGED = [
+    {"service": "ollama",  "dest": "/root/.ollama", "sub": "ollama",  "profile": "inference"},
+    {"service": "kokoro",  "dest": "/models",       "sub": "kokoro",  "profile": "voice"},
+    {"service": "whisper", "dest": "/models",       "sub": "whisper", "profile": "voice"},
+]
+
+
+def _models_dir() -> str:
+    """Effective absolute host path for the bundled model store, or "" for the
+    default docker volume. UI setting (/state/models_dir) wins over the
+    deployment NOVA_MODELS_DIR. Relative values are refused: compose runs from
+    THIS sidecar's workdir, where a relative bind source resolves to the wrong
+    host path — the default volume is the safe fallback."""
+    try:
+        with open(STATE_MODELS_FILE) as f:
+            val = f.read().strip()   # file present = authoritative ("" = default)
+    except OSError:
+        val = os.environ.get("NOVA_MODELS_DIR", "").strip()   # deployment fallback
+    return val if val.startswith("/") else ""
 
 
 def _use_gpu_file() -> bool:
@@ -49,21 +81,35 @@ def _use_gpu_file() -> bool:
         return False
 
 
-def _compose_cmd() -> list:
+def _use_models_file() -> bool:
+    """Merge the model-store relocation override when a model path is set."""
+    return bool(_models_dir()) and os.path.exists(MODELS_COMPOSE_FILE)
+
+
+def _compose_env() -> dict:
+    """Environment for compose subprocesses: inject the current model path so
+    docker-compose.models.yml interpolates ${NOVA_MODELS_DIR} to the live
+    value, whether it came from the UI state file or the deployment env."""
+    return {**os.environ, "NOVA_MODELS_DIR": _models_dir()}
+
+
+def _compose_cmd(profile: str = "inference") -> list:
     cmd = ["docker", "compose", "-f", COMPOSE_FILE]
     if _use_gpu_file():
         cmd += ["-f", GPU_COMPOSE_FILE]
-    return cmd + ["--profile", "inference"]
+    if _use_models_file():
+        cmd += ["-f", MODELS_COMPOSE_FILE]
+    return cmd + ["--profile", profile]
 
 _lock = threading.Lock()
 _op: dict = {"verb": None, "error": None}
 
 
-def _container_state() -> dict:
+def _container_state(service: str = SERVICE) -> dict:
     proc = subprocess.run(
         ["docker", "ps", "-a",
          "--filter", f"label=com.docker.compose.project={PROJECT}",
-         "--filter", f"label=com.docker.compose.service={SERVICE}",
+         "--filter", f"label=com.docker.compose.service={service}",
          "--format", "{{.State}}"],
         capture_output=True, text=True, timeout=10)
     lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
@@ -94,7 +140,7 @@ def _vram_info() -> dict:
         _compose_cmd() + ["exec", "-T", SERVICE, "nvidia-smi",
                           "--query-gpu=name,memory.total",
                           "--format=csv,noheader,nounits"],
-        capture_output=True, text=True, timeout=20)
+        capture_output=True, text=True, timeout=20, env=_compose_env())
     if proc.returncode != 0:
         return {"gpus": [],
                 "error": (proc.stderr or proc.stdout)[-300:].strip()
@@ -120,7 +166,7 @@ def _run_op(verb: str):
     log.info("%s: %s", verb, " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, env=_compose_env())
         if proc.returncode == 0:
             _op["error"] = None
             log.info("%s: done", verb)
@@ -132,6 +178,100 @@ def _run_op(verb: str):
         log.exception("%s crashed", verb)
     finally:
         _op["verb"] = None
+
+
+def _service_mount(service: str, dest: str) -> dict:
+    """The current host source of `service`'s store (the mount at `dest`), so a
+    relocate knows what to migrate FROM. Returns {type, name, source} or {} if
+    there is no container yet (fresh install / profile off → nothing to move)."""
+    proc = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={PROJECT}",
+         "--filter", f"label=com.docker.compose.service={service}",
+         "--format", "{{.ID}}"],
+        capture_output=True, text=True, timeout=10)
+    cid = proc.stdout.strip().splitlines()
+    if not cid:
+        return {}
+    fmt = ('{{range .Mounts}}{{if eq .Destination "%s"}}'
+           '{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}') % dest
+    ins = subprocess.run(["docker", "inspect", "--format", fmt, cid[0].strip()],
+                         capture_output=True, text=True, timeout=10)
+    parts = ins.stdout.strip().split("|")
+    if len(parts) != 3 or not parts[0]:
+        return {}
+    return {"type": parts[0], "name": parts[1], "source": parts[2]}
+
+
+def _migrate_service(m: dict, target: str):
+    """Relocate one managed service to `target` (or back to its default volume
+    when target is ""). Skips services with no container (e.g. the voice
+    profile isn't running). Copy is NON-DESTRUCTIVE and only fills an empty
+    destination, so the old store survives and a populated target is adopted."""
+    svc, dest, profile = m["service"], m["dest"], m["profile"]
+    state = _container_state(svc)
+    if not state["present"]:
+        log.info("relocate[%s]: no container (profile off) — skipped", svc)
+        return
+    cur = _service_mount(svc, dest)
+    new_bind = os.path.join(target, m["sub"]) if target else ""
+
+    if target and cur.get("type") == "bind" and cur.get("source") == new_bind:
+        log.info("relocate[%s]: already at %s", svc, new_bind)
+        return
+
+    if target:
+        # copy the current store into the new path IF that path is empty
+        src_mount = (f"{cur['name']}:/from:ro" if cur.get("type") == "volume"
+                     else f"{cur['source']}:/from:ro" if cur.get("source")
+                     else "")
+        if src_mount:
+            log.info("relocate[%s]: copy %s -> %s (if empty)", svc,
+                     cur.get("name") or cur.get("source"), new_bind)
+            cp = subprocess.run(
+                ["docker", "run", "--rm", "-v", src_mount, "-v",
+                 f"{new_bind}:/to", "alpine", "sh", "-c",
+                 'mkdir -p /to && [ -z "$(ls -A /to)" ] && cp -a /from/. /to/ '
+                 '|| echo "target not empty — adopting as-is"'],
+                capture_output=True, text=True, timeout=7200)
+            if cp.returncode != 0:
+                raise RuntimeError(f"{svc} copy failed: "
+                                   + (cp.stderr or cp.stdout)[-300:].strip())
+
+    # recreate the service bound to the new path (or default volume when target
+    # is ""). Existing image is reused — the sidecar has no build context.
+    _compose(["stop", svc], profile)
+    _compose(["up", "-d", "--no-build", svc], profile)
+    log.info("relocate[%s]: now bound to %s", svc, new_bind or "default volume")
+
+
+def _relocate():
+    """Move the bundled model store to the operator-chosen path (already written
+    to /state/models_dir) and recreate every present model service bound there —
+    ollama plus the kokoro/whisper voice services when they're running. Empty
+    target resets to the default docker volumes. Each service migrates
+    independently and NON-DESTRUCTIVELY: on any failure the old stores are still
+    intact where they were."""
+    target = _models_dir()
+    try:
+        for m in MANAGED:
+            _migrate_service(m, target)
+        _op["error"] = None
+        log.info("relocate: done (%s)", target or "default volumes")
+    except Exception as e:
+        _op["error"] = str(e)[:400]
+        log.exception("relocate failed")
+    finally:
+        _op["verb"] = None
+
+
+def _compose(args: list, profile: str = "inference"):
+    """Run a compose subprocess with the live model path injected; raise on
+    non-zero so a relocate stops before recreating on a broken step."""
+    proc = subprocess.run(_compose_cmd(profile) + args, capture_output=True,
+                          text=True, timeout=1800, env=_compose_env())
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout)[-300:].strip())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -160,18 +300,23 @@ class Handler(BaseHTTPRequestHandler):
             state = _container_state()
         except Exception as e:
             return self._send(500, {"error": str(e)[:400]})
-        self._send(200, {**state, "op": _op["verb"], "error": _op["error"]})
+        self._send(200, {**state, "op": _op["verb"], "error": _op["error"],
+                         "models_dir": _models_dir()})
 
     def do_POST(self):
-        if self.path not in ("/start", "/stop"):
+        if self.path == "/relocate":
+            verb = "relocate"
+        elif self.path in ("/start", "/stop"):
+            verb = self.path[1:]
+        else:
             return self._send(404, {"error": "not found"})
-        verb = self.path[1:]
         with _lock:
             if _op["verb"]:
                 return self._send(
                     409, {"error": f"{_op['verb']} already in progress"})
             _op.update(verb=verb, error=None)
-        threading.Thread(target=_run_op, args=(verb,), daemon=True).start()
+        target = _relocate if verb == "relocate" else lambda: _run_op(verb)
+        threading.Thread(target=target, daemon=True).start()
         self._send(202, {"status": f"{verb} requested"})
 
     def log_message(self, fmt, *args):
@@ -181,4 +326,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     log.info("inference-control listening on :%d (project=%s service=%s)",
              PORT, PROJECT, SERVICE)
+    _md = _models_dir()
+    log.info("model store: %s", f"{_md}/ollama" if _md else "default docker volume")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

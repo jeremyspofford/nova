@@ -117,6 +117,13 @@ See README for what works. This file is the ordered backlog.
   fabricated a "created!" success without
   calling the tool on the first attempt — never trust self-report, verify
   against the DB (old-Nova lesson holds).
+  **REMOVED 2026-07-21 (Jeremy: "rather annoying... the view mode is
+  noise")** — single-operator install, so the friction wasn't buying
+  anything; create/edit/delete just work everywhere now, same as
+  enable/disable always did. `ui.edit_mode`, `_require_edit_mode()`, the
+  header badge, and every `editMode`-gated conditional removed from both
+  layers. `is_system` protections (undeletable seeded rows/agents/rules)
+  are untouched — that guard was never about edit mode.
 
 - **Bundled Ollama + local-path validation** (2026-07-13) — optional
   `inference` compose profile ships Ollama (batteries-included local
@@ -956,15 +963,32 @@ See README for what works. This file is the ordered backlog.
    `mcp:<server>/<tool>` names through `execute_tool`, grants via named
    or `mcp:<server>:*` wildcards (the `db:*` precedent, deliberately no
    global `mcp:*`), guardian rules and the narration detector inherited
-   for free. Server registration is operator-only (edit-mode API, no
-   agent tool — the #18 self-escalation lesson applied preemptively);
-   tool descriptions hash-pinned at approval (poisoning defense, the
-   soul.md pattern). Lazy loading (index + meta-tool) ports the
-   live-verified `v0.5.0-alpha` design (old-repo PR #54) — designs only,
-   never code. HTTP transport first (pip `mcp` SDK, no new service);
-   stdio via an `mcp-runner` sidecar in the last phase. Overlaps #18:
-   much of "executable skills" may really be "an MCP server exists for
-   that" — the #18 research must evaluate them together.
+   for free. Server registration is operator-only (no agent tool — the
+   #18 self-escalation lesson applied preemptively); tool descriptions
+   hash-pinned at approval (poisoning defense, the soul.md pattern). Lazy
+   loading (index + meta-tool) ports the live-verified `v0.5.0-alpha`
+   design (old-repo PR #54) — designs only, never code. HTTP transport
+   first (pip `mcp` SDK, no new service); stdio via an `mcp-runner`
+   sidecar in the last phase. Overlaps #18: much of "executable skills"
+   may really be "an MCP server exists for that" — the #18 research must
+   evaluate them together.
+   **ALL 4 PHASES SHIPPED 2026-07-20/21 (uncommitted):** migration 031
+   (`mcp_servers`, `mcp_tools_cache`), `mcp_client.py` (HTTP transport,
+   API confirmed against the installed SDK directly, not scraped docs) +
+   `mcp_servers.py` (registry, hash-approval), dispatch integration in
+   `tools/registry.py` (`mcp:<server>/<tool>` namespacing, `mcp:<server>:*`
+   wildcard grants — MCP grants are NEVER implied by `allowed_tools=None`,
+   unlike `db:*`), lazy loading (`find_mcp_tools` meta-tool + system
+   -prompt index line, mid-turn toolset injection in `runner.py`), a
+   Servers section in Settings → Tools, and the `mcp-runner` stdio sidecar
+   (no Docker socket, no DB creds, no published ports — spawns
+   operator-approved commands as an argv list, never a shell). Live
+   -verified end-to-end at every phase: a real HTTP reference server (tool
+   call, revoked-grant refusal, a guardian block rule, the hash
+   -mismatch→error→re-approve cycle); lazy search-then-call in one turn;
+   full create/edit/delete through the actual browser UI; a real
+   `npx`-launched stdio server (13 tools, connected, called through the
+   sidecar). See `nova-mcp-client-shipped` memory for the full rundown.
 
 20. **ACP coding delegation — coding via protocol, not a bespoke harness
    (requested 2026-07-17)** — Nova as an Agent Client Protocol CLIENT
@@ -1161,6 +1185,59 @@ See README for what works. This file is the ordered backlog.
    conversation — ornith:9b made zero tool calls there all night)
    recorded in the plan doc. Awaiting Jeremy's review.
 
+### Discussion backlog (captured 2026-07-21 — to scope/plan, not yet numbered)
+
+Raised by Jeremy in one session; each needs a planning pass before it joins
+the numbered queue. Grouped by theme.
+
+**Self-improving Nova (the strategic arc): learn from the web → recommend →
+approve → test in staging → operator-test → promote to prod.**
+- **YouTube watching** *(Important; plan being drafted → `docs/plans/youtube-watching.md`)*
+  — let Nova "watch" a video = pull its transcript + metadata (keyless, e.g.
+  `youtube-transcript-api`) and feed it through the existing ingestion agent.
+  Foundation for web-driven self-improvement (e.g. watch MCP-server videos,
+  spot gaps, recommend installs). The full autonomous test→promote loop is the
+  longer roadmap on top of this input primitive.
+- **Recommendation / notification surface** *(recommended keystone; plan being
+  drafted → `docs/plans/notification-surface.md`)* — a notifications/
+  recommendations store that automations + Nova write to, rendered as a
+  banner/inbox card in chat with approve/dismiss. Fixes the current gap
+  (Nova's own words: "I can't do banners/push" — true today; there's only the
+  consent gate). Directly resolves the mcpservers.org automation frustration:
+  it would raise an actionable card instead of quietly writing to a topic and
+  hoping to mention it at conversation start. Backbone for the approve→promote
+  loop above.
+
+**Model management UX.**
+- **Auto-fill curated-model metadata** — adding to the curated list shouldn't
+  require hand-entering `tool_tier` / `speed` / `roles` / `notes`. Auto-derive
+  from params/size (+ the existing probe) and let the operator edit; today
+  `curated_models.create` requires them.
+- **Catalog quick-add buttons** — per-row buttons in the model catalog to add →
+  curated / install / assign-to-chat, instead of the manual create form.
+
+**Chat message UX (small tweaks).**
+- **Queue + interject while streaming** *(BEING IMPLEMENTED 2026-07-21)* — while
+  waiting on Nova's reply, let the operator type and queue follow-up messages,
+  with an option to interject/send immediately.
+- **File attachments** — attach files to a chat message (needs an upload
+  endpoint + storage + how agents consume them). Plan pass needed.
+- **Paste images into chat** — paste/drop an image into the composer (needs
+  image upload + a multimodal path). Plan pass needed.
+
+**Brain / memory navigation.**
+- **Orphaned memory clusters** — auto-created topics (e.g. the two MCP topics)
+  form isolated 2-node "systems" that float off the main map: they link to
+  each other (shared `mcp` tag) but nothing arcs them to the broader graph.
+  Fixes to consider: automations stamp `maintained_by: <automation>` on the
+  topics they maintain (arcs topic → automation node), and/or share tags with
+  platform entities so ingested knowledge connects to the capabilities it's
+  about. Also: the small isolated "system" renders an **unlabeled sun** —
+  investigate the universe sun-labeling for small/auto-generated clusters.
+- **Tag-click traversal** — clicking a `#tag` in a memory's detail view lists
+  every item with that tag, so related notes are walkable. Natural complement
+  to the orphaned-cluster fix.
+
 ## Later
 
 - **Speaker identification + per-person context (family, requested
@@ -1277,7 +1354,7 @@ See README for what works. This file is the ordered backlog.
   2026-07-17)** — direction settled, full spec once #20 lands. TWO-TIER
   RULE: the *soft layer* (agents, tools, automations, skills, prompts,
   soul — DB rows + markdown) is already runtime-self-modifiable, guarded
-  by guardian rules, edit-mode gating, and toggles; the *hard layer*
+  by guardian rules and toggles; the *hard layer*
   (code, compose, migrations — the machinery every guardrail runs on) is
   NEVER modified in place by the running Nova. No live self-editing: an
   agent that can edit its running code can edit its own guardrails — the
@@ -1306,6 +1383,21 @@ See README for what works. This file is the ordered backlog.
 - **Diagramming agent** — Mermaid as the workhorse, raw SVG for freeform;
   render–verify loop (render, inspect with vision, self-correct) because
   text-only generation fails silently on layout; render inline in chat.
+
+- **Nova as an MCP server (proposed 2026-07-21)** — the inverse of #19: expose
+  Nova's own capabilities over MCP so OTHER clients (Claude Desktop, another
+  agent, a second Nova instance) can call into them, instead of Nova only
+  ever consuming other people's servers. A genuinely separate feature from
+  #19 (that's the client role; this is the server role) — needs its own
+  design pass before building: which tools to expose (search/fetch/weather
+  are obvious low-risk candidates; memory read/write and anything
+  destructive are a different trust question entirely), how auth works
+  (likely the existing NOVA_AUTH_TOKEN bearer scheme, reused rather than
+  reinvented), and whether it's a new endpoint on the existing backend or
+  its own service. Raised when considering whether to replace the bundled
+  SearXNG/fetch_url builtins with MCP — verdict there was no (builtins stay:
+  zero-config, keyless, in-process, matches batteries-included; MCP is for
+  additive capabilities, not the baseline). Not started; not next up.
 
 ## Reference releases (mine for ideas, never build from)
 

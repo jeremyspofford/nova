@@ -1,0 +1,42 @@
+# Relocate the bundled model WEIGHTS off the default docker volumes onto a
+# path you choose — an external SSD, a NAS mount, a bigger disk. One knob:
+#
+#   NOVA_MODELS_DIR=/mnt/ssd/nova-models        # ABSOLUTE host path
+#
+# lays the weights out as subdirectories, one per bundled model service:
+#
+#   $NOVA_MODELS_DIR/
+#     ├── ollama/     Ollama LLM weights      (the GB-scale ones)
+#     ├── kokoro/     Kokoro TTS voices       (~340 MB)
+#     └── whisper/    faster-whisper STT models
+#
+# The inference-control sidecar merges this file AUTOMATICALLY for the bundled
+# Ollama whenever NOVA_MODELS_DIR is set, so the Settings → Inference toggle
+# relocates the LLM store with no CLI. For host-launched services (the voice
+# profile, or any manual `docker compose up`), tell compose to merge it too by
+# adding to .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.models.yml
+#
+# (compose reads COMPOSE_FILE automatically; chain more with ':', e.g. append
+# docker-compose.gpu.yml). Leave NOVA_MODELS_DIR unset to keep the default
+# docker-managed volumes — this file then changes nothing.
+#
+# Use an ABSOLUTE path: the sidecar recreates Ollama from its own working
+# directory, where a relative source would resolve to the wrong host path.
+# Sharing one path across machines works read-mostly; don't pull models from
+# two machines at once (Ollama's content-addressed blob store isn't built for
+# concurrent writers).
+
+services:
+  ollama:
+    volumes:
+      - ${NOVA_MODELS_DIR:?NOVA_MODELS_DIR must be set to use docker-compose.models.yml}/ollama:/root/.ollama
+
+  kokoro:
+    volumes:
+      - ${NOVA_MODELS_DIR:?NOVA_MODELS_DIR must be set to use docker-compose.models.yml}/kokoro:/models
+
+  whisper:
+    volumes:
+      - ${NOVA_MODELS_DIR:?NOVA_MODELS_DIR must be set to use docker-compose.models.yml}/whisper:/models
