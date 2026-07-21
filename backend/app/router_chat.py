@@ -17,7 +17,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, consents, conversations, db, rules, settings_store, trace
+from app import automations, compaction, consents, conversations, db, recommendations, rules, settings_store, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -1093,4 +1093,29 @@ async def decide_consent_endpoint(consent_id: str, body: dict):
     if not row:
         raise HTTPException(status_code=410,
                             detail="consent is no longer pending (expired or already decided)")
+    return row
+
+
+# ── recommendations: Nova's proactive cards (docs/plans/recommendation-surface.md) ─
+
+@router.get("/api/v1/recommendations")
+async def list_recommendations_endpoint(status: str = "new"):
+    """Proactive recommendations raised by Nova/automations. status=new is the
+    live queue the chat banner shows; status=all is the inbox view (decided
+    rows included, actionable first)."""
+    return await recommendations.list_all("all" if status == "all" else "new")
+
+
+@router.post("/api/v1/recommendations/{rec_id}/decide")
+async def decide_recommendation_endpoint(rec_id: str, body: dict):
+    """The operator's authenticated decision. Agents RAISE recommendations
+    (raise_recommendation tool) but only the operator decides — this endpoint
+    is the only writer of the outcome, never reachable by an agent."""
+    choice = str(body.get("choice", "")).lower()
+    if choice not in ("approve", "later", "dismiss"):
+        raise HTTPException(status_code=422,
+                            detail="choice must be 'approve', 'later', or 'dismiss'")
+    row = await recommendations.decide(rec_id, choice)
+    if not row:
+        raise HTTPException(status_code=404, detail="recommendation not found")
     return row

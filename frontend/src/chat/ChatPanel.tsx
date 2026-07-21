@@ -3,6 +3,7 @@ import {
   streamChat, getActiveConversation, getAgents, getMessages, getModels,
   patchAgent, getPendingConsents, decideConsent, Activity, Consent,
   ModelInfo, TraceSummary,
+  getRecCards, decideRecCard, RecCard,
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { TurnInspector } from './TurnInspector';
@@ -239,6 +240,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
   // reply short. abortRef cancels the in-flight turn for that interruption.
   const [queue, setQueue] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // proactive recommendation cards Nova/automations raised (keystone)
+  const [recs, setRecs] = useState<RecCard[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [inspectTraceId, setInspectTraceId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -546,6 +549,22 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     } catch { /* cards are best-effort; the next turn retries */ }
   };
 
+  // proactive recommendation cards — loaded on mount, after each turn (a turn
+  // may raise one), and polled so background automations surface without a turn
+  const loadRecs = async () => {
+    try { setRecs(await getRecCards('new')); } catch { /* best-effort */ }
+  };
+  useEffect(() => {
+    loadRecs();
+    const iv = setInterval(loadRecs, 60000);
+    return () => clearInterval(iv);
+  }, []);
+  async function decideRec(rec: RecCard, choice: 'approve' | 'later' | 'dismiss') {
+    setRecs(prev => prev.filter(r => r.id !== rec.id));   // optimistic
+    try { await decideRecCard(rec.id, choice); }
+    catch { void loadRecs(); }                            // reconcile on failure
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -669,6 +688,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
       setBusy(false);
       inputRef.current?.focus();
       void loadConsents();   // an agent may have asked for a decision this turn
+      void loadRecs();       // …or raised a recommendation
     }
   }
 
@@ -803,6 +823,31 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
           <span className="text-xs text-stone-500 shrink-0">{busy ? 'thinking…' : 'ready'}</span>
         </div>
       </header>
+
+      {recs.length > 0 && (
+        <div className="border-b border-amber-900/40 bg-amber-950/20 px-3 py-2 flex items-start gap-2">
+          <span className="text-amber-400 text-sm mt-0.5" aria-hidden>★</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] uppercase tracking-wide text-amber-500/80">Nova recommends</span>
+              <span className="text-[10px] text-stone-500">· from {recs[0].source}</span>
+              {recs.length > 1 && <span className="text-[10px] text-stone-500">· +{recs.length - 1} more</span>}
+            </div>
+            <div className="text-sm text-stone-100 mt-0.5">{recs[0].title}</div>
+            <div className="text-xs text-stone-400 mt-0.5 [&_p]:my-0.5 [&_a]:text-teal-400">
+              <Markdown>{recs[0].body}</Markdown>
+            </div>
+            <div className="flex gap-2 mt-1.5">
+              <button onClick={() => decideRec(recs[0], 'approve')}
+                className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">Approve</button>
+              <button onClick={() => decideRec(recs[0], 'later')}
+                className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
+              <button onClick={() => decideRec(recs[0], 'dismiss')}
+                className="text-xs px-2.5 py-1 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-4 space-y-2">
         {items.length === 0 && (

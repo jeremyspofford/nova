@@ -351,6 +351,36 @@ export async function setBundledInference(action: 'start' | 'stop'): Promise<voi
   if (!r.ok) throw new Error((await r.json()).detail ?? `${action} failed`);
 }
 
+/** A proactive recommendation card (distinct from model ModelRecommendation). */
+export interface RecCard {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  source: string;
+  status: string;
+  priority: number;
+  created_at: string | null;
+}
+
+/** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
+export async function getRecCards(status: 'new' | 'all' = 'new'): Promise<RecCard[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations?status=${status}`);
+  if (!r.ok) throw new Error('Failed to load recommendations');
+  return r.json();
+}
+
+export async function decideRecCard(
+  id: string, choice: 'approve' | 'later' | 'dismiss'): Promise<RecCard> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ choice }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'decide failed');
+  return r.json();
+}
+
 export interface ModelsDirInfo {
   path: string | null;   // null = default docker volume
   relocated: boolean;

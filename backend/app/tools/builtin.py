@@ -489,6 +489,34 @@ async def _request_operator_confirmation(args, ctx):
                         "message arrives.")})
 
 
+async def _raise_recommendation(args, ctx):
+    """Surface a proactive recommendation to the operator as a card in chat
+    (Approve / Later / Dismiss) — the visible, actionable alternative to
+    quietly writing a memory topic and hoping to mention it."""
+    from app import recommendations
+    kind = (args.get("kind") or "note").strip() or "note"
+    title = (args.get("title") or "").strip()
+    body = (args.get("body") or "").strip()
+    if not title or not body:
+        return "Error: title and body are required"
+    dedupe_key = (args.get("dedupe_key") or "").strip() or None
+    try:
+        priority = int(args.get("priority") or 0)
+    except (TypeError, ValueError):
+        priority = 0
+    try:
+        row = await recommendations.create(
+            kind, title, body,
+            source=ctx.get("agent_name") or "unknown",
+            priority=priority, dedupe_key=dedupe_key)
+    except ValueError as e:
+        return f"Error: {e}"
+    return _j({"status": row["status"], "recommendation_id": row["id"],
+               "note": ("The operator now has a recommendation card in their chat. "
+                        "Mention briefly that you flagged it; do not act on it "
+                        "yourself — they decide.")})
+
+
 async def _manage_rules(args, ctx):
     from app import consents, rules as rules_store
     action = (args.get("action") or "").lower()
@@ -850,6 +878,28 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                          "will change.")},
         }, "required": ["kind", "subject", "question"]},
         "execute": _request_operator_confirmation,
+    },
+    "raise_recommendation": {
+        "name": "raise_recommendation",
+        "description": ("Surface a proactive recommendation to the OPERATOR as a card "
+                        "in their chat (Approve / Later / Dismiss). Use this — not just "
+                        "a memory topic — when you find something worth their decision: "
+                        "an MCP server or tool to add, a model to try, an improvement to "
+                        "make. State the value plainly. They decide; you never act on it "
+                        "yourself."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string",
+                     "description": "category: mcp_server | model | action | note"},
+            "title": {"type": "string", "description": "one line — the recommendation"},
+            "body": {"type": "string",
+                     "description": "markdown: WHY and what value it adds, concretely"},
+            "dedupe_key": {"type": "string",
+                           "description": ("stable id so a recurring automation refreshes one "
+                                           "card instead of stacking duplicates (e.g. "
+                                           "'mcp:github'). Omit for one-off notes.")},
+            "priority": {"type": "integer", "description": "0 default; higher shows first"},
+        }, "required": ["title", "body"]},
+        "execute": _raise_recommendation,
     },
     "dispatch_to_agent": {
         "name": "dispatch_to_agent",
