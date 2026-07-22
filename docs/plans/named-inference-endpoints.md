@@ -1,5 +1,17 @@
 # Named local-inference endpoints — multi-backend
 
+> **SUPERSEDED / CLOSED (2026-07-22).** Shipped, broader, as the LLM **provider
+> registry** — commit `68b9e72`. This plan was local-only (`local:name/model`);
+> the delivered feature covers cloud **and** local under one `slug:model`
+> scheme via a DB-backed `llm_providers` registry (`backend/app/llm/providers.py`,
+> migration `042_llm_providers.sql`) and the Settings → Models → **Providers**
+> UI. LM Studio / vLLM / llama.cpp are covered by the built-in presets; a single
+> `OpenAICompatClient` serves every provider. Persistent reachability (this
+> plan's health/last_error dots) also shipped. Kept below for the still-useful
+> traps (host.docker.internal, LM Studio server-first, the 11434 shadow).
+> Not carried over: block-delete-when-pinned (the registry uses graceful local
+> fallback instead).
+
 Implementation plan (authored 2026-07-15 with Fable). Goal: users run LM
 Studio, llama.cpp, vLLM — not just Ollama. All serve OpenAI-compatible
 APIs (our existing client already speaks it); only Ollama has a pull API

@@ -231,27 +231,63 @@ async def delete(provider_id: str) -> str:
 #    last_error onto each configured provider, so the Providers panel shows a
 #    live green/red dot with the WHY (operator-visible-outcomes rule). ───────
 
+async def _approved_model(slug: str) -> str | None:
+    """A model id (minus the `slug:` prefix) the operator has already approved
+    for this provider — the fallback health check needs a real model name."""
+    from app import curated_models
+    prefix = f"{slug}:"
+    for r in await curated_models.list_all(enabled_only=True):
+        if r["provider"] == slug and r["model"].startswith(prefix):
+            return r["model"].split(":", 1)[1]
+    return None
+
+
 async def _reach(row: dict) -> tuple[bool | None, str | None, int | None]:
-    """Try the provider's model-list endpoint. Returns (ok, error, model_count);
-    ok is None when there's nothing to check (no catalog endpoint) — that's
-    'unknown', not a failure. Short timeouts so a sleeping local server fails
-    fast instead of hanging a save."""
+    """Reachability probe. Returns (ok, error, model_count); ok is None when
+    there's nothing to check yet ('unknown', not a failure). Short timeouts so
+    a sleeping local server fails fast instead of hanging a save.
+
+    Primary check is a cheap `GET /models`. Some providers — Anthropic most
+    notably — don't serve /models to the same Bearer auth as chat, so a working
+    provider would show a false red dot. When /models can't confirm, fall back
+    to a 1-token completion against an already-approved model: that exercises
+    the exact chat path Nova uses, so it's the real 'is this usable' answer."""
     import httpx
     key = resolve_key(row)
     if row["needs_key"] and not key:
         return False, "no API key set", None
-    if not row["catalog_path"]:
-        return None, "no model-list endpoint to check reachability", None
+    base = row["base_url"].rstrip("/")
     headers = dict(row["extra_headers"])
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    url = f"{row['base_url'].rstrip('/')}{row['catalog_path']}"
+
+    # 1) cheap path — list models
+    models_err = "no model-list endpoint"
+    if row["catalog_path"]:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+                resp = await client.get(f"{base}{row['catalog_path']}", headers=headers)
+            if resp.status_code == 200:
+                return True, None, len(resp.json().get("data", []))
+            models_err = f"/models HTTP {resp.status_code}"
+        except Exception as e:
+            models_err = f"/models {e}"
+
+    # 2) fallback — a 1-token completion against an approved model (real chat path)
+    model = await _approved_model(row["slug"])
+    if not model:
+        return None, f"{models_err}; approve a model to enable the reachability check", None
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
-            resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code}: {resp.text[:150]}", None
-        return True, None, len(resp.json().get("data", []))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            resp = await client.post(
+                f"{base}/chat/completions", headers=headers,
+                json={"model": model, "messages": [{"role": "user", "content": "hi"}],
+                      "max_tokens": 1, "stream": False})
+        if resp.status_code == 200:
+            return True, None, None
+        if resp.status_code in (401, 403):
+            return False, f"auth rejected (HTTP {resp.status_code})", None
+        return False, f"HTTP {resp.status_code}: {resp.text[:120]}", None
     except Exception as e:
         return False, str(e), None
 
