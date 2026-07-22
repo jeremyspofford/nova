@@ -1021,6 +1021,42 @@ See README for what works. This file is the ordered backlog.
    pings, automation failure alerts, and #24. Mine the v2 notification
    outbox design for delivery receipts (operator-visible-outcomes
    lesson: "accepted by transport" ≠ "received").
+   **SHIPPED 2026-07-22 (Opus):** `notify.py` is a MODULAR provider
+   registry (`Provider` base + `_PROVIDERS`), not ntfy-specific —
+   `notify.send()` dispatches to the active provider, callers unchanged.
+   Two providers live: **ntfy** (keyless, batteries-included default) and
+   **webhook** (POSTs the notification as JSON to any URL — the universal
+   bridge to Slack/Discord/Zapier and cloud pub/sub behind an HTTP ingest).
+   `notify_operator` builtin (granted to main, migration 038, guardian
+   -visible); `POST /api/v1/notify/test` + a "Send test notification"
+   button; scheduler fires a high-priority push when an automation
+   auto-disables (5 strikes). Honest receipts (server ACCEPTANCE + id,
+   never claimed device delivery). Settings namespaced `notify.<provider>.*`
+   (UI shows only the active provider's fields). **ntfy server is a
+   selector** — public (ntfy.sh) / builtin / custom — with a bundled
+   self-hosted **`ntfy` compose service** (`--profile notify`, image
+   `binwiederhier/ntfy`) for the fully-private path, and a topic
+   **Randomize** button. Verified end-to-end for both providers AND the
+   bundled server (receipt polled back). Committed as the notifications
+   lane; the self-hosted service + server-selector + randomize are a
+   follow-up pass (uncommitted at time of writing).
+   **Future providers (deferred — the seam makes each a self-contained
+   Provider subclass + settings + enum entry, no caller changes):**
+   - *Telegram* — a bot (BotFather token) posting via the HTTP API;
+     reliable, free, no per-message cost, no extra app if you already use
+     Telegram. Needs the secrets-management lane for the bot token
+     (`docs/plans/secrets-management.md`). Was always the "~v2" option in
+     [[nova-identity-decisions]].
+   - *Web Push (PWA)* — notify the Nova PWA itself (Push API + service
+     worker + VAPID keys), no separate app to install. Most native to
+     Nova's own phone path; more plumbing (VAPID, SW push handler) and the
+     push still transits Apple/Google push infrastructure.
+   - *webhook* — already SHIPPED above (listed here for completeness; it's
+     the pragmatic cloud/pub-sub bridge today).
+   - A bundled self-hosted ntfy service SHIPPED (above); a native cloud
+     pub/sub provider (SNS/GCP) stays unbuilt by design — those are
+     machine-to-machine fan-out, not person-reaching, so the webhook +
+     ntfy paths already cover reaching a human.
 
 22. **File/attachment ingestion in chat (2026-07-17)** — Nova ingests
    URLs (and soon videos) but you cannot hand her a FILE: no upload path

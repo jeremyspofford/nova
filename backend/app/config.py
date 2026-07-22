@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # media URLs (docs/plans/content-ingestion.md).
     media_worker_url: str = "http://media:8500"
 
+    # Bundled self-hosted ntfy server (optional `notify` compose profile) —
+    # what notify.ntfy.server_mode="builtin" publishes to. Reached over the
+    # compose network; the phone subscribes via the tailnet (see README).
+    ntfy_builtin_url: str = "http://ntfy:80"
+
     # NOTE: behavioral knobs (context budgets, compaction, automations, the
     # agent tool-round cap) live
     # in the DB-backed settings store (settings_store.py) — UI-configured,

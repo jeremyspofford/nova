@@ -63,12 +63,23 @@ class NtfyProvider(Provider):
     key = "ntfy"
     label = "ntfy"
 
+    def _server(self) -> str:
+        """Resolve the publish URL from the server_mode selector: the public
+        ntfy.sh, Nova's bundled server, or a custom URL."""
+        mode = settings_store.get("notify.ntfy.server_mode")
+        if mode == "builtin":
+            from app.config import settings
+            return settings.ntfy_builtin_url
+        if mode == "custom":
+            return (settings_store.get("notify.ntfy.custom_url") or "").strip()
+        return "https://ntfy.sh"
+
     def configured(self) -> bool:
-        return bool((settings_store.get("notify.ntfy.server_url") or "").strip()
+        return bool(self._server().strip()
                     and (settings_store.get("notify.ntfy.topic") or "").strip())
 
     async def send(self, message, *, title, priority, tags, click) -> dict:
-        server = (settings_store.get("notify.ntfy.server_url") or "").strip().rstrip("/")
+        server = self._server().strip().rstrip("/")
         topic = (settings_store.get("notify.ntfy.topic") or "").strip()
         headers: dict[str, str] = {"Priority": str(_PRIORITY.get(priority, 3))}
         if title:

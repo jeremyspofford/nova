@@ -38,6 +38,7 @@ services:
       INFERENCE_CONTROL_URL: http://inference-control:9911
       MCP_RUNNER_URL: http://mcp-runner:8100
       MEDIA_WORKER_URL: http://media:8500
+      NTFY_BUILTIN_URL: http://ntfy:80
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8000:8000"
@@ -128,6 +129,43 @@ services:
       MEDIA_MAX_DURATION_S: ${MEDIA_MAX_DURATION_S:-14400}
       MEDIA_WHISPER_WINDOW_S: ${MEDIA_WHISPER_WINDOW_S:-300}
     restart: unless-stopped
+
+  # Self-hosted ntfy server (optional): docker compose --profile notify up -d
+  # The private alternative to public ntfy.sh for push notifications — set
+  # Settings -> Notifications -> ntfy server to "builtin" and the backend
+  # publishes here over the compose network. Nothing leaves your machine
+  # except the final push to your subscribed phone. To reach it FROM the
+  # phone, expose it on your tailnet (README) — the app points at that URL,
+  # the backend at http://ntfy:80; same server, same topic, two paths.
+  # The published localhost port is only so you can front it with a reverse
+  # proxy / tailscale serve. Roadmap #21.
+  ntfy:
+    image: binwiederhier/ntfy
+    command: serve
+    profiles: ["notify"]
+    environment:
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8280}
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_CACHE_DURATION: ${NTFY_CACHE_DURATION:-12h}
+      NTFY_ATTACHMENT_CACHE_DIR: /var/cache/ntfy/attachments
+      NTFY_BEHIND_PROXY: "true"
+      # iOS can't hold a background socket, so the ntfy iOS app relies on Apple
+      # push (APNs), which only ntfy.sh can trigger. Setting an upstream lets
+      # THIS server forward a content-free wake-up ping through ntfy.sh so iOS
+      # gets instant delivery — the message body stays on your server. Android
+      # needs none of this. Set NTFY_UPSTREAM_BASE_URL="" in .env for zero
+      # third-party contact (iOS then falls back to slower polling).
+      NTFY_UPSTREAM_BASE_URL: ${NTFY_UPSTREAM_BASE_URL-https://ntfy.sh}
+    volumes:
+      - ntfy_cache:/var/cache/ntfy
+    ports:
+      - "127.0.0.1:8280:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:80/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
 
   # Optional batteries-included reachability: joins YOUR tailnet as node
   # "nova" and serves the web origin at https://nova.<tailnet>.ts.net with
@@ -226,3 +264,4 @@ volumes:
   kokoro_models:
   whisper_models:
   nova_state:
+  ntfy_cache:

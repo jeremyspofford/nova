@@ -167,6 +167,9 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
     if (d.key === 'voice.wake_word') {
       return <WakeWordField value={String(d.value)} onSelect={v => save(d.key, v)} />;
     }
+    if (d.key === 'notify.ntfy.topic') {
+      return <NtfyTopicField value={String(d.value ?? '')} onSave={v => save(d.key, v)} />;
+    }
     if (d.type === 'boolean') {
       return (
         <button
@@ -266,8 +269,11 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
               // and hide automatically, no code here to touch
               .filter(d => {
                 const m = d.key.match(/^notify\.(ntfy|webhook)\./);
-                if (!m) return true;
-                return m[1] === defs.find(x => x.key === 'notify.provider')?.value;
+                if (m && m[1] !== defs.find(x => x.key === 'notify.provider')?.value) return false;
+                // the custom-URL field only matters when the ntfy server is "custom"
+                if (d.key === 'notify.ntfy.custom_url'
+                    && defs.find(x => x.key === 'notify.ntfy.server_mode')?.value !== 'custom') return false;
+                return true;
               })
               .map(d => (
               <div key={d.key}
@@ -282,20 +288,23 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
               </div>
             ))}
             {section === 'Notifications' && (
-              <div className="pt-1">
-                <button
-                  onClick={runNotifyTest}
-                  disabled={notifyTest.busy}
-                  className="text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50"
-                >
-                  Send test notification
-                </button>
-                {notifyTest.msg && (
-                  <div className={`text-xs mt-2 ${
-                    notifyTest.ok === false ? 'text-amber-400' : 'text-teal-400'}`}>
-                    {notifyTest.msg}
-                  </div>
-                )}
+              <div className="pt-1 space-y-3">
+                <div>
+                  <button
+                    onClick={runNotifyTest}
+                    disabled={notifyTest.busy}
+                    className="text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50"
+                  >
+                    Send test notification
+                  </button>
+                  {notifyTest.msg && (
+                    <div className={`text-xs mt-2 ${
+                      notifyTest.ok === false ? 'text-amber-400' : 'text-teal-400'}`}>
+                      {notifyTest.msg}
+                    </div>
+                  )}
+                </div>
+                <NotificationsHelp defs={defs} />
               </div>
             )}
             {/* model inventory (pull, curated table) lives in the Models tab;
@@ -304,6 +313,130 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
         </section>
       ))}
       {status && <div className="text-xs text-teal-400">{status}</div>}
+    </div>
+  );
+}
+
+/** ntfy topic input with a Randomize button — on a public/shared server the
+ *  topic name is the only secret, so an easy way to mint a long unguessable
+ *  one matters. */
+function NtfyTopicField({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const randomize = () => {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const rnd = 'nova-' + Array.from(crypto.getRandomValues(new Uint8Array(14)))
+      .map(b => alphabet[b % alphabet.length]).join('');
+    setV(rnd);
+    onSave(rnd);
+  };
+  return (
+    <span className="shrink-0 flex items-center gap-2">
+      <input
+        className="w-44 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200 focus:outline-none focus:ring-1 focus:ring-teal-500"
+        value={v}
+        placeholder="nova-…"
+        onChange={e => setV(e.target.value)}
+        onBlur={() => { const t = v.trim(); if (t !== value) onSave(t); }}
+      />
+      <button
+        onClick={randomize}
+        title="Generate a long, unguessable topic"
+        className="text-xs px-2 py-1 rounded bg-stone-800 border border-stone-700 text-stone-300 hover:border-teal-600"
+      >
+        Randomize
+      </button>
+    </span>
+  );
+}
+
+/** In-Settings walkthrough for getting notifications onto a phone — adapts to
+ *  the chosen provider and ntfy server mode, and fills in the real topic +
+ *  server address so there's nothing to look up in a README. */
+function NotificationsHelp({ defs }: { defs: SettingDef[] }) {
+  const [open, setOpen] = useState(false);
+  const val = (k: string) => String(defs.find(d => d.key === k)?.value ?? '').trim();
+
+  const provider = val('notify.provider');
+  const mode = val('notify.ntfy.server_mode');
+  const topic = val('notify.ntfy.topic');
+  const custom = val('notify.ntfy.custom_url');
+  // the phone reaches the bundled server over the tailnet, same host as the
+  // Phone-setup URL but on ntfy's own https port (tailscale serve :8443)
+  const pub = val('ui.public_url').replace(/\/+$/, '').replace(/:\d+$/, '');
+  const builtinUrl = pub ? `${pub}:8443` : 'https://<your-nova-tailnet-domain>:8443';
+
+  const mono = 'font-mono text-stone-300';
+  const topicEl = topic
+    ? <code className={mono}>{topic}</code>
+    : <span className="text-amber-400">set a topic above (use Randomize)</span>;
+
+  return (
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40 p-3">
+      <button onClick={() => setOpen(o => !o)}
+        className="text-sm text-teal-400 hover:underline">
+        {open ? 'Hide phone setup' : 'How do I get these on my phone?'}
+      </button>
+      {open && (provider === 'webhook' ? (
+        <p className="mt-2 text-xs text-stone-400 leading-relaxed">
+          Webhook mode doesn't use a phone app — each notification is POSTed as
+          JSON to your URL. Set up delivery on the receiving end: a Slack or
+          Discord <b>incoming webhook</b>, a Zapier/IFTTT catch hook, or your own
+          endpoint. Then hit <b>Send test notification</b> and check that side.
+        </p>
+      ) : (
+        <ol className="mt-2 space-y-2 text-xs text-stone-400 leading-relaxed list-decimal pl-4">
+          <li>
+            Install the <b>ntfy</b> app — iOS: App&nbsp;Store; Android:
+            Play&nbsp;Store or F-Droid (search “ntfy”). It's free, no account.
+          </li>
+          {mode === 'public' && (
+            <li>
+              Leave the app on its default server (<code className={mono}>ntfy.sh</code>).
+              Nothing to add.
+            </li>
+          )}
+          {mode === 'custom' && (
+            <li>
+              In the app add your server{' '}
+              {custom
+                ? <code className={mono}>{custom}</code>
+                : <span className="text-amber-400">set the custom URL above</span>}{' '}
+              (Settings → Default server, or per subscription).
+            </li>
+          )}
+          {mode === 'builtin' && (
+            <li>
+              Point the app at your <b>bundled</b> server. Your phone can't use{' '}
+              <code className={mono}>http://ntfy:80</code> — that's internal to
+              Nova. It reaches it over Tailscale at{' '}
+              <code className={mono}>{builtinUrl}</code>. In the app: Settings →
+              Default server → enter that URL.
+              <div className="mt-1 text-stone-500">
+                Needs both the <code className="font-mono">notify</code> and{' '}
+                <code className="font-mono">tailscale</code> profiles running,
+                and the phone on your tailnet (same as Phone setup above).
+              </div>
+            </li>
+          )}
+          <li>
+            Tap <b>Subscribe to topic</b> and enter {topicEl} — the exact topic set
+            above. (Publisher and phone must use the same server + topic.)
+          </li>
+          <li>
+            Come back here and hit <b>Send test notification</b> — your phone
+            should buzz within a second or two.
+          </li>
+          {mode !== 'public' && (
+            <li className="text-stone-500">
+              <b>iPhone note:</b> self-hosted servers deliver instantly only if the
+              server forwards a wake-up ping through ntfy.sh — the bundled server
+              is set up for this by default (message text still stays on your
+              server). Android is instant either way.
+            </li>
+          )}
+        </ol>
+      ))}
     </div>
   );
 }
@@ -1505,10 +1638,19 @@ function ModelsTab() {
 
 /** Everything the configured credentials can reach; installed local models
  *  can be uninstalled from here (covers pulls that aren't in the curated
- *  table). */
+ *  table). Any cloud model can be approved straight from here in one click —
+ *  approval just creates (or re-enables) its curated row, which is what puts
+ *  it in the agent + chat dropdowns. */
 function FullCatalog() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
+  const [curated, setCurated] = useState<CuratedModel[]>([]);
+  const [filter, setFilter] = useState('');
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState('');
+
+  const loadCurated = () => getCuratedModels().then(setCurated).catch(() => {});
+  // curated row (if any) for a catalog model id — approval state lives here
+  const rowFor = (id: string) => curated.find(c => c.model === id);
 
   async function uninstall(m: ModelInfo) {
     if (!window.confirm(`Uninstall "${m.name}"? You can pull it again later.`)) return;
@@ -1519,12 +1661,37 @@ function FullCatalog() {
     } catch (e) { setStatus(String(e)); }
   }
 
+  async function setApproved(m: ModelInfo, approved: boolean) {
+    setBusy(b => ({ ...b, [m.id]: true }));
+    try {
+      const row = rowFor(m.id);
+      if (approved) {
+        // re-enable an existing row, or create a fresh (bare) one — metadata
+        // like tier/roles can be filled in later from the curated table; it
+        // isn't needed just to make the model assignable.
+        if (row) await patchCuratedModel(row.id, { enabled: true });
+        else await createCuratedModel({ model: m.id, provider: m.provider as CuratedModel['provider'] });
+      } else if (row) {
+        // seeded rows can't be deleted — veto by disabling; user rows are removed
+        if (row.is_system) await patchCuratedModel(row.id, { enabled: false });
+        else await deleteCuratedModel(row.id);
+      }
+      setStatus('');
+      await loadCurated();
+    } catch (e) { setStatus(String(e)); }
+    finally { setBusy(b => ({ ...b, [m.id]: false })); }
+  }
+
+  const shown = (models ?? []).filter(
+    m => !filter.trim() || m.id.toLowerCase().includes(filter.trim().toLowerCase()));
+
   return (
     <details
       className="rounded-lg border border-stone-700 bg-stone-800/30"
       onToggle={e => {
         if ((e.target as HTMLDetailsElement).open && models === null) {
           getModels(true).then(setModels).catch(() => setModels([]));
+          loadCurated();
         }
       }}
     >
@@ -1534,9 +1701,18 @@ function FullCatalog() {
       <div className="px-3 pb-3">
         <p className="text-xs text-stone-500 mb-1.5">
           Everything your credentials can reach. Providers without credentials
-          are absent by design. To make a cloud model appear in dropdowns, add
-          it to the curated table above (that's the approval).
+          are absent by design. Flip <b>approved</b> on any cloud model to put
+          it in the agent and chat dropdowns — no need to type it into the
+          curated table by hand.
         </p>
+        {models && models.length > 20 && (
+          <input
+            placeholder="filter…"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            className="w-full mb-1.5 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200"
+          />
+        )}
         <div className="max-h-64 overflow-y-auto nice-scroll space-y-0.5">
           {models === null ? (
             <div className="text-xs text-stone-500">loading…</div>
@@ -1544,18 +1720,29 @@ function FullCatalog() {
             <div className="text-xs text-stone-500 italic">
               nothing reachable — no local models installed and no cloud credentials
             </div>
+          ) : shown.length === 0 ? (
+            <div className="text-xs text-stone-500 italic">no models match "{filter}"</div>
           ) : (
-            models.map(m => (
-              <div key={m.id} className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono text-stone-400 truncate">{m.id}</span>
-                {m.provider === 'ollama' && (
-                  <button onClick={() => uninstall(m)}
-                    className="text-[10px] px-1.5 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800 shrink-0">
-                    uninstall
-                  </button>
-                )}
-              </div>
-            ))
+            shown.map(m => {
+              const row = rowFor(m.id);
+              const approved = !!row?.enabled;
+              return (
+                <div key={m.id} className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono text-stone-400 truncate">{m.id}</span>
+                  {m.provider === 'ollama' ? (
+                    <button onClick={() => uninstall(m)}
+                      className="text-[10px] px-1.5 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800 shrink-0">
+                      uninstall
+                    </button>
+                  ) : (
+                    <span className={busy[m.id] ? 'opacity-50 pointer-events-none' : ''}>
+                      <Toggle on={approved} onChange={() => setApproved(m, !approved)} label="approved"
+                        title="Approved cloud models appear in the agent + chat model dropdowns. Off vetoes the model without losing any curated metadata." />
+                    </span>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
         {status && <div className="mt-1 text-xs text-amber-400">{status}</div>}

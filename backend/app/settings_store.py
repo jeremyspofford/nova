@@ -239,18 +239,24 @@ SETTING_DEFS: list[dict] = [
                      "(ntfy maps this to sound/vibration and lock-screen "
                      "prominence; other providers pass it through).")},
     # ntfy provider
-    {"key": "notify.ntfy.server_url", "type": "string", "default": "https://ntfy.sh",
-     "section": "Notifications", "label": "ntfy · server URL",
-     "description": ("Where notifications are published. The default public "
-                     "ntfy.sh works with zero setup but relays your messages "
-                     "through a third party — self-host ntfy and point this at "
-                     "it (e.g. http://ntfy:80) to keep everything private.")},
+    {"key": "notify.ntfy.server_mode", "type": "enum", "default": "public",
+     "options": ["public", "builtin", "custom"],
+     "section": "Notifications", "label": "ntfy · server",
+     "description": ("Which ntfy server to publish to. public = ntfy.sh (free, "
+                     "zero setup, but your message text transits a third party); "
+                     "builtin = Nova's own bundled ntfy — fully private (start it "
+                     "with `docker compose --profile notify up -d ntfy`); custom = "
+                     "your own server URL below.")},
+    {"key": "notify.ntfy.custom_url", "type": "string", "default": "",
+     "section": "Notifications", "label": "ntfy · custom server URL",
+     "description": ("Only used when the server above is set to custom "
+                     "(e.g. https://ntfy.example.com).")},
     {"key": "notify.ntfy.topic", "type": "string", "default": "",
      "section": "Notifications", "label": "ntfy · topic",
      "description": ("The topic to publish to and subscribe to in the ntfy app. "
-                     "On public ntfy.sh the topic name IS the only secret, so "
-                     "pick a long, hard-to-guess one (anyone who knows it can "
-                     "read your notifications).")},
+                     "On a public/shared server the topic name IS the only "
+                     "secret, so pick a long, hard-to-guess one (use Randomize). "
+                     "Anyone who knows it can read your notifications.")},
     # webhook provider
     {"key": "notify.webhook.url", "type": "string", "default": "",
      "section": "Notifications", "label": "Webhook · URL",
