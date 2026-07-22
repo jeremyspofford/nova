@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app import db, model_warmer, rules, scheduler, settings_store
 from app.config import settings
+from app.llm import providers
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
 from app.router_voice import router as voice_router
@@ -25,14 +26,16 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()
+    await providers.warm()
     await rules.warm()
     await memory.startup()
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
+    provider_health_task = asyncio.create_task(providers.health_loop())
     log.info("Backend ready")
     yield
     log.info("Shutting down...")
-    for task in (scheduler_task, warmer_task):
+    for task in (scheduler_task, warmer_task, provider_health_task):
         task.cancel()
         try:
             await task

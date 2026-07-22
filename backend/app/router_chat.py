@@ -474,6 +474,72 @@ async def delete_curated_endpoint(row_id: str):
     return {"status": "deleted"}
 
 
+# ── LLM providers (Settings → Models → Providers) — bring-your-own key /
+#    endpoint registry. Operator-only; agents never touch provider config.
+#    API keys are stored server-side and NEVER returned (the list is redacted
+#    to key_set + last-4). ─────────────────────────────────────────────────
+
+@router.get("/api/v1/providers")
+async def list_providers_endpoint():
+    from app.llm import providers
+    return providers.list_public()
+
+
+@router.get("/api/v1/providers/presets")
+async def provider_presets_endpoint():
+    from app.llm import providers
+    return providers.PRESETS
+
+
+@router.post("/api/v1/providers", status_code=201)
+async def create_provider_endpoint(body: dict):
+    from app.llm import providers
+    try:
+        return await providers.create(
+            slug=str(body.get("slug", "")),
+            label=str(body.get("label", "")),
+            base_url=str(body.get("base_url", "")),
+            **{k: body[k] for k in
+               ("kind", "api_key", "extra_headers", "catalog_path",
+                "needs_key", "enabled") if k in body})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/api/v1/providers/{provider_id}")
+async def patch_provider_endpoint(provider_id: str, body: dict):
+    from app.llm import providers
+    try:
+        result = await providers.update(provider_id, **body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="provider not found")
+    if result == "no_fields":
+        raise HTTPException(status_code=422, detail="no editable fields provided")
+    return {"status": "updated"}
+
+
+@router.delete("/api/v1/providers/{provider_id}")
+async def delete_provider_endpoint(provider_id: str):
+    from app.llm import providers
+    result = await providers.delete(provider_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="provider not found")
+    if result == "is_system":
+        raise HTTPException(
+            status_code=403,
+            detail="the seeded OpenRouter provider can be edited or disabled "
+                   "but not deleted")
+    return {"status": "deleted"}
+
+
+@router.post("/api/v1/providers/{provider_id}/test")
+async def test_provider_endpoint(provider_id: str):
+    from app.llm import providers
+    return await providers.check(provider_id)  # reaches AND stamps the health dot
+
+
 # ── MCP servers (docs/plans/mcp-client.md) — operator-only registry.
 #    No agent-facing tool exists here on purpose: an agent that could
 #    register a server could grant itself arbitrary capabilities. ───────

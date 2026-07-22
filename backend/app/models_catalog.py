@@ -1,8 +1,9 @@
 """Available-models catalog — feeds model dropdowns in the UI.
 
-Combines installed Ollama models (local truth) with the OpenRouter catalog
-(public endpoint, keyless). Cached 5 minutes; each source fails soft so an
-offline local-only user still gets their Ollama list.
+Combines installed Ollama models (local truth) with the catalog of every
+configured provider in the registry (`llm/providers.py`). Cached 5 minutes;
+each source fails soft so an offline local-only user still gets their Ollama
+list.
 """
 
 import logging
@@ -11,7 +12,6 @@ import time
 import httpx
 
 from app import settings_store
-from app.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -33,24 +33,36 @@ async def _ollama_models() -> list[dict]:
         return []
 
 
-async def _openrouter_models() -> list[dict]:
-    # Auth gate: no key = no access = the models don't exist for this
-    # install. (Same rule for every future provider: unauthenticated
-    # providers contribute nothing to any catalog view.)
-    if not settings.has_openrouter():
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.openrouter_base_url}/models")
-            resp.raise_for_status()
-        models = [{"id": f"openrouter:{m['id']}", "provider": "openrouter",
-                   "name": m["id"]}
-                  for m in resp.json().get("data", [])]
-        models.sort(key=lambda m: m["name"])
-        return models
-    except Exception as e:
-        log.warning("openrouter model list unavailable: %s", e)
-        return []
+async def _provider_models() -> list[dict]:
+    """Every configured registry provider's catalog, as `slug:id` entries.
+
+    Auth gate per provider: an unconfigured provider (no key, or disabled)
+    contributes nothing. One provider failing — offline, or no /models endpoint
+    — never sinks the rest; it just logs and yields nothing. Providers with an
+    empty catalog_path can't list, so the operator approves their models by id.
+    """
+    from app.llm import providers
+    out: list[dict] = []
+    for slug in sorted(providers.known_slugs()):
+        row = providers.get(slug)
+        if not row or not row["catalog_path"] or not providers.is_configured(slug):
+            continue
+        headers = dict(row["extra_headers"])
+        key = providers.resolve_key(row)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        url = f"{row['base_url'].rstrip('/')}{row['catalog_path']}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+            models = [{"id": f"{slug}:{m['id']}", "provider": slug, "name": m["id"]}
+                      for m in resp.json().get("data", []) if m.get("id")]
+            models.sort(key=lambda m: m["name"])
+            out.extend(models)
+        except Exception as e:
+            log.warning("provider '%s' model list unavailable: %s", slug, e)
+    return out
 
 
 def invalidate():
@@ -125,8 +137,8 @@ async def list_models(force: bool = False, full: bool = False) -> list[dict]:
         models = _cache["models"]
     else:
         ollama = await _ollama_models()
-        openrouter = await _openrouter_models()
-        models = ollama + openrouter
+        provider_models = await _provider_models()
+        models = ollama + provider_models
         if models:
             _cache.update(at=time.monotonic(), models=models)
     if full:

@@ -23,7 +23,7 @@ import httpx
 
 from app import curated_models, hardware, model_warmer, models_catalog, settings_store
 from app.agents import registry as agent_registry
-from app.config import settings
+from app.llm import providers
 from app.llm.router import _resolve, effective_model
 
 log = logging.getLogger(__name__)
@@ -76,16 +76,17 @@ def _fits_local(row: dict, hw: dict) -> tuple[bool, str]:
     return False, ""
 
 
-def _candidates(profile: str, rows: list[dict], hw: dict,
-                cloud_ok: bool) -> list[dict]:
-    """Fitting rows for a profile, best first."""
+def _candidates(profile: str, rows: list[dict], hw: dict) -> list[dict]:
+    """Fitting rows for a profile, best first. A cloud row (any provider that
+    isn't the built-in ollama) is a candidate only when that provider is
+    configured; local rows must fit the hardware."""
     role = _PROFILE_ROLE[profile]
     out = []
     for row in rows:
         if role not in row["roles"]:
             continue
-        if row["provider"] == "openrouter":
-            if not cloud_ok:
+        if row["provider"] != "ollama":
+            if not providers.is_configured(row["provider"]):
                 continue
             out.append({**row, "how": "cloud"})
         else:
@@ -268,7 +269,7 @@ async def recommendations() -> dict:
     hw = await hardware.detect()
     rows = await curated_models.list_all(enabled_only=True)
     agents = await agent_registry.list_agents(enabled_only=False)
-    cloud_ok = settings.has_openrouter()
+    cloud_ok = any(providers.is_configured(s) for s in providers.known_slugs())
 
     # pin guard checks the FULL catalog — validity means "the provider
     # actually serves it", not "it's on the approved dropdown list"
@@ -277,7 +278,7 @@ async def recommendations() -> dict:
 
     per_profile: dict[str, list[dict]] = {}
     for profile in _PROFILE_ROLE:
-        per_profile[profile] = _candidates(profile, rows, hw, cloud_ok)
+        per_profile[profile] = _candidates(profile, rows, hw)
 
     out = []
     for agent in agents:

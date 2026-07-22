@@ -860,7 +860,8 @@ export async function testModel(model: string): Promise<ProbeResult> {
 export interface CuratedModel {
   id: string;
   model: string;
-  provider: 'ollama' | 'openrouter';
+  // 'ollama' (built-in local) or any registered provider slug
+  provider: string;
   min_ram_gb: number | null;
   min_vram_gb: number | null;
   tool_tier: 'A' | 'B' | 'C';
@@ -901,6 +902,82 @@ export async function patchCuratedModel(id: string, body: Record<string, unknown
 export async function deleteCuratedModel(id: string): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/models/curated/${id}`, { method: 'DELETE' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
+// ── LLM providers (bring-your-own key / endpoint). The API never returns the
+//    key — only key_set + the last-4 hint. ──────────────────────────────────
+export interface Provider {
+  id: string;
+  slug: string;
+  label: string;
+  kind: string;
+  base_url: string;
+  extra_headers: Record<string, string>;
+  catalog_path: string;
+  needs_key: boolean;
+  enabled: boolean;
+  is_system: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  key_set: boolean;
+  key_hint: string;
+  configured: boolean;
+  // persistent reachability (stamped on save + a 60s backend loop)
+  last_checked_at: string | null;
+  last_seen_at: string | null;
+  last_ok: boolean | null;
+  last_error: string | null;
+}
+
+export interface ProviderPreset {
+  slug: string;
+  label: string;
+  base_url: string;
+  needs_key: boolean;
+}
+
+export interface ProviderTest { ok: boolean | null; error?: string; model_count?: number }
+
+export async function getProviders(): Promise<Provider[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers`);
+  if (!r.ok) throw new Error('Failed to load providers');
+  return r.json();
+}
+
+export async function getProviderPresets(): Promise<ProviderPreset[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers/presets`);
+  if (!r.ok) throw new Error('Failed to load provider presets');
+  return r.json();
+}
+
+export async function createProvider(body: Record<string, unknown>): Promise<Provider> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Create failed');
+  return r.json();
+}
+
+export async function patchProvider(id: string, body: Record<string, unknown>): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Update failed');
+}
+
+export async function deleteProvider(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Delete failed');
+}
+
+export async function testProvider(id: string): Promise<ProviderTest> {
+  const r = await apiFetch(`${API_URL}/api/v1/providers/${id}/test`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Test failed');
+  return r.json();
 }
 
 export interface McpTool {

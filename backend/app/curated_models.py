@@ -60,9 +60,14 @@ async def list_all(enabled_only: bool = False) -> list[dict]:
 async def create(model: str, provider: str, **fields) -> dict:
     model = model.strip()
     if ":" not in model:
-        raise ValueError("model must be 'openrouter:<id>' or 'ollama:<name>'")
-    if provider not in ("ollama", "openrouter"):
-        raise ValueError("provider must be 'ollama' or 'openrouter'")
+        raise ValueError("model must be '<provider>:<id>', e.g. 'ollama:gemma3:12b'")
+    from app.llm import providers
+    valid = {"ollama"} | providers.known_slugs()
+    if provider not in valid:
+        raise ValueError(f"unknown provider '{provider}' — add it in "
+                         f"Settings → Models → Providers")
+    if model.split(":", 1)[0] != provider:
+        raise ValueError(f"model id must start with '{provider}:' to match its provider")
     fields = {k: v for k, v in fields.items() if k in _EDIT_FIELDS}
     _validate(fields)
     cols = ["model", "provider"] + list(fields)

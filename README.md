@@ -22,6 +22,20 @@ live status) — no CLI needed; `docker compose --profile inference up -d`
 still works. Its URL and the fallback model are runtime settings there too
 (point the URL at `http://host.docker.internal:11434` for a host-run Ollama).
 
+### Bring your own provider / key
+
+OpenRouter is just the batteries-included default. **Settings → Models →
+Providers** lets you add any OpenAI-compatible provider with your own key —
+OpenAI, Anthropic, Gemini, Groq, HuggingFace, Together, DeepSeek, Mistral, xAI,
+a local **LM Studio** / **vLLM** server (`http://host.docker.internal:<port>/v1`,
+no key needed), or a custom URL. Pick a preset, paste the key, hit **test**.
+The provider's models then appear in **Settings → Models → Full catalog**, where
+one **approved** toggle puts a model into the agent and chat dropdowns. A model
+is addressed as `<provider-slug>:<model-id>` (e.g. `openai:gpt-5.1`); keys are
+stored server-side and never shown again. Note that Anthropic and Gemini are
+reached through their OpenAI-compatibility endpoints, and are also available
+through OpenRouter with no extra setup.
+
 ## GPU acceleration (bundled Ollama)
 
 `docker-compose.gpu.yml` grants the ollama service NVIDIA GPU access. The

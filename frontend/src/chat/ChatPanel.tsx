@@ -226,12 +226,16 @@ interface ChatPanelProps {
   onWidthChange: (w: number) => void;
   mobile?: boolean;
   onShowBrain?: () => void;
+  /** Settings overlay open state — the model list is re-fetched whenever this
+   *  closes, so a model approved in Settings is immediately pickable here
+   *  without a page reload. */
+  settingsOpen?: boolean;
 }
 
 const MIN_W = 320;
 const MAX_W = 760;
 
-export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPanelProps) {
+export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsOpen }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -498,13 +502,17 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     return () => { speaker.onChange = undefined; };
   }, []);
 
+  // Fetch on mount and every time the Settings overlay closes — approving a
+  // model in Settings must make it immediately selectable here (the picker
+  // used to be frozen at page-load, so newly approved models never appeared).
   useEffect(() => {
+    if (settingsOpen) return;
     getModels().then(setModels).catch(() => {});
     getAgents().then(agents => {
       const main = agents.find(a => a.name === 'main');
       if (main) setMainAgent({ id: main.id, model: main.model });
     }).catch(() => {});
-  }, []);
+  }, [settingsOpen]);
 
   async function changeModel(model: string) {
     if (!mainAgent) return;

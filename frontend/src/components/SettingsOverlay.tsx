@@ -16,6 +16,8 @@ import {
   getNotifyReachability, getNotifyService, notifyServiceAction,
   pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, testNotification,
   uninstallModel, updateSkill,
+  Provider, ProviderPreset,
+  createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider,
 } from '../api';
 import type { NotifyReachability, NotifyService } from '../api';
 import { Markdown } from './Markdown';
@@ -1733,9 +1735,239 @@ function ModelsTab() {
         <SettingsTab only={['Models']} />
       </div>
       <PullModel onPulled={() => {}} />
+      <ProvidersPanel />
       <CuratedTable />
       <FullCatalog />
     </div>
+  );
+}
+
+/** LLM providers — bring your own key / endpoint. Any OpenAI-compatible
+ *  provider (OpenAI, Anthropic, Gemini, Groq, HuggingFace, a local LM Studio /
+ *  vLLM server, or a custom URL) can be added here; its models then show up in
+ *  the Full catalog below, ready to approve. Keys are stored server-side and
+ *  never sent back — the UI only ever sees "key set" + the last 4 chars. */
+function ProvidersPanel() {
+  const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Provider | null>(null);
+  const [status, setStatus] = useState('');
+  const [tests, setTests] = useState<Record<string, string>>({});
+  const emptyForm = {
+    slug: '', label: '', base_url: '', api_key: '',
+    needs_key: true, catalog_path: '/models',
+  };
+  const [form, setForm] = useState(emptyForm);
+
+  const load = () => getProviders().then(setProviders).catch(e => setStatus(String(e)));
+  useEffect(() => {
+    load();
+    getProviderPresets().then(setPresets).catch(() => {});
+    const t = setInterval(load, 30000);  // keep the reachability dots fresh
+    return () => clearInterval(t);
+  }, []);
+
+  function applyPreset(slug: string) {
+    const p = presets.find(x => x.slug === slug);
+    if (!p) return;
+    const custom = p.slug === 'custom';
+    setForm({
+      slug: custom ? '' : p.slug,
+      label: custom ? '' : p.label,
+      base_url: p.base_url, api_key: '',
+      needs_key: p.needs_key, catalog_path: '/models',
+    });
+  }
+
+  function startAdd() { setEditing(null); setForm(emptyForm); setAdding(true); }
+  function startEdit(p: Provider) {
+    setAdding(false);
+    setEditing(p);
+    setForm({
+      slug: p.slug, label: p.label, base_url: p.base_url, api_key: '',
+      needs_key: p.needs_key, catalog_path: p.catalog_path,
+    });
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      if (editing) {
+        const body: Record<string, unknown> = {
+          label: form.label, base_url: form.base_url,
+          needs_key: form.needs_key, catalog_path: form.catalog_path,
+        };
+        if (form.api_key) body.api_key = form.api_key;  // blank = keep current key
+        await patchProvider(editing.id, body);
+        setEditing(null);
+      } else {
+        await createProvider({
+          slug: form.slug, label: form.label, base_url: form.base_url,
+          api_key: form.api_key || undefined,
+          needs_key: form.needs_key, catalog_path: form.catalog_path,
+        });
+        setAdding(false);
+      }
+      setForm(emptyForm);
+      setStatus('');
+      load();
+    } catch (err) { setStatus(String(err)); }
+  }
+
+  async function toggle(p: Provider) {
+    try { await patchProvider(p.id, { enabled: !p.enabled }); load(); }
+    catch (e) { setStatus(String(e)); }
+  }
+
+  async function remove(p: Provider) {
+    if (!window.confirm(`Remove provider "${p.label}"? Models assigned to it will fall back to local until reassigned.`)) return;
+    try { await deleteProvider(p.id); load(); } catch (e) { setStatus(String(e)); }
+  }
+
+  async function test(p: Provider) {
+    setTests(t => ({ ...t, [p.id]: 'testing…' }));
+    try {
+      const r = await testProvider(p.id);
+      const msg = r.ok === true
+        ? `✓ reachable${r.model_count != null ? ` — ${r.model_count} models` : ''}`
+        : r.ok === null ? `— ${r.error}` : `✗ ${r.error}`;
+      setTests(t => ({ ...t, [p.id]: msg }));
+    } catch (e) { setTests(t => ({ ...t, [p.id]: `✗ ${e}` })); }
+  }
+
+  const formFields = (
+    <>
+      <div className="flex gap-2">
+        <input required placeholder="slug (model-id prefix, e.g. openai)"
+          value={form.slug} disabled={!!editing}
+          onChange={e => setForm({ ...form, slug: e.target.value })}
+          className="w-40 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200 disabled:opacity-50" />
+        <input required placeholder="label (e.g. OpenAI)" value={form.label}
+          onChange={e => setForm({ ...form, label: e.target.value })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" />
+      </div>
+      <input required placeholder="base URL (…/v1)" value={form.base_url}
+        onChange={e => setForm({ ...form, base_url: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+      <input type="password" autoComplete="off"
+        placeholder={editing?.key_set ? `API key (set …${editing.key_hint}; blank keeps it)` : 'API key'}
+        value={form.api_key}
+        onChange={e => setForm({ ...form, api_key: e.target.value })}
+        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+      <div className="flex items-center gap-3">
+        <input placeholder="catalog path (/models, blank = can't list)"
+          value={form.catalog_path}
+          onChange={e => setForm({ ...form, catalog_path: e.target.value })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+        <label className="flex items-center gap-1.5 text-[11px] text-stone-400 select-none whitespace-nowrap">
+          <input type="checkbox" checked={form.needs_key}
+            onChange={e => setForm({ ...form, needs_key: e.target.checked })}
+            className="accent-teal-600" />
+          requires a key
+        </label>
+      </div>
+    </>
+  );
+
+  return (
+    <details className="rounded-lg border border-stone-700 bg-stone-800/30">
+      <summary className="px-3 py-2 text-sm text-stone-300 cursor-pointer select-none">
+        Providers{providers ? ` (${providers.length})` : ''} — bring your own key / endpoint
+      </summary>
+      <div className="px-3 pb-3 space-y-2">
+        <p className="text-xs text-stone-500">
+          Add any OpenAI-compatible provider — OpenAI, Anthropic, Gemini, Groq,
+          HuggingFace, a local LM Studio / vLLM server, or a custom URL — with
+          its own key. Its models then appear in the Full catalog below to
+          approve. Keys are stored server-side and never shown again.
+        </p>
+        {providers === null ? (
+          <div className="text-xs text-stone-500">loading…</div>
+        ) : providers.map(p => (
+          <div key={p.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
+            {editing?.id === p.id ? (
+              <form onSubmit={submit} className="space-y-2">
+                {formFields}
+                <div className="flex gap-2 justify-end">
+                  <button type="button" onClick={() => { setEditing(null); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+                  <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-stone-100 truncate">{p.label}</span>
+                    <span className="text-[10px] font-mono px-1 rounded bg-stone-700 text-stone-400">{p.slug}</span>
+                    {p.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">seed</span>}
+                    {!p.configured ? (
+                      <span className="text-[10px] px-1 rounded border border-amber-800 text-amber-400">no key</span>
+                    ) : p.last_ok === false ? (
+                      <span title={p.last_error ?? 'unreachable'}
+                        className="flex items-center gap-1 text-[10px] text-red-400 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500" />unreachable
+                      </span>
+                    ) : p.last_ok === true ? (
+                      <span title={p.last_checked_at ? `reachable · checked ${fmtDateTime(p.last_checked_at)}` : 'reachable'}
+                        className="flex items-center gap-1 text-[10px] text-emerald-400 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />reachable
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-[10px] text-stone-500 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-stone-500 animate-pulse" />checking…
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button onClick={() => test(p)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-teal-300">test</button>
+                    <button onClick={() => startEdit(p)}
+                      className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">edit</button>
+                    {!p.is_system && (
+                      <button onClick={() => remove(p)}
+                        className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-500 hover:text-red-400 hover:border-red-800">delete</button>
+                    )}
+                    <Toggle on={p.enabled} onChange={() => toggle(p)} label="enabled"
+                      title="Disabled providers contribute no models and their assigned agents fall back to local." />
+                  </div>
+                </div>
+                <div className="mt-0.5 text-[11px] font-mono text-stone-500 truncate">
+                  {p.base_url}{p.key_set && ` · key …${p.key_hint}`}
+                </div>
+                {p.configured && p.last_ok === false && p.last_error && (
+                  <div className="mt-0.5 text-[11px] text-red-400/90 truncate" title={p.last_error}>
+                    ✗ {p.last_error}
+                  </div>
+                )}
+                {tests[p.id] && <div className="mt-0.5 text-[11px] font-mono text-stone-400">{tests[p.id]}</div>}
+              </>
+            )}
+          </div>
+        ))}
+
+        {adding ? (
+          <form onSubmit={submit} className="rounded border border-teal-800 bg-stone-900/40 px-2.5 py-2 space-y-2">
+            <select defaultValue="" onChange={e => applyPreset(e.target.value)}
+              className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200">
+              <option value="" disabled>start from a preset…</option>
+              {presets.map(p => <option key={p.slug} value={p.slug}>{p.label}</option>)}
+            </select>
+            {formFields}
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => { setAdding(false); setForm(emptyForm); }} className="text-xs text-stone-400 px-2">cancel</button>
+              <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">add</button>
+            </div>
+          </form>
+        ) : (
+          <button onClick={startAdd}
+            className="w-full text-xs text-stone-400 hover:text-teal-300 border border-dashed border-stone-700 hover:border-teal-800 rounded py-1.5">
+            + add a provider
+          </button>
+        )}
+        {status && <div className="text-xs text-red-400">{status}</div>}
+      </div>
+    </details>
   );
 }
 

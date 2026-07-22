@@ -597,6 +597,7 @@ export function Brain() {
           onWidthChange={changeChatWidth}
           mobile={isMobile}
           onShowBrain={() => setMobileChat(false)}
+          settingsOpen={settingsOpen}
         />
       )}
       {isMobile && !mobileChat && (
