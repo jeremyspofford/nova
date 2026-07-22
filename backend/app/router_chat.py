@@ -980,6 +980,73 @@ async def notify_test():
         title="Nova test", tags=["bell"])
 
 
+@router.get("/api/v1/notify/reachability")
+async def notify_reachability():
+    """Read-only diagnostic of the notification delivery path (roadmap #21
+    reachability, phase 1). Reports whether it's configured, whether the server
+    is reachable from Nova, and the EXACT url + topic the operator's phone
+    needs — honestly separating what Nova verifies from what only the operator
+    can (the tailnet side). `ok: null` = Nova can't check this from here."""
+    import re
+    import httpx
+
+    provider = settings_store.get("notify.provider")
+    enabled = bool(settings_store.get("notify.enabled"))
+    out: dict = {"provider": provider, "enabled": enabled, "checks": [], "phone": None}
+
+    if provider == "webhook":
+        url = (settings_store.get("notify.webhook.url") or "").strip()
+        out["checks"] = [
+            {"label": "Notifications enabled", "ok": enabled},
+            {"label": "Webhook URL set", "ok": bool(url), "detail": url or "not set"},
+        ]
+        out["note"] = ("Webhook posts JSON to your URL — verify delivery on the "
+                       "receiving end (Slack/Discord/Zapier/your endpoint).")
+        return out
+
+    # ── ntfy ──
+    mode = settings_store.get("notify.ntfy.server_mode")
+    topic = (settings_store.get("notify.ntfy.topic") or "").strip()
+    if mode == "builtin":
+        publish_url = settings.ntfy_builtin_url
+        pub = (settings_store.get("ui.public_url") or "").strip().rstrip("/")
+        host = re.sub(r":\d+$", "", pub) if pub else ""
+        phone_url = f"{host}:8443" if host else ""
+    elif mode == "custom":
+        publish_url = (settings_store.get("notify.ntfy.custom_url") or "").strip()
+        phone_url = publish_url
+    else:
+        publish_url = phone_url = "https://ntfy.sh"
+
+    reachable, detail = False, "no server URL"
+    if publish_url:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.get(f"{publish_url.rstrip('/')}/v1/health")
+            reachable = r.status_code == 200
+            detail = (f"reached {publish_url}" if reachable
+                      else f"{publish_url} returned HTTP {r.status_code}")
+        except Exception as e:  # noqa: BLE001 — report, never raise
+            detail = f"could not reach {publish_url} ({type(e).__name__})"
+
+    checks = [
+        {"label": "Notifications enabled", "ok": enabled},
+        {"label": "Topic set", "ok": bool(topic),
+         "detail": topic or "no topic yet — use Randomize"},
+        {"label": "ntfy server reachable from Nova", "ok": reachable, "detail": detail},
+    ]
+    if mode == "builtin":
+        checks.append({"label": "Phone URL derived from your public URL",
+                       "ok": bool(phone_url),
+                       "detail": phone_url or "set your public URL (Phone setup) first"})
+        checks.append({"label": "Tailnet route + Tailscale running", "ok": None,
+                       "detail": "Nova can't verify the tailnet side — make sure the "
+                                 "notify + tailscale profiles are up"})
+    out["checks"] = checks
+    out["phone"] = {"server_url": phone_url, "topic": topic}
+    return out
+
+
 # ── automations ──────────────────────────────────────────────────────────
 
 @router.get("/api/v1/automations")

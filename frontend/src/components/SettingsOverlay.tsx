@@ -13,9 +13,11 @@ import {
   getModelsDir, getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
   getTools, getVoiceHealth, patchAgent,
   patchAutomation, patchCuratedModel, patchMcpServer, patchRule, patchSettings, patchTool,
+  getNotifyReachability,
   pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, testNotification,
   uninstallModel, updateSkill,
 } from '../api';
+import type { NotifyReachability } from '../api';
 import { Markdown } from './Markdown';
 import { RecentTurns } from './RecentTurns';
 import qrcode from 'qrcode-generator';
@@ -289,6 +291,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
             ))}
             {section === 'Notifications' && (
               <div className="pt-1 space-y-3">
+                <NotificationsReachability />
                 <div>
                   <button
                     onClick={runNotifyTest}
@@ -347,6 +350,63 @@ function NtfyTopicField({ value, onSave }: { value: string; onSave: (v: string) 
         Randomize
       </button>
     </span>
+  );
+}
+
+/** Read-only status of the notification delivery path — turns "is this even
+ *  wired?" from invisible into a row of dots, and shows the exact URL + topic
+ *  the phone needs. Refreshes when a notify setting changes. */
+function NotificationsReachability() {
+  const [data, setData] = useState<NotifyReachability | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = () => {
+    setLoading(true);
+    getNotifyReachability().then(setData).catch(() => setData(null)).finally(() => setLoading(false));
+  };
+  useEffect(() => {
+    refresh();
+    const onChange = (e: Event) => {
+      const key = (e as CustomEvent).detail?.key as string | undefined;
+      if (key && key.startsWith('notify.')) refresh();
+    };
+    window.addEventListener('nova:setting-changed', onChange);
+    return () => window.removeEventListener('nova:setting-changed', onChange);
+  }, []);
+
+  const dot = (ok: boolean | null) =>
+    ok === true ? 'bg-teal-500' : ok === false ? 'bg-amber-500' : 'bg-stone-500';
+
+  return (
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-stone-200">Delivery path</div>
+        <button onClick={refresh} disabled={loading}
+          className="text-xs text-stone-400 hover:text-stone-200 disabled:opacity-50">
+          {loading ? 'checking…' : 'recheck'}
+        </button>
+      </div>
+      {data ? (
+        <div className="mt-2 space-y-1.5">
+          {data.checks.map((c, i) => (
+            <div key={i} className="flex items-start gap-2 text-xs">
+              <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${dot(c.ok)}`} />
+              <span className="text-stone-300">{c.label}</span>
+              {c.detail && <span className="text-stone-500 min-w-0 break-words">— {c.detail}</span>}
+            </div>
+          ))}
+          {data.phone?.server_url && (
+            <div className="mt-2 pt-2 border-t border-stone-700/60 text-xs text-stone-400">
+              On your phone, enter server{' '}
+              <code className="font-mono text-stone-300 break-all">{data.phone.server_url}</code>
+              {data.phone.topic && <> and subscribe to <code className="font-mono text-stone-300">{data.phone.topic}</code></>}.
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-stone-500">{loading ? 'checking…' : 'unavailable'}</div>
+      )}
+    </div>
   );
 }
 

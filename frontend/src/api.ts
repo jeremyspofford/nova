@@ -339,6 +339,21 @@ export async function testNotification(): Promise<NotifyTestResult> {
   return r.json();
 }
 
+export interface NotifyReachability {
+  provider: string;
+  enabled: boolean;
+  checks: { label: string; ok: boolean | null; detail?: string }[];
+  phone?: { server_url: string; topic: string } | null;
+  note?: string;
+}
+
+/** Read-only diagnostic of the notification delivery path. */
+export async function getNotifyReachability(): Promise<NotifyReachability> {
+  const r = await apiFetch(`${API_URL}/api/v1/notify/reachability`);
+  if (!r.ok) throw new Error('Failed to load reachability');
+  return r.json();
+}
+
 export interface BundledInferenceStatus {
   available: boolean;
   present?: boolean;
