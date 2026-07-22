@@ -13,11 +13,11 @@ import {
   getModelsDir, getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
   getTools, getVoiceHealth, patchAgent,
   patchAutomation, patchCuratedModel, patchMcpServer, patchRule, patchSettings, patchTool,
-  getNotifyReachability,
+  getNotifyReachability, getNotifyService, notifyServiceAction,
   pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, testNotification,
   uninstallModel, updateSkill,
 } from '../api';
-import type { NotifyReachability } from '../api';
+import type { NotifyReachability, NotifyService } from '../api';
 import { Markdown } from './Markdown';
 import { RecentTurns } from './RecentTurns';
 import qrcode from 'qrcode-generator';
@@ -291,6 +291,7 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
             ))}
             {section === 'Notifications' && (
               <div className="pt-1 space-y-3">
+                <NotifyServiceControl defs={defs} />
                 <NotificationsReachability />
                 <div>
                   <button
@@ -350,6 +351,48 @@ function NtfyTopicField({ value, onSave }: { value: string; onSave: (v: string) 
         Randomize
       </button>
     </span>
+  );
+}
+
+/** Start/stop the self-hosted ntfy server from the UI (no compose commands).
+ *  'Start' also derives + applies the correct base URL so the phone stays in
+ *  sync. Only shown for the builtin server with the control sidecar present. */
+function NotifyServiceControl({ defs }: { defs: SettingDef[] }) {
+  const [svc, setSvc] = useState<NotifyService | null>(null);
+  const [busy, setBusy] = useState(false);
+  const val = (k: string) => String(defs.find(d => d.key === k)?.value ?? '');
+
+  const refresh = () => getNotifyService().then(setSvc).catch(() => setSvc(null));
+  useEffect(() => { refresh(); }, []);
+
+  if (val('notify.provider') !== 'ntfy' || val('notify.ntfy.server_mode') !== 'builtin'
+      || !svc?.available) return null;
+
+  const running = !!svc.ntfy?.running;
+  const act = async (action: 'up' | 'down') => {
+    setBusy(true);
+    try {
+      await notifyServiceAction(action);
+      // the sidecar op runs async — poll a few times to reflect the new state
+      for (let i = 0; i < 6; i++) { await new Promise(r => setTimeout(r, 2500)); await refresh(); }
+    } catch { /* leave state; a recheck will catch up */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-700/70 bg-stone-800/40 p-3">
+      <div className="min-w-0">
+        <div className="text-sm text-stone-200">Self-hosted ntfy server</div>
+        <div className="text-xs text-stone-500">
+          {busy ? 'working…' : running ? 'Running' : 'Stopped'} — Nova sets its
+          address automatically so your phone stays in sync.
+        </div>
+      </div>
+      <button onClick={() => act(running ? 'down' : 'up')} disabled={busy}
+        className="shrink-0 text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50">
+        {busy ? '…' : running ? 'Stop' : 'Start'}
+      </button>
+    </div>
   );
 }
 

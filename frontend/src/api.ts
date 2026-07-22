@@ -354,6 +354,34 @@ export async function getNotifyReachability(): Promise<NotifyReachability> {
   return r.json();
 }
 
+export interface NotifyService {
+  available: boolean;
+  phone_url?: string;
+  base_url?: string;
+  ntfy?: { present: boolean; running: boolean; state: string };
+  tailscale?: { present: boolean; running: boolean; state: string };
+  op?: string | null;
+  error?: string | null;
+}
+
+/** State of the self-hosted ntfy service (via the inference-control sidecar). */
+export async function getNotifyService(): Promise<NotifyService> {
+  const r = await apiFetch(`${API_URL}/api/v1/notify/service`);
+  if (!r.ok) throw new Error('Failed to load notify service');
+  return r.json();
+}
+
+/** Start/stop the self-hosted ntfy service. 'up' also derives + applies the
+ *  correct base URL so the phone stays in sync. */
+export async function notifyServiceAction(action: 'up' | 'down'): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/notify/service`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Action failed');
+}
+
 export interface BundledInferenceStatus {
   available: boolean;
   present?: boolean;

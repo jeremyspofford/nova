@@ -1047,6 +1047,85 @@ async def notify_reachability():
     return out
 
 
+STATE_NTFY_BASE_URL_FILE = "/state/ntfy_base_url"
+
+
+def _ntfy_phone_url() -> str:
+    """The URL a phone must subscribe to for the current ntfy server mode. For
+    builtin it's DERIVED from Nova's own public URL (host + the ntfy tailnet
+    port), so it can't drift out of sync with ntfy's base-url — the mismatch
+    that silently breaks iOS background push. Empty when not derivable."""
+    import re
+    mode = settings_store.get("notify.ntfy.server_mode")
+    if mode == "builtin":
+        pub = (settings_store.get("ui.public_url") or "").strip().rstrip("/")
+        host = re.sub(r":\d+$", "", pub) if pub else ""
+        return f"{host}:8443" if host else ""
+    if mode == "custom":
+        return (settings_store.get("notify.ntfy.custom_url") or "").strip()
+    return "https://ntfy.sh"
+
+
+@router.get("/api/v1/notify/service")
+async def notify_service_status():
+    """State of the self-hosted notification services (ntfy + tailscale), via the
+    socket-holding inference-control sidecar. {available:false} when the sidecar
+    isn't present, so the UI can hide the controls."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.inference_control_url}/notify/status")
+            resp.raise_for_status()
+            status = resp.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("inference-control unreachable: %s", e)
+        return {"available": False}
+    return {"available": True, "phone_url": _ntfy_phone_url(), **status}
+
+
+@router.post("/api/v1/notify/service")
+async def notify_service_action(body: dict):
+    """Start/stop the self-hosted ntfy service from the UI (roadmap #21
+    reachability, phases 2-3). On 'up', Nova derives the correct base-url from
+    its own public URL and writes it to the shared control file so the sidecar
+    recreates ntfy with it — the phone-URL vs base-url mismatch that breaks iOS
+    background push can no longer happen. Operator surface only; the socket
+    -holding sidecar reads the control file read-only."""
+    import os
+    import httpx
+
+    action = str(body.get("action", "")).strip()
+    if action not in ("up", "down"):
+        raise HTTPException(status_code=422, detail="action must be 'up' or 'down'")
+
+    if action == "up":
+        # only the self-hosted (builtin) server's base-url is ours to set; for
+        # public/custom we don't run the server, so clear the control file
+        base_url = (_ntfy_phone_url()
+                    if settings_store.get("notify.ntfy.server_mode") == "builtin" else "")
+        try:
+            os.makedirs(os.path.dirname(STATE_NTFY_BASE_URL_FILE), exist_ok=True)
+            with open(STATE_NTFY_BASE_URL_FILE, "w") as f:
+                f.write(base_url)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"could not write control file: {e}")
+
+    path = "/notify/up" if action == "up" else "/notify/down"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{settings.inference_control_url}{path}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"inference-control sidecar unreachable: {e}")
+    if resp.status_code not in (200, 202):
+        try:
+            detail = resp.json().get("error", resp.text)
+        except ValueError:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return resp.json()
+
+
 # ── automations ──────────────────────────────────────────────────────────
 
 @router.get("/api/v1/automations")

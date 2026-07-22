@@ -40,6 +40,12 @@ OLLAMA_GPU = os.environ.get("OLLAMA_GPU", "auto").lower()
 # is the deployment-time fallback (the .env path). Read fresh on every use so
 # a relocation takes effect without restarting this sidecar.
 STATE_MODELS_FILE = os.environ.get("STATE_MODELS_FILE", "/state/models_dir")
+# Nova-derived ntfy base-url (Settings-driven, written by the backend). Read
+# fresh on every notify recreate so the self-hosted server's public URL always
+# matches what the phone subscribes to — the iOS APNs relay hashes a sync-topic
+# from it, so a mismatch silently breaks background push. Empty = leave the
+# compose default.
+STATE_NTFY_BASE_URL_FILE = os.environ.get("STATE_NTFY_BASE_URL_FILE", "/state/ntfy_base_url")
 PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
 SERVICE = "ollama"                       # the toggle target (start/stop)
 OLLAMA_TARGET = "/root/.ollama"          # where ollama keeps its store
@@ -68,6 +74,16 @@ def _models_dir() -> str:
     except OSError:
         val = os.environ.get("NOVA_MODELS_DIR", "").strip()   # deployment fallback
     return val if val.startswith("/") else ""
+
+
+def _ntfy_base_url() -> str:
+    """Operator/derived ntfy public URL (Settings → Notifications, written by the
+    backend). Read fresh each recreate. Empty = keep the compose default."""
+    try:
+        with open(STATE_NTFY_BASE_URL_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def _use_gpu_file() -> bool:
@@ -173,6 +189,62 @@ def _run_op(verb: str):
         else:
             _op["error"] = (proc.stderr or proc.stdout)[-400:].strip()
             log.warning("%s failed: %s", verb, _op["error"])
+    except Exception as e:
+        _op["error"] = str(e)[:400]
+        log.exception("%s crashed", verb)
+    finally:
+        _op["verb"] = None
+
+
+def _notify_status() -> dict:
+    """State of the notification-reachability services: the self-hosted ntfy
+    server and the tailscale node that exposes it to phones. Read-only."""
+    return {"ntfy": _container_state("ntfy"),
+            "tailscale": _container_state("tailscale"),
+            "base_url": _ntfy_base_url(),
+            "op": _op["verb"], "error": _op["error"]}
+
+
+def _run_notify(verb: str):
+    """Fixed ntfy-service ops (nothing parameterized by the request):
+      notify_up   -> recreate ONLY ntfy so it picks up the Nova-derived base-url
+                     (from the /state control file).
+      notify_down -> stop ntfy.
+
+    Deliberately never touches the tailscale service. Tailscale is the shared
+    reachability backbone (it also serves the app itself), its identity/auth
+    key live in the host .env which this sidecar does NOT have, and recreating
+    it here wiped the whole serve config + tailnet auth once — a real incident.
+    Ntfy is exposed by whatever serve.json the running tailscale already holds;
+    exposing it is the operator's tailscale concern, not this toggle's.
+
+    Same shape as _run_op: sets _op['error'] on failure, clears verb when done.
+    """
+    try:
+        if verb == "notify_up":
+            env = _compose_env()
+            base_url = _ntfy_base_url()
+            if base_url:
+                env["NTFY_BASE_URL"] = base_url
+            # first start pulls the ntfy image; force-recreate so a changed
+            # base-url is actually applied to a running container
+            cmd, timeout = (_compose_cmd("notify")
+                            + ["up", "-d", "--force-recreate", "ntfy"], 600)
+        elif verb == "notify_down":
+            cmd, timeout, env = (_compose_cmd("notify") + ["stop", "ntfy"],
+                                 120, _compose_env())
+        else:
+            _op["error"] = f"unknown notify verb {verb}"
+            return
+        log.info("%s: %s", verb, " ".join(cmd))
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout, env=env)
+        if proc.returncode != 0:
+            _op["error"] = (proc.stderr or proc.stdout)[-400:].strip()
+            log.warning("%s failed: %s", verb, _op["error"])
+            return
+        _op["error"] = None
+        log.info("%s: done", verb)
     except Exception as e:
         _op["error"] = str(e)[:400]
         log.exception("%s crashed", verb)
@@ -294,6 +366,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _vram_info())
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/notify/status":
+            try:
+                return self._send(200, _notify_status())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
         if self.path != "/status":
             return self._send(404, {"error": "not found"})
         try:
@@ -308,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             verb = "relocate"
         elif self.path in ("/start", "/stop"):
             verb = self.path[1:]
+        elif self.path in ("/notify/up", "/notify/down"):
+            verb = "notify_up" if self.path.endswith("up") else "notify_down"
         else:
             return self._send(404, {"error": "not found"})
         with _lock:
@@ -315,7 +394,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(
                     409, {"error": f"{_op['verb']} already in progress"})
             _op.update(verb=verb, error=None)
-        target = _relocate if verb == "relocate" else lambda: _run_op(verb)
+        if verb == "relocate":
+            target = _relocate
+        elif verb.startswith("notify_"):
+            target = lambda: _run_notify(verb)  # noqa: E731
+        else:
+            target = lambda: _run_op(verb)      # noqa: E731
         threading.Thread(target=target, daemon=True).start()
         self._send(202, {"status": f"{verb} requested"})
 
