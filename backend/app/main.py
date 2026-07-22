@@ -9,7 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app import db, model_warmer, rules, scheduler, settings_store
+from app import (db, ingest_backfill, model_warmer, rules, scheduler,
+                 settings_store)
 from app.config import settings
 from app.llm import providers
 from app.memory.memory import memory
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     await providers.warm()
     await rules.warm()
     await memory.startup()
+    await ingest_backfill.run()   # one-time repair: anchor drifting source ingests
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     provider_health_task = asyncio.create_task(providers.health_loop())

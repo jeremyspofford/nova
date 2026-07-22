@@ -186,7 +186,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     item_id: Optional[str] = None, append: bool = False,
                     prepend: bool = False,
                     maintained_by: Optional[str] = None,
-                    source_type: str = "chat") -> dict:
+                    source_type: str = "chat", link_pass: bool = True) -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept
         file. append=True + item_id adds content to the end of an existing item
         instead of replacing it (running logs/digests write only the delta);
@@ -207,7 +207,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 self._index_file(doc_id)
                 return {"status": "prepended" if prepend else "appended",
                         "type": type, "id": doc_id}
-            if type in ("skill", "topic"):
+            if type in ("skill", "topic", "source"):
                 if not title:
                     return {"status": "error",
                             "error": f"title is required when writing a {type}"}
@@ -220,7 +220,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 clean_tags = [str(t).strip().lower() for t in (tags or []) if str(t).strip()]
                 linked_tags: list[str] = []
                 related: list[str] = []
-                if type == "topic":
+                # link_pass=False skips the fuzzy corpus match — used for raw
+                # followed-source transcripts, which cluster by their SOURCE
+                # anchor, not by fuzzy topic overlap (that mis-tagged a Zig
+                # video 'nasa' and merged unrelated channels; 2026-07-22)
+                if type == "topic" and link_pass:
                     linked_tags, related = self._link_pass(
                         title, content, description or "", clean_tags, item_id)
                     clean_tags.extend(linked_tags)

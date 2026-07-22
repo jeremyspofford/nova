@@ -235,6 +235,47 @@ def _video_tag(title: str) -> str:
     return slug
 
 
+def _source_tag(title: str) -> str:
+    """A stable per-SOURCE subject tag, shared by a followed source's node and
+    every transcript ingested from it — so a channel and its videos form ONE
+    connected system in the brain graph instead of each video drifting alone
+    (follow/poll ingests are transcript-only, so a video's unique _video_tag
+    bridges nothing). Prefixed `src-` so it never collides with a generic/format
+    tag (media, transcript, source, …) and reads as a source grouping when it
+    labels the cluster. Derived from the title — stable as long as the title is
+    (re-follow keeps the existing title via COALESCE)."""
+    slug = _slugify(title)
+    if len(slug) > 36:
+        slug = slug[:36].rsplit("-", 1)[0]
+    return f"src-{slug}"
+
+
+async def _ensure_source_node(sub: dict) -> bool:
+    """Create the `source`-type memory node for a followed source, so its
+    ingested transcripts have a first-class anchor to orbit (the node the
+    `Source: [[title]]` links point at, carrying the shared source tag). Written
+    only when missing — a source node that already carries its tag is left
+    untouched so we never churn the brain-graph mtime. Returns True if it wrote."""
+    title = (sub.get("title") or sub.get("source_key") or "").strip()
+    if not title:
+        return False
+    tag = _source_tag(title)
+    doc_id = f"sources/{_slugify(title)}.md"
+    existing = memory.store.read_file(doc_id)
+    if existing and tag in memory.store.extract_tags(existing[0]):
+        return False
+    extractor = (sub.get("extractor") or "").lower()
+    kind = {"youtube": "YouTube channel/playlist"}.get(extractor,
+                                                       "channel/playlist/feed")
+    await memory.write(
+        f"A {kind} Nova follows. New uploads are ingested automatically; each "
+        "transcript links back here so this source's videos cluster together.",
+        type="source", title=title, description=f"Followed source — {title}",
+        category="knowledge", tags=[tag], source_url=sub.get("url"),
+        source_type="subscription")
+    return True
+
+
 # capped generously — the ingestion role is chosen specifically for large
 # context (full transcripts), so this is deliberately far above fetch_url's
 # 15,000-char page cap
@@ -256,7 +297,7 @@ async def _ingest_media_core(url: str, force: bool = False,
     its own, and skipping per-item LLM chunking keeps a batch fast/reliable).
     Returns {status: error|skipped|already_ingested|ingested, ...}; the ingested
     case also carries `segments` + `transcript_len` for the caller."""
-    from app import media_ingests
+    from app import media_ingests, source_subscriptions
     from app.media_client import extract as media_extract
 
     result = await media_extract(url)
@@ -277,16 +318,34 @@ async def _ingest_media_core(url: str, force: bool = False,
     # specific subject tag for THIS video, so its notes cluster together in the
     # brain graph (the generic media/transcript labels no longer bridge)
     video_tag = _video_tag(result["title"])
+    tags = ["media", "transcript", video_tag]
+    body = transcript[:_MAX_TRANSCRIPT_CHARS]
+
+    # Anchor a FOLLOWED-source ingest to its source: share the per-source tag
+    # and link the transcript back to the source node. Without this every
+    # followed video is a lone rogue in the atlas — its only non-generic tag
+    # (video_tag) is unique and batch mode writes no chunks to share it. The
+    # source tag goes FIRST so the atlas colors/groups the video by its channel.
+    if source_key:
+        sub = await source_subscriptions.get(source_key)
+        stitle = (sub.get("title") or "").strip() if sub else ""
+        if stitle:
+            tags.insert(0, _source_tag(stitle))
+            body = f"{body}\n\nSource: [[{stitle}]]"
+            await _ensure_source_node(sub)   # lazily guarantee the anchor exists
 
     # mechanical, guaranteed-complete safety net: the full transcript lands
     # in memory in code, before any chunking — nothing is lost even if the
     # model's chunking pass is lazy, incomplete, or (for batch) skipped
     full_note = await memory.write(
-        transcript[:_MAX_TRANSCRIPT_CHARS], type="topic",
+        body, type="topic",
         title=f"{result['title']} — full transcript",
         description=f"Full {result['transcript_source']} transcript of {result['title']}",
-        category="knowledge", tags=["media", "transcript", video_tag],
-        source_url=result["url"], source_type="media_transcript")
+        category="knowledge", tags=tags,
+        source_url=result["url"], source_type="media_transcript",
+        # a followed-source transcript clusters by its source anchor, not by
+        # fuzzy topic overlap — skip the link pass so channels stay distinct
+        link_pass=source_key is None)
 
     await media_ingests.record(
         media_key=media_key, extractor=result["extractor"], title=result["title"],
@@ -411,6 +470,9 @@ async def _follow_source(args, ctx):
     sub = await source_subscriptions.upsert(
         source_key=info["source_key"], url=info["url"], extractor=info["extractor"],
         title=info.get("title"), backfill=backfill)
+    # give the source a first-class brain-graph node up front, so the backfilled
+    # transcripts have something to orbit the moment they land
+    await _ensure_source_node(sub)
 
     result = {"status": "following", "source_key": info["source_key"],
               "title": sub["title"], "available": len(info.get("entries") or [])}

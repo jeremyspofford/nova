@@ -175,6 +175,43 @@ class OkfStore:
             log.info("Memory unlink: removed [[%s]] from %s", title, doc_id)
         return changed
 
+    def normalize_source_transcript(self, doc_id: str, tags: list[str],
+                                    link_title: str) -> Optional[float]:
+        """Repair an already-ingested followed-source transcript so it clusters
+        by its SOURCE only: set its frontmatter tags to the canonical source-only
+        set `tags` (dropping the fuzzy topical tags the write-time link pass added
+        before source clustering became authoritative), append a
+        `Source: [[link_title]]` link to the body, and strip any fuzzy
+        `Related:` cross-link line. The file mtime is PRESERVED (mirrors
+        unlink_references) — a repair re-tag is not new knowledge and must not
+        trip recency cues (fresh flares, planet sizing). Returns the (unchanged)
+        mtime when it wrote, else None (already normalized or not found)."""
+        base = self.base_dir.resolve()
+        path = (self.base_dir / doc_id).resolve()
+        if not (path.is_relative_to(base) and path.suffix == ".md"
+                and path.is_file()):
+            return None
+        fm, body = self.parse_frontmatter(path.read_text())
+        changed = False
+        if self.extract_tags(fm) != tags:
+            fm["tags"] = list(tags)
+            changed = True
+        kept = [ln for ln in body.split("\n")
+                if not ln.strip().lower().startswith("related:")]
+        if len(kept) != body.split("\n").__len__():
+            body = "\n".join(kept).rstrip()
+            changed = True
+        if f"[[{link_title}]]".lower() not in body.lower():
+            body = f"{body}\n\nSource: [[{link_title}]]"
+            changed = True
+        if not changed:
+            return None
+        stat = path.stat()
+        path.write_text(f"{self.render_frontmatter(fm)}\n\n{body}\n")
+        os.utime(path, (stat.st_atime, stat.st_mtime))
+        log.info("Memory source-anchor: normalized %s -> %s", doc_id, tags)
+        return stat.st_mtime
+
     def iter_files(self) -> list[tuple[str, float]]:
         """All markdown files as (doc_id, mtime)."""
         out = []
