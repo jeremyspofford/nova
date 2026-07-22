@@ -19,7 +19,7 @@ In roadmap priority order:
 | [observability-turn-tracing.md](observability-turn-tracing.md) | #3 | none; 3 flagged decisions inside, defaults chosen |
 | [model-curation-proposals.md](model-curation-proposals.md) | #5 | reuses gateway-lane discovery fetcher |
 | [named-inference-endpoints.md](named-inference-endpoints.md) | #6 | resolve pool-table convergence question in phase 1 |
-| [video-ingestion.md](video-ingestion.md) | #8 | depends on voice phase 2 (whisper) for the transcription fallback |
+| [content-ingestion.md](content-ingestion.md) (was video-ingestion.md, reconciled 2026-07-21) | #8 | phase 1 (media ingestion: `media` worker, dedicated `ingestion` model-recs role) BUILT 2026-07-21, uncommitted, awaiting Jeremy's review |
 | [persona-layer.md](persona-layer.md) | #15 | phase 1 (runner slot assembly) is standalone; locked decisions inside — Nova-as-proxy, specialists get house rules, not the soul |
 | [mcp-client.md](mcp-client.md) | #19 | HTTP transport first (pip `mcp` SDK); stdio via sidecar last; mines v0.5.0-alpha lazy-loading + consent designs; #18 research must weigh it |
 | [acp-coding-delegation.md](acp-coding-delegation.md) | #20 | phase 0 is a validation spike — ACP landscape moves fast; build after #3 (observability) |

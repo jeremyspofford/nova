@@ -6,7 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "faster-whisper>=1.0" "fastapi>=0.104" "uvicorn>=0.24"
+# faster-whisper + the CUDA 12 runtime libs its backend (ctranslate2) needs on
+# GPU. The libs just ride along in the image; WHISPER_DEVICE=cpu ignores them,
+# so the SAME image runs on CPU or GPU — the nvidia container runtime injects
+# the driver at run time, these provide cuBLAS + cuDNN. LD_LIBRARY_PATH points
+# ctranslate2 at them.
+RUN pip install --no-cache-dir "faster-whisper>=1.1" "fastapi>=0.104" "uvicorn>=0.24" \
+        nvidia-cublas-cu12 nvidia-cudnn-cu12
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib
 
 WORKDIR /srv
 COPY app.py .

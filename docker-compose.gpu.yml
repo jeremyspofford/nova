@@ -1,17 +1,34 @@
-# GPU override for the bundled Ollama service.
+# GPU override for the bundled Ollama + Whisper services.
 #
-# The inference-control sidecar merges this file AUTOMATICALLY whenever the
-# docker NVIDIA runtime is present (set OLLAMA_GPU=off in .env to opt out),
-# so the Settings → Inference toggle always recreates ollama with the right
-# device access. For manual host-side compose commands to match, add
+# The inference-control sidecar merges this file AUTOMATICALLY for OLLAMA
+# whenever the docker NVIDIA runtime is present (set OLLAMA_GPU=off in .env to
+# opt out). Whisper is host-launched with the `voice` profile, so to run it on
+# the GPU add this file to COMPOSE_FILE in .env (compose reads it automatically):
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
-# to .env (compose reads it automatically).
+# then: docker compose --profile voice up -d whisper
 #
 # The base docker-compose.yml stays CPU-safe: machines without the NVIDIA
 # runtime never load this file and keep working out of the box.
 
 services:
   ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Whisper on the GPU: far faster AND accurate enough for large-v3, which
+  # barely hallucinates on unclear speech. The model unloads after idle
+  # (WHISPER_IDLE_UNLOAD_S) so the VRAM returns to other work when you're not
+  # talking. Override the model with WHISPER_MODEL in .env if you want lighter.
+  whisper:
+    environment:
+      WHISPER_DEVICE: cuda
+      WHISPER_COMPUTE: float16
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3}
     deploy:
       resources:
         reservations:

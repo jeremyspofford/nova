@@ -7,7 +7,8 @@ in chat with Approve / Later / Dismiss — instead of quietly writing to a
 memory topic and hoping to mention it at conversation start.
 
 This is the OUTPUT half of the self-improving arc. The INPUT half (learn from
-the web) is `video-ingestion.md` (#8) + the existing ingestion agent. This
+the web) is `content-ingestion.md` (#8, was video-ingestion.md — reconciled
+2026-07-21 into one source-agnostic pipeline) + the existing ingestion agent. This
 surface is the rung between "Nova learned something" and "the operator acts on
 it," and the backbone of the eventual learn → recommend → approve → test →
 promote loop.

@@ -99,6 +99,43 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     _MAX_LINKED_TAGS = 5
     _MAX_RELATED = 3
 
+    # Tags that name what KIND or FORMAT a note is, not what it is ABOUT.
+    # Fine as search/filter labels, but they must NEVER create graph edges or
+    # be auto-adopted: two notes sharing "zoo" or "transcript" only fall in the
+    # same broad category — they are not related. This is the exact class of
+    # bug where a Bear Mountain hiking attraction got tag-bridged to the "Me at
+    # the zoo" YouTube video through the coincidental word "zoo", and where the
+    # ingestion pipeline's own "media"/"transcript" tags chained together
+    # unrelated videos (a moon-landing clip, a commencement speech, an elephant
+    # video). Named-entity tags (bear-mountain, nasa, voyager, me-at-the-zoo)
+    # are deliberately NOT here — those name a specific subject and SHOULD
+    # cluster. The distinction is common-noun/category vs. named entity; extend
+    # this set as new generic tags surface (it is a label list, not config).
+    _GENERIC_TAGS = frozenset({
+        # format / medium (several of these are auto-applied at ingest time)
+        "media", "transcript", "transcripts", "video", "audio", "image",
+        "photo", "photograph", "article", "document", "note", "notes",
+        "summary", "digest", "overview", "guide", "reference", "data",
+        "source", "sources", "tool", "tools", "content",
+        # broad kinds of place / thing
+        "zoo", "museum", "museums", "park", "state-park", "facilities",
+        "visitor-info", "recreation", "hiking", "trail", "trails", "nature",
+        "animals", "travel", "food", "music", "art", "people", "places",
+        # broad subject areas
+        "history", "science", "technology", "tech", "news", "sports",
+        "sports-news", "tech-news", "ai-news", "culture", "internet-culture",
+        "entertainment", "education", "politics", "business", "finance",
+        "misc", "general", "info", "information",
+        # broad geographies — a shared state/country/region is a LOCATION
+        # category, not a shared subject: Bear Mountain State Park and the NY
+        # Giants are both "new-york" yet wholly unrelated. Add specific broad
+        # places as they recur (a city/state/country almost never means two
+        # notes are about the same thing).
+        "new-york", "new-york-city", "nyc", "united-states", "usa", "us",
+        "america", "california", "texas", "florida", "europe", "asia",
+        "africa", "world", "global",
+    })
+
     def _link_pass(self, title: str, content: str, description: str,
                    tags: list[str], item_id: Optional[str]) -> tuple[list[str], list[str]]:
         """Mechanical linking at write time: compare a new/updated topic
@@ -133,7 +170,8 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     title_hits.append(other_title)
             for tag in self.store.extract_tags(fm):
                 t = tag.lower()
-                if t in own or t in tag_hits or len(t) < 3:
+                if (t in own or t in tag_hits or len(t) < 3
+                        or t in self._GENERIC_TAGS):
                     continue
                 # slug tags match their spoken form: bear-mountain ~ "bear mountain"
                 phrase = re.escape(t).replace(r"\-", r"[\s_-]+")
@@ -353,6 +391,12 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             nodes.append(node)
             by_title[title.lower()] = doc_id
             for tag in self.store.extract_tags(fm):
+                # generic category/format tags label a note's KIND, not its
+                # subject — they must not bridge unrelated notes into a shared
+                # cluster (see _GENERIC_TAGS). The tag still rides on the node
+                # above as a search label; it just earns no relationship edge.
+                if tag.lower() in self._GENERIC_TAGS:
+                    continue
                 tag_map.setdefault(tag, []).append(doc_id)
             for link in self.store.extract_links(body):
                 edges.append({"source": doc_id, "target_title": link.lower()})

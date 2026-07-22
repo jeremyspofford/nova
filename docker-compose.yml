@@ -37,6 +37,7 @@ services:
       SEARXNG_URL: http://searxng:8080
       INFERENCE_CONTROL_URL: http://inference-control:9911
       MCP_RUNNER_URL: http://mcp-runner:8100
+      MEDIA_WORKER_URL: http://media:8500
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8000:8000"
@@ -112,6 +113,22 @@ services:
     build: ./mcp-runner
     restart: unless-stopped
 
+  # Media ingestion worker (optional): docker compose --profile media up -d
+  # yt-dlp (1000+ sites — YouTube, Vimeo, Twitch, direct .mp4/.mp3 links,
+  # ...; keyless) + ffmpeg. Pulls site captions when offered; falls back to
+  # the whisper service (voice profile) for audio->text on caption-less
+  # videos and direct media URLs — the universal fallback that makes
+  # ingestion source-agnostic. No published port: only the backend talks to
+  # it, over the compose network (docs/plans/content-ingestion.md).
+  media:
+    build: ./media
+    profiles: ["media"]
+    environment:
+      WHISPER_URL: http://whisper:9000
+      MEDIA_MAX_DURATION_S: ${MEDIA_MAX_DURATION_S:-14400}
+      MEDIA_WHISPER_WINDOW_S: ${MEDIA_WHISPER_WINDOW_S:-300}
+    restart: unless-stopped
+
   # Optional batteries-included reachability: joins YOUR tailnet as node
   # "nova" and serves the web origin at https://nova.<tailnet>.ts.net with
   # a real certificate — identical on WSL2/Linux/macOS, no host Tailscale
@@ -156,7 +173,13 @@ services:
     build: ./whisper
     profiles: ["voice"]
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      # CPU-safe defaults; docker-compose.gpu.yml overrides to cuda/float16 and
+      # a bigger model. WHISPER_IDLE_UNLOAD_S frees the model from (V)RAM after
+      # this many idle seconds (reloads on demand) so the GPU is reclaimable.
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
+      WHISPER_IDLE_UNLOAD_S: ${WHISPER_IDLE_UNLOAD_S:-300}
     ports:
       - "127.0.0.1:9000:9000"
     volumes:

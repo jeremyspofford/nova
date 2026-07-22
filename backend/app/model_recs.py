@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 # conversationalists need speed).
 _AGENT_PROFILES = {
     "main": "chat",
-    "ingestion": "tools",
+    "ingestion": "ingestion",
     "guardian": "guard",
     "agent-creator": "tools",
     "agent-manager": "tools",
@@ -43,7 +43,7 @@ _AGENT_PROFILES = {
 }
 
 _PROFILE_ROLE = {"chat": "chat", "tools": "tools", "guard": "guard",
-                 "compaction": "compaction"}
+                 "compaction": "compaction", "ingestion": "ingestion"}
 _TIER_RANK = {"A": 2, "B": 1, "C": 0}
 _SPEED_RANK = {"fast": 2, "medium": 1, "slow": 0}
 
@@ -97,8 +97,12 @@ def _candidates(profile: str, rows: list[dict], hw: dict,
 
     def key(r):
         local = r["provider"] == "ollama"
-        if profile == "tools":
-            # reliability first, keep it local when the tier ties, then bigger
+        if profile in ("tools", "ingestion"):
+            # reliability first, keep it local when the tier ties, then
+            # bigger. Same shape for both: ingestion is batch/background
+            # work with no latency pressure, so a bigger/more-capable pick
+            # (more context headroom for long transcripts/articles) is never
+            # a downside the way it is for chat's snappiness preference.
             return (_TIER_RANK[r["tool_tier"]], local, size(r))
         if profile == "chat":
             # quality first, then latency, then local, then smaller (snappier)
@@ -133,7 +137,10 @@ def _reason(profile: str, pick: dict, hw: dict) -> str:
     why = {"tools": "tool-heavy role — reliability first",
            "chat": "conversation — quality with low latency",
            "guard": "guard duty — strict instruction following, small footprint",
-           "compaction": "summary passes — smallest adequate model"}[profile]
+           "compaction": "summary passes — smallest adequate model",
+           "ingestion": "content extraction — large context for full "
+                        "transcripts/articles, faithful over conversational, "
+                        "latency doesn't matter"}[profile]
     return f"{why}; tier-{pick['tool_tier']} {pick['speed']}, {where}"
 
 

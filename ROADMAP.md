@@ -1260,6 +1260,24 @@ approve → test in staging → operator-test → promote to prod.**
 - **Tag-click traversal** — clicking a `#tag` in a memory's detail view lists
   every item with that tag, so related notes are walkable. Natural complement
   to the orphaned-cluster fix.
+- **Memory-hygiene proposer + one-time backfill (2026-07-21)** — the tag/link
+  quality fixes shipped 2026-07-21 are all WRITE-TIME (generic tags no longer
+  bridge — `memory._GENERIC_TAGS`; `write_memory`/ingestion guidance steers
+  toward specific subject tags; short clips no longer over-chunk), so *new*
+  memories come out clean. Two follow-ons for the pre-fix backlog and ongoing
+  drift, both deliberately **propose-not-auto-apply** (the guardian/curation
+  principle — an autonomous re-tagger could silently re-introduce the exact
+  coincidental links just torn out, and it mutates the operator's knowledge
+  base unreviewed): (a) a **one-time backfill sweep** that scans existing
+  memories for notes with only generic tags, orphaned clusters, over-chunked
+  media, and homonym-prone tags, and lists proposed fixes for operator
+  approval; (b) a **periodic hygiene proposer** — a low-frequency automation
+  that raises the same findings as cards in the **recommendation surface**
+  (keystone, phase 1 shipped) with one-click apply, never editing memory on
+  its own. NOT a scheduled auto-tagger (considered and rejected 2026-07-21:
+  redundant now that writes are clean, and risky). Composes with the
+  recommendation surface and the orphaned-clusters item above; the
+  memory-curation lane's next concrete item after #27's write-time linking.
 
 ## Later
 

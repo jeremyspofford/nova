@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # socket, no DB credentials, no published ports.
     mcp_runner_url: str = "http://mcp-runner:8100"
 
+    # Media ingestion worker (optional `media` compose profile): yt-dlp +
+    # ffmpeg extraction, whisper fallback for caption-less audio and direct
+    # media URLs (docs/plans/content-ingestion.md).
+    media_worker_url: str = "http://media:8500"
+
     # NOTE: behavioral knobs (context budgets, compaction, automations, the
     # agent tool-round cap) live
     # in the DB-backed settings store (settings_store.py) — UI-configured,

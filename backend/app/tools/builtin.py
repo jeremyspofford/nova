@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from app import db
 from app.agents import registry as agent_registry
 from app.memory.memory import memory
+from app.memory.store import _slugify
 
 log = logging.getLogger(__name__)
 
@@ -209,6 +210,122 @@ async def _web_search(args, ctx):
         return "Error: query is required"
     from app.tools.web_search import search
     return await search(query, int(args.get("max_results", 6)))
+
+
+# ── media ingestion (video/audio; same agent, a different extraction path
+#    than web fetch — docs/plans/content-ingestion.md) ───────────────────
+
+def _fmt_ts(seconds: float) -> str:
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _video_tag(title: str) -> str:
+    """A specific per-video subject tag (the title slug) so a video's own
+    notes — the full transcript AND its chunks — cluster together in the brain
+    graph. The generic "media"/"transcript" labels no longer bridge anything
+    (memory._GENERIC_TAGS), so without a subject tag each transcript would
+    float alone; this is that subject tag. Capped at a hyphen boundary to keep
+    it tidy."""
+    slug = _slugify(title)
+    if len(slug) > 40:
+        slug = slug[:40].rsplit("-", 1)[0]
+    return slug
+
+
+# capped generously — the ingestion role is chosen specifically for large
+# context (full transcripts), so this is deliberately far above fetch_url's
+# 15,000-char page cap
+_MAX_TRANSCRIPT_CHARS = 200_000
+
+# At or below this the whole transcript fits a single note, so the mechanical
+# full-transcript note is enough and chunking only makes redundant micro-notes
+# (a 19-second, 259-char clip was getting shattered into three). Roughly one
+# chunk's worth — the 1-2k chars the chunk guidance targets.
+_CHUNK_MIN_CHARS = 1500
+
+
+async def _ingest_media(args, ctx):
+    url = (args.get("url") or "").strip()
+    if not url:
+        return "Error: url is required"
+    force = bool(args.get("force"))
+
+    from app import media_ingests
+    from app.media_client import extract as media_extract
+
+    result = await media_extract(url)
+    if result.get("error"):
+        return f"Error: {result['error']}"
+    if result.get("status") == "skipped":
+        return _j({"status": "skipped", "reason": result.get("reason", "not ingestible")})
+
+    media_key = result["media_key"]
+    existing = await media_ingests.get(media_key)
+    if existing and not force:
+        return _j({
+            "status": "already_ingested", "media_key": media_key,
+            "title": existing["title"], "ingested_at": str(existing["ingested_at"]),
+            "note": ("Already in memory. Tell the user it's already ingested; "
+                     "only pass force=true if they explicitly want to re-ingest."),
+        })
+
+    segments = result["segments"]
+    transcript = "\n".join(f"[{_fmt_ts(s['start'])}] {s['text']}" for s in segments)
+    # specific subject tag for THIS video, so its notes cluster together in the
+    # brain graph (the generic media/transcript labels no longer bridge)
+    video_tag = _video_tag(result["title"])
+
+    # mechanical, guaranteed-complete safety net: the full transcript lands
+    # in memory in code, before the agent writes anything — nothing is lost
+    # even if the model's subsequent chunking pass is lazy or incomplete
+    full_note = await memory.write(
+        transcript[:_MAX_TRANSCRIPT_CHARS], type="topic",
+        title=f"{result['title']} — full transcript",
+        description=f"Full {result['transcript_source']} transcript of {result['title']}",
+        category="knowledge", tags=["media", "transcript", video_tag],
+        source_url=result["url"], source_type="media_transcript")
+
+    await media_ingests.record(
+        media_key=media_key, extractor=result["extractor"], title=result["title"],
+        url=result["url"], duration_s=result.get("duration_s"),
+        transcript_source=result["transcript_source"], language=result.get("language"),
+        segment_count=len(segments), full_transcript_item_id=full_note.get("id"),
+        status="ok")
+
+    payload = {
+        "status": "ingested", "media_key": media_key, "title": result["title"],
+        "url": result["url"], "duration_s": result.get("duration_s"),
+        "transcript_source": result["transcript_source"],
+        "language": result.get("language"), "chapters": result.get("chapters") or [],
+        "full_transcript_item_id": full_note.get("id"),
+        "subject_tag": video_tag,
+    }
+
+    # Short clip: the single full-transcript note IS the note — don't chunk.
+    if len(transcript) <= _CHUNK_MIN_CHARS:
+        payload["note"] = (
+            "This transcript is short — it fits the single note already saved. "
+            "Do NOT split it into chunks (that would just make redundant "
+            "micro-notes). Confirm it's ingested and answer any questions from it.")
+        return _j(payload)
+
+    payload["segments"] = segments[:2000]  # generous; a truly enormous transcript
+                                            # still gets its full text in the note above
+    payload["note"] = (
+        "The full transcript is already saved (nothing is lost). Now write "
+        "CHUNKED, TIMESTAMPED notes for good retrieval: group the segments above "
+        "by chapter if chapters are given, else into spans of roughly 1-2k "
+        "characters. Call write_memory once per chunk (type=topic, title='<title> "
+        "— <chapter or mm:ss-mm:ss>', source_url=the chunk's own deep_link field "
+        "from its first segment — never construct a timestamp URL yourself). "
+        f"ALWAYS include the tag '{video_tag}' on every chunk (plus any subject "
+        "tags that name what the content is ABOUT) so this video's notes cluster "
+        "together. Preserve the transcript's actual wording per chunk; light "
+        "cleanup only, never summarize away content.")
+    return _j(payload)
 
 
 # WMO weather codes → plain English (open-meteo's `weather_code`)
@@ -622,10 +739,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": ("Write to long-term memory. type='journal' appends a note to today's "
                         "journal; type='topic' or type='skill' creates a durable concept file "
                         "(title required). Skills are guidance other agents retrieve and follow. "
-                        "Tags connect related topics in the brain graph; source_url records "
-                        "provenance for ingested content. For running documents (digests, "
-                        "logs) use item_id + append=true (or prepend=true for latest-first "
-                        "documents) and send only the new entries."),
+                        "Specific subject tags connect related topics in the brain graph (see "
+                        "the tags field); source_url records provenance for ingested content. "
+                        "For running documents (digests, logs) use item_id + append=true (or "
+                        "prepend=true for latest-first documents) and send only the new entries."),
         "parameters": {"type": "object", "properties": {
             "content": {"type": "string"},
             "type": {"type": "string", "enum": ["journal", "topic", "skill"]},
@@ -635,7 +752,16 @@ BUILTIN_TOOLS: dict[str, dict] = {
                          "enum": ["workflow", "knowledge", "tool-use", "custom"]},
             "priority": {"type": "integer"},
             "tags": {"type": "array", "items": {"type": "string"},
-                     "description": "2-4 short lowercase tags"},
+                     "description": ("2-4 lowercase kebab-case tags naming the SPECIFIC "
+                                     "SUBJECT of this note (bear-mountain, gas-giants, "
+                                     "model-context-protocol) — specific subject tags are what "
+                                     "link related memories in the brain graph. Reuse an "
+                                     "existing tag only when it names the SAME subject. Do NOT "
+                                     "tag by generic category/format/kind (video, transcript, "
+                                     "news, history, tools, zoo) or by broad geography "
+                                     "(new-york, usa): those are search labels only and never "
+                                     "link notes. Disambiguate words that have other meanings "
+                                     "(gas-giants, not giants).")},
             "source_url": {"type": "string"},
             "item_id": {"type": "string",
                         "description": ("To UPDATE an existing memory item in place, pass its "
@@ -674,6 +800,24 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "properties": {"url": {"type": "string"}},
                        "required": ["url"]},
         "execute": _fetch_url,
+    },
+    "ingest_media": {
+        "name": "ingest_media",
+        "description": ("Ingest a video, audio, or other media URL — any site "
+                        "yt-dlp supports (YouTube, Vimeo, Twitch, ...) or a "
+                        "direct .mp4/.webm/.mp3 link. Pulls the site's captions "
+                        "when available, else transcribes the audio via whisper. "
+                        "Mechanically dedupes (a known media_key is not "
+                        "re-ingested) and ALWAYS saves the full transcript to "
+                        "memory, regardless of what you do next — then returns "
+                        "timestamped segments with ready-made deep links for you "
+                        "to write chunked notes from."),
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"},
+            "force": {"type": "boolean",
+                      "description": "Re-ingest even if this media_key is already stored"},
+        }, "required": ["url"]},
+        "execute": _ingest_media,
     },
     "get_weather": {
         "name": "get_weather",
