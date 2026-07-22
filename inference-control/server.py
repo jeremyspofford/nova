@@ -1,14 +1,17 @@
 """Nova inference-control sidecar — the only holder of the Docker socket.
 
 The socket is root-equivalent on the host, so the backend never mounts it.
-Instead this tiny service exposes exactly four fixed endpoints on the
+Instead this tiny service exposes a fixed set of endpoints on the
 compose-internal network (no published ports):
 
-    GET  /status  -> {present, running, state, op, error}
-    GET  /gpu     -> {nvidia_runtime}   (docker info runtime check)
-    GET  /vram    -> {gpus: [{name, vram_total_gb}]}   (nvidia-smi in ollama)
-    POST /start   -> docker compose --profile inference up -d ollama
-    POST /stop    -> docker compose --profile inference stop ollama
+    GET  /status     -> {present, running, state, op, error}
+    GET  /gpu        -> {nvidia_runtime}   (docker info runtime check)
+    GET  /vram       -> {gpus: [{name, vram_total_gb}]}   (nvidia-smi in ollama)
+    GET  /gpu-stats  -> live GPU used/total VRAM, util %, temp (nvidia-smi)
+    GET  /containers -> per-service state + live CPU/mem (docker ps + stats)
+    GET  /disk       -> docker-managed disk sizes (docker system df) + store free
+    POST /start      -> docker compose --profile inference up -d ollama
+    POST /stop       -> docker compose --profile inference stop ollama
 
 Nothing is parameterized by the request: the compose file, project, and
 service name are baked in. A fully compromised client can at worst toggle
@@ -20,6 +23,7 @@ GPU reservation block) are honored without duplicating config here.
 import json
 import logging
 import os
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -172,6 +176,129 @@ def _vram_info() -> dict:
         except ValueError:
             continue
     return {"gpus": gpus}
+
+
+def _gpu_stats() -> dict:
+    """LIVE GPU utilization (vs. /vram's static capacity): per-GPU used/total
+    VRAM, core util %, and temperature, from nvidia-smi inside the ollama
+    container. Same fail-soft contract as /vram — a stopped or CPU-only
+    container returns {gpus: []}, never a guess. Feeds the Observability
+    board's live gauges (docs/plans/observability-board.md)."""
+    proc = subprocess.run(
+        _compose_cmd() + ["exec", "-T", SERVICE, "nvidia-smi",
+                          "--query-gpu=name,memory.used,memory.total,"
+                          "utilization.gpu,temperature.gpu",
+                          "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, timeout=20, env=_compose_env())
+    if proc.returncode != 0:
+        return {"gpus": [],
+                "error": (proc.stderr or proc.stdout)[-300:].strip()
+                or "nvidia-smi unavailable in the ollama container"}
+    gpus = []
+    for line in proc.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 5:
+            continue
+        name, used, total, util, temp = parts
+        try:
+            gpus.append({"name": name,
+                         "mem_used_gb": round(float(used) / 1024, 1),
+                         "mem_total_gb": round(float(total) / 1024, 1),
+                         "util_pct": float(util),
+                         "temp_c": float(temp)})
+        except ValueError:
+            continue
+    return {"gpus": gpus}
+
+
+def _parse_bytes(s: str) -> float | None:
+    """docker's human sizes ('1.23GiB', '512MiB', '0B') → GiB."""
+    s = s.strip()
+    units = {"B": 1, "KIB": 1024, "MIB": 1024**2, "GIB": 1024**3, "TIB": 1024**4,
+             "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4}
+    for suffix, mult in sorted(units.items(), key=lambda kv: -len(kv[0])):
+        if s.upper().endswith(suffix):
+            try:
+                return float(s[:-len(suffix)]) * mult / (1024**3)
+            except ValueError:
+                return None
+    return None
+
+
+def _containers() -> dict:
+    """Per-service state + live CPU/mem for this instance's compose project.
+    `docker ps -a` gives every service (incl. stopped); `docker stats` adds
+    CPU/mem for the running ones. Merged by container name."""
+    ps = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={PROJECT}",
+         "--format", '{{.Names}}\t{{.Label "com.docker.compose.service"}}\t{{.State}}'],
+        capture_output=True, text=True, timeout=10)
+    rows: dict[str, dict] = {}
+    for line in ps.stdout.splitlines():
+        cols = line.split("\t")
+        if len(cols) != 3 or not cols[0]:
+            continue
+        name, service, state = cols
+        rows[name] = {"name": name, "service": service, "state": state,
+                      "cpu_pct": None, "mem_used_gb": None, "mem_total_gb": None}
+    stats = subprocess.run(
+        ["docker", "stats", "--no-stream", "--format",
+         "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"],
+        capture_output=True, text=True, timeout=20)
+    for line in stats.stdout.splitlines():
+        cols = line.split("\t")
+        if len(cols) != 3 or cols[0] not in rows:
+            continue
+        name, cpu, mem = cols
+        try:
+            rows[name]["cpu_pct"] = float(cpu.strip().rstrip("%"))
+        except ValueError:
+            pass
+        if "/" in mem:
+            used, total = mem.split("/", 1)
+            rows[name]["mem_used_gb"] = _round1(_parse_bytes(used))
+            rows[name]["mem_total_gb"] = _round1(_parse_bytes(total))
+    return {"containers": sorted(rows.values(), key=lambda r: r["service"] or r["name"])}
+
+
+def _round1(v: float | None) -> float | None:
+    return round(v, 2) if v is not None else None
+
+
+def _disk_info() -> dict:
+    """Docker-managed disk (where the bundled model store lives when using the
+    default volume) via `docker system df`, plus the model-store path's free
+    space when that path is visible to this sidecar."""
+    out: dict = {}
+    df = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"],
+                        capture_output=True, text=True, timeout=15)
+    docker: dict = {}
+    for line in df.stdout.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = {"Images": "images_gb", "Local Volumes": "volumes_gb",
+               "Build Cache": "build_cache_gb", "Containers": "containers_gb"}.get(row.get("Type"))
+        if key:
+            docker[key] = _round1(_parse_bytes(row.get("Size", "0B")))
+            if row.get("Type") == "Local Volumes":
+                # Reclaimable looks like "12.3GB (50%)" — keep just the size
+                recl = row.get("Reclaimable", "0B").split(" ")[0]
+                docker["volumes_reclaimable_gb"] = _round1(_parse_bytes(recl))
+    if docker:
+        out["docker"] = docker
+    md = _models_dir()
+    if md and os.path.isdir(md):
+        try:
+            du = shutil.disk_usage(md)
+            out["model_store"] = {"path": md,
+                                  "free_gb": round(du.free / (1024**3), 1),
+                                  "total_gb": round(du.total / (1024**3), 1)}
+        except OSError:
+            pass
+    return out
 
 
 def _run_op(verb: str):
@@ -416,6 +543,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/notify/status":
             try:
                 return self._send(200, _notify_status())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/gpu-stats":
+            try:
+                return self._send(200, _gpu_stats())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/containers":
+            try:
+                return self._send(200, _containers())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/disk":
+            try:
+                return self._send(200, _disk_info())
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
         if self.path != "/status":

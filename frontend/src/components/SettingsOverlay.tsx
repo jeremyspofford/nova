@@ -21,7 +21,6 @@ import {
 } from '../api';
 import type { NotifyReachability, NotifyService } from '../api';
 import { Markdown } from './Markdown';
-import { RecentTurns } from './RecentTurns';
 import qrcode from 'qrcode-generator';
 import { getAuthToken, getServerToken } from '../api';
 import { THEMES } from '../brain/theme';
@@ -266,7 +265,18 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
               <BundledInference onChanged={() => getModels().then(setModels)} />
             )}
             {section === 'Inference' && <ModelStorage />}
-            {section === 'Observability' && <RecentTurns />}
+            {section === 'Observability' && (
+              <button
+                onClick={() => window.dispatchEvent(new Event('nova:open-observability'))}
+                className="w-full text-left rounded-lg border border-stone-700/70 bg-stone-800/40 px-3 py-2 hover:border-teal-700"
+              >
+                <span className="text-sm text-stone-200">Open the Observability board →</span>
+                <span className="block text-xs text-stone-500">
+                  Live resources (CPU, RAM, VRAM, disk), service health, and turn/cost
+                  rollups — plus recent turns. The chart icon (top-left) opens it too.
+                </span>
+              </button>
+            )}
             {defs.filter(d => d.section === section)
               // provider-scoped notify settings (notify.<provider>.*) show only
               // for the selected provider — new providers namespace themselves

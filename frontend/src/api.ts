@@ -238,6 +238,62 @@ export async function getTraces(limit = 50): Promise<TraceListItem[]> {
   return r.json();
 }
 
+// ── Observability board (system monitoring + turn/cost rollups) ───────────
+
+export interface GpuStat {
+  name: string; mem_used_gb: number; mem_total_gb: number; util_pct: number; temp_c: number;
+}
+export interface ContainerStat {
+  name: string; service: string; state: string;
+  cpu_pct: number | null; mem_used_gb: number | null; mem_total_gb: number | null;
+}
+export interface SystemResources {
+  instance: { id: string; label: string; leader: boolean };
+  platform: string;
+  cpu: { pct: number | null; cores: number | null; load1: number | null };
+  mem: { used_gb: number | null; total_gb: number | null };
+  gpu: { gpus: GpuStat[]; error?: string } | null;
+  disk: {
+    used_gb: number | null; total_gb: number | null;
+    docker?: Record<string, number | null>;
+    model_store?: { path: string; free_gb: number; total_gb: number };
+  };
+  containers: ContainerStat[];
+  sampled_at: number;
+}
+export async function getSystemResources(): Promise<SystemResources> {
+  const r = await apiFetch(`${API_URL}/api/v1/system/resources`);
+  if (!r.ok) throw new Error('Failed to load system resources');
+  return r.json();
+}
+
+export interface ServiceHealth {
+  name: string; ok: boolean; ms?: number; optional?: boolean; detail?: string;
+}
+export async function getSystemHealth(): Promise<{ services: ServiceHealth[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/system/health`);
+  if (!r.ok) throw new Error('Failed to load system health');
+  return r.json();
+}
+
+export interface ModelCost {
+  model: string; turns: number; calls: number;
+  prompt: number; completion: number; est_cost: number | null; priced: boolean;
+}
+export interface ObservabilitySummary {
+  window: string; turns: number; errors: number; cancelled: number; error_rate: number;
+  p50_secs: number | null; p95_secs: number | null;
+  tokens: { prompt: number; completion: number; total: number };
+  est_cost: number; cost_partial: boolean;
+  by_model: ModelCost[];
+  sources: Record<string, number>;
+}
+export async function getObservabilitySummary(window = '24h'): Promise<ObservabilitySummary> {
+  const r = await apiFetch(`${API_URL}/api/v1/observability/summary?window=${window}`);
+  if (!r.ok) throw new Error('Failed to load observability summary');
+  return r.json();
+}
+
 export async function getMemoryStats(): Promise<Record<string, number>> {
   const r = await apiFetch(`${API_URL}/api/v1/memory/stats`);
   if (!r.ok) throw new Error('Failed to load memory stats');

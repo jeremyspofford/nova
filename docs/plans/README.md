@@ -16,7 +16,8 @@ In roadmap priority order:
 | Plan | Roadmap item | Prereqs / notes |
 |---|---|---|
 | [voice.md](voice.md) | #1 | phase 1 + 1b SHIPPED 2026-07-15; phases 2–4 (STT) remain |
-| [observability-turn-tracing.md](observability-turn-tracing.md) | #3 | none; 3 flagged decisions inside, defaults chosen |
+| [observability-turn-tracing.md](observability-turn-tracing.md) | #3 | none; 3 flagged decisions inside, defaults chosen — SHIPPED (turn ledger complete) |
+| [observability-board.md](observability-board.md) | #30 | **P1 (live board) BUILT 2026-07-22, uncommitted, verified at :5173**; instance-aware, co-owns identity/leader with remote-shared-state.md (shared DB = aggregator); next P2 history+fleet (mig 043) → P3 leader-gated alerts; 3 new fixed-verb sidecar endpoints |
 | [model-curation-proposals.md](model-curation-proposals.md) | #5 | reuses gateway-lane discovery fetcher |
 | [named-inference-endpoints.md](named-inference-endpoints.md) | #6 | resolve pool-table convergence question in phase 1 |
 | [content-ingestion.md](content-ingestion.md) (was video-ingestion.md, reconciled 2026-07-21) | #8 | phase 1 (media ingestion: `media` worker, dedicated `ingestion` model-recs role) BUILT 2026-07-21, uncommitted, awaiting Jeremy's review |

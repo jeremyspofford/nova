@@ -1221,6 +1221,101 @@ See README for what works. This file is the ordered backlog.
    conversation — ornith:9b made zero tool calls there all night)
    recorded in the plan doc. Awaiting Jeremy's review.
 
+30. **Observability board + system monitoring (2026-07-22, spec drafted →
+    `docs/plans/observability-board.md`)** — promote observability from the
+    per-turn diagnostic it is today (#3's turn ledger: `trace.py`,
+    `turn_traces`/`turn_spans`, TurnInspector + a RecentTurns card in
+    Settings) into a **dedicated top-level Observability panel** (its own
+    launcher, peer to Settings — Jeremy's call 2026-07-22) that also, for the
+    first time, shows **live machine health**. Today there is zero resource
+    telemetry: `hardware.py` reports capacities (RAM/CPU/VRAM totals), never
+    utilization; `/health` is a bare DB ping; and nothing aggregates the
+    ledger even though `llm_call` spans already carry token counts. Four
+    sections: (1) health/topology strip, (2) live resource gauges — CPU%, RAM,
+    VRAM used/total, GPU util+temp, disk — reusing the `MemoryBar` component,
+    (3) 24h turn/cost rollups computed over the existing ledger, (4) alerts.
+    Host metrics the backend container can't see come from **new fixed-verb
+    sidecar endpoints** (`/gpu-stats`, `/containers`, `/disk` — same pattern
+    as the existing `/gpu`,`/vram`). **Designed instance-aware from day one
+    (Jeremy 2026-07-22): Nova may go distributed** — central DB/memory,
+    per-machine inference/model-storage, some pieces in the cloud. Key
+    consequence: with the shared central PG that `remote-shared-state.md`
+    already establishes, **the DB is the aggregator** — each instance samples
+    its own host (local `/proc` + its own sidecar) and writes rows tagged by
+    `instance_id`; no central collector, no cross-node fan-out; multi-instance
+    is a fleet table over those rows. Live gauges are local-direct; the fleet
+    view is from DB samples. Sampling is per-instance; **prune + alert
+    evaluation are leader-gated** (`leader.py` from `remote-shared-state.md`,
+    phase 1). Identity + the topology card are **co-owned with
+    `remote-shared-state.md`** — build once. **Phased:** P1 live board, single
+    instance (no storage; establishes instance identity + trivial leader) →
+    P2 history + fleet (`instances`/`resource_samples` + `turn_traces.
+    instance_id`, migration 043, tick sampler ~60s + leader-gated prune, d3
+    sparklines) → P3 leader-only threshold alerts through the #21 notification
+    registry (disk-full / OOM / VRAM saturation / instance-unreachable) with
+    debounce. Builds ON #3 (trace substrate + cost data) and #21 (alert
+    transport); aligns with `remote-shared-state.md` (identity/leader); the
+    recommendation surface is the alert's inbox half. **Not**
+    `device-activity-monitoring.md` (that watches Jeremy's own devices). Five
+    decisions flagged in the plan (sequencing vs. remote-shared-state; psutil
+    vs. hand-rolled `/proc`; VM-vs-host on WSL2; 60s/7d defaults; cost price
+    map). **PHASE 1 BUILT 2026-07-22, uncommitted, live-verified at :5173.**
+    Backend: `sysmon.py` (dep-free `/proc`+`shutil`, no psutil → no image
+    rebuild), `instances.py` (per-host id in `/state`, NOT the shared settings
+    DB; trivial `is_leader()`), `router_system.py` (`/system/resources`,
+    `/system/health`, `/system/fleet`, `/observability/summary` — cost rollup
+    reads existing `llm_call` token spans). Sidecar: three new fixed verbs
+    (`/gpu-stats` live nvidia-smi, `/containers` docker ps+stats, `/disk`
+    system df). Frontend: `ObservabilityOverlay.tsx` (own launcher, health
+    strip + MemoryBar-style gauges + container table + turn/cost tiles +
+    by-model cost + relocated RecentTurns); Settings → Observability now links
+    to the board. Verified: RTX 3090 VRAM/util/temp, per-container CPU/mem,
+    $1.35 est cost on glm-5.2 (locals $0), live poll ticking.
+    **REMAINING (paused 2026-07-22 — full phase detail + verification lines in
+    the plan doc; [[observability-board-30]] memory has the gotchas):**
+    - **P2 — history + fleet (next up).** Migration for `instances` (id, label,
+      role, first_seen, last_seen, `reaches` jsonb) + `resource_samples`
+      (instance_id, ts, cpu/mem/vram/gpu/disk cols + `detail` jsonb) + add
+      `turn_traces.instance_id` — **re-check the free migration number** (tip
+      was `044_ingest_orphan_cap` as of 2026-07-22 → next free 045; the plan's
+      "043" is already taken, and numbers keep moving with parallel work — read
+      the dir at build time). Per-instance sampler on the scheduler tick, throttled ~60s
+      (`trace.maybe_prune` gate pattern), writing one row + upserting
+      `instances.last_seen`/`reaches` — NOT leader-gated (each instance samples
+      itself). **Leader-gated** retention prune (`monitor.retention_days`,
+      default 7, daily — reuse the trace-prune shape, gate on
+      `instances.is_leader()`). New `GET /api/v1/system/resources/history?
+      window=…[&instance=]` bucketed via plain PG `date_bin` averages (no
+      extension). Populate `/system/fleet` from the samples (latest per
+      instance + heartbeat + reaches + leader) instead of today's hardcoded
+      one-row stub. Stamp `instance_id` on traces at turn open (trace.py) so
+      `/observability/summary` can take `&instance=`. Frontend: d3 SVG
+      sparklines under each gauge (d3 already a dep), a 1h/24h/7d resource
+      window toggle, and a real fleet table (collapses to one instance today).
+    - **P3 — alerts.** `monitor.thresholds` (disk_pct, mem_pct, vram_pct
+      sustained, gpu_temp_c, instance-unreachable = stale heartbeat);
+      **leader-only** evaluation on the tick over shared samples with
+      debounce/hysteresis; route breaches through `notify_operator` (#21) +/or
+      a recommendation card, node-attributed ("VRAM saturated on <label>"),
+      auto-clear + de-dupe on recovery; `GET/PUT /api/v1/system/alerts` +
+      threshold editor + active-alerts UI in the board.
+    - **P1 follow-ups (built, but loose ends).** Phone path :8080 needs
+      `docker compose build web && up -d web` (baked build) — NOT done.
+      Cost price map is a placeholder (only glm-5.2 priced; other cloud models
+      → `cost_partial` flag) → decision #5 is the operator-editable table.
+      `instances.label` defaults to the container hostname — set
+      `NOVA_INSTANCE_LABEL`, or add a per-host Settings field (must NOT live in
+      the shared settings DB). Disk gauge is `shutil.disk_usage("/")` (honest
+      proxy for the host docker partition; true host-disk needs an agent —
+      decision #3).
+    - **Open decisions (plan bottom).** #1 sequencing vs.
+      `remote-shared-state.md`: P1 shipped with trivial `is_leader()→True`; P2
+      prune-gating and P3 alert-gating want REAL leader election — land
+      remote-shared-state phase 1 before/with P3. #2 psutil (skipped for
+      dep-free `/proc`; swap only if per-process detail wanted → pyproject dep
+      + image rebuild). #3 VM-vs-host on WSL2. #4 60s/7d sampling defaults.
+      #5 cost price map.
+
 ### Discussion backlog (captured 2026-07-21 — to scope/plan, not yet numbered)
 
 Raised by Jeremy in one session; each needs a planning pass before it joins

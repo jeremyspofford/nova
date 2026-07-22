@@ -4,6 +4,7 @@ import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
 import { SettingsOverlay } from '../components/SettingsOverlay';
+import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 import { tagColor } from '../brain/systems';
 import { displayName } from '../names';
@@ -63,6 +64,7 @@ export function Brain() {
   const rendererRef = useRef<RendererHandle | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [observabilityOpen, setObservabilityOpen] = useState(false);
   const [prefs, setPrefs] = useState<BrainPrefs>(DEFAULT_PREFS);
   // latest graph as state — the Atlas, the chip, and the legend render from it
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
@@ -287,6 +289,14 @@ export function Brain() {
       rendererRef.current = null;
     };
   }, [prefs.view, prefs.showPlatform, openDetail]);
+
+  // the Settings → Observability link (and anything else) can open the board
+  // without threading props through overlays
+  useEffect(() => {
+    const open = () => { setSettingsOpen(false); setObservabilityOpen(true); };
+    window.addEventListener('nova:open-observability', open);
+    return () => window.removeEventListener('nova:open-observability', open);
+  }, []);
 
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
@@ -515,6 +525,17 @@ export function Brain() {
           ⌖
         </button>
         <button
+          onClick={() => setObservabilityOpen(true)}
+          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
+          title="Observability — health, resources & cost"
+          aria-label="Observability"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 12h4l2 6 4-14 2 8h6" />
+          </svg>
+        </button>
+        <button
           onClick={() => setSettingsOpen(true)}
           className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
           title="Settings, Automations, Rules & Agents"
@@ -590,6 +611,8 @@ export function Brain() {
       )}
 
       {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
+
+      {observabilityOpen && <ObservabilityOverlay onClose={() => setObservabilityOpen(false)} />}
 
       {(!isMobile || mobileChat) && (
         <ChatPanel

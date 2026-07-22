@@ -68,6 +68,11 @@ fragmentation footgun — worth the audit pass regardless).
    setup guide (env template for secondaries), Settings → Storage card
    shows which DB/memory home this instance uses (card exists — extend
    it with "shared/leader" status so the operator can SEE the topology).
+   NOTE (2026-07-22): the `instance_id` identity + this topology surface
+   are **co-owned with `observability-board.md`** (ROADMAP #30) — its
+   health/topology strip is the same view, and its `is_leader()` gating
+   depends on the leader work in phase 1 here. Define identity/leader once;
+   don't build two topology cards.
 4. Defer until real usage demands: per-file locking, conflict UI, live
    settings-change propagation (<20 s poll parity like soul-sync).
 
