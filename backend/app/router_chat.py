@@ -1105,9 +1105,21 @@ async def notify_reachability():
         checks.append({"label": "Phone URL derived from your public URL",
                        "ok": bool(phone_url),
                        "detail": phone_url or "set your public URL (Phone setup) first"})
-        checks.append({"label": "Tailnet route + Tailscale running", "ok": None,
-                       "detail": "Nova can't verify the tailnet side — make sure the "
-                                 "notify + tailscale profiles are up"})
+        # real tailnet-route status from the sidecar (live `tailscale serve`
+        # read); neutral only when the control sidecar isn't present
+        route_ok, route_detail = None, "control sidecar unavailable — can't check the route"
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(f"{settings.inference_control_url}/notify/status")
+            if r.status_code == 200:
+                route_ok = bool(r.json().get("tailnet_route"))
+                route_detail = ("served on your tailnet at :8443" if route_ok
+                                else "not served — Start the self-hosted server below "
+                                     "(or bring up the tailscale profile)")
+        except Exception:  # noqa: BLE001
+            pass
+        checks.append({"label": "Exposed on your tailnet (:8443)",
+                       "ok": route_ok, "detail": route_detail})
     out["checks"] = checks
     out["phone"] = {"server_url": phone_url, "topic": topic}
     return out
@@ -1161,8 +1173,9 @@ async def notify_service_action(body: dict):
     import httpx
 
     action = str(body.get("action", "")).strip()
-    if action not in ("up", "down"):
-        raise HTTPException(status_code=422, detail="action must be 'up' or 'down'")
+    if action not in ("up", "down", "expose"):
+        raise HTTPException(status_code=422,
+                            detail="action must be 'up', 'down', or 'expose'")
 
     if action == "up":
         # only the self-hosted (builtin) server's base-url is ours to set; for
@@ -1176,7 +1189,7 @@ async def notify_service_action(body: dict):
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"could not write control file: {e}")
 
-    path = "/notify/up" if action == "up" else "/notify/down"
+    path = {"up": "/notify/up", "down": "/notify/down", "expose": "/notify/expose"}[action]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(f"{settings.inference_control_url}{path}")

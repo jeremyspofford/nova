@@ -196,11 +196,49 @@ def _run_op(verb: str):
         _op["verb"] = None
 
 
+def _tailnet_ntfy_route() -> bool:
+    """Whether the :8443 -> ntfy route is currently served on the tailnet, read
+    LIVE via the serve CLI. Gives the reachability panel a real signal instead
+    of a guess. False (not an error) when tailscale is down."""
+    if not _container_state("tailscale")["running"]:
+        return False
+    try:
+        proc = subprocess.run(
+            _compose_cmd("tailscale") + ["exec", "-T", "tailscale",
+                                         "tailscale", "serve", "status"],
+            capture_output=True, text=True, timeout=15)
+        return "ntfy" in proc.stdout
+    except Exception:
+        return False
+
+
+def _expose_ntfy_route() -> None:
+    """Apply the :8443 -> ntfy tailnet route LIVE via the serve CLI — a
+    `docker compose exec`, NEVER a recreate, so the sidecar's missing host .env
+    can't blank tailscale's auth/config (the incident that made phase 4 use this
+    path). Idempotent; the same route also lives in serve.json for fresh
+    tailscale starts. Non-fatal: logs and returns if tailscale is down."""
+    if not _container_state("tailscale")["running"]:
+        log.info("expose: tailscale down — route deferred to serve.json on its next start")
+        return
+    proc = subprocess.run(
+        _compose_cmd("tailscale") + ["exec", "-T", "tailscale", "tailscale",
+                                     "serve", "--bg", "--https=8443", "http://ntfy:80"],
+        capture_output=True, text=True, timeout=30)
+    if proc.returncode == 0:
+        log.info("expose: :8443 -> ntfy route applied live")
+    else:
+        log.warning("expose: failed (non-fatal): %s",
+                    (proc.stderr or proc.stdout)[-200:].strip())
+
+
 def _notify_status() -> dict:
     """State of the notification-reachability services: the self-hosted ntfy
-    server and the tailscale node that exposes it to phones. Read-only."""
+    server, the tailscale node, and whether the :8443 route is actually served.
+    Read-only."""
     return {"ntfy": _container_state("ntfy"),
             "tailscale": _container_state("tailscale"),
+            "tailnet_route": _tailnet_ntfy_route(),
             "base_url": _ntfy_base_url(),
             "op": _op["verb"], "error": _op["error"]}
 
@@ -221,6 +259,11 @@ def _run_notify(verb: str):
     Same shape as _run_op: sets _op['error'] on failure, clears verb when done.
     """
     try:
+        if verb == "notify_expose":
+            # apply just the tailnet route, live (no ntfy recreate)
+            _expose_ntfy_route()
+            _op["error"] = None
+            return
         if verb == "notify_up":
             env = _compose_env()
             base_url = _ntfy_base_url()
@@ -243,6 +286,10 @@ def _run_notify(verb: str):
             _op["error"] = (proc.stderr or proc.stdout)[-400:].strip()
             log.warning("%s failed: %s", verb, _op["error"])
             return
+        # after starting ntfy, ensure it's exposed on the tailnet — live via the
+        # serve CLI, never a recreate (see _expose_ntfy_route). Non-fatal.
+        if verb == "notify_up":
+            _expose_ntfy_route()
         _op["error"] = None
         log.info("%s: done", verb)
     except Exception as e:
@@ -385,8 +432,9 @@ class Handler(BaseHTTPRequestHandler):
             verb = "relocate"
         elif self.path in ("/start", "/stop"):
             verb = self.path[1:]
-        elif self.path in ("/notify/up", "/notify/down"):
-            verb = "notify_up" if self.path.endswith("up") else "notify_down"
+        elif self.path in ("/notify/up", "/notify/down", "/notify/expose"):
+            verb = {"/notify/up": "notify_up", "/notify/down": "notify_down",
+                    "/notify/expose": "notify_expose"}[self.path]
         else:
             return self._send(404, {"error": "not found"})
         with _lock:

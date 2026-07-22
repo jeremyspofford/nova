@@ -371,7 +371,8 @@ function NotifyServiceControl({ defs }: { defs: SettingDef[] }) {
       || !svc?.available) return null;
 
   const running = !!svc.ntfy?.running;
-  const act = async (action: 'up' | 'down') => {
+  const exposed = !!svc.tailnet_route;
+  const act = async (action: 'up' | 'down' | 'expose') => {
     setBusy(true);
     try {
       await notifyServiceAction(action);
@@ -382,18 +383,31 @@ function NotifyServiceControl({ defs }: { defs: SettingDef[] }) {
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-700/70 bg-stone-800/40 p-3">
-      <div className="min-w-0">
-        <div className="text-sm text-stone-200">Self-hosted ntfy server</div>
-        <div className="text-xs text-stone-500">
-          {busy ? 'working…' : running ? 'Running' : 'Stopped'} — Nova sets its
-          address automatically so your phone stays in sync.
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm text-stone-200">Self-hosted ntfy server</div>
+          <div className="text-xs text-stone-500">
+            {busy ? 'working…' : running ? 'Running' : 'Stopped'} — Nova sets its
+            address automatically so your phone stays in sync.
+          </div>
         </div>
+        <button onClick={() => act(running ? 'down' : 'up')} disabled={busy}
+          className="shrink-0 text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50">
+          {busy ? '…' : running ? 'Stop' : 'Start'}
+        </button>
       </div>
-      <button onClick={() => act(running ? 'down' : 'up')} disabled={busy}
-        className="shrink-0 text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50">
-        {busy ? '…' : running ? 'Stop' : 'Start'}
-      </button>
+      {running && !exposed && (
+        <div className="flex items-center justify-between gap-3 pt-1 border-t border-stone-700/60">
+          <div className="text-xs text-amber-400 min-w-0">
+            Not exposed on your tailnet — your phone can't reach it yet.
+          </div>
+          <button onClick={() => act('expose')} disabled={busy}
+            className="shrink-0 text-xs px-2.5 py-1 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50">
+            Apply route
+          </button>
+        </div>
+      )}
     </div>
   );
 }

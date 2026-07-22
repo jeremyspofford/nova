@@ -360,6 +360,7 @@ export interface NotifyService {
   base_url?: string;
   ntfy?: { present: boolean; running: boolean; state: string };
   tailscale?: { present: boolean; running: boolean; state: string };
+  tailnet_route?: boolean;
   op?: string | null;
   error?: string | null;
 }
@@ -371,9 +372,10 @@ export async function getNotifyService(): Promise<NotifyService> {
   return r.json();
 }
 
-/** Start/stop the self-hosted ntfy service. 'up' also derives + applies the
- *  correct base URL so the phone stays in sync. */
-export async function notifyServiceAction(action: 'up' | 'down'): Promise<void> {
+/** Start/stop the self-hosted ntfy service, or (re)apply just the tailnet
+ *  route. 'up' also derives + applies the correct base URL so the phone stays
+ *  in sync; 'expose' re-applies the :8443 route live (no ntfy restart). */
+export async function notifyServiceAction(action: 'up' | 'down' | 'expose'): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/notify/service`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
