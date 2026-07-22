@@ -33,15 +33,41 @@ interface Section {
 
 const byLabel = (a: GraphNode, b: GraphNode) => a.label.localeCompare(b.label);
 
-export function MemoryAtlas({ nodes, edges, focus, onOpen, onClose }: {
+// drag bounds for the panel width — MIN keeps the search box usable, MAX
+// gives long titles room without swallowing the view (matches the chat's feel)
+const MIN_W = 240;
+const MAX_W = 560;
+const DEFAULT_W = 304;   // 19rem — the original fixed width
+
+export function MemoryAtlas({ nodes, edges, width, onWidthChange, focus, onOpen, onClose }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Panel width in px — drag-resizable, persisted by the parent. */
+  width: number;
+  onWidthChange: (w: number) => void;
   /** Jump target from the inventory chip — nonce re-fires on every click. */
   focus?: { type: string; nonce: number } | null;
   onOpen: (id: string) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState('');
+  const resizing = useRef(false);
+
+  // drag the right edge to resize; the panel is anchored `left-4` (16px), so
+  // the width is the pointer's x minus that offset
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!resizing.current) return;
+      onWidthChange(Math.min(MAX_W, Math.max(MIN_W, e.clientX - 16)));
+    };
+    const onUp = () => { resizing.current = false; document.body.style.cursor = ''; };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [onWidthChange]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const listRef = useRef<HTMLDivElement>(null);
   // the section a chip last opened, so re-clicking that chip collapses it
@@ -160,18 +186,46 @@ export function MemoryAtlas({ nodes, edges, focus, onOpen, onClose }: {
     ? true
     : open[s.id] ?? (s.id === 'home' || s.id.startsWith('sys:') || s.id === 'rogues');
 
+  // collapse every section — explicit false overrides the default-open ones
+  const collapseAll = () => {
+    setOpen(Object.fromEntries(sections.map(s => [s.id, false])));
+    chipSection.current = null;
+  };
+  const anyOpen = sections.some(isOpen);
+
   return (
-    <aside className="absolute top-16 left-4 bottom-4 z-20 w-[19rem] max-w-[calc(100vw-2rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl">
+    <aside
+      className="absolute top-16 left-4 bottom-4 z-20 max-w-[calc(100vw-2rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl"
+      style={{ width }}
+    >
+      {/* drag handle — widen the Atlas to read longer titles (double-click resets) */}
+      <div
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-700/50 transition-colors z-10"
+        onPointerDown={() => { resizing.current = true; document.body.style.cursor = 'col-resize'; }}
+        onDoubleClick={() => onWidthChange(DEFAULT_W)}
+        title="Drag to resize (double-click to reset)"
+      />
       <header className="px-3 py-2.5 border-b border-stone-700 flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="uppercase tracking-wide text-xs text-stone-500">Atlas</span>
-          <button
-            onClick={onClose}
-            className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
-            aria-label="Close atlas"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={collapseAll}
+              disabled={ql !== '' || !anyOpen}
+              className="text-stone-500 hover:text-stone-200 disabled:opacity-30 disabled:hover:text-stone-500 text-sm leading-none px-1"
+              title="Collapse all sections"
+              aria-label="Collapse all sections"
+            >
+              ⊟
+            </button>
+            <button
+              onClick={onClose}
+              className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
+              aria-label="Close atlas"
+            >
+              ×
+            </button>
+          </div>
         </div>
         <input
           autoFocus

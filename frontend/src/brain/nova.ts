@@ -62,9 +62,26 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   let labelMode: 'auto' | 'on' | 'off' = 'auto';
   let labelScale = 1;
 
+  // horizontal centering: Nova sits in the middle of the *clear* band, not
+  // the raw canvas. The canvas already ends at the chat's left edge, so the
+  // chat is accounted for by the canvas width; `leftInset` reserves the space
+  // the Atlas covers on the left. Eased so she glides to the new center when
+  // the Atlas opens, closes, or is dragged wider — never snaps.
+  let leftInsetTarget = 0;
+  let leftInset = 0;
+  const centerX = () => leftInset + (canvas.width - leftInset) / 2;
+  const orbR = () => {
+    const availW = canvas.width - leftInset;
+    return Math.max(22, Math.min(110, Math.min(availW, canvas.height) * 0.14)) * zoom;
+  };
+
   // view orientation — drag orbits the whole particle system around her
   let yaw = 0;
   let pitch = 0.15;
+  // zoom — wheel / pinch scale the whole scene around center so Nova can be
+  // pulled closer or pushed away; the recenter button resets it
+  let zoom = 1;
+  const MIN_ZOOM = 0.35, MAX_ZOOM = 6;
 
   // ── state machine ────────────────────────────────────────────────────
   // chat activity arrives via setActivity; speaking is polled off the
@@ -142,8 +159,12 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     const dt = Math.min(64, now - lastNow);    // clamp: background tabs jump
     lastNow = now;
     const w = canvas.width, h = canvas.height;
-    const cx = w / 2, cy = h / 2;
-    const R = Math.max(22, Math.min(110, Math.min(w, h) * 0.14));
+    // ease toward the current clear-band center — Nova glides when the Atlas
+    // or chat changes the space she has to live in
+    leftInset += (leftInsetTarget - leftInset) * (1 - Math.exp(-dt / 220));
+    const availW = w - leftInset;
+    const cx = leftInset + availW / 2, cy = h / 2;
+    const R = Math.max(22, Math.min(110, Math.min(availW, h) * 0.14)) * zoom;
     // the mote/shell pixel sizes were tuned against the settings preview card,
     // whose tiny canvas pins R at the 22px floor. On a full-screen canvas R
     // hits the 110px cap, so fixed-size particles shrink ~5x relative to the
@@ -333,23 +354,46 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   }
 
   // click the orb = open the soul (the orb IS Nova, same as the galaxy
-  // core); drag anywhere = orbit the view around her
+  // core); drag = orbit the view; wheel / pinch = zoom closer or further
   let dragging = false, dragDist = 0, lastX = 0, lastY = 0;
+  // two-pointer pinch (touch): the same convention as the universe view
+  const activePointers = new Map<number, { x: number; y: number }>();
+  let pinchDist = 0;
+  const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
   const inOrb = (x: number, y: number) => {
-    const R = Math.max(22, Math.min(110, Math.min(canvas.width, canvas.height) * 0.14));
-    return (x - canvas.width / 2) ** 2 + (y - canvas.height / 2) ** 2 <= (R * 2) ** 2;
+    const R = orbR();
+    return (x - centerX()) ** 2 + (y - canvas.height / 2) ** 2 <= (R * 2) ** 2;
   };
   const onPointerDown = (e: PointerEvent) => {
+    activePointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    if (activePointers.size === 2) {
+      const [a, b] = [...activePointers.values()];
+      pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
     dragging = true; dragDist = 0; lastX = e.offsetX; lastY = e.offsetY;
     canvas.setPointerCapture(e.pointerId);
   };
   const onPointerUp = (e: PointerEvent) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchDist = 0;
+    if (activePointers.size > 0) return;       // other fingers still down
     dragging = false;
     canvas.style.cursor = inOrb(e.offsetX, e.offsetY) ? 'pointer' : 'grab';
-    if (dragDist > 6) return;                  // that was an orbit, not a click
+    if (dragDist > 6) return;                  // that was an orbit/pinch, not a click
     opts?.onNodeClick?.(inOrb(e.offsetX, e.offsetY) ? 'soul.md' : null);
   };
   const onPointerMove = (e: PointerEvent) => {
+    if (activePointers.has(e.pointerId)) {
+      activePointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    }
+    if (activePointers.size === 2) {           // pinch: distance ratio scales zoom
+      const [a, b] = [...activePointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0) zoom = clampZoom(zoom * (d / pinchDist));
+      pinchDist = d;
+      dragDist += 10;                          // a pinch is never a click
+      return;
+    }
     if (dragging) {
       const dx = e.offsetX - lastX, dy = e.offsetY - lastY;
       dragDist += Math.abs(dx) + Math.abs(dy);
@@ -361,9 +405,14 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     }
     canvas.style.cursor = inOrb(e.offsetX, e.offsetY) ? 'pointer' : 'grab';
   };
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();                        // don't scroll the page behind her
+    zoom = clampZoom(zoom * (e.deltaY > 0 ? 1 / 1.08 : 1.08));
+  };
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
 
   raf = requestAnimationFrame(t => { lastNow = t; draw(t); });
 
@@ -376,12 +425,17 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       canvas.width = width;
       canvas.height = height;
     },
+    recenter() {
+      // reset the view: zoom back to 1:1 and face her straight on
+      zoom = 1; yaw = 0; pitch = 0.15;
+    },
     configure(options: Record<string, unknown>) {
       if (typeof options.rotationSpeed === 'number') pace = options.rotationSpeed / 2;
       if (typeof options.labelScale === 'number') labelScale = options.labelScale;
       if (options.labelMode === 'auto' || options.labelMode === 'on' || options.labelMode === 'off') {
         labelMode = options.labelMode;
       }
+      if (typeof options.leftInset === 'number') leftInsetTarget = Math.max(0, options.leftInset);
     },
     setActivity(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }) {
       if (state.kind === 'listening') { listening = state.active; return; }
@@ -393,6 +447,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('wheel', onWheel);
     },
   };
 }

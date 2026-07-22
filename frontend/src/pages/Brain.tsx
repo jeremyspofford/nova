@@ -10,6 +10,13 @@ import { displayName } from '../names';
 
 const REFRESH_MS = 20000;
 
+// the Atlas sits `left-4` (16px) from the left edge; its right edge — this
+// plus its width — is how far Nova's center must shift to stay centered.
+const ATLAS_LEFT = 16;
+// the sidebar-style detail card is `w-[26rem]` — used to tuck the legend past
+// the whole left-column stack when both it and the Atlas are open.
+const DETAIL_W = 416;
+
 const TYPE_BADGE: Record<string, string> = {
   topic: 'bg-teal-900/60 text-teal-300 border-teal-700',
   skill: 'bg-amber-900/40 text-amber-300 border-amber-700',
@@ -85,6 +92,45 @@ export function Brain() {
     localStorage.setItem('nova.chat.width', String(w));
     rendererRef.current?.resize(window.innerWidth - w, window.innerHeight);
   }, []);
+
+  // the Atlas is drag-resizable like the chat (longer titles fit when wider);
+  // `left-4` places it 16px from the left edge — that offset feeds leftInset
+  const [atlasWidth, setAtlasWidth] = useState(() =>
+    parseInt(localStorage.getItem('nova.atlas.width') ?? '304'));
+  const atlasWidthRef = useRef(atlasWidth);
+  atlasWidthRef.current = atlasWidth;
+  const atlasOpenRef = useRef(atlasOpen);
+  atlasOpenRef.current = atlasOpen;
+
+  const changeAtlasWidth = useCallback((w: number) => {
+    setAtlasWidth(w);
+    localStorage.setItem('nova.atlas.width', String(w));
+  }, []);
+
+  // Nova centers in the clear band between the Atlas (left) and the chat
+  // (right). The chat is already baked into the canvas width; leftInset tells
+  // the renderer how much the Atlas covers so she re-centers when it opens,
+  // closes, or is dragged wider. Desktop only — on mobile the Atlas is a
+  // full-width overlay and there's no band to center in.
+  const atlasInset = atlasOpen && !isMobile ? ATLAS_LEFT + atlasWidth : 0;
+  useEffect(() => {
+    rendererRef.current?.configure?.({ leftInset: atlasInset });
+  }, [atlasInset]);
+
+  // The legend shares the left column with the Atlas (and the sidebar-style
+  // detail card), so it must dock to the *right* of whatever's open there
+  // rather than sit buried behind it. Nothing open → it stays at the left
+  // edge, under its button. (Modal detail is a centered overlay — it doesn't
+  // claim the column, so it doesn't move the legend.)
+  const legendLeft = (() => {
+    if (isMobile) return ATLAS_LEFT;
+    let right = atlasOpen ? ATLAS_LEFT + atlasWidth : 0;
+    if (detail && prefs.detailStyle === 'sidebar') {
+      const detailLeft = atlasOpen ? ATLAS_LEFT + atlasWidth + 16 : ATLAS_LEFT;
+      right = detailLeft + DETAIL_W;
+    }
+    return right ? right + 16 : ATLAS_LEFT;
+  })();
 
   // Appearance lives in the settings platform (Settings -> Appearance);
   // load on mount, then react live to overlay changes via the change event.
@@ -183,6 +229,10 @@ export function Brain() {
       rotationSpeed: prefsRef.current.rotationSpeed,
       labelMode: prefsRef.current.labelMode,
       labelScale: prefsRef.current.labelScale,
+      // a freshly-created renderer doesn't know the Atlas state — seed it so
+      // Nova opens already centered in the current band
+      leftInset: atlasOpenRef.current && !mobileRef.current
+        ? ATLAS_LEFT + atlasWidthRef.current : 0,
     });
 
     const size = () => {
@@ -475,7 +525,10 @@ export function Brain() {
       </div>
 
       {legendOpen && (
-        <div className="absolute bottom-4 left-4 z-10 w-64 max-h-[45vh] overflow-y-auto nice-scroll rounded-xl bg-stone-900/85 backdrop-blur border border-stone-700 px-3 py-2.5 text-xs">
+        <div
+          className="absolute bottom-4 z-10 w-64 max-h-[45vh] overflow-y-auto nice-scroll rounded-xl bg-stone-900/85 backdrop-blur border border-stone-700 px-3 py-2.5 text-xs transition-[left] duration-200"
+          style={{ left: legendLeft }}
+        >
           <div className="flex items-center justify-between mb-1.5">
             <span className="uppercase tracking-wide text-stone-500">Legend</span>
             <button
@@ -505,6 +558,8 @@ export function Brain() {
         <MemoryAtlas
           nodes={graphData.nodes}
           edges={graphData.edges}
+          width={atlasWidth}
+          onWidthChange={changeAtlasWidth}
           focus={atlasFocus}
           onOpen={id => { openDetail(id); rendererRef.current?.focusNode?.(id); }}
           onClose={() => setAtlasOpen(false)}
@@ -526,7 +581,10 @@ export function Brain() {
           </div>
         </div>
       ) : detail && (
-        <aside className={`absolute top-16 ${atlasOpen ? 'left-4 md:left-[21rem]' : 'left-4'} bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl`}>
+        <aside
+          className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl"
+          style={atlasOpen && !isMobile ? { left: ATLAS_LEFT + atlasWidth + 16 } : undefined}
+        >
           {renderDetail(false)}
         </aside>
       )}
