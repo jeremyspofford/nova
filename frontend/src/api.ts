@@ -325,6 +325,20 @@ export async function patchSettings(changes: Record<string, unknown>): Promise<v
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Save failed');
 }
 
+export interface NotifyTestResult {
+  ok: boolean;
+  id?: string | null;
+  error?: string;
+  provider?: string;
+}
+
+/** Send a real test notification through the configured provider. */
+export async function testNotification(): Promise<NotifyTestResult> {
+  const r = await apiFetch(`${API_URL}/api/v1/notify/test`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Test failed');
+  return r.json();
+}
+
 export interface BundledInferenceStatus {
   available: boolean;
   present?: boolean;

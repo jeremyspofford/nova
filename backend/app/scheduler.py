@@ -102,6 +102,19 @@ async def tick():
                         type="journal", source_type="automation")
                 except Exception:
                     pass
+                # reach the operator even if the app is closed — an automation
+                # silently disabling itself is exactly the "you'd never know"
+                # case notifications exist for (roadmap #21). Best-effort: a
+                # no-op unless notifications are configured, never blocks the tick.
+                try:
+                    from app import notify
+                    await notify.send(
+                        f"'{automation['name']}' turned itself off after 5 "
+                        f"straight failures. Last error: {summary[:200]}",
+                        title="Automation auto-disabled", priority="high",
+                        tags=["warning"])
+                except Exception:
+                    log.exception("failure notification for auto-disabled automation failed")
             log.info("Automation %s: %s — %.120s",
                      automation["name"], "ok" if ok else "FAILED", summary)
 

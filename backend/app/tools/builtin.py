@@ -634,6 +634,30 @@ async def _raise_recommendation(args, ctx):
                         "yourself — they decide.")})
 
 
+async def _notify_operator(args, ctx):
+    """Push a notification to the operator's device via ntfy — the way to reach
+    them when the app is closed. Honest about outcome: reports SERVER acceptance
+    (with ntfy's message id), never phone delivery."""
+    from app import notify
+    message = (args.get("message") or "").strip()
+    if not message:
+        return "Error: message is required"
+    priority = (args.get("priority") or "").strip().lower() or None
+    tags = args.get("tags") if isinstance(args.get("tags"), list) else None
+    result = await notify.send(
+        message, title=(args.get("title") or "").strip() or None,
+        priority=priority, tags=tags)
+    if not result["ok"]:
+        return _j({"status": "not_sent", "error": result["error"],
+                   "note": ("The notification did NOT go out. Tell the operator "
+                            "plainly (they may need to enable/configure "
+                            "notifications in Settings).")})
+    return _j({"status": "accepted", "id": result.get("id"),
+               "note": ("Accepted by the ntfy server — this confirms it was "
+                        "PUBLISHED, not that it reached the operator's device. "
+                        "Say you sent it; don't claim they've seen it.")})
+
+
 async def _manage_rules(args, ctx):
     from app import consents, rules as rules_store
     action = (args.get("action") or "").lower()
@@ -1044,6 +1068,24 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "priority": {"type": "integer", "description": "0 default; higher shows first"},
         }, "required": ["title", "body"]},
         "execute": _raise_recommendation,
+    },
+    "notify_operator": {
+        "name": "notify_operator",
+        "description": ("Push a notification to the operator's device via ntfy — how "
+                        "you reach them when the app is CLOSED. Use it for things worth "
+                        "an interruption: a finished long task, an alert, a time-sensitive "
+                        "finding. NOT for normal chat replies (they're already here for "
+                        "those). Reports that the ntfy server accepted the message, which "
+                        "is not proof it reached their phone — never claim they've seen it."),
+        "parameters": {"type": "object", "properties": {
+            "message": {"type": "string", "description": "the notification body"},
+            "title": {"type": "string", "description": "optional short title/subject"},
+            "priority": {"type": "string",
+                         "description": "min | low | default | high | max (omit for the configured default)"},
+            "tags": {"type": "array", "items": {"type": "string"},
+                     "description": "optional ntfy tags/emoji shortcodes (e.g. 'warning', 'white_check_mark')"},
+        }, "required": ["message"]},
+        "execute": _notify_operator,
     },
     "dispatch_to_agent": {
         "name": "dispatch_to_agent",

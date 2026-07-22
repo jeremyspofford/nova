@@ -968,6 +968,18 @@ async def patch_settings(changes: dict):
     return {"applied": applied}
 
 
+@router.post("/api/v1/notify/test")
+async def notify_test():
+    """Send a real test notification through the configured provider, so the
+    operator can confirm setup from Settings. Returns notify.send's honest
+    result verbatim ({ok, id?, error?, provider?}) — server ACCEPTANCE, not
+    proof it reached the device."""
+    from app import notify
+    return await notify.send(
+        "Test notification from Nova — if this reached you, notifications are wired up.",
+        title="Nova test", tags=["bell"])
+
+
 # ── automations ──────────────────────────────────────────────────────────
 
 @router.get("/api/v1/automations")

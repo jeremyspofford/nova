@@ -14,6 +14,12 @@ from app import db
 
 log = logging.getLogger(__name__)
 
+# Notification provider keys for the notify.provider enum. Declared here (not
+# imported from app.notify) because notify.py imports THIS module — importing it
+# back would be circular. Keep in sync with notify._PROVIDERS; a stale entry just
+# offers a provider that notify.send() reports as unconfigured, never a crash.
+_NOTIFY_PROVIDERS = ["ntfy", "webhook"]
+
 SETTING_DEFS: list[dict] = [
     # ── Context ──────────────────────────────────────────────────────────
     {"key": "context.budget_openrouter", "type": "number", "default": 24000,
@@ -208,6 +214,50 @@ SETTING_DEFS: list[dict] = [
      "label": "Tap-to-talk pause tolerance (ms)",
      "description": ("How long a silence ends your turn in tap-to-talk. Higher "
                      "= more forgiving of mid-sentence pauses before Nova answers.")},
+    # ── Notifications (roadmap #21) ──────────────────────────────────────
+    # The only way Nova reaches you when the app is closed. Provider-based
+    # (app/notify.py): ntfy is the batteries-included default (keyless,
+    # self-hostable, privacy-first); webhook is the universal bridge to
+    # Slack/Discord/Zapier and cloud pub/sub. Provider-specific settings are
+    # namespaced notify.<provider>.* and the UI shows only the active one's.
+    {"key": "notify.enabled", "type": "boolean", "default": False,
+     "section": "Notifications", "label": "Enable push notifications",
+     "description": ("Let Nova and her automations reach you when the app is "
+                     "closed. Off = notify_operator is a no-op. Configure the "
+                     "provider below, then use “Send test”.")},
+    {"key": "notify.provider", "type": "enum", "default": "ntfy",
+     "options": _NOTIFY_PROVIDERS,
+     "section": "Notifications", "label": "Provider",
+     "description": ("Which backend delivers notifications. ntfy reaches a "
+                     "phone with no account; webhook POSTs the notification as "
+                     "JSON to any URL (Slack/Discord/Zapier, or a cloud "
+                     "pub/sub HTTP ingest).")},
+    {"key": "notify.default_priority", "type": "enum", "default": "default",
+     "options": ["min", "low", "default", "high", "max"],
+     "section": "Notifications", "label": "Default priority",
+     "description": ("Priority for notifications that don't set their own "
+                     "(ntfy maps this to sound/vibration and lock-screen "
+                     "prominence; other providers pass it through).")},
+    # ntfy provider
+    {"key": "notify.ntfy.server_url", "type": "string", "default": "https://ntfy.sh",
+     "section": "Notifications", "label": "ntfy · server URL",
+     "description": ("Where notifications are published. The default public "
+                     "ntfy.sh works with zero setup but relays your messages "
+                     "through a third party — self-host ntfy and point this at "
+                     "it (e.g. http://ntfy:80) to keep everything private.")},
+    {"key": "notify.ntfy.topic", "type": "string", "default": "",
+     "section": "Notifications", "label": "ntfy · topic",
+     "description": ("The topic to publish to and subscribe to in the ntfy app. "
+                     "On public ntfy.sh the topic name IS the only secret, so "
+                     "pick a long, hard-to-guess one (anyone who knows it can "
+                     "read your notifications).")},
+    # webhook provider
+    {"key": "notify.webhook.url", "type": "string", "default": "",
+     "section": "Notifications", "label": "Webhook · URL",
+     "description": ("Notifications are POSTed here as JSON "
+                     "{message,title,priority,tags,click,source}. Point it at a "
+                     "Slack/Discord incoming webhook, a Zapier/IFTTT catch hook, "
+                     "or your own cloud endpoint.")},
 ]
 
 _DEFS = {d["key"]: d for d in SETTING_DEFS}

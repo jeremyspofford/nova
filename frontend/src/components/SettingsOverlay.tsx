@@ -13,8 +13,8 @@ import {
   getModelsDir, getRecommendations, getRules, getSettings, getSkills, getStorageInfo,
   getTools, getVoiceHealth, patchAgent,
   patchAutomation, patchCuratedModel, patchMcpServer, patchRule, patchSettings, patchTool,
-  pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, uninstallModel,
-  updateSkill,
+  pullModel, setBundledInference, setModelsDir, synthesizeSpeech, testModel, testNotification,
+  uninstallModel, updateSkill,
 } from '../api';
 import { Markdown } from './Markdown';
 import { RecentTurns } from './RecentTurns';
@@ -107,6 +107,20 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
   const [loaded, setLoaded] = useState(false);
+  const [notifyTest, setNotifyTest] = useState<{ busy: boolean; msg: string; ok?: boolean }>(
+    { busy: false, msg: '' });
+
+  async function runNotifyTest() {
+    setNotifyTest({ busy: true, msg: 'Sending…' });
+    try {
+      const r = await testNotification();
+      setNotifyTest({ busy: false, ok: r.ok, msg: r.ok
+        ? `Accepted by ${r.provider ?? 'provider'}${r.id ? ` (id ${r.id})` : ''} — check your device. Acceptance isn't proof it arrived.`
+        : `Not sent: ${r.error}` });
+    } catch (e) {
+      setNotifyTest({ busy: false, ok: false, msg: String(e) });
+    }
+  }
 
   useEffect(() => {
     getSettings().then(setDefs).catch(e => setStatus(String(e))).finally(() => setLoaded(true));
@@ -246,7 +260,16 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
             )}
             {section === 'Inference' && <ModelStorage />}
             {section === 'Observability' && <RecentTurns />}
-            {defs.filter(d => d.section === section).map(d => (
+            {defs.filter(d => d.section === section)
+              // provider-scoped notify settings (notify.<provider>.*) show only
+              // for the selected provider — new providers namespace themselves
+              // and hide automatically, no code here to touch
+              .filter(d => {
+                const m = d.key.match(/^notify\.(ntfy|webhook)\./);
+                if (!m) return true;
+                return m[1] === defs.find(x => x.key === 'notify.provider')?.value;
+              })
+              .map(d => (
               <div key={d.key}
                 className={d.key === 'brain.view'
                   ? 'space-y-2'
@@ -258,6 +281,23 @@ function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] })
                 {field(d)}
               </div>
             ))}
+            {section === 'Notifications' && (
+              <div className="pt-1">
+                <button
+                  onClick={runNotifyTest}
+                  disabled={notifyTest.busy}
+                  className="text-sm px-3 py-1.5 rounded bg-stone-800 border border-stone-700 text-stone-200 hover:border-teal-600 disabled:opacity-50"
+                >
+                  Send test notification
+                </button>
+                {notifyTest.msg && (
+                  <div className={`text-xs mt-2 ${
+                    notifyTest.ok === false ? 'text-amber-400' : 'text-teal-400'}`}>
+                    {notifyTest.msg}
+                  </div>
+                )}
+              </div>
+            )}
             {/* model inventory (pull, curated table) lives in the Models tab;
                 assignment surfaces (detect & suggest, concurrent load) in Agents */}
           </div>
