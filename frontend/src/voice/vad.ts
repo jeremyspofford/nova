@@ -25,25 +25,56 @@ export class TapVad {
    *  speech. `silenceMs` = trailing silence that ends the turn (configurable
    *  via voice.vad_silence_ms). Throws if the mic is denied or assets fail. */
   async arm(cb: VadCallbacks, opts?: { silenceMs?: number }): Promise<void> {
+    // watch endpointing live: localStorage.setItem('nova.vadDebug','1')
+    const dbg = typeof localStorage !== 'undefined' && localStorage.getItem('nova.vadDebug') === '1';
+    const t0 = performance.now();
+    const silenceMs = opts?.silenceMs ?? 1100;
+    let speechAt = 0;
     this.vad = await MicVAD.new({
       // self-hosted assets — never the library's CDN defaults
       baseAssetPath: '/vad/',
       onnxWASMBasePath: '/vad/',
       model: 'v5',
-      // endpointing: ~300 ms min speech; trailing silence to end is tunable
-      // (default forgiving of mid-sentence pauses)
-      minSpeechMs: 300,
-      redemptionMs: opts?.silenceMs ?? 1100,
-      preSpeechPadMs: 300,
-      onSpeechStart: () => cb.onSpeechStart(),
-      onVADMisfire: () => cb.onMisfire(),
+      // Endpointing tuned to NOT cut off command-style speech (you pause while
+      // composing a query). Trailing silence to end is the operator setting
+      // voice.vad_silence_ms. The low negative threshold is the anti-cutoff
+      // lever: brief in-word amplitude dips must not read as "you stopped".
+      positiveSpeechThreshold: 0.35,
+      negativeSpeechThreshold: 0.2,
+      minSpeechMs: 250,
+      redemptionMs: silenceMs,
+      preSpeechPadMs: 400,      // a touch more, so the wake→VAD handoff keeps your first word
+      onSpeechStart: () => {
+        speechAt = performance.now();
+        if (dbg) console.debug(`[vad] speech start (+${Math.round(speechAt - t0)}ms after arm)`);
+        cb.onSpeechStart();
+      },
+      onVADMisfire: () => {
+        if (dbg) console.debug('[vad] MISFIRE (spoke < minSpeechMs) — back to armed');
+        cb.onMisfire();
+      },
       onSpeechEnd: (audio: Float32Array) => {
+        const secs = audio.length / 16000;
+        let sum = 0;
+        for (let i = 0; i < audio.length; i++) sum += audio[i] * audio[i];
+        const rms = Math.sqrt(sum / (audio.length || 1));
+        if (dbg) console.debug(`[vad] speech END: ${secs.toFixed(2)}s captured, rms=${rms.toFixed(4)}, `
+          + `${Math.round(performance.now() - speechAt)}ms since start, redemption=${silenceMs}ms`);
+        // Guard the classic whisper failure: a near-empty / near-silent clip
+        // (e.g. the wake→VAD handoff missed the command) makes whisper
+        // hallucinate "Thank you." Treat it as a misfire, not a real turn.
+        if (secs < 0.4 || rms < 0.006) {
+          if (dbg) console.debug('[vad] discarded as too short/quiet — misfire');
+          cb.onMisfire();
+          return;
+        }
         // Float32 @16 kHz → 16-bit PCM WAV (whisper decodes it via PyAV)
         const wav = utils.encodeWAV(audio, 1, 16000, 1, 16);
         cb.onSpeechEnd(new Blob([wav], { type: 'audio/wav' }));
       },
     });
     await this.vad.start();
+    if (dbg) console.debug(`[vad] armed in ${Math.round(performance.now() - t0)}ms (silence=${silenceMs}ms)`);
   }
 
   /** Stop listening and release the mic. */

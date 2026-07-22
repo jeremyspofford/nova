@@ -265,6 +265,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain }: ChatPan
     'idle' | 'recording' | 'arming' | 'armed' | 'capturing' | 'transcribing' | 'wake'>('idle');
   const [listenMode, setListenMode] = useState<'ptt' | 'tap' | 'wake'>('ptt');
   const mic = useRef(new Mic());
+  useEffect(() => () => mic.current.dispose(), []);   // release the device on unmount
   const tapVad = useRef<TapVad | null>(null);
   const vadSilenceMs = useRef(1100);
   const wakeRef = useRef<WakeWord | null>(null);
