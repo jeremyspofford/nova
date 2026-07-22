@@ -505,6 +505,47 @@ export async function decideRecCard(
   return r.json();
 }
 
+// ── ingestion queue (migration 041): the durable background ingest lane ──────
+
+export type IngestStatus = 'queued' | 'running' | 'done' | 'skipped' | 'failed';
+
+export interface IngestJob {
+  id: string;
+  url: string;
+  title: string | null;
+  source_key: string | null;
+  status: IngestStatus;
+  attempts: number;
+  max_attempts?: number;
+  orphans?: number;
+  error: string | null;
+  result_item_id?: string | null;
+  enqueued_by?: string | null;
+  enqueued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface IngestSummary {
+  counts: Partial<Record<IngestStatus, number>>;
+  jobs: IngestJob[];
+}
+
+/** Counts by status + the most-recently-touched jobs — the Ingestion panel's
+ *  live poll. queued+running = work in flight; done/failed/skipped = the trail. */
+export async function getIngestSummary(): Promise<IngestSummary> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/summary`);
+  if (!r.ok) throw new Error('Failed to load ingestion status');
+  return r.json();
+}
+
+/** Requeue a failed/skipped job so the worker tries it again. */
+export async function retryIngestJob(id: string): Promise<IngestJob> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs/${id}/retry`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Retry failed');
+  return r.json();
+}
+
 export interface ModelsDirInfo {
   path: string | null;   // null = default docker volume
   relocated: boolean;

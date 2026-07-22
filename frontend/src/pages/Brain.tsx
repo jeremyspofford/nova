@@ -5,6 +5,7 @@ import { Markdown } from '../components/Markdown';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
 import { SettingsOverlay } from '../components/SettingsOverlay';
 import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
+import { IngestionActivity } from '../components/IngestionPanel';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 import { tagColor } from '../brain/systems';
 import { displayName } from '../names';
@@ -524,6 +525,7 @@ export function Brain() {
         >
           ⌖
         </button>
+        <IngestionActivity />
         <button
           onClick={() => setObservabilityOpen(true)}
           className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"

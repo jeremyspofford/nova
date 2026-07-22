@@ -63,6 +63,16 @@ async def set_enabled(source_key: str, enabled: bool) -> bool:
     return res.endswith("1")
 
 
+async def increment_ingested(source_key: str, n: int = 1) -> None:
+    """Bump a source's running ingested_count by one as the worker actually lands
+    an item — the count now grows asynchronously, decoupled from the follow/poll
+    that discovered it (which records status/timing separately via record_poll)."""
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE source_subscriptions SET ingested_count = ingested_count + $2, "
+            "updated_at = now() WHERE source_key = $1", source_key, n)
+
+
 async def record_poll(source_key: str, *, status: str, error: Optional[str],
                       new_ingested: int) -> None:
     """Stamp a poll outcome: last_polled_at, ok/error, and bump the running

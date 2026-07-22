@@ -1336,6 +1336,55 @@ async def decide_consent_endpoint(consent_id: str, body: dict):
     return row
 
 
+# ── ingestion queue: the durable background ingest lane (migration 041) ──────
+#    follow_source / poll only ENQUEUE; ingest_worker drains this. These
+#    endpoints are the operator's live, per-item view of that work — the
+#    detailed trail the turn-ledger couldn't give (it died with a killed turn).
+
+@router.get("/api/v1/ingest/summary")
+async def ingest_summary_endpoint():
+    """Counts by status + the most-recently-touched jobs — the Ingestion panel's
+    one poll. queued/running = live work; done/failed/skipped = the trail."""
+    from app import ingest_jobs
+    return await ingest_jobs.summary()
+
+
+@router.get("/api/v1/ingest/jobs")
+async def ingest_jobs_endpoint(status: str | None = None, limit: int = 100):
+    """Full job list, optionally filtered by status (queued|running|done|
+    skipped|failed)."""
+    from app import ingest_jobs
+    limit = max(1, min(500, limit))
+    async with db.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                "SELECT * FROM ingest_jobs WHERE status = $1 "
+                "ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC "
+                "LIMIT $2", status, limit)
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM ingest_jobs "
+                "ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC "
+                "LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
+@router.post("/api/v1/ingest/jobs/{job_id}/retry")
+async def ingest_retry_endpoint(job_id: str):
+    """Requeue a failed/skipped job so the worker tries it again — the 'continue'
+    control for anything that didn't land."""
+    from app import ingest_jobs
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="job not found")
+    row = await ingest_jobs.retry(jid)
+    if not row:
+        raise HTTPException(status_code=409,
+                            detail="job is not in a retryable state (failed/skipped)")
+    return dict(row)
+
+
 # ── recommendations: Nova's proactive cards (docs/plans/recommendation-surface.md) ─
 
 @router.get("/api/v1/recommendations")

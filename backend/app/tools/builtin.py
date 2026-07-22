@@ -9,6 +9,7 @@ the execute function below only fires if something calls it outside the runner.
 
 import json
 import logging
+import re
 from urllib.parse import urlparse
 
 from app import db
@@ -422,37 +423,57 @@ async def _ingest_media(args, ctx):
 _BACKFILL_MAX = 50
 _POLL_WINDOW = 15   # recent uploads examined per source per poll (dedup does the rest)
 
+# A bare YouTube channel URL (…/@handle, /channel/UC…, /c/…, /user/…) enumerates to
+# the channel's TAB list (Videos/Shorts/Live), and yt-dlp's descent into the Videos
+# tab is flaky — @AILABS-393 resolved to its uploads fine but @ByteByteGo backfilled
+# nothing (2026-07-22). Pointing a channel root at its /videos tab makes enumeration
+# deterministic. Playlist and already-suffixed URLs pass through untouched.
+_YT_CHANNEL_ROOT = re.compile(
+    r"^(?:https?://)?(?:www\.|m\.)?youtube\.com/"
+    r"(?:@[\w.-]+|c/[\w.-]+|user/[\w.-]+|channel/UC[\w-]+)/?$",
+    re.IGNORECASE)
 
-async def _ingest_source_entries(entries: list[dict], source_key: str,
-                                 limit: int) -> dict:
-    """Ingest the not-yet-seen entries of an enumerated source, newest first.
-    Dedupes against the ledger by media_key BEFORE extracting, so already-known
-    items cost nothing. Returns ingested titles + counts."""
-    from app import media_ingests
-    ingested: list[str] = []
+
+def _normalize_source_url(url: str) -> str:
+    """Rewrite a bare YouTube channel URL to its /videos tab so following it
+    backfills actual uploads; leave every other URL alone."""
+    url = url.strip()
+    return url.rstrip("/") + "/videos" if _YT_CHANNEL_ROOT.match(url) else url
+
+
+async def _enqueue_source_entries(entries: list[dict], source_key: str,
+                                  limit: int, *, enqueued_by: str) -> dict:
+    """Queue the not-yet-ingested entries of an enumerated source for the
+    background ingest worker, newest first — the ASYNC replacement for inline
+    batch ingestion (a multi-channel backfill used to run download+transcribe
+    for every video inside the chat turn and die whole if the connection
+    dropped; 2026-07-22). Deduped against the media_ingests ledger (already
+    learned) and the active queue (already pending, via enqueue's partial unique
+    index), so re-following or re-polling costs nothing. Returns queued/known
+    counts — the heavy work happens later, in ingest_worker."""
+    from app import ingest_jobs, media_ingests
+    queued = 0
     already = 0
-    failed: list[str] = []
     for e in entries:
-        if limit and len(ingested) >= limit:
+        if limit and queued >= limit:
             break
         if await media_ingests.get(e["media_key"]):
             already += 1
             continue
-        core = await _ingest_media_core(e["url"], source_key=source_key)
-        if core["status"] == "ingested":
-            ingested.append(core["title"])
-        elif core["status"] == "already_ingested":
-            already += 1
-        else:   # error, or skipped (live/upcoming) — note it, keep going
-            failed.append(f"{e.get('title') or e['url']}: "
-                          f"{core.get('reason') or core.get('error')}")
-    return {"ingested": ingested, "already_had": already, "failed": failed}
+        row = await ingest_jobs.enqueue(
+            url=e["url"], media_key=e["media_key"], title=e.get("title"),
+            source_key=source_key, enqueued_by=enqueued_by)
+        if row:
+            queued += 1
+        else:
+            already += 1   # already sitting in the queue from a prior pass
+    return {"queued": queued, "already_had": already}
 
 
 async def _follow_source(args, ctx):
     from app import source_subscriptions
     from app.media_client import enumerate_source
-    url = (args.get("url") or "").strip()
+    url = _normalize_source_url(args.get("url") or "")
     if not url:
         return "Error: url is required"
     raw = args.get("backfill")
@@ -477,21 +498,26 @@ async def _follow_source(args, ctx):
     result = {"status": "following", "source_key": info["source_key"],
               "title": sub["title"], "available": len(info.get("entries") or [])}
     if backfill:
-        stats = await _ingest_source_entries(info["entries"], info["source_key"], backfill)
+        stats = await _enqueue_source_entries(
+            info.get("entries") or [], info["source_key"], backfill,
+            enqueued_by="follow_source")
+        # discovery happened now; the worker bumps ingested_count as items land
         await source_subscriptions.record_poll(
-            info["source_key"], status="ok", error=None,
-            new_ingested=len(stats["ingested"]))
-        result.update(backfilled=len(stats["ingested"]), already_had=stats["already_had"])
-        if stats["failed"]:
-            result["failed"] = stats["failed"][:5]
+            info["source_key"], status="ok", error=None, new_ingested=0)
+        result.update(queued=stats["queued"], already_had=stats["already_had"])
         result["note"] = (
-            f"Now following {sub['title']}. Backfilled {len(stats['ingested'])} recent "
-            "upload(s); new ones ingest automatically via the poll-followed-sources "
-            "automation. Report the source name and how many were backfilled.")
+            f"Now following {sub['title']}. Queued {stats['queued']} recent upload(s) "
+            "for BACKGROUND ingestion"
+            + (f" ({stats['already_had']} already in memory)"
+               if stats["already_had"] else "")
+            + " — they download and transcribe asynchronously and appear in memory as "
+            "each one finishes, so this returns immediately. Do NOT claim they're "
+            "learned yet; say they're queued and backfilling. New uploads ingest "
+            "automatically via the poll. Report the source name and the queued count.")
     else:
         result["note"] = (
             f"Now following {sub['title']} (future uploads only — no backfill). "
-            "The poll automation ingests new uploads from here on.")
+            "The poll queues new uploads for background ingestion from here on.")
     return _j(result)
 
 
@@ -549,17 +575,20 @@ async def _poll_sources(args, ctx):
                 s["source_key"], status="error", error=err[:300], new_ingested=0)
             report.append({"source": s["title"], "error": err[:200]})
             continue
-        stats = await _ingest_source_entries(info["entries"], s["source_key"], _POLL_WINDOW)
+        stats = await _enqueue_source_entries(
+            info.get("entries") or [], s["source_key"], _POLL_WINDOW,
+            enqueued_by="poll")
         await source_subscriptions.record_poll(
-            s["source_key"], status="ok", error=None, new_ingested=len(stats["ingested"]))
-        total_new += len(stats["ingested"])
-        if stats["ingested"] or stats["failed"]:
-            report.append({"source": s["title"], "new": stats["ingested"],
-                           "failed": stats["failed"][:3]})
+            s["source_key"], status="ok", error=None, new_ingested=0)
+        total_new += stats["queued"]
+        if stats["queued"]:
+            report.append({"source": s["title"], "queued": stats["queued"]})
     return _j({"status": "polled", "sources_checked": len(subs),
-               "new_ingested": total_new, "detail": report,
-               "note": ("Report which sources had new uploads and how many were "
-                        "ingested; if none, say the followed sources are up to date.")})
+               "queued": total_new, "detail": report,
+               "note": ("New uploads were QUEUED for background ingestion (they "
+                        "transcribe asynchronously via the ingest worker). Report how "
+                        "many were queued per source; if none, say the followed sources "
+                        "are up to date.")})
 
 
 # WMO weather codes → plain English (open-meteo's `weather_code`)
