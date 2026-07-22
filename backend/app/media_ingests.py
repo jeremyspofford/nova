@@ -18,6 +18,20 @@ async def get(media_key: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def delete_by_item_id(item_id: str) -> int:
+    """Drop any ledger row whose full-transcript note was just deleted from
+    memory. Without this a removed transcript leaves a dangling dedup entry
+    (full_transcript_item_id pointing at a missing file) that silently blocks
+    re-ingesting the same media without force=true. Returns rows removed."""
+    async with db.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM media_ingests WHERE full_transcript_item_id = $1", item_id)
+    try:
+        return int(result.split()[-1])   # asyncpg tag, e.g. "DELETE 1"
+    except (ValueError, IndexError):
+        return 0
+
+
 async def record(*, media_key: str, extractor: str, title: str, url: str,
                  duration_s: Optional[int], transcript_source: str,
                  language: Optional[str], segment_count: int,

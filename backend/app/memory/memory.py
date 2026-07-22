@@ -347,6 +347,12 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             if title:
                 for changed_id, mtime in self.store.unlink_references(title):
                     self._index_file(changed_id, mtime)
+            # a deleted transcript must not leave a dangling media_ingests row
+            # (its full_transcript_item_id would point at a missing file and
+            # block re-ingest without force). Lazy import keeps the OKF store
+            # import-light — the ledger is an app-level concern, not the store's.
+            from app import media_ingests
+            await media_ingests.delete_by_item_id(doc_id)
             return True
 
     async def stats(self) -> dict:
