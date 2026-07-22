@@ -768,9 +768,12 @@ async def _list_models(args, ctx):
 
 async def _recommend_models(args, ctx):
     from app import model_recs
-    recs = await model_recs.recommendations()
+    mode = (args.get("mode") or "hybrid").strip().lower()
+    recs = await model_recs.recommendations(mode=mode)
     hw = recs["hardware"]
     return _j({
+        "mode": recs["mode"],
+        "mode_note": recs.get("mode_note"),
         "hardware": {k: hw[k] for k in
                      ("ram_gb", "sizing_ram_gb", "memory_override_gb",
                       "cpu_cores", "platform", "memory_note",
@@ -1254,8 +1257,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": ("Suggest a model per agent based on this machine's "
                         "hardware (RAM, cores, GPU) and the curated model table. "
                         "Returns per-agent suggestions with reasons and "
-                        "alternates — present the reasons, not just names."),
-        "parameters": {"type": "object", "properties": {}},
+                        "alternates — present the reasons, not just names. "
+                        "Use 'mode' to shape the whole stack: hybrid (default), "
+                        "local (self-hosted only), or cloud (prefer cloud "
+                        "providers)."),
+        "parameters": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["hybrid", "local", "cloud"],
+                     "description": "Stack strategy: hybrid (default) | local | cloud"},
+        }},
         "execute": _recommend_models,
     },
     "pull_model": {

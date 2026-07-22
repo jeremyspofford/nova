@@ -76,23 +76,37 @@ def _fits_local(row: dict, hw: dict) -> tuple[bool, str]:
     return False, ""
 
 
-def _candidates(profile: str, rows: list[dict], hw: dict) -> list[dict]:
+def _candidates(profile: str, rows: list[dict], hw: dict,
+                mode: str = "hybrid") -> list[dict]:
     """Fitting rows for a profile, best first. A cloud row (any provider that
     isn't the built-in ollama) is a candidate only when that provider is
-    configured; local rows must fit the hardware."""
+    configured; local rows must fit the hardware.
+
+    mode constrains WHERE the stack may run:
+      hybrid — both are candidates (the default; quality wins).
+      local  — cloud rows excluded entirely (a fully self-hosted stack).
+      cloud  — cloud preferred; local kept only as a fallback for roles no
+               configured cloud provider serves, and dropped the moment a real
+               cloud candidate exists for that role.
+    """
     role = _PROFILE_ROLE[profile]
     out = []
     for row in rows:
         if role not in row["roles"]:
             continue
         if row["provider"] != "ollama":
-            if not providers.is_configured(row["provider"]):
+            if mode == "local" or not providers.is_configured(row["provider"]):
                 continue
             out.append({**row, "how": "cloud"})
         else:
             fits, how = _fits_local(row, hw)
             if fits:
                 out.append({**row, "how": how})
+
+    # cloud mode: once any real cloud option serves this role, drop local rows
+    # so the suggested stack is genuinely all-cloud where it can be.
+    if mode == "cloud" and any(c["provider"] != "ollama" for c in out):
+        out = [c for c in out if c["provider"] != "ollama"]
 
     size = lambda r: r["min_ram_gb"] or 0  # size proxy; cloud rows are 0
 
@@ -265,7 +279,9 @@ def _consolidate(out: list[dict], per_profile: dict, rows: list[dict],
     return _budget(assignments(), rows, hw)
 
 
-async def recommendations() -> dict:
+async def recommendations(mode: str = "hybrid") -> dict:
+    if mode not in ("hybrid", "local", "cloud"):
+        mode = "hybrid"
     hw = await hardware.detect()
     rows = await curated_models.list_all(enabled_only=True)
     agents = await agent_registry.list_agents(enabled_only=False)
@@ -278,7 +294,7 @@ async def recommendations() -> dict:
 
     per_profile: dict[str, list[dict]] = {}
     for profile in _PROFILE_ROLE:
-        per_profile[profile] = _candidates(profile, rows, hw)
+        per_profile[profile] = _candidates(profile, rows, hw, mode)
 
     out = []
     for agent in agents:
@@ -300,9 +316,11 @@ async def recommendations() -> dict:
             continue
         pick = _pick_for(current, cands)
         alternates = [c for c in cands if c["model"] != pick["model"]][:2]
-        # a cloud pick always carries a fully-local alternate
+        # a cloud pick always carries a fully-local alternate (any cloud
+        # provider, not just OpenRouter) — but never in explicit cloud mode,
+        # where an all-cloud stack is the whole point
         others = [c for c in cands if c["model"] != pick["model"]]
-        if pick["provider"] == "openrouter" and \
+        if pick["provider"] != "ollama" and mode != "cloud" and \
                 not any(a["provider"] == "ollama" for a in alternates):
             local = next((c for c in others if c["provider"] == "ollama"), None)
             if local:
@@ -336,9 +354,17 @@ async def recommendations() -> dict:
         })
 
     budget = _consolidate(out, per_profile, rows, hw)
-    return {"hardware": hw, "cloud_available": cloud_ok,
-            "curated_count": len(rows), "recommendations": out,
-            "budget": budget, "catalog_freshness": _catalog_freshness(rows)}
+    mode_note = None
+    if mode == "cloud" and not cloud_ok:
+        mode_note = ("No cloud provider is configured, so the cloud stack falls "
+                     "back to local models. Add a provider key in Settings → "
+                     "Models → Providers for a real all-cloud stack.")
+    elif mode == "local":
+        mode_note = "Local-only stack — cloud models are excluded even if configured."
+    return {"hardware": hw, "cloud_available": cloud_ok, "mode": mode,
+            "mode_note": mode_note, "curated_count": len(rows),
+            "recommendations": out, "budget": budget,
+            "catalog_freshness": _catalog_freshness(rows)}
 
 
 def _catalog_freshness(rows: list[dict]) -> dict:

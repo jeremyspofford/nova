@@ -33,6 +33,45 @@ async def _ollama_models() -> list[dict]:
         return []
 
 
+def _price_per_million(v) -> float | None:
+    """OpenAI-compat pricing is per-token as a string; show it per-million."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f * 1_000_000, 2) if f > 0 else None
+
+
+def _model_meta(m: dict) -> dict:
+    """The provider's OWN 'what is this good for' facts, when it supplies them.
+
+    This is the honest source for catalog models we have no curated row for:
+    the provider's description, context window, input modalities (vision), and
+    price — surfaced verbatim, never invented. Providers whose /models endpoint
+    returns only ids (most OpenAI-compat servers) yield an empty dict. OpenRouter
+    is the rich case.
+    """
+    meta: dict = {}
+    desc = (m.get("description") or "").strip()
+    if desc:
+        meta["description"] = desc[:500]
+    ctx = m.get("context_length") or (m.get("top_provider") or {}).get("context_length")
+    if isinstance(ctx, int) and ctx > 0:
+        meta["context_length"] = ctx
+    arch = m.get("architecture") or {}
+    mods = arch.get("input_modalities") or []
+    if "image" in mods or "image" in (arch.get("modality") or ""):
+        meta["vision"] = True
+    pricing = m.get("pricing") or {}
+    pin = _price_per_million(pricing.get("prompt"))
+    pout = _price_per_million(pricing.get("completion"))
+    if pin is not None:
+        meta["price_in"] = pin
+    if pout is not None:
+        meta["price_out"] = pout
+    return meta
+
+
 async def _provider_models() -> list[dict]:
     """Every configured registry provider's catalog, as `slug:id` entries.
 
@@ -40,6 +79,9 @@ async def _provider_models() -> list[dict]:
     contributes nothing. One provider failing — offline, or no /models endpoint
     — never sinks the rest; it just logs and yields nothing. Providers with an
     empty catalog_path can't list, so the operator approves their models by id.
+    Each entry carries whatever `_model_meta` the provider supplied (description,
+    context window, vision, price) so the full-catalog browser can say what a
+    model is good for, not just its name.
     """
     from app.llm import providers
     out: list[dict] = []
@@ -56,7 +98,8 @@ async def _provider_models() -> list[dict]:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
-            models = [{"id": f"{slug}:{m['id']}", "provider": slug, "name": m["id"]}
+            models = [{"id": f"{slug}:{m['id']}", "provider": slug, "name": m["id"],
+                       **_model_meta(m)}
                       for m in resp.json().get("data", []) if m.get("id")]
             models.sort(key=lambda m: m["name"])
             out.extend(models)

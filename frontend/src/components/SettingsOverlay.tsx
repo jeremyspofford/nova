@@ -18,6 +18,7 @@ import {
   uninstallModel, updateSkill,
   Provider, ProviderPreset,
   createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider,
+  USE_CASES, StackMode,
 } from '../api';
 import type { NotifyReachability, NotifyService } from '../api';
 import { Markdown } from './Markdown';
@@ -1153,17 +1154,24 @@ function DetectSuggest() {
   const [status, setStatus] = useState('');
   const [probes, setProbes] = useState<Record<string, ProbeResult | 'running'>>({});
   const [applied, setApplied] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<StackMode>('hybrid');
 
-  async function detect() {
+  async function detect(m: StackMode = mode) {
     setRunning(true);
     setStatus('');
     setApplied(new Set());
     try {
-      const [r, a] = await Promise.all([getRecommendations(), getAgents()]);
+      const [r, a] = await Promise.all([getRecommendations(m), getAgents()]);
       setRecs(r);
       setAgents(a);
     } catch (e) { setStatus(String(e)); }
     setRunning(false);
+  }
+
+  // switching the stack strategy re-runs the whole recommendation set in place
+  function changeMode(m: StackMode) {
+    setMode(m);
+    if (recs) detect(m);
   }
 
   async function apply(rec: ModelRecommendation) {
@@ -1214,13 +1222,34 @@ function DetectSuggest() {
           </div>
         </div>
         <button
-          onClick={detect}
+          onClick={() => detect()}
           disabled={running}
           className="shrink-0 text-xs bg-teal-700 hover:bg-teal-600 disabled:bg-stone-700 text-white rounded px-3 py-1"
         >
           {running ? 'detecting…' : recs ? 'refresh' : 'detect & suggest'}
         </button>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-stone-700/60 pt-2">
+        <span className="text-xs text-stone-400">stack</span>
+        <div className="inline-flex rounded border border-stone-700 overflow-hidden">
+          {(['local', 'hybrid', 'cloud'] as StackMode[]).map(m => (
+            <button key={m} onClick={() => changeMode(m)} disabled={running}
+              className={`text-xs px-2.5 py-0.5 capitalize disabled:opacity-50 ${mode === m
+                ? 'bg-teal-700/70 text-teal-100' : 'text-stone-400 hover:text-stone-200'}`}>
+              {m}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-stone-500">
+          {mode === 'local' ? 'self-hosted only'
+            : mode === 'cloud' ? 'prefer cloud providers'
+            : 'best of local + cloud'}
+        </span>
+      </div>
+      {recs?.mode_note && (
+        <div className="text-[11px] text-amber-400/90">{recs.mode_note}</div>
+      )}
 
       {hw && (
         <div className="text-xs font-mono text-stone-400 border-t border-stone-700/60 pt-2">
@@ -1348,9 +1377,11 @@ function CuratedTable() {
   const [editing, setEditing] = useState<CuratedModel | null>(null);
   const [installed, setInstalled] = useState<Set<string>>(new Set());
   const [pulls, setPulls] = useState<Record<string, string>>({});
+  const [useCaseFilter, setUseCaseFilter] = useState('');       // '' = any
+  const [locFilter, setLocFilter] = useState<'all' | 'local' | 'cloud'>('all');
   const emptyForm = {
     model: '', provider: 'ollama', min_ram_gb: '', min_vram_gb: '',
-    tool_tier: 'B', speed: 'medium', roles: '', notes: '',
+    tool_tier: 'B', speed: 'medium', roles: '', use_cases: [] as string[], notes: '',
   };
   const [form, setForm] = useState(emptyForm);
 
@@ -1418,9 +1449,16 @@ function CuratedTable() {
       min_ram_gb: m.min_ram_gb == null ? '' : String(m.min_ram_gb),
       min_vram_gb: m.min_vram_gb == null ? '' : String(m.min_vram_gb),
       tool_tier: m.tool_tier, speed: m.speed,
-      roles: m.roles.join(', '), notes: m.notes,
+      roles: m.roles.join(', '), use_cases: m.use_cases, notes: m.notes,
     });
   }
+
+  const toggleUseCase = (u: string) => setForm(f => ({
+    ...f,
+    use_cases: f.use_cases.includes(u)
+      ? f.use_cases.filter(x => x !== u)
+      : [...f.use_cases, u],
+  }));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1428,7 +1466,7 @@ function CuratedTable() {
       min_ram_gb: numOrNull(form.min_ram_gb),
       min_vram_gb: numOrNull(form.min_vram_gb),
       tool_tier: form.tool_tier, speed: form.speed,
-      roles: parseRoles(form.roles), notes: form.notes,
+      roles: parseRoles(form.roles), use_cases: form.use_cases, notes: form.notes,
     };
     try {
       if (editing) {
@@ -1465,11 +1503,33 @@ function CuratedTable() {
       <input placeholder="roles (comma-sep: chat, tools, guard, compaction)" value={form.roles}
         onChange={e => setForm({ ...form, roles: e.target.value })}
         className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+      <div>
+        <div className="text-[11px] text-stone-500 mb-1">good for (use-cases)</div>
+        <div className="flex flex-wrap gap-1">
+          {USE_CASES.map(u => (
+            <button key={u} type="button" onClick={() => toggleUseCase(u)}
+              className={`text-[11px] px-1.5 py-0.5 rounded border ${form.use_cases.includes(u)
+                ? 'bg-teal-800/60 border-teal-700 text-teal-100'
+                : 'bg-stone-800 border-stone-700 text-stone-400 hover:text-stone-200'}`}>
+              {u}
+            </button>
+          ))}
+        </div>
+      </div>
       <input placeholder="notes" value={form.notes}
         onChange={e => setForm({ ...form, notes: e.target.value })}
         className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200" />
     </>
   );
+
+  const isLocal = (m: CuratedModel) => m.provider === 'ollama';
+  // Only offer use-case options that some row actually carries.
+  const useCaseOptions = USE_CASES.filter(u => rows.some(m => m.use_cases.includes(u)));
+  const visible = rows.filter(m =>
+    (locFilter === 'all'
+      || (locFilter === 'local' && isLocal(m))
+      || (locFilter === 'cloud' && !isLocal(m)))
+    && (!useCaseFilter || m.use_cases.includes(useCaseFilter)));
 
   return (
     <details className="rounded-lg border border-stone-700 bg-stone-800/30">
@@ -1483,7 +1543,39 @@ function CuratedTable() {
           model but never deletes the row — flip it back anytime. Seeded rows
           can be toggled but not rewritten; add your own for anything missing.
         </p>
-        {rows.map(m => (
+        <div className="flex flex-wrap items-center gap-2 border-y border-stone-700/60 py-2">
+          <span className="text-[11px] text-stone-500">filter</span>
+          <div className="inline-flex rounded border border-stone-700 overflow-hidden">
+            {(['all', 'local', 'cloud'] as const).map(loc => (
+              <button key={loc} onClick={() => setLocFilter(loc)}
+                className={`text-[11px] px-2 py-0.5 ${locFilter === loc
+                  ? 'bg-teal-800/70 text-teal-100' : 'text-stone-400 hover:text-stone-200'}`}>
+                {loc}
+              </button>
+            ))}
+          </div>
+          <select value={useCaseFilter} onChange={e => setUseCaseFilter(e.target.value)}
+            className="bg-stone-800 border border-stone-700 rounded px-2 py-0.5 text-[11px] text-stone-300"
+            title="best for use-case">
+            <option value="">any use-case</option>
+            {useCaseOptions.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+          {(useCaseFilter || locFilter !== 'all') && (
+            <button onClick={() => { setUseCaseFilter(''); setLocFilter('all'); }}
+              className="text-[11px] text-stone-500 hover:text-stone-300 underline">
+              clear
+            </button>
+          )}
+          <span className="text-[11px] text-stone-600 ml-auto">
+            {visible.length} of {rows.length}
+          </span>
+        </div>
+        {visible.length === 0 && rows.length > 0 && (
+          <div className="text-[11px] text-stone-500 py-2 text-center">
+            no models match this filter.
+          </div>
+        )}
+        {visible.map(m => (
           <div key={m.id} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
             {editing?.id === m.id ? (
               <form onSubmit={submit} className="space-y-2">
@@ -1538,10 +1630,26 @@ function CuratedTable() {
                   </div>
                 </div>
                 <div className="mt-0.5 text-[11px] text-stone-500">
-                  {m.speed} · {m.roles.join('/') || 'no roles'}
+                  <span className={isLocal(m) ? 'text-sky-400/80' : 'text-violet-400/80'}>
+                    {isLocal(m) ? 'local' : 'cloud'}
+                  </span>
+                  {' · '}{m.speed} · {m.roles.join('/') || 'no roles'}
                   {m.min_ram_gb != null && ` · ${m.min_ram_gb} GB RAM`}
                   {m.min_vram_gb != null && ` · ${m.min_vram_gb} GB VRAM`}
                 </div>
+                {m.use_cases.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {m.use_cases.map(u => (
+                      <button key={u} onClick={() => setUseCaseFilter(u)}
+                        title={`filter to "${u}"`}
+                        className={`text-[10px] px-1.5 py-0.5 rounded border ${useCaseFilter === u
+                          ? 'bg-teal-800/60 border-teal-700 text-teal-100'
+                          : 'bg-stone-800/60 border-stone-700 text-stone-400 hover:text-stone-200'}`}>
+                        {u}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {m.notes && <div className="mt-0.5 text-[11px] text-stone-600 line-clamp-2">{m.notes}</div>}
                 {pulls[m.model] && (
                   <div className="mt-0.5 text-[11px] font-mono text-stone-400">{pulls[m.model]}</div>
@@ -1995,15 +2103,60 @@ function ProvidersPanel() {
   );
 }
 
+// Format a context window: 1000000 → "1M", 128000 → "128K".
+function fmtCtx(n?: number): string | null {
+  if (!n) return null;
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}K`;
+  return `${n}`;
+}
+
+// Description keywords that stand in for a use-case when there's no curated row.
+// Grounded in the PROVIDER'S OWN description text — a claim we surface, not one
+// we invent. vision/long-context come from hard metadata instead.
+const _USE_CASE_KEYWORDS: Record<string, string[]> = {
+  coding: ['coding', 'code', 'programming', 'software', 'developer'],
+  reasoning: ['reasoning', 'reason', 'math', 'logic', 'stem'],
+  writing: ['writing', 'write', 'creative', 'prose', 'storytelling'],
+  'agentic-tools': ['agent', 'tool', 'function call', 'function-call', 'tool use'],
+  chat: ['chat', 'conversation', 'assistant', 'dialogue'],
+  multilingual: ['multilingual', 'languages', 'translation'],
+  summarization: ['summar'],
+};
+
+/** The use-case tags for a catalog model. If a curated row exists, those
+ *  editorial tags are authoritative (`vetted`). Otherwise infer from provider
+ *  facts (vision←modality, long-context←window) and description keywords —
+ *  clearly styled as inferred, with the description shown so matches explain
+ *  themselves. */
+function catalogTags(m: ModelInfo, row?: CuratedModel): { tag: string; vetted: boolean }[] {
+  if (row && row.use_cases.length) return row.use_cases.map(t => ({ tag: t, vetted: true }));
+  const out: { tag: string; vetted: boolean }[] = [];
+  if (m.vision) out.push({ tag: 'vision', vetted: false });
+  if ((m.context_length ?? 0) >= 200_000) out.push({ tag: 'long-context', vetted: false });
+  const d = (m.description ?? '').toLowerCase();
+  if (d) {
+    for (const [tag, words] of Object.entries(_USE_CASE_KEYWORDS)) {
+      if (out.some(t => t.tag === tag)) continue;
+      if (words.some(w => d.includes(w))) out.push({ tag, vetted: false });
+    }
+  }
+  return out;
+}
+
 /** Everything the configured credentials can reach; installed local models
  *  can be uninstalled from here (covers pulls that aren't in the curated
  *  table). Any cloud model can be approved straight from here in one click —
  *  approval just creates (or re-enables) its curated row, which is what puts
- *  it in the agent + chat dropdowns. */
+ *  it in the agent + chat dropdowns. Cloud rows carry the provider's own
+ *  "good for" facts (description, context, vision, price) so a bare id isn't
+ *  the only thing to go on. */
 function FullCatalog() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [curated, setCurated] = useState<CuratedModel[]>([]);
   const [filter, setFilter] = useState('');
+  const [locFilter, setLocFilter] = useState<'all' | 'local' | 'cloud'>('all');
+  const [useCaseFilter, setUseCaseFilter] = useState('');
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState('');
 
@@ -2041,8 +2194,18 @@ function FullCatalog() {
     finally { setBusy(b => ({ ...b, [m.id]: false })); }
   }
 
-  const shown = (models ?? []).filter(
-    m => !filter.trim() || m.id.toLowerCase().includes(filter.trim().toLowerCase()));
+  const q = filter.trim().toLowerCase();
+  const shown = (models ?? []).filter(m => {
+    const local = m.provider === 'ollama';
+    if (locFilter === 'local' && !local) return false;
+    if (locFilter === 'cloud' && local) return false;
+    if (useCaseFilter &&
+        !catalogTags(m, rowFor(m.id)).some(t => t.tag === useCaseFilter)) return false;
+    if (q && !m.id.toLowerCase().includes(q) &&
+        !(m.description ?? '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const hasCloud = (models ?? []).some(m => m.provider !== 'ollama');
 
   return (
     <details
@@ -2064,15 +2227,43 @@ function FullCatalog() {
           it in the agent and chat dropdowns — no need to type it into the
           curated table by hand.
         </p>
-        {models && models.length > 20 && (
-          <input
-            placeholder="filter…"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            className="w-full mb-1.5 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200"
-          />
+        {models && models.length > 0 && (
+          <div className="mb-2 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-stone-500">filter</span>
+              <div className="inline-flex rounded border border-stone-700 overflow-hidden">
+                {(['all', 'local', 'cloud'] as const).map(loc => (
+                  <button key={loc} onClick={() => setLocFilter(loc)}
+                    className={`text-[11px] px-2 py-0.5 ${locFilter === loc
+                      ? 'bg-teal-800/70 text-teal-100' : 'text-stone-400 hover:text-stone-200'}`}>
+                    {loc}
+                  </button>
+                ))}
+              </div>
+              <select value={useCaseFilter} onChange={e => setUseCaseFilter(e.target.value)}
+                className="bg-stone-800 border border-stone-700 rounded px-2 py-0.5 text-[11px] text-stone-300"
+                title="best for use-case">
+                <option value="">any use-case</option>
+                {USE_CASES.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              {(useCaseFilter || locFilter !== 'all' || filter) && (
+                <button onClick={() => { setUseCaseFilter(''); setLocFilter('all'); setFilter(''); }}
+                  className="text-[11px] text-stone-500 hover:text-stone-300 underline">clear</button>
+              )}
+              <span className="text-[11px] text-stone-600 ml-auto">{shown.length} of {models.length}</span>
+            </div>
+            <input placeholder="search id or description…" value={filter}
+              onChange={e => setFilter(e.target.value)}
+              className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs font-mono text-stone-200" />
+            {useCaseFilter && hasCloud && (
+              <div className="text-[10px] text-stone-600">
+                cloud tags marked <span className="font-mono">?</span> are inferred from each provider's
+                description &amp; metadata (shown per row); curated models use their vetted tags.
+              </div>
+            )}
+          </div>
         )}
-        <div className="max-h-64 overflow-y-auto nice-scroll space-y-0.5">
+        <div className="max-h-80 overflow-y-auto nice-scroll space-y-1">
           {models === null ? (
             <div className="text-xs text-stone-500">loading…</div>
           ) : models.length === 0 ? (
@@ -2080,24 +2271,56 @@ function FullCatalog() {
               nothing reachable — no local models installed and no cloud credentials
             </div>
           ) : shown.length === 0 ? (
-            <div className="text-xs text-stone-500 italic">no models match "{filter}"</div>
+            <div className="text-xs text-stone-500 italic">no models match the current filter</div>
           ) : (
             shown.map(m => {
               const row = rowFor(m.id);
               const approved = !!row?.enabled;
+              const tags = catalogTags(m, row);
+              const ctx = fmtCtx(m.context_length);
               return (
-                <div key={m.id} className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono text-stone-400 truncate">{m.id}</span>
-                  {m.provider === 'ollama' ? (
-                    <button onClick={() => uninstall(m)}
-                      className="text-[10px] px-1.5 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800 shrink-0">
-                      uninstall
-                    </button>
-                  ) : (
-                    <span className={busy[m.id] ? 'opacity-50 pointer-events-none' : ''}>
-                      <Toggle on={approved} onChange={() => setApproved(m, !approved)} label="approved"
-                        title="Approved cloud models appear in the agent + chat model dropdowns. Off vetoes the model without losing any curated metadata." />
-                    </span>
+                <div key={m.id} className="rounded border border-stone-800 bg-stone-900/30 px-2 py-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-mono text-stone-300 truncate">{m.id}</span>
+                    {m.provider === 'ollama' ? (
+                      <button onClick={() => uninstall(m)}
+                        className="text-[10px] px-1.5 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800 shrink-0">
+                        uninstall
+                      </button>
+                    ) : (
+                      <span className={busy[m.id] ? 'opacity-50 pointer-events-none' : ''}>
+                        <Toggle on={approved} onChange={() => setApproved(m, !approved)} label="approved"
+                          title="Approved cloud models appear in the agent + chat model dropdowns. Off vetoes the model without losing any curated metadata." />
+                      </span>
+                    )}
+                  </div>
+                  {(ctx || m.vision || m.price_in != null) && (
+                    <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-stone-500">
+                      {ctx && <span>{ctx} ctx</span>}
+                      {m.vision && <span className="text-violet-400/80">vision</span>}
+                      {m.price_in != null && (
+                        <span>${m.price_in}/${m.price_out ?? '?'} per M</span>
+                      )}
+                    </div>
+                  )}
+                  {tags.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {tags.map(({ tag, vetted }) => (
+                        <button key={tag} onClick={() => setUseCaseFilter(tag)}
+                          title={vetted ? 'curated tag' : "inferred from the provider's description / metadata"}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${useCaseFilter === tag
+                            ? 'bg-teal-800/60 border-teal-700 text-teal-100'
+                            : vetted ? 'bg-stone-800/60 border-stone-700 text-stone-300 hover:text-stone-100'
+                              : 'border-dashed border-stone-700 text-stone-500 hover:text-stone-300'}`}>
+                          {tag}{vetted ? '' : ' ?'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {m.description && (
+                    <div className="mt-0.5 text-[10px] text-stone-600 line-clamp-2" title={m.description}>
+                      {m.description}
+                    </div>
                   )}
                 </div>
               );

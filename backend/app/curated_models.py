@@ -13,18 +13,24 @@ from app import db
 log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "model", "provider", "min_ram_gb", "min_vram_gb", "tool_tier",
-           "speed", "roles", "notes", "is_system", "enabled", "last_probe",
-           "probed_at", "created_at")
-_EDIT_FIELDS = {"min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles", "notes"}
+           "speed", "roles", "use_cases", "notes", "is_system", "enabled",
+           "last_probe", "probed_at", "created_at")
+_EDIT_FIELDS = {"min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles",
+                "use_cases", "notes"}
 _TIERS = ("A", "B", "C")
 _SPEEDS = ("fast", "medium", "slow")
 _ROLES = ("chat", "tools", "guard", "compaction", "voice", "ingestion")
+# "what is this good for" — a task-fit vocabulary distinct from the internal
+# agent-profile `roles`. The filter and the per-model chips draw from this set.
+_USE_CASES = ("coding", "agentic-tools", "reasoning", "writing", "chat",
+              "vision", "long-context", "multilingual", "summarization")
 
 
 def _row(r) -> dict:
     d = {k: r[k] for k in _FIELDS}
     d["id"] = str(d["id"])
     d["roles"] = list(d["roles"] or [])
+    d["use_cases"] = list(d["use_cases"] or [])
     if isinstance(d["last_probe"], str):
         d["last_probe"] = json.loads(d["last_probe"])
     for k in ("probed_at", "created_at"):
@@ -41,6 +47,10 @@ def _validate(fields: dict):
         if not isinstance(fields["roles"], list) or \
                 any(r not in _ROLES for r in fields["roles"]):
             raise ValueError(f"roles must be a list drawn from {_ROLES}")
+    if "use_cases" in fields:
+        if not isinstance(fields["use_cases"], list) or \
+                any(u not in _USE_CASES for u in fields["use_cases"]):
+            raise ValueError(f"use_cases must be a list drawn from {_USE_CASES}")
     for k in ("min_ram_gb", "min_vram_gb"):
         if k in fields and fields[k] is not None and (
                 not isinstance(fields[k], int) or fields[k] < 0):

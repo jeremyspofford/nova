@@ -400,9 +400,11 @@ async def hardware_endpoint():
 
 
 @router.get("/api/v1/models/recommendations")
-async def model_recommendations_endpoint():
+async def model_recommendations_endpoint(mode: str = "hybrid"):
+    """mode = hybrid (default) | local (self-hosted only) | cloud (prefer cloud,
+    local fallback only where no configured provider serves a role)."""
     from app import model_recs
-    return await model_recs.recommendations()
+    return await model_recs.recommendations(mode=mode)
 
 
 @router.get("/api/v1/models/budget")
@@ -439,7 +441,8 @@ async def create_curated_endpoint(body: dict):
             model=str(body.get("model", "")),
             provider=str(body.get("provider", "")),
             **{k: body[k] for k in
-               ("min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles", "notes")
+               ("min_ram_gb", "min_vram_gb", "tool_tier", "speed", "roles",
+                "use_cases", "notes")
                if k in body})
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

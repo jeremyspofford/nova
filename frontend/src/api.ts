@@ -358,7 +358,16 @@ export interface SettingDef {
   allow_empty?: boolean;
 }
 
-export interface ModelInfo { id: string; provider: string; name: string }
+export interface ModelInfo {
+  id: string; provider: string; name: string;
+  // Provider-supplied "what is this good for" facts, present when the provider's
+  // /models endpoint returns them (OpenRouter does; most others just return ids).
+  description?: string;
+  context_length?: number;
+  vision?: boolean;
+  price_in?: number;   // USD per million prompt tokens
+  price_out?: number;  // USD per million completion tokens
+}
 
 export async function getModels(full = false): Promise<ModelInfo[]> {
   const r = await apiFetch(`${API_URL}/api/v1/models${full ? '?full=true' : ''}`);
@@ -871,9 +880,13 @@ export interface ModelBudget {
   unknown_count: number;
 }
 
+export type StackMode = 'hybrid' | 'local' | 'cloud';
+
 export interface RecommendationsResponse {
   hardware: HardwareInfo;
   cloud_available: boolean;
+  mode: StackMode;
+  mode_note: string | null;
   curated_count: number;
   recommendations: ModelRecommendation[];
   budget: ModelBudget;
@@ -886,8 +899,8 @@ export async function getModelBudget(): Promise<ModelBudget & { hardware: Hardwa
   return r.json();
 }
 
-export async function getRecommendations(): Promise<RecommendationsResponse> {
-  const r = await apiFetch(`${API_URL}/api/v1/models/recommendations`);
+export async function getRecommendations(mode: StackMode = 'hybrid'): Promise<RecommendationsResponse> {
+  const r = await apiFetch(`${API_URL}/api/v1/models/recommendations?mode=${mode}`);
   if (!r.ok) throw new Error('Failed to load recommendations');
   return r.json();
 }
@@ -915,6 +928,12 @@ export async function testModel(model: string): Promise<ProbeResult> {
   return r.json();
 }
 
+// The fixed "what is this good for" vocabulary (mirrors curated_models._USE_CASES).
+export const USE_CASES = [
+  'coding', 'agentic-tools', 'reasoning', 'writing', 'chat',
+  'vision', 'long-context', 'multilingual', 'summarization',
+] as const;
+
 export interface CuratedModel {
   id: string;
   model: string;
@@ -925,6 +944,8 @@ export interface CuratedModel {
   tool_tier: 'A' | 'B' | 'C';
   speed: 'fast' | 'medium' | 'slow';
   roles: string[];
+  // "what is this good for" — filterable task-fit tags (see USE_CASES).
+  use_cases: string[];
   notes: string;
   is_system: boolean;
   enabled: boolean;
