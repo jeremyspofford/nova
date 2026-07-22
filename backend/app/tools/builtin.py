@@ -247,30 +247,30 @@ _MAX_TRANSCRIPT_CHARS = 200_000
 _CHUNK_MIN_CHARS = 1500
 
 
-async def _ingest_media(args, ctx):
-    url = (args.get("url") or "").strip()
-    if not url:
-        return "Error: url is required"
-    force = bool(args.get("force"))
-
+async def _ingest_media_core(url: str, force: bool = False,
+                             source_key: str | None = None) -> dict:
+    """Mechanical media ingest: extract → dedupe → guaranteed full-transcript
+    write → ledger record. NO agent chunking. Shared by the ingest_media tool
+    (which then asks the agent to chunk for finer retrieval) and by follow/poll
+    (batch, transcript-only — the full transcript is complete and citeable on
+    its own, and skipping per-item LLM chunking keeps a batch fast/reliable).
+    Returns {status: error|skipped|already_ingested|ingested, ...}; the ingested
+    case also carries `segments` + `transcript_len` for the caller."""
     from app import media_ingests
     from app.media_client import extract as media_extract
 
     result = await media_extract(url)
     if result.get("error"):
-        return f"Error: {result['error']}"
+        return {"status": "error", "error": result["error"], "url": url}
     if result.get("status") == "skipped":
-        return _j({"status": "skipped", "reason": result.get("reason", "not ingestible")})
+        return {"status": "skipped", "url": url,
+                "reason": result.get("reason", "not ingestible")}
 
     media_key = result["media_key"]
     existing = await media_ingests.get(media_key)
     if existing and not force:
-        return _j({
-            "status": "already_ingested", "media_key": media_key,
-            "title": existing["title"], "ingested_at": str(existing["ingested_at"]),
-            "note": ("Already in memory. Tell the user it's already ingested; "
-                     "only pass force=true if they explicitly want to re-ingest."),
-        })
+        return {"status": "already_ingested", "media_key": media_key, "url": url,
+                "title": existing["title"], "ingested_at": str(existing["ingested_at"])}
 
     segments = result["segments"]
     transcript = "\n".join(f"[{_fmt_ts(s['start'])}] {s['text']}" for s in segments)
@@ -279,8 +279,8 @@ async def _ingest_media(args, ctx):
     video_tag = _video_tag(result["title"])
 
     # mechanical, guaranteed-complete safety net: the full transcript lands
-    # in memory in code, before the agent writes anything — nothing is lost
-    # even if the model's subsequent chunking pass is lazy or incomplete
+    # in memory in code, before any chunking — nothing is lost even if the
+    # model's chunking pass is lazy, incomplete, or (for batch) skipped
     full_note = await memory.write(
         transcript[:_MAX_TRANSCRIPT_CHARS], type="topic",
         title=f"{result['title']} — full transcript",
@@ -293,19 +293,45 @@ async def _ingest_media(args, ctx):
         url=result["url"], duration_s=result.get("duration_s"),
         transcript_source=result["transcript_source"], language=result.get("language"),
         segment_count=len(segments), full_transcript_item_id=full_note.get("id"),
-        status="ok")
+        status="ok", source_key=source_key)
 
-    payload = {
+    return {
         "status": "ingested", "media_key": media_key, "title": result["title"],
         "url": result["url"], "duration_s": result.get("duration_s"),
         "transcript_source": result["transcript_source"],
         "language": result.get("language"), "chapters": result.get("chapters") or [],
-        "full_transcript_item_id": full_note.get("id"),
-        "subject_tag": video_tag,
+        "full_transcript_item_id": full_note.get("id"), "subject_tag": video_tag,
+        "segments": segments, "transcript_len": len(transcript),
     }
 
+
+async def _ingest_media(args, ctx):
+    url = (args.get("url") or "").strip()
+    if not url:
+        return "Error: url is required"
+
+    core = await _ingest_media_core(url, force=bool(args.get("force")))
+    status = core["status"]
+    if status == "error":
+        return f"Error: {core['error']}"
+    if status == "skipped":
+        return _j({"status": "skipped", "reason": core["reason"]})
+    if status == "already_ingested":
+        return _j({
+            "status": "already_ingested", "media_key": core["media_key"],
+            "title": core["title"], "ingested_at": core["ingested_at"],
+            "note": ("Already in memory. Tell the user it's already ingested; "
+                     "only pass force=true if they explicitly want to re-ingest."),
+        })
+
+    segments = core["segments"]
+    video_tag = core["subject_tag"]
+    payload = {k: core[k] for k in (
+        "status", "media_key", "title", "url", "duration_s", "transcript_source",
+        "language", "chapters", "full_transcript_item_id", "subject_tag")}
+
     # Short clip: the single full-transcript note IS the note — don't chunk.
-    if len(transcript) <= _CHUNK_MIN_CHARS:
+    if core["transcript_len"] <= _CHUNK_MIN_CHARS:
         payload["note"] = (
             "This transcript is short — it fits the single note already saved. "
             "Do NOT split it into chunks (that would just make redundant "
@@ -326,6 +352,152 @@ async def _ingest_media(args, ctx):
         "together. Preserve the transcript's actual wording per chunk; light "
         "cleanup only, never summarize away content.")
     return _j(payload)
+
+
+# ── follow-a-source (content-ingestion phase 2) ──────────────────────────
+# Follow a channel/playlist/feed → backfill recent uploads + a scheduled poll
+# ingests new ones. Batch ingest is transcript-only via _ingest_media_core
+# (the guaranteed full transcript is complete and citeable; per-item agent
+# chunking would make a batch slow and timeout-prone — the #26 digest lesson).
+
+_BACKFILL_MAX = 50
+_POLL_WINDOW = 15   # recent uploads examined per source per poll (dedup does the rest)
+
+
+async def _ingest_source_entries(entries: list[dict], source_key: str,
+                                 limit: int) -> dict:
+    """Ingest the not-yet-seen entries of an enumerated source, newest first.
+    Dedupes against the ledger by media_key BEFORE extracting, so already-known
+    items cost nothing. Returns ingested titles + counts."""
+    from app import media_ingests
+    ingested: list[str] = []
+    already = 0
+    failed: list[str] = []
+    for e in entries:
+        if limit and len(ingested) >= limit:
+            break
+        if await media_ingests.get(e["media_key"]):
+            already += 1
+            continue
+        core = await _ingest_media_core(e["url"], source_key=source_key)
+        if core["status"] == "ingested":
+            ingested.append(core["title"])
+        elif core["status"] == "already_ingested":
+            already += 1
+        else:   # error, or skipped (live/upcoming) — note it, keep going
+            failed.append(f"{e.get('title') or e['url']}: "
+                          f"{core.get('reason') or core.get('error')}")
+    return {"ingested": ingested, "already_had": already, "failed": failed}
+
+
+async def _follow_source(args, ctx):
+    from app import source_subscriptions
+    from app.media_client import enumerate_source
+    url = (args.get("url") or "").strip()
+    if not url:
+        return "Error: url is required"
+    raw = args.get("backfill")
+    backfill = 10 if raw is None else max(0, min(int(raw), _BACKFILL_MAX))
+
+    info = await enumerate_source(url, limit=backfill or 1)
+    if info.get("error"):
+        return f"Error: {info['error']}"
+    if info.get("is_source") is False:
+        return _j({"status": "not_a_source", "note": (
+            "That URL is a single video, not a channel/playlist/feed. Use "
+            "ingest_media for one video; follow_source is for a source you want "
+            "to keep watching for new uploads.")})
+
+    sub = await source_subscriptions.upsert(
+        source_key=info["source_key"], url=info["url"], extractor=info["extractor"],
+        title=info.get("title"), backfill=backfill)
+
+    result = {"status": "following", "source_key": info["source_key"],
+              "title": sub["title"], "available": len(info.get("entries") or [])}
+    if backfill:
+        stats = await _ingest_source_entries(info["entries"], info["source_key"], backfill)
+        await source_subscriptions.record_poll(
+            info["source_key"], status="ok", error=None,
+            new_ingested=len(stats["ingested"]))
+        result.update(backfilled=len(stats["ingested"]), already_had=stats["already_had"])
+        if stats["failed"]:
+            result["failed"] = stats["failed"][:5]
+        result["note"] = (
+            f"Now following {sub['title']}. Backfilled {len(stats['ingested'])} recent "
+            "upload(s); new ones ingest automatically via the poll-followed-sources "
+            "automation. Report the source name and how many were backfilled.")
+    else:
+        result["note"] = (
+            f"Now following {sub['title']} (future uploads only — no backfill). "
+            "The poll automation ingests new uploads from here on.")
+    return _j(result)
+
+
+async def _list_followed_sources(args, ctx):
+    from app import source_subscriptions
+    subs = await source_subscriptions.list_all()
+    if not subs:
+        return _j({"sources": [], "note": ("No followed sources yet. Use "
+                   "follow_source on a channel/playlist URL to start.")})
+    out = [{"title": s["title"], "url": s["url"], "source_key": s["source_key"],
+            "enabled": s["enabled"], "ingested": s["ingested_count"],
+            "last_polled_at": str(s["last_polled_at"]) if s["last_polled_at"] else None,
+            "last_status": s["last_status"], "last_error": s["last_error"]}
+           for s in subs]
+    return _j({"sources": out})
+
+
+async def _unfollow_source(args, ctx):
+    from app import source_subscriptions
+    key = (args.get("source_key") or args.get("url") or "").strip()
+    if not key:
+        return "Error: source_key (or url) is required"
+    sub = await source_subscriptions.get(key)
+    if not sub:   # accept the original followed URL too
+        for s in await source_subscriptions.list_all():
+            if key in (s["url"], s["source_key"]):
+                sub = s
+                break
+    if not sub:
+        return _j({"status": "not_found", "note": (
+            f"Not following '{key}'. Use list_followed_sources to see what's followed.")})
+    await source_subscriptions.delete(sub["source_key"])
+    return _j({"status": "unfollowed", "title": sub["title"], "note": (
+        f"Stopped following {sub['title']}. Already-ingested videos stay in memory.")})
+
+
+async def _poll_sources(args, ctx):
+    """Check every enabled followed source for new uploads and ingest them — the
+    poll-followed-sources automation's one mechanical call (also callable on
+    demand). Transcript-only per item, deduped against the ledger so only
+    genuinely new uploads cost an extraction."""
+    from app import source_subscriptions
+    from app.media_client import enumerate_source
+    subs = await source_subscriptions.list_all(enabled_only=True)
+    if not subs:
+        return _j({"status": "idle", "note": "No followed sources to poll."})
+
+    report = []
+    total_new = 0
+    for s in subs:
+        info = await enumerate_source(s["url"], limit=_POLL_WINDOW)
+        if info.get("error") or info.get("is_source") is False:
+            err = info.get("error") or "source no longer enumerable"
+            await source_subscriptions.record_poll(
+                s["source_key"], status="error", error=err[:300], new_ingested=0)
+            report.append({"source": s["title"], "error": err[:200]})
+            continue
+        stats = await _ingest_source_entries(info["entries"], s["source_key"], _POLL_WINDOW)
+        await source_subscriptions.record_poll(
+            s["source_key"], status="ok", error=None, new_ingested=len(stats["ingested"]))
+        total_new += len(stats["ingested"])
+        if stats["ingested"] or stats["failed"]:
+            report.append({"source": s["title"], "new": stats["ingested"],
+                           "failed": stats["failed"][:3]})
+    return _j({"status": "polled", "sources_checked": len(subs),
+               "new_ingested": total_new, "detail": report,
+               "note": ("Report which sources had new uploads and how many were "
+                        "ingested; if none, say the followed sources are up to date.")})
 
 
 # WMO weather codes → plain English (open-meteo's `weather_code`)
@@ -842,6 +1014,46 @@ BUILTIN_TOOLS: dict[str, dict] = {
                       "description": "Re-ingest even if this media_key is already stored"},
         }, "required": ["url"]},
         "execute": _ingest_media,
+    },
+    "follow_source": {
+        "name": "follow_source",
+        "description": ("Follow a media SOURCE — a channel, playlist, or feed page "
+                        "(any site yt-dlp can enumerate) — so Nova keeps learning "
+                        "from it: backfills its recent uploads now and a scheduled "
+                        "poll ingests new ones as they appear. For a SINGLE video "
+                        "use ingest_media instead."),
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "channel / playlist / feed page URL"},
+            "backfill": {"type": "integer",
+                         "description": "recent uploads to ingest now (default 10, 0 = future-only, max 50)"},
+        }, "required": ["url"]},
+        "execute": _follow_source,
+    },
+    "list_followed_sources": {
+        "name": "list_followed_sources",
+        "description": ("List the sources Nova follows, with each one's poll status "
+                        "and how many items it has contributed to memory."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _list_followed_sources,
+    },
+    "unfollow_source": {
+        "name": "unfollow_source",
+        "description": ("Stop following a source (by its source_key or the original "
+                        "followed URL). Already-ingested videos stay in memory; only "
+                        "future polling stops."),
+        "parameters": {"type": "object", "properties": {
+            "source_key": {"type": "string", "description": "the source_key, or the followed URL"},
+            "url": {"type": "string", "description": "alias for source_key — the followed URL"},
+        }},
+        "execute": _unfollow_source,
+    },
+    "poll_sources": {
+        "name": "poll_sources",
+        "description": ("Check every followed source for new uploads and ingest them. "
+                        "This is what the poll-followed-sources automation calls; you "
+                        "can also call it on demand to refresh now."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _poll_sources,
     },
     "get_weather": {
         "name": "get_weather",

@@ -22,16 +22,18 @@ async def record(*, media_key: str, extractor: str, title: str, url: str,
                  duration_s: Optional[int], transcript_source: str,
                  language: Optional[str], segment_count: int,
                  full_transcript_item_id: Optional[str],
-                 status: str = "ok") -> dict:
+                 status: str = "ok", source_key: Optional[str] = None) -> dict:
     """Upsert on media_key — a forced re-ingest (force=true) refreshes the
-    ledger row in place rather than erroring on the unique key."""
+    ledger row in place rather than erroring on the unique key. source_key
+    stamps the followed source that discovered this item (phase 2); a later
+    one-off ingest of the same item (source_key=None) never wipes it."""
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO media_ingests
                  (media_key, extractor, title, url, duration_s,
                   transcript_source, language, segment_count,
-                  full_transcript_item_id, status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                  full_transcript_item_id, status, source_key)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                ON CONFLICT (media_key) DO UPDATE SET
                  title = EXCLUDED.title, url = EXCLUDED.url,
                  duration_s = EXCLUDED.duration_s,
@@ -39,8 +41,10 @@ async def record(*, media_key: str, extractor: str, title: str, url: str,
                  language = EXCLUDED.language,
                  segment_count = EXCLUDED.segment_count,
                  full_transcript_item_id = EXCLUDED.full_transcript_item_id,
-                 status = EXCLUDED.status, updated_at = now()
+                 status = EXCLUDED.status,
+                 source_key = COALESCE(EXCLUDED.source_key, media_ingests.source_key),
+                 updated_at = now()
                RETURNING *""",
             media_key, extractor, title, url, duration_s, transcript_source,
-            language, segment_count, full_transcript_item_id, status)
+            language, segment_count, full_transcript_item_id, status, source_key)
     return dict(row)

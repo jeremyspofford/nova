@@ -326,16 +326,30 @@ original spec — see OPEN #7 for where it should live in the tab structure.
    non-YouTube to prove source-agnosticism per the original spec's
    verification bar) through chat, confirm a chunked+cited answer; regression
    -check the web path is untouched.
-2. **Sources — not built, unchanged scope from the original spec.**
-   `source_subscriptions` table (ALTER/CREATE, not pre-built now),
-   `follow_source(url, backfill)` / `list_followed_sources` /
-   `unfollow_source` tools, a `poll-followed-sources` automation on the
-   existing scheduler infra (general path: `yt-dlp --flat-playlist`
-   re-enumeration; YouTube RSS fast-path optional), Library UI. All the
-   original spec's "Traps" reasoning (source-size caps, per-source
-   variance, auth/cookies posture, dedupe across sources) still applies
-   unchanged — nothing here needed reconciling, only re-affirming it still
-   fits on the phase-1 foundation.
+2. **Sources — BUILT 2026-07-22 (uncommitted), Library UI deferred to phase 3.**
+   `source_subscriptions` table + `media_ingests.source_key` provenance column
+   (migration 039); `follow_source(url, backfill=10)` / `list_followed_sources`
+   / `unfollow_source` / `poll_sources` tools (builtin.py, granted to the
+   ingestion agent + a FOLLOW-A-SOURCE prompt mode, migration 040); a
+   `media` worker `POST /enumerate` (yt-dlp `extract_flat`, one-level tab
+   descent for channels, media_keys that match `/extract` exactly so the poll
+   dedupes against the ledger); a seeded `poll-followed-sources` automation
+   (6h, enabled, a no-op until a source is followed) on the existing scheduler
+   — no scheduler code needed. Batch backfill/poll ingest is **transcript-only**
+   via a factored `_ingest_media_core` (the guaranteed full transcript is
+   complete + citeable; skipping per-item agent chunking keeps a batch fast and
+   dodges the #26 digest-timeout class). Dedupe is source-neutral: `poll_sources`
+   diffs enumerated `media_key`s against `media_ingests` and ingests only the
+   new ones. Live-verified: `/enumerate` on a channel; follow via real chat
+   (dispatch → ingestion → follow_source, subscription row created, dedup
+   skipped the already-ingested item); a simulated new upload re-ingested by
+   `poll_sources` with `source_key` stamped; idempotent 2nd poll (0 new);
+   `not_a_source` guard on a single-video URL; unfollow-by-url keeps the
+   already-ingested memories. RSS fast-path still optional/deferred; the
+   original spec's "Traps" (source-size caps, per-source variance, auth/cookies,
+   cross-source dedupe) still apply and are handled where relevant (bounded
+   backfill/poll windows, one-level channel descent, keyless/public-only).
+   **Library UI** (followed-source list, ingest input) stays phase 3 per §UI.
 3. **Polish — unchanged scope.** Progress streaming in the UI (queued →
    fetching → transcribing → N chunks, the model-pull UI's existing
    pattern), non-English handling refinement, YouTube RSS fast-path if not

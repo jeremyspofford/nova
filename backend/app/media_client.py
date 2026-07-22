@@ -42,3 +42,29 @@ async def extract(url: str) -> dict:
             detail = resp.text
         return {"error": str(detail)[:500]}
     return resp.json()
+
+
+async def enumerate_source(url: str, limit: int = 0) -> dict:
+    """List a source's uploads WITHOUT downloading them (yt-dlp extract_flat).
+    {is_source: false} when the URL is a single video, not a channel/playlist;
+    {source_key, extractor, title, entries:[{media_key, url, title}]} for a
+    source (newest first, capped at `limit` when >0); {"error": ...} on failure.
+    Each entry's media_key matches what /extract would produce, so the poll
+    dedupes against the media_ingests ledger. Never raises."""
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{settings.media_worker_url}/enumerate",
+                                     json={"url": url, "limit": limit})
+    except httpx.ConnectError:
+        return {"error": ("the media worker isn't running — start it with "
+                          "'docker compose --profile media up -d media'")}
+    except httpx.HTTPError as e:
+        return {"error": f"media worker request failed: {e}"}
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except ValueError:
+            detail = resp.text
+        return {"error": str(detail)[:500]}
+    return resp.json()

@@ -308,3 +308,98 @@ async def extract(req: ExtractRequest):
         "duration_s": duration_s, "transcript_source": transcript_source,
         "language": language, "chapters": chapters, "segments": segments,
     }
+
+
+# ── source enumeration (follow-a-source, phase 2) ────────────────────────
+# List a channel/playlist/feed's uploads without downloading them, so the
+# backend can backfill recent items and a scheduled poll can spot new ones.
+
+class EnumerateRequest(BaseModel):
+    url: str
+    limit: int = 0   # 0 = all; >0 caps to the newest N (backfill / poll window)
+
+
+def _entry_media_key(entry: dict) -> str | None:
+    """media_key for a flat playlist entry, matching /extract's format exactly
+    (<extractor>:<id>, lowercased) so the poll dedupes against the ledger."""
+    mid = entry.get("id")
+    if not mid:
+        return None
+    ex = (entry.get("ie_key") or entry.get("extractor") or "generic").lower()
+    return f"{ex}:{mid}"
+
+
+def _collect_videos(ydl, info: dict, limit: int, depth: int = 0) -> list[dict]:
+    """Walk a flat extraction down to leaf video entries. A channel URL yields
+    tab containers (Videos/Shorts/Live) rather than videos directly, so descend
+    one level into containers; a plain playlist has videos at depth 0."""
+    out: list[dict] = []
+    for e in (info.get("entries") or []):
+        if not e:
+            continue
+        ie = (e.get("ie_key") or e.get("extractor") or "").lower()
+        is_container = (e.get("_type") in ("playlist", "multi_video")
+                        or e.get("entries") or ie.endswith("tab")
+                        or ie.endswith("playlist"))
+        if is_container and depth < 1 and e.get("url"):
+            try:
+                sub = ydl.extract_info(e["url"], download=False)
+                out.extend(_collect_videos(ydl, sub, limit, depth + 1))
+            except Exception:
+                log.exception("descend into %s failed", e.get("url"))
+        elif e.get("id"):
+            out.append(e)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def _enumerate_source(url: str, limit: int) -> dict:
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+            "extract_flat": "in_playlist"}
+    if limit and limit > 0:
+        opts["playlistend"] = limit
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if not (info.get("entries")
+                or info.get("_type") in ("playlist", "multi_video")):
+            return {"is_source": False}          # a single video, not a source
+        videos = _collect_videos(ydl, info, limit)
+
+    extractor = (info.get("extractor_key") or info.get("extractor") or "generic").lower()
+    source_key = f"{extractor}:{info.get('id')}"
+    seen: set[str] = set()
+    entries: list[dict] = []
+    for v in videos:
+        mk = _entry_media_key(v)
+        if not mk or mk in seen:
+            continue
+        seen.add(mk)
+        vurl = v.get("url") or v.get("webpage_url") or ""
+        if vurl and "://" not in vurl and mk.split(":")[0] == "youtube":
+            vurl = f"https://www.youtube.com/watch?v={v['id']}"   # bare id → watch URL
+        if not vurl:
+            continue
+        entries.append({"media_key": mk, "url": vurl, "title": v.get("title") or mk})
+
+    return {
+        "is_source": True, "source_key": source_key, "extractor": extractor,
+        "title": (info.get("title") or info.get("uploader")
+                  or info.get("channel") or source_key),
+        "url": info.get("webpage_url") or url,
+        "entries": entries,
+    }
+
+
+@app.post("/enumerate")
+async def enumerate_endpoint(req: EnumerateRequest):
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(400, "url is required")
+    try:
+        return await asyncio.to_thread(_enumerate_source, url, req.limit)
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(422, f"could not enumerate '{url}': {e}")
+    except Exception as e:
+        log.exception("enumerate failed for %s", url)
+        raise HTTPException(500, f"enumeration failed: {e}")
