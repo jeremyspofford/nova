@@ -92,6 +92,32 @@ async def system_fleet():
     return {"instances": out}
 
 
+@router.get("/api/v1/system/alerts")
+async def system_alerts():
+    """Active alerts + a short recently-cleared trail, instance-labeled.
+    Raising/clearing is the leader's job on the scheduler tick — this just
+    reads the state."""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT a.id, a.instance_id, i.label, a.kind, a.message,
+                      a.value, a.threshold, a.raised_at, a.cleared_at
+               FROM monitor_alerts a
+               LEFT JOIN instances i ON i.id = a.instance_id
+               WHERE a.cleared_at IS NULL
+                  OR a.cleared_at > now() - interval '7 days'
+               ORDER BY a.cleared_at IS NOT NULL, a.raised_at DESC
+               LIMIT 50""")
+    out = [{
+        "id": str(r["id"]), "instance_id": r["instance_id"],
+        "label": r["label"] or r["instance_id"], "kind": r["kind"],
+        "message": r["message"], "value": r["value"], "threshold": r["threshold"],
+        "raised_at": r["raised_at"].timestamp(),
+        "cleared_at": r["cleared_at"].timestamp() if r["cleared_at"] else None,
+    } for r in rows]
+    return {"active": [a for a in out if a["cleared_at"] is None],
+            "recent": [a for a in out if a["cleared_at"] is not None]}
+
+
 # ── resource history (phase 2) ────────────────────────────────────────────
 
 # window → (span, bucket) — sized so a chart gets ~60–100 points

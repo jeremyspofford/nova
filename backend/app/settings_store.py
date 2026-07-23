@@ -157,6 +157,29 @@ SETTING_DEFS: list[dict] = [
                      "VRAM/disk history behind the Observability sparklines) "
                      "are kept. One row per instance per minute; pruned by "
                      "the fleet leader.")},
+    {"key": "monitor.alerts_enabled", "type": "boolean", "default": True,
+     "section": "Observability", "label": "Resource alerts",
+     "description": ("Notify when a machine crosses the thresholds below or "
+                     "an instance stops reporting. Evaluated once across the "
+                     "fleet (by the leader); one notification per breach, "
+                     "auto-clears on recovery.")},
+    {"key": "monitor.alert_disk_pct", "type": "number", "default": 90,
+     "min": 50, "max": 99, "section": "Observability",
+     "label": "Disk alert (%)",
+     "description": "Alert when a machine's disk is this full."},
+    {"key": "monitor.alert_mem_pct", "type": "number", "default": 92,
+     "min": 50, "max": 99, "section": "Observability",
+     "label": "Memory alert (%)",
+     "description": "Alert when RAM stays this full."},
+    {"key": "monitor.alert_vram_pct", "type": "number", "default": 97,
+     "min": 50, "max": 100, "section": "Observability",
+     "label": "VRAM alert (%)",
+     "description": ("Alert when GPU memory stays this full — sustained "
+                     "saturation, not a single loading spike.")},
+    {"key": "monitor.alert_gpu_temp_c", "type": "number", "default": 85,
+     "min": 60, "max": 100, "section": "Observability",
+     "label": "GPU temperature alert (°C)",
+     "description": "Alert when the GPU stays hotter than this."},
     # ── MCP (docs/plans/mcp-client.md) ──────────────────────────────────
     {"key": "mcp.call_timeout_s", "type": "number", "default": 30,
      "min": 5, "max": 120, "section": "MCP",

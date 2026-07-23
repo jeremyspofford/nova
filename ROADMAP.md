@@ -1298,7 +1298,17 @@ See README for what works. This file is the ordered backlog.
       `/observability/summary` can take `&instance=`. Frontend: d3 SVG
       sparklines under each gauge (d3 already a dep), a 1h/24h/7d resource
       window toggle, and a real fleet table (collapses to one instance today).
-    - **P3 — alerts.** `monitor.thresholds` (disk_pct, mem_pct, vram_pct
+    - **P3 — alerts. BUILT + VERIFIED 2026-07-23, uncommitted** — together
+      with its prerequisite, **remote-shared-state phase 1 (REAL leader
+      election, `leader.py`, pg advisory lock, 24s failover measured)**;
+      mig 047 `monitor_alerts`, leader-only evaluation with 3-sample
+      debounce + hysteresis, unreachable-on-stale-heartbeat, node-
+      attributed ntfy, red alert cards on the board, thresholds as
+      Observability settings; full lifecycle verified live (raise once /
+      de-dupe / auto-clear / retired-instance clear). **This item (#30) is
+      now COMPLETE across all 3 phases**; loose ends: cost price map
+      (decision #5), per-host label field. Original scope for reference:
+      `monitor.thresholds` (disk_pct, mem_pct, vram_pct
       sustained, gpu_temp_c, instance-unreachable = stale heartbeat);
       **leader-only** evaluation on the tick over shared samples with
       debounce/hysteresis; route breaches through `notify_operator` (#21) +/or

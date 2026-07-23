@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app import automations, settings_store, sysmon, trace
+from app import automations, instances, settings_store, sysmon, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.llm import router as llm_router
@@ -62,11 +62,15 @@ async def run_one(automation: dict) -> tuple[bool, str]:
 
 
 async def tick():
-    await trace.maybe_prune()   # self-limits to once a day
-    # fleet monitoring rides the same heartbeat, ahead of the automations
-    # kill switch — an instance keeps reporting its hardware either way
+    # every instance reports its own hardware — sampling is never gated
     await sysmon.maybe_sample()
-    await sysmon.maybe_prune_samples()   # leader-only, self-limits to daily
+    # everything below is fleet-singleton work: exactly one instance may
+    # run automations and prunes, or they double-run on a shared DB
+    if not instances.is_leader():
+        return
+    await trace.maybe_prune()            # self-limits to once a day
+    await sysmon.maybe_prune_samples()   # self-limits to daily
+    await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

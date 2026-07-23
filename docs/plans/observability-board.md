@@ -280,12 +280,27 @@ Verify via `frontend-visual-verification` at :5173 (+ rebuild `web` for
   resets the sampler gate on every source edit, so dev bursts extra
   samples — harmless, averages into buckets. Fleet-history UI switcher
   deliberately deferred until a real second instance exists.
-- **Phase 3 — Alerts.** `monitor.thresholds` + **leader-only** evaluation
-  with debounce/hysteresis; route through `notify_operator` / recommendation
-  surface, node-attributed; active-alerts UI + threshold editor. **Verify:**
-  set disk threshold to 1% → exactly one ntfy + one card (not a storm);
-  raise it back → auto-clears; stop a second instance's sampler → an
-  "unreachable" alert fires from the leader.
+- **Phase 3 — Alerts. BUILT + VERIFIED 2026-07-23, uncommitted.**
+  Thresholds as individual Observability settings (`monitor.alerts_enabled`
+  + `alert_disk_pct`/`alert_mem_pct`/`alert_vram_pct`/`alert_gpu_temp_c` —
+  the settings section IS the threshold editor, no bespoke UI); migration
+  **047** `monitor_alerts` (one open row per instance+kind = the de-dupe,
+  partial unique index enforces it); **leader-only** evaluation each tick
+  in `sysmon.maybe_evaluate_alerts()` — debounce = 3 consecutive breaching
+  samples, hysteresis = clear at threshold−5, unreachable = heartbeat
+  silent >180s, retired instances (registry row deleted) auto-clear;
+  breaches route through `notify.send`, node-attributed; `GET
+  /api/v1/system/alerts` (active + 7d cleared trail); red alert cards at
+  the top of the board. **Built on real leader election** —
+  remote-shared-state phase 1 (`leader.py`, pg advisory lock 0x4E4F5641,
+  30s takeover) landed first; `instances.is_leader()` now delegates to it.
+  **Verified live through the real evaluator on real ticks** (fake
+  instance + planted samples): breach raised exactly one row + one notify;
+  second tick added nothing (de-dupe); recovery sample cleared it;
+  10-min-stale heartbeat raised `unreachable`; deleting the registry row
+  auto-cleared it; all test rows removed after. Deliberately deferred:
+  manual dismiss (an active condition would just re-raise), recovery
+  notifications.
 
 ## Reuse / align (don't rebuild)
 

@@ -327,6 +327,17 @@ export async function getSystemFleet(): Promise<{ instances: FleetInstance[] }> 
   return r.json();
 }
 
+export interface MonitorAlert {
+  id: string; instance_id: string; label: string; kind: string;
+  message: string; value: number | null; threshold: number | null;
+  raised_at: number; cleared_at: number | null;
+}
+export async function getSystemAlerts(): Promise<{ active: MonitorAlert[]; recent: MonitorAlert[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/system/alerts`);
+  if (!r.ok) throw new Error('Failed to load alerts');
+  return r.json();
+}
+
 export async function getMemoryStats(): Promise<Record<string, number>> {
   const r = await apiFetch(`${API_URL}/api/v1/memory/stats`);
   if (!r.ok) throw new Error('Failed to load memory stats');

@@ -62,8 +62,9 @@ def label() -> str:
 
 
 def is_leader() -> bool:
-    """Whether this instance runs the fleet-wide singletons (retention prune,
-    alert evaluation). Trivially true single-node; replaced by the
-    advisory-lock leader from remote-shared-state phase 1 without touching
-    callers."""
-    return True
+    """Whether this instance runs the fleet-wide singletons (automations,
+    retention prunes, alert evaluation). Delegates to the advisory-lock
+    election (remote-shared-state phase 1) — exactly the swap this seam was
+    built for; callers are unchanged."""
+    from app import leader
+    return leader.is_leader()

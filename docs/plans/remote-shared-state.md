@@ -58,9 +58,27 @@ fragmentation footgun — worth the audit pass regardless).
 
 ## Phases
 
-1. **Leader election** (standalone win). Verify: run two backend
-   containers against one PG (compose override), kill the leader, watch
-   the follower promote within 30 s and run the scheduler exactly once.
+1. **Leader election. BUILT + VERIFIED 2026-07-23, uncommitted** (built as
+   the prerequisite for observability-board P3 alerts). `backend/app/
+   leader.py`: dedicated asyncpg connection, `pg_try_advisory_lock
+   (0x4E4F5641)`, 30s retry, fail-safe demotion on any connection doubt,
+   `on_promoted` hooks; started in lifespan BEFORE the scheduler so a
+   single instance leads from tick one; `instances.is_leader()` now
+   delegates (all observability gating switched over untouched).
+   Scheduler singletons (automations, trace prune, sample prune, alert
+   eval) gate per-tick; sampling stays per-instance. The split-state
+   startup refusal (Traps below) also landed (`_refuse_split_state` in
+   main.py, `NOVA_ALLOW_SPLIT_STATE=1` escape hatch). **Verified live:**
+   a contender against the same PG stayed follower; killing the leader
+   promoted it in 24s; the restarted backend stayed follower while the
+   contender held the lock and re-acquired within 30s of its removal.
+   Deviations from the 2026-07-15 sketch, on the merits: the **model
+   warmer is NOT leader-gated** (it pins the LOCAL ollama — each instance
+   must warm its own muscle); **compaction** is turn-inline, not a
+   background singleton; **ingest_worker** needs no gate (claims use FOR
+   UPDATE SKIP LOCKED) — but its startup orphan-requeue assumes a single
+   instance (would requeue another instance's in-flight job); revisit at
+   phase 2.
 2. **Memory watcher + atomic appends.** Verify: append a memory file via
    a second writer, see it in search results without restart; repeat on
    an SMB mount for the poll fallback.

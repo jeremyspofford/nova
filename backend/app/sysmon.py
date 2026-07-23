@@ -263,6 +263,133 @@ async def maybe_sample():
         log.exception("resource sample failed; next tick retries")
 
 
+# ── phase 3: threshold alerts (leader-only) ─────────────────────────────────
+
+# a breach must hold for this many consecutive samples before it raises —
+# a model load spiking VRAM for one reading is normal, not an alert
+_ALERT_DEBOUNCE = 3
+# and must drop this far below the threshold to clear — no flapping when a
+# value hovers right at the line
+_ALERT_HYSTERESIS = 5.0
+# an instance sampling ~1/min that has been silent this long is unreachable
+_UNREACHABLE_AFTER_S = 180
+
+
+def _pct(used, total) -> float | None:
+    if used is None or total is None or total <= 0:
+        return None
+    return used / total * 100
+
+
+async def _raise_alert(conn, instance_id: str, label: str, kind: str,
+                       message: str, value, threshold) -> None:
+    import uuid as _uuid
+    await conn.execute(
+        """INSERT INTO monitor_alerts
+               (id, instance_id, kind, message, value, threshold)
+           VALUES ($1, $2, $3, $4, $5, $6)""",
+        _uuid.uuid4(), instance_id, kind, message, value, threshold)
+    log.warning("ALERT raised [%s] %s", kind, message)
+    # reach the operator even with the app closed; the alert row stands
+    # either way, so a notify failure only costs the push
+    try:
+        from app import notify
+        await notify.send(message, title="Nova resource alert",
+                          priority="high", tags=["warning"])
+    except Exception:
+        log.exception("alert notification failed (alert row kept)")
+
+
+async def maybe_evaluate_alerts():
+    """Threshold evaluation over the whole fleet's samples — leader-only so
+    each breach raises exactly once. De-dupe = one open row per
+    (instance, kind); recovery auto-clears with hysteresis."""
+    if not instances.is_leader():
+        return
+    if not settings_store.get("monitor.alerts_enabled"):
+        return
+    try:
+        thresholds = {
+            "disk_pct": float(settings_store.get("monitor.alert_disk_pct")),
+            "mem_pct": float(settings_store.get("monitor.alert_mem_pct")),
+            "vram_pct": float(settings_store.get("monitor.alert_vram_pct")),
+            "gpu_temp_c": float(settings_store.get("monitor.alert_gpu_temp_c")),
+        }
+        async with db.acquire() as conn:
+            insts = await conn.fetch(
+                """SELECT id, label,
+                          extract(epoch FROM (now() - last_seen)) AS age_s
+                   FROM instances""")
+            open_rows = await conn.fetch(
+                "SELECT instance_id, kind FROM monitor_alerts WHERE cleared_at IS NULL")
+            open_alerts = {(r["instance_id"], r["kind"]) for r in open_rows}
+            known_ids = {r["id"] for r in insts}
+
+            for inst in insts:
+                iid, label = inst["id"], inst["label"] or inst["id"]
+
+                # unreachable: the heartbeat itself is the debounce (~3
+                # missed samples); clears the moment a fresh sample lands
+                silent = inst["age_s"] is not None and float(inst["age_s"]) > _UNREACHABLE_AFTER_S
+                if silent and (iid, "unreachable") not in open_alerts:
+                    mins = int(float(inst["age_s"]) // 60)
+                    await _raise_alert(
+                        conn, iid, label, "unreachable",
+                        f"Instance '{label}' has not reported for {mins} minutes.",
+                        float(inst["age_s"]), _UNREACHABLE_AFTER_S)
+                elif not silent and (iid, "unreachable") in open_alerts:
+                    await conn.execute(
+                        """UPDATE monitor_alerts SET cleared_at = now()
+                           WHERE instance_id = $1 AND kind = 'unreachable'
+                             AND cleared_at IS NULL""", iid)
+                    log.info("ALERT cleared [unreachable] %s", label)
+
+                # metric thresholds want the last few samples (debounce)
+                samples = await conn.fetch(
+                    """SELECT mem_used_gb, mem_total_gb, vram_used_gb,
+                              vram_total_gb, gpu_temp_c, disk_used_gb,
+                              disk_total_gb
+                       FROM resource_samples WHERE instance_id = $1
+                       ORDER BY ts DESC LIMIT $2""", iid, _ALERT_DEBOUNCE)
+                metrics = {
+                    "disk_pct": [_pct(s["disk_used_gb"], s["disk_total_gb"]) for s in samples],
+                    "mem_pct": [_pct(s["mem_used_gb"], s["mem_total_gb"]) for s in samples],
+                    "vram_pct": [_pct(s["vram_used_gb"], s["vram_total_gb"]) for s in samples],
+                    "gpu_temp_c": [s["gpu_temp_c"] for s in samples],
+                }
+                pretty = {"disk_pct": "Disk", "mem_pct": "Memory",
+                          "vram_pct": "VRAM", "gpu_temp_c": "GPU temperature"}
+                for kind, series in metrics.items():
+                    limit = thresholds[kind]
+                    vals = [v for v in series if v is not None]
+                    breached = (len(vals) >= _ALERT_DEBOUNCE
+                                and all(v >= limit for v in vals))
+                    recovered = bool(vals) and vals[0] < limit - _ALERT_HYSTERESIS
+                    unit = "°C" if kind == "gpu_temp_c" else "%"
+                    if breached and (iid, kind) not in open_alerts:
+                        await _raise_alert(
+                            conn, iid, label, kind,
+                            f"{pretty[kind]} at {vals[0]:.0f}{unit} on "
+                            f"'{label}' (threshold {limit:.0f}{unit}).",
+                            vals[0], limit)
+                    elif recovered and (iid, kind) in open_alerts:
+                        await conn.execute(
+                            """UPDATE monitor_alerts SET cleared_at = now()
+                               WHERE instance_id = $1 AND kind = $2
+                                 AND cleared_at IS NULL""", iid, kind)
+                        log.info("ALERT cleared [%s] %s", kind, label)
+
+            # an unreachable alert for a deleted (retired) instance can never
+            # see a fresh heartbeat — clear it when the registry row is gone
+            for iid, kind in open_alerts:
+                if iid not in known_ids:
+                    await conn.execute(
+                        """UPDATE monitor_alerts SET cleared_at = now()
+                           WHERE instance_id = $1 AND cleared_at IS NULL""", iid)
+    except Exception:
+        log.exception("alert evaluation failed; next tick retries")
+
+
 async def maybe_prune_samples():
     """Fleet-wide retention, leader-only so it runs once, at most daily —
     the trace.maybe_prune pattern."""

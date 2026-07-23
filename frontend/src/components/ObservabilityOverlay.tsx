@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  getObservabilitySummary, getResourceHistory, getSystemFleet,
-  getSystemHealth, getSystemResources,
-  FleetInstance, HistoryPoint, ObservabilitySummary, ResourceHistory,
-  ServiceHealth, SystemResources,
+  getObservabilitySummary, getResourceHistory, getSystemAlerts,
+  getSystemFleet, getSystemHealth, getSystemResources,
+  FleetInstance, HistoryPoint, MonitorAlert, ObservabilitySummary,
+  ResourceHistory, ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
 import { CardsSkeleton } from './ui';
@@ -133,6 +133,7 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   const [hist, setHist] = useState<ResourceHistory | null>(null);
   const [histWin, setHistWin] = useState<HistWindow>('24h');
   const [fleet, setFleet] = useState<FleetInstance[] | null>(null);
+  const [alerts, setAlerts] = useState<{ active: MonitorAlert[]; recent: MonitorAlert[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const live = useRef(true);
 
@@ -172,6 +173,15 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
       .then(f => { if (on) setFleet(f.instances); }).catch(() => {});
     load();
     const id = setInterval(load, 10_000);
+    return () => { on = false; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    let on = true;
+    const load = () => getSystemAlerts()
+      .then(a => { if (on) setAlerts(a); }).catch(() => {});
+    load();
+    const id = setInterval(load, 15_000);
     return () => { on = false; clearInterval(id); };
   }, []);
 
@@ -217,6 +227,42 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
           {!res && !err && <CardsSkeleton n={3} />}
 
           {res && <>
+          {/* Alerts — the reason to open this board in a hurry */}
+          <section>
+            <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Alerts</h3>
+            {!alerts ? (
+              <div className="text-xs text-stone-500">Loading…</div>
+            ) : alerts.active.length === 0 ? (
+              <div className="text-xs text-stone-500">
+                No active alerts.
+                {alerts.recent.length > 0 && (
+                  <span className="text-stone-600">
+                    {' '}Recently cleared: {alerts.recent.slice(0, 3).map(a =>
+                      `${a.kind} on ${a.label} (${agoTs(a.cleared_at)})`).join(' · ')}
+                  </span>
+                )}
+                <span className="block text-stone-600 mt-0.5">
+                  Thresholds live in Settings → Observability.
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {alerts.active.map(a => (
+                  <div key={a.id}
+                    className="rounded-lg border border-red-900/70 bg-red-950/30 px-3 py-2 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm text-red-300">{a.message}</div>
+                      <div className="text-[11px] text-stone-500 mt-0.5">
+                        {a.kind} · {a.label} · raised {agoTs(a.raised_at)} · clears on recovery
+                      </div>
+                    </div>
+                    <span className="shrink-0 mt-0.5 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* Health / topology strip */}
           <section>
             <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Service health</h3>

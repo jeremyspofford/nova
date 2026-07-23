@@ -9,8 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app import (db, ingest_backfill, ingest_worker, model_warmer, rules,
-                 scheduler, settings_store)
+from app import (db, ingest_backfill, ingest_worker, leader, model_warmer,
+                 rules, scheduler, settings_store)
 from app.config import settings
 from app.llm import providers
 from app.memory.memory import memory
@@ -22,15 +22,40 @@ logging.basicConfig(level=settings.get_log_level())
 log = logging.getLogger(__name__)
 
 
+def _refuse_split_state() -> None:
+    """A secondary pointed at a central PG while keeping the default local
+    memory dir is a split-brain entity — half its mind in the shared DB,
+    half on a disk no other instance can see (remote-shared-state trap).
+    Refuse loudly unless the operator explicitly opts in."""
+    import os
+    from urllib.parse import urlparse
+
+    host = (urlparse(settings.database_url).hostname or "").lower()
+    local_db = host in {"postgres", "localhost", "127.0.0.1", "::1", ""}
+    default_mem = settings.okf_memory_dir.rstrip("/") in {
+        "./data/memory", "data/memory", "/app/data/memory"}
+    if not local_db and default_mem \
+            and os.environ.get("NOVA_ALLOW_SPLIT_STATE") != "1":
+        raise RuntimeError(
+            "DATABASE_URL points at a remote postgres but NOVA_MEMORY_DIR is "
+            "the local default — one brain, two memory homes. Point "
+            "NOVA_MEMORY_DIR at the shared memory dir, or set "
+            "NOVA_ALLOW_SPLIT_STATE=1 to run split on purpose.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Starting Nova backend...")
+    _refuse_split_state()
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()
     await providers.warm()
     await rules.warm()
     await memory.startup()
+    # elect before the first scheduler tick so a single instance is leader
+    # from the start; followers keep retrying every 30s in the background
+    await leader.start()
     await ingest_backfill.run()   # one-time repair: anchor drifting source ingests
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
@@ -45,6 +70,7 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    await leader.stop()   # releases the advisory lock promptly on clean exit
     await db.close_pool()
 
 
