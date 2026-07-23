@@ -77,16 +77,22 @@ async def create(kind: str, title: str, body: str, *, source: str,
 
 
 async def list_all(status: str = "new") -> list[dict]:
-    """`new` = the live queue (highest priority, newest first); `all` = the
-    inbox view (everything, decided last)."""
+    """`new` = the banner queue: undecided AND unsnoozed — 'later' means the
+    operator asked the banner to stop showing it, so only the inbox lists it
+    until a dedupe re-raise resets it to 'new'. `all` = the inbox view:
+    everything actionable (snoozed included) plus the last 30 days of
+    decided rows."""
     async with db.acquire() as conn:
         if status == "all":
             rows = await conn.fetch(
-                "SELECT * FROM recommendations ORDER BY "
-                "(status IN ('new','seen','later')) DESC, priority DESC, created_at DESC")
+                "SELECT * FROM recommendations "
+                "WHERE status IN ('new','seen','later') "
+                "   OR decided_at > now() - interval '30 days' "
+                "ORDER BY (status IN ('new','seen','later')) DESC, "
+                "         priority DESC, coalesce(decided_at, created_at) DESC")
         else:
             rows = await conn.fetch(
-                "SELECT * FROM recommendations WHERE status IN ('new','seen','later') "
+                "SELECT * FROM recommendations WHERE status IN ('new','seen') "
                 "ORDER BY priority DESC, created_at DESC")
     return [_row(r) for r in rows]
 

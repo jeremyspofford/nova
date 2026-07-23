@@ -1,5 +1,20 @@
 # Recommendation / notification surface — Nova speaks up proactively
 
+> **Status 2026-07-23:** **Phase 1 was already SHIPPED** by a parallel lane
+> (migrations 032 + 037, `recommendations.py`, endpoints,
+> `raise_recommendation` builtin granted to main + ingestion, chat banner —
+> this doc's "no inbox exists" claim below is a 2026-07-21 snapshot) except
+> the automation re-point, which landed today: `mcp-server-discovery` now
+> raises cards (dedupe_key `mcp:<slug>`, priority from relevance) alongside
+> its topic writes. **Phase 2 BUILT + verified 2026-07-23, uncommitted:**
+> bell + new-count badge in the chat header, inbox panel (actionable incl.
+> snoozed, then 30 days of recently-decided), decide-from-inbox, banner's
+> "+N more" opens it. Also fixed: `later` now actually snoozes — the banner
+> queue excludes it (it used to reappear on the next poll). Verified live:
+> three planted cards → approve from banner, snooze + dismiss from inbox,
+> badge/groups tracked, statuses correct in the DB; fixtures removed.
+> Phase 3 (actionable Approve through the consent rails) not started.
+
 Implementation plan (authored 2026-07-21 with Opus, at Jeremy's request).
 Goal: give Nova and her automations a first-class way to **proactively raise
 a recommendation or notification that the operator actually sees** — a card

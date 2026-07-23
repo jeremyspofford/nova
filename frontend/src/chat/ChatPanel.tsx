@@ -560,6 +560,22 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   // proactive recommendation cards — loaded on mount, after each turn (a turn
   // may raise one), and polled so background automations surface without a turn
+  // the inbox: everything actionable (snoozed included) + 30d of decided.
+  // Fetched when the bell opens, kept in sync with decisions after that.
+  const [inbox, setInbox] = useState<RecCard[] | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxExpanded, setInboxExpanded] = useState<string | null>(null);
+
+  const loadInbox = async () => {
+    try { setInbox(await getRecCards('all')); } catch { /* best-effort */ }
+  };
+  const toggleInbox = () => {
+    setInboxOpen(open => {
+      if (!open) void loadInbox();
+      return !open;
+    });
+  };
+
   const loadRecs = async () => {
     try { setRecs(await getRecCards('new')); } catch { /* best-effort */ }
   };
@@ -570,8 +586,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   }, []);
   async function decideRec(rec: RecCard, choice: 'approve' | 'later' | 'dismiss') {
     setRecs(prev => prev.filter(r => r.id !== rec.id));   // optimistic
-    try { await decideRecCard(rec.id, choice); }
-    catch { void loadRecs(); }                            // reconcile on failure
+    try {
+      const updated = await decideRecCard(rec.id, choice);
+      setInbox(prev => prev && prev.map(r => r.id === rec.id ? updated : r));
+    } catch {
+      void loadRecs();                                    // reconcile on failure
+      if (inboxOpen) void loadInbox();
+    }
   }
 
   useEffect(() => {
@@ -787,6 +808,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           )}
         </span>
         <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={toggleInbox}
+            className={`relative shrink-0 leading-none px-1.5 py-1 rounded border ${
+              inboxOpen ? 'border-teal-700 text-teal-400'
+              : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
+            title="Recommendations inbox"
+            aria-label="Recommendations inbox"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            {recs.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-stone-950 text-[9px] font-semibold leading-[14px] text-center">
+                {recs.length}
+              </span>
+            )}
+          </button>
           {mainAgent && models.length > 0 && (
             <select
               value={mainAgent.model}
@@ -834,6 +874,84 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         </div>
       </header>
 
+      {inboxOpen && (() => {
+        const agoStr = (iso: string | null) => {
+          if (!iso) return '';
+          const t = Date.parse(iso.replace(' ', 'T'));
+          if (Number.isNaN(t)) return '';
+          const s = Math.max(0, (Date.now() - t) / 1000);
+          if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+          if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+          return `${Math.round(s / 86400)}d ago`;
+        };
+        const open = (r: RecCard) => ['new', 'seen', 'later'].includes(r.status);
+        const actionable = (inbox ?? []).filter(open);
+        const decided = (inbox ?? []).filter(r => !open(r));
+        const row = (r: RecCard) => (
+          <div key={r.id} className="px-3 py-2 border-t border-stone-800/70">
+            <button
+              onClick={() => setInboxExpanded(e => e === r.id ? null : r.id)}
+              className="w-full text-left"
+            >
+              <div className={`text-sm leading-snug ${open(r) ? 'text-stone-100' : 'text-stone-400'}`}>
+                {r.title}
+              </div>
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                {r.source} · {open(r)
+                  ? (r.status === 'later' ? `snoozed · ${agoStr(r.created_at)}` : agoStr(r.created_at))
+                  : `${r.status} · ${agoStr(r.decided_at)}`}
+              </div>
+            </button>
+            {inboxExpanded === r.id && (
+              <div className="mt-1.5">
+                <div className="text-xs text-stone-400 [&_p]:my-0.5 [&_a]:text-teal-400">
+                  <Markdown>{r.body}</Markdown>
+                </div>
+                {open(r) && (
+                  <div className="flex gap-2 mt-1.5">
+                    <button onClick={() => decideRec(r, 'approve')}
+                      className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">Approve</button>
+                    {r.status !== 'later' && (
+                      <button onClick={() => decideRec(r, 'later')}
+                        className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
+                    )}
+                    <button onClick={() => decideRec(r, 'dismiss')}
+                      className="text-xs px-2.5 py-1 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800">Dismiss</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+        return (
+          <div className="absolute right-2 z-40 w-80 max-w-[calc(100%-1rem)] max-h-[65vh] overflow-y-auto nice-scroll rounded-xl border border-stone-700 bg-stone-900/95 backdrop-blur shadow-2xl">
+            <div className="px-3 py-2 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wide text-stone-500">Recommendations</span>
+              <button onClick={() => setInboxOpen(false)} aria-label="Close inbox"
+                className="text-stone-500 hover:text-stone-200 leading-none px-1">×</button>
+            </div>
+            {inbox === null ? (
+              <div className="px-3 py-4 pt-0 text-xs text-stone-500">Loading…</div>
+            ) : inbox.length === 0 ? (
+              <div className="px-3 py-4 pt-0 text-xs text-stone-500">
+                Nothing here yet — when {assistantName} or an automation finds
+                something worth your decision, it lands here.
+              </div>
+            ) : (
+              <>
+                {actionable.map(row)}
+                {decided.length > 0 && (
+                  <div className="px-3 pt-2 pb-1 border-t border-stone-800 text-[10px] uppercase tracking-wide text-stone-600">
+                    Recently decided
+                  </div>
+                )}
+                {decided.map(row)}
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       {recs.length > 0 && (
         <div className="border-b border-amber-900/40 bg-amber-950/20 px-3 py-2 flex items-start gap-2">
           <span className="text-amber-400 text-sm mt-0.5" aria-hidden>★</span>
@@ -841,7 +959,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] uppercase tracking-wide text-amber-500/80">Nova recommends</span>
               <span className="text-[10px] text-stone-500">· from {recs[0].source}</span>
-              {recs.length > 1 && <span className="text-[10px] text-stone-500">· +{recs.length - 1} more</span>}
+              {recs.length > 1 && (
+                <button onClick={toggleInbox}
+                  className="text-[10px] text-stone-500 hover:text-teal-300 underline underline-offset-2">
+                  +{recs.length - 1} more
+                </button>
+              )}
             </div>
             <div className="text-sm text-stone-100 mt-0.5">{recs[0].title}</div>
             <div className="text-xs text-stone-400 mt-0.5 [&_p]:my-0.5 [&_a]:text-teal-400">

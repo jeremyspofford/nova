@@ -529,6 +529,7 @@ export interface RecCard {
   status: string;
   priority: number;
   created_at: string | null;
+  decided_at: string | null;
 }
 
 /** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
