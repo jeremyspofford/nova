@@ -295,7 +295,8 @@ async def _raise_alert(conn, instance_id: str, label: str, kind: str,
     try:
         from app import notify
         await notify.send(message, title="Nova resource alert",
-                          priority="high", tags=["warning"])
+                          priority="high", tags=["warning"],
+                          click="/observability")
     except Exception:
         log.exception("alert notification failed (alert row kept)")
 

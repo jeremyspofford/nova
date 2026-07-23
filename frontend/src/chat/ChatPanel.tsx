@@ -576,6 +576,20 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     });
   };
 
+  // push deep link: a recommendation notification opens /chat?inbox=open —
+  // land with the inbox already up, then clean the param off the URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('inbox') !== 'open') return;
+    setInboxOpen(true);
+    void loadInbox();
+    params.delete('inbox');
+    const qs = params.toString();
+    window.history.replaceState(null, '',
+      window.location.pathname + (qs ? `?${qs}` : ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadRecs = async () => {
     try { setRecs(await getRecCards('new')); } catch { /* best-effort */ }
   };

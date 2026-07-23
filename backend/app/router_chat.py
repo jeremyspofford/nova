@@ -149,6 +149,19 @@ async def chat_stream(request: ChatRequest):
                 log.exception("failed to persist assistant turn")
             asyncio.ensure_future(compaction.maybe_compact(
                 conversation_id, main_agent["model"], window_oldest_at))
+            # long turns push "Nova replied" when they finish — the device
+            # itself suppresses it while the app is on screen (push-sw.js),
+            # so it only lands when the operator walked away
+            try:
+                from datetime import datetime, timezone
+                min_secs = int(settings_store.get("notify.push_reply_min_secs") or 0)
+                secs = (datetime.now(timezone.utc) - turn.started_at).total_seconds()
+                if secs >= min_secs:
+                    from app import notify
+                    asyncio.ensure_future(notify.send(
+                        final_text[:120], title="Nova replied", click="/chat"))
+            except Exception:
+                log.exception("reply-push scheduling failed")
 
         yield "data: [DONE]\n\n"
 
@@ -1393,6 +1406,45 @@ async def list_recommendations_endpoint(status: str = "new"):
     live queue the chat banner shows; status=all is the inbox view (decided
     rows included, actionable first)."""
     return await recommendations.list_all("all" if status == "all" else "new")
+
+
+# ── web push: per-device subscriptions (the webpush notify provider) ──────
+# Operator-only like everything on this API; agents never see these. The
+# delivery half lives in app/push.py.
+
+@router.get("/api/v1/push/pubkey")
+async def push_pubkey():
+    """The VAPID applicationServerKey — PushManager.subscribe needs it.
+    Generates the fleet keypair on first call."""
+    from app import push
+    pub, _ = await push.ensure_vapid()
+    return {"key": pub}
+
+
+@router.post("/api/v1/push/subscribe")
+async def push_subscribe(body: dict):
+    """Register (or refresh) this device's push subscription."""
+    from app import push
+    sub = body.get("subscription") or {}
+    if not sub.get("endpoint") or not (sub.get("keys") or {}).get("p256dh"):
+        raise HTTPException(status_code=422, detail="subscription with endpoint + keys required")
+    return await push.subscribe(sub, str(body.get("label") or "")[:120])
+
+
+@router.post("/api/v1/push/unsubscribe")
+async def push_unsubscribe(body: dict):
+    from app import push
+    endpoint = str(body.get("endpoint") or "")
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="endpoint required")
+    return {"removed": await push.unsubscribe(endpoint)}
+
+
+@router.get("/api/v1/push/subscriptions")
+async def push_subscriptions():
+    """Device list for Settings -> Notifications."""
+    from app import push
+    return {"devices": await push.list_subscriptions()}
 
 
 @router.post("/api/v1/recommendations/{rec_id}/decide")

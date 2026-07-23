@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 # imported from app.notify) because notify.py imports THIS module — importing it
 # back would be circular. Keep in sync with notify._PROVIDERS; a stale entry just
 # offers a provider that notify.send() reports as unconfigured, never a crash.
-_NOTIFY_PROVIDERS = ["ntfy", "webhook"]
+_NOTIFY_PROVIDERS = ["ntfy", "webpush", "webhook"]
 
 SETTING_DEFS: list[dict] = [
     # ── Context ──────────────────────────────────────────────────────────
@@ -268,6 +268,13 @@ SETTING_DEFS: list[dict] = [
      "description": ("Priority for notifications that don't set their own "
                      "(ntfy maps this to sound/vibration and lock-screen "
                      "prominence; other providers pass it through).")},
+    {"key": "notify.push_reply_min_secs", "type": "number", "default": 20,
+     "min": 0, "max": 600, "section": "Notifications",
+     "label": "Push when a reply takes longer than (seconds)",
+     "description": ("Long chat turns push a \"Nova replied\" notification "
+                     "when they finish — but only if the app isn't on screen "
+                     "(the device itself suppresses it when you're looking). "
+                     "0 pushes for every reply.")},
     # ntfy provider
     {"key": "notify.ntfy.server_mode", "type": "enum", "default": "public",
      "options": ["public", "builtin", "custom"],

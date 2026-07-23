@@ -54,6 +54,9 @@ export default defineConfig({
         // wasm runtimes + onnx models (VAD, wake) load on demand and
         // browser-cache — never precache them into the service worker
         globIgnores: ['**/vad/**', '**/wake/**', '**/*.wasm'],
+        // web push lives in a small static file so the SW stays generated
+        // (no injectManifest migration); push-sw.js is precached by glob
+        importScripts: ['push-sw.js'],
       },
     }),
   ],

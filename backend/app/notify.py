@@ -127,9 +127,38 @@ class WebhookProvider(Provider):
         return {"ok": True, "id": None}
 
 
+class WebPushProvider(Provider):
+    """Native Web Push to the installed PWA — devices subscribe from
+    Settings -> Notifications; delivery + subscription hygiene live in
+    app/push.py. No second app, notifications wear Nova's icon."""
+
+    key = "webpush"
+    label = "Web Push (this app)"
+
+    def configured(self) -> bool:
+        # sync by contract — answer from push.py's cached count. Unprimed
+        # (None) counts as configured: send() then reports the real state.
+        from app import push
+        n = push.cached_count()
+        return n is None or n > 0
+
+    async def send(self, message, *, title, priority, tags, click) -> dict:
+        from app import push
+        res = await push.send_all(message, title=title, tags=tags,
+                                  url=click, priority=priority)
+        if res["total"] == 0:
+            return {"ok": False, "error": "no devices are subscribed — open "
+                    "Settings -> Notifications on a device and enable push"}
+        if res["sent"] == 0:
+            return {"ok": False, "error": "no device accepted the push: "
+                    + "; ".join(res["errors"] or ["unknown"])}
+        log.info("web push accepted for %d/%d devices", res["sent"], res["total"])
+        return {"ok": True, "id": f"{res['sent']}/{res['total']} devices"}
+
+
 # The registry. Order here is the order the Settings enum should list them.
 _PROVIDERS: dict[str, Provider] = {
-    p.key: p for p in (NtfyProvider(), WebhookProvider())
+    p.key: p for p in (NtfyProvider(), WebPushProvider(), WebhookProvider())
 }
 
 

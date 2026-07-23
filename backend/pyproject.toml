@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "python-multipart>=0.0.6",
     "mcp>=1.0.0",
+    "pywebpush>=2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -11,6 +11,7 @@ duplicates — and never resurrects one the operator already dismissed
 (docs/plans/recommendation-surface.md).
 """
 
+import asyncio
 import json
 import logging
 import uuid as uuid_mod
@@ -73,7 +74,17 @@ async def create(kind: str, title: str, body: str, *, source: str,
                 r = await conn.fetchrow(
                     "SELECT * FROM recommendations WHERE dedupe_key = $1", dedupe_key)
     log.info("Recommendation raised: %s %r by %s", kind, title, source)
-    return _row(r)
+    row = _row(r)
+    # reach the operator's devices too — the card is the durable surface,
+    # the push is the nudge. Fire-and-forget; a decided dedupe row (create
+    # left it untouched) must not re-ping.
+    if row["status"] == "new":
+        async def _ping():
+            from app import notify
+            await notify.send(body[:140], title=f"Nova recommends: {title}"[:90],
+                              tags=["bulb"], click="/chat?inbox=open")
+        asyncio.get_running_loop().create_task(_ping())
+    return row
 
 
 async def list_all(status: str = "new") -> list[dict]:

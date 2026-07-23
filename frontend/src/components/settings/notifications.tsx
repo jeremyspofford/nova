@@ -1,8 +1,147 @@
 import { useState, useEffect } from 'react';
 import {
   SettingDef, getNotifyReachability, getNotifyService, notifyServiceAction,
+  getPushPubkey, listPushDevices, subscribePush, unsubscribePush,
+  urlB64ToUint8Array,
 } from '../../api';
-import type { NotifyReachability, NotifyService } from '../../api';
+import type { NotifyReachability, NotifyService, PushDevice } from '../../api';
+
+/** A human name for this device, good enough to tell rows apart. */
+function deviceLabel(): string {
+  const ua = navigator.userAgent;
+  const os = /iPhone|iPod/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad'
+    : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac'
+    : /Windows/.test(ua) ? 'Windows' : 'Linux';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome'
+    : /Safari\//.test(ua) ? 'Safari' : /Firefox\//.test(ua) ? 'Firefox' : 'browser';
+  return `${os} · ${browser}`;
+}
+
+function agoDays(ts: number | null): string {
+  if (!ts) return 'never';
+  const d = (Date.now() / 1000 - ts) / 86400;
+  if (d < 1 / 24) return 'just now';
+  if (d < 1) return `${Math.round(d * 24)}h ago`;
+  return `${Math.round(d)}d ago`;
+}
+
+/** Web Push for THIS device: permission + subscription, plus the fleet's
+ *  device list. Push needs the real service worker — the built app
+ *  (tailscale URL / :8080), not the dev server. */
+export function PushDeviceCard() {
+  const supported = 'serviceWorker' in navigator && 'PushManager' in window;
+  const [subscribed, setSubscribed] = useState<string | null>(null);
+  const [devices, setDevices] = useState<PushDevice[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const refresh = async () => {
+    try { setDevices(await listPushDevices()); } catch { /* offline — fine */ }
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      setSubscribed(sub?.endpoint ?? null);
+    } catch { /* unsupported */ }
+  };
+  useEffect(() => { if (supported) void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const enable = async () => {
+    setBusy(true); setMsg('');
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        setMsg('No service worker here — push works in the installed app '
+          + '(your tailscale URL or :8080), not the dev server.');
+        return;
+      }
+      // the permission prompt must come from this click
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        setMsg('Notification permission was not granted.');
+        return;
+      }
+      const key = await getPushPubkey();
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8Array(key),
+      });
+      await subscribePush(sub, deviceLabel());
+      setMsg('Push enabled on this device. Send a test below to confirm.');
+      await refresh();
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async () => {
+    setBusy(true); setMsg('');
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) {
+        await unsubscribePush(sub.endpoint);
+        await sub.unsubscribe();
+      }
+      setMsg('Push disabled on this device.');
+      await refresh();
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (d: PushDevice) => {
+    try { await unsubscribePush(d.endpoint); await refresh(); } catch { /* row stays */ }
+  };
+
+  return (
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40 px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-stone-200">Push on this device</div>
+          <div className="text-xs text-stone-500">
+            {supported
+              ? (subscribed ? 'Enabled — Nova reaches this device natively.'
+                 : 'Native notifications from the installed app — no extra app needed.')
+              : 'This browser does not support Web Push.'}
+          </div>
+        </div>
+        {supported && (
+          <button
+            onClick={subscribed ? disable : enable}
+            disabled={busy}
+            className={`shrink-0 text-sm px-3 py-1.5 rounded border disabled:opacity-50 ${
+              subscribed
+                ? 'border-stone-700 text-stone-400 hover:text-red-300 hover:border-red-800'
+                : 'bg-teal-700 hover:bg-teal-600 border-teal-700 text-white'}`}
+          >
+            {busy ? '…' : subscribed ? 'Disable' : 'Enable push'}
+          </button>
+        )}
+      </div>
+      {msg && <div className="text-xs text-teal-400">{msg}</div>}
+      {devices && devices.length > 0 && (
+        <div className="pt-1 border-t border-stone-800 space-y-1">
+          {devices.map(d => (
+            <div key={d.endpoint} className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-stone-300 truncate">
+                {d.label ?? `device …${d.endpoint_tail}`}
+                {d.endpoint === subscribed && <span className="text-stone-600"> · this one</span>}
+                {d.failures > 0 && <span className="text-amber-500"> · {d.failures} failed</span>}
+              </span>
+              <span className="shrink-0 text-stone-600">used {agoDays(d.last_used_at)}</span>
+              <button onClick={() => remove(d)}
+                className="shrink-0 text-stone-600 hover:text-red-400">remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** ntfy topic input with a Randomize button — on a public/shared server the
  *  topic name is the only secret, so an easy way to mint a long unguessable

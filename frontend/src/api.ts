@@ -448,6 +448,58 @@ export async function testNotification(): Promise<NotifyTestResult> {
   return r.json();
 }
 
+// ── web push: this device's subscription + the fleet's device list ────────
+
+export async function getPushPubkey(): Promise<string> {
+  const r = await apiFetch(`${API_URL}/api/v1/push/pubkey`);
+  if (!r.ok) throw new Error('Failed to load push key');
+  return (await r.json()).key;
+}
+
+export async function subscribePush(subscription: PushSubscription, label: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/push/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscription: subscription.toJSON(), label }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'subscribe failed');
+}
+
+export async function unsubscribePush(endpoint: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/push/unsubscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'unsubscribe failed');
+}
+
+export interface PushDevice {
+  endpoint: string;
+  endpoint_tail: string;
+  label: string | null;
+  created_at: number;
+  last_used_at: number | null;
+  failures: number;
+}
+
+export async function listPushDevices(): Promise<PushDevice[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/push/subscriptions`);
+  if (!r.ok) throw new Error('Failed to load push devices');
+  return (await r.json()).devices;
+}
+
+/** applicationServerKey wants raw bytes, the API hands out base64url.
+ *  Built over an explicit ArrayBuffer so it satisfies BufferSource under
+ *  TS 5.7's ArrayBufferLike split. */
+export function urlB64ToUint8Array(b64: string): Uint8Array<ArrayBuffer> {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
 export interface NotifyReachability {
   provider: string;
   enabled: boolean;

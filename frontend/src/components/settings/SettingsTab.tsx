@@ -5,7 +5,7 @@ import {
 import { THEMES } from '../../brain/theme';
 import { ThemePreview } from '../ThemePreview';
 import { CardsSkeleton } from '../ui';
-import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp } from './notifications';
+import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
 import { VoiceField, ListenModeField, WakeWordField } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
 import { BundledInference, ModelStorage } from './inference';
@@ -210,6 +210,7 @@ export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: stri
             ))}
             {section === 'Notifications' && (
               <div className="pt-1 space-y-3">
+                <PushDeviceCard />
                 <NotifyServiceControl defs={defs} />
                 <NotificationsReachability />
                 <div>
