@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app import automations, settings_store, trace
+from app import automations, settings_store, sysmon, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.llm import router as llm_router
@@ -63,6 +63,10 @@ async def run_one(automation: dict) -> tuple[bool, str]:
 
 async def tick():
     await trace.maybe_prune()   # self-limits to once a day
+    # fleet monitoring rides the same heartbeat, ahead of the automations
+    # kill switch — an instance keeps reporting its hardware either way
+    await sysmon.maybe_sample()
+    await sysmon.maybe_prune_samples()   # leader-only, self-limits to daily
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

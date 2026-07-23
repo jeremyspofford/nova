@@ -150,6 +150,13 @@ SETTING_DEFS: list[dict] = [
                      "behind the duration chips) are kept. Traces are "
                      "diagnostics, not memory — pruning them loses nothing "
                      "Nova knows.")},
+    {"key": "monitor.retention_days", "type": "number", "default": 7,
+     "min": 1, "max": 90, "section": "Observability",
+     "label": "Resource history retention (days)",
+     "description": ("How long per-instance resource samples (the CPU/RAM/"
+                     "VRAM/disk history behind the Observability sparklines) "
+                     "are kept. One row per instance per minute; pruned by "
+                     "the fleet leader.")},
     # ── MCP (docs/plans/mcp-client.md) ──────────────────────────────────
     {"key": "mcp.call_timeout_s", "type": "number", "default": 30,
      "min": 5, "max": 120, "section": "MCP",

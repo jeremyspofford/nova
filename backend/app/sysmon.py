@@ -8,12 +8,15 @@ docker-disk readings fanned out to this instance's own inference-control
 sidecar (the only holder of the docker socket + nvidia-smi). On WSL2 these are
 the VM's numbers — the real ceiling the instance runs against.
 
-Live only: nothing is stored here. History + a fleet of instances arrive in
-phase 2 by writing these same snapshots to a shared table, tagged per
-instance.
+Phase 2 adds history + fleet: each instance also writes its snapshot to the
+shared `resource_samples` table (~60s, its own scheduler tick — sampling is
+NOT leader-gated, every instance reports its own hardware) and upserts its
+`instances` row; only the retention prune runs leader-only so it happens
+once across the fleet.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -21,7 +24,7 @@ import time
 
 import httpx
 
-from app import db, hardware, instances
+from app import db, hardware, instances, settings_store
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -169,3 +172,113 @@ async def health() -> dict:
         probes = await asyncio.gather(
             *(_probe(client, *c) for c in _HTTP_CHECKS))
     return {"services": [pg, *probes]}
+
+
+# ── phase 2: sampler + retention (docs/plans/observability-board.md) ─────────
+
+# the scheduler ticks every 60s; the gate only guards against extra callers
+_SAMPLE_GATE_S = 55
+_PRUNE_GATE_S = 24 * 3600
+_last_sample = 0.0
+_last_prune = 0.0
+
+
+async def _reaches() -> dict:
+    """Can this instance reach the shared backends, and how fast? The two
+    that matter for a split-brain diagnosis: the shared PG and the memory
+    dir (a mount on remote instances)."""
+    out: dict = {}
+    t0 = time.monotonic()
+    try:
+        async with db.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        out["pg"] = {"ok": True, "ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        out["pg"] = {"ok": False, "detail": str(e)[:120]}
+    t0 = time.monotonic()
+    try:
+        await asyncio.to_thread(os.listdir, settings.okf_memory_dir)
+        out["memory"] = {"ok": True, "ms": round((time.monotonic() - t0) * 1000)}
+    except OSError as e:
+        out["memory"] = {"ok": False, "detail": str(e)[:120]}
+    return out
+
+
+def _gpu_rollup(gpu: dict | None) -> dict:
+    """One sample row spans all GPUs: memory sums, utilization/temp maxes.
+    The per-GPU breakdown rides in `detail` for anyone who needs it."""
+    gpus = (gpu or {}).get("gpus") or []
+    if not gpus:
+        return {"used": None, "total": None, "pct": None, "temp": None}
+    return {
+        "used": round(sum(g.get("mem_used_gb") or 0 for g in gpus), 1),
+        "total": round(sum(g.get("mem_total_gb") or 0 for g in gpus), 1),
+        "pct": max((g.get("util_pct") or 0) for g in gpus),
+        "temp": max((g.get("temp_c") or 0) for g in gpus),
+    }
+
+
+async def maybe_sample():
+    """One fleet-visible sample of this instance, at most ~1/minute. Rides
+    the scheduler tick; never raises (a broken sampler must not take the
+    automations heartbeat down with it)."""
+    global _last_sample
+    now = time.monotonic()
+    if _last_sample and now - _last_sample < _SAMPLE_GATE_S:
+        return
+    _last_sample = now
+    try:
+        snap, reaches = await asyncio.gather(snapshot(), _reaches())
+        gpu = _gpu_rollup(snap.get("gpu"))
+        detail = {
+            "containers": snap.get("containers") or [],
+            "gpus": (snap.get("gpu") or {}).get("gpus") or [],
+            "docker": (snap.get("disk") or {}).get("docker"),
+            "model_store": (snap.get("disk") or {}).get("model_store"),
+            "platform": snap.get("platform"),
+        }
+        inst = snap["instance"]
+        async with db.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO instances (id, label, reaches)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (id) DO UPDATE
+                       SET label = EXCLUDED.label,
+                           last_seen = now(),
+                           reaches = EXCLUDED.reaches""",
+                inst["id"], inst["label"], json.dumps(reaches))
+            await conn.execute(
+                """INSERT INTO resource_samples
+                       (instance_id, ts, cpu_pct, load1, mem_used_gb,
+                        mem_total_gb, vram_used_gb, vram_total_gb, gpu_pct,
+                        gpu_temp_c, disk_used_gb, disk_total_gb, detail)
+                   VALUES ($1, now(), $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                           $11, $12)""",
+                inst["id"], snap["cpu"]["pct"], snap["cpu"]["load1"],
+                snap["mem"]["used_gb"], snap["mem"]["total_gb"],
+                gpu["used"], gpu["total"], gpu["pct"], gpu["temp"],
+                snap["disk"]["used_gb"], snap["disk"]["total_gb"],
+                json.dumps(detail))
+    except Exception:
+        log.exception("resource sample failed; next tick retries")
+
+
+async def maybe_prune_samples():
+    """Fleet-wide retention, leader-only so it runs once, at most daily —
+    the trace.maybe_prune pattern."""
+    global _last_prune
+    if not instances.is_leader():
+        return
+    now = time.monotonic()
+    if _last_prune and now - _last_prune < _PRUNE_GATE_S:
+        return
+    _last_prune = now
+    days = int(settings_store.get("monitor.retention_days") or 7)
+    try:
+        async with db.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM resource_samples WHERE ts < now() - make_interval(days => $1)",
+                days)
+        log.info("Resource-sample retention: %s (older than %d days)", result, days)
+    except Exception:
+        log.exception("resource-sample prune failed; will retry tomorrow")

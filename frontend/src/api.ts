@@ -294,6 +294,39 @@ export async function getObservabilitySummary(window = '24h'): Promise<Observabi
   return r.json();
 }
 
+export interface HistoryPoint {
+  ts: number;
+  cpu_pct: number | null; mem_used_gb: number | null; mem_total_gb: number | null;
+  vram_used_gb: number | null; vram_total_gb: number | null;
+  gpu_pct: number | null; gpu_temp_c: number | null;
+  disk_used_gb: number | null; disk_total_gb: number | null;
+}
+export interface ResourceHistory {
+  window: string; instance: string; bucket_secs: number; points: HistoryPoint[];
+}
+export async function getResourceHistory(
+  window = '24h', instance?: string,
+): Promise<ResourceHistory> {
+  const q = instance ? `&instance=${encodeURIComponent(instance)}` : '';
+  const r = await apiFetch(`${API_URL}/api/v1/system/resources/history?window=${window}${q}`);
+  if (!r.ok) throw new Error('Failed to load resource history');
+  return r.json();
+}
+
+export interface FleetInstance {
+  id: string; label: string | null; self: boolean; leader: boolean;
+  last_seen: number | null; stale: boolean;
+  reaches: Record<string, { ok: boolean; ms?: number; detail?: string }>;
+  cpu_pct?: number | null; mem_used_gb?: number | null; mem_total_gb?: number | null;
+  vram_used_gb?: number | null; vram_total_gb?: number | null;
+  disk_used_gb?: number | null; disk_total_gb?: number | null;
+}
+export async function getSystemFleet(): Promise<{ instances: FleetInstance[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/system/fleet`);
+  if (!r.ok) throw new Error('Failed to load fleet');
+  return r.json();
+}
+
 export async function getMemoryStats(): Promise<Record<string, number>> {
   const r = await apiFetch(`${API_URL}/api/v1/memory/stats`);
   if (!r.ok) throw new Error('Failed to load memory stats');

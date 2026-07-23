@@ -262,15 +262,24 @@ Verify via `frontend-visual-verification` at :5173 (+ rebuild `web` for
   trivial later swap. Verified live: RTX 3090 VRAM 7.3/24 GB + 66%/67°C,
   per-container CPU/mem, health chips with latencies, $1.35 est cost on
   glm-5.2 (locals $0), poll ticking (42→43 turns between shots).
-- **Phase 2 — History + fleet.** Migration 043 (`instances`,
-  `resource_samples`, `turn_traces.instance_id`); per-instance sampler
-  (tick, ~60s) + **leader-gated** prune; `/system/resources/history`
-  bucketed; SVG sparklines + 1h/24h/7d toggle; the fleet table now populated
-  from DB samples. **This is what makes multi-instance work** — no new
-  collector, just tagged rows in the shared DB. **Verify (single box):**
-  history fills and survives `docker compose up -d backend`. **Verify
-  (multi, when available / via a second backend on the same PG):** a second
-  instance appears in the fleet with its own gauges and heartbeat.
+- **Phase 2 — History + fleet. BUILT + VERIFIED 2026-07-23, uncommitted.**
+  Migration **046** (`instances`, `resource_samples`,
+  `turn_traces.instance_id` — 043 was long gone); per-instance sampler on
+  the scheduler tick (55s monotonic gate, never raises) + **leader-gated**
+  daily prune on new `monitor.retention_days` (default 7);
+  `/system/resources/history` date_bin-bucketed (1h/1min, 24h/15min,
+  7d/2h); `/system/fleet` reads registry + latest sample per instance
+  (stale >180s flagged); `/observability/summary` takes `&instance=`;
+  hand-rolled SVG sparklines (no d3 import needed) + 1h/24h/7d toggle +
+  fleet table in the board. **Verified:** steady 1-row/min sampling;
+  history + same instance id survive `--force-recreate backend`; a second
+  instance (one-off container, own id, same PG) appeared in the fleet with
+  its own gauges and heartbeat — then its rows were cleaned out;
+  instance-stamping proven via a synthetic trace (flush path) and the
+  summary filter returns 0 for bogus instances. Note: uvicorn `--reload`
+  resets the sampler gate on every source edit, so dev bursts extra
+  samples — harmless, averages into buckets. Fleet-history UI switcher
+  deliberately deferred until a real second instance exists.
 - **Phase 3 — Alerts.** `monitor.thresholds` + **leader-only** evaluation
   with debounce/hysteresis; route through `notify_operator` / recommendation
   surface, node-attributed; active-alerts UI + threshold editor. **Verify:**

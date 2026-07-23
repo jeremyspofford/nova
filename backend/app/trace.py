@@ -32,7 +32,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app import db
+from app import db, instances
 
 log = logging.getLogger(__name__)
 
@@ -202,11 +202,12 @@ async def _flush(t: _Turn):
             await conn.execute(
                 """INSERT INTO turn_traces
                        (id, source, automation, conversation_id, model,
-                        status, error, started_at, finished_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                        status, error, started_at, finished_at, instance_id)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
                 t.id, t.source, t.automation,
                 uuid.UUID(t.conversation_id) if t.conversation_id else None,
-                t.model, t.status, t.error, t.started_at, t.finished_at)
+                t.model, t.status, t.error, t.started_at, t.finished_at,
+                await instances.ensure_id())
             if t.spans:
                 await conn.executemany(
                     """INSERT INTO turn_spans

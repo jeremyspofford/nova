@@ -1273,7 +1273,13 @@ See README for what works. This file is the ordered backlog.
     $1.35 est cost on glm-5.2 (locals $0), live poll ticking.
     **REMAINING (paused 2026-07-22 — full phase detail + verification lines in
     the plan doc; [[observability-board-30]] memory has the gotchas):**
-    - **P2 — history + fleet (next up).** Migration for `instances` (id, label,
+    - **P2 — history + fleet. BUILT + VERIFIED 2026-07-23, uncommitted**
+      (migration landed as **046**; details + verification in the plan doc's
+      phase-2 entry — sampler on the tick, leader-gated prune via new
+      `monitor.retention_days`, `date_bin` history endpoint, fleet from DB
+      samples, `&instance=` on the summary, sparklines + fleet table in the
+      board; multi-instance proven with a second backend on the same PG).
+      Original scope for reference: Migration for `instances` (id, label,
       role, first_seen, last_seen, `reaches` jsonb) + `resource_samples`
       (instance_id, ts, cpu/mem/vram/gpu/disk cols + `detail` jsonb) + add
       `turn_traces.instance_id` — **re-check the free migration number** (tip
@@ -1299,8 +1305,8 @@ See README for what works. This file is the ordered backlog.
       a recommendation card, node-attributed ("VRAM saturated on <label>"),
       auto-clear + de-dupe on recovery; `GET/PUT /api/v1/system/alerts` +
       threshold editor + active-alerts UI in the board.
-    - **P1 follow-ups (built, but loose ends).** Phone path :8080 needs
-      `docker compose build web && up -d web` (baked build) — NOT done.
+    - **P1 follow-ups (built, but loose ends).** Phone path :8080 rebuild —
+      DONE 2026-07-23 (web rebuilt with the board + P2 history/fleet).
       Cost price map is a placeholder (only glm-5.2 priced; other cloud models
       → `cost_partial` flag) → decision #5 is the operator-editable table.
       `instances.label` defaults to the container hostname — set

@@ -1,14 +1,12 @@
-"""System + observability API (docs/plans/observability-board.md, phase 1).
+"""System + observability API (docs/plans/observability-board.md, phases 1–2).
 
-Live machine readings for the Observability board, plus turn/cost rollups
-computed over the existing turn ledger (#3) — the spans already carry token
-counts, so this is pure aggregation, nothing new is captured.
-
-Instance-aware from the start: readings are attributed to this instance, and
-the fleet endpoint returns a one-row fleet today. Phase 2 populates the fleet
-from a shared samples table; the shapes here don't change.
+Live machine readings for the Observability board, turn/cost rollups over the
+existing turn ledger (#3), and — phase 2 — bucketed resource history plus a
+fleet view read back out of the shared `resource_samples`/`instances` tables
+every instance writes into.
 """
 
+import json
 import logging
 import time
 from datetime import timedelta
@@ -37,17 +35,115 @@ async def system_health():
     return await sysmon.health()
 
 
+# an instance sampling every ~60s that hasn't written for 3 minutes is
+# presumed unreachable — the P3 alert threshold will reuse this
+_STALE_AFTER_S = 180
+
+
 @router.get("/api/v1/system/fleet")
 async def system_fleet():
-    """Every Nova instance sharing this DB. Today: just this one (identity +
-    leadership). Phase 2 fills it from `resource_samples` heartbeats."""
-    return {"instances": [{
-        "id": await instances.ensure_id(),
-        "label": instances.label(),
-        "leader": instances.is_leader(),
-        "self": True,
-        "last_seen": time.time(),
-    }]}
+    """Every Nova instance sharing this DB: registry row + its latest sample.
+    Single box today = one row; a second backend on the same PG shows up here
+    with no extra plumbing."""
+    self_id = await instances.ensure_id()
+    rows = []
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT i.id, i.label, i.last_seen, i.reaches,
+                          extract(epoch FROM (now() - i.last_seen)) AS age_s,
+                          s.cpu_pct, s.mem_used_gb, s.mem_total_gb,
+                          s.vram_used_gb, s.vram_total_gb, s.disk_used_gb,
+                          s.disk_total_gb
+                   FROM instances i
+                   LEFT JOIN LATERAL (
+                       SELECT * FROM resource_samples r
+                       WHERE r.instance_id = i.id
+                       ORDER BY r.ts DESC LIMIT 1) s ON true
+                   ORDER BY i.first_seen""")
+    except Exception:
+        log.exception("fleet query failed; falling back to self row")
+    def _r(v, nd=1):
+        # REAL columns come back with float32 noise (31.200000762939453)
+        return round(v, nd) if v is not None else None
+
+    out = []
+    for r in rows:
+        age = float(r["age_s"]) if r["age_s"] is not None else None
+        out.append({
+            "id": r["id"], "label": r["label"],
+            "self": r["id"] == self_id,
+            # leadership is only knowable about ourselves until the advisory
+            # lock lands; the single-leader assumption makes others False
+            "leader": instances.is_leader() if r["id"] == self_id else False,
+            "last_seen": r["last_seen"].timestamp() if r["last_seen"] else None,
+            "stale": age is None or age > _STALE_AFTER_S,
+            "reaches": json.loads(r["reaches"]) if r["reaches"] else {},
+            "cpu_pct": _r(r["cpu_pct"]), "mem_used_gb": _r(r["mem_used_gb"]),
+            "mem_total_gb": _r(r["mem_total_gb"]), "vram_used_gb": _r(r["vram_used_gb"]),
+            "vram_total_gb": _r(r["vram_total_gb"]), "disk_used_gb": _r(r["disk_used_gb"]),
+            "disk_total_gb": _r(r["disk_total_gb"]),
+        })
+    if not any(i["self"] for i in out):
+        # first minute of a fresh install: the sampler hasn't run yet
+        out.append({"id": self_id, "label": instances.label(),
+                    "self": True, "leader": instances.is_leader(),
+                    "last_seen": time.time(), "stale": False, "reaches": {}})
+    return {"instances": out}
+
+
+# ── resource history (phase 2) ────────────────────────────────────────────
+
+# window → (span, bucket) — sized so a chart gets ~60–100 points
+_HISTORY = {
+    "1h": (timedelta(hours=1), timedelta(minutes=1)),
+    "24h": (timedelta(hours=24), timedelta(minutes=15)),
+    "7d": (timedelta(days=7), timedelta(hours=2)),
+}
+
+
+@router.get("/api/v1/system/resources/history")
+async def resources_history(window: str = "24h", instance: str | None = None):
+    """Bucketed series from `resource_samples` for the sparklines. Averages
+    per date_bin bucket; gauges' totals ride along for scale."""
+    if window not in _HISTORY:
+        raise HTTPException(status_code=422,
+                            detail=f"window must be one of {list(_HISTORY)}")
+    span, bucket = _HISTORY[window]
+    inst = instance or await instances.ensure_id()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT date_bin($3, ts, to_timestamp(0)) AS bucket,
+                      round(avg(cpu_pct)::numeric, 1)      AS cpu_pct,
+                      round(avg(mem_used_gb)::numeric, 2)  AS mem_used_gb,
+                      max(mem_total_gb)                    AS mem_total_gb,
+                      round(avg(vram_used_gb)::numeric, 2) AS vram_used_gb,
+                      max(vram_total_gb)                   AS vram_total_gb,
+                      round(avg(gpu_pct)::numeric, 1)      AS gpu_pct,
+                      max(gpu_temp_c)                      AS gpu_temp_c,
+                      round(avg(disk_used_gb)::numeric, 1) AS disk_used_gb,
+                      max(disk_total_gb)                   AS disk_total_gb
+               FROM resource_samples
+               WHERE instance_id = $1 AND ts > now() - $2::interval
+               GROUP BY bucket ORDER BY bucket""",
+            inst, span, bucket)
+    return {
+        "window": window,
+        "instance": inst,
+        "bucket_secs": int(bucket.total_seconds()),
+        "points": [{
+            "ts": r["bucket"].timestamp(),
+            "cpu_pct": float(r["cpu_pct"]) if r["cpu_pct"] is not None else None,
+            "mem_used_gb": float(r["mem_used_gb"]) if r["mem_used_gb"] is not None else None,
+            "mem_total_gb": round(r["mem_total_gb"], 1) if r["mem_total_gb"] is not None else None,
+            "vram_used_gb": float(r["vram_used_gb"]) if r["vram_used_gb"] is not None else None,
+            "vram_total_gb": round(r["vram_total_gb"], 1) if r["vram_total_gb"] is not None else None,
+            "gpu_pct": float(r["gpu_pct"]) if r["gpu_pct"] is not None else None,
+            "gpu_temp_c": round(r["gpu_temp_c"], 1) if r["gpu_temp_c"] is not None else None,
+            "disk_used_gb": float(r["disk_used_gb"]) if r["disk_used_gb"] is not None else None,
+            "disk_total_gb": round(r["disk_total_gb"], 1) if r["disk_total_gb"] is not None else None,
+        } for r in rows],
+    }
 
 
 # ── turn / cost rollups over the ledger ───────────────────────────────────
@@ -80,10 +176,11 @@ def _price(model: str | None) -> tuple[float, float] | None:
 
 
 @router.get("/api/v1/observability/summary")
-async def observability_summary(window: str = "24h"):
+async def observability_summary(window: str = "24h", instance: str | None = None):
     """24h-style rollups: turn count, error rate, latency percentiles, token
     totals + estimated cost by model, source breakdown. Aggregates
-    turn_traces/turn_spans — the ledger IS the cost substrate."""
+    turn_traces/turn_spans — the ledger IS the cost substrate. `instance`
+    narrows to the turns one machine served (traces are stamped at flush)."""
     if window not in _WINDOWS:
         raise HTTPException(status_code=422, detail=f"window must be one of {list(_WINDOWS)}")
     interval = _WINDOWS[window]
@@ -97,11 +194,13 @@ async def observability_summary(window: str = "24h"):
                       percentile_cont(0.95) WITHIN GROUP (
                           ORDER BY extract(epoch FROM finished_at - started_at)) AS p95
                FROM turn_traces
-               WHERE started_at > now() - $1::interval""", interval)
+               WHERE started_at > now() - $1::interval
+                 AND ($2::text IS NULL OR instance_id = $2)""", interval, instance)
         src_rows = await conn.fetch(
             """SELECT source, count(*) AS n FROM turn_traces
                WHERE started_at > now() - $1::interval
-               GROUP BY source""", interval)
+                 AND ($2::text IS NULL OR instance_id = $2)
+               GROUP BY source""", interval, instance)
         model_rows = await conn.fetch(
             """SELECT s.name AS model,
                       count(DISTINCT s.trace_id) AS turns,
@@ -111,7 +210,8 @@ async def observability_summary(window: str = "24h"):
                FROM turn_spans s JOIN turn_traces t ON t.id = s.trace_id
                WHERE s.kind = 'llm_call'
                  AND t.started_at > now() - $1::interval
-               GROUP BY s.name""", interval)
+                 AND ($2::text IS NULL OR t.instance_id = $2)
+               GROUP BY s.name""", interval, instance)
 
     by_model, total_prompt, total_completion, total_cost, partial = [], 0, 0, 0.0, False
     for r in model_rows:

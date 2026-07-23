@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  getObservabilitySummary, getSystemHealth, getSystemResources,
-  ObservabilitySummary, ServiceHealth, SystemResources,
+  getObservabilitySummary, getResourceHistory, getSystemFleet,
+  getSystemHealth, getSystemResources,
+  FleetInstance, HistoryPoint, ObservabilitySummary, ResourceHistory,
+  ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
 import { CardsSkeleton } from './ui';
@@ -13,6 +15,8 @@ import { CardsSkeleton } from './ui';
 
 const POLL_MS = 4000;
 const WINDOWS = ['1h', '6h', '24h', '7d'] as const;
+const HIST_WINDOWS = ['1h', '24h', '7d'] as const;
+type HistWindow = (typeof HIST_WINDOWS)[number];
 
 function pct(used: number | null, total: number | null): number | null {
   if (used == null || total == null || total <= 0) return null;
@@ -50,6 +54,61 @@ function StatTile({ label, value, tone }: { label: string; value: string; tone?:
   );
 }
 
+function agoTs(ts: number | null): string {
+  if (!ts) return '—';
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+/** One metric's history as a small SVG line. Scale runs 0 → `max` when the
+ *  metric has a known ceiling (RAM/VRAM/disk totals, CPU 100%), so the line's
+ *  height reads as headroom; null points break the line into segments. */
+function Spark({ label, detail, points, max }: {
+  label: string; detail: string;
+  points: { t: number; v: number | null }[]; max: number | null;
+}) {
+  const W = 160, H = 36;
+  const vals = points.map(p => p.v).filter((v): v is number => v != null);
+  const hi = max ?? (vals.length ? Math.max(...vals) * 1.1 : 1);
+  const t0 = points[0]?.t ?? 0;
+  const t1 = points[points.length - 1]?.t ?? t0 + 1;
+  const x = (t: number) => ((t - t0) / Math.max(1, t1 - t0)) * W;
+  const y = (v: number) => H - 2 - (v / (hi || 1)) * (H - 6);
+  const segments: string[] = [];
+  let cur: string[] = [];
+  for (const p of points) {
+    if (p.v == null) {
+      if (cur.length) segments.push(cur.join(' '));
+      cur = [];
+    } else {
+      cur.push(`${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`);
+    }
+  }
+  if (cur.length) segments.push(cur.join(' '));
+  return (
+    <div>
+      <div className="flex justify-between text-[11px] mb-0.5">
+        <span className="text-stone-400">{label}</span>
+        <span className="text-stone-300 font-mono">{detail}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+        className="w-full h-9 rounded bg-stone-800/40 text-teal-400" aria-hidden>
+        {segments.map((pts, i) => (
+          <polyline key={i} points={pts} fill="none" stroke="currentColor"
+            strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        ))}
+        {vals.length === 1 && (
+          <circle cx={x(points.find(p => p.v != null)!.t)} cy={y(vals[0])}
+            r="2" fill="currentColor" />
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function HealthChip({ s }: { s: ServiceHealth }) {
   const muted = s.optional && !s.ok;
   const dot = s.ok ? 'bg-emerald-500' : muted ? 'bg-stone-600' : 'bg-red-500';
@@ -71,6 +130,9 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<ServiceHealth[] | null>(null);
   const [summary, setSummary] = useState<ObservabilitySummary | null>(null);
   const [window, setWindow] = useState<(typeof WINDOWS)[number]>('24h');
+  const [hist, setHist] = useState<ResourceHistory | null>(null);
+  const [histWin, setHistWin] = useState<HistWindow>('24h');
+  const [fleet, setFleet] = useState<FleetInstance[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const live = useRef(true);
 
@@ -93,6 +155,25 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     getObservabilitySummary(window).then(setSummary).catch(e => setErr(String(e)));
   }, [window]);
+
+  // history: samples land ~1/min, so refresh slowly; refetch on window change
+  useEffect(() => {
+    let on = true;
+    const load = () => getResourceHistory(histWin)
+      .then(h => { if (on) setHist(h); }).catch(() => {});
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { on = false; clearInterval(id); };
+  }, [histWin]);
+
+  useEffect(() => {
+    let on = true;
+    const load = () => getSystemFleet()
+      .then(f => { if (on) setFleet(f.instances); }).catch(() => {});
+    load();
+    const id = setInterval(load, 10_000);
+    return () => { on = false; clearInterval(id); };
+  }, []);
 
   const inst = res?.instance;
   const gpus = res?.gpu?.gpus ?? [];
@@ -146,6 +227,51 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
+          {/* Fleet — every instance writing into this DB */}
+          {fleet && fleet.length > 0 && (
+            <section>
+              <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Fleet</h3>
+              <div className="rounded-lg border border-stone-700/70 overflow-hidden">
+                <table className="w-full text-[11px]">
+                  <thead className="text-stone-500 bg-stone-800/40">
+                    <tr>
+                      <th className="text-left font-normal px-3 py-1.5">instance</th>
+                      <th className="text-left font-normal px-3 py-1.5">last sample</th>
+                      <th className="text-right font-normal px-3 py-1.5">cpu</th>
+                      <th className="text-right font-normal px-3 py-1.5">mem</th>
+                      <th className="text-right font-normal px-3 py-1.5">vram</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-stone-300">
+                    {fleet.map(i => (
+                      <tr key={i.id} className="border-t border-stone-800">
+                        <td className="px-3 py-1">
+                          <span className="text-stone-200">{i.label ?? i.id}</span>
+                          {i.self && <span className="text-stone-600"> · this one</span>}
+                          {i.leader && (
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded bg-teal-900/50 border border-teal-800 text-teal-300">leader</span>
+                          )}
+                        </td>
+                        <td className={`px-3 py-1 font-mono ${i.stale ? 'text-red-400' : 'text-stone-400'}`}>
+                          {i.stale ? `stale · ${agoTs(i.last_seen)}` : agoTs(i.last_seen)}
+                        </td>
+                        <td className="px-3 py-1 text-right font-mono">
+                          {i.cpu_pct != null ? `${i.cpu_pct}%` : '—'}
+                        </td>
+                        <td className="px-3 py-1 text-right font-mono">
+                          {i.mem_used_gb != null ? `${i.mem_used_gb} / ${i.mem_total_gb} GB` : '—'}
+                        </td>
+                        <td className="px-3 py-1 text-right font-mono">
+                          {i.vram_used_gb != null ? `${i.vram_used_gb} / ${i.vram_total_gb} GB` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
           {/* Live resources */}
           <section>
             <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Resources</h3>
@@ -176,6 +302,56 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
                 )}
               </div>
             )}
+          </section>
+
+          {/* Resource history — sparklines over the per-minute samples */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs uppercase tracking-wide text-stone-500">History</h3>
+              <div className="flex gap-1 text-[11px]">
+                {HIST_WINDOWS.map(w => (
+                  <button key={w} onClick={() => setHistWin(w)}
+                    className={`px-2 py-0.5 rounded ${w === histWin ? 'bg-teal-700/50 text-teal-200' : 'text-stone-500 hover:text-stone-300'}`}>
+                    {w}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {!hist ? (
+              <CardsSkeleton n={1} />
+            ) : hist.points.length < 2 ? (
+              <div className="text-xs text-stone-500">
+                Collecting — one sample a minute; the first line appears within
+                a couple of minutes.
+              </div>
+            ) : (() => {
+              const hp = hist.points;
+              const series = (k: keyof HistoryPoint) =>
+                hp.map(p => ({ t: p.ts, v: p[k] as number | null }));
+              const last = (k: keyof HistoryPoint): number | null => {
+                for (let i = hp.length - 1; i >= 0; i--) {
+                  const v = hp[i][k];
+                  if (v != null) return v as number;
+                }
+                return null;
+              };
+              const memT = last('mem_total_gb'), vramT = last('vram_total_gb');
+              const diskT = last('disk_total_gb');
+              return (
+                <div className="grid md:grid-cols-2 gap-x-6 gap-y-3">
+                  <Spark label="CPU" points={series('cpu_pct')} max={100}
+                    detail={last('cpu_pct') != null ? `${last('cpu_pct')}%` : '—'} />
+                  <Spark label="Memory" points={series('mem_used_gb')} max={memT}
+                    detail={last('mem_used_gb') != null ? `${last('mem_used_gb')} / ${memT} GB` : '—'} />
+                  {vramT != null && (
+                    <Spark label="VRAM" points={series('vram_used_gb')} max={vramT}
+                      detail={`${last('vram_used_gb') ?? '—'} / ${vramT} GB`} />
+                  )}
+                  <Spark label="Disk" points={series('disk_used_gb')} max={diskT}
+                    detail={last('disk_used_gb') != null ? `${last('disk_used_gb')} / ${diskT} GB` : '—'} />
+                </div>
+              );
+            })()}
           </section>
 
           {/* Containers */}
