@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Brain } from './pages/Brain';
+import { BrowserRouter } from 'react-router-dom';
+import { AppShell } from './shell/AppShell';
 import { checkAuth, setAuthToken } from './api';
 
 /** Token gate — shown only when the backend has NOVA_AUTH_TOKEN set and we
@@ -67,5 +68,9 @@ export default function App() {
     );
   }
 
-  return <Brain />;
+  return (
+    <BrowserRouter>
+      <AppShell />
+    </BrowserRouter>
+  );
 }

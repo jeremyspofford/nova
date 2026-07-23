@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { deleteMemoryItem, getBrainGraph, getMemoryItem, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
-import { SettingsOverlay } from '../components/SettingsOverlay';
-import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
-import { IngestionActivity } from '../components/IngestionPanel';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 import { tagColor } from '../brain/systems';
 import { displayName } from '../names';
@@ -62,11 +60,17 @@ const PLATFORM_CHIPS = ['agent', 'tool', 'automation', 'rule'];
 
 export function Brain() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // the shell's content area — canvas sizing measures this, not the window,
+  // so the rail (and its expand/collapse) is accounted for automatically
+  const rootRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<RendererHandle | null>(null);
   const [detail, setDetail] = useState<MemoryItem | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [observabilityOpen, setObservabilityOpen] = useState(false);
   const [prefs, setPrefs] = useState<BrainPrefs>(DEFAULT_PREFS);
+  const navigate = useNavigate();
+  // routed Settings/Library stand in for the old settingsOpen state — the
+  // chat panel refetches its model list when either closes
+  const { pathname } = useLocation();
+  const settingsRouteOpen = pathname.startsWith('/settings') || pathname.startsWith('/library');
   // latest graph as state — the Atlas, the chip, and the legend render from it
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
     { nodes: [], edges: [] });
@@ -80,21 +84,38 @@ export function Brain() {
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
-  // small screens: chat IS the app, full-width, brain one tap away
+  // small screens: chat IS the app (the /chat tab), the canvas one tab away
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
-  const [mobileChat, setMobileChat] = useState(true);
+  const mobileChat = pathname === '/chat';
   const mobileRef = useRef(isMobile);
 
   const [chatWidth, setChatWidth] = useState(() =>
     parseInt(localStorage.getItem('nova.chat.width') ?? '384'));
   const chatWidthRef = useRef(chatWidth);
 
+  // current canvas-fit closure from the renderer effect, exposed so chat
+  // toggles/resizes outside that effect can re-fit without recreating it
+  const sizeRef = useRef<(() => void) | null>(null);
+
   const changeChatWidth = useCallback((w: number) => {
     setChatWidth(w);
     chatWidthRef.current = w;
     localStorage.setItem('nova.chat.width', String(w));
-    rendererRef.current?.resize(window.innerWidth - w, window.innerHeight);
+    sizeRef.current?.();
   }, []);
+
+  // desktop chat visibility — the rail's chat toggle drives this via event
+  const [chatOpen, setChatOpen] = useState(() =>
+    localStorage.getItem('nova.chat.open') !== '0');
+  const chatOpenRef = useRef(chatOpen);
+  chatOpenRef.current = chatOpen;
+  useEffect(() => {
+    const onToggle = (e: Event) =>
+      setChatOpen(Boolean((e as CustomEvent).detail?.open));
+    window.addEventListener('nova:toggle-chat', onToggle);
+    return () => window.removeEventListener('nova:toggle-chat', onToggle);
+  }, []);
+  useEffect(() => { sizeRef.current?.(); }, [chatOpen]);
 
   // the Atlas is drag-resizable like the chat (longer titles fit when wider);
   // `left-4` places it 16px from the left edge — that offset feeds leftInset
@@ -241,12 +262,18 @@ export function Brain() {
     const size = () => {
       mobileRef.current = window.innerWidth < 768;
       setIsMobile(mobileRef.current);
+      const box = rootRef.current;
       renderer.resize(
-        window.innerWidth - (mobileRef.current ? 0 : chatWidthRef.current),
-        window.innerHeight);
+        (box?.clientWidth ?? window.innerWidth) -
+          (mobileRef.current || !chatOpenRef.current ? 0 : chatWidthRef.current),
+        box?.clientHeight ?? window.innerHeight);
     };
     size();
+    sizeRef.current = size;
     window.addEventListener('resize', size);
+    // rail expand/collapse changes the content area with no window resize
+    const ro = new ResizeObserver(size);
+    if (rootRef.current) ro.observe(rootRef.current);
 
     // live-activity bridge (the brain-activity item's contract): anything
     // dispatching nova:chat-activity reaches the active renderer here
@@ -283,21 +310,15 @@ export function Brain() {
     return () => {
       cancelled = true;
       reloadRef.current = null;
+      sizeRef.current = null;
       clearInterval(interval);
+      ro.disconnect();
       window.removeEventListener('resize', size);
       window.removeEventListener('nova:chat-activity', onActivity);
       renderer.destroy();
       rendererRef.current = null;
     };
   }, [prefs.view, prefs.showPlatform, openDetail]);
-
-  // the Settings → Observability link (and anything else) can open the board
-  // without threading props through overlays
-  useEffect(() => {
-    const open = () => { setSettingsOpen(false); setObservabilityOpen(true); };
-    window.addEventListener('nova:open-observability', open);
-    return () => window.removeEventListener('nova:open-observability', open);
-  }, []);
 
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
@@ -463,7 +484,7 @@ export function Brain() {
   );
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-stone-950">
+    <div ref={rootRef} className="absolute inset-0 overflow-hidden bg-stone-950">
       {/* keyed per renderer-recreate: a canvas that ever held a WebGL context
           can never hand out a 2d context again (and a force-lost WebGL context
           can't be revived) — every setup-effect run needs a fresh element */}
@@ -473,7 +494,11 @@ export function Brain() {
         className="absolute top-0 left-0"
       />
 
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+      {/* canvas chrome belongs to the canvas — on the phone chat tab it
+          would bleed over the chat header. top inset keeps it out from
+          under a notch/status bar (env() is 0 on desktop). */}
+      <div className={`absolute top-[calc(1rem_+_env(safe-area-inset-top))] left-4 z-10 items-center gap-2 ${
+        isMobile && mobileChat ? 'hidden' : 'flex'}`}>
         <div className={`px-1 py-1 rounded-lg bg-stone-900/80 backdrop-blur border text-xs font-mono flex items-center ${atlasOpen ? 'border-teal-700' : 'border-stone-700'}`}>
           {MEMORY_CHIPS
             .filter(t => t === 'topic' || (typeCounts[t] ?? 0) > 0)
@@ -519,31 +544,16 @@ export function Brain() {
         </button>
         <button
           onClick={() => rendererRef.current?.recenter?.()}
-          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
+          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
           title="Recenter the view"
           aria-label="Recenter"
         >
-          ⌖
-        </button>
-        <IngestionActivity />
-        <button
-          onClick={() => setObservabilityOpen(true)}
-          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
-          title="Observability — health, resources & cost"
-          aria-label="Observability"
-        >
+          {/* crosshair: legible at toolbar size, unlike the bare ⌖ glyph */}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M3 12h4l2 6 4-14 2 8h6" />
+            strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="6" />
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
           </svg>
-        </button>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 text-sm leading-none"
-          title="Settings, Automations, Rules & Agents"
-          aria-label="Settings"
-        >
-          ⚙
         </button>
       </div>
 
@@ -612,27 +622,14 @@ export function Brain() {
         </aside>
       )}
 
-      {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
-
-      {observabilityOpen && <ObservabilityOverlay onClose={() => setObservabilityOpen(false)} />}
-
-      {(!isMobile || mobileChat) && (
+      {((isMobile && mobileChat) || (!isMobile && chatOpen)) && (
         <ChatPanel
           width={isMobile ? window.innerWidth : chatWidth}
           onWidthChange={changeChatWidth}
           mobile={isMobile}
-          onShowBrain={() => setMobileChat(false)}
-          settingsOpen={settingsOpen}
+          onShowBrain={() => navigate('/')}
+          settingsOpen={settingsRouteOpen}
         />
-      )}
-      {isMobile && !mobileChat && (
-        <button
-          onClick={() => setMobileChat(true)}
-          className="absolute bottom-6 right-5 z-30 w-12 h-12 rounded-full bg-teal-700 hover:bg-teal-600 text-white text-xl shadow-2xl"
-          aria-label="Open chat"
-        >
-          💬
-        </button>
       )}
     </div>
   );

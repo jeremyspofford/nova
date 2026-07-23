@@ -28,10 +28,13 @@ In roadmap priority order:
 | [universe-view.md](universe-view.md) | phases 1–4 BUILT 2026-07-16 + interaction round 2026-07-17 (right-drag pan, click-focus/highlight, crisp label overlay, delete→black-hole, legend, Atlas explorer), live-verified at :5173 + :8080; awaiting Jeremy's review + Galaxy-retirement call | 3D celestial brain view built alongside Galaxy; replaces Galaxy when Jeremy signs off |
 | [guarded-actions-consent.md](guarded-actions-consent.md) | #29 (CRITICAL) — phase 1 BUILT 2026-07-20, uncommitted, awaiting Jeremy's review | Approve/Deny card + single-use consents validated at the tool layer; all seams verified (one caveat in the plan: organic main→guardian relay needs a re-probe in a cleaner conversation) |
 | [avatar-view.md](avatar-view.md) | #2 (entity view) — SHELVED 2026-07-19 after Jeremy reviewed the animation preview | phase 0 assets + pipeline DONE and preserved; the motion layer failed review (blink occlusion, mouth flicker — critique + resume notes at the top of the plan); do not build phase 1+ without a motion prototype Jeremy approves |
+| [ui-shell-refactor.md](ui-shell-refactor.md) | UI/UX review 2026-07-22; resolves #4 (mobile routes) | collapsible utility rail over the full-bleed canvas (routed panels + mobile bottom tabs; v1 = inspiration only, NO "Brain" destination — the canvas is the app), Settings/Library split, pop-in fix, phone-path nginx fix; **COMPLETE — all phases built, verified, phone pass accepted 2026-07-22; uncommitted**; follow-on (native app) in ROADMAP discussion backlog |
 
 Not planned here (deliberately):
-- **Mobile PWA routes (#4)** — roadmap says design WITH Jeremy after real
-  on-device usage; a spec written before that usage would be fiction.
+- ~~**Mobile PWA routes (#4)** — roadmap says design WITH Jeremy after real
+  on-device usage; a spec written before that usage would be fiction.~~ —
+  that usage happened (Jeremy's 2026-07-22 phone review);
+  [ui-shell-refactor.md](ui-shell-refactor.md) now covers #4.
 - **Chat activity in brain views (#7)** — already designed in ROADMAP.md
   (the `setActivity` contract); it's buildable from there. Note: voice.md
   phase 1 creates the audio-level hook it will consume.

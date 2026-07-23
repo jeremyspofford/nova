@@ -760,7 +760,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   return (
     <aside
       className="absolute top-0 right-0 bottom-0 bg-stone-900/95 backdrop-blur border-l border-stone-700 flex flex-col shadow-2xl"
-      style={{ width }}
+      // full-bleed phones: keep the header out from under the status bar
+      style={{ width, paddingTop: mobile ? 'env(safe-area-inset-top)' : undefined }}
     >
       {/* drag handle — widen/narrow the chat (desktop only) */}
       {!mobile && (

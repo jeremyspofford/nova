@@ -1349,6 +1349,17 @@ approve → test in staging → operator-test → promote to prod.**
 - **Catalog quick-add buttons** — per-row buttons in the model catalog to add →
   curated / install / assign-to-chat, instead of the manual create form.
 
+**Native mobile app** *(raised 2026-07-22, after the shell refactor's phone
+pass)* — Jeremy: the PWA is "usable-ish… decent enough for now", but "soon
+we'll want to work on creating actual android and/or ios app". Needs a
+planning pass when picked up: thin shell over the existing web app
+(Capacitor/Tauri-mobile — cheapest, reuses the PWA + one-origin :8080 path,
+adds real push notifications and an icon that doesn't die when Safari
+evicts the service worker) vs. true native (biggest lift; only worth it if
+we want on-device voice/wake-word or background sync the wrapper can't do).
+The nginx one-origin + token auth design already serves any wrapper
+unchanged.
+
 **Chat message UX (small tweaks).**
 - **Queue + interject while streaming** *(BEING IMPLEMENTED 2026-07-21)* — while
   waiting on Nova's reply, let the operator type and queue follow-up messages,

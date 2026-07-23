@@ -4,6 +4,7 @@ import {
   ObservabilitySummary, ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
+import { CardsSkeleton } from './ui';
 
 /** The Observability board (docs/plans/observability-board.md, phase 1) — a
  *  dedicated top-level panel: service health, live resource gauges for this
@@ -130,6 +131,11 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
+          {/* no-zeros rule: hold the whole board on a skeleton until the
+              first tick lands, instead of painting sparse placeholders */}
+          {!res && !err && <CardsSkeleton n={3} />}
+
+          {res && <>
           {/* Health / topology strip */}
           <section>
             <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Service health</h3>
@@ -222,6 +228,7 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
                 ))}
               </div>
             </div>
+            {!summary && <CardsSkeleton n={1} />}
             {summary && (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
@@ -274,6 +281,7 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
             )}
             <RecentTurns />
           </section>
+          </>}
         </div>
       </div>
     </div>
