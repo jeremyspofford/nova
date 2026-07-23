@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   streamChat, getActiveConversation, getAgents, getMessages, getModels,
   patchAgent, getPendingConsents, decideConsent, Activity, Consent,
@@ -7,6 +8,7 @@ import {
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { TurnInspector } from './TurnInspector';
+import { VoiceOverlay } from './VoiceOverlay';
 import { agentDisplayName, displayName } from '../names';
 import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
@@ -16,9 +18,15 @@ import type { WakeWord } from '../voice/wake';
 import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
 import { useAssistantName } from '../useAssistantName';
 
+/** An attachment as the message list shows it — preview only exists for
+ *  images picked this session (history rows come back name-only). */
+interface UiAttachment { kind: 'image' | 'text'; name: string; mime: string; preview?: string }
+/** A picked-but-not-yet-sent attachment; data = base64 (image) or file text. */
+interface PendingAttachment extends UiAttachment { data: string }
+
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
-      streaming?: boolean; trace?: TraceSummary }
+      streaming?: boolean; trace?: TraceSummary; attachments?: UiAttachment[] }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
   | { id: string; kind: 'error'; content: string }
   | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
@@ -48,8 +56,38 @@ function errText(err: unknown): string {
 let nextId = 0;
 const uid = () => `ui-${++nextId}`;
 
+// Camera shots are huge; vision models don't need them. Longest edge capped
+// at 1568px (the common provider sweet spot), re-encoded as JPEG.
+async function downscaleImage(f: File): Promise<{ data: string; mime: string; preview: string }> {
+  const url = URL.createObjectURL(f);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('unreadable image'));
+      i.src = url;
+    });
+    const scale = Math.min(1, 1568 / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    return { data: dataUrl.split(',')[1], mime: 'image/jpeg', preview: dataUrl };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// presence bridge for the mic: the orb (canvas + voice overlay) draws
+// "listening" while a capture is armed or recording
+const emitListening = (on: boolean) =>
+  window.dispatchEvent(new CustomEvent('nova:chat-activity',
+    { detail: { active: on, kind: 'listening' } }));
+
 function renderItem(item: Item, onInspect?: (traceId: string) => void,
-                    onConsent?: OnConsent) {
+                    onConsent?: OnConsent, mobile?: boolean) {
   if (item.kind === 'consent') {
     // an agent (via request_operator_confirmation) is asking the OPERATOR
     // to decide a guarded action — roadmap #29's card
@@ -136,14 +174,34 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
       </div>
     );
   }
+  // phones follow the mockup register: the user speaks in a quiet pill, the
+  // assistant answers as plain text on the dark ground — no bubble
+  const bubble = item.role === 'user'
+    ? (mobile ? 'bg-stone-800 text-stone-100 whitespace-pre-wrap rounded-2xl'
+              : 'bg-teal-700 text-white whitespace-pre-wrap rounded-lg')
+    : (mobile ? 'text-stone-100' : 'bg-stone-800 text-stone-100 rounded-lg');
   return (
     <div key={item.id} className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-      <div className="max-w-[85%] min-w-0 flex flex-col">
-        <div className={`break-words px-3 py-2 rounded-lg text-sm ${
-          item.role === 'user'
-            ? 'bg-teal-700 text-white whitespace-pre-wrap'
-            : 'bg-stone-800 text-stone-100'
-        }`}>
+      <div className={`${mobile && item.role === 'assistant' ? 'max-w-full' : 'max-w-[85%]'} min-w-0 flex flex-col`}>
+        {item.attachments && item.attachments.length > 0 && (
+          <div className={`flex flex-wrap gap-1.5 mb-1 ${item.role === 'user' ? 'justify-end' : ''}`}>
+            {item.attachments.map((a, i) => a.kind === 'image' && a.preview ? (
+              <img key={i} src={a.preview} alt={a.name}
+                className="max-h-40 max-w-[12rem] rounded-xl border border-stone-700 object-cover" />
+            ) : (
+              <span key={i} className="inline-flex items-center gap-1.5 text-[11px] bg-stone-800 border border-stone-700 rounded-full px-2.5 py-1 text-stone-300">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  {a.kind === 'image'
+                    ? <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></>
+                    : <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></>}
+                </svg>
+                <span className="truncate max-w-[10rem]">{a.name}</span>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className={`break-words px-3 py-2 text-sm ${bubble}`}>
           {item.streaming && !item.content ? (
             // waiting for the first token — bouncing "typing" dots
             <span className="flex items-center gap-1 py-1" aria-label="Nova is thinking">
@@ -183,7 +241,7 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
  *  reviewable without competing with the conversation; narration warnings
  *  stay visible (dimmed). Live activity renders inline as it happens. */
 function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
-                       onConsent?: OnConsent) {
+                       onConsent?: OnConsent, mobile?: boolean) {
   const blocks: React.ReactNode[] = [];
   let trace: Extract<Item, { kind: 'activity' }>[] = [];
   const flush = () => {
@@ -205,7 +263,7 @@ function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
       trace.push(item);
     } else {
       flush();
-      blocks.push(renderItem(item, onInspect, onConsent));
+      blocks.push(renderItem(item, onInspect, onConsent, mobile));
     }
   }
   flush();
@@ -251,6 +309,40 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const resizing = useRef(false);
+  const navigate = useNavigate();
+
+  // ── attachments: picked files waiting in the composer ──
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // phone chrome: the nav drawer and the full-screen voice mode
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const voiceOpenRef = useRef(false);
+
+  async function addFiles(list: FileList | File[] | null) {
+    if (!list) return;
+    for (const f of Array.from(list)) {
+      try {
+        if (f.type.startsWith('image/')) {
+          const { data, mime, preview } = await downscaleImage(f);
+          setPending(p => [...p, { kind: 'image', name: f.name || 'photo.jpg', mime, data, preview }]);
+        } else if (f.size <= 512 * 1024) {
+          const body = await f.text();
+          // real binaries decode to replacement chars — refuse them honestly
+          if (/�/.test(body.slice(0, 2000))) throw new Error('not a text file');
+          setPending(p => [...p, { kind: 'text', name: f.name, mime: f.type || 'text/plain', data: body }]);
+        } else {
+          throw new Error('too large (512 KB limit for files)');
+        }
+      } catch (err) {
+        setItems(prev => [...prev, { id: uid(), kind: 'error',
+          content: `Couldn't attach ${f.name}: ${errText(err)} — images and text files work.` }]);
+      }
+    }
+  }
 
   // grow the input vertically with its content, capped at ~8 lines
   useEffect(() => {
@@ -359,23 +451,27 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           setTimeout(async () => {
             await v.disarm();
             tapVad.current = null;
+            emitListening(false);
             await submitUtterance(wav);
             await afterSubmit?.(true);
           }, 0);
         },
       }, { silenceMs: vadSilenceMs.current });
       setMicState(s => (s === 'arming' ? 'armed' : s));
+      emitListening(true);
       if (armTimeoutMs) {
         armTimer = window.setTimeout(async () => {
           if (tapVad.current !== v) return;      // already captured/cancelled
           await v.disarm();
           tapVad.current = null;
+          emitListening(false);
           await afterSubmit?.(false);             // back to wake listening
         }, armTimeoutMs);
       }
     } catch (err) {
       tapVad.current = null;
       setMicState('idle');
+      emitListening(false);
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `Voice detector unavailable: ${errText(err)}` }]);
       await afterSubmit?.(false);
@@ -389,6 +485,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       await tapVad.current?.disarm();
       tapVad.current = null;
       setMicState('idle');
+      emitListening(false);
       return;
     }
     speaker.enable();               // reserve the audio context in the gesture
@@ -448,6 +545,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       await wakeRef.current?.stop();
       wakeRef.current = null;
       setMicState('idle');
+      emitListening(false);
       return;
     }
     speaker.enable();
@@ -469,6 +567,54 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     }
   }
 
+  // ── voice mode: the full-screen overlay (phone mic button) ──
+  // A continuous conversation loop with no wake phrase: capture → transcribe
+  // → send (spoken reply) → once she finishes speaking, listen again. Closing
+  // the overlay tears the loop down; the mic button inside it mutes/unmutes.
+  async function voiceLoopDone(_captured: boolean) {
+    if (!voiceOpenRef.current) { emitListening(false); return; }
+    while (speaker.speaking) {                     // let the reply finish
+      await new Promise(r => setTimeout(r, 200));
+      if (!voiceOpenRef.current) return;
+    }
+    if (!voiceOpenRef.current || tapVad.current) return;   // muted or re-armed
+    await startVadCapture(voiceLoopDone);
+  }
+
+  async function openVoice() {
+    speaker.enable();               // inside the tap gesture — autoplay policy
+    if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    setVoiceOpen(true);
+    voiceOpenRef.current = true;
+    // take the mic over from any other capture mode
+    await tapVad.current?.disarm();
+    tapVad.current = null;
+    await wakeRef.current?.stop();
+    await startVadCapture(voiceLoopDone);
+  }
+
+  async function closeVoice() {
+    voiceOpenRef.current = false;
+    setVoiceOpen(false);
+    await tapVad.current?.disarm();
+    tapVad.current = null;
+    speaker.cancel();
+    setMicState('idle');
+    emitListening(false);
+    if (wakeOn.current) void resumeWake();   // hand the mic back to hands-free
+  }
+
+  async function voiceMicToggle() {
+    if (micState === 'armed' || micState === 'capturing') {   // mute
+      await tapVad.current?.disarm();
+      tapVad.current = null;
+      setMicState('idle');
+      emitListening(false);
+    } else if (micState === 'idle') {                          // unmute
+      await startVadCapture(voiceLoopDone);
+    }
+  }
+
   // push-to-talk: hold the mic, speak, release → transcribe → voice turn.
   async function pttStart(e: React.PointerEvent) {
     if (busy || micState !== 'idle') return;
@@ -479,6 +625,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     try {
       await mic.current.start();
       setMicState('recording');
+      emitListening(true);
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `Microphone unavailable: ${errText(err)}` }]);
@@ -486,6 +633,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   }
 
   async function pttEnd() {
+    emitListening(false);
     if (micState !== 'recording') { mic.current.cancel(); return; }
     try {
       const blob = await mic.current.stop();
@@ -626,7 +774,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               },
             }
           : { id: m.id, kind: 'msg', role: m.role, content: m.content,
-              trace: m.trace ?? undefined }));
+              trace: m.trace ?? undefined,
+              attachments: m.attachments?.map(a => ({ kind: a.kind, name: a.name, mime: a.mime })) }));
         void loadConsents(conv.id);
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
@@ -644,8 +793,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   async function send(opts?: { text?: string; source?: string; speak?: boolean }) {
     const message = (opts?.text ?? input).trim();
-    if (!message || busy) return;
-    if (opts?.text === undefined) setInput('');   // voice passes its own text
+    // composer sends carry the picked attachments; voice/queued turns don't
+    const atts = opts?.text === undefined ? pending : [];
+    if ((!message && atts.length === 0) || busy) return;
+    if (opts?.text === undefined) { setInput(''); setPending([]); }
     setBusy(true);
     const ac = new AbortController();   // interject aborts this turn
     abortRef.current = ac;
@@ -654,7 +805,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     // voice turns speak the reply even if the mute toggle is off
     const speakThisTurn = opts?.speak ?? speech;
 
-    setItems(prev => [...prev, { id: uid(), kind: 'msg', role: 'user', content: message }]);
+    setItems(prev => [...prev, { id: uid(), kind: 'msg', role: 'user', content: message,
+      attachments: atts.length
+        ? atts.map(({ kind, name, mime, preview }) => ({ kind, name, mime, preview }))
+        : undefined }]);
     const assistantId = uid();
     setItems(prev => [...prev, { id: assistantId, kind: 'msg', role: 'assistant', content: '', streaming: true }]);
 
@@ -674,7 +828,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     let liveDispatches = 0;
 
     try {
-      for await (const event of streamChat(message, conversationId ?? undefined, opts?.source, ac.signal)) {
+      for await (const event of streamChat(message, conversationId ?? undefined, opts?.source, ac.signal,
+                                           atts.map(({ kind, name, mime, data }) => ({ kind, name, mime, data })))) {
         if (event.type === 'meta') {
           liveTraceId = event.traceId ?? null;
         } else if (event.type === 'text') {
@@ -740,10 +895,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // fires automatically when the current reply finishes.
   function submitComposer() {
     const msg = input.trim();
-    if (!msg) return;
+    if (!msg && pending.length === 0) return;
     if (busy) {
-      setQueue(q => [...q, msg]);
-      setInput('');
+      // text queues; attachments wait in the composer for the next idle send
+      if (msg) { setQueue(q => [...q, msg]); setInput(''); }
     } else {
       void send();
     }
@@ -794,7 +949,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   return (
     <aside
-      className="absolute top-0 right-0 bottom-0 bg-stone-900/95 backdrop-blur border-l border-stone-700 flex flex-col shadow-2xl"
+      className={`absolute top-0 right-0 bottom-0 flex flex-col ${
+        mobile ? 'bg-stone-950'
+               : 'bg-stone-900/95 backdrop-blur border-l border-stone-700 shadow-2xl'}`}
       // full-bleed phones: keep the header out from under the status bar
       style={{ width, paddingTop: mobile ? 'env(safe-area-inset-top)' : undefined }}
     >
@@ -807,19 +964,49 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           title="Drag to resize (double-click to reset)"
         />
       )}
+      {/* phones: the mockup register — a floating hamburger, the name, the
+          bell; everything else (model, speech) lives in the drawer */}
+      {mobile && (
+        <header className="px-3 py-2 flex items-center gap-2.5">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Menu"
+            title="Menu"
+            className="w-9 h-9 shrink-0 rounded-full bg-stone-900/80 border border-stone-800 flex items-center justify-center text-stone-300"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 8h16M4 14h10" />
+            </svg>
+          </button>
+          <span className="text-stone-200 font-medium truncate">{assistantName}</span>
+          <span className="flex-1" />
+          <button
+            onClick={toggleInbox}
+            className={`relative shrink-0 w-9 h-9 rounded-full border flex items-center justify-center ${
+              inboxOpen ? 'border-teal-700 text-teal-400 bg-stone-900/80'
+              : 'border-stone-800 bg-stone-900/80 text-stone-400'}`}
+            title="Recommendations inbox"
+            aria-label="Recommendations inbox"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            {recs.length > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-stone-950 text-[9px] font-semibold leading-[14px] text-center">
+                {recs.length}
+              </span>
+            )}
+          </button>
+        </header>
+      )}
+
+      {!mobile && (
       <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 shrink-0">
           <span className="text-teal-400 font-semibold">{assistantName}</span>
-          {mobile && onShowBrain && (
-            <button
-              onClick={onShowBrain}
-              className="text-base leading-none px-1.5 py-0.5 rounded border border-stone-700 text-stone-400"
-              title="Show the brain"
-              aria-label="Show the brain"
-            >
-              🧠
-            </button>
-          )}
         </span>
         <div className="flex items-center gap-2 min-w-0">
           <button
@@ -887,6 +1074,86 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           <span className="text-xs text-stone-500 shrink-0">{busy ? 'thinking…' : 'ready'}</span>
         </div>
       </header>
+      )}
+
+      {/* phone nav drawer — the surfaces the tab bar used to hold, plus the
+          model picker and speech toggle the desktop header shows */}
+      {mobile && drawerOpen && (
+        <div className="fixed inset-0 z-50" onClick={() => setDrawerOpen(false)}>
+          <div className="absolute inset-0 bg-black/60" />
+          <nav
+            className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-stone-950 border-r border-stone-800 flex flex-col"
+            style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-4 pb-3 flex items-center justify-between">
+              <span className="text-teal-400 font-semibold">{assistantName}</span>
+              <button
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Close menu"
+                className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
+              >
+                ×
+              </button>
+            </div>
+            <button
+              onClick={() => { setDrawerOpen(false); onShowBrain?.(); }}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
+            >
+              <span className="w-[18px] h-[18px] shrink-0 rounded-full bg-gradient-to-br from-amber-100 via-amber-300 to-teal-400" />
+              {assistantName}'s universe
+            </button>
+            <button
+              onClick={() => { setDrawerOpen(false); navigate('/activity'); }}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+              </svg>
+              Activity
+            </button>
+            <button
+              onClick={() => { setDrawerOpen(false); navigate('/settings'); }}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1" />
+              </svg>
+              Settings
+            </button>
+            <div className="mt-4 mx-4 pt-4 border-t border-stone-800 space-y-3">
+              {mainAgent && models.length > 0 && (
+                <label className="block text-xs text-stone-500">
+                  Model
+                  <select
+                    value={mainAgent.model}
+                    onChange={e => changeModel(e.target.value)}
+                    className="mt-1 w-full bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-300"
+                  >
+                    {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {!models.some(m => m.id === mainAgent.model) && (
+                      <option value={mainAgent.model}>{mainAgent.model}</option>
+                    )}
+                  </select>
+                </label>
+              )}
+              <div className="flex items-center justify-between text-sm text-stone-300">
+                Speak replies
+                <button
+                  onClick={toggleSpeech}
+                  className={`px-2.5 py-1 rounded-full border text-xs ${
+                    speech ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-500'}`}
+                >
+                  {speech ? 'On' : 'Off'}
+                </button>
+              </div>
+            </div>
+          </nav>
+        </div>
+      )}
 
       {inboxOpen && (() => {
         const agoStr = (iso: string | null) => {
@@ -1004,7 +1271,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           </div>
         )}
 
-        {renderGrouped(items, setInspectTraceId, handleConsent)}
+        {renderGrouped(items, setInspectTraceId, handleConsent, mobile)}
         <div ref={endRef} />
       </div>
 
@@ -1024,10 +1291,170 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           ))}
         </div>
       )}
+      {pending.length > 0 && (
+        <div className={`px-3 pt-2 flex flex-wrap items-center gap-2 ${mobile ? '' : 'border-t border-stone-800'}`}>
+          {pending.map((a, i) => (
+            <span key={i} className="relative">
+              {a.kind === 'image' && a.preview ? (
+                <img src={a.preview} alt={a.name}
+                  className="h-14 w-14 object-cover rounded-xl border border-stone-700" />
+              ) : (
+                <span className="inline-flex items-center max-w-[12rem] text-[11px] bg-stone-800 border border-stone-700 rounded-full pl-2.5 pr-3 py-1.5 text-stone-300">
+                  <span className="truncate">{a.name}</span>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setPending(p => p.filter((_, j) => j !== i))}
+                aria-label={`Remove ${a.name}`}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-stone-700 border border-stone-600 text-stone-200 text-xs leading-none flex items-center justify-center"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* the pickers behind the + button; value reset so re-picking the same
+          file fires change again */}
+      <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden
+        onChange={e => { const fs = e.target.files ? Array.from(e.target.files) : null;
+                         e.target.value = ''; void addFiles(fs); }} />
+      <input ref={photoInputRef} type="file" accept="image/*" multiple hidden
+        onChange={e => { const fs = e.target.files ? Array.from(e.target.files) : null;
+                         e.target.value = ''; void addFiles(fs); }} />
+      <input ref={fileInputRef} type="file" multiple hidden
+        onChange={e => { const fs = e.target.files ? Array.from(e.target.files) : null;
+                         e.target.value = ''; void addFiles(fs); }} />
+
+      {mobile ? (
+        // the mockup composer: one rounded pill — +, the field, then the mic
+        // (voice mode) or, once there's something to send, the send arrow
+        <form
+          onSubmit={e => { e.preventDefault(); submitComposer(); }}
+          className="relative px-3 pt-1.5"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        >
+          {attachOpen && (
+            <div className="absolute bottom-full left-3 mb-1 z-30 min-w-[11rem] rounded-2xl border border-stone-700 bg-stone-900/95 backdrop-blur shadow-2xl overflow-hidden">
+              <button type="button"
+                onClick={() => { setAttachOpen(false); cameraInputRef.current?.click(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-stone-200 hover:bg-stone-800 text-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+                Camera
+              </button>
+              <button type="button"
+                onClick={() => { setAttachOpen(false); photoInputRef.current?.click(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-stone-200 hover:bg-stone-800 text-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+                Photos
+              </button>
+              <button type="button"
+                onClick={() => { setAttachOpen(false); fileInputRef.current?.click(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-stone-200 hover:bg-stone-800 text-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                </svg>
+                Files
+              </button>
+            </div>
+          )}
+          <div className="flex items-end gap-1 bg-stone-900 border border-stone-800 rounded-[26px] p-1.5">
+            <button
+              type="button"
+              onClick={() => setAttachOpen(o => !o)}
+              aria-label="Add photos or files"
+              title="Add photos or files"
+              className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+                attachOpen ? 'bg-stone-700 text-stone-100' : 'text-stone-300'}`}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submitComposer();
+                }
+              }}
+              placeholder={busy ? 'Queue a follow-up…' : `Ask ${assistantName}`}
+              className="flex-1 min-w-0 resize-none overflow-y-auto nice-scroll bg-transparent text-stone-100 placeholder-stone-500 px-1.5 py-2 text-[15px] focus:outline-none"
+            />
+            {busy && !!input.trim() && (
+              <button
+                type="button"
+                onClick={interject}
+                title={`Interrupt ${assistantName} and send this now`}
+                className="shrink-0 h-9 px-3 rounded-full bg-amber-700 text-white text-xs"
+              >
+                Now
+              </button>
+            )}
+            {input.trim() || pending.length > 0 ? (
+              <button
+                type="submit"
+                aria-label={busy ? 'Queue' : 'Send'}
+                title={busy ? `${assistantName} is replying — this queues and sends when she finishes` : 'Send'}
+                className="shrink-0 w-9 h-9 rounded-full bg-teal-600 text-white flex items-center justify-center"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void openVoice()}
+                aria-label={`Talk with ${assistantName}`}
+                title={`Talk with ${assistantName}`}
+                className="shrink-0 w-9 h-9 rounded-full bg-stone-100 text-stone-900 flex items-center justify-center"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
+                  <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </form>
+      ) : (
       <form
         onSubmit={e => { e.preventDefault(); submitComposer(); }}
         className="border-t border-stone-700 p-3 flex items-end gap-2"
       >
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Attach images or files"
+          title="Attach images or files"
+          className="px-2.5 py-2 rounded text-sm bg-stone-700 hover:bg-stone-600 text-stone-200"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+        </button>
         <textarea
           ref={inputRef}
           rows={1}
@@ -1087,13 +1514,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         )}
         <button
           type="submit"
-          disabled={!input.trim()}
+          disabled={!input.trim() && pending.length === 0}
           title={busy ? 'Nova is replying — this queues and sends when she finishes' : 'Send'}
           className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:bg-stone-700 disabled:text-stone-500 text-white rounded text-sm transition"
         >
           {busy ? 'Queue' : 'Send'}
         </button>
       </form>
+      )}
+
+      {voiceOpen && (
+        <VoiceOverlay
+          assistantName={assistantName}
+          micState={micState}
+          busy={busy}
+          onMicToggle={() => void voiceMicToggle()}
+          onClose={() => void closeVoice()}
+          onSendText={t => void send({ text: t, source: 'voice', speak: true })}
+        />
+      )}
     </aside>
   );
 }

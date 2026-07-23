@@ -96,11 +96,14 @@ export type ChatEvent =
   | { type: 'done' };
 
 export async function* streamChat(message: string, conversationId?: string,
-                                  source?: string, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
+                                  source?: string, signal?: AbortSignal,
+                                  attachments?: { kind: string; name: string; mime: string; data: string }[],
+                                  ): AsyncGenerator<ChatEvent> {
   const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, conversation_id: conversationId, source }),
+    body: JSON.stringify({ message, conversation_id: conversationId, source,
+                           ...(attachments?.length ? { attachments } : {}) }),
     signal,
   });
 
@@ -169,6 +172,15 @@ export interface TraceSummary {
   dispatches: number;
 }
 
+/** An attachment on a chat turn. Outgoing: data = base64 (image) or the
+ *  file's text. History rows carry only {kind, name, mime} — no binary. */
+export interface ChatAttachment {
+  kind: 'image' | 'text';
+  name: string;
+  mime: string;
+  data?: string;
+}
+
 export interface StoredMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -176,6 +188,7 @@ export interface StoredMessage {
   created_at: string;
   tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
   trace?: TraceSummary | null;
+  attachments?: ChatAttachment[];
 }
 
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {

@@ -6,17 +6,19 @@ import { LibraryPage } from '../components/library/LibraryPage';
 import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
 import { ActivityPage } from '../components/IngestionPanel';
 import { Rail } from './Rail';
-import { MobileNav } from './MobileNav';
 
-/** The app frame: utility rail (desktop) / bottom tabs (phone) + the
- *  canvas. Brain (canvas + docked chat) is mounted permanently OUTSIDE the
- *  route switch — navigation must never tear down the WebGL renderer.
- *  Routed surfaces render over it, inside the content area, so the chrome
- *  stays reachable. */
+/** The app frame: utility rail (desktop) + the canvas. Brain (canvas +
+ *  docked chat) is mounted permanently OUTSIDE the route switch —
+ *  navigation must never tear down the WebGL renderer. Routed surfaces
+ *  render over it, inside the content area, so the chrome stays reachable.
+ *
+ *  Phones have no chrome at all: the app IS the chat (2026-07-23), other
+ *  surfaces hang off the chat header's drawer, and closing one lands back
+ *  in chat. */
 export function AppShell() {
   const navigate = useNavigate();
-  const home = () => navigate('/');
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const home = () => navigate(window.innerWidth < 768 ? '/chat' : '/');
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -43,9 +45,7 @@ export function AppShell() {
   return (
     <div className="flex w-full h-screen overflow-hidden bg-stone-950">
       <Rail />
-      {/* on phones the content area ends above the tab bar (plus the home
-          indicator inset), so composers and cards never hide behind it */}
-      <div className="relative flex-1 min-w-0 h-[calc(100%_-_3.25rem_-_env(safe-area-inset-bottom))] md:h-full">
+      <div className="relative flex-1 min-w-0 h-full">
         <Brain />
         <Routes>
           <Route path="/" element={null} />
@@ -57,7 +57,6 @@ export function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
-      <MobileNav />
     </div>
   );
 }

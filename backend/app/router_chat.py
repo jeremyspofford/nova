@@ -61,7 +61,7 @@ def _sse(obj) -> str:
 
 @router.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
-    if not request.message.strip():
+    if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="message is empty")
 
     conversation = await conversations.get_or_create_active_conversation()
@@ -93,10 +93,39 @@ async def chat_stream(request: ChatRequest):
     history = await conversations.load_history(conversation_id)
     window, _aged = conversations.window_history(history, history_budget)
     window_oldest_at = window[0]["created_at"] if window else None
-    turn_messages = conversations.to_llm_history(window) + [
-        {"role": "user", "content": request.message}]
 
-    await conversations.append_message(conversation_id, "user", request.message)
+    # Attachments: images ride THIS turn as image_url content parts (the model
+    # sees the pixels now; later turns see a persisted "[Attached image: …]"
+    # marker). Text files are inlined into the message itself, so they persist
+    # in the window like typed text. Nothing binary is stored in the DB.
+    user_text = request.message
+    image_parts: list[dict] = []
+    attach_meta: list[dict] = []
+    if request.attachments:
+        if sum(len(a.data) for a in request.attachments) > 20_000_000:
+            raise HTTPException(status_code=413,
+                                detail="attachments too large (20 MB per message)")
+        for a in request.attachments:
+            attach_meta.append({"kind": a.kind, "name": a.name, "mime": a.mime})
+            if a.kind == "image":
+                mime = a.mime or "image/jpeg"
+                image_parts.append({"type": "image_url",
+                                    "image_url": {"url": f"data:{mime};base64,{a.data}"}})
+            else:
+                user_text += f"\n\n--- attached file: {a.name} ---\n{a.data[:60_000]}"
+    if not user_text.strip() and image_parts:
+        user_text = "(see attached image)"
+    persist_text = user_text + "".join(
+        f"\n[Attached image: {m['name']}]" for m in attach_meta if m["kind"] == "image")
+
+    turn_content = ([{"type": "text", "text": user_text}] + image_parts
+                    if image_parts else user_text)
+    turn_messages = conversations.to_llm_history(window) + [
+        {"role": "user", "content": turn_content}]
+
+    await conversations.append_message(
+        conversation_id, "user", persist_text,
+        metadata={"attachments": attach_meta} if attach_meta else None)
 
     async def generate():
         final_text = ""
@@ -143,7 +172,7 @@ async def chat_stream(request: ChatRequest):
                     effective_model(main_agent["model"]),
                     metadata={"trace_id": str(turn.id)})
                 await memory.write(
-                    f"User: {request.message}\n\nNova: {final_text}",
+                    f"User: {persist_text}\n\nNova: {final_text}",
                     type="journal", source_type="chat")
             except Exception:
                 log.exception("failed to persist assistant turn")
@@ -197,6 +226,8 @@ async def get_messages(conversation_id: str):
             tid = (meta or {}).get("trace_id")
             if m["role"] == "assistant" and tid:
                 trace_ids.setdefault(tid, []).append(row)
+            if (meta or {}).get("attachments"):
+                row["attachments"] = meta["attachments"]
             out.append(row)
         elif m["role"] == "tool" and m["tool_calls"]:
             tc = m["tool_calls"]

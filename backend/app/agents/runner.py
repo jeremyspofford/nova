@@ -330,6 +330,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
+    if isinstance(query, list):
+        # multimodal turn (image attachments) — the text part drives memory
+        # search and prompt assembly; the image parts go to the model as-is
+        query = " ".join(p.get("text", "") for p in query
+                         if isinstance(p, dict) and p.get("type") == "text")
 
     exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)

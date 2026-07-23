@@ -28,7 +28,7 @@ const MODE_COLOR: Record<Mode, string> = {
 
 // target intensity per mode — everything eases toward it, nothing snaps
 const MODE_ENERGY: Record<Mode, number> = {
-  idle: 0.20, listening: 0.42, thinking: 0.6, working: 0.85, speaking: 0.38,
+  idle: 0.20, listening: 0.38, thinking: 0.55, working: 0.75, speaking: 0.36,
 };
 
 export const NOVA_LEGEND: LegendEntry[] = [
@@ -61,6 +61,9 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   let pace = 1;                                // rotationSpeed / 2 (0 = still)
   let labelMode: 'auto' | 'on' | 'off' = 'auto';
   let labelScale = 1;
+  // presence surfaces (the voice overlay) want her big — a scale on the orb
+  // radius and its cap, so the same renderer fills a phone screen
+  let orbScale = 1;
 
   // horizontal centering: Nova sits in the middle of the *clear* band, not
   // the raw canvas. The canvas already ends at the chat's left edge, so the
@@ -70,10 +73,9 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   let leftInsetTarget = 0;
   let leftInset = 0;
   const centerX = () => leftInset + (canvas.width - leftInset) / 2;
-  const orbR = () => {
-    const availW = canvas.width - leftInset;
-    return Math.max(22, Math.min(110, Math.min(availW, canvas.height) * 0.14)) * zoom;
-  };
+  const baseR = (availW: number, h: number) =>
+    Math.max(22, Math.min(110 * orbScale, Math.min(availW, h) * 0.14 * orbScale)) * zoom;
+  const orbR = () => baseR(canvas.width - leftInset, canvas.height);
 
   // view orientation — drag orbits the whole particle system around her
   let yaw = 0;
@@ -164,7 +166,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     leftInset += (leftInsetTarget - leftInset) * (1 - Math.exp(-dt / 220));
     const availW = w - leftInset;
     const cx = leftInset + availW / 2, cy = h / 2;
-    const R = Math.max(22, Math.min(110, Math.min(availW, h) * 0.14)) * zoom;
+    const R = baseR(availW, h);
     // the mote/shell pixel sizes were tuned against the settings preview card,
     // whose tiny canvas pins R at the 22px floor. On a full-screen canvas R
     // hits the 110px cap, so fixed-size particles shrink ~5x relative to the
@@ -227,11 +229,11 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     };
 
     // motes — the ambient field that quickens as she engages
-    const drift = dt * (0.3 + energy * 1.0) * flow;
+    const drift = dt * (0.22 + energy * 0.7) * flow;
     for (const mo of motes) {
       mo.ang += mo.speed * drift * 0.001;
       const s = proj(mo, R);
-      const twinkle = 0.55 + 0.45 * Math.sin(now / 700 + mo.tw);
+      const twinkle = 0.65 + 0.35 * Math.sin(now / 1200 + mo.tw);
       ctx.fillStyle = col((0.1 + energy * 0.4) * twinkle * (0.7 + 0.3 * s.d));
       ctx.beginPath();
       ctx.arc(s.x, s.y, mo.size * psc * (1 + 0.2 * s.d), 0, Math.PI * 2);
@@ -241,21 +243,22 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     // the orb: a fuzzy shell of matter around a soft inner light whose
     // focus slowly wanders — glow and dust, nothing solid, nothing static
     // breathing is pace-independent — even a stilled orb is alive; the glow
-    // inhales with the radius so the breath is unmistakable
-    const bphase = Math.sin(now / 2600);
-    const breathe = 1 + bphase * 0.06;
+    // inhales with the radius so the breath is unmistakable. Long and shallow
+    // on purpose — a resting breath, not a pulse (gentleness pass 2026-07-23).
+    const bphase = Math.sin(now / 4200);
+    const breathe = 1 + bphase * 0.04;
     const bpulse = 0.5 + 0.5 * bphase;
-    const r = R * breathe * (1 + lvlS * 0.06 * weight.speaking);
-    const haloR = r * (2.4 + energy * 1.0);
+    const r = R * breathe * (1 + lvlS * 0.05 * weight.speaking);
+    const haloR = r * (2.4 + energy * 0.8);
     const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
-    halo.addColorStop(0, col(0.28 + energy * 0.20 + bpulse * 0.07));
-    halo.addColorStop(0.4, col(0.09 + energy * 0.10 + bpulse * 0.03));
+    halo.addColorStop(0, col(0.28 + energy * 0.18 + bpulse * 0.05));
+    halo.addColorStop(0.4, col(0.09 + energy * 0.09 + bpulse * 0.02));
     halo.addColorStop(1, col(0));
     ctx.fillStyle = halo;
     ctx.beginPath(); ctx.arc(cx, cy, haloR, 0, Math.PI * 2); ctx.fill();
     // inner light: gradual multi-stop falloff from a wandering focal point
-    const fx = cx + Math.cos(now / 4700) * r * 0.18;
-    const fy = cy + Math.sin(now / 6100) * r * 0.14;
+    const fx = cx + Math.cos(now / 6800) * r * 0.16;
+    const fy = cy + Math.sin(now / 8600) * r * 0.12;
     const body = ctx.createRadialGradient(fx, fy, 0, cx, cy, r * 1.05);
     body.addColorStop(0, `rgba(255,255,255,${0.22 + energy * 0.22 + bpulse * 0.06})`);
     body.addColorStop(0.3, col(0.32 + energy * 0.18));
@@ -266,14 +269,14 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     ctx.beginPath(); ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2); ctx.fill();
     // the shell: slow-swirling dust; her voice brightens and gently
     // swells it — no snapping, no rings
-    const swell = 1 + lvlS * 0.10 * weight.speaking;
-    const spin = dt * (0.3 + energy * 0.6) * flow * 0.001;
+    const swell = 1 + lvlS * 0.08 * weight.speaking;
+    const spin = dt * (0.22 + energy * 0.45) * flow * 0.001;
     for (const p of shell) {
       p.ang += p.speed * spin;
       const s = proj(p, r * swell);
-      const tw = 0.55 + 0.45 * Math.sin(now / 900 + p.tw);
+      const tw = 0.65 + 0.35 * Math.sin(now / 1500 + p.tw);
       const depth = 0.7 + 0.3 * s.d;             // the near face of the shell reads brighter
-      const a = (0.14 + bpulse * 0.05 + energy * 0.40 + lvlS * 0.15 * weight.speaking)
+      const a = (0.14 + bpulse * 0.04 + energy * 0.38 + lvlS * 0.12 * weight.speaking)
                 * tw * depth;
       // per-particle color: shade the mode hue toward white by the particle's
       // own warmth and its depth. This gives the cluster dimension instead of
@@ -295,7 +298,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     // faster counter-rotating outer ring
     const wThink = weight.thinking + weight.working;
     if (wThink > 0.02) {
-      const spin = now * 0.0011 * (0.5 + energy) * Math.max(pace, 0.15);
+      const spin = now * 0.0008 * (0.5 + energy) * Math.max(pace, 0.15);
       ctx.lineWidth = 1.6;
       ctx.strokeStyle = col(0.55 * wThink);
       for (let i = 0; i < 3; i++) {
@@ -313,7 +316,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
 
     // ripples: listening pulls rings inward (speech ripples removed —
     // Jeremy 2026-07-19: too chaotic; her voice lives in the shell now)
-    if (weight.listening > 0.25 && now - lastInRipple > 1400 / Math.max(pace, 0.25)) {
+    if (weight.listening > 0.25 && now - lastInRipple > 1800 / Math.max(pace, 0.25)) {
       ripples.push({ life: 0, dir: -1 });
       lastInRipple = now;
     }
@@ -436,6 +439,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
         labelMode = options.labelMode;
       }
       if (typeof options.leftInset === 'number') leftInsetTarget = Math.max(0, options.leftInset);
+      if (typeof options.orbScale === 'number' && options.orbScale > 0) orbScale = options.orbScale;
     },
     setActivity(state: { active: boolean; kind?: 'thinking' | 'dispatch' | 'tool' | 'listening' }) {
       if (state.kind === 'listening') { listening = state.active; return; }

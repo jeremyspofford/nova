@@ -622,6 +622,22 @@ export function Brain() {
         </aside>
       )}
 
+      {/* phones: the canvas is one drawer-tap from chat; this floating pill
+          is the way back (the tab bar is gone — chat IS the app there) */}
+      {isMobile && !mobileChat && (
+        <button
+          onClick={() => navigate('/chat')}
+          className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900/85 backdrop-blur border border-stone-700 text-sm text-stone-200 shadow-2xl"
+          style={{ bottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          Chat
+        </button>
+      )}
+
       {((isMobile && mobileChat) || (!isMobile && chatOpen)) && (
         <ChatPanel
           width={isMobile ? window.innerWidth : chatWidth}
