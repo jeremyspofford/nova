@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app import db, rules, settings_store
 from app.config import settings
+from app.evals import checks
 from app.evals import runner as eval_runner
 from app.evals import suites
 from app.llm import providers
@@ -83,6 +84,21 @@ def cmd_list(args: argparse.Namespace) -> int:
             task = suites.load_task(suite, task_id)
             print(f"    - {task_id}: {task.title}")
     return 0
+
+
+def _print_contract(report: checks.ContractReport) -> None:
+    """The deterministic layer's verdict. Failures are listed in full — a
+    contract failure is the reviewable half of a promote/reject decision, so
+    it has to say exactly which rail broke."""
+    total = len(report.results)
+    if not total:
+        print("    contract    (none specified)")
+        return
+    passed = total - len(report.failures)
+    print(f"    contract    {passed}/{total} checks passed"
+          + ("" if report.passed else "  ← FAILED"))
+    for failure in report.failures:
+        print(f"      ✗ {failure.key}: {failure.detail}")
 
 
 def _print_run(result: eval_runner.RunResult) -> None:
@@ -153,15 +169,21 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 task, args.champion, args.challenger,
                 scratch_root=scratch_root, record=args.record)
             pairs.append(pair)
-            _print_run(pair["champion"])
-            _print_run(pair["challenger"])
+            for side in ("champion", "challenger"):
+                report = checks.evaluate(task.contract, pair[side])
+                pair[f"{side}_contract"] = report
+                _print_run(pair[side])
+                _print_contract(report)
     finally:
         await _shutdown()
 
     if args.json:
         payload = [{"task": p["task"], "suite_version": p["suite_version"],
                     "champion": asdict(p["champion"]),
-                    "challenger": asdict(p["challenger"])} for p in pairs]
+                    "challenger": asdict(p["challenger"]),
+                    "champion_contract": p["champion_contract"].as_dict(),
+                    "challenger_contract": p["challenger_contract"].as_dict()}
+                   for p in pairs]
         Path(args.json).write_text(json.dumps(payload, indent=2, default=str))
         print(f"\nwrote {args.json}")
 
@@ -177,6 +199,23 @@ async def cmd_run(args: argparse.Namespace) -> int:
         print(f"\n{len(ungradeable)} of {len(pairs)} task(s) not gradeable — a "
               f"contestant errored, timed out, or returned nothing; comparing "
               f"those would hand the other side a free win")
+
+    # The deterministic scoreboard. Not a promote/reject verdict on its own —
+    # that needs the judge layer (phase 2) and Jeremy's tiebreaker — but a
+    # challenger that breaks contracts the champion keeps is already answered.
+    gradeable = [p for p in pairs
+                 if p["champion"].gradeable and p["challenger"].gradeable]
+    if gradeable:
+        champ_ok = sum(1 for p in gradeable if p["champion_contract"].passed)
+        chall_ok = sum(1 for p in gradeable if p["challenger_contract"].passed)
+        print(f"\ncontract scoreboard ({len(gradeable)} gradeable task(s)): "
+              f"champion {champ_ok}, challenger {chall_ok}")
+        regressions = [p["task"] for p in gradeable
+                       if p["champion_contract"].passed
+                       and not p["challenger_contract"].passed]
+        if regressions:
+            print("challenger broke contracts the champion kept: "
+                  + ", ".join(regressions))
 
     if args.keep:
         print(f"\nscratch kept at {scratch_root}")
