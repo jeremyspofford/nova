@@ -322,6 +322,14 @@ same-ollama pair provably serializes.
 
 ## Phase 5 — Stream specialist text (perceived latency)
 
+STATUS: BUILT + VERIFIED 2026-07-24. `sub_text` is its own runner event and
+its own SSE key (`sub`), batched by sentence, tagged with the agent, and
+rendered as a per-agent accordion in chat. Live: a real dispatch streamed
+12 sentence-sized chunks and added ZERO message rows — the turn persisted
+the same 3 tool rows a dispatch always did. TTS is untouched (it only ever
+consumed `text`). 15 assertions in backend/tests/test_sub_text.py.
+
+
 Depth-1 text deltas are dropped today (runner.py:492), so multi-minute
 dispatches look frozen. Rails (v1's wording was a blocker in disguise:
 routed through the activity path, a 200s dispatch at ~10 deltas/s would

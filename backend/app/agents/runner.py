@@ -592,6 +592,64 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
         await _cancel_and_drain(tasks)
 
 
+# ── streaming specialist text (docs/plans/turn-speed.md, phase 5) ────────
+#
+# Depth-1 text used to be dropped, so a multi-minute dispatch looked frozen.
+# It is emitted as `sub_text`, a NEW top-level event with its own SSE key —
+# deliberately NOT "text":
+#
+#   * TTS speaks `text`. A specialist's working notes must never be read
+#     aloud mid-answer.
+#   * router_chat persists `activity` events as message rows. At ~10
+#     deltas/s a 200s dispatch would insert ~2,000 rows, evict real history
+#     out of load_history's 200-row window, and replay as spam forever.
+#
+# Batching by sentence (or ~250ms of silence) keeps the event rate near the
+# rate a human reads at, instead of the rate a model emits at.
+
+# the ONE predicate all three nesting layers use (run_agent -> _run_dispatch
+# -> the parent's dispatch branch): anything here is forwarded upward, and
+# `final` is consumed as the result instead.
+_FORWARDED_FROM_SUB = ("activity", "error", "sub_text")
+
+_SENTENCE_END = (". ", "! ", "? ", ".\n", "!\n", "?\n", "\n\n")
+_SUB_TEXT_MAX_CHARS = 400          # flush long unpunctuated runs anyway
+_SUB_TEXT_MAX_IDLE_S = 0.25
+
+
+class _SubTextBatcher:
+    """Accumulates deltas and releases them a sentence at a time."""
+
+    __slots__ = ("_buf", "_last")
+
+    def __init__(self):
+        self._buf = ""
+        self._last = time.monotonic()
+
+    def feed(self, delta: str) -> list[str]:
+        self._buf += delta
+        now = time.monotonic()
+        out: list[str] = []
+        while True:
+            cut = max((self._buf.find(e) + len(e) for e in _SENTENCE_END
+                       if e in self._buf), default=0)
+            if cut <= 0:
+                break
+            out.append(self._buf[:cut])
+            self._buf = self._buf[cut:]
+        if not out and (len(self._buf) >= _SUB_TEXT_MAX_CHARS
+                        or now - self._last >= _SUB_TEXT_MAX_IDLE_S):
+            out.append(self._buf)
+            self._buf = ""
+        if out:
+            self._last = now
+        return [chunk for chunk in out if chunk.strip()]
+
+    def drain(self) -> list[str]:
+        rest, self._buf = self._buf, ""
+        return [rest] if rest.strip() else []
+
+
 # ── concurrent sibling dispatches (docs/plans/turn-speed.md, phase 4) ────
 #
 # Ordered after phase 3 on purpose: whatever extra dispatches this
@@ -659,7 +717,7 @@ async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
                             async for sub in agen:
                                 if sub["type"] == "final":
                                     text = sub["text"]
-                                elif sub["type"] in ("activity", "error"):
+                                elif sub["type"] in _FORWARDED_FROM_SUB:
                                     queue.put_nowait(("event", name, sub))
                         finally:
                             # closing it HERE is what runs the child's own
@@ -845,6 +903,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     dispatch_result_ids: set[str] = set()
     bulk_result_ids: set[str] = set()
     dispatches_made = 0
+    sub_stream = _SubTextBatcher()
 
     max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
     round_model = agent["model"]      # may switch to the fallback mid-turn
@@ -875,6 +934,14 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         round_text += event["text"]
                         if dispatch_depth == 0:
                             yield {"type": "text", "text": event["text"]}
+                        else:
+                            # a specialist's thinking, batched (phase 5).
+                            # A separate event type, never "text": TTS
+                            # speaks text, and a sub-agent's working notes
+                            # must never be read aloud.
+                            for chunk in sub_stream.feed(event["text"]):
+                                yield {"type": "sub_text", "text": chunk,
+                                       "agent": agent.get("name")}
                     elif etype == "tool_calls":
                         tool_calls = event["tool_calls"]
                     elif etype == "usage":
@@ -893,6 +960,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         lsp["error_class"] = event.get("error_class")
                         failure = event
                         break
+                for chunk in (sub_stream.drain() if dispatch_depth else []):
+                    yield {"type": "sub_text", "text": chunk,
+                           "agent": agent.get("name")}
                 lsp["completion_chars"] = len(round_text)
                 lsp["tool_calls_requested"] = len(tool_calls)
 
@@ -1094,7 +1164,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                                                    automation):
                         if sub["type"] == "final":
                             result = sub["text"]
-                        elif sub["type"] in ("activity", "error"):
+                        elif sub["type"] in _FORWARDED_FROM_SUB:
                             yield sub
                     if not result:
                         result = "Error: dispatched agent produced no result"
@@ -1191,10 +1261,10 @@ async def _run_dispatch(args: dict, parent_depth: int,
                                  automation=automation):
         if event["type"] == "final":
             sub_final = event["text"]
-        elif event["type"] == "activity":
+        elif event["type"] in _FORWARDED_FROM_SUB:
             yield event
-        elif event["type"] == "error":
-            sub_final = f"Error from {agent_name}: {event['error']}"
+            if event["type"] == "error":
+                sub_final = f"Error from {agent_name}: {event['error']}"
 
     yield {"type": "final", "text": sub_final or f"[{agent_name} returned nothing]"}
 

@@ -29,6 +29,9 @@ type Item =
       streaming?: boolean; trace?: TraceSummary; attachments?: UiAttachment[];
       speaker?: { name: string; role: string } }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
+  /** A dispatched specialist thinking out loud while it works. Live only —
+   *  never persisted, so it does not come back on reload. */
+  | { id: string; kind: 'subtext'; agent: string; turnId: string; content: string }
   | { id: string; kind: 'error'; content: string }
   | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
 
@@ -166,6 +169,20 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
       <div key={item.id} className="text-xs text-amber-400/80 font-mono px-1">
         {activityLabel(item.activity)}
       </div>
+    );
+  }
+  if (item.kind === 'subtext') {
+    // a specialist working out loud: collapsed by default so a long
+    // dispatch shows progress without burying the conversation
+    return (
+      <details key={item.id} className="text-xs font-mono px-1">
+        <summary className="text-stone-500 cursor-pointer select-none">
+          ⋯ {agentDisplayName(item.agent)} is working…
+        </summary>
+        <div className="mt-1 ml-3 px-2 py-1.5 whitespace-pre-wrap break-words font-sans text-stone-400 bg-stone-900/60 border-l border-stone-800 rounded-r max-h-64 overflow-y-auto">
+          {item.content}
+        </div>
+      </details>
     );
   }
   if (item.kind === 'error') {
@@ -873,6 +890,26 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             emitPresence(true, 'thinking');
             lastPresence = Date.now();
           }
+        } else if (event.type === 'subText') {
+          // never spoken (speaker.feed is only fed by 'text') and never
+          // persisted — it exists so a multi-minute dispatch shows life
+          const who = event.agent || 'specialist';
+          setItems(prev => {
+            // one accordion per (turn, agent): keyed by this turn's assistant
+            // bubble so a new turn never appends to the last one's
+            const idx = prev.findIndex(it => it.kind === 'subtext'
+                                             && it.agent === who && it.turnId === assistantId);
+            if (idx >= 0) {
+              const found = prev[idx] as Extract<Item, { kind: 'subtext' }>;
+              const merged: Item = { ...found, content: found.content + event.text };
+              return [...prev.slice(0, idx), merged, ...prev.slice(idx + 1)];
+            }
+            const at = prev.findIndex(it => it.id === assistantId);
+            const line: Item = { id: uid(), kind: 'subtext', agent: who,
+                                 turnId: assistantId, content: event.text };
+            return at < 0 ? [...prev, line]
+              : [...prev.slice(0, at), line, ...prev.slice(at)];
+          });
         } else if (event.type === 'activity') {
           if (event.activity.kind === 'tool_start') {
             liveTools++;

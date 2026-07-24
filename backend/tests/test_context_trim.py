@@ -96,9 +96,18 @@ def test_ceiling():
               str(context_trim.ceiling_for("openrouter:small")))
         check("a 1M model does not RAISE it",
               context_trim.ceiling_for("openrouter:huge") == 60000)
-        check("an unknown window falls back to the budget",
+        # phase 3: for a LOCAL model the configured server window IS the real
+        # one — ollama reports none, and trimming has to aim at the window the
+        # call must actually fit or the router refuses it
+        settings_store._cache["inference.ollama_num_ctx"] = 16384
+        check("a local model is sized by the configured server window",
+              context_trim.ceiling_for("ollama:qwen3:8b") == 12384,
+              str(context_trim.ceiling_for("ollama:qwen3:8b")))
+        settings_store._cache["inference.ollama_num_ctx"] = 0
+        check("...and falls back to the budget when it is unset",
               context_trim.ceiling_for("ollama:qwen3:8b") == 60000)
-        check("a model missing from the catalog also falls back",
+        settings_store._cache["inference.ollama_num_ctx"] = 16384
+        check("a cloud model missing from the catalog falls back",
               context_trim.ceiling_for("openrouter:never-seen") == 60000)
     finally:
         models_catalog._cache["models"] = saved

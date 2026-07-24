@@ -175,6 +175,14 @@ async def chat_stream(request: ChatRequest):
                     etype = event["type"]
                     if etype == "text":
                         yield _sse({"t": event["text"]})
+                    elif etype == "sub_text":
+                        # a specialist's live thinking (turn-speed phase 5).
+                        # Its own key, and deliberately NOT persisted: at
+                        # ~10 deltas/s a long dispatch would insert
+                        # thousands of message rows, push real history out
+                        # of load_history's window, and replay forever.
+                        yield _sse({"sub": event["text"],
+                                    "agent": event.get("agent")})
                     elif etype == "activity":
                         # `args` is additive (parallel tool results carry the
                         # brief so simultaneous same-name lines are

@@ -158,6 +158,10 @@ export interface Activity {
 export type ChatEvent =
   | { type: 'meta'; conversationId: string; model: string; traceId?: string }
   | { type: 'text'; text: string }
+  /** A dispatched specialist thinking out loud. Separate from 'text' on
+   *  purpose: this is never spoken and never persisted — it exists so a
+   *  multi-minute dispatch stops looking frozen. */
+  | { type: 'subText'; text: string; agent?: string }
   | { type: 'activity'; activity: Activity }
   | { type: 'error'; error: string }
   | { type: 'done' };
@@ -214,6 +218,8 @@ export async function* streamChat(message: string, conversationId?: string,
                   traceId: meta.trace_id };
         } else if (typeof parsed.t === 'string') {
           yield { type: 'text', text: parsed.t };
+        } else if (typeof parsed.sub === 'string') {
+          yield { type: 'subText', text: parsed.sub, agent: parsed.agent as string | undefined };
         } else if (parsed.activity) {
           yield { type: 'activity', activity: parsed.activity as Activity };
         } else if (typeof parsed.error === 'string') {
