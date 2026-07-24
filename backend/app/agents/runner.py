@@ -331,8 +331,11 @@ async def _build_system_prompt(agent: dict, query: str, *,
     # ROLE — the one slot the agent controls
     parts = [agent["system_prompt"]]
 
-    # FACTS — fresh every turn; bare data + imperatives (de-quotable)
-    parts.append(_now_block())
+    # FACTS — fresh every turn; bare data + imperatives (de-quotable).
+    # The clock is the LAST facts block on purpose: it changes every minute,
+    # and sitting ahead of the stable blocks it invalidated any provider
+    # prefix cache across turns. It must still never displace the LAST WORD
+    # slots — recency there is owned by the register.
     model_block = _model_block(agent)
     if model_block:
         parts.append(model_block)
@@ -348,6 +351,7 @@ async def _build_system_prompt(agent: dict, query: str, *,
     spk = _speaker_block(speaker)
     if spk:
         parts.append(spk)
+    parts.append(_now_block())
 
     # CONTEXT — specialist index, memories, skills, rolling summary
     if include_index:
@@ -359,7 +363,16 @@ async def _build_system_prompt(agent: dict, query: str, *,
                       if a["name"] != agent.get("name")]
             if others:
                 lines = "\n".join(f"- {a['name']}: {a['description']}" for a in others)
-                parts.append("## Available specialists (dispatch_to_agent)\n" + lines)
+                parts.append(
+                    "## Available specialists (dispatch_to_agent)\n" + lines
+                    + "\n"
+                    "A dispatch message is that specialist's ONLY context — "
+                    "it sees nothing of this conversation or of other "
+                    "specialists' replies. When a dispatch builds on findings "
+                    "you already have (an earlier specialist's reply, your own "
+                    "tool results), include those findings in the message "
+                    "itself so the specialist works from them instead of "
+                    "re-researching what is already known.")
         except Exception:
             log.exception("Agent index injection failed; continuing without it")
     try:
@@ -497,6 +510,13 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     u = event.get("usage") or {}
                     lsp["prompt_tokens"] = u.get("prompt_tokens")
                     lsp["completion_tokens"] = u.get("completion_tokens")
+                    # provider-reported prefix-cache hits (OpenAI-compat
+                    # `prompt_tokens_details.cached_tokens`) — the ledger
+                    # evidence for whether prompt-order changes actually
+                    # buy cached prefills (turn-speed phase 0)
+                    det = u.get("prompt_tokens_details") or {}
+                    if isinstance(det, dict) and det.get("cached_tokens") is not None:
+                        lsp["cached_tokens"] = det["cached_tokens"]
                 elif etype == "error":
                     lsp["error"] = event["error"]
                     yield {"type": "error", "error": event["error"]}
@@ -529,7 +549,27 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             try:
                 args = json.loads(tc["arguments"]) if tc["arguments"] else {}
             except json.JSONDecodeError:
-                args = {}
+                # broken argument JSON used to execute as {} — a silent
+                # wrong invocation (write_memory with no content). Give the
+                # model an error result it can correct next round instead;
+                # every tool_call id still gets its tool message.
+                result = (f"Error: the arguments for {name} were not valid "
+                          "JSON. Nothing was executed — re-issue the call "
+                          "with corrected arguments.")
+                yield {"type": "activity", "kind": "tool_start", "name": name,
+                       "agent": agent.get("name"),
+                       "detail": (tc["arguments"] or "")[:200]}
+                async with trace.span("tool", name) as tsp:
+                    tsp["agent"] = agent.get("name")
+                    tsp["error"] = "malformed_arguments"
+                    tsp["args"] = trace.redact_text(tc["arguments"] or "", 2000)
+                    tsp["result_size"] = len(result)
+                    tsp["result_head"] = result
+                yield {"type": "activity", "kind": "tool_result", "name": name,
+                       "agent": agent.get("name"), "detail": result[:200]}
+                messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                 "content": result})
+                continue
 
             yield {"type": "activity", "kind": "tool_start", "name": name,
                    "agent": agent.get("name"), "detail": _brief(args)}
