@@ -17,7 +17,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, consents, conversations, db, recommendations, rules, settings_store, trace
+from app import automations, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -75,6 +75,23 @@ async def chat_stream(request: ChatRequest):
     # Voice → "Voice reply model"); (2) get the brevity block appended at the
     # END of the assembled prompt (system_suffix), since the reply is read
     # ALOUD. Shallow-copy so the registry dict is never mutated.
+    # who's speaking (docs/plans/speaker-id.md) — the client echoes what
+    # transcribe reported. Resolution can only narrow: an unknown voice gets
+    # the guest tier; typed chat has no voice signal and is the operator by
+    # definition; a stale/bad profile id degrades to unknown, never operator.
+    speaker = None
+    if request.source == "voice" and request.speaker:
+        if request.speaker == "unknown":
+            speaker = {"id": None, "name": "unknown voice", "role": "unknown"}
+        else:
+            prof = await voiceprints.get(request.speaker)
+            if prof:
+                speaker = {"id": prof["id"], "name": prof["name"],
+                           "role": prof["role"],
+                           "persona_notes": prof.get("persona_notes")}
+            else:
+                speaker = {"id": None, "name": "unknown voice", "role": "unknown"}
+
     voice_suffix = None
     if request.source == "voice":
         voice_suffix = _VOICE_BREVITY
@@ -123,9 +140,15 @@ async def chat_stream(request: ChatRequest):
     turn_messages = conversations.to_llm_history(window) + [
         {"role": "user", "content": turn_content}]
 
+    user_meta: dict = {}
+    if attach_meta:
+        user_meta["attachments"] = attach_meta
+    if speaker:
+        user_meta["speaker"] = {"id": speaker["id"], "name": speaker["name"],
+                                "role": speaker["role"]}
     await conversations.append_message(
         conversation_id, "user", persist_text,
-        metadata={"attachments": attach_meta} if attach_meta else None)
+        metadata=user_meta or None)
 
     async def generate():
         final_text = ""
@@ -141,7 +164,7 @@ async def chat_stream(request: ChatRequest):
                 async for event in agent_runner.run_agent(
                         main_agent, turn_messages,
                         conversation_summary=conversation.get("summary"),
-                        system_suffix=voice_suffix):
+                        system_suffix=voice_suffix, speaker=speaker):
                     etype = event["type"]
                     if etype == "text":
                         yield _sse({"t": event["text"]})
@@ -171,9 +194,18 @@ async def chat_stream(request: ChatRequest):
                     conversation_id, "assistant", final_text,
                     effective_model(main_agent["model"]),
                     metadata={"trace_id": str(turn.id)})
-                await memory.write(
-                    f"User: {persist_text}\n\nNova: {final_text}",
-                    type="journal", source_type="chat")
+                # non-operator speakers journal under their own name — what
+                # the kid says must never file as the operator's words
+                if speaker and speaker["role"] != "operator":
+                    who = f"«{speaker['name']}» ({speaker['role']})"
+                    await memory.write(
+                        f"{who}: {persist_text}\n\nNova: {final_text}",
+                        type="journal", source_type="chat",
+                        author=speaker["name"])
+                else:
+                    await memory.write(
+                        f"User: {persist_text}\n\nNova: {final_text}",
+                        type="journal", source_type="chat")
             except Exception:
                 log.exception("failed to persist assistant turn")
             asyncio.ensure_future(compaction.maybe_compact(
@@ -228,6 +260,8 @@ async def get_messages(conversation_id: str):
                 trace_ids.setdefault(tid, []).append(row)
             if (meta or {}).get("attachments"):
                 row["attachments"] = meta["attachments"]
+            if (meta or {}).get("speaker"):
+                row["speaker"] = meta["speaker"]
             out.append(row)
         elif m["role"] == "tool" and m["tool_calls"]:
             tc = m["tool_calls"]

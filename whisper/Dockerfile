@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the driver at run time, these provide cuBLAS + cuDNN. LD_LIBRARY_PATH points
 # ctranslate2 at them.
 RUN pip install --no-cache-dir "faster-whisper>=1.1" "fastapi>=0.104" "uvicorn>=0.24" \
-        nvidia-cublas-cu12 nvidia-cudnn-cu12
+        nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+        "sherpa-onnx>=1.10" "numpy<2.3"
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib
 
 WORKDIR /srv

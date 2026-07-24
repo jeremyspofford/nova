@@ -44,8 +44,25 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Ar
   return r.arrayBuffer();
 }
 
-/** Transcribe a recorded push-to-talk utterance; resolves to the text. */
-export async function transcribeSpeech(blob: Blob): Promise<string> {
+/** Who transcribe recognized on a voice turn (docs/plans/speaker-id.md). */
+export interface SpeakerMatch {
+  profile_id: string;
+  name: string;
+  role: 'operator' | 'kid' | 'guest';
+  confidence: number;
+}
+
+export interface TranscribeResult {
+  text: string;
+  /** the matched household member, or null (unknown / recognition off) */
+  speaker: SpeakerMatch | null;
+  /** true when recognition actually ran (enabled + someone enrolled) —
+   *  distinguishes "unknown voice" from "not checking" */
+  speaker_active: boolean;
+}
+
+/** Transcribe a recorded utterance; resolves to text + who was speaking. */
+export async function transcribeSpeech(blob: Blob): Promise<TranscribeResult> {
   const r = await apiFetch(`${API_URL}/api/v1/voice/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': blob.type || 'application/octet-stream' },
@@ -55,7 +72,57 @@ export async function transcribeSpeech(blob: Blob): Promise<string> {
     const detail = await r.json().then(j => j.detail).catch(() => r.statusText);
     throw new Error(`Transcription failed: ${detail}`);
   }
-  return (await r.json()).text ?? '';
+  const j = await r.json();
+  return { text: j.text ?? '', speaker: j.speaker ?? null,
+           speaker_active: j.speaker_active ?? false };
+}
+
+// ── household voice profiles ───────────────────────────────────────────────
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  role: 'operator' | 'kid' | 'guest';
+  persona_notes: string | null;
+  enrolled: boolean;
+  enrolled_clips: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export async function listProfiles(): Promise<UserProfile[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/profiles`);
+  if (!r.ok) throw new Error('Failed to load profiles');
+  return (await r.json()).profiles;
+}
+
+export async function createProfile(
+  name: string, role: string, personaNotes?: string,
+): Promise<UserProfile> {
+  const r = await apiFetch(`${API_URL}/api/v1/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role, persona_notes: personaNotes ?? null }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'create failed');
+  return r.json();
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/profiles/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'delete failed');
+}
+
+/** One enrollment clip: the audio is embedded server-side and DISCARDED. */
+export async function enrollVoiceClip(profileId: string, blob: Blob): Promise<UserProfile> {
+  const r = await apiFetch(
+    `${API_URL}/api/v1/voice/enroll?profile_id=${encodeURIComponent(profileId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'enrollment failed');
+  return (await r.json()).profile;
 }
 
 export interface VoiceHealth { status: string; detail?: string | null; voices: string[] }
@@ -98,11 +165,13 @@ export type ChatEvent =
 export async function* streamChat(message: string, conversationId?: string,
                                   source?: string, signal?: AbortSignal,
                                   attachments?: { kind: string; name: string; mime: string; data: string }[],
+                                  speakerId?: string,
                                   ): AsyncGenerator<ChatEvent> {
   const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, conversation_id: conversationId, source,
+                           ...(speakerId ? { speaker: speakerId } : {}),
                            ...(attachments?.length ? { attachments } : {}) }),
     signal,
   });
@@ -189,6 +258,7 @@ export interface StoredMessage {
   tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
   trace?: TraceSummary | null;
   attachments?: ChatAttachment[];
+  speaker?: { id: string | null; name: string; role: string };
 }
 
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
