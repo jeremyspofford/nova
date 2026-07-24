@@ -47,6 +47,17 @@ SETTING_DEFS: list[dict] = [
                      "dispatches burn a round per search/fetch, so raise "
                      "this if specialists keep getting cut off — the "
                      "wall-clock kill switch remains the hard runaway stop.")},
+    {"key": "agents.tool_concurrency", "type": "number", "default": 3,
+     "min": 1, "max": 8, "section": "Agents",
+     "label": "Parallel tool calls per round",
+     "description": ("How many READ-ONLY tools an agent may run at once "
+                     "when the model asks for several in one round "
+                     "(searches, page fetches, memory lookups). Writes, "
+                     "dispatches, and everything else always run one at a "
+                     "time in the order the model asked for them. 1 = fully "
+                     "sequential, exactly the old behavior. Web searches "
+                     "stay capped at 2 at once regardless, so a burst can't "
+                     "get Nova rate-limited by the search engines.")},
     # ── Inference ────────────────────────────────────────────────────────
     {"key": "inference.ollama_url", "type": "string",
      "default": "http://ollama:11434", "section": "Inference",
