@@ -117,21 +117,27 @@ error, builtin secrets keep working.
    a GitHub PAT as `github_pat`; register the GitHub MCP server with
    `Authorization: Bearer {{secret:github_pat}}`; it connects and lists tools; the
    stored config + the turn trace show only the reference / `•••`, never the token.
+   First consumers queued behind this phase (2026-07-24): `{{secret:ha_token}}`
+   (`home-assistant.md` C1) and `{{secret:github_pat}}` (`coding-team-pipeline.md`
+   T4) — neither token may be stored anywhere in Nova before this lands.
 2. **Agent ergonomics.** A `list_secret_names` builtin (names only) so Nova can
    suggest "store a token named github_pat, then I'll wire it" — and the
    recommendation card for a keyed integration links straight to Settings → Secrets.
    Migrate `openrouter_api_key` to an optional store-backed secret (env stays the
-   fallback for bootstrap).
+   fallback for bootstrap), and migrate every plaintext `llm_providers.api_key`
+   row into the store the same way — the providers table keeps only a secret
+   reference and the mig-042 plaintext column is emptied once migrated.
 3. **External managers (opt-in).** 1Password + Bitwarden/Vaultwarden resolvers, the
    source picker in the UI, reference validation. **Verify:** a secret sourced from
-   1Password resolves at call time with nothing stored in Nova's DB.
+   1Password resolves at call time with nothing stored in Nova's DB. Tail:
+   age-based rotation nudges — a small automation raises a recommendation when a
+   secret's `updated_at` passes a threshold (default 90 days, a setting).
 
 ## Decisions (defaults chosen; phase 1 can start on the recommendation)
 
-1. **Architecture** — built-in encrypted store as the default (ships, offline,
-   private), external managers as opt-in resolvers (recommended). Alternatives:
-   built-in only (simplest), or bundle a manager (Vaultwarden profile). Jeremy's
-   call — surfaced as a question alongside this plan.
+1. **Architecture** — LOCKED (Jeremy, 2026-07-24): built-in encrypted store
+   ships first; external managers (1Password, Bitwarden/Vaultwarden) stay
+   later opt-in reference-resolvers exactly as phase 3 describes.
 2. **Master key when `NOVA_SECRET_KEY` unset** — dev fallback generates + persists
    to `./data/secret.key` with a loud warning (default), vs fail-closed (no secret
    storage until a key is set). Default: dev-fallback, warn hard.

@@ -31,6 +31,17 @@ In roadmap priority order:
 | [speaker-id.md](speaker-id.md) | discussion backlog (raised 2026-07-23) | Nova knows who's talking: sherpa-onnx voiceprints in the whisper service, `user_profiles` (operator/kid/guest), persona + mechanical tool clamp per speaker, unknown→ask; LOCKED: personalization never authentication; **plan approved 2026-07-23, not built** |
 | [web-push.md](web-push.md) | follow-on to #21 | **BUILT 2026-07-23, uncommitted** — native Web Push to the installed PWA (webpush provider, mig 048, push-sw.js via importScripts, per-device card in Settings); triggers: notify traffic + recommendations + long-reply-finished; awaiting Jeremy's on-phone subscribe + test |
 | [ui-shell-refactor.md](ui-shell-refactor.md) | UI/UX review 2026-07-22; resolves #4 (mobile routes) | collapsible utility rail over the full-bleed canvas (routed panels + mobile bottom tabs; v1 = inspiration only, NO "Brain" destination — the canvas is the app), Settings/Library split, pop-in fix, phone-path nginx fix; **COMPLETE — all phases built, verified, phone pass accepted 2026-07-22; uncommitted**; follow-on (native app) in ROADMAP discussion backlog |
+| [notifications-reachability.md](notifications-reachability.md) | #21 | SHIPPED 2026-07-22 (modular provider registry: ntfy + webhook); [web-push.md](web-push.md) extends it |
+| [recommendation-surface.md](recommendation-surface.md) | discussion-backlog keystone | phases 1–2 SHIPPED (store/tool/banner + inbox/bell); phase 3 (actionable-approve via consent rails) remains |
+| [device-activity-monitoring.md](device-activity-monitoring.md) | Later | designed, not built; ActivityWatch/computer-usage — NOT smart home (that's [home-assistant.md](home-assistant.md)) |
+| [model-eval-pipeline.md](model-eval-pipeline.md) | gate for turn-speed phase 3 + #36 stage 2 | DECISIONS LOCKED 2026-07-24; standing answer to "can we swap agent X to model Y?"; challengers include same-model-different-prompt (2026-07-24 extension) |
+| [turn-speed.md](turn-speed.md) | latency lane (measured 2026-07-24) | PROPOSED; its runner.py restructure freezes other runner-touching lanes while it lands |
+| [data-backups.md](data-backups.md) | **#31 (Wave 1 — build first)** | blast-radius insurance before Nova acts anywhere; restore-drill phase 5 added 2026-07-24 |
+| [secrets-management.md](secrets-management.md) | **#32 (Wave 1)** | LOCKED 2026-07-24: built-in encrypted store first; phase 1 unblocks #33 T4 + #35 |
+| [coding-team-pipeline.md](coding-team-pipeline.md) | **#33 (Waves 3–4)** | team layer on #20 — roles as pipeline stages; build after [acp-coding-delegation.md](acp-coding-delegation.md) phases 0–3 |
+| [ideation-goals.md](ideation-goals.md) | **#34** | ideator half Wave 1 (zero hot files); goals table + Library tab Wave 3 |
+| [home-assistant.md](home-assistant.md) | **#35 (Wave 2)** | after #32 phase 1; LOCKED: compose profile `home` now (IP devices), HAOS box later for radios |
+| [self-improvement.md](self-improvement.md) | **#36 (Waves 3–5)** | umbrella: measure → tune → self-code → goal autonomy; containment invariants LOCKED; stage 4 activation checklist inside |
 
 Not planned here (deliberately):
 - ~~**Mobile PWA routes (#4)** — roadmap says design WITH Jeremy after real

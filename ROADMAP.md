@@ -1332,6 +1332,87 @@ See README for what works. This file is the ordered backlog.
       + image rebuild). #3 VM-vs-host on WSL2. #4 60s/7d sampling defaults.
       #5 cost price map.
 
+31. **Data backups — snapshot / restore / factory reset (promoted from the
+    discussion backlog 2026-07-24; spec → `docs/plans/data-backups.md`, now
+    with a restore-drill phase 5)** — first lane of the "Nova starts doing
+    things" arc (master plan approved 2026-07-24): blast-radius insurance
+    before Nova gains write-power anywhere else. One portable bundle
+    (manifest with schema version + checksums, pg_dump, memory tree,
+    nova_state, `ha_config` once it exists) via a fixed-verb backup-runner
+    sidecar; local + rclone cloud targets; Settings → Backups; typed
+    confirms + automatic pre-restore safety snapshot; quarterly restore
+    drill. **Wave 1 — start immediately**, parallel with #32 / the #20
+    spike / #34's ideator half.
+
+32. **Secrets management (promoted from the discussion backlog 2026-07-24;
+    spec → `docs/plans/secrets-management.md`; architecture LOCKED: built-in
+    encrypted store first)** — encrypted `secrets` table (AES-GCM,
+    `NOVA_SECRET_KEY`), `{{secret:name}}` references resolved only at the
+    outbound call, Settings → Secrets, agents list names never values;
+    closes the plaintext-at-rest gaps (`mcp_servers.headers`,
+    `llm_providers.api_key`); 1Password/Bitwarden/Vaultwarden stay later
+    opt-in reference-resolvers. Phase 1 unblocks `{{secret:ha_token}}`
+    (#35) and `{{secret:github_pat}}` (#33 T4). **Wave 1.**
+
+33. **Coding team pipeline (2026-07-24; spec →
+    `docs/plans/coding-team-pipeline.md`)** — the team layer on #20's ACP
+    delegation: roles as STAGES of a backend state machine, not conversing
+    agents (LOCKED, Jeremy 2026-07-24) — brief (Nova-main as PM) → spec →
+    failing-tests → implement → independent review (security checklist +
+    protected-paths tripwire) → browser-QA screenshots; one ACP session per
+    stage in the same task worktree; artifacts in-worktree
+    (`.nova/spec.md`, `.nova/review.md`); operator checkpoints after spec
+    and review; red→green enforced mechanically by the broker. GitHub MCP
+    with `{{secret:github_pat}}`; push only via a consent-gated,
+    branch-only broker verb with a coder-mounted deploy key; deploy v1 =
+    compose-on-same-host stack verbs on inference-control (which stays the
+    ONLY docker.sock holder). Operator merge is the gate indefinitely.
+    Depends on #20 phases 0–3 and, for T4, #32. **Waves 3–4.**
+
+34. **Ideation + goals (2026-07-24; spec →
+    `docs/plans/ideation-goals.md`)** — Nova proposes things to build: a
+    read-only `ideator` agent + weekly automation raising 1–3
+    memory-grounded ideas into the recommendations inbox; a minimal
+    `goals` table + Library → Goals tab; approving an idea creates a goal;
+    `coding_tasks.goal_id` links pipeline work to goals. Autonomous goal
+    pursuit is EXCLUSIVELY #36 stage 4. **Ideator half Wave 1** (zero hot
+    files); goals table Wave 3.
+
+35. **Home Assistant (promoted from Later 2026-07-24; spec →
+    `docs/plans/home-assistant.md`)** — LOCKED (Jeremy, 2026-07-24): HA
+    Container as a nova compose service now (profile `home`; IP-based
+    devices only under WSL2 — no USB-radio fights), dedicated HAOS box
+    later for Zigbee/Thread; Nova-side integration identical either way
+    (HA's own MCP server + `Authorization: Bearer {{secret:ha_token}}`).
+    Scoped `home` agent (explicit `mcp:home-assistant/*` grants only),
+    guardian actuation tiers from day one (reads free;
+    locks/garage/alarm/climate-setpoints/cameras consent-gated via the
+    existing rail), daily house digest + evening check; no event-bus
+    streaming in v1. After #32 phase 1. **Wave 2.**
+
+36. **Self-improvement arc (2026-07-24; spec →
+    `docs/plans/self-improvement.md`)** — the staged umbrella, nothing
+    self-modifies until it can be graded: (1) measure = model-eval
+    pipeline (spec'd; challengers now include same-model-different-prompt);
+    (2) soft-layer self-tuning proposals with eval evidence,
+    operator-approved, never auto-applied, tool grants never self-widened;
+    (3) Nova-improves-Nova = the #33 pipeline with the nova repo as a
+    workspace + the staging-stack design from the Later sketch (operator
+    merge = the gate indefinitely); (4) goal autonomy — goal-runner over
+    #34's goals with per-goal token/cost budgets (needs #16), kill switch
+    (`autonomy.enabled`), ledger view; activation gated on a LOCKED
+    checklist (restore drill passed, cost caps live, ledger UI live, kill
+    switch tested, 2-week supervised trial). Containment invariants LOCKED
+    in the spec. **Waves 3–5.**
+
+**Wave ordering for the 2026-07-24 "Nova starts doing things" arc**
+(#31–#36 plus #20; the plan specs are authoritative): Wave 1, parallel —
+#31, #32, #20 phase-0 spike, #34 ideator. Wave 2 — #20 phases 1–3, #35,
+model-eval pipeline. Wave 3 — #33 T1–T3, #34 goals, #36 stage 2, and #16
+pulled forward (cloud coding spend needs caps before it grows). Wave 4 —
+#33 T4–T5, #36 stage 3. Wave 5 — #36 stage 4, only after its activation
+checklist passes.
+
 ### Discussion backlog (captured 2026-07-21 — to scope/plan, not yet numbered)
 
 Raised by Jeremy in one session; each needs a planning pass before it joins
@@ -1410,7 +1491,8 @@ unchanged.
 
 **Security / integrations.**
 - **Secrets management** *(plan drafted 2026-07-21 → `docs/plans/secrets-management.md`)*
-  — a home for tokens Nova's integrations need (GitHub PAT for the GitHub MCP
+  — **PROMOTED to #32 (2026-07-24; store-first architecture LOCKED).**
+  A home for tokens Nova's integrations need (GitHub PAT for the GitHub MCP
   server, keyed-tool API keys). Today MCP auth headers sit **plaintext** in the DB;
   provider keys are env-only; trace redaction is the only guardrail. Plan: a
   built-in **encrypted** secret store, referenced by name (`{{secret:github_pat}}`),
@@ -1420,7 +1502,8 @@ unchanged.
   Gates the keystone's GitHub-MCP recommendation being actionable.
 
 - **Data backups / restore / factory reset** *(plan drafted 2026-07-21 →
-  `docs/plans/data-backups.md`)* — snapshot all of Nova's state (Postgres +
+  `docs/plans/data-backups.md`)* — **PROMOTED to #31 (2026-07-24; restore
+  drill added as phase 5).** Snapshot all of Nova's state (Postgres +
   memory files + control state; model weights excluded, re-downloadable) into
   one portable bundle, store it **locally or in the cloud** (rclone — 50+
   backends), **import** to restore, and a typed-confirm **factory reset**. A
@@ -1482,13 +1565,15 @@ unchanged.
   Nextcloud, iCloud public links), full Google Calendar OAuth as a keyed
   opt-in extra later (same posture as the mailbox decision).
 
-- **Home Assistant integration (2026-07-17)** — the ambient-presence /
-  smart-home half of the Jarvis register: "turn off the lights", "is the
-  garage closed". Rides #19 for free — Home Assistant ships its own MCP
-  server, so this is "register a preset server + grant it" rather than a
-  bespoke integration; local and keyless (fits batteries-included).
-  Guardian rules should watch actuation tools from day one (lights are
-  reversible; locks and garage doors are consent-gate material).
+- **Home Assistant integration (2026-07-17)** — **PROMOTED to #35
+  (2026-07-24; spec → `docs/plans/home-assistant.md`).** The
+  ambient-presence / smart-home half of the Jarvis register: "turn off the
+  lights", "is the garage closed". Rides #19 for free — Home Assistant
+  ships its own MCP server, so this is "register a preset server + grant
+  it" rather than a bespoke integration; local and keyless (fits
+  batteries-included). Guardian rules should watch actuation tools from
+  day one (lights are reversible; locks and garage doors are consent-gate
+  material).
 
 - **Location capability (from Nova's self-assessment, 2026-07-17)** —
   IP-based geolocation as the keyless v1 (feeds weather defaults +
@@ -1556,8 +1641,9 @@ unchanged.
   visual-heavy videos; decide summarize-into-memory vs index-full-transcript.
 - **Coding agent(s)** — SUPERSEDED as the primary path by #20 (ACP
   delegation, 2026-07-17): drive existing coding agents over the Agent
-  Client Protocol instead of building a bespoke harness. This item
-  remains only as the fully-local fallback lane (a local model on an
+  Client Protocol instead of building a bespoke harness; the team layer
+  above #20 is now #33 (`docs/plans/coding-team-pipeline.md`, 2026-07-24).
+  This item remains only as the fully-local fallback lane (a local model on an
   ACP-speaking harness — #20 phase 4 researches it). Original sketch:
   one general coding agent with strong tools (repo access, shell, file
   editing, test runner); specializations (reviewer, architect) as
@@ -1573,7 +1659,9 @@ unchanged.
   evaluate. ornith:9b left pulled on the dev box.
 
 - **Self-improvement pipeline — how Nova changes her own code (discussed
-  2026-07-17)** — direction settled, full spec once #20 lands. TWO-TIER
+  2026-07-17)** — **SPEC'D as #36 (2026-07-24; `docs/plans/
+  self-improvement.md` — this sketch is its stage 3).** Direction settled,
+  full spec once #20 lands. TWO-TIER
   RULE: the *soft layer* (agents, tools, automations, skills, prompts,
   soul — DB rows + markdown) is already runtime-self-modifiable, guarded
   by guardian rules and toggles; the *hard layer*

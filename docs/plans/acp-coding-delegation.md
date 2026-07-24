@@ -14,6 +14,11 @@ protocol knowledge dates to early 2026. **Phase 0 is a validation spike
 whose findings may reshape every later phase.** Treat phases 1–3 as the
 intended shape, not gospel.
 
+2026-07-24: the team layer above this — roles as pipeline stages (spec /
+tests / implement / review / browser QA), operator checkpoints, push +
+deploy verbs — is specified separately in `coding-team-pipeline.md`.
+This plan is the substrate that layer drives; build this first.
+
 ## Protocol essentials (validate in phase 0)
 
 - JSON-RPC over stdio between a client (editor/orchestrator — here, Nova)
@@ -78,8 +83,10 @@ Two candidate modes; v1 ships the first:
 1. **Sandboxed-autonomous (v1 default)**: inside an isolated worktree in
    a secretless container, auto-approve file edits within the worktree
    and an allowlisted command set (test/build/lint runners); deny
-   network fetches, global installs, and paths outside the worktree;
-   anything denied is logged in the session report. The real gate is the
+   agent-initiated network fetches beyond the container's egress
+   allowlist (a phase-0 deliverable — see below), global installs, and
+   paths outside the worktree; anything denied is logged in the session
+   report. The real gate is the
    diff review — nothing merges without the operator.
 2. **Interactive approvals (later)**: per-request approve/deny surfaced
    in chat. Needs new UI machinery and an operator who's present;
@@ -102,16 +109,22 @@ cost capture exists.
    JSON-RPC driver; map the real frames (session lifecycle, streaming
    updates, permission requests, FS mediation, cancellation); confirm
    worktree cwd + non-interactive auth work; re-survey adapters.
-   Deliverable: findings appended to this doc, adapter choice, go/no-go.
-   If FS mediation or permissioning can't confine the agent, STOP and
-   redesign before any build.
+   Deliverable: findings appended to this doc, adapter choice, go/no-go,
+   plus a concrete egress allowlist for the coder sidecar — the adapter
+   must reach its own API (api.anthropic.com / Google endpoints) and a
+   later push verb needs the git host, so the policy is a destination
+   allowlist, not a blanket network deny; package-registry installs stay
+   denied. If FS mediation or permissioning can't confine the agent,
+   STOP and redesign before any build.
 1. **Coder sidecar + broker + workspace registry.** Compose service,
    broker verbs, migration + Settings card (edit-mode gated). Verify:
    session spawned by hand against a scratch repo produces a worktree
    branch with a real edit; broker unreachable from host; kill verb works.
 2. **Chat integration.** `delegate_coding_task` + `check_coding_session`
    builtins (granted to main — dispatch depth is capped at 1, so no
-   liaison agent; the builtin IS the delegation), session table, activity
+   liaison agent; the builtin IS the delegation), session table (designed
+   with a nullable `task_id` FK so the `coding-team-pipeline.md` stage
+   machine extends it later rather than migrating it), activity
    streaming, completion journal. Verify through :5173: ask Nova to make
    a small real change in a registered repo; watch progress in the
    activity trail; journal report lands; branch + diff exist and main is

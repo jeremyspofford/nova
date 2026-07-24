@@ -18,7 +18,9 @@ and deliberately skips the fourth:
 3. **Control state** — `nova_state` (the model-store path) and the **secrets
    encryption key** (`NOVA_SECRET_KEY` / `./data/secret.key`, per
    `secrets-management.md`). Small but critical: without the key, restored
-   encrypted secrets are unrecoverable.
+   encrypted secrets are unrecoverable. Once the `home` compose profile
+   exists (`home-assistant.md`), the **`ha_config` volume** joins this
+   tier — small, precious, included by default.
 4. **Model weights** (`ollama_models`, `kokoro_models`, `whisper_models`) —
    large and **re-downloadable**. Excluded by default (a backup shouldn't be
    12 GB); opt-in for a fully-offline complete bundle.
@@ -35,6 +37,7 @@ manifest.json      # schema/app version, created_at, contents, checksums
 db.sql             # pg_dump of the nova database
 memory/            # verbatim copy of the memory markdown tree
 state/             # nova_state contents (models_dir, …)
+ha_config/         # Home Assistant config, once the home profile exists
 secret.key         # ONLY if "include secrets key" is on (see Decisions)
 models/            # ONLY if "include model weights" is on (large)
 ```
@@ -116,6 +119,14 @@ access and volume access. Two options (Decisions §4):
 4. **Polish.** Include-model-weights option, encrypted bundles (passphrase),
    backup size/count on the Storage card, restore-into-newer-schema migration
    path.
+5. **Restore drill (added 2026-07-24).** A backup that has never been
+   restored is a hope, not a backup. Quarterly (seeded automation +
+   runbook): restore the latest bundle into a throwaway scratch compose
+   project, boot it, run a smoke chat turn, tear down; journal the
+   outcome and notify on failure. Reuses the stack verbs from
+   `coding-team-pipeline.md` once those exist; until then the runbook is
+   manual. **Verify:** the drill restores yesterday's bundle into a
+   scratch stack that answers one chat turn, then cleans up.
 
 ## Decisions (defaults chosen; phase 1 can start)
 
@@ -140,7 +151,9 @@ access and volume access. Two options (Decisions §4):
   refuse. The manifest's schema version is the gate. Test both directions.
 - **The secrets key is the crown jewel** — excluding it protects the backup but
   means "restore ≠ working secrets" without the key; say so at restore time,
-  never silently restore un-decryptable secrets.
+  never silently restore un-decryptable secrets. Settings → Backups carries a
+  standing nudge to keep an offline copy of `NOVA_SECRET_KEY` — key loss
+  bricks every encrypted secret and every key-excluded bundle.
 - **Partial/corrupt bundles** — checksums + atomic writes (temp then rename);
   a failed upload must not leave a half-bundle that "lists" as restorable.
 - **Consistency** — `pg_dump` is a consistent snapshot; copy memory files right
