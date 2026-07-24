@@ -14,7 +14,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from app import db
-from app.tools import builtin
+from app.tools import builtin, fixtures
 from app.tools.http_executor import execute_http_tool
 
 log = logging.getLogger(__name__)
@@ -332,6 +332,21 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     except Exception:
         log.exception("rules engine failed; allowing call (fail-open)")
 
+    # eval record/replay (docs/plans/model-eval-pipeline.md). Below the grant
+    # and rule gates on purpose — both contestants must meet identical
+    # enforcement — and above every executor, so a replay-only tool can never
+    # reach the real world. No-op outside an eval run.
+    replayed = fixtures.intercept(name, args)
+    if replayed is not None:
+        return replayed
+
+    result = await _dispatch(name, args, ctx)
+    fixtures.observe(name, args, result)  # full result: redaction is downstream
+    return result
+
+
+async def _dispatch(name: str, args: dict, ctx: dict) -> str:
+    """Run the tool for real: builtin, then DB http_call, then MCP."""
     if name in BUILTIN_TOOLS:
         try:
             return await BUILTIN_TOOLS[name]["execute"](args, ctx)

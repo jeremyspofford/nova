@@ -204,6 +204,49 @@ human.
    fallback + replay-only mode). Exit: a champion/challenger pair runs
    from a CLI/endpoint call, real memory untouched (verified by hashing
    data/memory before/after), two trace ids returned.
+
+   STATUS: DONE 2026-07-24 — branch `eval-pipeline`, uncommitted. Exit
+   criterion met live: `ingestion/research-and-write-topic` ran
+   glm-5.2 vs ollama:qwen3:8b back-to-back against a throwaway DB, both
+   traces landed `source='eval'`, and the real memory dir's content
+   hash was byte-identical before and after. 91 checks in
+   `backend/tests/test_eval_harness.py`.
+
+   Three deviations from the design above, all deliberate:
+
+   - **No `memory_override` kwarg, no `_mem(ctx)` helper.** NEXT.md
+     freezes runner.py for the turn-speed lane, and without the runner
+     half the prompt-assembly reads and the narration journal write
+     still hit real memory — so Phase 1 could not have met its own exit
+     criterion. Instead the module-level `memory` singleton became a
+     contextvar-resolving proxy (`memory.sandbox(mem)`). Zero runner.py
+     edits, and it covers the SIX extra memory reaches in builtin.py the
+     four-call-site plan missed (`_ensure_source_node`,
+     `_ingest_media_core`, `_list_stale_topics`). The `ctx["eval_run"]`
+     failsafe is gone because the state it guarded — flag set, override
+     missing — cannot exist when the flag IS the instance.
+   - **`backend/app/evals/` is a package, not `evals.py`.** A module and
+     a package cannot share a name, and the suites lane ships
+     `evals/tasks/`.
+   - **Live execution is an allowlist, not a fallthrough.** Only the
+     scratch-store memory tools may really run in replay mode
+     (`fixtures.LIVE_OK`); everything unfixtured is refused and marks the
+     run invalid. The first cut let any granted-but-unfixtured tool
+     execute, which sent 8 of the 18 authored tasks to the live internet
+     with both contestants seeing different worlds — a fairness hole
+     that reported itself as a clean run. Caught in adversarial review.
+
+   Handoff to the suites lane: those same 8 tasks grant `web_search` /
+   `fetch_url` with no fixture behind them, so a stray call now
+   invalidates the run. One line each fixes it — add the tool to that
+   suite's `replay_only_tools` (both suites already define a
+   `replay_only_default`), or author the fixture. `run` prints the list
+   per contestant under "unservable".
+
+   Still deferred to lane-1-merge (marked TODO in code): a real per-run
+   `max_tool_rounds` override — pinning it today mutates the global
+   settings cache for the whole process — and the `_run_dispatch`
+   fixture hook that phase 4's orchestrator suite needs.
 2. **Grading + storage**: contract checkers; pairwise judge with
    position swap; migration 050 tables; eval_worker; observability
    filters. Exit: queued eval produces a stored verdict with
