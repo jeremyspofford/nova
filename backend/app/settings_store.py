@@ -47,6 +47,30 @@ SETTING_DEFS: list[dict] = [
                      "dispatches burn a round per search/fetch, so raise "
                      "this if specialists keep getting cut off — the "
                      "wall-clock kill switch remains the hard runaway stop.")},
+    {"key": "agents.max_dispatches_per_turn", "type": "number", "default": 3,
+     "min": 1, "max": 10, "section": "Agents",
+     "label": "Specialist dispatches per turn",
+     "description": ("How many times one turn may hand work to a specialist "
+                     "before it has to answer with what it has. Each dispatch "
+                     "is a full sub-turn — the single biggest cost in a slow "
+                     "turn — so this is the budget that keeps 'ask a "
+                     "specialist' from becoming an unbounded fan-out.")},
+    {"key": "agents.dispatch_timeout_s", "type": "number", "default": 300,
+     "min": 30, "max": 900, "section": "Agents",
+     "label": "Dispatch time limit (seconds)",
+     "description": ("Hard wall-clock cap on one specialist dispatch. Past "
+                     "it the specialist is stopped and the turn continues "
+                     "with an error in its place, so one stuck sub-agent "
+                     "can't hold a reply open forever.")},
+    {"key": "agents.local_fallback_enabled", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Fall back to the cloud when local is down",
+     "description": ("If an agent's local model can't be reached (server "
+                     "down, model not pulled), retry the round once on the "
+                     "main agent's model and note it in the reply. Only ever "
+                     "before the first word of output — a stream that failed "
+                     "halfway may already have run tools, and retrying it "
+                     "would double-bill and repeat those actions. Off = the "
+                     "turn fails with the error visible.")},
     {"key": "agents.intraturn_budget", "type": "number", "default": 60000,
      "min": 8000, "max": 400000, "section": "Agents",
      "label": "Prompt ceiling within one turn (tokens)",
@@ -78,6 +102,24 @@ SETTING_DEFS: list[dict] = [
      "description": ("Local inference endpoint. Default is the bundled service "
                      "(docker compose --profile inference); for host-run Ollama use "
                      "http://host.docker.internal:11434. Applies to the next request.")},
+    {"key": "inference.ollama_num_ctx", "type": "number", "default": 16384,
+     "min": 2048, "max": 262144, "section": "Inference",
+     "label": "Local context window (tokens)",
+     "description": ("What the local server is configured to hold — it must "
+                     "match OLLAMA_CONTEXT_LENGTH on the ollama service "
+                     "(docker-compose.yml). Nova refuses a local call whose "
+                     "prompt would exceed it instead of sending it: the "
+                     "server drops the FRONT of an oversized prompt, which "
+                     "is where the system prompt lives, and answers anyway "
+                     "with no error. Bigger costs VRAM — the KV cache grows "
+                     "with it.")},
+    {"key": "inference.ollama_timeout_s", "type": "number", "default": 300,
+     "min": 30, "max": 900, "section": "Inference",
+     "label": "Local request timeout (seconds)",
+     "description": ("How long to wait on the local server. Loading a large "
+                     "model off disk can take minutes, and a short timeout "
+                     "reads as a dead server on the first call after a "
+                     "swap.")},
     {"key": "inference.local_fallback_model", "type": "model",
      "model_scope": "ollama", "allow_empty": False,
      "default": "qwen2.5:3b", "section": "Inference",

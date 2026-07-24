@@ -453,6 +453,12 @@ _NO_RESULT = ("Error: this tool call produced no result (it was interrupted). "
               "Nothing was completed — re-issue it if you still need it.")
 
 
+def _is_dispatch(entry: tuple[dict, dict, bool]) -> bool:
+    """A well-formed dispatch call — eligible for the phase-4 sibling group."""
+    tc, _args, malformed = entry
+    return not malformed and tc["name"] == "dispatch_to_agent"
+
+
 def _is_parallel_safe(entry: tuple[dict, dict, bool]) -> bool:
     """(tool_call, args, malformed) -> may this call share a round with its
     neighbours? Malformed calls never qualify: they take the sequential
@@ -586,6 +592,243 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
         await _cancel_and_drain(tasks)
 
 
+# ── streaming specialist text (docs/plans/turn-speed.md, phase 5) ────────
+#
+# Depth-1 text used to be dropped, so a multi-minute dispatch looked frozen.
+# It is emitted as `sub_text`, a NEW top-level event with its own SSE key —
+# deliberately NOT "text":
+#
+#   * TTS speaks `text`. A specialist's working notes must never be read
+#     aloud mid-answer.
+#   * router_chat persists `activity` events as message rows. At ~10
+#     deltas/s a 200s dispatch would insert ~2,000 rows, evict real history
+#     out of load_history's 200-row window, and replay as spam forever.
+#
+# Batching by sentence (or ~250ms of silence) keeps the event rate near the
+# rate a human reads at, instead of the rate a model emits at.
+
+# the ONE predicate all three nesting layers use (run_agent -> _run_dispatch
+# -> the parent's dispatch branch): anything here is forwarded upward, and
+# `final` is consumed as the result instead.
+_FORWARDED_FROM_SUB = ("activity", "error", "sub_text")
+
+_SENTENCE_END = (". ", "! ", "? ", ".\n", "!\n", "?\n", "\n\n")
+_SUB_TEXT_MAX_CHARS = 400          # flush long unpunctuated runs anyway
+_SUB_TEXT_MAX_IDLE_S = 0.25
+
+
+class _SubTextBatcher:
+    """Accumulates deltas and releases them a sentence at a time."""
+
+    __slots__ = ("_buf", "_last")
+
+    def __init__(self):
+        self._buf = ""
+        self._last = time.monotonic()
+
+    def feed(self, delta: str) -> list[str]:
+        self._buf += delta
+        now = time.monotonic()
+        out: list[str] = []
+        while True:
+            cut = max((self._buf.find(e) + len(e) for e in _SENTENCE_END
+                       if e in self._buf), default=0)
+            if cut <= 0:
+                break
+            out.append(self._buf[:cut])
+            self._buf = self._buf[cut:]
+        if not out and (len(self._buf) >= _SUB_TEXT_MAX_CHARS
+                        or now - self._last >= _SUB_TEXT_MAX_IDLE_S):
+            out.append(self._buf)
+            self._buf = ""
+        if out:
+            self._last = now
+        return [chunk for chunk in out if chunk.strip()]
+
+    def drain(self) -> list[str]:
+        rest, self._buf = self._buf, ""
+        return [rest] if rest.strip() else []
+
+
+# ── concurrent sibling dispatches (docs/plans/turn-speed.md, phase 4) ────
+#
+# Ordered after phase 3 on purpose: whatever extra dispatches this
+# encourages are cheap ones. The hard constraint is that ollama SERIALIZES
+# generation — two dispatches pointed at the same local server would not
+# overlap, they would queue, and the second would sit at the first-byte
+# timeout while their alternating prompts destroyed each other's prefix
+# cache. So overlap is decided by BACKEND, never by count.
+
+
+async def _dispatch_backend(agent_name: str) -> str:
+    """Which inference backend this dispatch will land on.
+
+    'ollama' means the single local server (one lane at a time); any other
+    value fans out fine. A lookup failure counts as local — the safe
+    direction, since serializing a cloud pair only costs time, while
+    overlapping a local pair costs a failed turn.
+    """
+    try:
+        from app.agents import registry as agent_registry
+        target = await agent_registry.get_agent_by_name(agent_name)
+    except Exception:
+        log.exception("dispatch backend lookup failed for %s", agent_name)
+        return "ollama"
+    model = llm_router.effective_model((target or {}).get("model") or "")
+    if not model:
+        return "ollama"
+    return "ollama" if llm_router.is_local(model) else model.split(":", 1)[0]
+
+
+async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
+                              dispatch_depth: int, automation: Optional[str],
+                              results: dict[str, str]) -> AsyncIterator[dict]:
+    """Run consecutive dispatch calls concurrently, across backends only.
+
+    Each child gets its OWN task, created inside its own `trace.span`
+    context: task creation copies the contextvar context, so every span the
+    sub-agent opens nests under ITS dispatch. One task round-robining
+    between children would attribute half of one specialist's spans to the
+    other one, which is worse than no tracing at all.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    cap = float(settings_store.get("agents.dispatch_timeout_s") or 300)
+    local_lane = asyncio.Semaphore(1)   # ollama generates one at a time
+
+    backends = [await _dispatch_backend(args.get("agent_name", ""))
+                for _tc, args in entries]
+
+    async def _one(tc: dict, args: dict, serialize: bool) -> None:
+        name = args.get("agent_name", "")
+        text = ""
+        try:
+            async with AsyncExitStack() as stack:
+                if serialize:
+                    await stack.enter_async_context(local_lane)
+                async with trace.span("dispatch", name) as dsp:
+                    dsp["message"] = trace.redact_text(
+                        args.get("message") or "", 200)
+                    dsp["backend"] = "local" if serialize else "cloud"
+
+                    async def pump():
+                        nonlocal text
+                        agen = _run_dispatch(args, dispatch_depth, automation)
+                        try:
+                            async for sub in agen:
+                                if sub["type"] == "final":
+                                    text = sub["text"]
+                                elif sub["type"] in _FORWARDED_FROM_SUB:
+                                    queue.put_nowait(("event", name, sub))
+                        finally:
+                            # closing it HERE is what runs the child's own
+                            # cancellation contract inside this task
+                            await agen.aclose()
+
+                    try:
+                        # the scheduler's kill-switch pattern: one runaway
+                        # specialist must not hold the whole turn open
+                        await asyncio.wait_for(pump(), timeout=cap)
+                    except asyncio.TimeoutError:
+                        dsp["error"] = "timeout"
+                        text = text or (
+                            f"Error: {name} did not finish within "
+                            f"{cap:.0f}s and was stopped.")
+                    dsp["result_size"] = len(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a specialist must not kill the turn
+            log.exception("dispatch to %s failed", name)
+            text = f"Error dispatching to {name}: {e}"
+        finally:
+            # exactly one terminal message per task, on every exit path
+            queue.put_nowait(("done", name, (tc, text)))
+
+    tasks: list[asyncio.Task] = []
+    try:
+        tasks = [asyncio.create_task(
+                     _one(tc, args, serialize=(backends[i] == "ollama")),
+                     name=f"dispatch:{args.get('agent_name', '')}")
+                 for i, (tc, args) in enumerate(entries)]
+        remaining = len(tasks)
+        while remaining:
+            kind, name, payload = await queue.get()
+            if kind == "event":
+                yield payload
+                continue
+            tc, text = payload
+            result = text or "Error: dispatched agent produced no result"
+            results[tc["id"]] = result
+            yield {"type": "activity", "kind": "agent_reply", "name": name,
+                   "agent": name, "detail": result[:2000]}
+            remaining -= 1
+    finally:
+        await _cancel_and_drain(tasks)
+
+
+# ── local-model failure handling (docs/plans/turn-speed.md, phase 3) ─────
+#
+# Retry-elsewhere is safe ONLY before the first byte. A stream that already
+# produced output may have executed tools; retrying it double-bills the
+# round and repeats every side effect it had already caused.
+_FALLBACK_CLASSES = {"connect_failed", "http_status"}
+
+_last_fallback_notice = 0.0
+_FALLBACK_NOTICE_EVERY_S = 1800   # debounce: at most one alert per 30 min
+
+
+async def _fallback_target(agent: dict, failed_model: str,
+                           failure: dict) -> Optional[str]:
+    """The model to retry this round on, or None to surface the failure.
+
+    Deliberately narrow. It fires only when a LOCAL model could not be
+    reached at all, and it resolves the target FIRST: on a keyless
+    local-first install the main agent is itself on ollama, and "falling
+    back" to the same dead server just doubles the time to failure.
+    """
+    if failure.get("error_class") not in _FALLBACK_CLASSES:
+        return None
+    if not settings_store.get("agents.local_fallback_enabled"):
+        return None
+    if not llm_router.is_local(llm_router.effective_model(failed_model)):
+        return None   # a cloud provider's own error is not ours to reroute
+    try:
+        from app.agents import registry as agent_registry
+        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
+    except Exception:
+        log.exception("fallback lookup failed; surfacing the original error")
+        return None
+    target = llm_router.effective_model((main or {}).get("model") or "")
+    if not target or target == llm_router.effective_model(failed_model):
+        return None
+    if llm_router.is_local(target):
+        log.warning("no fallback: the main agent is on the same local server")
+        return None
+    return target
+
+
+def _notify_fallback(agent: dict, failed_model: str, target: str,
+                     failure: dict) -> None:
+    """Tell the operator their local tier is down — debounced.
+
+    Honest receipts: without this the cost win silently evaporates and the
+    operator budgets on $0 turns that are quietly billing a cloud provider.
+    """
+    global _last_fallback_notice
+    now = time.monotonic()
+    if _last_fallback_notice and now - _last_fallback_notice < _FALLBACK_NOTICE_EVERY_S:
+        return
+    _last_fallback_notice = now
+    try:
+        from app import notify
+        asyncio.ensure_future(notify.send(
+            f"{agent.get('name')} could not reach {failed_model} "
+            f"({failure.get('error_class')}) and is running on {target} "
+            f"instead — local inference is down, and these turns cost money.",
+            title="Nova: local model unreachable", tags=["warning"]))
+    except Exception:
+        log.exception("fallback notification failed")
+
+
 async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
                     conversation_summary: str | None = None,
@@ -659,54 +902,87 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # output the model can always re-fetch)
     dispatch_result_ids: set[str] = set()
     bulk_result_ids: set[str] = set()
+    dispatches_made = 0
+    sub_stream = _SubTextBatcher()
 
     max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
+    round_model = agent["model"]      # may switch to the fallback mid-turn
     for round_no in range(max_rounds):
         round_text = ""
         tool_calls: list[dict] = []
-        errored = False
+        failure: dict | None = None
 
-        async with trace.span(
-                "llm_call", llm_router.effective_model(agent["model"])) as lsp:
-            lsp["agent"] = agent.get("name")
-            lsp["round"] = round_no + 1
-            # overflow protection, immediately before the request is built:
-            # a no-op under the ceiling, and never removes or reorders a
-            # message (an orphaned tool_call is a provider 400)
-            context_trim.trim_transcript(
-                messages, model=llm_router.effective_model(agent["model"]),
-                exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
-                detail=lsp)
-            async for event in llm_router.stream_chat(messages, agent["model"],
-                                                      tools or None):
-                etype = event.get("type")
-                if etype == "text":
-                    round_text += event["text"]
-                    if dispatch_depth == 0:
-                        yield {"type": "text", "text": event["text"]}
-                elif etype == "tool_calls":
-                    tool_calls = event["tool_calls"]
-                elif etype == "usage":
-                    u = event.get("usage") or {}
-                    lsp["prompt_tokens"] = u.get("prompt_tokens")
-                    lsp["completion_tokens"] = u.get("completion_tokens")
-                    # provider-reported prefix-cache hits (OpenAI-compat
-                    # `prompt_tokens_details.cached_tokens`) — the ledger
-                    # evidence for whether prompt-order changes actually
-                    # buy cached prefills (turn-speed phase 0)
-                    det = u.get("prompt_tokens_details") or {}
-                    if isinstance(det, dict) and det.get("cached_tokens") is not None:
-                        lsp["cached_tokens"] = det["cached_tokens"]
-                elif etype == "error":
-                    lsp["error"] = event["error"]
-                    yield {"type": "error", "error": event["error"]}
-                    errored = True
-                    break
-            lsp["completion_chars"] = len(round_text)
-            lsp["tool_calls_requested"] = len(tool_calls)
+        while True:   # at most twice: the agent's model, then the fallback
+            round_text = ""
+            tool_calls = []
+            failure = None
+            async with trace.span(
+                    "llm_call", llm_router.effective_model(round_model)) as lsp:
+                lsp["agent"] = agent.get("name")
+                lsp["round"] = round_no + 1
+                # overflow protection, immediately before the request is
+                # built: a no-op under the ceiling, and never removes or
+                # reorders a message (an orphaned tool_call is a 400)
+                context_trim.trim_transcript(
+                    messages, model=llm_router.effective_model(round_model),
+                    exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
+                    detail=lsp)
+                async for event in llm_router.stream_chat(messages, round_model,
+                                                          tools or None):
+                    etype = event.get("type")
+                    if etype == "text":
+                        round_text += event["text"]
+                        if dispatch_depth == 0:
+                            yield {"type": "text", "text": event["text"]}
+                        else:
+                            # a specialist's thinking, batched (phase 5).
+                            # A separate event type, never "text": TTS
+                            # speaks text, and a sub-agent's working notes
+                            # must never be read aloud.
+                            for chunk in sub_stream.feed(event["text"]):
+                                yield {"type": "sub_text", "text": chunk,
+                                       "agent": agent.get("name")}
+                    elif etype == "tool_calls":
+                        tool_calls = event["tool_calls"]
+                    elif etype == "usage":
+                        u = event.get("usage") or {}
+                        lsp["prompt_tokens"] = u.get("prompt_tokens")
+                        lsp["completion_tokens"] = u.get("completion_tokens")
+                        # provider-reported prefix-cache hits (OpenAI-compat
+                        # `prompt_tokens_details.cached_tokens`) — the ledger
+                        # evidence for whether prompt-order changes actually
+                        # buy cached prefills (turn-speed phase 0)
+                        det = u.get("prompt_tokens_details") or {}
+                        if isinstance(det, dict) and det.get("cached_tokens") is not None:
+                            lsp["cached_tokens"] = det["cached_tokens"]
+                    elif etype == "error":
+                        lsp["error"] = event["error"]
+                        lsp["error_class"] = event.get("error_class")
+                        failure = event
+                        break
+                for chunk in (sub_stream.drain() if dispatch_depth else []):
+                    yield {"type": "sub_text", "text": chunk,
+                           "agent": agent.get("name")}
+                lsp["completion_chars"] = len(round_text)
+                lsp["tool_calls_requested"] = len(tool_calls)
 
-        if errored:
-            return
+            if failure is None:
+                break
+            target = await _fallback_target(agent, round_model, failure)
+            if not target:
+                yield {"type": "error", "error": failure["error"]}
+                return
+            log.warning("agent %s: %s unreachable (%s) — retrying this round "
+                        "on %s", agent.get("name"), round_model,
+                        failure.get("error_class"), target)
+            note = (f"\n\n[Note: {agent.get('name')}'s model "
+                    f"({llm_router.effective_model(round_model)}) was "
+                    f"unreachable, so this ran on {target} instead.]")
+            final_text += note
+            if dispatch_depth == 0:
+                yield {"type": "text", "text": note}
+            _notify_fallback(agent, round_model, target, failure)
+            round_model = target
 
         final_text += round_text
 
@@ -776,6 +1052,49 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     i = j
                     continue
 
+            # a RUN of consecutive dispatches: siblings overlap when they
+            # land on different backends (phase 4)
+            if concurrency > 1 and _is_dispatch(parsed[i]):
+                j = i
+                while j < len(parsed) and _is_dispatch(parsed[j]):
+                    j += 1
+                if j - i > 1:
+                    group = [(t, a) for t, a, _ in parsed[i:j]]
+                    budget = int(settings_store.get(
+                        "agents.max_dispatches_per_turn") or 3)
+                    runnable: list[tuple[dict, dict]] = []
+                    results = {}
+                    for gt, ga in group:
+                        calls_made += 1
+                        dispatch_result_ids.add(gt["id"])
+                        dispatches_made += 1
+                        yield {"type": "activity", "kind": "tool_start",
+                               "name": gt["name"], "agent": agent.get("name"),
+                               "args": _brief(ga), "detail": _brief(ga)}
+                        if dispatches_made > budget:
+                            results[gt["id"]] = (
+                                f"Error: this turn has already used its "
+                                f"{budget} specialist dispatches. Answer with "
+                                f"what you have, or tell the operator what is "
+                                f"still missing.")
+                        else:
+                            runnable.append((gt, ga))
+                    if runnable:
+                        group_gen = _run_dispatch_group(
+                            runnable, dispatch_depth=dispatch_depth,
+                            automation=automation, results=results)
+                        try:
+                            async for ev in group_gen:
+                                yield ev
+                        finally:
+                            await group_gen.aclose()
+                    for gt, _ga in group:
+                        messages.append(
+                            {"role": "tool", "tool_call_id": gt["id"],
+                             "content": results.get(gt["id"], _NO_RESULT)[:8000]})
+                    i = j
+                    continue
+
             tc, args, malformed = parsed[i]
             i += 1
             calls_made += 1
@@ -818,6 +1137,24 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 # the specialist's report is the turn's product — exempt from
                 # overflow trimming no matter how old it gets
                 dispatch_result_ids.add(tc["id"])
+                dispatches_made += 1
+                budget = int(settings_store.get(
+                    "agents.max_dispatches_per_turn") or 3)
+                if dispatches_made > budget:
+                    # a per-turn budget, not a depth limit: each dispatch is
+                    # a full sub-turn, so "ask another specialist" is the
+                    # most expensive thing a turn can do. Same shape as the
+                    # depth-limit message — a result the model can act on.
+                    result = (f"Error: this turn has already used its "
+                              f"{budget} specialist dispatches. Answer with "
+                              f"what you have, or tell the operator what is "
+                              f"still missing.")
+                    yield {"type": "activity", "kind": "tool_result",
+                           "name": name, "agent": agent.get("name"),
+                           "args": _brief(args), "detail": result}
+                    messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                     "content": result})
+                    continue
                 # the sub-agent's own spans nest under this one (parent_span_id)
                 async with trace.span(
                         "dispatch", args.get("agent_name", "")) as dsp:
@@ -827,7 +1164,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                                                    automation):
                         if sub["type"] == "final":
                             result = sub["text"]
-                        elif sub["type"] in ("activity", "error"):
+                        elif sub["type"] in _FORWARDED_FROM_SUB:
                             yield sub
                     if not result:
                         result = "Error: dispatched agent produced no result"
@@ -924,10 +1261,10 @@ async def _run_dispatch(args: dict, parent_depth: int,
                                  automation=automation):
         if event["type"] == "final":
             sub_final = event["text"]
-        elif event["type"] == "activity":
+        elif event["type"] in _FORWARDED_FROM_SUB:
             yield event
-        elif event["type"] == "error":
-            sub_final = f"Error from {agent_name}: {event['error']}"
+            if event["type"] == "error":
+                sub_final = f"Error from {agent_name}: {event['error']}"
 
     yield {"type": "final", "text": sub_final or f"[{agent_name} returned nothing]"}
 
