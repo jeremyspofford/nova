@@ -95,10 +95,14 @@ def _ts_seconds(hours: str | None, minutes: str, seconds: str, millis: str) -> f
 
 
 def _vtt_to_segments(vtt_text: str) -> list[dict]:
-    """Minimal WebVTT cue parser: timestamps + text, inline tags stripped,
-    consecutive duplicate cues collapsed (rolling auto-captions repeat the
-    previous line as a visual effect — collapsing avoids near-duplicate
-    chunks downstream)."""
+    """Minimal WebVTT cue parser: timestamps + text, inline tags stripped.
+
+    Rolling auto-captions stream new words by re-displaying the previous
+    cue's tail alongside new text (a 2-line rolling window), so raw cues
+    are full of overlapping, near-duplicate text. Dedupe by stripping the
+    word-level overlap with the previous cue rather than only collapsing
+    byte-identical cues — that only caught the rare case where a cue
+    repeats verbatim, not the common "previous line + new line" case."""
     segments: list[dict] = []
     cur: dict | None = None
     for line in vtt_text.splitlines():
@@ -120,13 +124,33 @@ def _vtt_to_segments(vtt_text: str) -> list[dict]:
             cur["text"] = (cur["text"] + " " + text).strip()
     if cur and cur["text"]:
         segments.append(cur)
+    return _dedupe_rolling_captions(segments)
 
+
+def _dedupe_rolling_captions(segments: list[dict]) -> list[dict]:
+    """Strip each cue's word-level overlap with the previous cue, keeping
+    only the new words. A cue fully contained in the previous one (no new
+    words) is dropped and its end time extends the prior segment."""
     out: list[dict] = []
+    prev_words: list[str] = []
     for seg in segments:
-        if out and out[-1]["text"] == seg["text"]:
-            out[-1]["end"] = seg["end"]
+        words = seg["text"].split()
+        if not words:
             continue
-        out.append(seg)
+        max_overlap = min(len(prev_words), len(words))
+        overlap = 0
+        for k in range(max_overlap, 0, -1):
+            if prev_words[-k:] == words[:k]:
+                overlap = k
+                break
+        new_words = words[overlap:]
+        prev_words = words
+        if not new_words:
+            if out:
+                out[-1]["end"] = seg["end"]
+            continue
+        out.append({"start": seg["start"], "end": seg["end"],
+                    "text": " ".join(new_words)})
     return out
 
 
