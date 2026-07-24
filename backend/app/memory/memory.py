@@ -2,11 +2,18 @@
 
 Invariant: every indexed doc id is a real file path relative to the memory dir,
 so retrieval can always read the file back.
+
+The module-level `memory` name is a proxy, not the store itself — see the
+bottom of this file. Eval runs bind a scratch store to the current async
+context so a graded turn can never touch the operator's real memory.
 """
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 
 from app import timefmt
@@ -20,9 +27,39 @@ _SNIPPET_CHARS = 500
 _SKILL_SNIPPET_CHARS = 700
 
 
+def _refuse_overlap(root: Path) -> None:
+    """A scratch store may not overlap the operator's real memory dir.
+
+    Callers treat a sandbox root as disposable — the eval CLI rmtree's it —
+    so a root nested inside ./data/memory (or one containing it) would put a
+    delete of the operator's entire memory one bad --scratch-root away.
+    Checked here rather than at the call site because every future caller
+    inherits it.
+    """
+    real = Path(settings.okf_memory_dir).resolve()
+    if root == real or root.is_relative_to(real) or real.is_relative_to(root):
+        raise ValueError(
+            f"sandbox root {root} overlaps the real memory dir {real} — "
+            f"a scratch store must live somewhere disposable")
+
+
 class OkfMemory:
-    def __init__(self):
-        self.store = OkfStore(settings.okf_memory_dir)
+    def __init__(self, base_dir: Optional[str] = None):
+        """base_dir=None is the real store (settings.okf_memory_dir).
+
+        Passing one builds a SANDBOX instance: an independent store, index
+        and write lock rooted anywhere on disk. The path is resolved first
+        because store.write_concept computes `relative_to(base_dir.resolve())`
+        when it creates a file — an unresolved symlinked root (a /tmp that is
+        a symlink, say) raises ValueError on every create.
+        """
+        self.sandboxed = base_dir is not None
+        if base_dir is None:
+            root = settings.okf_memory_dir
+        else:
+            root = str(Path(base_dir).resolve())
+            _refuse_overlap(Path(root))
+        self.store = OkfStore(root)
         self.index = BM25Index()
         self._lock = asyncio.Lock()
 
@@ -357,8 +394,12 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             # (its full_transcript_item_id would point at a missing file and
             # block re-ingest without force). Lazy import keeps the OKF store
             # import-light — the ledger is an app-level concern, not the store's.
-            from app import media_ingests
-            await media_ingests.delete_by_item_id(doc_id)
+            # The ledger is Postgres, which no filesystem sandbox contains, so
+            # a scratch store stops at its own files: deleting a fixture note
+            # must never drop a real ingest row.
+            if not self.sandboxed:
+                from app import media_ingests
+                await media_ingests.delete_by_item_id(doc_id)
             return True
 
     async def stats(self) -> dict:
@@ -434,4 +475,79 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         return {"nodes": nodes, "edges": resolved}
 
 
-memory = OkfMemory()
+# ── the process's memory, and the eval sandbox seam ──────────────────────
+#
+# `memory` below is a PROXY, not the store. Seven modules do
+# `from app.memory.memory import memory` at module scope (runner.py:22,
+# tools/builtin.py:17, main.py:16, router_chat.py:26, scheduler.py:16,
+# ingest_worker.py:20, ingest_backfill.py:21) and hold their own reference,
+# so rebinding this name after import redirects nothing. Resolving on
+# attribute access is the only seam that reaches all of them — which is what
+# lets an eval run sandbox the agent runner's prompt-assembly reads and its
+# narration journal write without editing runner.py at all
+# (docs/plans/model-eval-pipeline.md, "Memory sandbox").
+#
+# Outside a sandbox() block this is exactly the old singleton: one instance,
+# resolved per access, no behavior change.
+
+_real = OkfMemory()
+
+_override: contextvars.ContextVar[Optional[OkfMemory]] = contextvars.ContextVar(
+    "okf_memory_override", default=None)
+
+
+def current() -> OkfMemory:
+    """The store this async context should read and write."""
+    return _override.get() or _real
+
+
+def real() -> OkfMemory:
+    """The operator's actual memory, ignoring any sandbox.
+
+    Only for code that must never be redirected (health probes, storage
+    stats). Anything an agent can reach should go through the proxy.
+    """
+    return _real
+
+
+@contextlib.contextmanager
+def sandbox(mem: OkfMemory):
+    """Bind a scratch store for this async context and everything it spawns.
+
+    Fail-safe by construction: there is no "flag set but override missing"
+    state to fall through, because the flag IS the instance. Tasks created
+    inside the block copy the context, so the runner's fire-and-forget
+    narration write lands in the scratch store too.
+    """
+    if not mem.sandboxed:
+        raise ValueError(
+            "refusing to bind the real memory store as a sandbox — "
+            "construct OkfMemory(base_dir=<scratch dir>)")
+    token = _override.set(mem)
+    try:
+        yield mem
+    finally:
+        _override.reset(token)
+
+
+class _MemoryProxy:
+    """Attribute-forwarding view of `current()`.
+
+    Callers reach through it for methods (memory.write, memory.context) and
+    for attributes (memory.store, memory.index, memory._GENERIC_TAGS,
+    memory._index_file), so it forwards everything rather than wrapping a
+    fixed method list.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str):
+        return getattr(current(), name)
+
+    def __repr__(self) -> str:
+        mem = current()
+        where = "sandbox" if mem.sandboxed else "real"
+        return f"<memory {where} at {mem.store.base_dir}>"
+
+
+memory = _MemoryProxy()
