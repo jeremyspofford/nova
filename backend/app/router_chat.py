@@ -165,17 +165,23 @@ async def chat_stream(request: ChatRequest):
             yield _sse({"meta": {"conversation_id": conversation_id,
                                  "model": model_eff,
                                  "trace_id": str(turn.id)}})
+            # held by name so the finally can close it deterministically
+            events = agent_runner.run_agent(
+                main_agent, turn_messages,
+                conversation_summary=conversation.get("summary"),
+                system_suffix=voice_suffix, speaker=speaker)
             try:
-                async for event in agent_runner.run_agent(
-                        main_agent, turn_messages,
-                        conversation_summary=conversation.get("summary"),
-                        system_suffix=voice_suffix, speaker=speaker):
+                async for event in events:
                     etype = event["type"]
                     if etype == "text":
                         yield _sse({"t": event["text"]})
                     elif etype == "activity":
+                        # `args` is additive (parallel tool results carry the
+                        # brief so simultaneous same-name lines are
+                        # distinguishable); old clients ignore unknown keys
                         yield _sse({"activity": {k: event.get(k) for k in
-                                                 ("kind", "name", "agent", "detail")}})
+                                                 ("kind", "name", "agent",
+                                                  "args", "detail")}})
                         # persist tool activity as an audit row (fire and forget)
                         asyncio.ensure_future(conversations.append_message(
                             conversation_id, "tool",
@@ -192,6 +198,15 @@ async def chat_stream(request: ChatRequest):
                 log.exception("chat stream failed")
                 turn.set_error(str(e))
                 yield _sse({"error": str(e)})
+            finally:
+                # A disconnect or interject cancels this task while the
+                # runner sits suspended at a yield, so its own cleanup would
+                # otherwise wait for GC finalization — a race the ledger
+                # flush at the end of this trace context usually wins,
+                # losing exactly the in-flight spans. Closing it here runs
+                # the runner's cancellation contract (cancel-and-AWAIT the
+                # round's tool tasks, stamp their spans cancelled) first.
+                await events.aclose()
 
         if final_text.strip():
             try:

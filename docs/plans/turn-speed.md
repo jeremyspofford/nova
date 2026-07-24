@@ -81,6 +81,21 @@ move.
 
 ## Phase 1 — Parallel same-round tool calls (read-only whitelist)
 
+STATUS: BUILT + VERIFIED 2026-07-24 on branch `turn-speed` (uncommitted,
+awaiting review). All rails implemented; all four Verify checks run — 29
+stub assertions (`backend/tests/test_tool_concurrency.py`), real tools in a
+one-off rig, and a real SSE turn + mid-batch client abort against a rig
+backend on an isolated database. `agents.tool_concurrency` ships defaulting
+to 3 (the verify passed); 1 restores the old sequential loop exactly.
+Two findings worth carrying forward:
+  - The web_search cap is now measured, not assumed: 5 simultaneous real
+    queries return NOTHING (both providers fail in 0.6s); capped at 2 the
+    providers and results are identical to sequential at 3.0s vs 4.7s.
+  - Search degradation is a RATE limit, not a concurrency one — two
+    5-query rounds inside ~10s fail the second round whichever way they
+    run, and searxng's DDG engine has been serving CAPTCHAs since
+    2026-07-18. Phase 3's quality gate must not read that as a regression.
+
 `runner.py:526` runs the round's calls in a for-loop of awaits. Change,
 with these NON-NEGOTIABLE rails (each traces to a review finding):
 

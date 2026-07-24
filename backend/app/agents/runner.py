@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
 from app import narration, settings_store, timefmt, trace
@@ -418,6 +419,172 @@ async def _build_system_prompt(agent: dict, query: str, *,
     return "\n\n".join(parts)
 
 
+# ── parallel same-round tool calls (docs/plans/turn-speed.md, phase 1) ────
+#
+# A WHITELIST, never a blacklist: only tools that (a) mutate nothing and
+# (b) carry no same-round ordering contract may overlap. Everything else —
+# every write, dispatch_to_agent, find_mcp_tools (it mutates the live
+# toolset), every MCP/DB/http_call tool — runs sequentially in the model's
+# call order, because the model relies on that order (create-then-append
+# memory sequences, the per-chunk ingest flow) and serialized writes gain
+# no wall-clock from parallelism anyway. New read-only builtins do NOT
+# join this set automatically; adding one is a deliberate decision.
+_PARALLEL_TOOLS = frozenset({
+    "web_search", "fetch_url", "get_weather", "search_memory",
+    "read_memory_item", "list_agents", "list_models",
+    "list_followed_sources", "list_stale_topics",
+})
+
+# Per-tool ceilings INSIDE a batch, under the global concurrency budget.
+# web_search is capped because SearXNG proxies rate-limited upstream
+# engines. Measured 2026-07-24 on this box, five real queries: uncapped
+# (5 at once) returned NOTHING — all five failed both searxng and the
+# keyless DDG fallback in 0.6s; capped at 2 returned the same providers and
+# the same results as running them one at a time, in 3.0s vs 4.7s. Two it
+# is. fetch_url is deliberately uncapped (distinct hosts; overlapping is
+# exactly where the timeout-stacking win lives).
+_TOOL_CONCURRENCY_CAPS = {"web_search": 2}
+
+# The tool-result guarantee's last resort: a missing tool message for a
+# tool_call id is a provider 400 that kills the turn mid-research, so every
+# id gets a string even if its task vanished without one.
+_NO_RESULT = ("Error: this tool call produced no result (it was interrupted). "
+              "Nothing was completed — re-issue it if you still need it.")
+
+
+def _is_parallel_safe(entry: tuple[dict, dict, bool]) -> bool:
+    """(tool_call, args, malformed) -> may this call share a round with its
+    neighbours? Malformed calls never qualify: they take the sequential
+    path that hands the model a correctable error."""
+    tc, _args, malformed = entry
+    return not malformed and tc["name"] in _PARALLEL_TOOLS
+
+
+async def _run_tool(name: str, args: dict, ctx: dict,
+                    agent_name: str | None) -> str:
+    """Execute one tool inside its own trace span — shared by the sequential
+    path and the parallel batch so both write identical audit rows. Opening
+    the span inside the child task (not around the gather) is what keeps the
+    parent chain right: task creation copies the contextvar context."""
+    async with trace.span("tool", name) as tsp:
+        tsp["agent"] = agent_name
+        tsp["args"] = trace.redact_args(args)
+        result = await tool_registry.execute_tool(name, args, ctx)
+        tsp["result_size"] = len(result)
+        tsp["result_head"] = trace.redact_text(result)
+    return result
+
+
+async def _cancel_and_drain(tasks: list[asyncio.Task]) -> None:
+    """Cancel every still-running child and AWAIT it. The awaiting half is
+    the point: it is what lets each child's `finally` run, so trace.span
+    stamps status=cancelled + finished_at and the ledger still shows what
+    was in flight. Without it a client disconnect (or an interject, which
+    makes this the COMMON path — ChatPanel aborts the fetch and fires the
+    next turn immediately) leaves orphaned tasks doing real network work
+    with no audit rows.
+
+    Runs while the caller is already unwinding, and never raises: the
+    original exception propagates from the caller, never from here. One
+    bounded wait, so a wedged child can never hang the unwind."""
+    pending = [t for t in tasks if not t.done()]
+    for t in pending:
+        t.cancel()
+    if not pending:
+        return
+    try:
+        await asyncio.wait(pending, timeout=5.0)
+    except asyncio.CancelledError:
+        # Our own cancel scope is dead. Under Starlette/anyio that means
+        # EVERY await here raises immediately (observed live: a client
+        # disconnect), so we cannot wait for the children ourselves — hand
+        # them to a detached task, which is outside that scope and can.
+        # The children are already cancelled either way; this is what still
+        # closes their spans.
+        try:
+            asyncio.ensure_future(_await_all(pending))
+        except RuntimeError:
+            pass  # loop is shutting down; the cancels above still stand
+        return
+    still = [t for t in tasks if not t.done()]
+    if still:
+        log.warning("Tool tasks did not finish cancelling: %s",
+                    [t.get_name() for t in still])
+
+
+async def _await_all(tasks: list[asyncio.Task]) -> None:
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
+                              agent_name: str | None, concurrency: int,
+                              results: dict[str, str]) -> AsyncIterator[dict]:
+    """Run a run of consecutive read-only tool calls concurrently.
+
+    Yields the same activity events the sequential path does: every
+    tool_start up front in the model's call order, then each tool_result as
+    it lands. Results are collected into `results` (keyed by tool_call id)
+    for the caller to append as tool messages in call order — completion
+    order must never reorder the transcript.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    slots = asyncio.Semaphore(concurrency)
+    # per-batch, not module-level: no cross-turn state, no event-loop binding
+    caps = {tc["name"]: asyncio.Semaphore(min(_TOOL_CONCURRENCY_CAPS[tc["name"]],
+                                              concurrency))
+            for tc, _ in batch if tc["name"] in _TOOL_CONCURRENCY_CAPS}
+
+    async def _one(tc: dict, args: dict) -> None:
+        name = tc["name"]
+        result: str | None = None
+        try:
+            async with AsyncExitStack() as stack:
+                # per-tool cap FIRST so a queued web_search doesn't sit on a
+                # global slot another tool could be using
+                if name in caps:
+                    await stack.enter_async_context(caps[name])
+                await stack.enter_async_context(slots)
+                result = await _run_tool(name, args, ctx, agent_name)
+        except asyncio.CancelledError:
+            raise  # cancellation is not a result; the span is already stamped
+        except Exception as e:  # noqa: BLE001 — a tool must never kill the turn
+            log.exception("Tool %s failed inside a parallel batch", name)
+            result = f"Error executing {name}: {e}"
+        finally:
+            if result is not None:
+                results[tc["id"]] = result
+            # exactly one queue message per task, on EVERY exit path
+            # (finally runs for BaseException too) — the loop below reads
+            # one message per task, so a child that died without producing
+            # one would otherwise leave it waiting forever
+            queue.put_nowait((tc, args, result))  # unbounded: never blocks
+
+    tasks: list[asyncio.Task] = []
+    try:
+        # tasks first, then the start events: the work begins immediately
+        # instead of waiting on the consumer to pull each event off the SSE
+        # stream, and a close during the start events still finds real tasks
+        # to cancel rather than orphaning them a line later
+        tasks = [asyncio.create_task(_one(tc, args), name=f"tool:{tc['name']}")
+                 for tc, args in batch]
+        for tc, args in batch:
+            yield {"type": "activity", "kind": "tool_start", "name": tc["name"],
+                   "agent": agent_name, "args": _brief(args),
+                   "detail": _brief(args)}
+        for _ in range(len(tasks)):
+            tc, args, result = await queue.get()
+            if result is None:      # child died without producing one
+                log.warning("Tool %s produced no result", tc["name"])
+                continue
+            # the args brief rides the result event too: five simultaneous
+            # "web_search" lines are otherwise indistinguishable
+            yield {"type": "activity", "kind": "tool_result", "name": tc["name"],
+                   "agent": agent_name, "args": _brief(args),
+                   "detail": result[:200]}
+    finally:
+        await _cancel_and_drain(tasks)
+
+
 async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
                     conversation_summary: str | None = None,
@@ -543,12 +710,62 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                            for tc in tool_calls],
         })
 
+        # Args are parsed up front because the read-only/mutating partition
+        # below is decided per call: a malformed one executes nothing and
+        # always takes the sequential path.
+        parsed: list[tuple[dict, dict, bool]] = []
         for tc in tool_calls:
+            try:
+                parsed.append((tc, json.loads(tc["arguments"])
+                               if tc["arguments"] else {}, False))
+            except json.JSONDecodeError:
+                parsed.append((tc, {}, True))
+
+        # 1 = exactly the old sequential loop (the flag's default), so the
+        # revert is a settings change, not a deploy. Read per turn.
+        concurrency = max(1, int(settings_store.get("agents.tool_concurrency") or 1))
+
+        i = 0
+        while i < len(parsed):
+            # a RUN of consecutive read-only calls overlaps; any mutating
+            # call ends the run, so nothing is ever reordered across one
+            if concurrency > 1 and _is_parallel_safe(parsed[i]):
+                j = i
+                while j < len(parsed) and _is_parallel_safe(parsed[j]):
+                    j += 1
+                if j - i > 1:
+                    batch = [(t, a) for t, a, _ in parsed[i:j]]
+                    calls_made += len(batch)
+                    results: dict[str, str] = {}
+                    gather = _run_tools_parallel(batch, ctx, agent.get("name"),
+                                                 concurrency, results)
+                    try:
+                        async for ev in gather:
+                            yield ev
+                    finally:
+                        # an exception (GeneratorExit from a client
+                        # disconnect, CancelledError from an interject)
+                        # propagating out of `async for` leaves the inner
+                        # generator suspended for GC to finalize later —
+                        # closing it here is what actually runs its
+                        # cancel-and-await contract, in this task, now
+                        await gather.aclose()
+                    # tool-result guarantee: one tool message per tool_call
+                    # id, in the MODEL'S call order — completion order must
+                    # never reorder the transcript, and a missing id is a
+                    # provider 400 that kills the turn mid-research
+                    for bt, _ba in batch:
+                        messages.append(
+                            {"role": "tool", "tool_call_id": bt["id"],
+                             "content": results.get(bt["id"], _NO_RESULT)[:8000]})
+                    i = j
+                    continue
+
+            tc, args, malformed = parsed[i]
+            i += 1
             calls_made += 1
             name = tc["name"]
-            try:
-                args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-            except json.JSONDecodeError:
+            if malformed:
                 # broken argument JSON used to execute as {} — a silent
                 # wrong invocation (write_memory with no content). Give the
                 # model an error result it can correct next round instead;
@@ -558,6 +775,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                           "with corrected arguments.")
                 yield {"type": "activity", "kind": "tool_start", "name": name,
                        "agent": agent.get("name"),
+                       "args": (tc["arguments"] or "")[:200],
                        "detail": (tc["arguments"] or "")[:200]}
                 async with trace.span("tool", name) as tsp:
                     tsp["agent"] = agent.get("name")
@@ -566,13 +784,16 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     tsp["result_size"] = len(result)
                     tsp["result_head"] = result
                 yield {"type": "activity", "kind": "tool_result", "name": name,
-                       "agent": agent.get("name"), "detail": result[:200]}
+                       "agent": agent.get("name"),
+                       "args": (tc["arguments"] or "")[:200],
+                       "detail": result[:200]}
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
                 continue
 
             yield {"type": "activity", "kind": "tool_start", "name": name,
-                   "agent": agent.get("name"), "detail": _brief(args)}
+                   "agent": agent.get("name"), "args": _brief(args),
+                   "detail": _brief(args)}
 
             if name == "dispatch_to_agent":
                 result = ""
@@ -615,16 +836,13 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         else f"No unloaded MCP tools matched '{query}'."
                     tsp["result_size"] = len(result)
                 yield {"type": "activity", "kind": "tool_result", "name": name,
-                       "agent": agent.get("name"), "detail": result[:200]}
+                       "agent": agent.get("name"), "args": _brief(args),
+                       "detail": result[:200]}
             else:
-                async with trace.span("tool", name) as tsp:
-                    tsp["agent"] = agent.get("name")
-                    tsp["args"] = trace.redact_args(args)
-                    result = await tool_registry.execute_tool(name, args, ctx)
-                    tsp["result_size"] = len(result)
-                    tsp["result_head"] = trace.redact_text(result)
+                result = await _run_tool(name, args, ctx, agent.get("name"))
                 yield {"type": "activity", "kind": "tool_result", "name": name,
-                       "agent": agent.get("name"), "detail": result[:200]}
+                       "agent": agent.get("name"), "args": _brief(args),
+                       "detail": result[:200]}
 
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "content": result[:8000]})
