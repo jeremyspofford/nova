@@ -232,18 +232,27 @@ evidence rather than assumption.
     (regex), the task moved its ambiguous forbidden values onto anchored
     patterns, and the suite went to v3. A grader that fails a right answer
     is worse than no grader.
-  * **The residue was real, and POSITION fixed it.** Under the corrected
-    grader the agent still appended "a May 2026 leak claimed 2T params /
-    1M context — superseded" to the topic. Migration 052 closed the
-    "record the correction" loophole and changed nothing across five runs;
-    migration 053 moved the same words to the END of the agent prompt
-    (they had been sitting mid-prompt, ahead of tag hygiene and two whole
-    mode sections) and it went to 4/4 clean with zero leak mentions. The
-    documented lesson — must-win instructions go last — held again.
-  * **Still open:** the shelf-life rail is ~75%, not 100%. Prices and
-    hours still slip into a topic about one run in four. That is a
-    prompt-quality item for the eval pipeline's judge layer to keep
-    honest, not something to hill-climb further against one task.
+  * **The residue is real and only PARTLY fixed.** Under the corrected
+    grader the agent still sometimes appends "a May 2026 leak claimed 2T
+    params / 1M context — superseded" to the topic, which puts the wrong
+    numbers in memory where a later search surfaces them without the
+    caveat. Migration 052 closed the "record the correction" loophole
+    (no measurable change across 6 runs); 053 moved the same words to the
+    END of the prompt, where they had not been — tag hygiene and two whole
+    mode sections sat after them. Measured with the corrected grader:
+    3/6 clean before 053, 4/6 after. Better, but inside the noise at that
+    sample size — do NOT read it as solved.
+  * **The harness is fair, and that was worth proving.** Every invocation
+    had the first contestant pass and the second fail, which for a
+    grading pipeline would be a disqualifying bias. It is not one: both
+    runs get a byte-identical round-1 prompt (3627 tokens) and took the
+    same tool path, so the asymmetry was small-sample sampling noise.
+  * **Still open, and the honest state of both rails:** shelf-life passes
+    6 of 8 (prices or hours still slip into a topic about one run in
+    four); the superseded-figures rail passes 4 of 6. Both are materially
+    better than before and neither is solved. The right next move is the
+    eval pipeline's judge layer plus more samples per task — not more
+    prompt revisions hill-climbed against two tasks.
 
 The v1 premise "qwen3:30b-a3b Q4 fits the 3090 with room" FAILS
 arithmetic on the real box: ~18.6GB weights + ~3GB KV@32k + ~1–1.5GB

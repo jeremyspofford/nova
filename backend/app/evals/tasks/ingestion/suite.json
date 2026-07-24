@@ -8,19 +8,8 @@
   "run": {
     "max_tool_rounds": 10,
     "budget_seconds": 300,
-    "exclude_tools": [
-      "raise_recommendation"
-    ],
-    "replay_only_tools": [
-      "ingest_media",
-      "follow_source",
-      "unfollow_source",
-      "poll_sources",
-      "list_followed_sources",
-      "get_weather",
-      "web_search",
-      "fetch_url"
-    ],
+    "exclude_tools": ["raise_recommendation"],
+    "replay_only_tools": ["ingest_media", "follow_source", "unfollow_source", "poll_sources", "list_followed_sources", "get_weather", "web_search", "fetch_url"],
     "replay_only_default": "Error: this tool is not available in eval replay mode."
   },
   "tasks": [
