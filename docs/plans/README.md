@@ -35,7 +35,7 @@ In roadmap priority order:
 | [recommendation-surface.md](recommendation-surface.md) | discussion-backlog keystone | phases 1–2 SHIPPED (store/tool/banner + inbox/bell); phase 3 (actionable-approve via consent rails) remains |
 | [device-activity-monitoring.md](device-activity-monitoring.md) | Later | designed, not built; ActivityWatch/computer-usage — NOT smart home (that's [home-assistant.md](home-assistant.md)) |
 | [model-eval-pipeline.md](model-eval-pipeline.md) | gate for turn-speed phase 3 + #36 stage 2 | DECISIONS LOCKED 2026-07-24; standing answer to "can we swap agent X to model Y?"; challengers include same-model-different-prompt (2026-07-24 extension) |
-| [turn-speed.md](turn-speed.md) | latency lane (measured 2026-07-24) | PROPOSED; its runner.py restructure freezes other runner-touching lanes while it lands |
+| [turn-speed.md](turn-speed.md) | latency lane (measured 2026-07-24) | **ALL 6 PHASES SHIPPED 2026-07-24** — parallel read-only tools + cancellation, overflow protection, local-tier rails (quality gate FAILED: specialists stay on cloud), concurrent sibling dispatches, specialist text streaming. runner.py is unfrozen |
 | [data-backups.md](data-backups.md) | **#31 (Wave 1 — build first)** | blast-radius insurance before Nova acts anywhere; restore-drill phase 5 added 2026-07-24 |
 | [secrets-management.md](secrets-management.md) | **#32 (Wave 1)** | LOCKED 2026-07-24: built-in encrypted store first; phase 1 unblocks #33 T4 + #35 |
 | [coding-team-pipeline.md](coding-team-pipeline.md) | **#33 (Waves 3–4)** | team layer on #20 — roles as pipeline stages; build after [acp-coding-delegation.md](acp-coding-delegation.md) phases 0–3 |

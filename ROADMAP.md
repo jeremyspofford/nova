@@ -1393,7 +1393,12 @@ See README for what works. This file is the ordered backlog.
 36. **Self-improvement arc (2026-07-24; spec →
     `docs/plans/self-improvement.md`)** — the staged umbrella, nothing
     self-modifies until it can be graded: (1) measure = model-eval
-    pipeline (spec'd; challengers now include same-model-different-prompt);
+    pipeline — **stage 1 is now PARTLY BUILT (2026-07-24)**: harness core
+    (memory sandbox + tool fixtures), 3 authored suites x 6 tasks, and the
+    deterministic contract checker all shipped and used for real to
+    decide turn-speed phase 3; what remains is the pairwise judge, result
+    storage, and the Promote button (challengers now include
+    same-model-different-prompt);
     (2) soft-layer self-tuning proposals with eval evidence,
     operator-approved, never auto-applied, tool grants never self-widened;
     (3) Nova-improves-Nova = the #33 pipeline with the nova repo as a
