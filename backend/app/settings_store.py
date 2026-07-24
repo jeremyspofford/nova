@@ -47,6 +47,19 @@ SETTING_DEFS: list[dict] = [
                      "dispatches burn a round per search/fetch, so raise "
                      "this if specialists keep getting cut off — the "
                      "wall-clock kill switch remains the hard runaway stop.")},
+    {"key": "agents.intraturn_budget", "type": "number", "default": 60000,
+     "min": 8000, "max": 400000, "section": "Agents",
+     "label": "Prompt ceiling within one turn (tokens)",
+     "description": ("Safety net for long research turns, which grow their "
+                     "own prompt: every tool result is replayed to the model "
+                     "on the next round. At this ceiling the oldest raw "
+                     "search and page results get shortened in place so the "
+                     "turn can finish instead of overflowing the model's "
+                     "context. A specialist's report is never shortened. Set "
+                     "well ABOVE normal turns (a long research turn peaks "
+                     "around 32k) — this is overflow protection, not "
+                     "trimming; the model's own context window lowers it "
+                     "automatically when that is smaller.")},
     {"key": "agents.tool_concurrency", "type": "number", "default": 3,
      "min": 1, "max": 8, "section": "Agents",
      "label": "Parallel tool calls per round",

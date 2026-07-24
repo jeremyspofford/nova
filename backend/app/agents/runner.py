@@ -19,6 +19,7 @@ from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
 from app import narration, settings_store, timefmt, trace
+from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory.memory import memory
 from app.tools import registry as tool_registry
@@ -653,6 +654,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     final_text = ""
     calls_made = 0
+    # phase 2 bookkeeping: which tool results may never be trimmed (a
+    # specialist's report IS the turn's product) and which go first (raw web
+    # output the model can always re-fetch)
+    dispatch_result_ids: set[str] = set()
+    bulk_result_ids: set[str] = set()
 
     max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
     for round_no in range(max_rounds):
@@ -664,6 +670,13 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 "llm_call", llm_router.effective_model(agent["model"])) as lsp:
             lsp["agent"] = agent.get("name")
             lsp["round"] = round_no + 1
+            # overflow protection, immediately before the request is built:
+            # a no-op under the ceiling, and never removes or reorders a
+            # message (an orphaned tool_call is a provider 400)
+            context_trim.trim_transcript(
+                messages, model=llm_router.effective_model(agent["model"]),
+                exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
+                detail=lsp)
             async for event in llm_router.stream_chat(messages, agent["model"],
                                                       tools or None):
                 etype = event.get("type")
@@ -755,6 +768,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     # never reorder the transcript, and a missing id is a
                     # provider 400 that kills the turn mid-research
                     for bt, _ba in batch:
+                        if bt["name"] in context_trim._BULK_TOOLS:
+                            bulk_result_ids.add(bt["id"])
                         messages.append(
                             {"role": "tool", "tool_call_id": bt["id"],
                              "content": results.get(bt["id"], _NO_RESULT)[:8000]})
@@ -795,8 +810,14 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                    "agent": agent.get("name"), "args": _brief(args),
                    "detail": _brief(args)}
 
+            if name in context_trim._BULK_TOOLS:
+                bulk_result_ids.add(tc["id"])
+
             if name == "dispatch_to_agent":
                 result = ""
+                # the specialist's report is the turn's product — exempt from
+                # overflow trimming no matter how old it gets
+                dispatch_result_ids.add(tc["id"])
                 # the sub-agent's own spans nest under this one (parent_span_id)
                 async with trace.span(
                         "dispatch", args.get("agent_name", "")) as dsp:
