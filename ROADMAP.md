@@ -1365,6 +1365,29 @@ approve → test in staging → operator-test → promote to prod.**
 - **Catalog quick-add buttons** — per-row buttons in the model catalog to add →
   curated / install / assign-to-chat, instead of the manual create form.
 
+**Voice speaker identification — Nova knows who's talking** *(raised
+2026-07-23; **full spec approved same day → `docs/plans/speaker-id.md`** —
+decisions locked: kid mode = tone+tools+memory all three, unknown→ask,
+one tagged stream, real profiles table, sherpa-onnx not SpeechBrain)* — Jeremy: if he talks it knows it's him; if his kid talks it
+knows that and "speaks differently — like a different role and another
+identity to follow." Feasible and all-local: speaker embeddings
+(SpeechBrain ECAPA-TDNN class, ~20MB, no keys) computed on the same audio
+the whisper service already transcribes; enroll each person with a few
+utterances (the same enrollment UX wake-word learning #11 wants — build
+once); cosine-match per voice turn → tag the turn `speaker=jeremy|kid|
+unknown`. Downstream: per-speaker profile drives the persona layer (#15
+slot assembly — register/content rules per speaker) and a *reduced*
+permission tier for non-operator voices (kid mode: no tools that write/
+delete, no settings, guardian-enforced). HARD RULE for the planning pass:
+voice ID is personalization, NEVER authentication — a recognized voice can
+only ever NARROW privileges below the operator baseline (spoofable by
+playback; kids' voices drift; short utterances misfire). Adult-vs-child is
+the easy discrimination case. Typed chat has no voice signal — needs a
+manual user picker or operator-default. Needs a plan pass: user profiles
+table (v3 is single-operator today), voiceprint storage (biometric-adjacent:
+opt-in, local, deletable — same stance as #11), enrollment flow, whisper-
+service embedding endpoint, persona/guardian wiring.
+
 **Native mobile app** *(raised 2026-07-22, after the shell refactor's phone
 pass)* — Jeremy: the PWA is "usable-ish… decent enough for now", but "soon
 we'll want to work on creating actual android and/or ios app". Needs a
@@ -1436,6 +1459,21 @@ unchanged.
   redundant now that writes are clean, and risky). Composes with the
   recommendation surface and the orphaned-clusters item above; the
   memory-curation lane's next concrete item after #27's write-time linking.
+
+**Naming cleanup: purge "brain" from internal code** *(raised 2026-07-24,
+prompted by the Activity → note-detail linking work)* — Jeremy's 2026-07-22
+rule ([[canvas-is-the-app]]) banned "Brain" as a nav item/tab/label; the UI
+is clean today (the visible label is "{name}'s universe"), but the term is
+still baked into internal identifiers: `frontend/src/pages/Brain.tsx`, the
+`frontend/src/brain/` directory (`universe.ts`, `galaxy.ts`, `graph2d.ts`,
+`nova.ts`, `systems.ts`, `theme.ts`), `getBrainGraph()` / `onShowBrain` in
+the frontend, the `/api/v1/brain/graph` backend route, `brain.*` settings
+keys (`brain.view`, `brain.label_scale`, …) persisted in `settings_store`,
+and this doc's own "Brain / memory navigation" heading above. Full rename
+(e.g. → `universe`) needs a plan pass since the settings keys are *stored
+data*, not just identifiers — a straight rename orphans existing rows,
+needs a migration or a read-both-keys shim. Correctness-neutral, deferred
+behind more pressing lanes.
 
 ## Later
 
