@@ -453,6 +453,12 @@ _NO_RESULT = ("Error: this tool call produced no result (it was interrupted). "
               "Nothing was completed — re-issue it if you still need it.")
 
 
+def _is_dispatch(entry: tuple[dict, dict, bool]) -> bool:
+    """A well-formed dispatch call — eligible for the phase-4 sibling group."""
+    tc, _args, malformed = entry
+    return not malformed and tc["name"] == "dispatch_to_agent"
+
+
 def _is_parallel_safe(entry: tuple[dict, dict, bool]) -> bool:
     """(tool_call, args, malformed) -> may this call share a round with its
     neighbours? Malformed calls never qualify: they take the sequential
@@ -582,6 +588,121 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
             yield {"type": "activity", "kind": "tool_result", "name": tc["name"],
                    "agent": agent_name, "args": _brief(args),
                    "detail": result[:200]}
+    finally:
+        await _cancel_and_drain(tasks)
+
+
+# ── concurrent sibling dispatches (docs/plans/turn-speed.md, phase 4) ────
+#
+# Ordered after phase 3 on purpose: whatever extra dispatches this
+# encourages are cheap ones. The hard constraint is that ollama SERIALIZES
+# generation — two dispatches pointed at the same local server would not
+# overlap, they would queue, and the second would sit at the first-byte
+# timeout while their alternating prompts destroyed each other's prefix
+# cache. So overlap is decided by BACKEND, never by count.
+
+
+async def _dispatch_backend(agent_name: str) -> str:
+    """Which inference backend this dispatch will land on.
+
+    'ollama' means the single local server (one lane at a time); any other
+    value fans out fine. A lookup failure counts as local — the safe
+    direction, since serializing a cloud pair only costs time, while
+    overlapping a local pair costs a failed turn.
+    """
+    try:
+        from app.agents import registry as agent_registry
+        target = await agent_registry.get_agent_by_name(agent_name)
+    except Exception:
+        log.exception("dispatch backend lookup failed for %s", agent_name)
+        return "ollama"
+    model = llm_router.effective_model((target or {}).get("model") or "")
+    if not model:
+        return "ollama"
+    return "ollama" if llm_router.is_local(model) else model.split(":", 1)[0]
+
+
+async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
+                              dispatch_depth: int, automation: Optional[str],
+                              results: dict[str, str]) -> AsyncIterator[dict]:
+    """Run consecutive dispatch calls concurrently, across backends only.
+
+    Each child gets its OWN task, created inside its own `trace.span`
+    context: task creation copies the contextvar context, so every span the
+    sub-agent opens nests under ITS dispatch. One task round-robining
+    between children would attribute half of one specialist's spans to the
+    other one, which is worse than no tracing at all.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    cap = float(settings_store.get("agents.dispatch_timeout_s") or 300)
+    local_lane = asyncio.Semaphore(1)   # ollama generates one at a time
+
+    backends = [await _dispatch_backend(args.get("agent_name", ""))
+                for _tc, args in entries]
+
+    async def _one(tc: dict, args: dict, serialize: bool) -> None:
+        name = args.get("agent_name", "")
+        text = ""
+        try:
+            async with AsyncExitStack() as stack:
+                if serialize:
+                    await stack.enter_async_context(local_lane)
+                async with trace.span("dispatch", name) as dsp:
+                    dsp["message"] = trace.redact_text(
+                        args.get("message") or "", 200)
+                    dsp["backend"] = "local" if serialize else "cloud"
+
+                    async def pump():
+                        nonlocal text
+                        agen = _run_dispatch(args, dispatch_depth, automation)
+                        try:
+                            async for sub in agen:
+                                if sub["type"] == "final":
+                                    text = sub["text"]
+                                elif sub["type"] in ("activity", "error"):
+                                    queue.put_nowait(("event", name, sub))
+                        finally:
+                            # closing it HERE is what runs the child's own
+                            # cancellation contract inside this task
+                            await agen.aclose()
+
+                    try:
+                        # the scheduler's kill-switch pattern: one runaway
+                        # specialist must not hold the whole turn open
+                        await asyncio.wait_for(pump(), timeout=cap)
+                    except asyncio.TimeoutError:
+                        dsp["error"] = "timeout"
+                        text = text or (
+                            f"Error: {name} did not finish within "
+                            f"{cap:.0f}s and was stopped.")
+                    dsp["result_size"] = len(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a specialist must not kill the turn
+            log.exception("dispatch to %s failed", name)
+            text = f"Error dispatching to {name}: {e}"
+        finally:
+            # exactly one terminal message per task, on every exit path
+            queue.put_nowait(("done", name, (tc, text)))
+
+    tasks: list[asyncio.Task] = []
+    try:
+        tasks = [asyncio.create_task(
+                     _one(tc, args, serialize=(backends[i] == "ollama")),
+                     name=f"dispatch:{args.get('agent_name', '')}")
+                 for i, (tc, args) in enumerate(entries)]
+        remaining = len(tasks)
+        while remaining:
+            kind, name, payload = await queue.get()
+            if kind == "event":
+                yield payload
+                continue
+            tc, text = payload
+            result = text or "Error: dispatched agent produced no result"
+            results[tc["id"]] = result
+            yield {"type": "activity", "kind": "agent_reply", "name": name,
+                   "agent": name, "detail": result[:2000]}
+            remaining -= 1
     finally:
         await _cancel_and_drain(tasks)
 
@@ -858,6 +979,49 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         messages.append(
                             {"role": "tool", "tool_call_id": bt["id"],
                              "content": results.get(bt["id"], _NO_RESULT)[:8000]})
+                    i = j
+                    continue
+
+            # a RUN of consecutive dispatches: siblings overlap when they
+            # land on different backends (phase 4)
+            if concurrency > 1 and _is_dispatch(parsed[i]):
+                j = i
+                while j < len(parsed) and _is_dispatch(parsed[j]):
+                    j += 1
+                if j - i > 1:
+                    group = [(t, a) for t, a, _ in parsed[i:j]]
+                    budget = int(settings_store.get(
+                        "agents.max_dispatches_per_turn") or 3)
+                    runnable: list[tuple[dict, dict]] = []
+                    results = {}
+                    for gt, ga in group:
+                        calls_made += 1
+                        dispatch_result_ids.add(gt["id"])
+                        dispatches_made += 1
+                        yield {"type": "activity", "kind": "tool_start",
+                               "name": gt["name"], "agent": agent.get("name"),
+                               "args": _brief(ga), "detail": _brief(ga)}
+                        if dispatches_made > budget:
+                            results[gt["id"]] = (
+                                f"Error: this turn has already used its "
+                                f"{budget} specialist dispatches. Answer with "
+                                f"what you have, or tell the operator what is "
+                                f"still missing.")
+                        else:
+                            runnable.append((gt, ga))
+                    if runnable:
+                        group_gen = _run_dispatch_group(
+                            runnable, dispatch_depth=dispatch_depth,
+                            automation=automation, results=results)
+                        try:
+                            async for ev in group_gen:
+                                yield ev
+                        finally:
+                            await group_gen.aclose()
+                    for gt, _ga in group:
+                        messages.append(
+                            {"role": "tool", "tool_call_id": gt["id"],
+                             "content": results.get(gt["id"], _NO_RESULT)[:8000]})
                     i = j
                     continue
 

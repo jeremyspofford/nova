@@ -55,6 +55,13 @@ SETTING_DEFS: list[dict] = [
                      "is a full sub-turn — the single biggest cost in a slow "
                      "turn — so this is the budget that keeps 'ask a "
                      "specialist' from becoming an unbounded fan-out.")},
+    {"key": "agents.dispatch_timeout_s", "type": "number", "default": 300,
+     "min": 30, "max": 900, "section": "Agents",
+     "label": "Dispatch time limit (seconds)",
+     "description": ("Hard wall-clock cap on one specialist dispatch. Past "
+                     "it the specialist is stopped and the turn continues "
+                     "with an error in its place, so one stuck sub-agent "
+                     "can't hold a reply open forever.")},
     {"key": "agents.local_fallback_enabled", "type": "boolean", "default": True,
      "section": "Agents", "label": "Fall back to the cloud when local is down",
      "description": ("If an agent's local model can't be reached (server "

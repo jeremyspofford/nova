@@ -285,6 +285,16 @@ position, not a failure of the lane.
 
 ## Phase 4 — Concurrent sibling dispatches (after Phase 3 on purpose)
 
+STATUS: BUILT + VERIFIED 2026-07-24. Same-round dispatches overlap unless
+they land on the same local server. Live: two cloud dispatches started
+within the same 100ms and overlapped 4.3s of a 6.9s round (11.2s of work
+in 6.9s of wall clock); a client abort mid-dispatch left the turn and BOTH
+dispatch spans cancelled with end times, both children's llm_call spans
+cancelled with them, and no stray tasks. 24 assertions in
+backend/tests/test_dispatch_group.py, including the same-ollama pair
+provably serializing and every child span nesting under its own dispatch.
+
+
 Ordered after Phase 3 so any prompting-induced extra dispatches are
 local/cheap, not extra glm-5.2 sub-turns. Mechanics:
 
