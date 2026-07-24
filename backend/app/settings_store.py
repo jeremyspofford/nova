@@ -265,6 +265,12 @@ SETTING_DEFS: list[dict] = [
                      "A hesitant match counts as unknown — unknown voices "
                      "get the guest treatment, so uncertainty is always "
                      "safe.")},
+    {"key": "voice.speaker_autotrain", "type": "boolean", "default": True,
+     "section": "Voice", "label": "Keep learning enrolled voices",
+     "description": ("Fold decisively confident voice matches back into the "
+                     "voiceprint so recognition tracks a changing voice "
+                     "(kids grow). Only matches well above the threshold "
+                     "train; borderline ones never reinforce themselves.")},
     {"key": "voice.family_tools", "type": "string", "default": "web_search",
      "section": "Voice", "label": "Family voices can use",
      "description": ("Comma-separated tools available to recognized "

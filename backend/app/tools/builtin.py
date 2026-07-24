@@ -872,6 +872,39 @@ async def _request_operator_confirmation(args, ctx):
                         "message arrives.")})
 
 
+async def _remember_speaker(args, ctx):
+    """Auto-enrollment for the introduce-yourself path (speaker-id.md).
+    Turn-scoped: the runner grants this ONLY on unknown-voice turns. The
+    given name is a LABEL the person offered — the profile is always
+    created as a guest; saying a name never grants anything, and a name
+    collision with an existing profile creates a distinct entry rather
+    than ever folding a stranger's voice into someone else's print."""
+    if ctx.get("speaker_role") != "unknown":
+        return ("Error: remember_speaker only applies while talking with an "
+                "unrecognized voice.")
+    from app import voiceprints
+    name = str(args.get("name") or "").strip()[:60]
+    if not name:
+        return "Error: name is required."
+    pending = voiceprints.take_pending()
+    if not pending:
+        return ("Error: no recent voice samples to learn from — ask them to "
+                "say one more full sentence, then call this again.")
+    existing = {p["name"].lower() for p in await voiceprints.list_profiles()}
+    base, i = name, 2
+    while name.lower() in existing:
+        name = f"{base} ({i})"
+        i += 1
+    profile = await voiceprints.create(name, "guest", None)
+    used = pending[-5:]
+    for emb in used:
+        await voiceprints.add_enrollment(profile["id"], emb)
+    return (f"Remembered {name} as a household guest, learned from "
+            f"{len(used)} voice sample(s) of this conversation. Their next "
+            f"utterances will be recognized. They remain a guest — only the "
+            f"operator can change roles (Settings -> Voice).")
+
+
 async def _raise_recommendation(args, ctx):
     """Surface a proactive recommendation to the operator as a card in chat
     (Approve / Later / Dismiss) — the visible, actionable alternative to
@@ -1358,6 +1391,19 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                          "will change.")},
         }, "required": ["kind", "subject", "question"]},
         "execute": _request_operator_confirmation,
+    },
+    "remember_speaker": {
+        "name": "remember_speaker",
+        "description": ("Remember the voice you're currently hearing as a named "
+                        "household guest, so they're recognized from now on. Use "
+                        "AFTER an unrecognized speaker tells you their name (ask "
+                        "first!). The name is just a label they gave — they get "
+                        "guest access only; roles are the operator's to change."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string",
+                     "description": "the name the speaker gave for themselves"},
+        }, "required": ["name"]},
+        "execute": _remember_speaker,
     },
     "raise_recommendation": {
         "name": "raise_recommendation",

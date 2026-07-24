@@ -198,12 +198,30 @@ enrollment.
    delete / settings change → tool refused at the layer ("not granted"),
    turn continues gracefully; operator turn identical to before; trace
    shows no clamped tool ever executed.
-4. **Later (flagged, deliberately not built now):** retrieval-side
+4. **Auto-enrollment (added 2026-07-24 at Jeremy's direction — BUILT):**
+   unknown voices enroll themselves through conversation. Unknown-turn
+   embeddings wait in a short-lived pending buffer; the turn-scoped
+   `remember_speaker` tool (granted ONLY on unknown-voice turns) creates a
+   GUEST profile from the name the person offered and folds the pending
+   samples in — the name is a label, never authority, and a collision
+   with an existing profile creates a distinct entry rather than folding
+   a stranger's voice into someone's print. `voice.speaker_autotrain`
+   (default on) keeps enrolled prints current by folding decisively
+   confident matches (threshold + 0.15) into a capped-window mean, so
+   voices can drift (kids grow) without manual re-enrollment. Also at
+   Jeremy's direction: `voice.family_tools` allowlist (consume-not-change:
+   default web_search; `mcp:*` patterns available), and typed chat stays
+   operator-by-authentication, confirmed as intended.
+5. **Later (flagged, deliberately not built now):** retrieval-side
    content filtering for kid turns (memory.context currently retrieves
-   from the whole store — persona rules carry v1); a mechanical
-   "this is X" operator-confirm card for unknown voices; keeping
+   from the whole store — persona rules carry v1); retroactive re-tagging
+   of the turns that preceded a remember_speaker naming; keeping
    enrollment clips (opt-in) to feed #11 wake retraining; per-profile TTS
-   voice; brain-graph per-person companion stars.
+   voice; brain-graph per-person companion stars; and Jeremy's
+   multi-tenancy direction (2026-07-24): per-user authentication and
+   per-user memory instances — "each person may get their own memory
+   instance of Nova (at minimum)" — a separate design pass when he's
+   settled on how to split user concerns.
 
 ## Traps
 

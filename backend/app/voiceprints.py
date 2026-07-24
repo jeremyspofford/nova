@@ -13,12 +13,36 @@ Matching only ever selects which *narrowing* applies downstream.
 import json
 import logging
 import math
+import time
 import uuid as uuid_mod
 from typing import Optional
 
 from app import db, settings_store
 
 log = logging.getLogger(__name__)
+
+# Unknown-voice embeddings wait here briefly so a just-introduced guest's
+# voice is learned from the very conversation that introduced them (the
+# remember_speaker tool drains this). In-process on purpose: voice turns
+# land on one instance; revisit with multi-instance voice.
+_PENDING_TTL_S = 900
+_PENDING_MAX = 10
+_pending: list[tuple[float, list[float]]] = []
+
+
+def remember_pending(embedding: list[float]) -> None:
+    now = time.monotonic()
+    _pending.append((now, embedding))
+    _pending[:] = [(t, e) for t, e in _pending
+                   if now - t < _PENDING_TTL_S][-_PENDING_MAX:]
+
+
+def take_pending() -> list[list[float]]:
+    """Drain the recent unknown-voice embeddings (newest last)."""
+    now = time.monotonic()
+    out = [e for t, e in _pending if now - t < _PENDING_TTL_S]
+    _pending.clear()
+    return out
 
 _FIELDS = ("id", "name", "role", "persona_notes", "enrolled_clips",
            "created_at", "updated_at")
@@ -90,6 +114,11 @@ async def delete(profile_id: str) -> bool:
     return result.endswith("1")
 
 
+# the mean's effective window: new clips always keep at least 1/20 weight,
+# so a voiceprint tracks a drifting voice (kids grow) instead of fossilizing
+_MEAN_CAP = 20
+
+
 async def add_enrollment(profile_id: str, embedding: list[float]) -> Optional[dict]:
     """Fold one more clip's embedding into the profile's running mean.
     The clip's audio was already discarded by the caller — only the vector
@@ -104,7 +133,8 @@ async def add_enrollment(profile_id: str, embedding: list[float]) -> Optional[di
         old = r["voiceprint"]
         old = json.loads(old) if isinstance(old, str) else old
         if old and len(old) == len(embedding) and n > 0:
-            merged = [(o * n + e) / (n + 1) for o, e in zip(old, embedding)]
+            w = min(n, _MEAN_CAP - 1)
+            merged = [(o * w + e) / (w + 1) for o, e in zip(old, embedding)]
         else:
             merged, n = list(embedding), 0
         r = await conn.fetchrow(

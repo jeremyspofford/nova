@@ -271,8 +271,10 @@ _UNKNOWN_REGISTER = (
     "## Speaking with a guest\n"
     "You don't recognize this voice as an enrolled household member. Be "
     "friendly and general, and early on, ask who you're speaking with. Don't "
-    "share household or operator details. Household members can be enrolled "
-    "in Settings -> Voice.")
+    "share household or operator details. When they tell you their name, "
+    "call remember_speaker with it — from then on you'll recognize their "
+    "voice and greet them properly. They stay a guest either way; roles are "
+    "the operator's to change.")
 
 
 def _speaker_block(speaker: dict | None) -> str:
@@ -447,6 +449,12 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         available = {t["function"]["name"] for t in tools}
         allowed = _family_allowed(available)
         tools = [t for t in tools if t["function"]["name"] in allowed]
+        if speaker_role == "unknown":
+            # the introduce-yourself path: grant remember_speaker for this
+            # turn only — all it can do is create a GUEST profile from the
+            # voice already being heard (auto-enrollment, speaker-id.md)
+            if not any(t["function"]["name"] == "remember_speaker" for t in tools):
+                tools.append(tool_registry.builtin_def("remember_speaker"))
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
     async with trace.span("stage", "build_prompt") as psp:

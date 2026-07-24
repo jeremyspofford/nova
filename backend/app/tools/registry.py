@@ -172,6 +172,12 @@ async def search_lazy_mcp_tools(agent: dict, query: str) -> list[dict]:
     return matches
 
 
+def builtin_def(name: str) -> dict:
+    """One builtin's LLM def — for turn-scoped grants the agent's own list
+    doesn't carry (e.g. remember_speaker on unknown-voice turns)."""
+    return _to_llm_def(BUILTIN_TOOLS[name])
+
+
 async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> list[dict]:
     """LLM tool definitions for an agent.
 

@@ -128,9 +128,21 @@ async def _identify(audio: bytes, content_type: str) -> tuple[dict | None, bool]
         if r.status_code != 200:
             log.warning("speaker embed failed: %s %s", r.status_code, r.text[:120])
             return None, True
-        matched = await voiceprints.match(r.json().get("embedding"))
+        embedding = r.json().get("embedding")
+        matched = await voiceprints.match(embedding)
         if matched is None:
+            # stash for the introduce-yourself path: if Nova learns who this
+            # is (remember_speaker), these become their first enrollment
+            if embedding:
+                voiceprints.remember_pending(embedding)
             return None, True
+        # passive training: a decisively confident match keeps the print
+        # current as voices drift — the extra bar over the match threshold
+        # keeps borderline matches from reinforcing themselves
+        if settings_store.get("voice.speaker_autotrain"):
+            bar = float(settings_store.get("voice.speaker_threshold") or 0.55) + 0.15
+            if matched["confidence"] >= bar:
+                await voiceprints.add_enrollment(matched["id"], embedding)
         return ({"profile_id": matched["id"], "name": matched["name"],
                  "role": matched["role"], "confidence": matched["confidence"]},
                 True)
