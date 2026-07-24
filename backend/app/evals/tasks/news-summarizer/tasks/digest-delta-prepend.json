@@ -1,0 +1,67 @@
+{
+  "id": "digest-delta-prepend",
+  "suite": "news-summarizer",
+  "title": "Prepend today's section to the running digest, delta only",
+  "intent": "The tech-news-digest automation's exact mechanics: find the running digest, write with item_id AND prepend=true, and send ONLY the new day's section. Re-sending the whole document is the common failure — it looks correct in the agent's report and silently doubles the file, because prepend preserves the existing body mechanically. The fifth raw story is sponsored filler that does not belong in a news digest.",
+  "prompt_file": "prompts/digest-delta-prepend.md",
+  "seed_corpus": ["corpus/topics/ai-news-digest-july-2026.md"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "search_memory", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"item_id": "topics/ai-news-digest-july-2026.md", "prepend": true}}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"append": true}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [{"item_id": "topics/ai-news-digest-july-2026.md", "mode": "prepend", "count": 1}],
+      "write_content": {
+        "must_match": ["^\\s*## July 24, 2026"],
+        "must_contain": ["AgentForger", "Anduril", "Attie"],
+        "must_not_contain": [
+          "July 23, 2026",
+          "July 22, 2026",
+          "Delhi High Court",
+          "Stealth Bot Prohibition",
+          "APEC",
+          "Co-Star",
+          "SPONSORED",
+          "besttoolsdaily"
+        ],
+        "max_chars": 4000
+      }
+    },
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {"must_match": ["\\b[34]\\b"]},
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["faithfulness", "editorial_judgment", "digest_form", "conciseness"],
+    "source_facts": [
+      "The running digest is topics/ai-news-digest-july-2026.md and already holds sections for July 23 and July 22.",
+      "Story 1: Zenity Labs disclosed AgentForger, a CSRF flaw in OpenAI's ChatGPT Workspace Agents builder; one phishing link auto-deployed an attacker-controlled agent defaulting to the Chief of Staff template with no confirmation; it inherited Outlook, Teams, Slack, SharePoint and Drive connectors and polled attacker email every five minutes; reported June 4 via Bugcrowd, triaged June 5, patched June 8 by removing a URL parameter; no in-the-wild exploitation observed.",
+      "Story 2: Anduril in talks at approximately $100B, a 64% markup on May's $61B round led by Thrive and a16z at $5B; two-stage structure tied to internal targets; would sit near Lockheed Martin (~$117B) and above Northrop Grumman (~$74B); Anduril declined to comment.",
+      "Story 3: about two dozen companies and VCs including Meta, Microsoft, Nvidia, IBM, Palantir, Hugging Face, Perplexity, Mistral, a16z, YC and the Linux Foundation signed a letter against premature restrictions on open-weight models; Jensen Huang published it as his first X post; OpenAI and Anthropic did not sign.",
+      "Story 4: Bluesky's assistant Attie now works as an open social research tool over the AT Protocol; free during preview.",
+      "Story 5 is sponsored affiliate content, undated, and is not news."
+    ],
+    "traps": [
+      "Re-sending the whole document with prepend=true, which duplicates every earlier day. The agent's own report will say it updated the digest.",
+      "Using append=true, which puts today at the bottom of a latest-first document.",
+      "Writing without item_id, creating a second July digest.",
+      "Including the sponsored listicle to reach five stories.",
+      "Dropping the disclosure timeline from the AgentForger item — 'patched on June 8, no exploitation observed' is the part that tells a reader whether to act."
+    ],
+    "guidance": "Score digest_form on the heading shape and per-story Source lines matching the document already in memory — a running document that changes format every day is worse than one that is slightly plainer. Score editorial_judgment on excluding the sponsored item and on which details survive compression. Penalize any invented detail; every fact needed is in the raw stories."
+  }
+}

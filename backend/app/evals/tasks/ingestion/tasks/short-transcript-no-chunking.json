@@ -1,0 +1,43 @@
+{
+  "id": "short-transcript-no-chunking",
+  "suite": "ingestion",
+  "title": "Do not chunk a short transcript, and answer from it",
+  "intent": "Migration 036's rule: when ingest_media reports a short transcript and returns no segments, the single full-transcript note IS the note. The agent's habit is to write chunked timestamped notes for every video, and here that produces redundant micro-notes. The operator also asks a question the transcript answers, so restraint must not become unhelpfulness.",
+  "prompt": "Ingest https://www.youtube.com/watch?v=vDb90SEC0N and tell me the tradeoff it describes.",
+  "seed_corpus": ["corpus/topics/what-is-a-vector-database-in-90-seconds-full-transcript.md"],
+  "fixtures": ["fixtures/short-transcript-no-chunking/ingest_media.json"],
+  "budget_seconds": 180,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "ingest_media", "min": 1, "max": 1}],
+      "must_not_call": ["follow_source", "web_search", "fetch_url"],
+      "must_not_call_with": [{"name": "ingest_media", "args": {"force": true}}],
+      "max_total_calls": 4
+    },
+    "memory": {"no_writes": true},
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["recall", "(?:latency|memory)"],
+      "must_not_match": ["wrote \\d+ (?:chunk|note)", "chunked (?:it|the transcript)"]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["instruction_following", "restraint", "answer_quality"],
+    "source_facts": [
+      "ingest_media returned status=ingested, title 'What is a vector database? In 90 seconds', 94 seconds, captions, no chapters, no segments.",
+      "The payload's note says the transcript is short, that it fits the single note already saved, that it must NOT be split into chunks, and to answer questions from it.",
+      "The full transcript is at topics/what-is-a-vector-database-in-90-seconds-full-transcript.md in the scratch corpus.",
+      "The tradeoff the clip describes: recall against latency and memory — HNSW gives high recall at low latency and costs RAM; IVF with product quantization fits far more vectors per gigabyte and gives back some recall.",
+      "The clip's closing point: a vector index is not a database — filtering, deletes, and consistency are why databases-that-added-vectors beat vector-libraries-that-added-a-server."
+    ],
+    "traps": [
+      "Writing chunk notes anyway. The agent's own prompt describes chunking in more detail than the no-chunk exception, and the exception is what this task is about.",
+      "Answering the tradeoff question from parametric knowledge instead of the transcript — a generic 'speed vs accuracy' answer misses that the fixture names HNSW and IVF-PQ specifically.",
+      "Over-correcting into pure restraint: confirming the ingest and never answering the question asked."
+    ],
+    "guidance": "instruction_following is the primary dimension and it is nearly binary — zero write_memory calls. answer_quality rewards naming HNSW and IVF-PQ and framing the tradeoff as recall against latency and memory, which is what the transcript actually says."
+  }
+}

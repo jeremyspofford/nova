@@ -1,0 +1,11 @@
+{
+  "tool": "ingest_media",
+  "notes": "The short-clip branch (builtin.py:394-399): transcript under _CHUNK_MIN_CHARS, so the payload carries NO segments and a note that explicitly forbids chunking. This branch exists because of migration 036 — the agent was splitting 90-second clips into redundant micro-notes. The seeded corpus contains the full-transcript topic the payload names, so the world matches the tool's claim.",
+  "entries": [
+    {
+      "match": {"url": "https://www.youtube.com/watch?v=vDb90SEC0N"},
+      "result": "{\"status\": \"ingested\", \"media_key\": \"youtube:vDb90SEC0N\", \"title\": \"What is a vector database? In 90 seconds\", \"url\": \"https://www.youtube.com/watch?v=vDb90SEC0N\", \"duration_s\": 94, \"transcript_source\": \"captions\", \"language\": \"en\", \"chapters\": [], \"full_transcript_item_id\": \"topics/what-is-a-vector-database-in-90-seconds-full-transcript.md\", \"subject_tag\": \"what-is-a-vector-database-in-90-seconds\", \"note\": \"This transcript is short \\u2014 it fits the single note already saved. Do NOT split it into chunks (that would just make redundant micro-notes). Confirm it's ingested and answer any questions from it.\"}"
+    }
+  ],
+  "default": {"result": "Error: could not resolve {{args.url}}"}
+}

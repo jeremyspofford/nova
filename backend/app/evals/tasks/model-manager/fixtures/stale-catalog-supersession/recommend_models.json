@@ -1,0 +1,5 @@
+{
+  "tool": "recommend_models",
+  "notes": "A single-role payload whose curated table has aged: it suggests ollama:qwen2.5-coder:14b for the coder role, which is a REGRESSION from the role's current ollama:qwen3:14b and two generations behind what shipped in June. The tool's own reason sounds authoritative ('highest-scoring coding entry in the curated table that fits 16GB VRAM') and is true of the table while being wrong about the world. Served for any mode.",
+  "default": {"result_file": "recommend_models.txt"}
+}

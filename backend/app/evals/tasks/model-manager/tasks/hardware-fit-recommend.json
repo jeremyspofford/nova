@@ -1,0 +1,45 @@
+{
+  "id": "hardware-fit-recommend",
+  "suite": "model-manager",
+  "title": "Recommend a model for one role and present the reasoning",
+  "intent": "The role's core job and its explicit prompt rail: 'Present the reasons, not just the names.' The fixture gives a full recommend_models payload; a weak model reads off the suggested_model field, a strong one uses the reason, the VRAM number, and the alternates to answer the 'why' the operator actually asked.",
+  "prompt": "What model should the ingestion agent be running on this machine, and why?",
+  "fixtures": ["fixtures/hardware-fit-recommend/recommend_models.json"],
+  "budget_seconds": 180,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "recommend_models", "min": 1, "max": 2}],
+      "max_total_calls": 4
+    },
+    "memory": {"no_writes": true},
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["qwen3:14b", "(?:vram|16\\s?gb|9(?:\\.0)?\\s?gb)"],
+      "must_not_match": [
+        "I(?:'ve| have) (?:now )?(?:switched|applied|updated|changed) ",
+        "(?:pulling|downloading) (?:it|the model) now"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["reason_quality", "faithfulness", "actionability"],
+    "source_facts": [
+      "Machine: 64GB RAM (60GB sizing budget), 16 cores, linux, NVIDIA RTX 4070 Ti SUPER, 16GB VRAM, nvidia runtime available.",
+      "Ingestion's current model is openrouter:z-ai/glm-5.2 and the recommendation status is 'switch' to ollama:qwen3:14b.",
+      "The stated reason: ingestion is high-volume, latency-tolerant and mostly distillation; qwen3:14b at q4_K_M needs ~9.0GB VRAM and keeps page bodies and transcripts off a metered API.",
+      "Alternates offered: ollama:gemma4:e2b (tier-1 fast, local) and openrouter:z-ai/glm-5.2 (tier-3 quality, cloud).",
+      "Nothing overcommits: 14.5GB of 16GB VRAM and 21GB of 60GB RAM if every suggestion loaded at once.",
+      "The payload's closing note says suggestions can be verified with the test probe in Settings → Inference and that local models must be pulled first — never without asking."
+    ],
+    "traps": [
+      "Answering with the model name and nothing else, which is the exact failure the prompt rail was written against.",
+      "Inventing a VRAM figure instead of using the ~9.0GB the payload states.",
+      "Claiming the switch was made. This agent cannot edit the agents table; it can only recommend.",
+      "Skipping the fact that qwen3:14b is not installed yet and would need a pull the operator has to approve."
+    ],
+    "guidance": "Reward an answer that gives the recommendation, the reason in the operator's terms (volume, latency tolerance, cost of sending transcripts to a metered API), the VRAM fit against 16GB, and a next step — pull it, then verify with the probe in Settings → Inference. Reward mentioning an alternate and when it would be the better pick. Penalize any claim of having applied a change."
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "tag-hygiene-specific-subjects",
+  "suite": "ingestion",
+  "title": "Tag by specific subject, and keep ephemeral facts out of memory",
+  "intent": "The over-linking incident as a test case: a page whose most salient vocabulary is entirely generic (zoo, park, trails, nature, animals, history, new-york) and whose correct tags are named entities. Second rail in the same task: the page's hours, closure, and prices are ephemeral — reported in the answer, never stored. The seeded corpus holds the other half of the original incident, the 'Me at the zoo' transcript, so a wrong tag set is visibly a bridge between two unrelated notes.",
+  "prompt": "Read https://parks.example.gov/bear-mountain/trailside-zoo and save what's worth keeping.",
+  "seed_corpus": ["corpus/topics/me-at-the-zoo-full-transcript.md"],
+  "fixtures": ["fixtures/tag-hygiene-specific-subjects/fetch_url.json"],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "fetch_url", "min": 1, "max": 2},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_not_call": ["ingest_media", "follow_source"]
+    },
+    "memory": {
+      "topics_created": {"min": 1, "max": 1},
+      "frontmatter_required": ["title", "description", "category", "tags", "source_url"],
+      "frontmatter_equals": {"category": "knowledge"},
+      "source_url_in": ["https://parks.example.gov/bear-mountain/trailside-zoo"],
+      "tags": {
+        "min": 2,
+        "max": 4,
+        "no_generic": true,
+        "must_include_any": [["bear-mountain", "trailside-museums-and-zoo", "trailside-zoo"]],
+        "must_not_include": [
+          "zoo", "museum", "museums", "park", "state-park", "nature",
+          "animals", "hiking", "trail", "trails", "history", "new-york",
+          "visitor-info", "recreation", "travel", "places"
+        ]
+      },
+      "body_must_contain_any": [
+        ["1927"],
+        ["appalachian trail"],
+        ["124 feet", "124-foot", "lowest point"]
+      ],
+      "body_must_not_contain": [
+        "10:00 am",
+        "4:30",
+        "last admission",
+        "$1 per person",
+        "$10 per vehicle",
+        "closed today"
+      ],
+      "write_content": {"max_chars": 3500}
+    },
+    "rounds_max": 6,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["tag_quality", "durable_vs_ephemeral", "faithfulness", "distillation_quality"],
+    "source_facts": [
+      "Trailside Museums and Zoo opened in 1927 at the base of Bear Mountain in Bear Mountain State Park, New York.",
+      "It is the oldest nature-trail museum complex in the United States.",
+      "The lowest point of the 2,197-mile Appalachian Trail — 124 feet above sea level — runs through the zoo grounds, so thru-hikers walk through the exhibits.",
+      "Four museums along a third of a mile of paved path: Reptile House, Nature Study, Geology, and History; the History Museum is a 1935 stone building on the site of Fort Clinton, a Revolutionary War earthwork captured by the British in October 1777.",
+      "Animals are non-releasable native New York wildlife placed by state rehabilitators; the zoo neither acquires for display nor breeds.",
+      "Operated jointly by the Palisades Interstate Park Commission and a nonprofit that funds animal care.",
+      "EPHEMERAL, must not be stored: today's hours 10:00-4:30, last admission 4:00, $1 admission, $10 parking, and the Reptile House closed today for maintenance."
+    ],
+    "traps": [
+      "Tagging by salient vocabulary yields zoo / park / trails / nature / animals / new-york — every one of them a generic tag that earns no graph edge, leaving the note floating.",
+      "Storing today's hours and closure bakes a fact with a shelf life of hours into a durable topic.",
+      "The seeded 'Me at the zoo' transcript is the original bridging incident's other half. A note tagged 'zoo' asserts a relationship to a 2005 YouTube clip about elephants."
+    ],
+    "guidance": "Reward named-entity tags (bear-mountain, appalachian-trail, fort-clinton, palisades-interstate-park). Penalize any category-shaped tag even when it is an accurate description of the page. Reward mentioning today's hours or the Reptile House closure in the ANSWER while leaving them out of the stored topic; treat storing them as the failure, not mentioning them."
+  }
+}

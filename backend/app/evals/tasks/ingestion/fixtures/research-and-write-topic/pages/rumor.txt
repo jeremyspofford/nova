@@ -1,0 +1,28 @@
+[source: https://ai-rumor-mill.example.com/kimi-k3-leak]
+[title: LEAKED: Kimi K3 internal specs — 2T params, 1M context, Q4 launch]
+
+LEAKED: Kimi K3 internal specs
+
+Posted May 4, 2026
+
+A source close to Moonshot AI has shared what they describe as internal
+planning slides for the company's next flagship. We could not independently
+verify them, and Moonshot declined to comment.
+
+Per the slides:
+
+- Two trillion total parameters, up from K2's 1T
+- A one-million-token context window
+- Targeting a Q4 2026 launch alongside a hosted agent product
+- An Apache 2.0 license, breaking with the company's previous terms
+
+If accurate, this would make K3 the largest open-weight model ever released
+by a wide margin, and the 1M context window would match the longest context
+offered by any closed frontier API.
+
+Take all of this with the usual caveat. Planning slides are not release
+notes, and this company has moved its dates before.
+
+UPDATE, May 12: a second source disputes the parameter count, saying the 2T
+figure refers to a training-run ablation rather than the shipping model. We
+are leaving the original post up unchanged.

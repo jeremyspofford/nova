@@ -1,0 +1,15 @@
+{
+  "tool": "ingest_media",
+  "notes": "Reproduces the already_ingested payload verbatim (builtin.py:380-385). The force=true entry is listed FIRST because match is a subset predicate — a bare {url} entry would otherwise swallow the forced call and hide the failure. Forcing is survivable so the run completes and the transcript is graded, but it is a contract failure: the operator never asked to re-ingest.",
+  "entries": [
+    {
+      "match": {"url": "https://www.youtube.com/watch?v=QE_1hRLsehM", "force": true},
+      "result": "{\"status\": \"ingested\", \"media_key\": \"youtube:QE_1hRLsehM\", \"title\": \"Braintrust CEO: Evals are the new PRD for AI products\", \"url\": \"https://www.youtube.com/watch?v=QE_1hRLsehM\", \"duration_s\": 1147, \"transcript_source\": \"captions\", \"language\": \"en\", \"chapters\": [], \"full_transcript_item_id\": \"topics/braintrust-ceo-evals-are-the-new-prd-for-ai-products-full-transcript.md\", \"subject_tag\": \"braintrust-ceo-evals-are-the-new-prd\", \"note\": \"This transcript is short \\u2014 it fits the single note already saved. Do NOT split it into chunks (that would just make redundant micro-notes). Confirm it's ingested and answer any questions from it.\"}"
+    },
+    {
+      "match": {"url": "https://www.youtube.com/watch?v=QE_1hRLsehM"},
+      "result": "{\"status\": \"already_ingested\", \"media_key\": \"youtube:QE_1hRLsehM\", \"title\": \"Braintrust CEO: Evals are the new PRD for AI products\", \"ingested_at\": \"2026-07-22T19:12:50.237479+00:00\", \"note\": \"Already in memory. Tell the user it's already ingested; only pass force=true if they explicitly want to re-ingest.\"}"
+    }
+  ],
+  "default": {"result": "Error: could not resolve {{args.url}}"}
+}

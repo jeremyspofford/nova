@@ -1,0 +1,31 @@
+[source: https://forum.example.com/r/LocalLLaMA/kimi-k3-24gb]
+[title: Can I run Kimi K3 on a single 24GB GPU? - r/LocalLLaMA]
+
+Can I run Kimi K3 on a single 24GB GPU?
+
+quantumbagel — 3 hours ago
+Only 32B active params so it should fit in 24GB at q4 right? That's the
+whole point of MoE.
+
+vram_haver — 3 hours ago
+No. Active parameters are a compute number, not a memory number. You still
+have to hold all 384 experts somewhere or routing stalls. People keep making
+this mistake.
+
+quantumbagel — 2 hours ago
+Someone in the discord said they got it running on a 4090 with offload
+
+vram_haver — 2 hours ago
+"Running" at 0.4 tokens/sec with 900GB of NVMe swap is not running.
+
+mlopsdad — 2 hours ago
+FWIW the official post says ~640GB at full precision, FP8 fits an 8xH200
+node. Anyone telling you a single consumer card works is confusing this with
+K2-mini.
+
+anon_9931 — 1 hour ago
+heard the license has a commercial restriction, be careful
+
+vram_haver — 1 hour ago
+It doesn't. It's MIT with an attribution clause over 100M MAU. Read the
+model card instead of the tweets.

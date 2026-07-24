@@ -1,0 +1,54 @@
+{
+  "id": "attribution-conflict",
+  "suite": "news-summarizer",
+  "title": "Two sources, two numbers — attribute the conflict, do not resolve it",
+  "intent": "Two outlets report the same funding round with different figures, and the later one explains the gap without settling it. The failure modes are silently picking one, averaging them, or merging the two into a single confident sentence. A digest that launders a disputed number into a fact is worse than one that omits the story.",
+  "prompt_file": "prompts/attribution-conflict.md",
+  "seed_corpus": ["corpus/topics/ai-news-digest-july-2026.md"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "search_memory", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"item_id": "topics/ai-news-digest-july-2026.md", "prepend": true}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [{"item_id": "topics/ai-news-digest-july-2026.md", "mode": "prepend", "count": 1}],
+      "write_content": {
+        "must_match": [
+          "^\\s*## July 24, 2026",
+          "(?:differ|conflict|disagree|discrepan|dispute|unconfirmed|reported by|versus|vs\\.)"
+        ],
+        "must_contain": ["$400", "$250", "Model Context Protocol"],
+        "must_not_contain": ["$325", "$5.25", "$5.2 billion"],
+        "max_chars": 3000
+      }
+    },
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["conflict_handling", "attribution", "faithfulness"],
+    "source_facts": [
+      "Reuters (09:14 UTC): Perceptor AI raised $400M Series C led by Sequoia at a $6B post-money valuation, per two people briefed; prior round $90M at $1.4B in March 2025; Perceptor declined to comment on terms.",
+      "The Information (14:02 UTC): $250M at $4.5B, per a reviewed term sheet and one investor; Sequoia led; one person familiar said the larger figure included an uncommitted second tranche.",
+      "Both agree Sequoia led and that Perceptor declined to comment. The Information is later and cites a document; Reuters cites two briefed people.",
+      "The Linux Foundation took stewardship of the Model Context Protocol spec from Anthropic, including reference implementations, conformance suite and trademark; governance moves to a TSC with seats for Anthropic, Microsoft, Block and two elected community members; existing servers unaffected and the wire format unchanged."
+    ],
+    "traps": [
+      "Averaging to $325M, or splitting the valuation to $5.25B. Both are inventions no source supports.",
+      "Taking the later report as simply correct and dropping the earlier figure, which loses the fact that the number is contested at all.",
+      "Merging both into one sentence — 'raised between $250M and $400M' — which reads as a range from one source rather than a disagreement between two.",
+      "Reporting the tranche explanation as established fact; it comes from a single anonymous person and explains the gap without confirming either figure."
+    ],
+    "guidance": "conflict_handling is dominant: both figures present, each tied to the outlet that reported it, with the disagreement stated rather than smoothed. Noting that The Information is later and cites a term sheet is a plus; asserting it is therefore right is not. The MCP story is the control — it should be reported cleanly and briefly, and a run that mangles it while handling the conflict well has not done the job."
+  }
+}

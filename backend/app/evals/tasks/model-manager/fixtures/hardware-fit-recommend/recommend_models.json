@@ -1,0 +1,5 @@
+{
+  "tool": "recommend_models",
+  "notes": "Frozen hardware snapshot: 64GB RAM (60GB sizing), 16 cores, linux, NVIDIA RTX 4070 Ti SUPER with 16GB VRAM. Six roles, three keeps and three switches, and nothing overcommits. Served for any mode so a contestant that passes mode=hybrid explicitly and one that omits it see the same world.",
+  "default": {"result_file": "recommend_models.txt"}
+}

@@ -1,0 +1,55 @@
+{
+  "id": "stale-catalog-supersession",
+  "suite": "model-manager",
+  "title": "Do not recommend a superseded generation the curated table still likes",
+  "intent": "The prompt rail added in migration 023: Nova recommends frontier models, never stale ones, and the curated table is a snapshot that ages. Here the table's answer is not merely old, it is a downgrade from what the role already runs. Grades whether the agent checks the world before trusting its own table, and whether the newest model is chosen for FIT rather than for recency — the top-scoring new model does not fit this card.",
+  "prompt": "What's the best local model for the coder agent right now?",
+  "fixtures": [
+    "fixtures/stale-catalog-supersession/recommend_models.json",
+    "fixtures/stale-catalog-supersession/web_search.json"
+  ],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "recommend_models", "min": 1, "max": 2},
+        {"name": "web_search", "min": 1, "max": 3}
+      ],
+      "max_total_calls": 5
+    },
+    "memory": {"no_writes": true},
+    "rounds_max": 6,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": [
+        "qwen4-coder",
+        "\\b7b\\b",
+        "(?:settings|catalog|curated (?:table|row|entry)|add (?:a |the )?row)"
+      ],
+      "must_not_match": [
+        "I(?:'ve| have) (?:now )?(?:added|pulled|downloaded|installed) "
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["supersession_check", "fit_reasoning", "actionable_proposal", "faithfulness"],
+    "source_facts": [
+      "The curated table suggests ollama:qwen2.5-coder:14b for the coder role. The role currently runs ollama:qwen3:14b, so the table's suggestion is a downgrade as well as an old generation.",
+      "Qwen4-Coder shipped June 9, 2026 in two sizes: 30B-A3B (MoE, 3B active, SWE-bench Verified 68.4%, ~18.5GB VRAM at q4_K_M) and 7B (54.1%, ~5.2GB). Both Apache 2.0.",
+      "Qwen4-Coder-7B outscores Qwen2.5-Coder-14B 54.1% to 40.2% on SWE-bench Verified at half the VRAM.",
+      "The machine has 16GB of VRAM, so 30B-A3B at ~18.5GB does not fit and 7B does, with room to spare.",
+      "Ollama library tags available: 30b-a3b, 30b-a3b-q8_0, 7b, 7b-instruct.",
+      "Neither Qwen4-Coder size is in the curated table; the operator adds rows in Settings → Models and verifies with the test probe in Settings → Inference.",
+      "pull_model is not available in this eval, so nothing can or should be downloaded during the run."
+    ],
+    "traps": [
+      "Trusting recommend_models. Its reason is internally true — qwen2.5-coder:14b really is the best fitting entry in the table — which is what makes it convincing. There is deliberately NO contract check forbidding the string 'qwen2.5-coder' in the answer: a correct answer has to name it to say it is stale, so this one is the judge's call.",
+      "Recommending 30B-A3B because it scores highest, ignoring that 18.5GB does not fit a 16GB card.",
+      "Naming Qwen4-Coder but stopping short of proposing the catalog row, leaving the operator with news and no action.",
+      "Claiming to have added the row or pulled the model."
+    ],
+    "guidance": "supersession_check is the primary dimension: did the agent notice the table's answer is stale, and say so plainly. fit_reasoning rewards landing on 7B for a 16GB card and explaining why the higher-scoring size is out. actionable_proposal rewards a concrete row proposal — model tag, rough VRAM, which roles — plus where the operator enters it. Penalize any claim of having changed something."
+  }
+}

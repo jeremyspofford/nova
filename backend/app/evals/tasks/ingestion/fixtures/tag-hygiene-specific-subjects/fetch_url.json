@@ -1,0 +1,8 @@
+{
+  "tool": "fetch_url",
+  "notes": "The page is saturated with words that are all in _GENERIC_TAGS — zoo, museum, park, state-park, trail, trails, hiking, nature, animals, history, visitor-info, new-york — so a model tagging by salient vocabulary produces exactly the tag set the graph refuses to link on. It also carries a block of genuinely ephemeral facts (today's hours, today's closure, current admission and parking prices) that the ingestion prompt says to report but not store.",
+  "entries": [
+    {"match": {"url": "https://parks.example.gov/bear-mountain/trailside-zoo"}, "result_file": "pages/trailside-zoo.txt"}
+  ],
+  "default": {"result": "Error: HTTP 404 from {{args.url}}"}
+}
