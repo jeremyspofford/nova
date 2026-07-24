@@ -111,11 +111,14 @@ async def chat_stream(request: ChatRequest):
     window, _aged = conversations.window_history(history, history_budget)
     window_oldest_at = window[0]["created_at"] if window else None
 
-    # Attachments: images ride THIS turn as image_url content parts (the model
-    # sees the pixels now; later turns see a persisted "[Attached image: …]"
-    # marker). Text files are inlined into the message itself, so they persist
-    # in the window like typed text. Nothing binary is stored in the DB.
+    # Attachments ride THIS turn only as full content — images as image_url
+    # content parts, text files inlined into the turn's text — so the model
+    # sees them now. What gets PERSISTED (and shown in the chat bubble) is
+    # just the typed message plus a "[Attached …: name]" marker; the full
+    # text/pixels don't resurface in later turns' replayed history. Nothing
+    # binary is stored in the DB.
     user_text = request.message
+    turn_extra_text = ""
     image_parts: list[dict] = []
     attach_meta: list[dict] = []
     if request.attachments:
@@ -129,14 +132,16 @@ async def chat_stream(request: ChatRequest):
                 image_parts.append({"type": "image_url",
                                     "image_url": {"url": f"data:{mime};base64,{a.data}"}})
             else:
-                user_text += f"\n\n--- attached file: {a.name} ---\n{a.data[:60_000]}"
+                turn_extra_text += f"\n\n--- attached file: {a.name} ---\n{a.data[:60_000]}"
     if not user_text.strip() and image_parts:
         user_text = "(see attached image)"
     persist_text = user_text + "".join(
-        f"\n[Attached image: {m['name']}]" for m in attach_meta if m["kind"] == "image")
+        f"\n[Attached {'image' if m['kind'] == 'image' else 'file'}: {m['name']}]"
+        for m in attach_meta)
 
-    turn_content = ([{"type": "text", "text": user_text}] + image_parts
-                    if image_parts else user_text)
+    turn_text = user_text + turn_extra_text
+    turn_content = ([{"type": "text", "text": turn_text}] + image_parts
+                    if image_parts else turn_text)
     turn_messages = conversations.to_llm_history(window) + [
         {"role": "user", "content": turn_content}]
 

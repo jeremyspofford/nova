@@ -10,7 +10,8 @@ class ChatAttachment(BaseModel):
     kind "image": data is base64 (no data: prefix), mime like image/jpeg —
     forwarded to the model as an image_url content part this turn.
     kind "text": data is the file's decoded text — inlined into the message
-    (and persisted with it, so it stays in the conversation window).
+    for this turn only; what's persisted is a "[Attached file: name]" marker,
+    so the full text doesn't resurface in later turns' replayed history.
     """
     kind: Literal["image", "text"]
     name: str
