@@ -25,6 +25,11 @@ class ChatRequest(BaseModel):
     # "voice" = the turn was initiated by speaking (phase 2+); lets the main
     # agent answer with the voice.model_override LLM. Typed chat leaves it None.
     source: Optional[str] = None
+    # who transcribe recognized on a voice turn (docs/plans/speaker-id.md):
+    # a profile id, the literal "unknown", or None (typed chat / recognition
+    # off). Client-echoed like `source`; resolution server-side can only
+    # NARROW privileges — never authentication.
+    speaker: Optional[str] = None
     attachments: Optional[list[ChatAttachment]] = None
 
 

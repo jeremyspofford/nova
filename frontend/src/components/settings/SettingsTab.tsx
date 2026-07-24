@@ -6,7 +6,7 @@ import { THEMES } from '../../brain/theme';
 import { ThemePreview } from '../ThemePreview';
 import { CardsSkeleton } from '../ui';
 import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
-import { VoiceField, ListenModeField, WakeWordField } from './voice';
+import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
 import { BundledInference, ModelStorage } from './inference';
 
@@ -171,6 +171,7 @@ export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: stri
               <BundledInference onChanged={() => getModels().then(setModels)} />
             )}
             {section === 'Inference' && <ModelStorage />}
+            {section === 'Voice' && <HouseholdVoices />}
             {section === 'Observability' && (
               <button
                 onClick={() => window.dispatchEvent(new Event('nova:open-observability'))}

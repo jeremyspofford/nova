@@ -26,7 +26,8 @@ interface PendingAttachment extends UiAttachment { data: string }
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
-      streaming?: boolean; trace?: TraceSummary; attachments?: UiAttachment[] }
+      streaming?: boolean; trace?: TraceSummary; attachments?: UiAttachment[];
+      speaker?: { name: string; role: string } }
   | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
   | { id: string; kind: 'error'; content: string }
   | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
@@ -199,6 +200,11 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
                 <span className="truncate max-w-[10rem]">{a.name}</span>
               </span>
             ))}
+          </div>
+        )}
+        {item.role === 'user' && item.speaker && (
+          <div className="text-[10px] text-amber-400/90 mb-0.5 text-right">
+            {item.speaker.role === 'unknown' ? 'unknown voice' : item.speaker.name}
           </div>
         )}
         <div className={`break-words px-3 py-2 text-sm ${bubble}`}>
@@ -409,13 +415,23 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   // a captured utterance (from PTT or tap-VAD) → transcribe → voice turn.
   // The reply is always spoken (voice in implies voice out).
+  // one utterance -> text + who was speaking; the speaker echo rides the
+  // chat request exactly like `source` does (personalization, never auth —
+  // the server only ever narrows on it)
   async function submitUtterance(blob: Blob) {
     setMicState('transcribing');
     try {
-      const text = await transcribeSpeech(blob);
+      const { text, speaker: who, speaker_active } = await transcribeSpeech(blob);
       setMicState('idle');
-      if (text.trim()) await send({ text, source: 'voice', speak: true });
-      else setItems(prev => [...prev, { id: uid(), kind: 'error',
+      if (text.trim()) {
+        await send({
+          text, source: 'voice', speak: true,
+          speakerId: who ? who.profile_id : (speaker_active ? 'unknown' : undefined),
+          speakerTag: who && who.role !== 'operator'
+            ? { name: who.name, role: who.role }
+            : (!who && speaker_active ? { name: 'unknown voice', role: 'unknown' } : undefined),
+        });
+      } else setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: "Didn't catch that — try again." }]);
     } catch (err) {
       setMicState('idle');
@@ -775,6 +791,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             }
           : { id: m.id, kind: 'msg', role: m.role, content: m.content,
               trace: m.trace ?? undefined,
+              speaker: m.speaker && m.speaker.role !== 'operator'
+                ? { name: m.speaker.name, role: m.speaker.role } : undefined,
               attachments: m.attachments?.map(a => ({ kind: a.kind, name: a.name, mime: a.mime })) }));
         void loadConsents(conv.id);
       } catch (err) {
@@ -791,7 +809,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const emitPresence = (active: boolean, kind?: 'thinking' | 'dispatch' | 'tool') =>
     window.dispatchEvent(new CustomEvent('nova:chat-activity', { detail: { active, kind } }));
 
-  async function send(opts?: { text?: string; source?: string; speak?: boolean }) {
+  async function send(opts?: { text?: string; source?: string; speak?: boolean;
+                               speakerId?: string;
+                               speakerTag?: { name: string; role: string } }) {
     const message = (opts?.text ?? input).trim();
     // composer sends carry the picked attachments; voice/queued turns don't
     const atts = opts?.text === undefined ? pending : [];
@@ -806,6 +826,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     const speakThisTurn = opts?.speak ?? speech;
 
     setItems(prev => [...prev, { id: uid(), kind: 'msg', role: 'user', content: message,
+      speaker: opts?.speakerTag,
       attachments: atts.length
         ? atts.map(({ kind, name, mime, preview }) => ({ kind, name, mime, preview }))
         : undefined }]);
@@ -829,7 +850,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
     try {
       for await (const event of streamChat(message, conversationId ?? undefined, opts?.source, ac.signal,
-                                           atts.map(({ kind, name, mime, data }) => ({ kind, name, mime, data })))) {
+                                           atts.map(({ kind, name, mime, data }) => ({ kind, name, mime, data })),
+                                           opts?.speakerId)) {
         if (event.type === 'meta') {
           liveTraceId = event.traceId ?? null;
         } else if (event.type === 'text') {

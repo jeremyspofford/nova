@@ -244,6 +244,27 @@ SETTING_DEFS: list[dict] = [
      "label": "Tap-to-talk pause tolerance (ms)",
      "description": ("How long a silence ends your turn in tap-to-talk. Higher "
                      "= more forgiving of mid-sentence pauses before Nova answers.")},
+    # ── speaker identification (docs/plans/speaker-id.md) ────────────────
+    {"key": "voice.speaker_id", "type": "boolean", "default": True,
+     "section": "Voice", "label": "Recognize who's speaking",
+     "description": ("Match each voice turn against the enrolled household "
+                     "voices below. Recognition personalizes tone and NARROWS "
+                     "what non-operator voices can do — it never unlocks "
+                     "anything. Off, or with nobody enrolled, every turn "
+                     "behaves like the operator (today's behavior).")},
+    {"key": "voice.speaker_threshold", "type": "number", "default": 0.55,
+     "min": 0.3, "max": 0.9, "section": "Voice",
+     "label": "Voice match threshold",
+     "description": ("Minimum similarity for a voice match. Raise it if the "
+                     "wrong person gets recognized; lower it if enrolled "
+                     "voices keep coming up unknown.")},
+    {"key": "voice.speaker_margin", "type": "number", "default": 0.10,
+     "min": 0.0, "max": 0.5, "section": "Voice",
+     "label": "Voice match margin",
+     "description": ("How clearly the best match must beat the runner-up. "
+                     "A hesitant match counts as unknown — unknown voices "
+                     "get the guest treatment, so uncertainty is always "
+                     "safe.")},
     # ── Notifications (roadmap #21) ──────────────────────────────────────
     # The only way Nova reaches you when the app is closed. Provider-based
     # (app/notify.py): ntfy is the batteries-included default (keyless,

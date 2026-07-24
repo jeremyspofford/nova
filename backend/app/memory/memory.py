@@ -186,6 +186,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     item_id: Optional[str] = None, append: bool = False,
                     prepend: bool = False,
                     maintained_by: Optional[str] = None,
+                    author: Optional[str] = None,
                     source_type: str = "chat", link_pass: bool = True) -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept
         file. append=True + item_id adds content to the end of an existing item
@@ -193,7 +194,10 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         prepend=True puts the delta at the TOP instead (latest-first documents).
         maintained_by (an automation name, plumbed from the run context — never
         agent-supplied) stamps provenance on topics CREATED during an automation
-        run, so the brain's writes-arc survives month rollovers mechanically."""
+        run, so the brain's writes-arc survives month rollovers mechanically.
+        author (a recognized speaker's name, plumbed from the voice turn —
+        docs/plans/speaker-id.md) marks what a non-operator household member
+        said, so their words never file as the operator's."""
         async with self._lock:
             if append or prepend:
                 if not item_id:
@@ -213,6 +217,8 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                             "error": f"title is required when writing a {type}"}
                 metadata = {"type": type, "title": title, "priority": priority,
                             "source_type": source_type, "enabled": True}
+                if author:
+                    metadata["author"] = author
                 if description:
                     metadata["description"] = description
                 if category:

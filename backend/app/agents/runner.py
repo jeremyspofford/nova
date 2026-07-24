@@ -221,10 +221,63 @@ async def _mcp_index_block(agent: dict) -> str:
             "load matching tools into THIS turn)\n" + lines)
 
 
+# Speaker tiers (docs/plans/speaker-id.md). Non-operator voices run with a
+# hard-narrowed toolset: search only — no memory writes, no settings, no
+# notify, no manage_*, and no dispatch (a sub-agent must not be an escape
+# hatch). Enforced mechanically below, at the same layer as tool grants;
+# recognition can only ever NARROW, never widen.
+_RESTRICTED_ROLES = {"kid", "guest", "unknown"}
+_RESTRICTED_TOOLS = {"web_search"}
+
+_KID_REGISTER = (
+    "## Speaking with a child\n"
+    "You're talking with a kid from the household. Use simple, warm words and "
+    "short sentences. Stay on kid-appropriate topics and gently steer away "
+    "from anything that isn't. Never bring up the operator's private or work "
+    "matters, and never explain or negotiate your own restrictions — just be "
+    "helpful and kind.")
+
+_GUEST_REGISTER = (
+    "## Speaking with a guest\n"
+    "You don't recognize this voice as an enrolled household member. Be "
+    "friendly and general, and early on, ask who you're speaking with. Don't "
+    "share household or operator details. Household members can be enrolled "
+    "in Settings -> Voice.")
+
+
+def _speaker_block(speaker: dict | None) -> str:
+    """FACTS block: who the current voice turn belongs to. Same idiom as
+    _now_block — live data, imperative, empty when there's nothing to say."""
+    if not speaker:
+        return ""
+    role = speaker.get("role")
+    lines = ["## Who you're speaking with (live)"]
+    if role == "unknown":
+        lines.append("An unrecognized voice — not an enrolled household "
+                     "member. Address them as a guest.")
+    else:
+        lines.append(f"{speaker.get('name')} — role: {role}.")
+        if speaker.get("persona_notes"):
+            lines.append(speaker["persona_notes"])
+    return "\n".join(lines)
+
+
+def _speaker_register(speaker: dict | None) -> str:
+    """LAST-WORD register composed AFTER the channel register — never
+    replacing it. Operator (and no-speaker) turns add nothing."""
+    role = (speaker or {}).get("role")
+    if role == "kid":
+        return _KID_REGISTER
+    if role in ("guest", "unknown"):
+        return _GUEST_REGISTER
+    return ""
+
+
 async def _build_system_prompt(agent: dict, query: str, *,
                                include_index: bool = False,
                                conversation_summary: str | None = None,
-                               system_suffix: str | None = None) -> str:
+                               system_suffix: str | None = None,
+                               speaker: dict | None = None) -> str:
     """Slot-based prompt assembly — persona-layer phase 1.
 
     ROLE → FACTS → CONTEXT → LAST WORD, in that order, always. The agent
@@ -255,6 +308,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
     mcp_index = await _mcp_index_block(agent)
     if mcp_index:
         parts.append(mcp_index)
+    spk = _speaker_block(speaker)
+    if spk:
+        parts.append(spk)
 
     # CONTEXT — specialist index, memories, skills, rolling summary
     if include_index:
@@ -304,6 +360,11 @@ async def _build_system_prompt(agent: dict, query: str, *,
         parts.append(_HOUSE_RULES.format(name=name))
         if system_suffix:
             parts.append(system_suffix)
+    # speaker register composes AFTER the channel register — the very last
+    # word for non-operator voices; operator turns append nothing
+    reg = _speaker_register(speaker)
+    if reg:
+        parts.append(reg)
     return "\n\n".join(parts)
 
 
@@ -311,7 +372,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
                     conversation_summary: str | None = None,
                     system_suffix: str | None = None,
-                    automation: str | None = None) -> AsyncIterator[dict]:
+                    automation: str | None = None,
+                    speaker: dict | None = None) -> AsyncIterator[dict]:
     """Run one agent turn (with tool rounds) and stream events.
 
     turn_messages: chat-format messages for this turn (history + new user msg),
@@ -327,6 +389,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     Rides the tool ctx — never the prompt — so tools can record run
     provenance mechanically (write_memory stamps maintained_by on created
     topics); propagates through dispatch so a sub-agent's writes carry it too.
+    speaker: who the voice turn belongs to (docs/plans/speaker-id.md) —
+    {id, name, role, persona_notes?}. Non-operator roles get a hard tool
+    clamp here (search only, no dispatch) plus a persona block/register;
+    None (typed chat, or recognition off) is exactly the old behavior.
     """
     query = next((m["content"] for m in reversed(turn_messages)
                   if m["role"] == "user"), "")
@@ -338,18 +404,27 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
+    speaker_role = (speaker or {}).get("role")
+    if speaker_role in _RESTRICTED_ROLES:
+        # the tier clamp: intersect, never extend — with no voiceprints
+        # enrolled this branch is unreachable and behavior is exactly the
+        # single-operator behavior of before
+        tools = [t for t in tools
+                 if t["function"]["name"] in _RESTRICTED_TOOLS]
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
     async with trace.span("stage", "build_prompt") as psp:
         system_prompt = await _build_system_prompt(
             agent, query, include_index=can_dispatch,
-            conversation_summary=conversation_summary, system_suffix=system_suffix)
+            conversation_summary=conversation_summary, system_suffix=system_suffix,
+            speaker=speaker)
         psp["prompt_chars"] = len(system_prompt)
         psp["agent"] = agent.get("name")
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
            "dispatch_depth": dispatch_depth, "automation": automation,
+           "speaker_role": speaker_role,
            "granted": {t["function"]["name"] for t in tools}}
 
     final_text = ""

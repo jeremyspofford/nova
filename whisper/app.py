@@ -6,7 +6,16 @@ filtering + anti-hallucination guards.
 
     GET  /health      -> {status, model, device, loaded, ...}
     POST /transcribe   (raw audio body) -> {text, language, ...}
+    POST /embed        (raw audio body) -> {embedding, secs} — speaker voiceprint
     POST /unload       -> free the model from (V)RAM now (reloads on next use)
+
+/embed is the speaker-identification half (docs/plans/speaker-id.md): a
+sherpa-onnx speaker-embedding model (WeSpeaker voxceleb class, ~28MB ONNX,
+auto-downloaded to the models volume) turns an utterance into a vector the
+backend cosine-matches against enrolled household voiceprints. CPU-only,
+its own lock — an embedding must never queue behind a long transcription,
+and a broken embedder must never break STT (callers treat errors as
+speaker-unknown).
 
 Runs on CPU (device=cpu/int8) or GPU (device=cuda/float16) from the SAME image;
 falls back to CPU if the GPU can't be used. To keep the GPU free for other work
@@ -44,6 +53,62 @@ last_used = 0.0
 # ctranslate2 isn't safe to call concurrently, and load/unload must not race a
 # transcribe — one lock serialises all three.
 lock = asyncio.Lock()
+
+# ── speaker embeddings (voiceprints) ─────────────────────────────────────────
+# WeSpeaker English voxceleb CAM++ via sherpa-onnx — small, CPU, keyless.
+# (The release tag's "recongition" typo is upstream's, not ours.)
+SPEAKER_MODEL_URL = os.environ.get(
+    "SPEAKER_MODEL_URL",
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    "speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B.onnx")
+SPEAKER_MODEL_PATH = os.path.join(
+    MODEL_DIR, "speaker", os.path.basename(SPEAKER_MODEL_URL).replace("%2B", "+"))
+# an utterance shorter than this carries too little voice to identify anyone
+SPEAKER_MIN_SECS = float(os.environ.get("SPEAKER_MIN_SECS", "1.5"))
+
+spk_extractor = None
+spk_state: dict = {"status": "cold", "detail": None}
+# deliberately NOT the transcribe lock: embedding is ~10ms on CPU and must
+# never wait behind a long transcription or a model (re)load
+spk_lock = asyncio.Lock()
+
+
+def _spk_build() -> None:
+    """Download (once, into the models volume) + load the speaker model.
+    Runs in a worker thread; caller holds spk_lock."""
+    global spk_extractor
+    import urllib.request
+
+    import sherpa_onnx
+    if not os.path.exists(SPEAKER_MODEL_PATH):
+        os.makedirs(os.path.dirname(SPEAKER_MODEL_PATH), exist_ok=True)
+        tmp = SPEAKER_MODEL_PATH + ".part"
+        log.info("downloading speaker model to %s ...", SPEAKER_MODEL_PATH)
+        urllib.request.urlretrieve(SPEAKER_MODEL_URL, tmp)
+        os.replace(tmp, SPEAKER_MODEL_PATH)
+    cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model=SPEAKER_MODEL_PATH, num_threads=2, provider="cpu")
+    spk_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
+    spk_state.update(status="ready", detail=None)
+    log.info("speaker embedder ready (%s)", os.path.basename(SPEAKER_MODEL_PATH))
+
+
+def _decode_16k_mono(data: bytes):
+    """Any container/codec PyAV understands -> float32 mono 16 kHz [-1, 1]."""
+    import av
+    import numpy as np
+    pcm = []
+    with av.open(BytesIO(data)) as container:
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+        for frame in container.decode(audio=0):
+            for out in resampler.resample(frame):
+                pcm.append(out.to_ndarray())
+        for out in resampler.resample(None):   # flush
+            pcm.append(out.to_ndarray())
+    if not pcm:
+        return np.zeros(0, dtype=np.float32)
+    samples = np.concatenate(pcm, axis=1)[0]
+    return samples.astype(np.float32) / 32768.0
 
 app = FastAPI(title="nova-whisper")
 
@@ -113,7 +178,41 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {**state, "idle_unload_s": IDLE_UNLOAD_S}
+    return {**state, "idle_unload_s": IDLE_UNLOAD_S, "speaker": spk_state}
+
+
+@app.post("/embed")
+async def embed(request: Request):
+    """Speaker embedding for one utterance. Returns {embedding: null} for
+    too-short audio; raises only on truly broken input — the backend treats
+    any failure as speaker-unknown, never as a failed transcription."""
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(400, "empty audio body")
+    try:
+        samples = await asyncio.to_thread(_decode_16k_mono, audio)
+    except Exception as e:
+        raise HTTPException(400, f"could not decode audio: {e}")
+    secs = round(len(samples) / 16000.0, 2)
+    if secs < SPEAKER_MIN_SECS:
+        return {"embedding": None, "secs": secs, "reason": "too short"}
+
+    def run():
+        stream = spk_extractor.create_stream()
+        stream.accept_waveform(sample_rate=16000, waveform=samples)
+        stream.input_finished()
+        return list(spk_extractor.compute(stream))
+
+    async with spk_lock:
+        if spk_extractor is None:
+            try:
+                await asyncio.to_thread(_spk_build)
+            except Exception as e:
+                spk_state.update(status="error", detail=str(e)[:200])
+                log.exception("speaker model load failed")
+                raise HTTPException(503, f"speaker model unavailable: {e}")
+        vec = await asyncio.to_thread(run)
+    return {"embedding": vec, "secs": secs, "dim": len(vec)}
 
 
 @app.post("/unload")
