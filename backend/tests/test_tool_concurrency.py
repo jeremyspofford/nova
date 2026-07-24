@@ -21,16 +21,23 @@ What it pins down (each maps to a rail in the plan):
 
 import asyncio
 import json
+import shutil
 import sys
+import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 sys.path.insert(0, "/app/backend")
 
 from app import narration, settings_store, trace          # noqa: E402
 from app.agents import runner                             # noqa: E402
 from app.llm import router as llm_router                  # noqa: E402
+from app.memory import memory as memory_mod               # noqa: E402
 from app.tools import registry as tool_registry           # noqa: E402
+
+# throwaway memory root for prompt assembly (never the operator's store —
+# OkfMemory refuses a sandbox root that overlaps the real dir)
+SCRATCH_MEM = tempfile.mkdtemp(prefix="nova-tool-concurrency-")
 
 # ── stub world ───────────────────────────────────────────────────────────
 
@@ -124,13 +131,6 @@ def install_stubs(recorder: ToolRecorder, script: LLMScript, tool_names):
     runner._platform_block = _empty
     runner._entities_block = _empty
     runner._mcp_index_block = _empty
-
-    async def _ctx(_q):
-        return {"context": ""}
-
-    runner.memory.context = _ctx
-    runner.memory.skills_context = _ctx
-    runner.memory.soul = _empty
     narration.detect = lambda text, calls: None
 
 
@@ -158,7 +158,7 @@ async def drive(rounds, *, concurrency, tool_names, recorder=None,
     holder: dict = {"events": []}
     ready = asyncio.Event()
 
-    async def body():
+    async def turn_body():
         starts = 0
         async with trace.turn("test") as turn:
             holder["turn"] = turn
@@ -172,6 +172,14 @@ async def drive(rounds, *, concurrency, tool_names, recorder=None,
                             ready.set()
             finally:
                 await agen.aclose()
+
+    async def body():
+        # prompt assembly reads memory for real — through the eval lane's
+        # sandbox seam, so it lands in a throwaway store instead of the
+        # operator's. (The `memory` singleton is a read-only proxy now:
+        # monkeypatching its methods is deliberately impossible, by design.)
+        with memory_mod.sandbox(memory_mod.OkfMemory(base_dir=SCRATCH_MEM)):
+            await turn_body()
 
     if cancel_after_starts:
         task = asyncio.create_task(body(), name="turn")
@@ -374,6 +382,7 @@ async def main():
               test_malformed_inside_a_run):
         await t()
         print()
+    shutil.rmtree(SCRATCH_MEM, ignore_errors=True)
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES))
         return 1
