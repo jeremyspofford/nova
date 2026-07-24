@@ -1,0 +1,23 @@
+{
+  "suite": "ingestion",
+  "suite_version": 1,
+  "agent": "ingestion",
+  "execution_class": "live-tool",
+  "description": "The ingestion agent's four operating modes — RESEARCH, REFRESH, INGEST-MEDIA, FOLLOW-A-SOURCE — graded against a frozen mini-web and a frozen scratch memory corpus.",
+  "notes": "Every task here is a rail from the agent's own system prompt or a real incident. Tasks 1-3 grade the memory-write half (distillation, update-in-place, tag hygiene); tasks 4-6 grade the media half (source vs single video, already-ingested honesty, the do-NOT-chunk-a-short-transcript rule from migration 036). The tech-news-digest automation also runs as this agent, but its digest behavior is graded in the news-summarizer suite because that is where the digest corpus lives.",
+  "run": {
+    "max_tool_rounds": 10,
+    "budget_seconds": 300,
+    "exclude_tools": ["raise_recommendation"],
+    "replay_only_tools": ["ingest_media", "follow_source", "unfollow_source", "poll_sources", "list_followed_sources", "get_weather"],
+    "replay_only_default": "Error: this tool is not available in eval replay mode."
+  },
+  "tasks": [
+    "research-and-write-topic",
+    "refresh-topic-in-place",
+    "tag-hygiene-specific-subjects",
+    "follow-a-source-not-a-video",
+    "media-already-ingested-honesty",
+    "short-transcript-no-chunking"
+  ]
+}

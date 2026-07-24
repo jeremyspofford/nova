@@ -1,0 +1,32 @@
+[source: https://techcrunch.example.com/2026/07/16/moonshot-kimi-k3]
+[title: Moonshot's Kimi K3 tops the open-weight coding leaderboard — and draws a White House response]
+
+Moonshot's Kimi K3 tops the open-weight coding leaderboard — and draws a
+White House response
+
+July 16, 2026
+
+Beijing-based Moonshot AI released Kimi K3 on Thursday, and the open-weight
+model immediately took the top spot on SWE-bench Verified among models with
+published weights, scoring 74.2%.
+
+The model is a mixture-of-experts design with 1.2 trillion total parameters
+and 32 billion active per token. Moonshot says the context window is 480K
+tokens. Weights are available on Hugging Face under what the company calls a
+modified MIT license.
+
+Within hours, a White House spokesperson said the administration was
+"reviewing whether the model's capabilities are consistent with its stated
+training budget," language that industry observers read as an accusation of
+distillation from US frontier labs. Moonshot has not responded to the
+specific claim; its model card lists data sources but does not itemize
+synthetic data provenance.
+
+The release lands three weeks after the APEC Chengdu statement in which 21
+economies, including the United States and China, endorsed "trusted
+open-source approaches" to AI.
+
+Analysts we spoke to cautioned that leaderboard position is not the same as
+deployability: serving K3 at full precision requires a multi-GPU node, which
+puts it out of reach for the hobbyist audience that drove adoption of
+smaller open-weight releases.

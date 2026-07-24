@@ -1,0 +1,38 @@
+[source: https://moonshot.ai/blog/kimi-k3]
+[title: Kimi K3 — model page (updated for K3.1)]
+
+Kimi K3
+
+Updated July 22, 2026 — this page now covers the K3.1 checkpoint.
+
+K3.1 checkpoint (July 22, 2026)
+
+We have published K3.1, a drop-in replacement for the July 16 weights. Three
+changes:
+
+1. Context extended from 512K to 768K tokens. The extension is a continued
+   pre-training pass, not rope scaling; retrieval accuracy at 768K matches
+   what K3.0 held at 512K.
+2. A vision variant, K3.1-VL, ships alongside the text model. It shares the
+   language backbone and adds a 1.1B-parameter vision encoder; image input is
+   billed at the input token rate.
+3. SWE-bench Verified improves to 76.8% (from 74.2%). LiveCodeBench v6 and
+   AIME 2026 are unchanged within noise.
+
+Pricing (effective July 22, 2026)
+
+  Input   $0.40 per million tokens   (was $0.55)
+  Output  $1.60 per million tokens   (was $2.20)
+
+Unchanged from the July 16 release
+
+  Architecture      1.2T total parameters, 32B active, 8 of 384 experts
+  License           modified MIT, attribution above 100M MAU
+  Serving footprint ~640GB at full precision; FP8 fits one 8xH200 node
+
+K3.0 weights remain downloadable and remain supported through the end of the
+year. The API alias kimi-k3 now points at K3.1; pin kimi-k3.0 if you need
+the original checkpoint.
+
+We are still not commenting on the training-data questions raised at launch
+beyond the model card.

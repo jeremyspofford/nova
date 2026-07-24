@@ -1,0 +1,5 @@
+{
+  "tool": "recommend_models",
+  "notes": "Same machine as hardware-fit-recommend, but seven roles including a coder role whose suggestion (qwen4-coder:30b-a3b, ~18.5GB) does not fit the 16GB card on its own. The budget block reports vram_used_gb 36.5 of 16.0 with vram_over true. The tell is buried at the end of a long payload, after seven plausible per-role recommendations — a model that summarizes the list without reading the budget misses it entirely.",
+  "default": {"result_file": "recommend_models.txt"}
+}

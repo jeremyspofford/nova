@@ -1,0 +1,73 @@
+{
+  "id": "research-and-write-topic",
+  "suite": "ingestion",
+  "title": "Research a subject from the open web and store one distilled topic",
+  "intent": "RESEARCH mode end to end: search, pick authoritative sources over aggregators and rumor, distill rather than dump, and write exactly one well-formed topic with specific subject tags and correct provenance. The mini-web plants a stale pre-release leak above the forum thread so a rank-following model imports numbers that the vendor page contradicts.",
+  "prompt": "Find out what Kimi K3 is and save what you learn.",
+  "fixtures": [
+    "fixtures/research-and-write-topic/web_search.json",
+    "fixtures/research-and-write-topic/fetch_url.json"
+  ],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "web_search", "min": 1, "max": 3},
+        {"name": "fetch_url", "min": 1, "max": 4}
+      ],
+      "must_not_call": ["ingest_media", "follow_source", "poll_sources"]
+    },
+    "memory": {
+      "topics_created": {"min": 1, "max": 1},
+      "frontmatter_required": ["title", "description", "category", "tags", "source_url"],
+      "frontmatter_equals": {"category": "knowledge", "type": "topic"},
+      "source_url_in": [
+        "https://moonshot.ai/blog/kimi-k3",
+        "https://techcrunch.example.com/2026/07/16/moonshot-kimi-k3"
+      ],
+      "tags": {
+        "min": 2,
+        "max": 4,
+        "no_generic": true,
+        "must_include_any": [["kimi-k3", "kimi", "moonshot-ai", "moonshot"]]
+      },
+      "body_must_contain_any": [
+        ["512k", "512,000", "512 000"],
+        ["1.2t", "1.2 trillion"],
+        ["mit"]
+      ],
+      "body_must_not_contain": [
+        "2 trillion",
+        "one-million",
+        "1m context",
+        "1m-token",
+        "q4 2026 launch"
+      ],
+      "write_content": {"max_chars": 4000}
+    },
+    "rounds_max": 8,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["faithfulness", "completeness", "distillation_quality", "memory_write_quality"],
+    "source_facts": [
+      "Kimi K3 was released July 16, 2026 by Moonshot AI.",
+      "It is a sparse mixture-of-experts model: 1.2 trillion total parameters, 32 billion active per token, 8 of 384 experts routed per layer.",
+      "The context window is 512K tokens. The aggregator article says 480K; the vendor page says 512K and is authoritative.",
+      "License is a modified MIT license: commercial use permitted, attribution required above 100M monthly active users, no field-of-use restriction.",
+      "Full-precision serving needs roughly 640GB of accelerator memory; the FP8 checkpoint fits one 8xH200 node. It does NOT run on a single consumer GPU.",
+      "SWE-bench Verified 74.2%, LiveCodeBench v6 68.9%, AIME 2026 91.0%, MMLU-Pro 84.3%, Tau-bench retail 71.5%, self-reported by Moonshot.",
+      "Hosted API pricing is $0.55/M input and $2.20/M output, unchanged from K2.",
+      "A White House spokesperson raised a distillation question; Moonshot has not responded beyond its model card."
+    ],
+    "traps": [
+      "The May 2026 leak page claims 2T parameters, a 1M context window, a Q4 launch, and an Apache 2.0 license. All four are contradicted by the shipped release; the leak even self-corrects in an update note.",
+      "The forum thread's opening post claims the 32B active count means it fits in 24GB of VRAM. It is corrected later in the same thread.",
+      "The listicle is affiliate SEO filler with nothing to contribute; fetching it at all is wasted budget.",
+      "The aggregator's 480K context number is the one plausible-looking wrong fact in an otherwise sound article."
+    ],
+    "guidance": "Reward preferring the vendor page over the aggregator on the numbers they disagree about, and reward saying which source a contested fact came from. Penalize importing any leak-page figure. Penalize a topic that reads as a paste of one page rather than a distillation a future reader with no access to the sources could use."
+  }
+}

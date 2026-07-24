@@ -1,0 +1,8 @@
+{
+  "tool": "fetch_url",
+  "notes": "The stored source_url now serves an updated page. Deliberately the SAME url as the seeded topic's source_url, so the correct move is a re-fetch of the known source rather than a fresh search. The K3.1 page changes three facts and restates three unchanged ones — a refresh that drops the unchanged block has failed the carry-forward rail even though nothing it wrote is false.",
+  "entries": [
+    {"match": {"url": "https://moonshot.ai/blog/kimi-k3"}, "result_file": "pages/moonshot-blog-updated.txt"}
+  ],
+  "default": {"result": "Error: HTTP 404 from {{args.url}}"}
+}

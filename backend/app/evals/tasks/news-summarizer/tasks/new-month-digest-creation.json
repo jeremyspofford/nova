@@ -1,0 +1,64 @@
+{
+  "id": "new-month-digest-creation",
+  "suite": "news-summarizer",
+  "title": "Start a new month's digest instead of appending to last month's",
+  "intent": "Month rollover. Memory holds a June digest and nothing for July, and search_memory for 'AI news digest' returns June as the obvious hit. The failure is prepending July onto the June document — the same tool call that is correct every other day of the month. Two of the three items also update stories June recorded as unresolved, which is extra pull toward the old file.",
+  "notes": "The prompt names the target month explicitly rather than saying 'this month'. Production's instruction relies on the runner's date block; naming it here keeps the task deterministic whenever the suite is run, at the cost of not grading month derivation.",
+  "prompt_file": "prompts/new-month-digest-creation.md",
+  "seed_corpus": ["corpus/topics/ai-news-digest-june-2026.md"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "search_memory", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"item_id": "topics/ai-news-digest-june-2026.md"}},
+        {"name": "write_memory", "args": {"prepend": true}},
+        {"name": "write_memory", "args": {"append": true}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "topics_created": {"min": 1, "max": 1},
+      "title_matches": "^AI News Digest\\s*[—–-]\\s*July 2026$",
+      "frontmatter_required": ["title", "description", "category", "tags"],
+      "frontmatter_equals": {"category": "knowledge", "type": "topic"},
+      "tags": {
+        "min": 2,
+        "max": 4,
+        "no_generic": false,
+        "must_include_any": [["ai-news", "tech-news"], ["digest"]]
+      },
+      "write_content": {
+        "must_match": ["^\\s*## July 24, 2026"],
+        "must_contain": ["AgentForger", "Model Context Protocol", "2 August 2026"],
+        "must_not_contain": ["June 30, 2026", "June 12, 2026", "Qwen4-Coder"],
+        "max_chars": 3000
+      }
+    },
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["rollover_correctness", "faithfulness", "digest_form"],
+    "source_facts": [
+      "Memory contains topics/ai-news-digest-june-2026.md and no July digest.",
+      "The correct action is creating a new topic titled 'AI News Digest — July 2026', category knowledge, tags ai-news / tech-news / digest, with a '## July 24, 2026' section — not an item_id write against June.",
+      "Item 1: Zenity Labs disclosed AgentForger, a CSRF flaw in OpenAI's ChatGPT Workspace Agents builder; one phishing link deployed an attacker-controlled agent with no confirmation, inheriting Outlook, Teams, Slack, SharePoint and Drive connectors; reported June 4, patched June 8; no in-the-wild exploitation.",
+      "Item 2: the Linux Foundation took MCP stewardship from Anthropic — spec, reference implementations, conformance suite and trademark — with a TSC seating Anthropic, Microsoft, Block and two elected community members; existing servers unaffected. June's digest recorded this as unconfirmed talks.",
+      "Item 3: the Commission confirmed AI Act general-purpose obligations take effect 2 August 2026, with a 2 August 2028 deadline for models already on the market. June's digest recorded the delay request as unresolved.",
+      "June's tags in memory are ai-news, tech-news, digest — all three are in _GENERIC_TAGS and all three are correct here. A digest is a search surface, not a subject cluster, so the no-generic-tags rule is deliberately not applied to this task."
+    ],
+    "traps": [
+      "Writing with item_id pointing at the June digest. It is the top search hit and the prepend call is muscle memory.",
+      "Creating the topic with a title that will not slug to the expected id — an en dash, a different separator, or 'July 2026 AI News Digest'.",
+      "Carrying June's entries forward into the new document 'for continuity', which duplicates them across two files.",
+      "Losing that items 2 and 3 resolve stories June left open — worth a clause, not a reason to edit June."
+    ],
+    "guidance": "rollover_correctness is dominant and mechanical: a new topic, correct title, June untouched. Reward matching June's document shape — day heading, numbered stories, Source lines — since the two files are read as one series. Reward a clause noting that the MCP and AI Act items resolve what June recorded as open; penalize any edit to the June file."
+  }
+}

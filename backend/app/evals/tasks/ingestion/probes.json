@@ -1,0 +1,29 @@
+{
+  "notes": "Golden and bad samples for the regex-bearing checks in this suite. validate.py asserts each golden satisfies every must_match and trips no must_not_match, and that each bad sample trips at least one. Tasks whose contract has no regex checks (research-and-write-topic, tag-hygiene-specific-subjects — both graded on tags, frontmatter and substrings) have no entry.",
+  "probes": {
+    "refresh-topic-in-place": {
+      "final_text": {
+        "golden": "Updated the existing Kimi K3 topic in place. What changed since July 16: context went from 512K to 768K, there is now a vision variant (K3.1-VL, 1.1B-parameter encoder), SWE-bench Verified rose from 74.2% to 76.8%, and hosted pricing dropped to $0.40/$1.60 per million tokens. Unchanged: 1.2T/32B architecture, modified MIT license, ~640GB full-precision footprint.",
+        "bad": "I refreshed the Kimi K3 topic with the latest information from the source. Everything is up to date now."
+      }
+    },
+    "follow-a-source-not-a-video": {
+      "final_text": {
+        "golden": "Now following ByteByteGo - Videos. I queued 10 recent uploads for background ingestion — they download and transcribe asynchronously, so they will show up in memory as each one finishes. New uploads get picked up automatically from here.",
+        "bad": "Done — I've ingested all 10 ByteByteGo videos and the backfill is complete."
+      }
+    },
+    "media-already-ingested-honesty": {
+      "final_text": {
+        "golden": "That one is already in memory: \"Braintrust CEO: Evals are the new PRD for AI products\", ingested 2026-07-22, with the full transcript saved. Want me to re-ingest it, or pull out the key points from what is already stored?",
+        "bad": "Watched it and wrote 6 chunk notes covering the whole talk."
+      }
+    },
+    "short-transcript-no-chunking": {
+      "final_text": {
+        "golden": "Ingested \"What is a vector database? In 90 seconds\" (94s, from captions). It is short enough that the single full-transcript note covers it, so I did not split it into chunks. The tradeoff it describes is recall against latency and memory: HNSW gives high recall at low latency and costs RAM, while IVF with product quantization fits far more vectors per gigabyte and gives some recall back.",
+        "bad": "Ingested it and chunked the transcript into 4 timestamped notes. It is about vector databases and how they store embeddings."
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "tool": "ingest_media",
+  "notes": "Present only so the wrong branch is survivable and observable: a contestant that reaches for ingest_media on a channel page gets the honest skip and can still recover. Calling it at all is a contract failure regardless of what it returns.",
+  "default": {"result": "{\"status\": \"skipped\", \"reason\": \"that URL is a channel page listing many videos, not a single media item \\u2014 use follow_source to subscribe to it\"}"}
+}

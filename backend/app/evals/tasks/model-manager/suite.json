@@ -1,0 +1,23 @@
+{
+  "suite": "model-manager",
+  "suite_version": 1,
+  "agent": "model-manager",
+  "execution_class": "live-tool",
+  "description": "Model inventory and fit against a frozen hardware snapshot and a frozen catalog: recommend with reasons, notice when the curated table has aged, and refuse to invent models or specs.",
+  "notes": "Every task runs against the same machine — 64GB RAM (60GB sizing), 16 cores, linux, RTX 4070 Ti SUPER with 16GB VRAM — so VRAM fit is a real constraint the agent has to reason about rather than a number it can wave at. list_models and recommend_models are replay-only here for determinism rather than for safety: both read live hardware, the live curated table and the live agents table, none of which are stable across machines or weeks. pull_model is excluded per the plan's no-real-side-effects rail, which is also why pull discipline is not graded in this suite (see README, Known gaps).",
+  "run": {
+    "max_tool_rounds": 8,
+    "budget_seconds": 240,
+    "exclude_tools": ["pull_model"],
+    "replay_only_tools": ["list_models", "recommend_models"],
+    "replay_only_default": "Error: this tool is not available in eval replay mode."
+  },
+  "tasks": [
+    "hardware-fit-recommend",
+    "vram-overcommit-honesty",
+    "local-only-mode",
+    "inventory-honesty",
+    "stale-catalog-supersession",
+    "unknown-model-honesty"
+  ]
+}

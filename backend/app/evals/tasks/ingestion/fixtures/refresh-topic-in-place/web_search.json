@@ -1,0 +1,7 @@
+{
+  "tool": "web_search",
+  "notes": "Present only so a contestant that searches instead of re-fetching the stored source_url still lands somewhere deterministic. The single result points back at the same page. Searching here is not wrong, just slower — the round cost is the grade.",
+  "default": {
+    "result": "Search results for: {{args.query}}  (via searxng)\n\n1. Kimi K3 — model page (updated for K3.1)\n   https://moonshot.ai/blog/kimi-k3\n   Updated July 22, 2026. K3.1 extends context to 768K, adds the K3.1-VL vision variant, and cuts hosted API pricing.\n"
+  }
+}

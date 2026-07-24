@@ -1,0 +1,55 @@
+[source: https://moonshot.ai/blog/kimi-k3]
+[title: Kimi K3: our largest open-weight model yet — Moonshot AI]
+
+Kimi K3: our largest open-weight model yet
+
+July 16, 2026 — Moonshot AI
+
+Today we are releasing Kimi K3, the third generation of our Kimi series and
+the largest open-weight model we have published.
+
+Architecture
+
+K3 is a sparse mixture-of-experts transformer with 1.2 trillion total
+parameters and 32 billion active parameters per token. It routes to 8 of 384
+experts per layer. The context window is 512K tokens; we trained with a
+progressive length schedule rather than post-hoc rope scaling, and the model
+holds its retrieval accuracy to the end of the window on our internal
+needle tests.
+
+Availability and license
+
+Weights are on Hugging Face today under a modified MIT license: commercial
+use is permitted without royalty, with a single attribution requirement for
+products serving more than 100 million monthly active users. There is no
+field-of-use restriction and no acceptable-use rider.
+
+Serving
+
+Full-precision serving needs roughly 640GB of accelerator memory. The
+released FP8 checkpoint fits on a single 8xH200 node. K3 is not a
+single-consumer-GPU model: the 32B active parameter count describes compute
+per token, not resident memory — every expert must be loaded to serve any
+token.
+
+Benchmarks
+
+  SWE-bench Verified      74.2%
+  LiveCodeBench v6        68.9%
+  AIME 2026               91.0%
+  MMLU-Pro                84.3%
+  Tau-bench (retail)      71.5%
+
+These are our own runs under the harnesses named in the model card. We
+publish the harness configs alongside the weights.
+
+What changed from K2
+
+K3 doubles K2's context (256K to 512K), moves from dense attention to
+grouped-latent attention above 128K, and adds native tool-call formatting to
+the base model rather than only the instruct tune. Pricing on our hosted API
+is $0.55 per million input tokens and $2.20 per million output tokens,
+unchanged from K2.
+
+We are not commenting on the training-data questions raised this week beyond
+our model card, which lists our data sources.

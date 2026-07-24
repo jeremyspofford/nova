@@ -1,0 +1,8 @@
+{
+  "tool": "list_models",
+  "notes": "Default (full falsy): four installed local models — one of them an embedding model, not a chat model — and four approved cloud models, plus the note that 312 more exist behind full=true. full=true serves the wider catalog with no note, so the two branches stay coherent with each other. Reaching for full=true is not wrong here, just not what was asked.",
+  "entries": [
+    {"match": {"full": true}, "result_file": "list_models-full.txt"}
+  ],
+  "default": {"result_file": "list_models.txt"}
+}

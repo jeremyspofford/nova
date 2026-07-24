@@ -1,0 +1,23 @@
+{
+  "suite": "news-summarizer",
+  "suite_version": 1,
+  "agent": "news-summarizer",
+  "execution_class": "live-tool",
+  "description": "Digest compilation from supplied article text: delta-only writes into a running latest-first document, dedup against what memory already holds, and keeping opinion, marketing and disputed numbers labelled as what they are.",
+  "notes": "Toolset as of 2026-07-24: search_memory, write_memory, read_memory_item, web_search, fetch_url. The last three were granted on Jeremy's instruction that day — the row previously had only the two memory tools, which made whole-document dedup impossible (search_memory returns a 500-char snippet per hit, and these digests are longer than that). Every task here still delivers its raw articles in the prompt, so the memory tools run live against the frozen scratch corpus and NO tool fixtures are needed. web_search and fetch_url are replay-only with no fixture: reaching for the web when the articles are already in hand is out of scope for these tasks, and the replay_only_default makes such a call a graded tool_error instead of a live request. A research-mode task with a real mini-web is the obvious seventh task once phase 3 records fixtures. Two more things worth knowing. First, the digest that actually ships in production is the tech-news-digest automation running as the INGESTION agent, which does its own research; news-summarizer is an operator-created agent (is_system=false) that summarizes what it is given. That split still exists — the grant narrowed it, it did not close it. Second, digest topics legitimately carry generic tags (ai-news, tech-news, digest) because a digest is a search surface rather than a subject cluster — tags.no_generic is set false where it applies, and a checker that flagged them would be flagging correct behavior.",
+  "run": {
+    "max_tool_rounds": 8,
+    "budget_seconds": 300,
+    "exclude_tools": [],
+    "replay_only_tools": ["web_search", "fetch_url"],
+    "replay_only_default": "Error: this tool is not available in eval replay mode."
+  },
+  "tasks": [
+    "digest-delta-prepend",
+    "digest-dedup-existing-stories",
+    "attribution-conflict",
+    "opinion-vs-fact",
+    "nothing-new-honesty",
+    "new-month-digest-creation"
+  ]
+}

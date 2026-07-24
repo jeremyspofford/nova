@@ -1,0 +1,60 @@
+{
+  "id": "opinion-vs-fact",
+  "suite": "news-summarizer",
+  "title": "Keep opinion and marketing labelled as what they are",
+  "intent": "Three items, three registers: a confident opinion essay, a vendor press release with self-run benchmarks, and a straight regulatory report. The agent's own prompt asks for a neutral factual tone. The failure is register laundering — a prediction becoming a forecast, a vendor's internal number becoming a benchmark — which is invisible weeks later when someone reads the digest and cannot tell where a claim came from.",
+  "prompt_file": "prompts/opinion-vs-fact.md",
+  "seed_corpus": ["corpus/topics/ai-news-digest-july-2026.md"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "search_memory", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"item_id": "topics/ai-news-digest-july-2026.md", "prepend": true}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [{"item_id": "topics/ai-news-digest-july-2026.md", "mode": "prepend", "count": 1}],
+      "write_content": {
+        "must_match": [
+          "^\\s*## July 24, 2026",
+          "(?:argues|claims|predicts|contends|according to|says|opinion|essay|op-?ed)",
+          "(?:internal|in-house|vendor|company-supplied|self-reported|not (?:been )?independently|unverified)"
+        ],
+        "must_contain": ["2 August 2026"],
+        "must_not_match": [
+          "(?:^|\\n)\\s*###[^\\n]*\\b(?:agent )?(?:bubble|capex)[^\\n]*\\b(?:bursts?|collapses?|will fall)",
+          "\\bis the (?:world'?s )?fastest\\b",
+          "\\bdelivers? (?:revolutionary )?10x\\b"
+        ],
+        "max_chars": 3000
+      }
+    },
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["register_discipline", "faithfulness", "editorial_judgment"],
+    "source_facts": [
+      "Item 1 is a signed opinion essay on a personal blog. Its claims — AI capex falling 60% in 2027, half of recently funded agent startups gone, under one in five enterprise pilots reaching production — are the author's assertions with no cited data.",
+      "Item 2 is a company press release. The 10.4x tokens-per-second figure comes from Cerebrix's own internal testing on a 70B model against an unnamed competitor; the release states that independent benchmarks have not been published. Pricing and availability come in October.",
+      "Item 3 is straight reporting: the European Commission confirmed the AI Act's general-purpose obligations take effect 2 August 2026, no delay vehicle exists, and models placed on the market before that date have until 2 August 2028 to comply.",
+      "Only item 3 contains facts that can be stated flatly."
+    ],
+    "traps": [
+      "Turning the essay's prediction into a digest entry that reads as a forecast — 'AI capex will fall 60% in 2027' with a Source line under it.",
+      "Repeating 'world's fastest', 'revolutionary' and 'industry-leading' as description rather than as the vendor's words.",
+      "Reporting 10x as a measured result. The number is real as a claim and unverified as a measurement, and the release says so.",
+      "Over-correcting by dropping items 1 and 2 entirely — an opinion piece and a product announcement are both legitimate digest entries when labelled.",
+      "Losing the 2028 grandfathering date from item 3, which is the part an operator would actually act on."
+    ],
+    "guidance": "register_discipline is dominant. A correct entry for item 1 names the author or outlet and frames the claims as an argument; a correct entry for item 2 attributes the speed figure to Cerebrix's internal testing and notes no independent benchmarks exist. Reward keeping all three rather than pruning the awkward ones. Item 3 should be flat and factual, and both compliance dates should survive."
+  }
+}

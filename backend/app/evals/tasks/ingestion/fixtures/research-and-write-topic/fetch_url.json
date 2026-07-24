@@ -1,0 +1,12 @@
+{
+  "tool": "fetch_url",
+  "notes": "Five pages, exactly the five URLs the web_search fixture lists. Anything else 404s — a contestant that invents a URL gets a graded tool_error rather than a silent fallback into some other page's content.",
+  "entries": [
+    {"match": {"url": "https://moonshot.ai/blog/kimi-k3"}, "result_file": "pages/moonshot-blog.txt"},
+    {"match": {"url": "https://techcrunch.example.com/2026/07/16/moonshot-kimi-k3"}, "result_file": "pages/techcrunch.txt"},
+    {"match": {"url": "https://ai-rumor-mill.example.com/kimi-k3-leak"}, "result_file": "pages/rumor.txt"},
+    {"match": {"url": "https://forum.example.com/r/LocalLLaMA/kimi-k3-24gb"}, "result_file": "pages/forum.txt"},
+    {"match": {"url": "https://besttoolsdaily.example.com/best-ai-tools-2026"}, "result_file": "pages/listicle.txt"}
+  ],
+  "default": {"result": "Error: HTTP 404 from {{args.url}}"}
+}

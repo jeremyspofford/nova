@@ -1,0 +1,15 @@
+{
+  "tool": "follow_source",
+  "notes": "Reproduces _follow_source's exact success payload (builtin.py:507-525), including the note that tells the agent NOT to claim the backfill is learned yet. Two entries because _normalize_source_url rewrites a bare channel URL to /videos inside the tool, so either form is a legitimate call. Anything else fails to enumerate — a contestant that passes a single video URL here gets the honest error rather than a free pass.",
+  "entries": [
+    {
+      "match": {"url": "https://www.youtube.com/@ByteByteGo"},
+      "result": "{\"status\": \"following\", \"source_key\": \"youtube:UCZgt6AzoyjslHTC9dz0UoTw\", \"title\": \"ByteByteGo - Videos\", \"available\": 10, \"queued\": 10, \"already_had\": 0, \"note\": \"Now following ByteByteGo - Videos. Queued 10 recent upload(s) for BACKGROUND ingestion \\u2014 they download and transcribe asynchronously and appear in memory as each one finishes, so this returns immediately. Do NOT claim they're learned yet; say they're queued and backfilling. New uploads ingest automatically via the poll. Report the source name and the queued count.\"}"
+    },
+    {
+      "match": {"url": "https://www.youtube.com/@ByteByteGo/videos"},
+      "result": "{\"status\": \"following\", \"source_key\": \"youtube:UCZgt6AzoyjslHTC9dz0UoTw\", \"title\": \"ByteByteGo - Videos\", \"available\": 10, \"queued\": 10, \"already_had\": 0, \"note\": \"Now following ByteByteGo - Videos. Queued 10 recent upload(s) for BACKGROUND ingestion \\u2014 they download and transcribe asynchronously and appear in memory as each one finishes, so this returns immediately. Do NOT claim they're learned yet; say they're queued and backfilling. New uploads ingest automatically via the poll. Report the source name and the queued count.\"}"
+    }
+  ],
+  "default": {"result": "Error: could not enumerate {{args.url}} — no playlist or channel entries found at that URL"}
+}

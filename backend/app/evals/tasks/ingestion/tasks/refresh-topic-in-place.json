@@ -1,0 +1,66 @@
+{
+  "id": "refresh-topic-in-place",
+  "suite": "ingestion",
+  "title": "Refresh a stale topic in place instead of creating a second one",
+  "intent": "REFRESH mode and the single hardest rail in the ingestion prompt: 'writing without item_id creates a second topic, which is a failure.' Also grades carry-forward — the updated source restates three unchanged facts and changes three, so a refresh that only transcribes the new page loses the license and serving-footprint facts a future reader needs.",
+  "prompt": "Our Kimi K3 topic is out of date. Refresh it and tell me what changed.",
+  "seed_corpus": ["corpus/topics/kimi-k3.md"],
+  "fixtures": [
+    "fixtures/refresh-topic-in-place/fetch_url.json",
+    "fixtures/refresh-topic-in-place/web_search.json"
+  ],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "search_memory", "min": 1, "max": 3},
+        {"name": "read_memory_item", "min": 1, "max": 2},
+        {"name": "fetch_url", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_not_call": ["ingest_media", "follow_source"],
+      "must_call_with": [
+        {"name": "read_memory_item", "args": {"item_id": "topics/kimi-k3.md"}},
+        {"name": "write_memory", "args": {"item_id": "topics/kimi-k3.md"}}
+      ]
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [{"item_id": "topics/kimi-k3.md", "mode": "replace", "count": 1}],
+      "body_must_contain_any": [
+        ["768k"],
+        ["k3.1-vl", "vision"],
+        ["$0.40", "0.40"],
+        ["mit"],
+        ["640gb", "640 gb"]
+      ],
+      "body_must_not_contain": ["$0.55 per million input tokens"],
+      "write_content": {"max_chars": 4500}
+    },
+    "rounds_max": 8,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["768", "vis(?:ion|ual)"]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["update_in_place_discipline", "carry_forward", "faithfulness", "change_reporting"],
+    "source_facts": [
+      "The seeded topic is topics/kimi-k3.md, learned 2026-07-16, source_url https://moonshot.ai/blog/kimi-k3.",
+      "That URL now serves a page updated 2026-07-22 covering the K3.1 checkpoint.",
+      "Changed: context 512K to 768K; a vision variant K3.1-VL with a 1.1B-parameter encoder now exists; SWE-bench Verified 74.2% to 76.8%; pricing $0.55/$2.20 to $0.40/$1.60 per million tokens.",
+      "Unchanged and still true: 1.2T total / 32B active / 8 of 384 experts, modified MIT license with attribution above 100M MAU, ~640GB full-precision serving footprint, FP8 fits one 8xH200 node.",
+      "K3.0 weights stay downloadable and supported through year end; the kimi-k3 API alias now points at K3.1.",
+      "The seeded topic's line 'Text only; there is no vision variant at launch' is now false and must not survive the refresh."
+    ],
+    "traps": [
+      "Writing a second topic (no item_id) is the failure this task exists for. It looks successful in the agent's own report.",
+      "Replacing the body with only the K3.1 delta silently deletes the license and serving-footprint facts.",
+      "Leaving the stale 'no vision variant' sentence in place while also adding the vision paragraph produces a self-contradicting topic.",
+      "Reporting 'nothing changed' or refusing to state the diff — the prompt asks for it explicitly."
+    ],
+    "guidance": "Score change_reporting on whether the final answer names the specific diffs rather than saying the topic was updated. Score carry_forward on whether facts the new page restates as unchanged survive in the stored body."
+  }
+}

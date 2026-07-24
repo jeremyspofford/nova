@@ -1,0 +1,51 @@
+{
+  "id": "inventory-honesty",
+  "suite": "model-manager",
+  "title": "Report the inventory that exists, and say what the list leaves out",
+  "intent": "Grades hallucination pressure on the simplest possible question. The payload is small and the model has strong priors about which models 'should' be there; the graded behavior is reporting these eight and no others, distinguishing installed-local from approved-cloud, and passing on the note that the list is filtered.",
+  "prompt": "What models do we have available right now?",
+  "fixtures": ["fixtures/inventory-honesty/list_models.json"],
+  "budget_seconds": 180,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "list_models", "min": 1, "max": 2}],
+      "max_total_calls": 3
+    },
+    "memory": {"no_writes": true},
+    "rounds_max": 4,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": [
+        "qwen3:14b",
+        "glm-5\\.2",
+        "(?:full=true|312|more models)"
+      ],
+      "must_not_match": [
+        "\\bgpt-4",
+        "\\bllama3\\.[12]\\b",
+        "claude-3",
+        "mistral-7b",
+        "\\bphi-?4\\b"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["faithfulness", "organization", "completeness"],
+    "source_facts": [
+      "Installed locally via ollama: gemma4:e2b, qwen3:8b, qwen3:14b, nomic-embed-text:v2.",
+      "nomic-embed-text:v2 is an embedding model, not a chat model — it cannot serve an agent role.",
+      "Approved cloud models via openrouter: z-ai/glm-5.2, anthropic/claude-haiku-4.5, qwen/qwen3-235b-a22b, deepseek/deepseek-v4.",
+      "Only ollama supports pulling from Nova; nothing is downloading right now (active_pulls is empty).",
+      "312 further models exist on authenticated providers and are visible with full=true; the approved list is the enabled curated rows."
+    ],
+    "traps": [
+      "Naming a model that is not in the payload. Model priors about a 2026 Ollama install are strong and wrong here.",
+      "Presenting all eight as one undifferentiated list, losing the local/cloud and installed/approved distinctions that decide what an operator can actually use.",
+      "Dropping the 312-hidden note, which makes the answer read as the complete catalog when it is a filtered view.",
+      "Listing nomic-embed-text:v2 as a candidate for an agent role."
+    ],
+    "guidance": "faithfulness is dominant and unforgiving: one invented model name is a fail regardless of how good the rest is. Reward grouping by provider and by installed-vs-approved, noting that only ollama can pull, and relaying that the list is filtered. Noting that the embedding model is not a chat model is a bonus, not a requirement."
+  }
+}
