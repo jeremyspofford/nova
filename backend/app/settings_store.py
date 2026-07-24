@@ -265,6 +265,17 @@ SETTING_DEFS: list[dict] = [
                      "A hesitant match counts as unknown — unknown voices "
                      "get the guest treatment, so uncertainty is always "
                      "safe.")},
+    {"key": "voice.family_tools", "type": "string", "default": "web_search",
+     "section": "Voice", "label": "Family voices can use",
+     "description": ("Comma-separated tools available to recognized "
+                     "non-operator voices (kid/guest) and unknown voices. "
+                     "`mcp:*` grants every connected MCP tool (add "
+                     "find_mcp_tools too for lazily-loaded servers); "
+                     "`mcp:<server>/*` grants one server. Only ever narrows "
+                     "— nothing the main agent lacks, and never dispatch. "
+                     "Changing Nova (rules, automations, skills, settings, "
+                     "memory writes) stays operator-only regardless. Mind "
+                     "that MCP servers vary in power — grant deliberately.")},
     # ── Notifications (roadmap #21) ──────────────────────────────────────
     # The only way Nova reaches you when the app is closed. Provider-based
     # (app/notify.py): ntfy is the batteries-included default (keyless,
