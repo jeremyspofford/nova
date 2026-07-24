@@ -36,7 +36,7 @@ TOOLS_KEYS = {"must_call", "must_not_call", "must_call_with",
 MEMORY_KEYS = {"no_writes", "no_new_topics", "topics_created", "updates",
                "title_matches", "frontmatter_required", "frontmatter_equals",
                "source_url_in", "tags", "body_must_contain_any",
-               "body_must_not_contain", "write_content"}
+               "body_must_not_contain", "body_must_not_match", "write_content"}
 TAGS_KEYS = {"min", "max", "no_generic", "must_include_any", "must_not_include"}
 WRITE_CONTENT_KEYS = {"must_match", "must_not_match", "must_contain",
                       "must_not_contain", "max_chars"}
@@ -279,6 +279,14 @@ def check_memory(spec: dict, run: Any, report: ContractReport,
         report.add(f"memory.body_must_not_contain[{needle}]",
                    not _contains(needle, joined), "present" if
                    _contains(needle, joined) else "absent")
+    # the regex form, for forbidden values that are SUBSTRINGS of the correct
+    # answer. Graded a champion as wrong for writing "1.2 trillion" because
+    # the spec forbade "2 trillion" — no substring test can separate those,
+    # and a grader that fails a right answer is worse than no grader.
+    for pattern in spec.get("body_must_not_match") or []:
+        report.add(f"memory.body_must_not_match[{pattern[:40]}]",
+                   not _search(pattern, joined),
+                   "matched" if _search(pattern, joined) else "absent")
 
     if "write_content" in spec:
         _check_write_content(spec["write_content"] or {}, writes, report)

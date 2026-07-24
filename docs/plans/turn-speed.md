@@ -215,10 +215,35 @@ evidence rather than assumption.
 - Consequence: no agent's model was changed. The mechanical wins (phases
   0–2, 4) stand on their own, and the rails below mean a future candidate
   can be tried in one settings edit with a fallback that is safe.
-- Champion note worth its own look: glm-5.2 failed two contracts too —
-  it wrote a museum's opening hours (ephemeral facts) into a topic, and
-  put superseded spec numbers in a research topic. The suites are doing
-  their job; that is a prompt-quality item, not a model swap.
+- Champion note, now RESOLVED (2026-07-24, same day): glm-5.2 failed two
+  contracts of its own, and chasing them found one real prompt gap, one
+  grader bug, and one lesson this codebase keeps re-learning.
+  * **Ephemeral facts — real gap, fixed.** The agent wrote a museum's
+    opening hours and prices into a durable topic. The shelf-life rule
+    existed but lived inside RESEARCH mode's step 3, and that task is an
+    INGEST. Hoisted to a mode-independent rule (migration 051). Failing
+    every observed run before; passing 6 of 8 after, with the residual
+    failures partial (2 of 26 checks, a different ephemeral item each
+    time). Not fully solved — see the open item below.
+  * **Superseded spec numbers — mostly a GRADER bug.** The champion wrote
+    "1.2 trillion", which is CORRECT, and `body_must_not_contain:
+    ["2 trillion"]` matched the substring inside it. No substring test can
+    separate those, so the vocabulary gained `body_must_not_match`
+    (regex), the task moved its ambiguous forbidden values onto anchored
+    patterns, and the suite went to v3. A grader that fails a right answer
+    is worse than no grader.
+  * **The residue was real, and POSITION fixed it.** Under the corrected
+    grader the agent still appended "a May 2026 leak claimed 2T params /
+    1M context — superseded" to the topic. Migration 052 closed the
+    "record the correction" loophole and changed nothing across five runs;
+    migration 053 moved the same words to the END of the agent prompt
+    (they had been sitting mid-prompt, ahead of tag hygiene and two whole
+    mode sections) and it went to 4/4 clean with zero leak mentions. The
+    documented lesson — must-win instructions go last — held again.
+  * **Still open:** the shelf-life rail is ~75%, not 100%. Prices and
+    hours still slip into a topic about one run in four. That is a
+    prompt-quality item for the eval pipeline's judge layer to keep
+    honest, not something to hill-climb further against one task.
 
 The v1 premise "qwen3:30b-a3b Q4 fits the 3090 with room" FAILS
 arithmetic on the real box: ~18.6GB weights + ~3GB KV@32k + ~1–1.5GB
@@ -355,17 +380,34 @@ Trace/DB micro-optimization; shared httpx pools (fold into Phase 1 only
 if trivial); background/job-id dispatches; multi-hop model chains;
 parallelizing mutating tools.
 
-## Decisions for Jeremy (PROPOSED until signed off)
+## Decisions — how each one landed (2026-07-24)
 
-1. **Specialist model**: decided BY THE GATES between qwen3:30b-a3b@16k
-   and a 14b-class co-resident — sign off on the candidate list, not a
-   winner. (Laguna XS stays a Coder-agent candidate only.)
-2. **Mid-stream local failure**: fail with the error visible (my rec) vs
-   one logged cloud retry (accepts double-billing that call).
-3. **Fallback-to-cloud**: auto with visible note + debounced repeat
-   alert (my rec) vs hard-fail when local is down.
-4. **`agents.max_dispatches_per_turn` default 3** — confirm.
-5. **Orchestrator model**: unchanged — confirm.
+All five are now MATERIALIZED in shipped code. 1 and 2 were settled by
+evidence; 3, 4 and 5 shipped as the recommendation, each behind an
+operator control, and each is one settings edit to reverse. They are
+recorded here as decisions taken, not as decisions still owed — Jeremy
+should overrule any he disagrees with rather than confirm them.
+
+1. **Specialist model — ANSWERED BY THE GATES.** qwen3:30b-a3b was never
+   pulled: the plan's own arithmetic disqualified it, and the 14b-class
+   candidate (qwen3:14b Q4_K_M) made the point moot by passing fit and
+   voice-contention and then FAILING quality 2/6 vs glm-5.2's 4/6. No
+   agent's model changed. Revisit by pointing one agent at a candidate in
+   Settings → Agents and re-running the ingestion suite.
+2. **Mid-stream local failure — fail with the error visible.** Shipped as
+   the recommendation, and it is structural rather than configurable: a
+   stream that already emitted a tool call may have written memory, so
+   `mid_stream` is excluded from the fallback classes by construction. A
+   retry there would double-bill and repeat side effects.
+3. **Fallback-to-cloud — auto, with a visible note and a debounced alert.**
+   Shipped as the recommendation. Reverse with
+   `agents.local_fallback_enabled = false`, which makes an unreachable
+   local model fail the turn with the error visible instead.
+4. **`agents.max_dispatches_per_turn` = 3.** Shipped. Range 1–10 in
+   Settings → Agents; the over-budget call gets a usable error result
+   rather than a hard stop, so raising it mid-experiment is safe.
+5. **Orchestrator model — unchanged.** `main` is still on the
+   operator-chosen frontier model; nothing in phases 0–5 touches it.
 
 ## Expected end state on the measured turn
 

@@ -211,6 +211,7 @@ the `write_memory` call args from the transcript.
 | `tags` | `{"min","max","no_generic","must_include_any","must_not_include"}` — see below |
 | `body_must_contain_any` | list of alternative-groups; each group needs ≥1 hit in the created/updated body |
 | `body_must_not_contain` | substrings that must not appear in the body |
+| `body_must_not_match` | regexes that must not match the body — use this whenever the forbidden value is a SUBSTRING of the correct one |
 | `write_content` | `{"must_match","must_not_match","must_contain","must_not_contain","max_chars"}` — applied to the `content` **argument** of the write, which is the only way to grade delta-only writes (append/prepend send just the delta); on a create it is the whole body |
 
 `tags.no_generic: true` fails the check if any tag is in
@@ -226,6 +227,12 @@ of groups; each group needs at least one of its tags present.
 | `tool_errors_max` | results starting `Error: ` or `Blocked by rule ` |
 | `final_text` | `{"must_match": [regex], "must_not_match": [regex]}` on the final assistant text |
 | `narration_slip_allowed` | default `false`; fails when `narration.detect(final_text, tool_calls_made)` returns a match |
+
+A forbidden value that is a substring of the RIGHT answer cannot be expressed
+with `body_must_not_contain` — `"1.2 trillion"` contains `"2 trillion"`, so the
+substring form fails a correct write. That is not hypothetical: it graded a
+champion as wrong on 2026-07-24. Reach for `body_must_not_match` with an
+anchored pattern (`(?<![\d.])2\s*(?:trillion|T\b)`) in that case.
 
 Regexes are Python `re`, matched case-insensitively with `re.search` and
 **without** `re.MULTILINE` — `^` means start of the string, not start of a

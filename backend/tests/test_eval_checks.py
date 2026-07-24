@@ -215,6 +215,26 @@ def test_memory_shape():
     check("tags parse from the store's raw string form", report.passed,
           "; ".join(f"{r.key} {r.detail}" for r in report.failures))
 
+    # the substring trap that graded a right answer as wrong: a forbidden
+    # value that is a SUBSTRING of the correct one needs the regex form
+    body = FakeRun(memory=mem([topic("topics/k.md",
+                                     body="1.2 trillion (1.2T) total parameters")]))
+    report = checks.ContractReport()
+    checks.check_memory({"body_must_not_contain": ["2 trillion"]}, body, report)
+    check("substring form trips on the CORRECT value (why the regex form exists)",
+          not report.passed)
+    report = checks.ContractReport()
+    checks.check_memory({"body_must_not_match": [r"(?<![\d.])2\s*(?:trillion|T\b)"]},
+                        body, report)
+    check("the anchored regex accepts 1.2 trillion", report.passed,
+          "; ".join(f"{r.key} {r.detail}" for r in report.failures))
+    leaked = FakeRun(memory=mem([topic("topics/k.md",
+                                       body="rumored at 2 trillion parameters")]))
+    report = checks.ContractReport()
+    checks.check_memory({"body_must_not_match": [r"(?<![\d.])2\s*(?:trillion|T\b)"]},
+                        leaked, report)
+    check("...and still catches the bare 2 trillion claim", not report.passed)
+
     # generic tags are the bridging-bug rail: they must fail
     bad = FakeRun(memory=mem([topic("topics/x.md", tags=["news", "video"])]))
     report = checks.ContractReport()
@@ -245,7 +265,7 @@ def test_memory_shape():
     report = checks.ContractReport()
     checks.check_memory({"no_new_topics": True}, j, report)
     check("a journal entry is not a new topic", report.passed)
-    COUNTS["cases"] += 7
+    COUNTS["cases"] += 10
 
 
 def test_top_level_and_run_validity():

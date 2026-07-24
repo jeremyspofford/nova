@@ -49,7 +49,8 @@ TOOLS_KEYS = {"must_call", "must_not_call", "must_call_with",
 MEMORY_KEYS = {
     "no_writes", "no_new_topics", "topics_created", "updates", "title_matches",
     "frontmatter_required", "frontmatter_equals", "source_url_in", "tags",
-    "body_must_contain_any", "body_must_not_contain", "write_content",
+    "body_must_contain_any", "body_must_not_contain", "body_must_not_match",
+    "write_content",
 }
 TAGS_KEYS = {"min", "max", "no_generic", "must_include_any", "must_not_include"}
 WRITE_CONTENT_KEYS = {"must_match", "must_not_match", "must_contain",
@@ -182,6 +183,8 @@ def check_contract(where, contract, agent):
         err(where, "no_writes is set alongside a check that presumes a write")
     if "title_matches" in memory:
         check_regex(where, memory["title_matches"])
+    for pattern in memory.get("body_must_not_match") or []:
+        check_regex(where, pattern)
     tags = memory.get("tags") or {}
     check_unknown(where, tags, TAGS_KEYS, "contract.memory.tags")
     if tags.get("must_include_any"):

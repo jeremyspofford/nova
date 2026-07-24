@@ -7,57 +7,157 @@
     "suite": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["suite", "suite_version", "agent", "execution_class", "description", "run", "tasks"],
+      "required": [
+        "suite",
+        "suite_version",
+        "agent",
+        "execution_class",
+        "description",
+        "run",
+        "tasks"
+      ],
       "properties": {
-        "suite": {"type": "string", "pattern": "^[a-z0-9-]+$"},
-        "suite_version": {"type": "integer", "minimum": 1,
-          "description": "Bump on ANY change that could move a score. Results are only comparable within a version."},
-        "agent": {"type": "string", "description": "agents.name this suite grades"},
-        "execution_class": {"enum": ["live-tool", "replay-only"]},
-        "description": {"type": "string"},
-        "notes": {"type": "string"},
+        "suite": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "suite_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bump on ANY change that could move a score. Results are only comparable within a version."
+        },
+        "agent": {
+          "type": "string",
+          "description": "agents.name this suite grades"
+        },
+        "execution_class": {
+          "enum": [
+            "live-tool",
+            "replay-only"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
         "run": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["max_tool_rounds", "budget_seconds"],
+          "required": [
+            "max_tool_rounds",
+            "budget_seconds"
+          ],
           "properties": {
-            "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50,
-              "description": "Value the harness pins agents.max_tool_rounds to for this suite (global setting, not a per-agent column)."},
-            "budget_seconds": {"type": "integer", "minimum": 30,
-              "description": "Default per-task wall-clock budget; a task may override."},
-            "exclude_tools": {"type": "array", "items": {"type": "string"},
-              "description": "Removed from the agent toolset for the whole suite (real side effects)."},
-            "replay_only_tools": {"type": "array", "items": {"type": "string"},
-              "description": "Stay in the toolset but must never execute — serve a fixture, else replay_only_default."},
-            "replay_only_default": {"type": "string",
-              "description": "Result string served when a replay-only tool is called with no matching fixture. Keeps a stray call a graded tool_error instead of an aborted run."}
+            "max_tool_rounds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Value the harness pins agents.max_tool_rounds to for this suite (global setting, not a per-agent column)."
+            },
+            "budget_seconds": {
+              "type": "integer",
+              "minimum": 30,
+              "description": "Default per-task wall-clock budget; a task may override."
+            },
+            "exclude_tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Removed from the agent toolset for the whole suite (real side effects)."
+            },
+            "replay_only_tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Stay in the toolset but must never execute — serve a fixture, else replay_only_default."
+            },
+            "replay_only_default": {
+              "type": "string",
+              "description": "Result string served when a replay-only tool is called with no matching fixture. Keeps a stray call a graded tool_error instead of an aborted run."
+            }
           }
         },
-        "tasks": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
       }
     },
-
     "task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "suite", "title", "intent", "contract"],
-      "oneOf": [{"required": ["prompt"]}, {"required": ["prompt_file"]}],
+      "required": [
+        "id",
+        "suite",
+        "title",
+        "intent",
+        "contract"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "prompt"
+          ]
+        },
+        {
+          "required": [
+            "prompt_file"
+          ]
+        }
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
-        "suite": {"type": "string"},
-        "title": {"type": "string"},
-        "intent": {"type": "string"},
-        "prompt": {"type": "string"},
-        "prompt_file": {"type": "string", "description": "Path under the suite dir; contents are the user message verbatim."},
-        "seed_corpus": {"type": "array", "items": {"type": "string"},
-          "description": "Files under corpus/ copied into the scratch memory dir before startup(), preserving the path below corpus/."},
-        "fixtures": {"type": "array", "items": {"type": "string"}},
-        "budget_seconds": {"type": "integer", "minimum": 30},
-        "contract": {"$ref": "#/$defs/contract"},
-        "judge": {"$ref": "#/$defs/judge"}
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "suite": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "prompt_file": {
+          "type": "string",
+          "description": "Path under the suite dir; contents are the user message verbatim."
+        },
+        "seed_corpus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files under corpus/ copied into the scratch memory dir before startup(), preserving the path below corpus/."
+        },
+        "fixtures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "budget_seconds": {
+          "type": "integer",
+          "minimum": 30
+        },
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "judge": {
+          "$ref": "#/$defs/judge"
+        }
       }
     },
-
     "contract": {
       "type": "object",
       "additionalProperties": false,
@@ -66,144 +166,407 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "must_call": {"type": "array", "items": {
-              "type": "object", "additionalProperties": false,
-              "required": ["name"],
-              "properties": {
-                "name": {"type": "string"},
-                "min": {"type": "integer", "minimum": 0},
-                "max": {"type": "integer", "minimum": 0}
-              }}},
-            "must_not_call": {"type": "array", "items": {"type": "string"}},
-            "must_call_with": {"type": "array", "items": {"$ref": "#/$defs/argPredicate"}},
-            "must_not_call_with": {"type": "array", "items": {"$ref": "#/$defs/argPredicate"}},
-            "max_total_calls": {"type": "integer", "minimum": 0}
+            "must_call": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "min": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "max": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "must_not_call": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "must_call_with": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/argPredicate"
+              }
+            },
+            "must_not_call_with": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/argPredicate"
+              }
+            },
+            "max_total_calls": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
         "memory": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "no_writes": {"type": "boolean"},
-            "no_new_topics": {"type": "boolean"},
-            "topics_created": {"$ref": "#/$defs/bounds"},
-            "updates": {"type": "array", "items": {
-              "type": "object", "additionalProperties": false,
-              "required": ["item_id", "mode"],
-              "properties": {
-                "item_id": {"type": "string"},
-                "mode": {"enum": ["replace", "append", "prepend"]},
-                "count": {"type": "integer", "minimum": 0}
-              }}},
-            "title_matches": {"type": "string", "description": "Python regex, re.search, case-insensitive"},
-            "frontmatter_required": {"type": "array", "items": {"type": "string"}},
-            "frontmatter_equals": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
-            "source_url_in": {"type": "array", "items": {"type": "string"}},
+            "no_writes": {
+              "type": "boolean"
+            },
+            "no_new_topics": {
+              "type": "boolean"
+            },
+            "topics_created": {
+              "$ref": "#/$defs/bounds"
+            },
+            "updates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "item_id",
+                  "mode"
+                ],
+                "properties": {
+                  "item_id": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "replace",
+                      "append",
+                      "prepend"
+                    ]
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "title_matches": {
+              "type": "string",
+              "description": "Python regex, re.search, case-insensitive"
+            },
+            "frontmatter_required": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "frontmatter_equals": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "source_url_in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "tags": {
-              "type": "object", "additionalProperties": false,
+              "type": "object",
+              "additionalProperties": false,
               "properties": {
-                "min": {"type": "integer", "minimum": 0},
-                "max": {"type": "integer", "minimum": 0},
-                "no_generic": {"type": "boolean",
-                  "description": "true → fail if any tag is in OkfMemory._GENERIC_TAGS"},
-                "must_include_any": {"type": "array", "items": {"type": "array", "items": {"type": "string"}},
-                  "description": "list of groups; each group needs >=1 tag present"},
-                "must_not_include": {"type": "array", "items": {"type": "string"}}
-              }},
-            "body_must_contain_any": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-            "body_must_not_contain": {"type": "array", "items": {"type": "string"}},
+                "min": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "no_generic": {
+                  "type": "boolean",
+                  "description": "true → fail if any tag is in OkfMemory._GENERIC_TAGS"
+                },
+                "must_include_any": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "description": "list of groups; each group needs >=1 tag present"
+                },
+                "must_not_include": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "body_must_contain_any": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "body_must_not_contain": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "write_content": {
-              "type": "object", "additionalProperties": false,
+              "type": "object",
+              "additionalProperties": false,
               "description": "Checks against the content ARGUMENT of write_memory — the only way to grade delta-only append/prepend writes.",
               "properties": {
-                "must_match": {"type": "array", "items": {"type": "string"}},
-                "must_not_match": {"type": "array", "items": {"type": "string"}},
-                "must_contain": {"type": "array", "items": {"type": "string"}},
-                "must_not_contain": {"type": "array", "items": {"type": "string"}},
-                "max_chars": {"type": "integer", "minimum": 1}
-              }}
+                "must_match": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "must_not_match": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "must_contain": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "must_not_contain": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "max_chars": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "body_must_not_match": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Python regexes (re.search, IGNORECASE, no MULTILINE) that must NOT match the created/updated topic bodies. Use this instead of body_must_not_contain whenever the forbidden value is a substring of the correct one."
+            }
           }
         },
-        "rounds_max": {"type": "integer", "minimum": 1},
-        "malformed_args_max": {"type": "integer", "minimum": 0},
-        "tool_errors_max": {"type": "integer", "minimum": 0},
+        "rounds_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "malformed_args_max": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_errors_max": {
+          "type": "integer",
+          "minimum": 0
+        },
         "final_text": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "must_match": {"type": "array", "items": {"type": "string"}},
-            "must_not_match": {"type": "array", "items": {"type": "string"}}
-          }},
-        "narration_slip_allowed": {"type": "boolean", "default": false,
-          "description": "false → fail when narration.detect(final_text, tool_calls_made) matches"}
+            "must_match": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "must_not_match": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "narration_slip_allowed": {
+          "type": "boolean",
+          "default": false,
+          "description": "false → fail when narration.detect(final_text, tool_calls_made) matches"
+        }
       }
     },
-
     "argPredicate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "args"],
+      "required": [
+        "name",
+        "args"
+      ],
       "properties": {
-        "name": {"type": "string"},
-        "args": {"type": "object", "description": "subset predicate: every listed key must be present with an equal value"}
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object",
+          "description": "subset predicate: every listed key must be present with an equal value"
+        }
       }
     },
-
     "bounds": {
-      "type": "object", "additionalProperties": false,
-      "properties": {"min": {"type": "integer", "minimum": 0}, "max": {"type": "integer", "minimum": 0}}
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     },
-
     "judge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["dimensions"],
+      "required": [
+        "dimensions"
+      ],
       "properties": {
-        "dimensions": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-        "source_facts": {"type": "array", "items": {"type": "string"}},
-        "traps": {"type": "array", "items": {"type": "string"}},
-        "guidance": {"type": "string"}
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "source_facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "traps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "guidance": {
+          "type": "string"
+        }
       }
     },
-
     "fixture": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool"],
+      "required": [
+        "tool"
+      ],
       "properties": {
-        "tool": {"type": "string"},
-        "notes": {"type": "string",
-          "description": "Result strings may contain {{args.<key>}} placeholders, substituted from the actual call args."},
-        "entries": {"type": "array", "items": {"$ref": "#/$defs/fixtureEntry"}},
-        "default": {"$ref": "#/$defs/fixtureResult"}
+        "tool": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Result strings may contain {{args.<key>}} placeholders, substituted from the actual call args."
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fixtureEntry"
+          }
+        },
+        "default": {
+          "$ref": "#/$defs/fixtureResult"
+        }
       }
     },
     "fixtureEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["match"],
-      "oneOf": [{"required": ["result"]}, {"required": ["result_file"]}],
+      "required": [
+        "match"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "required": [
+            "result_file"
+          ]
+        }
+      ],
       "properties": {
-        "match": {"type": "object", "description": "subset predicate on the call args; first matching entry wins"},
-        "result": {"type": "string"},
-        "result_file": {"type": "string"},
-        "notes": {"type": "string"}
+        "match": {
+          "type": "object",
+          "description": "subset predicate on the call args; first matching entry wins"
+        },
+        "result": {
+          "type": "string"
+        },
+        "result_file": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
       }
     },
     "fixtureResult": {
       "type": "object",
       "additionalProperties": false,
-      "oneOf": [{"required": ["result"]}, {"required": ["result_file"]}],
+      "oneOf": [
+        {
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "required": [
+            "result_file"
+          ]
+        }
+      ],
       "properties": {
-        "result": {"type": "string"},
-        "result_file": {"type": "string"},
-        "notes": {"type": "string"}
+        "result": {
+          "type": "string"
+        },
+        "result_file": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
       }
     }
   },
-
   "oneOf": [
-    {"$ref": "#/$defs/suite"},
-    {"$ref": "#/$defs/task"},
-    {"$ref": "#/$defs/fixture"}
+    {
+      "$ref": "#/$defs/suite"
+    },
+    {
+      "$ref": "#/$defs/task"
+    },
+    {
+      "$ref": "#/$defs/fixture"
+    }
   ]
 }
