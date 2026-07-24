@@ -51,6 +51,12 @@ async def _process(job: dict) -> None:
             title=core.get("title"))
         if job.get("source_key"):
             await source_subscriptions.increment_ingested(job["source_key"])
+        # a duplicate enqueue (see find_open in _enqueue_source_entries) can
+        # still leave an older failed/skipped sibling row for this same video
+        # from before that fix — reap it now that this job proves it's stale
+        media_key = job.get("media_key") or core.get("media_key")
+        if media_key:
+            await ingest_jobs.purge_superseded_siblings(media_key)
         log.info("ingested: %s", core.get("title") or job["url"])
     elif status == "already_ingested":
         await ingest_jobs.mark_skipped(job_id, reason="already ingested",

@@ -182,6 +182,36 @@ async def take_unannounced_source_stats(source_key: str) -> dict:
     return {"done": row["done"], "failed": row["failed"], "skipped": row["skipped"]}
 
 
+async def find_open(media_key: str) -> Optional[dict]:
+    """Most recent non-done job for this media_key, if any. Lets a producer
+    (follow_source backfill, poll) revive a stuck failed/skipped row instead
+    of enqueueing a duplicate — the previous gap: both producers only checked
+    the media_ingests ledger + the active-queue unique index, so a video whose
+    first attempt failed/was interrupted would get a brand-new job row on the
+    next poll, orphaning the old one at 'failed' forever even after the video
+    was genuinely ingested via its twin."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM ingest_jobs WHERE media_key = $1 AND status != 'done'
+               ORDER BY enqueued_at DESC LIMIT 1""",
+            media_key)
+    return dict(row) if row else None
+
+
+async def purge_superseded_siblings(media_key: str) -> int:
+    """After a job for `media_key` lands 'done', remove any OTHER failed/skipped
+    rows for the same media_key — leftovers from the duplicate-enqueue race
+    find_open() now prevents going forward, and from before this fix shipped.
+    Their outcome is stale: the video is confirmed ingested by the row that
+    just completed. Returns rows removed."""
+    async with db.acquire() as conn:
+        res = await conn.execute(
+            """DELETE FROM ingest_jobs
+               WHERE media_key = $1 AND status IN ('failed', 'skipped')""",
+            media_key)
+    return _rowcount(res)
+
+
 async def retry(job_id) -> Optional[dict]:
     """Operator retry of a failed/skipped job: reset it to queued with a fresh
     error AND interruption budget (attempts=0, orphans=0) so the worker picks it

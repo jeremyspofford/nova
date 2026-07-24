@@ -460,9 +460,18 @@ async def _enqueue_source_entries(entries: list[dict], source_key: str,
         if await media_ingests.get(e["media_key"]):
             already += 1
             continue
-        row = await ingest_jobs.enqueue(
-            url=e["url"], media_key=e["media_key"], title=e.get("title"),
-            source_key=source_key, enqueued_by=enqueued_by)
+        # a prior attempt for this exact video may already be sitting at
+        # failed/skipped (interrupted, transient error) — revive that row
+        # instead of enqueueing a duplicate that orphans it forever
+        stuck = await ingest_jobs.find_open(e["media_key"])
+        if stuck and stuck["status"] in ("failed", "skipped"):
+            row = await ingest_jobs.retry(stuck["id"])
+        elif stuck:
+            row = None  # queued/running — enqueue's own dedupe would no-op anyway
+        else:
+            row = await ingest_jobs.enqueue(
+                url=e["url"], media_key=e["media_key"], title=e.get("title"),
+                source_key=source_key, enqueued_by=enqueued_by)
         if row:
             queued += 1
         else:
