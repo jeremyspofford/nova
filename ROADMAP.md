@@ -1365,6 +1365,29 @@ approve → test in staging → operator-test → promote to prod.**
 - **Catalog quick-add buttons** — per-row buttons in the model catalog to add →
   curated / install / assign-to-chat, instead of the manual create form.
 
+**Voice speaker identification — Nova knows who's talking** *(raised
+2026-07-23; **full spec approved same day → `docs/plans/speaker-id.md`** —
+decisions locked: kid mode = tone+tools+memory all three, unknown→ask,
+one tagged stream, real profiles table, sherpa-onnx not SpeechBrain)* — Jeremy: if he talks it knows it's him; if his kid talks it
+knows that and "speaks differently — like a different role and another
+identity to follow." Feasible and all-local: speaker embeddings
+(SpeechBrain ECAPA-TDNN class, ~20MB, no keys) computed on the same audio
+the whisper service already transcribes; enroll each person with a few
+utterances (the same enrollment UX wake-word learning #11 wants — build
+once); cosine-match per voice turn → tag the turn `speaker=jeremy|kid|
+unknown`. Downstream: per-speaker profile drives the persona layer (#15
+slot assembly — register/content rules per speaker) and a *reduced*
+permission tier for non-operator voices (kid mode: no tools that write/
+delete, no settings, guardian-enforced). HARD RULE for the planning pass:
+voice ID is personalization, NEVER authentication — a recognized voice can
+only ever NARROW privileges below the operator baseline (spoofable by
+playback; kids' voices drift; short utterances misfire). Adult-vs-child is
+the easy discrimination case. Typed chat has no voice signal — needs a
+manual user picker or operator-default. Needs a plan pass: user profiles
+table (v3 is single-operator today), voiceprint storage (biometric-adjacent:
+opt-in, local, deletable — same stance as #11), enrollment flow, whisper-
+service embedding endpoint, persona/guardian wiring.
+
 **Native mobile app** *(raised 2026-07-22, after the shell refactor's phone
 pass)* — Jeremy: the PWA is "usable-ish… decent enough for now", but "soon
 we'll want to work on creating actual android and/or ios app". Needs a
