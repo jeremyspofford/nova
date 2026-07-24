@@ -69,7 +69,7 @@ export function Brain() {
   const navigate = useNavigate();
   // routed Settings/Library stand in for the old settingsOpen state — the
   // chat panel refetches its model list when either closes
-  const { pathname } = useLocation();
+  const { pathname, state: routeState } = useLocation();
   const settingsRouteOpen = pathname.startsWith('/settings') || pathname.startsWith('/library');
   // latest graph as state — the Atlas, the chip, and the legend render from it
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
@@ -233,6 +233,18 @@ export function Brain() {
       console.error('detail load failed:', err);
     }
   }, []);
+
+  // deep-link entry point: other pages (e.g. Activity, linking a finished
+  // ingest job to the note it produced) navigate('/', { state: { openItem } })
+  // rather than needing their own copy of the detail-card machinery. Clear the
+  // state right after so back/forward nav doesn't reopen it.
+  useEffect(() => {
+    const itemId = (routeState as { openItem?: string } | null)?.openItem;
+    if (!itemId) return;
+    openDetail(itemId);
+    rendererRef.current?.focusNode?.(itemId);
+    navigate(pathname, { replace: true, state: null });
+  }, [routeState, pathname, openDetail, navigate]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -154,9 +154,19 @@ export function ActivityPage({ onClose }: { onClose: () => void }) {
             <div key={job.id} className="px-3 py-2 rounded-lg hover:bg-stone-800/40 flex items-start gap-2.5">
               <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[job.status]} ${job.status === 'running' ? 'animate-pulse' : ''}`} />
               <div className="min-w-0 flex-1">
-                <div className="text-sm text-stone-200 truncate" title={job.title ?? job.url}>
-                  {job.title ?? job.url}
-                </div>
+                {job.result_item_id ? (
+                  <button
+                    onClick={() => navigate('/', { state: { openItem: job.result_item_id } })}
+                    className="block w-full text-left text-sm text-teal-300 hover:text-teal-200 hover:underline truncate"
+                    title={`Open note: ${job.title ?? job.url}`}
+                  >
+                    {job.title ?? job.url}
+                  </button>
+                ) : (
+                  <div className="text-sm text-stone-200 truncate" title={job.title ?? job.url}>
+                    {job.title ?? job.url}
+                  </div>
+                )}
                 <div className="text-xs text-stone-500 flex flex-wrap items-center gap-x-2">
                   <span className={job.status === 'failed' ? 'text-red-400' : job.status === 'running' ? 'text-teal-400' : ''}>
                     {STATUS_LABEL[job.status]}
