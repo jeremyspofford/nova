@@ -117,6 +117,12 @@ export function Brain() {
   }, []);
   useEffect(() => { sizeRef.current?.(); }, [chatOpen]);
 
+  // "Discuss" on a note's detail card: attach its content to the composer
+  // (same PendingAttachment shape a user-picked text file gets) and surface
+  // the chat panel, so the operator's next message already has it in view.
+  const [discussPayload, setDiscussPayload] =
+    useState<{ name: string; mime: string; data: string } | null>(null);
+
   // the Atlas is drag-resizable like the chat (longer titles fit when wider);
   // `left-4` places it 16px from the left edge — that offset feeds leftInset
   const [atlasWidth, setAtlasWidth] = useState(() =>
@@ -407,6 +413,13 @@ export function Brain() {
     }
   };
 
+  const doDiscuss = () => {
+    if (!detail) return;
+    setDiscussPayload({ name: fm.title ?? detail.id, mime: 'text/markdown', data: detail.content });
+    setDetail(null);
+    if (isMobile) navigate('/chat'); else setChatOpen(true);
+  };
+
   // roomy = the centered modal; the sidebar keeps its tighter density
   const renderDetail = (roomy: boolean) => detail && (
     <>
@@ -470,6 +483,9 @@ export function Brain() {
         <span className="font-mono text-stone-600 truncate">{detail.id}</span>
         <div className="shrink-0 flex items-center gap-3">
           {deleteErr && <span className="text-red-400">{deleteErr}</span>}
+          <button onClick={doDiscuss} className="text-teal-400 hover:text-teal-300">
+            Discuss
+          </button>
           {deletable && (
             <button
               onClick={doDelete}
@@ -657,6 +673,8 @@ export function Brain() {
           mobile={isMobile}
           onShowBrain={() => navigate('/')}
           settingsOpen={settingsRouteOpen}
+          discussPayload={discussPayload}
+          onDiscussHandled={() => setDiscussPayload(null)}
         />
       )}
     </div>

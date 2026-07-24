@@ -288,12 +288,17 @@ interface ChatPanelProps {
    *  closes, so a model approved in Settings is immediately pickable here
    *  without a page reload. */
   settingsOpen?: boolean;
+  /** "Discuss" from a note's detail card: attach its content to the composer
+   *  as if the operator had picked it as a text file. */
+  discussPayload?: { name: string; mime: string; data: string } | null;
+  onDiscussHandled?: () => void;
 }
 
 const MIN_W = 320;
 const MAX_W = 760;
 
-export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsOpen }: ChatPanelProps) {
+export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsOpen,
+                           discussPayload, onDiscussHandled }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -313,6 +318,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   // ── attachments: picked files waiting in the composer ──
   const [pending, setPending] = useState<PendingAttachment[]>([]);
+
+  useEffect(() => {
+    if (!discussPayload) return;
+    setPending(p => [...p, { kind: 'text', ...discussPayload }]);
+    inputRef.current?.focus();
+    onDiscussHandled?.();
+  }, [discussPayload, onDiscussHandled]);
   const [attachOpen, setAttachOpen] = useState(false);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
