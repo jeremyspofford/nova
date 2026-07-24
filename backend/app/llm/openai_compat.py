@@ -6,7 +6,20 @@ Event vocabulary yielded by stream():
         {"id": str, "name": str, "arguments": str}]}
     {"type": "usage", "usage": dict}                 only with include_usage
     {"type": "done"}
-    {"type": "error", "error": str}
+    {"type": "error", "error": str, "error_class": str, "status_code": int|None}
+
+`error_class` is what makes a fallback decision safe (turn-speed phase 3).
+One undifferentiated error string cannot tell "the local server isn't
+running" from "the model died halfway through writing to memory", and those
+demand opposite responses:
+
+    connect_failed  nothing was sent or nothing came back — retrying
+                    elsewhere is free and duplicates nothing
+    http_status     the server answered with an error before any output;
+                    404 specifically means the model is not pulled
+    mid_stream      output had already started. NEVER auto-retry: the turn
+                    may have executed tools, and a retry double-bills and
+                    duplicates side effects. Surface it instead.
 """
 
 import json
@@ -41,6 +54,9 @@ class OpenAICompatClient:
 
         # Tool-call deltas arrive fragmented; merge them by choice index.
         pending_calls: dict[int, dict] = {}
+        # once anything has been yielded, a failure is mid_stream and the
+        # caller must not retry it anywhere
+        produced_output = False
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -49,8 +65,13 @@ class OpenAICompatClient:
                     if resp.status_code != 200:
                         body = (await resp.aread()).decode(errors="replace")[:500]
                         log.error("LLM API %s from %s: %s", resp.status_code, self.base_url, body)
+                        hint = ("" if resp.status_code != 404 else
+                                f" — '{model}' is not available on this server "
+                                f"(not pulled?)")
                         yield {"type": "error",
-                               "error": f"LLM API error {resp.status_code}: {body}"}
+                               "error": f"LLM API error {resp.status_code}: {body}{hint}",
+                               "error_class": "http_status",
+                               "status_code": resp.status_code}
                         return
 
                     async for line in resp.aiter_lines():
@@ -74,9 +95,11 @@ class OpenAICompatClient:
 
                         content = delta.get("content")
                         if content:
+                            produced_output = True
                             yield {"type": "text", "text": content}
 
                         for tc in delta.get("tool_calls") or []:
+                            produced_output = True
                             idx = tc.get("index", 0)
                             slot = pending_calls.setdefault(
                                 idx, {"id": "", "name": "", "arguments": ""})
@@ -89,8 +112,14 @@ class OpenAICompatClient:
                                 slot["arguments"] += fn["arguments"]
 
         except httpx.HTTPError as e:
-            log.error("LLM connection error to %s: %s", self.base_url, e)
-            yield {"type": "error", "error": f"LLM connection error: {e}"}
+            # the distinction that decides whether a fallback is safe: a
+            # stream that already produced output may have executed tools
+            klass = "mid_stream" if produced_output else "connect_failed"
+            log.error("LLM %s error to %s: %s", klass, self.base_url, e)
+            yield {"type": "error",
+                   "error": (f"LLM connection error: {e}" if not produced_output
+                             else f"LLM stream failed mid-answer: {e}"),
+                   "error_class": klass, "status_code": None}
             return
 
         if pending_calls:

@@ -182,6 +182,44 @@ growing monotonically, and the final report quality matches baseline
 
 ## Phase 3 — Local specialist tier (gated, empirical)
 
+STATUS 2026-07-24: rails BUILT + VERIFIED; **the quality gate FAILED, so
+specialists stay on cloud** — the plan's own fallback position, taken on
+evidence rather than assumption.
+
+- **Fit gate: PASS** for qwen3:14b Q4_K_M (the 14b-class candidate).
+  41/41 layers on GPU, 11.8GB at 16k context, co-resident with the voice
+  model (7.5GB) and whisper: 23.0GB of 24GB used, 1.3GB free. qwen3:30b-a3b
+  was never pulled — the plan's own arithmetic disqualified it, and the
+  measurement below made the point moot.
+- **Context sizing: the deciding variable.** At the server default (32768 on
+  ollama 0.31.2) the 14b costs 5.1GB of KV and EVICTS the voice model; at
+  16384 it costs 2.5GB and they co-reside. Now pinned via
+  OLLAMA_CONTEXT_LENGTH in compose + a matching `inference.ollama_num_ctx`.
+- **num_ctx per call is NOT available on this path** (new fact): a probe
+  showed ollama's OpenAI-compatible /v1 endpoint IGNORES `options.num_ctx`
+  (n_ctx stayed at the server default). Per-call sizing would need the
+  native /api/chat client. The rail that mattered — never silently truncate
+  the system prompt — is delivered instead by refusing an oversized local
+  prompt client-side, and by teaching the phase-2 trimmer that a local
+  model's window IS the configured one.
+- **Voice contention: PASS.** Voice-model latency 0.52–0.88s idle vs
+  1.01–1.10s while the 14b generated; both models stayed resident, no
+  evict/reload stall.
+- **Quality gate: FAIL** (ingestion suite, contract checks, 2026-07-24).
+  Champion glm-5.2 passed 4/6 tasks; challenger qwen3:14b passed 2/6, and
+  the failures are the disqualifying kind: it created NO topic at all on
+  both write-the-topic tasks, never called fetch_url on the research task,
+  and its in-place refresh dropped every key fact. It was also SLOWER
+  (56s vs 32s, 38s vs 23s, 27s vs 6s) — there was no speed win to trade
+  quality for. Full log: the eval CLI with `--json`.
+- Consequence: no agent's model was changed. The mechanical wins (phases
+  0–2, 4) stand on their own, and the rails below mean a future candidate
+  can be tried in one settings edit with a fallback that is safe.
+- Champion note worth its own look: glm-5.2 failed two contracts too —
+  it wrote a museum's opening hours (ephemeral facts) into a topic, and
+  put superseded spec numbers in a research topic. The suites are doing
+  their job; that is a prompt-quality item, not a model swap.
+
 The v1 premise "qwen3:30b-a3b Q4 fits the 3090 with room" FAILS
 arithmetic on the real box: ~18.6GB weights + ~3GB KV@32k + ~1–1.5GB
 buffers ≈ 23GB vs ~20.7GB free with whisper resident → CPU-offloaded

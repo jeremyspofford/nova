@@ -586,6 +586,70 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
         await _cancel_and_drain(tasks)
 
 
+# ── local-model failure handling (docs/plans/turn-speed.md, phase 3) ─────
+#
+# Retry-elsewhere is safe ONLY before the first byte. A stream that already
+# produced output may have executed tools; retrying it double-bills the
+# round and repeats every side effect it had already caused.
+_FALLBACK_CLASSES = {"connect_failed", "http_status"}
+
+_last_fallback_notice = 0.0
+_FALLBACK_NOTICE_EVERY_S = 1800   # debounce: at most one alert per 30 min
+
+
+async def _fallback_target(agent: dict, failed_model: str,
+                           failure: dict) -> Optional[str]:
+    """The model to retry this round on, or None to surface the failure.
+
+    Deliberately narrow. It fires only when a LOCAL model could not be
+    reached at all, and it resolves the target FIRST: on a keyless
+    local-first install the main agent is itself on ollama, and "falling
+    back" to the same dead server just doubles the time to failure.
+    """
+    if failure.get("error_class") not in _FALLBACK_CLASSES:
+        return None
+    if not settings_store.get("agents.local_fallback_enabled"):
+        return None
+    if not llm_router.is_local(llm_router.effective_model(failed_model)):
+        return None   # a cloud provider's own error is not ours to reroute
+    try:
+        from app.agents import registry as agent_registry
+        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
+    except Exception:
+        log.exception("fallback lookup failed; surfacing the original error")
+        return None
+    target = llm_router.effective_model((main or {}).get("model") or "")
+    if not target or target == llm_router.effective_model(failed_model):
+        return None
+    if llm_router.is_local(target):
+        log.warning("no fallback: the main agent is on the same local server")
+        return None
+    return target
+
+
+def _notify_fallback(agent: dict, failed_model: str, target: str,
+                     failure: dict) -> None:
+    """Tell the operator their local tier is down — debounced.
+
+    Honest receipts: without this the cost win silently evaporates and the
+    operator budgets on $0 turns that are quietly billing a cloud provider.
+    """
+    global _last_fallback_notice
+    now = time.monotonic()
+    if _last_fallback_notice and now - _last_fallback_notice < _FALLBACK_NOTICE_EVERY_S:
+        return
+    _last_fallback_notice = now
+    try:
+        from app import notify
+        asyncio.ensure_future(notify.send(
+            f"{agent.get('name')} could not reach {failed_model} "
+            f"({failure.get('error_class')}) and is running on {target} "
+            f"instead — local inference is down, and these turns cost money.",
+            title="Nova: local model unreachable", tags=["warning"]))
+    except Exception:
+        log.exception("fallback notification failed")
+
+
 async def run_agent(agent: dict, turn_messages: list[dict], *,
                     dispatch_depth: int = 0,
                     conversation_summary: str | None = None,
@@ -659,54 +723,75 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # output the model can always re-fetch)
     dispatch_result_ids: set[str] = set()
     bulk_result_ids: set[str] = set()
+    dispatches_made = 0
 
     max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
+    round_model = agent["model"]      # may switch to the fallback mid-turn
     for round_no in range(max_rounds):
         round_text = ""
         tool_calls: list[dict] = []
-        errored = False
+        failure: dict | None = None
 
-        async with trace.span(
-                "llm_call", llm_router.effective_model(agent["model"])) as lsp:
-            lsp["agent"] = agent.get("name")
-            lsp["round"] = round_no + 1
-            # overflow protection, immediately before the request is built:
-            # a no-op under the ceiling, and never removes or reorders a
-            # message (an orphaned tool_call is a provider 400)
-            context_trim.trim_transcript(
-                messages, model=llm_router.effective_model(agent["model"]),
-                exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
-                detail=lsp)
-            async for event in llm_router.stream_chat(messages, agent["model"],
-                                                      tools or None):
-                etype = event.get("type")
-                if etype == "text":
-                    round_text += event["text"]
-                    if dispatch_depth == 0:
-                        yield {"type": "text", "text": event["text"]}
-                elif etype == "tool_calls":
-                    tool_calls = event["tool_calls"]
-                elif etype == "usage":
-                    u = event.get("usage") or {}
-                    lsp["prompt_tokens"] = u.get("prompt_tokens")
-                    lsp["completion_tokens"] = u.get("completion_tokens")
-                    # provider-reported prefix-cache hits (OpenAI-compat
-                    # `prompt_tokens_details.cached_tokens`) — the ledger
-                    # evidence for whether prompt-order changes actually
-                    # buy cached prefills (turn-speed phase 0)
-                    det = u.get("prompt_tokens_details") or {}
-                    if isinstance(det, dict) and det.get("cached_tokens") is not None:
-                        lsp["cached_tokens"] = det["cached_tokens"]
-                elif etype == "error":
-                    lsp["error"] = event["error"]
-                    yield {"type": "error", "error": event["error"]}
-                    errored = True
-                    break
-            lsp["completion_chars"] = len(round_text)
-            lsp["tool_calls_requested"] = len(tool_calls)
+        while True:   # at most twice: the agent's model, then the fallback
+            round_text = ""
+            tool_calls = []
+            failure = None
+            async with trace.span(
+                    "llm_call", llm_router.effective_model(round_model)) as lsp:
+                lsp["agent"] = agent.get("name")
+                lsp["round"] = round_no + 1
+                # overflow protection, immediately before the request is
+                # built: a no-op under the ceiling, and never removes or
+                # reorders a message (an orphaned tool_call is a 400)
+                context_trim.trim_transcript(
+                    messages, model=llm_router.effective_model(round_model),
+                    exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
+                    detail=lsp)
+                async for event in llm_router.stream_chat(messages, round_model,
+                                                          tools or None):
+                    etype = event.get("type")
+                    if etype == "text":
+                        round_text += event["text"]
+                        if dispatch_depth == 0:
+                            yield {"type": "text", "text": event["text"]}
+                    elif etype == "tool_calls":
+                        tool_calls = event["tool_calls"]
+                    elif etype == "usage":
+                        u = event.get("usage") or {}
+                        lsp["prompt_tokens"] = u.get("prompt_tokens")
+                        lsp["completion_tokens"] = u.get("completion_tokens")
+                        # provider-reported prefix-cache hits (OpenAI-compat
+                        # `prompt_tokens_details.cached_tokens`) — the ledger
+                        # evidence for whether prompt-order changes actually
+                        # buy cached prefills (turn-speed phase 0)
+                        det = u.get("prompt_tokens_details") or {}
+                        if isinstance(det, dict) and det.get("cached_tokens") is not None:
+                            lsp["cached_tokens"] = det["cached_tokens"]
+                    elif etype == "error":
+                        lsp["error"] = event["error"]
+                        lsp["error_class"] = event.get("error_class")
+                        failure = event
+                        break
+                lsp["completion_chars"] = len(round_text)
+                lsp["tool_calls_requested"] = len(tool_calls)
 
-        if errored:
-            return
+            if failure is None:
+                break
+            target = await _fallback_target(agent, round_model, failure)
+            if not target:
+                yield {"type": "error", "error": failure["error"]}
+                return
+            log.warning("agent %s: %s unreachable (%s) — retrying this round "
+                        "on %s", agent.get("name"), round_model,
+                        failure.get("error_class"), target)
+            note = (f"\n\n[Note: {agent.get('name')}'s model "
+                    f"({llm_router.effective_model(round_model)}) was "
+                    f"unreachable, so this ran on {target} instead.]")
+            final_text += note
+            if dispatch_depth == 0:
+                yield {"type": "text", "text": note}
+            _notify_fallback(agent, round_model, target, failure)
+            round_model = target
 
         final_text += round_text
 
@@ -818,6 +903,24 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 # the specialist's report is the turn's product — exempt from
                 # overflow trimming no matter how old it gets
                 dispatch_result_ids.add(tc["id"])
+                dispatches_made += 1
+                budget = int(settings_store.get(
+                    "agents.max_dispatches_per_turn") or 3)
+                if dispatches_made > budget:
+                    # a per-turn budget, not a depth limit: each dispatch is
+                    # a full sub-turn, so "ask another specialist" is the
+                    # most expensive thing a turn can do. Same shape as the
+                    # depth-limit message — a result the model can act on.
+                    result = (f"Error: this turn has already used its "
+                              f"{budget} specialist dispatches. Answer with "
+                              f"what you have, or tell the operator what is "
+                              f"still missing.")
+                    yield {"type": "activity", "kind": "tool_result",
+                           "name": name, "agent": agent.get("name"),
+                           "args": _brief(args), "detail": result}
+                    messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                     "content": result})
+                    continue
                 # the sub-agent's own spans nest under this one (parent_span_id)
                 async with trace.span(
                         "dispatch", args.get("agent_name", "")) as dsp:

@@ -30,6 +30,10 @@ def effective_model(model: str) -> str:
     return model
 
 
+def is_local(model: str) -> bool:
+    return model.split(":", 1)[0] == "ollama"
+
+
 def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
     if ":" not in model:
         raise ValueError(f"Unknown model format: {model!r} (expected 'slug:model')")
@@ -37,7 +41,12 @@ def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
     if slug == "ollama":
         from app import settings_store
         base = str(settings_store.get("inference.ollama_url")).rstrip("/")
-        return OpenAICompatClient(f"{base}/v1", "ollama"), name
+        # A cold local model can take minutes to load off disk (model_warmer
+        # already budgets 300s for exactly this); the blanket 120s fires
+        # spuriously on the first call after a swap and reads as a dead
+        # server. Applies to reads too — this is a first-byte deadline.
+        timeout = float(settings_store.get("inference.ollama_timeout_s") or 300)
+        return OpenAICompatClient(f"{base}/v1", "ollama", timeout=timeout), name
     row = providers.get(slug)
     if not row:
         raise ValueError(f"Unknown provider {slug!r} in model {model!r} "
@@ -47,9 +56,54 @@ def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
             name)
 
 
+async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
+    """Refuse a local call whose prompt cannot fit, instead of letting the
+    server silently drop the front of it.
+
+    Ollama truncates an oversized prompt from the HEAD, which is where the
+    system prompt lives — the agent quietly loses its role, its rails and
+    its tool contract, and answers anyway. That is the worst failure shape
+    there is: no error, no log line, just a worse answer.
+
+    Measured 2026-07-24 on ollama 0.31.2: `options.num_ctx` sent to the
+    OpenAI-compatible /v1 endpoint is IGNORED (probe showed n_ctx stayed at
+    the server default), so per-call context sizing is not available on this
+    path. The server-wide OLLAMA_CONTEXT_LENGTH is the real knob; this
+    setting mirrors it so the client can refuse loudly rather than guess.
+    """
+    from app import settings_store
+    from app.agents import context_trim
+    limit = int(settings_store.get("inference.ollama_num_ctx") or 0)
+    if limit <= 0:
+        return None
+    # leave the same completion headroom the trimmer reserves
+    usable = limit - context_trim._COMPLETION_HEADROOM
+    estimate = context_trim.estimate_tokens(messages)
+    if estimate <= usable:
+        return None
+    log.error("local prompt overflow: ~%d tokens vs num_ctx %d for %s",
+              estimate, limit, model)
+    return {
+        "type": "error",
+        "error": (f"This prompt is about {estimate:,} tokens, but the local "
+                  f"server is configured for {limit:,} (inference."
+                  f"ollama_num_ctx). Sending it would silently truncate the "
+                  f"system prompt, so the call was refused. Raise "
+                  f"OLLAMA_CONTEXT_LENGTH on the ollama service and the "
+                  f"matching setting, lower agents.intraturn_budget, or move "
+                  f"this agent to a cloud model."),
+        "error_class": "prompt_too_long", "status_code": None}
+
+
 async def stream_chat(messages: list, model: str,
                       tools: Optional[list] = None) -> AsyncIterator[dict]:
-    client, model_name = _resolve(effective_model(model))
+    target = effective_model(model)
+    if is_local(target):
+        refusal = await _refuse_local_overflow(target, messages)
+        if refusal:
+            yield refusal
+            return
+    client, model_name = _resolve(target)
     # include_usage: exact token counts in a final usage chunk — feeds the
     # turn ledger; providers that don't support it simply omit the event
     async for event in client.stream(messages, model_name, tools,

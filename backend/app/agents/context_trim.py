@@ -97,10 +97,17 @@ def model_context(model: str) -> Optional[int]:
     """The model's real context window, or None when we don't know it.
 
     Reads the models-catalog CACHE only — never a network call on the hot
-    path. Unknown is the honest and common answer (ollama's /api/tags reports
-    no context window at all), and the caller falls back to the operator's
-    budget setting.
+    path. Unknown is the honest and common answer, and the caller falls back
+    to the operator's budget setting.
     """
+    # Local models: the server's configured window IS the real one, and
+    # ollama's /api/tags does not report it. Without this the trimmer would
+    # happily build a 40k prompt for a 16k local model, which the router
+    # then refuses — trimming has to aim at the window the call must fit.
+    if model.split(":", 1)[0] == "ollama":
+        from app import settings_store
+        configured = int(settings_store.get("inference.ollama_num_ctx") or 0)
+        return configured or None
     try:
         from app import models_catalog
         for entry in models_catalog._cache.get("models") or []:
