@@ -163,6 +163,13 @@ export class WakeWord {
    *  subscribes to frames (phase 2). Resuming after a command used to cost a
    *  full getUserMedia + AudioContext; it is now a Set.add. */
   async start(): Promise<void> {
+    // Idempotent. Phase 2 deliberately leaves wake RUNNING during a capture
+    // (stopping it would release the shared device and pay the open cost
+    // again), so the resume paths could reach a detector that never stopped
+    // — and a second start() overwrote `unsubscribe`, orphaning the previous
+    // frame listener and its broker reference. The device then never closed
+    // and every frame was scored twice.
+    if (this.unsubscribe) return;
     this.acc = []; this.raw = []; this.cooldownUntil = 0;
     this.peakMax = 0; this.peakFired = false; this.peakQuietAt = 0;
     this.ring = null; this.ringAt = 0; this.fireAudio = null;   // never carry old audio in
@@ -172,6 +179,8 @@ export class WakeWord {
   }
 
   async stop(): Promise<void> {
+    if (!this.unsubscribe) return;    // never started, or already stopped —
+                                      // releasing again would unbalance the broker
     // a fire stops the detector immediately, so the peak is still open here —
     // without this flush, successful wakes would never reach the log
     this.closePeak();

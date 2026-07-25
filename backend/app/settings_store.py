@@ -361,6 +361,14 @@ SETTING_DEFS: list[dict] = [
      "label": "Tap-to-talk pause tolerance (ms)",
      "description": ("How long a silence ends your turn in tap-to-talk. Higher "
                      "= more forgiving of mid-sentence pauses before Nova answers.")},
+    {"key": "voice.vad_silence_conversation_ms", "type": "number", "default": 700,
+     "min": 400, "max": 2000, "section": "Voice",
+     "label": "Conversation pause tolerance (ms)",
+     "description": ("The same thing, but while conversation mode is open — "
+                     "shorter, so she answers sooner. It can be aggressive "
+                     "here because talking over her works: if she starts "
+                     "early, just keep going and she gets out of the way. "
+                     "400 ms off every turn is the cheapest speed there is.")},
     # ── speaker identification (docs/plans/speaker-id.md) ────────────────
     {"key": "voice.speaker_id", "type": "boolean", "default": True,
      "section": "Voice", "label": "Recognize who's speaking",

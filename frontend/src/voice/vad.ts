@@ -68,12 +68,18 @@ export class TapVad {
     const wanted = opts?.silenceMs ?? 1100;
     await micBroker.acquire();
     await this.ensure(dbg);
-    // redemptionMs becomes a frame count inside the library, so changing it
-    // means rebuilding — but it is an operator setting that rarely moves, so
-    // only rebuild when it actually differs.
+    // Retune in place. This used to DESTROY and rebuild the model, on the
+    // belief that redemptionMs is baked into a frame count at construction.
+    // It is baked into a frame count, but MicVAD.setOptions recomputes it
+    // live (vad-web's FrameProcessor.setOptions), so the rebuild was ~1.4 s
+    // of dead microphone for nothing. That mattered little when the value
+    // only changed if the operator edited a setting; it matters a lot now
+    // that conversation mode carries its own, shorter value and would
+    // otherwise pay the rebuild on entering and again on leaving.
     if (wanted !== this.silenceMs) {
       this.silenceMs = wanted;
-      await this.rebuild(dbg);
+      this.vad!.setOptions({ redemptionMs: wanted });
+      if (dbg) console.debug(`[vad] retuned redemption to ${wanted}ms in place (no rebuild)`);
     }
     await this.vad!.start();
     this.live = true;
@@ -103,18 +109,25 @@ export class TapVad {
     return this.live;
   }
 
+  /** Restart the sustained-speech measurement from now.
+   *
+   *  Called once the output has been ducked, so the 500 ms that confirms an
+   *  interruption is measured against a quiet speaker rather than a loud one.
+   *  Without it the confirm is backwards for exactly the signal it must
+   *  reject: synthesized speech is more continuously voiced than a person, so
+   *  her own voice leaking into an open microphone clears a "500 ms of voiced
+   *  frames" bar MORE reliably than the human trying to interrupt her. */
+  resetSustain(): void {
+    this.resetSustainFn?.();
+  }
+
+  private resetSustainFn: (() => void) | null = null;
+
   private async ensure(dbg: boolean): Promise<MicVAD> {
     if (this.vad) return this.vad;
     if (!this.building) this.building = this.build(dbg);
     this.vad = await this.building;
     return this.vad;
-  }
-
-  private async rebuild(dbg: boolean): Promise<void> {
-    const old = this.vad;
-    this.vad = null; this.building = null;
-    if (old) { try { await old.destroy(); } catch { /* gone */ } }
-    await this.ensure(dbg);
   }
 
   private async build(dbg: boolean): Promise<MicVAD> {
@@ -124,7 +137,8 @@ export class TapVad {
     let voiced = 0;      // consecutive-ish voiced frames
     let quiet = 0;       // voiceless frames since the last voiced one
     let sustained = false;
-    const resetSustain = () => { voiced = 0; quiet = 0; sustained = false; };
+    const resetSustain = () => { if (dbg) console.debug(`[vad] resetSustain (had ${voiced} voiced)`); voiced = 0; quiet = 0; sustained = false; };
+    this.resetSustainFn = resetSustain;
     const vad = await MicVAD.new({
       // self-hosted assets — never the library's CDN defaults
       baseAssetPath: '/vad/',
