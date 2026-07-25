@@ -44,15 +44,18 @@ async def append_message(conversation_id: str, role: str, content: Optional[str]
                          metadata: Optional[dict] = None) -> str:
     message_id = uuid.uuid4()
     async with db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO messages (id, conversation_id, role, content, model_used, tool_calls, metadata)
-               VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '{}'::jsonb))""",
-            message_id, uuid.UUID(conversation_id), role, content, model_used,
-            json.dumps(tool_calls) if tool_calls is not None else None,
-            json.dumps(metadata) if metadata is not None else None)
-        await conn.execute(
-            "UPDATE conversations SET updated_at = now(), last_message_at = now() "
-            "WHERE id = $1", uuid.UUID(conversation_id))
+        # One unit: a stored message whose conversation still claims an older
+        # last_message_at sorts and prunes wrong everywhere downstream.
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO messages (id, conversation_id, role, content, model_used, tool_calls, metadata)
+                   VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '{}'::jsonb))""",
+                message_id, uuid.UUID(conversation_id), role, content, model_used,
+                json.dumps(tool_calls) if tool_calls is not None else None,
+                json.dumps(metadata) if metadata is not None else None)
+            await conn.execute(
+                "UPDATE conversations SET updated_at = now(), last_message_at = now() "
+                "WHERE id = $1", uuid.UUID(conversation_id))
     return str(message_id)
 
 

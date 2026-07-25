@@ -199,23 +199,28 @@ async def maybe_prune():
 async def _flush(t: _Turn):
     try:
         async with db.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO turn_traces
-                       (id, source, automation, conversation_id, model,
-                        status, error, started_at, finished_at, instance_id)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-                t.id, t.source, t.automation,
-                uuid.UUID(t.conversation_id) if t.conversation_id else None,
-                t.model, t.status, t.error, t.started_at, t.finished_at,
-                await instances.ensure_id())
-            if t.spans:
-                await conn.executemany(
-                    """INSERT INTO turn_spans
-                           (id, trace_id, parent_span_id, seq, kind, name,
-                            status, started_at, finished_at, detail)
+            # Trace and spans together, or neither: a committed turn_traces
+            # row whose spans died on the next statement is a trace the Turn
+            # Inspector renders as an empty waterfall — worse than absent,
+            # because it looks like a turn that did nothing.
+            async with conn.transaction():
+                await conn.execute(
+                    """INSERT INTO turn_traces
+                           (id, source, automation, conversation_id, model,
+                            status, error, started_at, finished_at, instance_id)
                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-                    [(s["id"], t.id, s["parent_span_id"], s["seq"], s["kind"],
-                      s["name"], s["status"], s["started_at"], s["finished_at"],
-                      json.dumps(s["detail"])) for s in t.spans])
+                    t.id, t.source, t.automation,
+                    uuid.UUID(t.conversation_id) if t.conversation_id else None,
+                    t.model, t.status, t.error, t.started_at, t.finished_at,
+                    await instances.ensure_id())
+                if t.spans:
+                    await conn.executemany(
+                        """INSERT INTO turn_spans
+                               (id, trace_id, parent_span_id, seq, kind, name,
+                                status, started_at, finished_at, detail)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                        [(s["id"], t.id, s["parent_span_id"], s["seq"], s["kind"],
+                          s["name"], s["status"], s["started_at"], s["finished_at"],
+                          json.dumps(s["detail"])) for s in t.spans])
     except Exception:
         log.exception("turn-ledger flush failed; trace %s dropped", t.id)

@@ -221,7 +221,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     category: Optional[str] = None, priority: int = 0,
                     tags: Optional[list[str]] = None, source_url: Optional[str] = None,
                     item_id: Optional[str] = None, append: bool = False,
-                    prepend: bool = False,
+                    prepend: bool = False, replace: bool = False,
                     maintained_by: Optional[str] = None,
                     author: Optional[str] = None,
                     source_type: str = "chat", link_pass: bool = True) -> dict:
@@ -232,6 +232,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         maintained_by (an automation name, plumbed from the run context — never
         agent-supplied) stamps provenance on topics CREATED during an automation
         run, so the brain's writes-arc survives month rollovers mechanically.
+        replace=True is for MECHANICAL writers that own their slug (the media
+        transcript safety net re-run with force=True): a title collision is
+        the intended overwrite, not an accident. Model-facing writes never set
+        it — for them a collision means another note already lives there and
+        they get {"status": "exists"} with its id.
         author (a recognized speaker's name, plumbed from the voice turn —
         docs/plans/speaker-id.md) marks what a non-operator household member
         said, so their words never file as the operator's."""
@@ -285,8 +290,18 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     metadata["maintained_by"] = maintained_by
                 try:
                     doc_id = self.store.write_concept(title, content, type, metadata,
-                                                      doc_id=item_id)
-                except FileNotFoundError as e:
+                                                      doc_id=item_id, replace=replace)
+                except FileExistsError as e:
+                    # Not an error the caller should retry — a fork in the
+                    # road, answered with the id it needs to take either turn.
+                    return {"status": "exists", "id": str(e),
+                            "error": (f"'{title}' already exists as {e}. To add "
+                                      f"to it call write_memory with "
+                                      f"item_id='{e}' and append=true; to "
+                                      f"replace it deliberately pass that "
+                                      f"item_id alone; otherwise choose a "
+                                      f"more specific title.")}
+                except (FileNotFoundError, PermissionError) as e:
                     return {"status": "error", "error": str(e)}
                 if linked_tags or related:
                     log.info("Memory link pass: %s gained tags=%s related=%s",

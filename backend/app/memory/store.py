@@ -13,6 +13,14 @@ log = logging.getLogger(__name__)
 
 TYPE_DIRS = {"topic": "topics", "skill": "skills", "journal": "journals", "source": "sources"}
 
+# Where a PINNED write (doc_id=...) may land. write_concept replaces a file's
+# whole body, and only concepts are things you refresh. journals/ are the
+# record of what happened — delete_memory_item already refuses to touch them
+# — and soul.md sits at the root and is identity, not a note. The old guard
+# was "inside the memory dir, ends in .md, exists", so an item_id of
+# 'journals/2026-07-24.md' or 'soul.md' silently replaced either one.
+_PINNABLE_DIRS = {TYPE_DIRS[t] for t in ("topic", "skill", "source")}
+
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
@@ -62,11 +70,16 @@ class OkfStore:
 
     def write_concept(self, title: str, content: str, concept_type: str = "topic",
                       metadata: Optional[dict] = None,
-                      doc_id: Optional[str] = None) -> str:
-        """Write (or overwrite) a concept file. Returns the doc id (relative path).
+                      doc_id: Optional[str] = None, replace: bool = False) -> str:
+        """Write a concept file. Returns the doc id (relative path).
 
-        doc_id pins the write to an existing file (in-place update even when the
-        title differs) — it must resolve inside the memory dir and already exist.
+        doc_id pins the write to an existing CONCEPT file (in-place update even
+        when the title differs) — it must resolve inside the memory dir, live
+        under one of _PINNABLE_DIRS, and already exist.
+
+        Without doc_id this creates, and a taken slug raises FileExistsError
+        rather than flattening whatever is there. replace=True opts out, for
+        mechanical writers that own their slug.
         """
         fm = dict(metadata or {})
         fm.setdefault("type", concept_type)
@@ -79,6 +92,13 @@ class OkfStore:
             if not (pinned.is_relative_to(base) and pinned.suffix == ".md"
                     and pinned.exists()):
                 raise FileNotFoundError(f"memory item '{doc_id}' not found")
+            rel = pinned.relative_to(base)
+            if len(rel.parts) != 2 or rel.parts[0] not in _PINNABLE_DIRS:
+                raise PermissionError(
+                    f"'{doc_id}' is not a concept item — only "
+                    f"{'/, '.join(sorted(_PINNABLE_DIRS))}/ items can be "
+                    f"rewritten. Journals are the record of what happened; "
+                    f"append to them instead of replacing them.")
             path = pinned
             # In-place updates preserve frontmatter keys the caller doesn't
             # set: data-level markers (maintained_by, about, hand-added keys)
@@ -88,6 +108,13 @@ class OkfStore:
         else:
             subdir = TYPE_DIRS.get(concept_type, "topics")
             path = self.base_dir / subdir / f"{_slugify(title)}.md"
+            if path.exists() and not replace:
+                # A create whose slug is already taken used to write straight
+                # over the other note — body gone, maintained_by/about gone,
+                # and memory.write still answered {"status": "written"}. The
+                # caller decides now: append to it, pin an item_id to replace
+                # it deliberately, or pick a different title.
+                raise FileExistsError(str(path.relative_to(self.base_dir)))
         path.write_text(f"{self.render_frontmatter(fm)}\n\n{content}\n")
         log.info("Memory write: %s", path)
         return str(path.relative_to(self.base_dir.resolve() if path.is_absolute()
