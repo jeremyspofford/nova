@@ -72,6 +72,47 @@ Threshold tuning against YOUR voice: set
 mode — the console prints the rolling 1 s max score. Speak the phrase,
 read your scores, set `voice.wake_threshold` a bit below them.
 
+## Retraining on real clips (phase 5)
+
+Settings → Voice → "Learn the wake word from use" makes Nova keep the few
+seconds around each labelled wake attempt in `data/wake-training/` — it fired
+and you spoke (`positive`), it fired and nobody did (`false_fire`), it nearly
+fired and you had to try again (`near_miss`). Off by default; every clip is
+playable and deletable from the same panel.
+
+```bash
+.venv/bin/python ingest_captured.py --dry-run   # look before you copy
+.venv/bin/python ingest_captured.py             # -> data/pos, data/neg
+.venv/bin/python featurize.py && .venv/bin/python train.py
+```
+
+`ingest_captured.py` exists because copying those files into `data/pos` is
+wrong in three ways that would quietly poison the retrain:
+
+1. **The phrase is not at the end.** `featurize.py` labels `windows[-2:]` as
+   positive because a TTS clip ends exactly when the phrase does. A captured
+   clip does not — a near-miss is snapshotted several hundred ms after the
+   score fell back, and a VAD clip ends with the 1100 ms redemption tail.
+   Those last two windows are silence, and training on them teaches
+   "silence after speech means wake". The script locates the phrase by
+   streaming the clip through the real head and taking the peak, then trims.
+2. **Near misses are positives.** They are the phrase, said by someone the
+   model does not know, and ignored — the most valuable clips in the set.
+3. **Weight.** `data/pos` ships 828 synthetic clips; forty real ones is 4.6%
+   and moves nothing. The script duplicates real clips to `--share` (default
+   0.23) and tells you the multiplier — if it prints something like 60x,
+   capture more clips rather than believing the number.
+
+**Child augmentation direction.** `augment()`'s rate perturbation resamples,
+which shifts pitch and formants together — and the direction is the opposite
+of the obvious reading. `resample_poly(x, 1000*rate, 1000)` with `rate > 1`
+makes the signal longer, which at a fixed 16 kHz plays back slower and
+*lower*: the adult-male direction. A child is `rate < 1`. v0.2 used
+`uniform(0.9, 1.1)` — symmetric, and ±10% is about ±160 cents, nowhere near a
+child; adult-to-child is roughly 250–370 cents of formant scaling
+(ChildAugment, arXiv 2402.15214). It now takes the child branch
+(`0.74–0.87`) 40% of the time.
+
 ## Honest limits
 
 - **Synthetic-only training.** Kokoro voices are diverse but they are not

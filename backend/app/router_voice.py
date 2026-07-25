@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app import settings_store, voiceprints
+from app import settings_store, voiceprints, wake_training
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -220,3 +220,57 @@ async def enroll(request: Request, profile_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return {"profile": row, "clip_secs": payload.get("secs")}
+
+
+# ── wake-word learning: labelled clips from ordinary use (phase 5a) ─────────
+# The gate is re-checked HERE, on every write, not just in the browser. A tab
+# left open before the operator turned learning off must not go on recording
+# the household because it never reloaded.
+
+
+@router.post("/api/v1/voice/wake-clip")
+async def wake_clip(request: Request, label: str, score: float = 0.0,
+                    threshold: float = 0.0, phrase: str = "",
+                    speaker: str = "", mic: str = "", secs: float = 0.0):
+    """One labelled wake clip (raw WAV body). See app/wake_training.py."""
+    if not settings_store.get("voice.wake_learning"):
+        raise HTTPException(status_code=403,
+                            detail="wake learning is off (Settings → Voice)")
+    audio = await request.body()
+    try:
+        rec = wake_training.store(label, audio, {
+            "score": score, "threshold": threshold, "phrase": phrase,
+            "speaker": speaker, "mic": mic, "secs": secs,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return rec
+
+
+@router.get("/api/v1/voice/wake-clips")
+async def list_wake_clips(limit: int = 100):
+    out = wake_training.listing(limit=limit)
+    out["enabled"] = bool(settings_store.get("voice.wake_learning"))
+    return out
+
+
+@router.get("/api/v1/voice/wake-clips/{clip_id}/audio")
+async def wake_clip_audio(clip_id: str):
+    """Play a clip back. "Browsable" has to mean you can HEAR what was kept —
+    a count alone is not something an operator can consent to."""
+    wav = wake_training.find(clip_id)
+    if wav is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    return Response(content=wav.read_bytes(), media_type="audio/wav")
+
+
+@router.delete("/api/v1/voice/wake-clips/{clip_id}")
+async def delete_wake_clip(clip_id: str):
+    if not wake_training.delete(clip_id):
+        raise HTTPException(status_code=404, detail="clip not found")
+    return {"deleted": 1}
+
+
+@router.delete("/api/v1/voice/wake-clips")
+async def delete_wake_clips():
+    return {"deleted": wake_training.delete_all()}

@@ -116,9 +116,23 @@ def augment(x: np.ndarray, hard: bool = False) -> np.ndarray:
     trained through reverb/noise/EQ — so v0.2 simulates: room reverb
     (exp-decay noise kernel), spectral tilt (browser mic processing colors
     the spectrum), rate perturbation (pitch+tempo), and wider noise SNRs."""
-    # rate perturbation: resample by ±10% — shifts pitch and tempo together
+    # Rate perturbation: resample, which shifts pitch and formants together.
+    # DIRECTION MATTERS and it is the opposite of the obvious reading:
+    # resample_poly(x, 1000*rate, 1000) with rate > 1 makes the signal LONGER,
+    # and a longer signal replayed at a fixed 16 kHz is slower and LOWER —
+    # the adult-male direction. A child is rate < 1.
+    #
+    # v0.2 used uniform(0.9, 1.1): symmetric, and ±10% is roughly ±160 cents,
+    # nowhere near a child. Adult-to-child is about 250-370 cents of formant
+    # scaling (ChildAugment, arXiv 2402.15214), i.e. rate ~0.74-0.87. So the
+    # child direction is now a deliberate branch rather than a coin flip that
+    # never went far enough — this is the augmentation the kid problem needs,
+    # and it costs nothing to generate.
     if rng.random() < 0.7:
-        rate = rng.uniform(0.9, 1.1)
+        if rng.random() < 0.4:
+            rate = rng.uniform(0.74, 0.87)      # toward a child's tract
+        else:
+            rate = rng.uniform(0.92, 1.08)      # ordinary speaker variation
         x = resample_poly(x, int(1000 * rate), 1000).astype(np.float32)
     # synthetic room reverb: convolve with a decaying-noise RIR
     if hard or rng.random() < 0.5:

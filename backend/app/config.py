@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     kokoro_url: str = "http://kokoro:8880"
     whisper_url: str = "http://whisper:9000"
 
+    # Labelled wake-word clips (voice.wake_learning, opt-in) — local only,
+    # gitignored like ./data/memory. See app/wake_training.py.
+    wake_training_dir: str = "./data/wake-training"
+
     # Memory
     okf_memory_dir: str = "./data/memory"
     memory_context_max_chars: int = 4000

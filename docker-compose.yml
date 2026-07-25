@@ -37,6 +37,9 @@ services:
       NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
       NOVA_TRUST_LOCALHOST: ${NOVA_TRUST_LOCALHOST:-true}
       OKF_MEMORY_DIR: /app/data/memory
+      # labelled wake-word clips (voice.wake_learning, off by default) — plain
+      # files next to memory, so tools/wake-training reads them directly
+      WAKE_TRAINING_DIR: /app/data/wake-training
       # shown read-only in Settings → Storage — the mount itself is fixed at
       # container-create time and can't be changed from inside the container
       NOVA_MEMORY_DIR_HOST: ${NOVA_MEMORY_DIR:-./data/memory}
@@ -60,6 +63,7 @@ services:
       # mount, an Obsidian vault folder, another disk. Markdown in, markdown
       # out; the index rescans on startup and reindexes on write.
       - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
+      - ./data/wake-training:/app/data/wake-training
       - ./backend:/app/backend:cached
       # tiny shared control channel to the inference-control sidecar: the
       # backend writes the operator-chosen model-store path here, the sidecar

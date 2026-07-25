@@ -44,6 +44,64 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Ar
   return r.arrayBuffer();
 }
 
+// ── wake-word learning (phase 5a): labelled clips from ordinary use ────────
+
+export interface WakeClip {
+  id: string;
+  label: 'positive' | 'false_fire' | 'near_miss';
+  at: number;              // epoch seconds
+  bytes: number;
+  score?: number;
+  threshold?: number;
+  phrase?: string;
+  speaker?: string;
+  mic?: string;
+  secs?: number;
+}
+
+export interface WakeClipListing {
+  enabled: boolean;
+  counts: Record<string, number>;
+  bytes: number;
+  total: number;
+  clips: WakeClip[];
+}
+
+export async function uploadWakeClip(label: string, wav: Blob,
+                                     meta: Record<string, string | number>): Promise<void> {
+  const q = new URLSearchParams({ label, ...Object.fromEntries(
+    Object.entries(meta).map(([k, v]) => [k, String(v)])) });
+  const r = await apiFetch(`${API_URL}/api/v1/voice/wake-clip?${q}`, {
+    method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav,
+  });
+  if (!r.ok) throw new Error(`wake clip rejected: ${r.status}`);
+}
+
+export async function listWakeClips(): Promise<WakeClipListing> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/wake-clips`);
+  if (!r.ok) throw new Error('could not load wake clips');
+  return r.json();
+}
+
+/** Fetched as a blob, not linked: the audio route needs the auth header, so
+ *  an <audio src> pointing at it would 401. */
+export async function wakeClipAudio(id: string): Promise<string> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/wake-clips/${id}/audio`);
+  if (!r.ok) throw new Error('clip not found');
+  return URL.createObjectURL(await r.blob());
+}
+
+export async function deleteWakeClip(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/wake-clips/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('delete failed');
+}
+
+export async function deleteAllWakeClips(): Promise<number> {
+  const r = await apiFetch(`${API_URL}/api/v1/voice/wake-clips`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('delete failed');
+  return (await r.json()).deleted as number;
+}
+
 /** Who transcribe recognized on a voice turn (docs/plans/speaker-id.md). */
 export interface SpeakerMatch {
   profile_id: string;
