@@ -328,11 +328,45 @@ async def test_dispatch_timeout():
     settings_store._cache["agents.dispatch_timeout_s"] = 300
 
 
+# ── 7. the cap reaches a LONE dispatch, and the sequential setting ───────
+
+async def test_single_dispatch_timeout():
+    """The regression this whole path was collapsed to fix.
+
+    The wall-clock cap used to live only in the parallel-group path, which
+    engaged solely when a round held TWO OR MORE consecutive dispatches AND
+    tool_concurrency > 1. One specialist per round is the common shape, and
+    it took a separate inline branch with no timeout at all — so a stuck
+    specialist held the turn open forever and agents.dispatch_timeout_s was
+    a setting that did nothing. Both cases below used to hang.
+    """
+    print("8. a lone stuck specialist is stopped at the cap too")
+    for label, concurrency in (("concurrency=3", 3), ("concurrency=1 (sequential)", 1)):
+        fleet = Fleet(duration=10.0, models={"ingestion": "openrouter:a"})
+        script = Script(["ingestion"])            # ONE dispatch, not a group
+        install(fleet, script, concurrency=concurrency)
+        settings_store._cache["agents.dispatch_timeout_s"] = 0.5
+        t0 = time.monotonic()
+        holder = await drive(fleet, script)
+        elapsed = time.monotonic() - t0
+        check(f"{label}: stopped at the cap, not the specialist's 10s",
+              elapsed < 3, f"{elapsed:.2f}s")
+        tool_msgs = [m for m in script.seen[1] if m["role"] == "tool"]
+        check(f"{label}: the result says it timed out",
+              len(tool_msgs) == 1 and "did not finish within" in tool_msgs[0]["content"],
+              str([m["content"][:40] for m in tool_msgs]))
+        spans = [s for s in holder["turn"].spans if s["kind"] == "dispatch"]
+        check(f"{label}: the span records the timeout",
+              len(spans) == 1 and spans[0]["detail"].get("error") == "timeout",
+              str([s["detail"].get("error") for s in spans]))
+    settings_store._cache["agents.dispatch_timeout_s"] = 300
+
+
 async def main():
     for t in (test_cloud_pair_overlaps, test_mixed_pair_overlaps,
               test_same_ollama_serializes, test_cancel_mid_group,
               test_span_parentage, test_budget_inside_group,
-              test_dispatch_timeout):
+              test_dispatch_timeout, test_single_dispatch_timeout):
         await t()
         print()
     shutil.rmtree(SCRATCH_MEM, ignore_errors=True)

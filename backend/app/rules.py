@@ -5,14 +5,13 @@ Enforcement lives in tools/registry.py::execute_tool. Fail-open by design:
 a broken rules engine logs ERROR but must never brick every tool call.
 """
 
-import asyncio
 import json
 import logging
 import re
 import uuid
 from typing import Optional
 
-from app import db
+from app import bg, db
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +85,7 @@ def _record_hit(rule_id: str):
                     "WHERE id = $1", uuid.UUID(rule_id))
         except Exception:
             log.exception("rule hit accounting failed")
-    asyncio.ensure_future(bump())
+    bg.spawn(bump(), name="rule-hit")
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────

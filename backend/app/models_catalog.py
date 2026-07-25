@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from app import settings_store
+from app import bg, settings_store
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +125,6 @@ def active_pulls() -> list[str]:
 
 async def start_pull(name: str) -> str:
     """Kick off a background Ollama pull. Returns a status string immediately."""
-    import asyncio
 
     if name in _active_pulls:
         return f"'{name}' is already being pulled."
@@ -160,7 +159,7 @@ async def start_pull(name: str) -> str:
         finally:
             _active_pulls.discard(name)
 
-    asyncio.ensure_future(run())
+    bg.spawn(run(), name="model-pull")
     return (f"Pull of '{name}' started in the background. It will appear in "
             f"list_models when complete (check back in a bit — larger models "
             f"take minutes).")

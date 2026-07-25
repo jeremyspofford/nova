@@ -11,13 +11,12 @@ duplicates — and never resurrects one the operator already dismissed
 (docs/plans/recommendation-surface.md).
 """
 
-import asyncio
 import json
 import logging
 import uuid as uuid_mod
 from typing import Optional
 
-from app import db
+from app import bg, db
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ async def create(kind: str, title: str, body: str, *, source: str,
             from app import notify
             await notify.send(body[:140], title=f"Nova recommends: {title}"[:90],
                               tags=["bulb"], click="/chat?inbox=open")
-        asyncio.get_running_loop().create_task(_ping())
+        bg.spawn(_ping(), name="recommendation-ping")
     return row
 
 
