@@ -42,7 +42,16 @@ export function AutomationsTab() {
   }
 
   async function toggle(a: Automation) {
-    await patchAutomation(a.id, { enabled: !a.enabled });
+    // This is the kill switch. It had no catch at all, so a failed PATCH was
+    // an unhandled rejection and the row re-rendered from the reload as if
+    // nothing had been asked — you would believe an automation was disabled
+    // while it kept running on schedule.
+    setStatus('');
+    try {
+      await patchAutomation(a.id, { enabled: !a.enabled });
+    } catch (err) {
+      setStatus(`Couldn't ${a.enabled ? 'disable' : 'enable'} "${a.name}": ${err}`);
+    }
     load();
   }
 
