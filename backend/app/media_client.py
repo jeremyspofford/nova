@@ -20,11 +20,31 @@ log = logging.getLogger(__name__)
 TIMEOUT_S = 1800.0
 
 
+async def _refuse_internal(url: str) -> dict | None:
+    """SSRF guard, same one fetch_url uses. The media path had none: the
+    model picks the URL for ingest_media/follow_source/poll_sources and it
+    went straight to yt-dlp inside a container that can reach
+    http://backend:8000, http://inference-control:9911/stop, the metadata
+    endpoint, and every tailnet peer. fetch_url refused all of that while
+    this door stood open — the asymmetry was the bug, not the policy.
+
+    Returns the {"error": ...} both callers already return, or None."""
+    from app.tools.web_fetch import _validate_target
+    err = await _validate_target(url)
+    if err:
+        log.warning("media SSRF guard refused %s: %s", url, err)
+        return {"error": err}
+    return None
+
+
 async def extract(url: str) -> dict:
     """{media_key, extractor, id, title, url, duration_s, transcript_source,
     language, chapters, segments:[{start,end,text,deep_link}]} on success;
     {"status": "skipped", "reason": ...} for live/upcoming streams;
     {"error": "..."} on failure. Never raises — callers relay the message."""
+    refused = await _refuse_internal(url)
+    if refused:
+        return refused
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
             resp = await client.post(f"{settings.media_worker_url}/extract",
@@ -51,6 +71,9 @@ async def enumerate_source(url: str, limit: int = 0) -> dict:
     source (newest first, capped at `limit` when >0); {"error": ...} on failure.
     Each entry's media_key matches what /extract would produce, so the poll
     dedupes against the media_ingests ledger. Never raises."""
+    refused = await _refuse_internal(url)
+    if refused:
+        return refused
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(f"{settings.media_worker_url}/enumerate",

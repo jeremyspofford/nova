@@ -8,9 +8,12 @@ transport, applied here to sidestep hand-rolled JSON-RPC framing entirely:
 the `mcp` SDK's stdio_client + ClientSession already handle the initialize
 handshake, request/response correlation, and content parsing correctly.
 
-Security posture: command/args always come from an mcp_servers row that
-was edit_mode-gated at creation time in the backend (never a free string
-from an agent or the network) and are exec'd as an argv list via
+Security posture: command/args always come from an mcp_servers row whose
+command passed the backend's launcher allow-list at creation time
+(mcp_servers._STDIO_COMMANDS — this used to say "edit_mode-gated", which
+stopped being true when edit_mode was deleted on 2026-07-21, leaving the
+claim as the only thing guarding the exec), never a free string from an
+agent or the network, and are exec'd as an argv list via
 StdioServerParameters — never through a shell. This container holds no DB
 credentials and no Docker socket; a compromised client here can spawn
 arbitrary local subprocesses, so it must never be reachable from outside

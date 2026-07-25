@@ -102,6 +102,37 @@ async def _list_agents(args, ctx):
     return _j(slim)
 
 
+async def _escalating_grants(requested, ctx) -> list[str]:
+    """Tools in `requested` that the CALLING agent does not itself hold.
+
+    Capability confinement, enforced mechanically: an agent may hand out only
+    what it was already trusted with. Without this, tool grants were free —
+    main dispatches to agent-manager, agent-manager creates or updates an
+    agent with allowed_tools=['delete_memory_item', ...] and dispatches to
+    it, and the whole main/ingestion/memory-curator separation evaporates in
+    two hops. ctx['granted'] is the resolved set actually offered this turn
+    (db:* and mcp: are already expanded), so plain membership is enough."""
+    if not isinstance(requested, list):
+        return []
+    granted = ctx.get("granted")
+    if granted is None:           # no ctx (operator/eval path) — nothing to confine
+        return []
+    return sorted({str(t) for t in requested} - set(granted))
+
+
+def _grant_refusal(target: str, escalating: list[str]) -> str:
+    """Operator-only, not consent-gated. request_operator_confirmation is
+    guardian's tool and validates its subject against the rules table, so
+    routing grants through it would mean a new tool, a new grant and a new
+    consent kind — more privileged surface to defend the privilege boundary.
+    Settings → Agents already edits allowed_tools behind the auth middleware,
+    which is the authenticated path this refusal points at."""
+    return (f"Error: granting {', '.join(escalating)} to '{target}' would give "
+            f"it tools you do not hold yourself. An agent can only pass on "
+            f"capabilities it already has. Tell the operator to grant these in "
+            f"Settings → Agents if they want them; do not retry.")
+
+
 async def _manage_agents(args, ctx):
     action = (args.get("action") or "").lower()
 
@@ -119,12 +150,16 @@ async def _manage_agents(args, ctx):
         model = args.get("model") or settings.default_model
         if ":" not in model:
             model = f"openrouter:{model}"
+        tools = args.get("allowed_tools") or ["search_memory", "write_memory"]
+        escalating = await _escalating_grants(tools, ctx)
+        if escalating:
+            return _grant_refusal(name, escalating)
         agent_id = await agent_registry.create_agent(
             name=name,
             description=args.get("description", ""),
             system_prompt=system_prompt,
             model=model,
-            allowed_tools=args.get("allowed_tools") or ["search_memory", "write_memory"],
+            allowed_tools=tools,
             routing_keywords=args.get("routing_keywords"),
         )
         return _j({"status": "created", "agent_id": agent_id, "name": name})
@@ -138,13 +173,25 @@ async def _manage_agents(args, ctx):
                      else await agent_registry.get_agent(ident))
         if not agent:
             return f"Error: agent '{ident}' not found"
-        if action == "disable":
-            ok = await agent_registry.disable_agent(agent["id"])
-            return _j({"status": "disabled" if ok else "failed", "name": agent["name"]})
-        updates = {k: v for k, v in args.items()
-                   if k in ("description", "system_prompt", "model",
-                            "allowed_tools", "routing_keywords", "enabled")}
-        ok = await agent_registry.update_agent(agent["id"], **updates)
+        # SystemAgentProtected is the registry refusing to let a chat turn
+        # rewrite what main/guardian/a manager is or may do. Relay it as an
+        # error string: a result the model can act on, same shape as every
+        # other refusal here.
+        try:
+            if action == "disable":
+                ok = await agent_registry.disable_agent(agent["id"])
+                return _j({"status": "disabled" if ok else "failed",
+                           "name": agent["name"]})
+            updates = {k: v for k, v in args.items()
+                       if k in ("description", "system_prompt", "model",
+                                "allowed_tools", "routing_keywords", "enabled")}
+            if "allowed_tools" in updates:
+                escalating = await _escalating_grants(updates["allowed_tools"], ctx)
+                if escalating:
+                    return _grant_refusal(agent["name"], escalating)
+            ok = await agent_registry.update_agent(agent["id"], **updates)
+        except agent_registry.SystemAgentProtected as e:
+            return f"Error: {e}"
         return _j({"status": "updated" if ok else "failed", "name": agent["name"]})
 
     return f"Error: unknown action '{action}' (use list/create/update/disable)"
@@ -1244,8 +1291,11 @@ BUILTIN_TOOLS: dict[str, dict] = {
     "manage_agents": {
         "name": "manage_agents",
         "description": ("Manage the agent registry: list, create, update, or disable agents. "
-                        "System agents can be disabled but never deleted. allowed_tools may "
-                        "name builtins, specific DB-created tools, or 'db:*' for all "
+                        "System agents (main, guardian, the managers) cannot be deleted, "
+                        "disabled, or have their prompt, model or tools changed from here — "
+                        "only the operator can, in Settings. You may only grant tools you "
+                        "hold yourself; anything wider is the operator's call. allowed_tools "
+                        "may name builtins, specific DB-created tools, or 'db:*' for all "
                         "DB-created tools."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["list", "create", "update", "disable"]},

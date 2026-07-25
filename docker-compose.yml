@@ -119,8 +119,8 @@ services:
   # stdio MCP server bridge (docs/plans/mcp-client.md, phase 4). Spawns
   # operator-registered stdio MCP servers as subprocesses on the backend's
   # behalf — no Docker socket, no DB credentials, no published ports.
-  # Every command it runs comes from an edit_mode-gated mcp_servers row,
-  # never from an agent or the network directly.
+  # Every command it runs comes from an mcp_servers row whose command passed
+  # the backend's launcher allow-list, never from an agent or the network.
   mcp-runner:
     build: ./mcp-runner
     restart: unless-stopped
