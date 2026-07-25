@@ -58,6 +58,14 @@ const CHIP_COLOR: Record<string, string> = { ...TYPE_COLOR, topic: '#2dd4bf' };
 const MEMORY_CHIPS = ['topic', 'skill', 'journal', 'source'];
 const PLATFORM_CHIPS = ['agent', 'tool', 'automation', 'rule'];
 
+// parseInt(null) and parseInt('garbage') are both NaN, and a NaN width
+// propagates straight into a style prop as `width: NaN` — a panel that
+// silently collapses because localStorage held something unexpected.
+function storedWidth(key: string, fallback: number): number {
+  const n = parseInt(localStorage.getItem(key) ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 export function Brain() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // the shell's content area — canvas sizing measures this, not the window,
@@ -86,11 +94,12 @@ export function Brain() {
 
   // small screens: chat IS the app (the /chat tab), the canvas one tab away
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [viewportW, setViewportW] = useState(() => window.innerWidth);
   const mobileChat = pathname === '/chat';
   const mobileRef = useRef(isMobile);
 
   const [chatWidth, setChatWidth] = useState(() =>
-    parseInt(localStorage.getItem('nova.chat.width') ?? '384'));
+    storedWidth('nova.chat.width', 384));
   const chatWidthRef = useRef(chatWidth);
 
   // current canvas-fit closure from the renderer effect, exposed so chat
@@ -126,7 +135,7 @@ export function Brain() {
   // the Atlas is drag-resizable like the chat (longer titles fit when wider);
   // `left-4` places it 16px from the left edge — that offset feeds leftInset
   const [atlasWidth, setAtlasWidth] = useState(() =>
-    parseInt(localStorage.getItem('nova.atlas.width') ?? '304'));
+    storedWidth('nova.atlas.width', 304));
   const atlasWidthRef = useRef(atlasWidth);
   atlasWidthRef.current = atlasWidth;
   const atlasOpenRef = useRef(atlasOpen);
@@ -143,6 +152,33 @@ export function Brain() {
   // closes, or is dragged wider. Desktop only — on mobile the Atlas is a
   // full-width overlay and there's no band to center in.
   const atlasInset = atlasOpen && !isMobile ? ATLAS_LEFT + atlasWidth : 0;
+
+  // Nothing renders what nobody can see. The canvas stays MOUNTED across
+  // navigation on purpose — tearing down a WebGL context to show a settings
+  // panel is the worse trade — but "mounted" and "running" are different
+  // things, and it used to only be the first.
+  //
+  // ONLY genuinely opaque surfaces count. Settings, Library, Observability
+  // and Activity are modal cards over a TRANSLUCENT scrim (`bg-black/40`
+  // around a `bg-stone-900/95` panel), so a wide margin of canvas stays
+  // visible at ~60% behind every one of them — freezing the animation there
+  // freezes something the operator is still looking at, which reads as the
+  // app hanging. The phone's chat panel is the real case: `bg-stone-950`,
+  // full-bleed, nothing behind it visible at all, with a 60fps two-pass
+  // bloom pipeline underneath costing battery and heat for a view that is
+  // not on screen (measured: ~67k paints per 3s).
+  const occluded = isMobile && mobileChat;
+  // Also held in a ref: this effect can run BEFORE the renderer-creation
+  // effect on mount, and then rendererRef.current is still null and the
+  // pause is dropped on the floor. `occluded` does not change afterwards on
+  // a cold load straight into /chat, so it never gets a second chance —
+  // measured: the phone chat tab was still painting ~67k times per 3s.
+  // The renderer seeds itself from this ref the moment it is created.
+  const occludedRef = useRef(occluded);
+  occludedRef.current = occluded;
+  useEffect(() => {
+    rendererRef.current?.setPaused?.(occluded);
+  }, [occluded]);
   useEffect(() => {
     rendererRef.current?.configure?.({ leftInset: atlasInset });
   }, [atlasInset]);
@@ -267,6 +303,7 @@ export function Brain() {
       renderer = THEMES[DEFAULT_THEME].create(canvas, { onNodeClick: openDetail });
     }
     rendererRef.current = renderer;
+    renderer.setPaused?.(occludedRef.current);
     renderer.configure?.({
       rotationSpeed: prefsRef.current.rotationSpeed,
       labelMode: prefsRef.current.labelMode,
@@ -280,6 +317,9 @@ export function Brain() {
     const size = () => {
       mobileRef.current = window.innerWidth < 768;
       setIsMobile(mobileRef.current);
+      // a rotation changes the width without crossing the 768 breakpoint,
+      // so isMobile alone does not tell the chat panel to re-measure
+      setViewportW(window.innerWidth);
       const box = rootRef.current;
       renderer.resize(
         (box?.clientWidth ?? window.innerWidth) -
@@ -668,7 +708,10 @@ export function Brain() {
 
       {((isMobile && mobileChat) || (!isMobile && chatOpen)) && (
         <ChatPanel
-          width={isMobile ? window.innerWidth : chatWidth}
+          // viewportW, not window.innerWidth: reading it during render
+          // means a phone rotation re-renders with the PRE-rotation width,
+          // because isMobile is unchanged and React bails out
+          width={isMobile ? viewportW : chatWidth}
           onWidthChange={changeChatWidth}
           mobile={isMobile}
           onShowBrain={() => navigate('/')}

@@ -52,6 +52,25 @@ export const GRAPH_LEGEND: LegendEntry[] = [
   { key: 'skill', color: NODE_COLORS.skill, label: 'Skills' },
 ];
 
+
+// A cheap identity for a graph dataset: enough to tell "the poll returned
+// the same thing again" from a real change, without JSON.stringify-ing the
+// whole node+edge array on every tick the way universe.ts does.
+function graphFingerprint(nodes: GraphNode[], edges: GraphEdge[]): string {
+  // Same shape universe.ts has always used, and for the same reason: a
+  // count-and-max-mtime fingerprint silently misses the platform half of
+  // the graph. Agents, tools, automations and rules are all stamped with a
+  // FROZEN mtime (`_CAP_MTIME`, evaluated once at backend import), so
+  // renaming an agent, toggling an automation or changing its interval
+  // changes neither the counts nor the max — and the view would quietly
+  // stop updating while looking perfectly alive. The graph is a few hundred
+  // nodes; comparing them properly costs nothing worth having a bug over.
+  return JSON.stringify([
+    nodes.map(n => [n.id, n.label, n.type, n.mtime, n.enabled, n.interval_minutes]),
+    edges.map(e => [e.source, e.target, e.kind]),
+  ]);
+}
+
 export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): RendererHandle {
   const ctx = canvas.getContext('2d')!;
   let nodes: SimNode[] = [];
@@ -70,15 +89,28 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
   // pan/zoom transform
   let scale = 1, tx = 0, ty = 0;
   let panning = false, lastX = 0, lastY = 0;
+  let lastFingerprint = '';
   let dragDistance = 0; // distinguishes a click from a pan
 
   const toWorld = (px: number, py: number) => ({ x: (px - tx) / scale, y: (py - ty) / scale });
 
+  // Recomputed once per dataset, not once per node per frame. This used to
+  // map every node's mtime into a new array and spread it into Math.min/max
+  // INSIDE nodeRadius — which draw() calls per node per frame and hitTest()
+  // calls per node per click. That is O(n^2) allocations at 60fps, and the
+  // spread also risks a stack overflow once the graph is large enough.
+  let mtimeLo = 0, mtimeHi = 0;
+  function recomputeMtimeRange() {
+    mtimeLo = Infinity; mtimeHi = -Infinity;
+    for (const n of nodes) {
+      if (n.mtime < mtimeLo) mtimeLo = n.mtime;
+      if (n.mtime > mtimeHi) mtimeHi = n.mtime;
+    }
+  }
+
   function nodeRadius(n: SimNode): number {
     if (!nodes.length) return 5;
-    const times = nodes.map(m => m.mtime);
-    const min = Math.min(...times), max = Math.max(...times);
-    const t = max > min ? (n.mtime - min) / (max - min) : 0.5;
+    const t = mtimeHi > mtimeLo ? (n.mtime - mtimeLo) / (mtimeHi - mtimeLo) : 0.5;
     return 4 + t * 5; // newer memories are bigger
   }
 
@@ -154,7 +186,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
       }
     }
     ctx.restore();
-    raf = requestAnimationFrame(draw);
+    if (running()) raf = requestAnimationFrame(draw);
   }
 
   function hitTest(px: number, py: number): SimNode | null {
@@ -206,10 +238,35 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
 
+
+  // Pause control. The canvas keeps rendering when nothing can see it:
+  // <Brain/> is mounted permanently outside the router (deliberately — a
+  // route change must never tear down the WebGL context), so this loop ran
+  // at full rate behind every overlay, and on the phone behind an opaque
+  // chat panel. Only universe.ts watched visibilitychange; these did not,
+  // so a backgrounded tab relied purely on the browser throttling rAF.
+  let paused = false;
+  let hidden = false;
+  const running = () => !paused && !hidden;
+  function kick() {
+    cancelAnimationFrame(raf);
+    if (running()) raf = requestAnimationFrame(draw);
+  }
+  const onVisibility = () => { hidden = document.hidden; kick(); };
+  document.addEventListener('visibilitychange', onVisibility);
+
   raf = requestAnimationFrame(draw);
 
   return {
+    setPaused(next: boolean) { paused = next; kick(); },
     setData(newNodes: GraphNode[], newEdges: GraphEdge[]) {
+      // The graph is polled every 20s and almost always comes back
+      // identical, but setData rebuilt the whole force simulation and
+      // restarted alpha regardless — so the layout visibly re-settled every
+      // 20 seconds, on a canvas the operator was reading.
+      const fp = graphFingerprint(newNodes, newEdges);
+      if (fp === lastFingerprint) return;
+      lastFingerprint = fp;
       // keep positions of nodes that already exist so refreshes don't jump
       const prev = new Map(nodes.map(n => [n.id, n]));
       nodes = newNodes.map(n => {
@@ -224,6 +281,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
         .force('charge', forceManyBody().strength(-200))
         .force('center', forceCenter(canvas.width / 2, canvas.height / 2))
         .force('collide', forceCollide(18));
+      recomputeMtimeRange();
       sim.alpha(prev.size ? 0.4 : 1).restart();
     },
     resize(width: number, height: number) {
@@ -253,6 +311,7 @@ export function createGraph2D(canvas: HTMLCanvasElement, opts?: RendererOpts): R
     },
     destroy() {
       cancelAnimationFrame(raf);
+      document.removeEventListener('visibilitychange', onVisibility);
       sim?.stop();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);

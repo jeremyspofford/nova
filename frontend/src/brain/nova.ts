@@ -353,7 +353,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
       }
     }
 
-    raf = requestAnimationFrame(draw);
+    if (running()) raf = requestAnimationFrame(draw);
   }
 
   // click the orb = open the soul (the orb IS Nova, same as the galaxy
@@ -417,9 +417,24 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('wheel', onWheel, { passive: false });
 
+  // Pause control. This view is the most expensive of the 2D three — 110
+  // motes plus an 820-particle shell, each drawing two arc fills, so ~1,750
+  // canvas paths per frame — and it ran at full rate behind the phone's
+  // opaque chat panel where nothing of it is visible.
+  let paused = false;
+  let hidden = false;
+  const running = () => !paused && !hidden;
+  function kick() {
+    cancelAnimationFrame(raf);
+    if (running()) raf = requestAnimationFrame(t => { lastNow = t; draw(t); });
+  }
+  const onVisibility = () => { hidden = document.hidden; kick(); };
+  document.addEventListener('visibilitychange', onVisibility);
+
   raf = requestAnimationFrame(t => { lastNow = t; draw(t); });
 
   return {
+    setPaused(next: boolean) { paused = next; kick(); },
     setData(_nodes: GraphNode[], _edges: GraphEdge[]) {
       // presence view — nothing is drawn from the graph (the name tag was
       // removed 2026-07-19; the orb needs no caption)
@@ -448,6 +463,7 @@ export function createNova(canvas: HTMLCanvasElement, opts?: RendererOpts): Rend
     },
     destroy() {
       cancelAnimationFrame(raf);
+      document.removeEventListener('visibilitychange', onVisibility);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointermove', onPointerMove);

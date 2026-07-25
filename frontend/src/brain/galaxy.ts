@@ -115,14 +115,17 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     const homes = new Map(types.map((t, i) => [t, fibonacciSphere(i, Math.max(types.length, 2), 190)]));
     const prev = byId;
 
+    // Once for the dataset. This pair used to be recomputed INSIDE the
+    // per-node callback — a full map + two spreads per node, so the layout
+    // pass was O(n^2) in allocations before it even started relaxing.
+    let lo = Infinity, hi = -Infinity;
+    for (const m of nodes) { if (m.mtime < lo) lo = m.mtime; if (m.mtime > hi) hi = m.mtime; }
     stars = nodes.map(n => {
       const old = prev.get(n.id);
       if (old) { old.node = n; return old; }
       const home = homes.get(n.type)!;
       const r = mulberry32(hash(n.id));
       const jitter = () => (r() - 0.5) * 170;
-      const times = nodes.map(m => m.mtime);
-      const lo = Math.min(...times), hi = Math.max(...times);
       const recency = hi > lo ? (n.mtime - lo) / (hi - lo) : 0.5;
       return {
         node: n,
@@ -354,7 +357,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
       }
     }
 
-    raf = requestAnimationFrame(draw);
+    if (running()) raf = requestAnimationFrame(draw);
   }
 
   // the core's projected position, refreshed each frame for hit-testing
@@ -419,10 +422,42 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
   canvas.addEventListener('pointerleave', onLeave);
   canvas.addEventListener('wheel', onWheel, { passive: false });
 
+
+  // Pause control. The canvas keeps rendering when nothing can see it:
+  // <Brain/> is mounted permanently outside the router (deliberately — a
+  // route change must never tear down the WebGL context), so this loop ran
+  // at full rate behind every overlay, and on the phone behind an opaque
+  // chat panel. Only universe.ts watched visibilitychange; these did not,
+  // so a backgrounded tab relied purely on the browser throttling rAF.
+  let lastFingerprint = '';
+  let paused = false;
+  let hidden = false;
+  const running = () => !paused && !hidden;
+  function kick() {
+    cancelAnimationFrame(raf);
+    if (running()) raf = requestAnimationFrame(draw);
+  }
+  const onVisibility = () => { hidden = document.hidden; kick(); };
+  document.addEventListener('visibilitychange', onVisibility);
+
   raf = requestAnimationFrame(draw);
 
   return {
+    setPaused(next: boolean) { paused = next; kick(); },
     setData(nodes: GraphNode[], edges: GraphEdge[]) {
+      // layout() runs 60 relaxation passes with an O(n^2) inner loop,
+      // synchronously on the main thread. It had no change guard at all, so
+      // the 20s graph poll paid for the whole thing every time — even when
+      // the poll returned byte-identical data, which is the usual case.
+      // full compare, not count+maxMtime — platform nodes carry a frozen
+      // mtime, so a rename or an enable/disable moves neither (see the note
+      // in graph2d.ts's graphFingerprint)
+      const fp = JSON.stringify([
+        nodes.map(n => [n.id, n.label, n.type, n.mtime, n.enabled, n.interval_minutes]),
+        edges.map(e => [e.source, e.target, e.kind]),
+      ]);
+      if (fp === lastFingerprint) return;
+      lastFingerprint = fp;
       links = edges.map(e => ({ a: e.source, b: e.target }));
       layout(nodes);
     },
@@ -453,6 +488,7 @@ export function createGalaxy(canvas: HTMLCanvasElement, opts?: RendererOpts): Re
     },
     destroy() {
       cancelAnimationFrame(raf);
+      document.removeEventListener('visibilitychange', onVisibility);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);

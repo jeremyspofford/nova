@@ -14,6 +14,10 @@ export interface RendererHandle {
   setData(nodes: GraphNode[], edges: GraphEdge[]): void;
   resize(width: number, height: number): void;
   destroy(): void;
+  /** Stop/resume the animation loop. Brain keeps this renderer mounted
+   *  across navigation on purpose (tearing down a WebGL context to show a
+   *  settings panel is worse), so occlusion has to be told, not inferred. */
+  setPaused?(paused: boolean): void;
   /** Optional runtime settings (e.g. rotationSpeed, labelMode). */
   configure?(options: Record<string, unknown>): void;
   /** Reset the camera/viewport to frame the whole scene. */
