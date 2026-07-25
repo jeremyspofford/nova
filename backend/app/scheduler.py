@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app import automations, instances, settings_store, sysmon, trace
+from app import automations, instances, retention, settings_store, sysmon, trace
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.llm import router as llm_router
@@ -70,6 +70,7 @@ async def tick():
         return
     await trace.maybe_prune()            # self-limits to once a day
     await sysmon.maybe_prune_samples()   # self-limits to daily
+    await retention.maybe_prune()        # tool rows, consents, alerts, recs
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     if not settings_store.get("automations.enabled"):
         return

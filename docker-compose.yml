@@ -5,6 +5,12 @@ name: nova
 services:
   postgres:
     image: postgres:16-alpine
+    # The four services below ARE the product, and they were the only ones
+    # without a restart policy — every sidecar had one. That is why a WSL
+    # reboot left postgres/backend/frontend/web sitting in Exited(255)
+    # while ollama, ntfy and the rest came back on their own, and Nova had
+    # to be started by hand every time.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: nova
       POSTGRES_USER: nova
@@ -21,6 +27,10 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
+    # dev ergonomics live here, not in the image: the source is bind-mounted
+    # below, so the reloader picks up edits without a rebuild
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     environment:
       DATABASE_URL: postgresql://nova:${POSTGRES_PASSWORD:-nova-dev-password}@postgres:5432/nova
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -250,6 +260,7 @@ services:
     build:
       context: ./frontend
       target: dev
+    restart: unless-stopped
     ports:
       - "127.0.0.1:5173:5173"
     volumes:
@@ -263,8 +274,19 @@ services:
     build:
       context: ./frontend
       target: web
+    restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
+    # nginx resolves the backend's address once at startup, so a backend
+    # recreated without web leaves :8080 502ing at a stale container IP.
+    # The healthcheck makes that visible in `docker compose ps` instead of
+    # looking like a frontend bug.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       - backend
 

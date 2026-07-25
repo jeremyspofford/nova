@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 from app import db
 

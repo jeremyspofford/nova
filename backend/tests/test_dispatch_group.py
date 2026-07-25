@@ -192,7 +192,7 @@ async def test_cloud_pair_overlaps():
           [m["tool_call_id"] for m in tool_msgs] == ["d0", "d1"],
           str([m["tool_call_id"] for m in tool_msgs]))
     check("each carries its own specialist's report",
-          all(f"report from" in m["content"] for m in tool_msgs))
+          all("report from" in m["content"] for m in tool_msgs))
 
 
 async def test_mixed_pair_overlaps():
@@ -289,7 +289,7 @@ async def test_budget_inside_group():
     script = Script(["a", "b", "c", "d"])
     install(fleet, script)
     settings_store._cache["agents.max_dispatches_per_turn"] = 2
-    holder = await drive(fleet, script)
+    await drive(fleet, script)          # this case asserts on fleet/script only
     check("only the budgeted two ran", len(fleet.started) == 2,
           str([n for n, _ in fleet.started]))
     tool_msgs = [m for m in script.seen[1] if m["role"] == "tool"]

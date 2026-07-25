@@ -108,7 +108,9 @@ def _candidates(profile: str, rows: list[dict], hw: dict,
     if mode == "cloud" and any(c["provider"] != "ollama" for c in out):
         out = [c for c in out if c["provider"] != "ollama"]
 
-    size = lambda r: r["min_ram_gb"] or 0  # size proxy; cloud rows are 0
+    def size(r):                       # size proxy; cloud rows are 0
+        return r["min_ram_gb"] or 0
+
 
     def key(r):
         local = r["provider"] == "ollama"

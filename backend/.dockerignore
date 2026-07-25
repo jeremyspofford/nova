@@ -1,0 +1,8 @@
+# Build context hygiene — none of this belongs in the image.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+tests/
+*.egg-info/
+.env

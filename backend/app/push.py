@@ -14,6 +14,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import uuid as uuid_mod
 from typing import Optional
 
@@ -23,7 +24,11 @@ log = logging.getLogger(__name__)
 
 # VAPID `sub` claim — a contact for push services to reach the operator of
 # this application server. Only ever sent to the push relays.
-_VAPID_SUB = "mailto:jeremyspofford@gmail.com"
+_VAPID_SUB = os.environ.get("NOVA_VAPID_SUB") or "mailto:nova@localhost"
+# Was hardcoded to the maintainer's personal address, which every deployment
+# of this project then sent to Google/Apple/Mozilla's push relays as its
+# contact. Set NOVA_VAPID_SUB to a real mailto: if you want the relays to be
+# able to reach you about your own instance.
 
 # Web Push Urgency header from our friendly priority names
 _URGENCY = {"min": "very-low", "low": "low", "default": "normal",
