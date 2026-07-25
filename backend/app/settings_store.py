@@ -317,6 +317,13 @@ SETTING_DEFS: list[dict] = [
                      "listening this long so you can just keep talking — no "
                      "wake phrase needed. The mic button pulses while the "
                      "window is open. 0 = every turn needs the wake phrase.")},
+    {"key": "voice.conversation_idle_s", "type": "number", "default": 120,
+     "min": 0, "max": 900, "section": "Voice",
+     "label": "Conversation mode idle timeout (seconds)",
+     "description": ("Conversation mode keeps the mic open turn after turn — "
+                     "no wake phrase — until you end it. This is how long it "
+                     "waits in silence before closing on its own and handing "
+                     "the microphone back. 0 = never close by itself.")},
     {"key": "voice.vad_silence_ms", "type": "number", "default": 1100,
      "min": 500, "max": 2500, "section": "Voice",
      "label": "Tap-to-talk pause tolerance (ms)",

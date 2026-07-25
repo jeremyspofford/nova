@@ -17,6 +17,7 @@
 // WebGPU build) — same subpath vad-web loads, sharing one ORT runtime
 import * as ort from 'onnxruntime-web/wasm';
 import { WAKE_CATALOG, DEFAULT_WAKE } from './wakeCatalog';
+import { recordWakeEvent } from './wakeLog';
 
 ort.env.wasm.wasmPaths = '/vad/';   // reuse the self-hosted ORT wasm from phase 3
 ort.env.wasm.numThreads = 1;        // single-thread SIMD — no COOP/COEP needed
@@ -28,6 +29,13 @@ const BINS = 32;         // mel features
 const MEL_WIN = 76;      // embedding input frames
 const EMB_WIN = 16;      // wake model input embeddings
 const MEL_MAX = 200;     // rolling mel-frame cap
+
+// Shadow logging (ROADMAP #11b): a "peak" is one attempt at the phrase, not one
+// chunk. It opens when the score crosses PEAK_FLOOR, tracks its max, and closes
+// once the score has stayed below the floor for PEAK_QUIET_MS. Peaks that never
+// reached the threshold are the near-misses worth knowing about.
+const PEAK_FLOOR = 0.02;
+const PEAK_QUIET_MS = 700;
 
 const TAP_WORKLET = `
 class WakeTap extends AudioWorkletProcessor {
@@ -69,10 +77,22 @@ export class WakeWord {
   private debug = localStorage.getItem('nova.wakeDebug') === '1';
   private dbgMax = 0;
   private dbgAt = 0;
+  // open peak (one attempt at the phrase) — see PEAK_FLOOR
+  private peakMax = 0;
+  private peakFired = false;
+  private peakQuietAt = 0;
 
   private constructor(opts: WakeOptions) {
     this.threshold = opts.threshold ?? 0.5;
     this.onWake = opts.onWake;
+  }
+
+  /** Retune a RUNNING detector. Without this, `voice.wake_threshold` changes
+   *  do nothing until wake is toggled off and on (the instance is reused at
+   *  the ChatPanel call site), which silently invalidates any measurement of
+   *  a threshold change. */
+  setTuning(opts: { threshold?: number }): void {
+    if (typeof opts.threshold === 'number') this.threshold = opts.threshold;
   }
 
   static async create(opts: WakeOptions): Promise<WakeWord> {
@@ -92,6 +112,7 @@ export class WakeWord {
    *  listening session (e.g. resuming after a command) starts clean. */
   async start(): Promise<void> {
     this.acc = []; this.raw = []; this.cooldownUntil = 0;
+    this.peakMax = 0; this.peakFired = false; this.peakQuietAt = 0;
     await this.primeBuffers();
     this.ctx = new AudioContext({ sampleRate: SR });
     await this.ctx.resume();
@@ -110,6 +131,9 @@ export class WakeWord {
   }
 
   async stop(): Promise<void> {
+    // a fire stops the detector immediately, so the peak is still open here —
+    // without this flush, successful wakes would never reach the log
+    this.closePeak();
     this.stream?.getTracks().forEach(t => t.stop());
     if (this.node) this.node.port.onmessage = null;
     if (this.ctx) { try { await this.ctx.close(); } catch { /* closed */ } }
@@ -155,6 +179,36 @@ export class WakeWord {
     this.embBuf = Array.from({ length: EMB_WIN }, () => silEmb);
   }
 
+  /** Collapse a run of elevated scores into ONE logged attempt. Emitting per
+   *  chunk would bury the signal: a single "hey nova" spans a dozen chunks. */
+  private trackPeak(score: number, fired: boolean): void {
+    const now = performance.now();
+    if (score >= PEAK_FLOOR) {
+      this.peakMax = Math.max(this.peakMax, score);
+      this.peakQuietAt = 0;
+      if (fired) this.peakFired = true;
+      return;
+    }
+    if (this.peakMax === 0) return;                        // nothing open
+    if (!this.peakQuietAt) { this.peakQuietAt = now; return; }
+    if (now - this.peakQuietAt < PEAK_QUIET_MS) return;    // still in the gap
+    this.closePeak();
+  }
+
+  private closePeak(): void {
+    if (this.peakMax > 0) {
+      recordWakeEvent({
+        at: Date.now(),
+        score: this.peakMax,
+        kind: this.peakFired ? 'fire' : 'near',
+        threshold: this.threshold,
+      });
+    }
+    this.peakMax = 0;
+    this.peakFired = false;
+    this.peakQuietAt = 0;
+  }
+
   private onAudio(block: Float32Array): void {
     for (let i = 0; i < block.length; i++) this.acc.push(block[i] * 32767);   // int16-valued
     if (!this.busy && this.acc.length >= CHUNK) void this.pump();
@@ -182,7 +236,9 @@ export class WakeWord {
             this.dbgAt = performance.now();
           }
         }
-        if (s >= this.threshold && performance.now() >= this.cooldownUntil) {
+        const fired = s >= this.threshold && performance.now() >= this.cooldownUntil;
+        this.trackPeak(s, fired);
+        if (fired) {
           this.cooldownUntil = performance.now() + 2000;   // debounce
           this.onWake();
         }
