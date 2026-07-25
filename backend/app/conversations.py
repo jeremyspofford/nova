@@ -59,17 +59,29 @@ async def append_message(conversation_id: str, role: str, content: Optional[str]
     return str(message_id)
 
 
-async def load_history(conversation_id: str, limit: int = 200) -> list[dict]:
-    """The most recent `limit` messages, in chronological order."""
+async def load_history(conversation_id: str, limit: int = 200,
+                       roles: Optional[tuple[str, ...]] = None) -> list[dict]:
+    """The most recent `limit` messages, in chronological order.
+
+    `roles` filters INSIDE the limit, which is the whole point: every tool
+    call journals a row here (router_chat stamps one per activity event), and
+    those rows outnumber real turns ~2:1 in practice. Taking 200 rows and
+    filtering after meant the LLM replayed whatever fraction happened to be
+    conversation — measured 2026-07-24 on the live DB: 128 tool rows in the
+    200 fetched, so 72 real turns against a budget sized for far more. Nova
+    forgot roughly three times sooner than configured, and decoded 128 rows
+    of jsonb tool_calls to throw them away.
+    """
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """SELECT id, role, content, model_used, tool_calls, metadata, created_at FROM (
                    SELECT * FROM messages
                    WHERE conversation_id = $1
+                     AND ($3::text[] IS NULL OR role = ANY($3::text[]))
                    ORDER BY created_at DESC
                    LIMIT $2
                ) recent ORDER BY created_at ASC""",
-            uuid.UUID(conversation_id), limit)
+            uuid.UUID(conversation_id), limit, list(roles) if roles else None)
     return [{
         "id": str(r["id"]),
         "role": r["role"],

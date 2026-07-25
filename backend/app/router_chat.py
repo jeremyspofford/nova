@@ -114,7 +114,11 @@ async def chat_stream(request: ChatRequest):
     overhead = (settings.memory_context_max_chars // 4) + 2500
     history_budget = max(1500, total_budget - overhead)
 
-    history = await conversations.load_history(conversation_id)
+    # user/assistant only: tool rows are an audit trail the LLM never replays
+    # (to_llm_history drops them anyway), and letting them occupy the row cap
+    # is what starved the window to a third of history_budget.
+    history = await conversations.load_history(
+        conversation_id, roles=("user", "assistant"))
     window, _aged = conversations.window_history(history, history_budget)
     window_oldest_at = window[0]["created_at"] if window else None
 
@@ -185,9 +189,11 @@ async def chat_stream(request: ChatRequest):
                     elif etype == "sub_text":
                         # a specialist's live thinking (turn-speed phase 5).
                         # Its own key, and deliberately NOT persisted: at
-                        # ~10 deltas/s a long dispatch would insert
-                        # thousands of message rows, push real history out
-                        # of load_history's window, and replay forever.
+                        # ~10 deltas/s a long dispatch would insert thousands
+                        # of message rows into a table nothing prunes. (It no
+                        # longer evicts real history — load_history takes its
+                        # row cap over user/assistant rows only — but the
+                        # bloat reason stands on its own.)
                         yield _sse({"sub": event["text"],
                                     "agent": event.get("agent")})
                     elif etype == "activity":

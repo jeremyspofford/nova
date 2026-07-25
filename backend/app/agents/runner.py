@@ -615,8 +615,9 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
 #   * TTS speaks `text`. A specialist's working notes must never be read
 #     aloud mid-answer.
 #   * router_chat persists `activity` events as message rows. At ~10
-#     deltas/s a 200s dispatch would insert ~2,000 rows, evict real history
-#     out of load_history's 200-row window, and replay as spam forever.
+#     deltas/s a 200s dispatch would insert ~2,000 rows into a table nothing
+#     prunes. (Since load_history caps rows over user/assistant only, they
+#     no longer evict real history — but they are still permanent bloat.)
 #
 # Batching by sentence (or ~250ms of silence) keeps the event rate near the
 # rate a human reads at, instead of the rate a model emits at.
