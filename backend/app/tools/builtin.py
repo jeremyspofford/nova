@@ -408,6 +408,9 @@ async def _ingest_media_core(url: str, force: bool = False,
     # model's chunking pass is lazy, incomplete, or (for batch) skipped
     full_note = await memory.write(
         body, type="topic",
+        # mechanical writer, owns this slug: a re-ingest with force=True is
+        # meant to refresh the note, not collide with it
+        replace=True,
         title=f"{result['title']} — full transcript",
         description=f"Full {result['transcript_source']} transcript of {result['title']}",
         category="knowledge", tags=tags,

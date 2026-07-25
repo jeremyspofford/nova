@@ -36,6 +36,12 @@ export function HouseholdVoices() {
   };
 
   const remove = async (p: UserProfile) => {
+    // The only destructive action in the app that used to skip the confirm
+    // every other one has — and it takes a voiceprint with it, which can only
+    // be restored by getting the person to re-enrol in person.
+    if (!window.confirm(
+      `Delete ${p.name}'s voice profile? Their voiceprint goes with it and `
+      + `Nova will stop recognising them until they enrol again.`)) return;
     setMsg('');
     try {
       await deleteProfile(p.id);   // deletes the voiceprint with it
