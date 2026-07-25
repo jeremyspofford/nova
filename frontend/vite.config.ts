@@ -5,6 +5,22 @@ import { createReadStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
+// Stamp the real client IP on every proxied request, exactly as nginx does
+// for :8080. Without it the backend saw no X-Real-IP and treated the caller
+// as this machine — and since vite listens on 0.0.0.0, "the caller" included
+// every container on the compose network. searxng, media and mcp-runner all
+// handle untrusted input and could reach http://frontend:5173/api/v1/... to
+// get tokenless admin, including the admin token itself. The host's own
+// browser still arrives via docker's gateway IP, which the backend does
+// recognise as local, so nothing changes for normal use.
+function forwardRealIp(proxy: { on: (e: string, cb: (...a: never[]) => void) => void }) {
+  proxy.on('proxyReq', ((proxyReq: { setHeader: (k: string, v: string) => void },
+                        req: { socket?: { remoteAddress?: string } }) => {
+    const ip = req.socket?.remoteAddress ?? ''
+    proxyReq.setHeader('X-Real-IP', ip.replace(/^::ffff:/, ''))
+  }) as never)
+}
+
 // The onnxruntime-web loader does a runtime `import()` of its .mjs glue; the
 // Vite DEV server otherwise tries to transform that emscripten module and
 // 500s ("no available backend"). Serve the self-hosted /vad/ .mjs raw.
@@ -68,10 +84,12 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_PROXY_TARGET || 'http://backend:8000',
         changeOrigin: true,
+        configure: forwardRealIp,
       },
       '/health': {
         target: process.env.VITE_PROXY_TARGET || 'http://backend:8000',
         changeOrigin: true,
+        configure: forwardRealIp,
       },
     },
   },

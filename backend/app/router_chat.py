@@ -424,7 +424,10 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
     for k in ("allowed_tools", "routing_keywords"):
         if k in allowed and allowed[k] is not None and not isinstance(allowed[k], list):
             raise HTTPException(status_code=422, detail=f"{k} must be a list or null")
-    ok = await agent_registry.update_agent(agent_id, **allowed)
+    # operator=True: this route is the human at Settings, already past the
+    # auth middleware. The is_system guard in the registry exists to stop the
+    # MODEL rewriting a system agent, not the owner.
+    ok = await agent_registry.update_agent(agent_id, operator=True, **allowed)
     if not ok:
         raise HTTPException(status_code=404, detail="agent not found")
     return {"status": "updated"}

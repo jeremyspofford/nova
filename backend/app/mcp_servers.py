@@ -1,6 +1,8 @@
 """MCP server registry — the mcp_servers/mcp_tools_cache tables (migration
-031). Registration is operator-only (edit-mode gated in router_chat.py);
-there is deliberately no agent-facing tool on top of this module — an
+031). Registration is operator-only: it sits behind the auth middleware, and
+a stdio server's command must be an allow-listed launcher (_STDIO_COMMANDS)
+because registering one is, by construction, asking Nova to execute it.
+There is deliberately no agent-facing tool on top of this module — an
 agent that could register a server could grant itself arbitrary
 capabilities (docs/plans/mcp-client.md).
 
@@ -24,6 +26,35 @@ _FIELDS = ("id", "name", "transport", "url", "command", "args", "headers",
            "last_seen", "created_at", "updated_at")
 _EDIT_FIELDS = {"url", "command", "args", "headers"}
 _TRANSPORTS = ("http", "stdio")
+
+# A stdio server's `command` is EXECUTED, verbatim, in the mcp-runner
+# container (mcp-runner/server.py hands it to StdioServerParameters). This
+# module's docstring used to claim registration was "edit-mode gated in
+# router_chat.py"; edit_mode was deleted on 2026-07-21 and nothing replaced
+# it, so POST /api/v1/mcp/servers with transport='stdio' was an arbitrary-exec
+# endpoint sitting behind nothing but the auth middleware. Note that merely
+# listing a server's tools already runs the binary — the tools_hash approval
+# below defends against description poisoning, never against execution.
+#
+# An allow-list rather than an operator toggle: this is how MCP servers are
+# actually launched, it costs a real setup nothing, and it does not
+# reintroduce the edit-mode friction Jeremy removed on purpose. Widen it here
+# if a launcher is genuinely missing.
+_STDIO_COMMANDS = {"npx", "uvx", "uv", "node", "python", "python3", "deno", "bun"}
+
+
+def _check_stdio_command(command: str) -> None:
+    """Raise ValueError unless `command` is a bare, allow-listed launcher."""
+    cmd = (command or "").strip()
+    base = cmd.rsplit("/", 1)[-1]
+    if base != cmd:
+        raise ValueError(
+            f"stdio command must be a bare launcher name, not a path ({cmd!r})")
+    if base not in sorted(_STDIO_COMMANDS):
+        raise ValueError(
+            f"stdio command {base!r} is not an allowed launcher. Allowed: "
+            f"{', '.join(sorted(_STDIO_COMMANDS))}. The server's own package "
+            f"goes in args, e.g. command='npx', args=['-y','@scope/pkg'].")
 
 
 def _row(r) -> dict:
@@ -73,8 +104,10 @@ async def create(name: str, transport: str, **fields) -> dict:
         raise ValueError(f"transport must be one of {_TRANSPORTS}")
     if transport == "http" and not str(fields.get("url") or "").strip():
         raise ValueError("url is required for http transport")
-    if transport == "stdio" and not str(fields.get("command") or "").strip():
-        raise ValueError("command is required for stdio transport")
+    if transport == "stdio":
+        if not str(fields.get("command") or "").strip():
+            raise ValueError("command is required for stdio transport")
+        _check_stdio_command(str(fields["command"]))
     fields = {k: v for k, v in fields.items() if k in _EDIT_FIELDS}
     if "headers" in fields:
         fields["headers"] = json.dumps(fields["headers"] or {})
@@ -99,6 +132,10 @@ async def update(server_id: str, **fields) -> str:
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return "not_found"
+    # PATCH is the other way to reach exec: a connection-field change makes
+    # router_chat re-refresh, which runs the command.
+    if fields.get("command"):
+        _check_stdio_command(str(fields["command"]))
     if "headers" in fields:
         fields["headers"] = json.dumps(fields["headers"] or {})
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
