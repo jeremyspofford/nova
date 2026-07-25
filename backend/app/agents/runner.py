@@ -18,7 +18,7 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import narration, settings_store, timefmt, trace
+from app import bg, narration, settings_store, timefmt, trace
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory.memory import memory
@@ -316,7 +316,8 @@ async def _build_system_prompt(agent: dict, query: str, *,
                                include_index: bool = False,
                                conversation_summary: str | None = None,
                                system_suffix: str | None = None,
-                               speaker: dict | None = None) -> str:
+                               speaker: dict | None = None,
+                               degraded: list[str] | None = None) -> str:
     """Slot-based prompt assembly — persona-layer phase 1.
 
     ROLE → FACTS → CONTEXT → LAST WORD, in that order, always. The agent
@@ -402,7 +403,13 @@ async def _build_system_prompt(agent: dict, query: str, *,
             sp["memory_chars"] = len(mem["context"])
             sp["skills_chars"] = len(skills["context"])
     except Exception:
+        # The turn continues, but it continues BLIND — and a confident answer
+        # written with no memory is indistinguishable from a well-remembered
+        # one. A log line nobody is reading is not a receipt, so this leaves
+        # the log AND tells the operator in the chat itself.
         log.exception("Memory retrieval failed; continuing without context")
+        if degraded is not None:
+            degraded.append("memory could not be read — answering without it")
     if conversation_summary:
         parts.append("## Conversation so far (running summary)\n"
                      + conversation_summary)
@@ -493,6 +500,11 @@ async def _run_tool(name: str, args: dict, ctx: dict,
         result = await tool_registry.execute_tool(name, args, ctx)
         tsp["result_size"] = len(result)
         tsp["result_head"] = trace.redact_text(result)
+        # a tool that failed returns its error as the RESULT (tools never
+        # raise here), so without this the span closed "ok" and the Turn
+        # Inspector painted a failed call green
+        if tool_registry.is_error_result(result):
+            tsp["error"] = trace.redact_text(result, 200)
     return result
 
 
@@ -523,7 +535,7 @@ async def _cancel_and_drain(tasks: list[asyncio.Task]) -> None:
         # The children are already cancelled either way; this is what still
         # closes their spans.
         try:
-            asyncio.ensure_future(_await_all(pending))
+            bg.spawn(_await_all(pending), name="dispatch-drain")
         except RuntimeError:
             pass  # loop is shutting down; the cancels above still stand
         return
@@ -835,7 +847,7 @@ def _notify_fallback(agent: dict, failed_model: str, target: str,
     _last_fallback_notice = now
     try:
         from app import notify
-        asyncio.ensure_future(notify.send(
+        bg.spawn(notify.send(
             f"{agent.get('name')} could not reach {failed_model} "
             f"({failure.get('error_class')}) and is running on {target} "
             f"instead — local inference is down, and these turns cost money.",
@@ -896,13 +908,21 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 tools.append(tool_registry.builtin_def("remember_speaker"))
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
+    degraded: list[str] = []
     async with trace.span("stage", "build_prompt") as psp:
         system_prompt = await _build_system_prompt(
             agent, query, include_index=can_dispatch,
             conversation_summary=conversation_summary, system_suffix=system_suffix,
-            speaker=speaker)
+            speaker=speaker, degraded=degraded)
         psp["prompt_chars"] = len(system_prompt)
         psp["agent"] = agent.get("name")
+        if degraded:
+            psp["error"] = "; ".join(degraded)
+    # say it out loud before the answer starts, so the operator can weigh the
+    # reply against what was missing from it
+    for note in degraded:
+        yield {"type": "activity", "kind": "degraded",
+               "name": "context", "agent": agent.get("name"), "detail": note}
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
     ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
@@ -1091,48 +1111,67 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     i = j
                     continue
 
-            # a RUN of consecutive dispatches: siblings overlap when they
-            # land on different backends (phase 4)
-            if concurrency > 1 and _is_dispatch(parsed[i]):
+            # EVERY dispatch goes through the group machinery, even a lone
+            # one. It used to be the parallel-only path, and the inline
+            # single-dispatch branch beside it was a second implementation
+            # that forgot the wall-clock cap — so with the default settings
+            # (one specialist per round is the common shape) a stuck
+            # specialist hung the turn open forever and
+            # agents.dispatch_timeout_s was config that did nothing. Sharing
+            # the path also means one budget check instead of two copies.
+            if _is_dispatch(parsed[i]):
                 j = i
                 while j < len(parsed) and _is_dispatch(parsed[j]):
                     j += 1
-                if j - i > 1:
-                    group = [(t, a) for t, a, _ in parsed[i:j]]
-                    budget = int(settings_store.get(
-                        "agents.max_dispatches_per_turn") or 3)
-                    runnable: list[tuple[dict, dict]] = []
-                    results = {}
-                    for gt, ga in group:
-                        calls_made += 1
-                        dispatch_result_ids.add(gt["id"])
-                        dispatches_made += 1
-                        yield {"type": "activity", "kind": "tool_start",
+                # tool_concurrency=1 still means one at a time: a run of one
+                # gets the cap and the bookkeeping, just no overlap.
+                if concurrency <= 1:
+                    j = i + 1
+                group = [(t, a) for t, a, _ in parsed[i:j]]
+                budget = int(settings_store.get(
+                    "agents.max_dispatches_per_turn") or 3)
+                runnable: list[tuple[dict, dict]] = []
+                results = {}
+                for gt, ga in group:
+                    calls_made += 1
+                    dispatch_result_ids.add(gt["id"])
+                    dispatches_made += 1
+                    yield {"type": "activity", "kind": "tool_start",
+                           "name": gt["name"], "agent": agent.get("name"),
+                           "args": _brief(ga), "detail": _brief(ga)}
+                    if dispatches_made > budget:
+                        # a per-turn budget, not a depth limit: each dispatch
+                        # is a full sub-turn, so "ask another specialist" is
+                        # the most expensive thing a turn can do.
+                        refusal = (
+                            f"Error: this turn has already used its "
+                            f"{budget} specialist dispatches. Answer with "
+                            f"what you have, or tell the operator what is "
+                            f"still missing.")
+                        results[gt["id"]] = refusal
+                        # the model gets it as the tool result; the operator
+                        # needs to see it too, or a silently-dropped dispatch
+                        # just looks like an answer that ignored the question
+                        yield {"type": "activity", "kind": "tool_result",
                                "name": gt["name"], "agent": agent.get("name"),
-                               "args": _brief(ga), "detail": _brief(ga)}
-                        if dispatches_made > budget:
-                            results[gt["id"]] = (
-                                f"Error: this turn has already used its "
-                                f"{budget} specialist dispatches. Answer with "
-                                f"what you have, or tell the operator what is "
-                                f"still missing.")
-                        else:
-                            runnable.append((gt, ga))
-                    if runnable:
-                        group_gen = _run_dispatch_group(
-                            runnable, dispatch_depth=dispatch_depth,
-                            automation=automation, results=results)
-                        try:
-                            async for ev in group_gen:
-                                yield ev
-                        finally:
-                            await group_gen.aclose()
-                    for gt, _ga in group:
-                        messages.append(
-                            {"role": "tool", "tool_call_id": gt["id"],
-                             "content": results.get(gt["id"], _NO_RESULT)[:8000]})
-                    i = j
-                    continue
+                               "args": _brief(ga), "detail": refusal}
+                    else:
+                        runnable.append((gt, ga))
+                if runnable:
+                    group_gen = _run_dispatch_group(
+                        runnable, dispatch_depth=dispatch_depth,
+                        automation=automation, results=results)
+                    try:
+                        async for ev in group_gen:
+                            yield ev
+                    finally:
+                        await group_gen.aclose()
+                for gt, _ga in group:
+                    messages.append(
+                        {"role": "tool", "tool_call_id": gt["id"],
+                         "content": results.get(gt["id"], _NO_RESULT)[:8000]})
+                i = j
+                continue
 
             tc, args, malformed = parsed[i]
             i += 1
@@ -1171,51 +1210,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             if name in context_trim._BULK_TOOLS:
                 bulk_result_ids.add(tc["id"])
 
-            if name == "dispatch_to_agent":
-                result = ""
-                # the specialist's report is the turn's product — exempt from
-                # overflow trimming no matter how old it gets
-                dispatch_result_ids.add(tc["id"])
-                dispatches_made += 1
-                budget = int(settings_store.get(
-                    "agents.max_dispatches_per_turn") or 3)
-                if dispatches_made > budget:
-                    # a per-turn budget, not a depth limit: each dispatch is
-                    # a full sub-turn, so "ask another specialist" is the
-                    # most expensive thing a turn can do. Same shape as the
-                    # depth-limit message — a result the model can act on.
-                    result = (f"Error: this turn has already used its "
-                              f"{budget} specialist dispatches. Answer with "
-                              f"what you have, or tell the operator what is "
-                              f"still missing.")
-                    yield {"type": "activity", "kind": "tool_result",
-                           "name": name, "agent": agent.get("name"),
-                           "args": _brief(args), "detail": result}
-                    messages.append({"role": "tool", "tool_call_id": tc["id"],
-                                     "content": result})
-                    continue
-                # the sub-agent's own spans nest under this one (parent_span_id)
-                async with trace.span(
-                        "dispatch", args.get("agent_name", "")) as dsp:
-                    dsp["message"] = trace.redact_text(
-                        args.get("message") or "", 200)
-                    async for sub in _run_dispatch(args, dispatch_depth,
-                                                   automation):
-                        if sub["type"] == "final":
-                            result = sub["text"]
-                        elif sub["type"] in _FORWARDED_FROM_SUB:
-                            yield sub
-                    if not result:
-                        result = "Error: dispatched agent produced no result"
-                    dsp["result_size"] = len(result)
-                # the specialist's reply, near-full (matches the 2000-char
-                # tool-row persistence cap) — the chat trace renders it as an
-                # expandable "← <agent> replied" item
-                yield {"type": "activity", "kind": "agent_reply",
-                       "name": args.get("agent_name", ""),
-                       "agent": args.get("agent_name", ""),
-                       "detail": result[:2000]}
-            elif name == "find_mcp_tools":
+            if name == "find_mcp_tools":
                 # phase 2 lazy loading: mutate the LIVE round's toolset —
                 # tools/ctx["granted"] are otherwise fixed for the whole
                 # turn, but a found tool must be callable next round.
@@ -1258,7 +1253,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                "detail": f"announced an action but called no tool (matched {snippet!r})"}
         log.warning("Narration detected: agent=%s model=%s matched=%r",
                     agent.get("name"), agent.get("model"), snippet)
-        asyncio.ensure_future(memory.write(
+        bg.spawn(memory.write(
             f"Narration detected: agent '{agent.get('name')}' on model "
             f"{agent.get('model')} announced an action but called no tool "
             f"this turn (matched {snippet!r}). The described work did NOT "

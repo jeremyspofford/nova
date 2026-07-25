@@ -8,7 +8,6 @@ SSE contract for POST /api/v1/chat/stream:
     data: [DONE]
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -17,7 +16,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
+from app import automations, bg, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -204,7 +203,7 @@ async def chat_stream(request: ChatRequest):
                                                  ("kind", "name", "agent",
                                                   "args", "detail")}})
                         # persist tool activity as an audit row (fire and forget)
-                        asyncio.ensure_future(conversations.append_message(
+                        bg.spawn(conversations.append_message(
                             conversation_id, "tool",
                             content=(event.get("detail") or "")[:2000],
                             tool_calls={"kind": event.get("kind"),
@@ -248,8 +247,19 @@ async def chat_stream(request: ChatRequest):
                         f"User: {persist_text}\n\nNova: {final_text}",
                         type="journal", source_type="chat")
             except Exception:
+                # The operator has already READ this answer — it streamed. If
+                # it never reached the database, the next turn will not have
+                # it and neither will the transcript, so the conversation
+                # quietly loses a turn that visibly happened. Say so on the
+                # stream while the answer is still on screen.
                 log.exception("failed to persist assistant turn")
-            asyncio.ensure_future(compaction.maybe_compact(
+                turn.set_error("assistant turn not persisted")
+                yield _sse({"activity": {
+                    "kind": "degraded", "name": "persistence",
+                    "detail": ("this reply could not be saved — it will be "
+                               "missing from the conversation after a "
+                               "reload")}})
+            bg.spawn(compaction.maybe_compact(
                 conversation_id, main_agent["model"], window_oldest_at))
             # long turns push "Nova replied" when they finish — the device
             # itself suppresses it while the app is on screen (push-sw.js),
@@ -260,7 +270,7 @@ async def chat_stream(request: ChatRequest):
                 secs = (datetime.now(timezone.utc) - turn.started_at).total_seconds()
                 if secs >= min_secs:
                     from app import notify
-                    asyncio.ensure_future(notify.send(
+                    bg.spawn(notify.send(
                         final_text[:120], title="Nova replied", click="/chat"))
             except Exception:
                 log.exception("reply-push scheduling failed")

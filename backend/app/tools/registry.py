@@ -5,7 +5,6 @@ tools. allowed_tools = NULL means "all builtins". DB tools are data
 (execution_type='http_call'), so creating one takes effect immediately.
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -13,7 +12,7 @@ import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
-from app import db
+from app import bg, db
 from app.tools import builtin, fixtures
 from app.tools.http_executor import execute_http_tool
 
@@ -100,7 +99,7 @@ async def _load_mcp_tools() -> dict[str, dict]:
             finally:
                 _MCP_REFRESH_INFLIGHT.discard(sid)
 
-        asyncio.ensure_future(_bg())
+        bg.spawn(_bg(), name="mcp-refresh")
 
     return out
 
@@ -303,6 +302,20 @@ async def delete_tool(tool_id: str) -> str:
         await conn.execute("DELETE FROM tools WHERE id = $1", uuid.UUID(tool_id))
     log.info("Tool deleted by operator: %s", row["name"])
     return "deleted"
+
+
+def is_error_result(result: str) -> bool:
+    """Did this tool result represent a failure?
+
+    Tools deliberately never raise into the runner — they return a string the
+    model can read and act on, and every failure path in this module and in
+    builtin.py writes one of two prefixes. That convention had no reader,
+    though: the trace span recorded status="ok" for all of them, so the Turn
+    Inspector drew failed tools green and the observability error rate
+    counted zero. Honest receipts start with noticing.
+    """
+    head = result.lstrip()[:40].lower()
+    return head.startswith("error") or head.startswith("blocked by rule")
 
 
 async def execute_tool(name: str, args: dict, ctx: dict) -> str:

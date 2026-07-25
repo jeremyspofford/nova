@@ -32,7 +32,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app import db, instances
+from app import bg, db, instances
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ async def turn(source: str, *, conversation_id: str | None = None,
     finally:
         t.finished_at = datetime.now(timezone.utc)
         _turn_var.reset(token)
-        asyncio.ensure_future(_flush(t))
+        bg.spawn(_flush(t), name="trace-flush")
 
 
 @asynccontextmanager
