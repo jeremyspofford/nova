@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { AppShell } from './shell/AppShell';
-import { checkAuth, setAuthToken } from './api';
+import { checkAuth, setAuthToken, type AuthState } from './api';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 /** Token gate — shown only when the backend has NOVA_AUTH_TOKEN set and we
  *  don't hold the right one. Empty token backend-side = open (dev). */
 export default function App() {
-  const [locked, setLocked] = useState<boolean | null>(null); // null = checking
+  const [auth, setAuth] = useState<AuthState | null>(null); // null = checking
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
+  const locked = auth === 'locked';
 
   useEffect(() => {
     // login-by-link: a token in the URL FRAGMENT (#token=…) — fragments
@@ -19,8 +21,8 @@ export default function App() {
       setAuthToken(decodeURIComponent(m[1]).trim());
       history.replaceState(null, '', window.location.pathname);
     }
-    checkAuth().then(ok => setLocked(!ok)).catch(() => setLocked(false));
-    const onUnauthorized = () => setLocked(true);
+    checkAuth().then(setAuth);
+    const onUnauthorized = () => setAuth('locked');
     window.addEventListener('nova:unauthorized', onUnauthorized);
     return () => window.removeEventListener('nova:unauthorized', onUnauthorized);
   }, []);
@@ -28,16 +30,40 @@ export default function App() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setAuthToken(token.trim());
-    if (await checkAuth().catch(() => false)) {
+    const next = await checkAuth();
+    if (next === 'ok') {
       setError('');
-      setLocked(false);
+      setAuth('ok');
     } else {
       setAuthToken(null);
-      setError('That token was not accepted.');
+      setError(next === 'offline'
+        ? "Couldn't reach Nova — is the backend running?"
+        : 'That token was not accepted.');
     }
   }
 
-  if (locked === null) return <div className="w-full h-screen bg-stone-950" />;
+  if (auth === null) return <div className="w-full h-screen bg-stone-950" />;
+
+  if (auth === 'offline') {
+    return (
+      <div className="w-full h-screen bg-stone-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm rounded-xl bg-stone-900/95 border border-stone-700
+                        shadow-2xl p-6 space-y-3 text-center">
+          <h1 className="text-teal-400 font-semibold text-lg">Nova</h1>
+          <p className="text-sm text-stone-300">Can&rsquo;t reach the backend.</p>
+          <p className="text-xs text-stone-500">
+            It may still be starting. If it stays down:
+            <code className="mx-1 text-stone-400">docker compose up -d backend</code>
+          </p>
+          <button
+            onClick={() => { setAuth(null); checkAuth().then(setAuth); }}
+            className="w-full bg-teal-700 hover:bg-teal-600 text-white rounded py-2 text-sm">
+            retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (locked) {
     return (
@@ -69,8 +95,10 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <AppShell />
-    </BrowserRouter>
+    <ErrorBoundary label="Nova">
+      <BrowserRouter>
+        <AppShell />
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

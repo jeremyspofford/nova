@@ -151,6 +151,16 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
         </div>
       );
     }
+    if (item.activity.kind === 'degraded') {
+      // the turn ran, but without something it needed. Said out loud so a
+      // confident answer written with no memory is distinguishable from a
+      // well-remembered one.
+      return (
+        <div key={item.id} className={`text-xs text-amber-300 bg-amber-950/30 border border-amber-900 rounded px-2.5 py-1.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
+          ⚠ {item.activity.detail}
+        </div>
+      );
+    }
     if (item.activity.kind === 'agent_reply') {
       // the specialist's reply back to Nova — collapsed to one line,
       // expandable to the (near-)full text
@@ -325,10 +335,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  type QueuedTurn = { text: string; source?: string; speak?: boolean;
+                      speakerId?: string;
+                      speakerTag?: { name: string; role: string } };
   // follow-ups typed while Nova is still replying: queued and auto-sent FIFO
   // when the current turn finishes; "interject" jumps the queue and cuts the
   // reply short. abortRef cancels the in-flight turn for that interruption.
-  const [queue, setQueue] = useState<string[]>([]);
+  // Whole turns, not bare strings: a voice follow-up carries speak/speaker
+  // and a consent approval carries its source, and queueing only the text
+  // would silently downgrade both (a spoken question answered in silence).
+  const [queue, setQueue] = useState<QueuedTurn[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   // proactive recommendation cards Nova/automations raised (keystone)
   const [recs, setRecs] = useState<RecCard[]>([]);
@@ -819,11 +835,19 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   async function changeModel(model: string) {
     if (!mainAgent) return;
+    const previous = mainAgent.model;
     try {
       await patchAgent(mainAgent.id, { model });
       setMainAgent({ ...mainAgent, model });
     } catch (err) {
+      // The select is uncontrolled-in-effect: the browser has already moved
+      // to the new option. Logging to the console and leaving it there told
+      // the operator they had switched models when the write had failed —
+      // and every later reply came from the old one. Put it back, and say so.
       console.error('model change failed:', err);
+      setMainAgent({ ...mainAgent, model: previous });
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `Couldn't switch to ${model}: ${errText(err)}. Still on ${previous}.` }]);
     }
   }
 
@@ -940,8 +964,27 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     })();
   }, []);
 
+  // Autoscroll ONLY when the operator is already at the bottom. It used to
+  // fire on every `items` change — i.e. every streamed token — which both
+  // restarted a smooth-scroll animation ~40×/s and made it impossible to
+  // scroll up and read anything while Nova was replying: you got yanked back
+  // down on the next token. rAF instead of 'smooth' so it lands in one frame
+  // rather than animating over the top of the next one.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => {
+    if (!pinnedRef.current) return;
+    const id = requestAnimationFrame(() => endRef.current?.scrollIntoView());
+    return () => cancelAnimationFrame(id);
   }, [items]);
 
   // #7's ChatPanel half: presence views (the orb) listen for these events
@@ -954,7 +997,18 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     const message = (opts?.text ?? input).trim();
     // composer sends carry the picked attachments; voice/queued turns don't
     const atts = opts?.text === undefined ? pending : [];
-    if ((!message && atts.length === 0) || busy) return;
+    if (!message && atts.length === 0) return;
+    if (busy) {
+      // Anything arriving mid-turn used to hit `|| busy` and evaporate with
+      // no trace. The composer was fine — submitComposer queues — but every
+      // caller that passes its own text bypassed that: a voice utterance
+      // while Nova was still talking, and a consent approval clicked during
+      // the turn that requested it. The operator saw their word or their
+      // click accepted and nothing happen. Queue it instead; the drain
+      // effect sends it whole the moment the turn ends.
+      if (opts?.text) setQueue(q => [...q, { ...opts, text: opts.text as string }]);
+      return;
+    }
     if (opts?.text === undefined) { setInput(''); setPending([]); }
     setBusy(true);
     const ac = new AbortController();   // interject aborts this turn
@@ -1079,7 +1133,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     if (!msg && pending.length === 0) return;
     if (busy) {
       // text queues; attachments wait in the composer for the next idle send
-      if (msg) { setQueue(q => [...q, msg]); setInput(''); }
+      if (msg) { setQueue(q => [...q, { text: msg }]); setInput(''); }
     } else {
       void send();
     }
@@ -1093,7 +1147,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     const msg = input.trim();
     if (!msg || !busy) return;
     setInput('');
-    setQueue(q => [msg, ...q]);
+    setQueue(q => [{ text: msg }, ...q]);
+    abortRef.current?.abort();
+  }
+
+  // stop with nothing to say: same abort, no follow-up queued
+  function stopTurn() {
+    if (!busy) return;
     abortRef.current?.abort();
   }
 
@@ -1104,7 +1164,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     if (busy || queue.length === 0) return;
     const next = queue[0];
     setQueue(q => q.slice(1));
-    void sendRef.current({ text: next });
+    void sendRef.current(next);
   }, [busy, queue]);
 
   // the operator's click: record the decision, then tell Nova in-channel so
@@ -1478,7 +1538,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-4 space-y-2">
+      <div ref={scrollerRef}
+           className="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-4 space-y-2">
         {items.length === 0 && (
           <div className="text-center text-stone-500 mt-10">
             <p className="text-base font-medium text-stone-400">Talk to {assistantName}</p>
@@ -1499,7 +1560,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           <span className="text-[10px] uppercase tracking-wide text-stone-500">queued</span>
           {queue.map((q, i) => (
             <span key={i} className="inline-flex items-center gap-1 max-w-[15rem] text-[11px] bg-stone-800 border border-stone-700 rounded-full px-2 py-0.5 text-stone-300">
-              <span className="truncate">{q}</span>
+              <span className="truncate">{q.text}</span>
               <button type="button" onClick={() => setQueue(qq => qq.filter((_, j) => j !== i))}
                 className="text-stone-500 hover:text-red-400 leading-none" title="Remove from queue" aria-label="Remove from queue">×</button>
             </span>
@@ -1706,6 +1767,21 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                   strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            ) : busy ? (
+              // Stopping used to require typing something first — "Now"
+              // only appears with text in the box — so a stream that stalled
+              // left "thinking…" on screen with no way out but a reload.
+              <button
+                type="button"
+                onClick={stopTurn}
+                aria-label={`Stop ${assistantName}`}
+                title={`Stop ${assistantName}`}
+                className="shrink-0 w-9 h-9 rounded-full bg-stone-700 text-white flex items-center justify-center"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
             ) : (

@@ -134,10 +134,29 @@ export async function getVoiceHealth(): Promise<VoiceHealth> {
   return r.json();
 }
 
-/** true = authorized (or auth disabled); false = the token gate is up. */
-export async function checkAuth(): Promise<boolean> {
-  const r = await apiFetch(`${API_URL}/api/v1/settings`);
-  return r.status !== 401;
+export type AuthState = 'ok' | 'locked' | 'offline';
+
+/** 'ok' = authorized (or auth disabled), 'locked' = the token gate is up,
+ *  'offline' = the backend did not answer at all.
+ *
+ *  The third case used to collapse into the first: App caught the network
+ *  error and unlocked, so a backend that was simply DOWN rendered the whole
+ *  app against a dead API — every surface then failing into its own silent
+ *  `.catch(() => {})` and showing empty state. "Nova has nothing to say" and
+ *  "Nova is not running" looked identical. */
+export async function checkAuth(): Promise<AuthState> {
+  try {
+    const r = await apiFetch(`${API_URL}/api/v1/settings`);
+    if (r.status === 401) return 'locked';
+    // Not just a thrown fetch: when the backend is down, the thing in front
+    // of it answers instead — vite's dev proxy and nginx both return 502
+    // rather than refusing the connection, so `fetch` resolves happily and
+    // only the STATUS says anything is wrong. Checked live: a dead upstream
+    // rendered the whole app as if authorized until this line existed.
+    return r.ok ? 'ok' : 'offline';
+  } catch {
+    return 'offline';
+  }
 }
 
 /** The admin token from the server — only answers for already-trusted
@@ -149,7 +168,11 @@ export async function getServerToken(): Promise<string> {
 }
 
 export interface Activity {
-  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'agent_reply';
+  /** `degraded` = the turn ran, but something it needed was missing (memory
+   *  unreadable, the reply not persisted). Pairs with the backend's
+   *  honest-receipts change; harmless if that half is not deployed. */
+  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'agent_reply'
+      | 'degraded';
   name: string;
   agent?: string;
   detail?: string;
@@ -221,7 +244,14 @@ export async function* streamChat(message: string, conversationId?: string,
         } else if (typeof parsed.sub === 'string') {
           yield { type: 'subText', text: parsed.sub, agent: parsed.agent as string | undefined };
         } else if (parsed.activity) {
-          yield { type: 'activity', activity: parsed.activity as Activity };
+          // shape-check before it reaches renderItem. This is the one frame
+          // whose contents get destructured during render, so a malformed
+          // one used to throw mid-render — and with no error boundary in the
+          // tree that white-screened the entire app.
+          const a = parsed.activity as Partial<Activity> | null;
+          if (a && typeof a === 'object' && typeof a.kind === 'string') {
+            yield { type: 'activity', activity: a as Activity };
+          }
         } else if (typeof parsed.error === 'string') {
           yield { type: 'error', error: parsed.error };
         }
