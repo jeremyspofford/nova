@@ -338,6 +338,20 @@ const MAX_W = 760;
 // resolves before it.
 const DUCK_CEILING_MS = 2500;
 
+// Phase 4 backstop: if a captured turn never hands the microphone back
+// within this, arm anyway rather than sit deaf. The fast path re-arms as soon
+// as the utterance is dispatched; this only catches a transcription that
+// never settles, and a backgrounded PWA whose timers Chrome has throttled to
+// roughly one a minute.
+const REARM_CEILING_MS = 8000;
+
+// How long the duck takes to actually land (setTargetAtTime, tau=0.05), after
+// which the sustained-speech clock restarts against the quieter output.
+const DUCK_SETTLE_MS = 200;
+
+// Per reply. Stops her volume pumping if leakage keeps tripping the detector.
+const MAX_ECHO_DUCKS = 3;
+
 export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsOpen,
                            discussPayload, onDiscussHandled }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
@@ -427,6 +441,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // for a moment so the word that woke us cannot immediately re-trigger
   const wakeIgnoreUntil = useRef(0);
   const vadSilenceMs = useRef(1100);
+  // conversation mode runs a shorter tolerance: barge-in is the safety net
+  // that makes aggressive endpointing survivable — if she starts early you
+  // just keep talking and she gets out of the way — and 400ms off the front
+  // of every turn is the cheapest speed in the whole path.
+  const vadSilenceConvMs = useRef(700);
   const wakeRef = useRef<WakeWord | null>(null);
   const wakeOn = useRef(false);
   const wakeThreshold = useRef(0.5);
@@ -442,6 +461,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // stay visible. Both drive the same voiceLoopDone continuation.
   const [conversationOpen, setConversationOpen] = useState(false);
   const conversationRef = useRef(false);
+  // ONE generation counter for the whole voice machine. Every async
+  // continuation captures it on entry and bails if it moved, which replaces
+  // a scatter of ad-hoc guards (`!conversationRef.current`, `tapVad.current
+  // !== v`, `!wakeOn.current`) that each knew about one mode and therefore
+  // could not see a change to another. Bumped by every mode change: opening
+  // or closing conversation, muting, wake on/off, cancelling a tap, and the
+  // tab going away. It does not replace `tapVad.current`, which answers a
+  // different question — "is something armed right now".
+  const epoch = useRef(0);
+  const bumpEpoch = () => { epoch.current += 1; };
   const idleS = useRef(120);          // voice.conversation_idle_s; 0 = never
   const assistantName = useAssistantName();
 
@@ -453,6 +482,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (isMode(m)) setListenMode(m);
       const s = defs.find(d => d.key === 'voice.vad_silence_ms')?.value;
       if (typeof s === 'number') vadSilenceMs.current = s;
+      const sc = defs.find(d => d.key === 'voice.vad_silence_conversation_ms')?.value;
+      if (typeof sc === 'number') vadSilenceConvMs.current = sc;
       const w = defs.find(d => d.key === 'voice.wake_threshold')?.value;
       if (typeof w === 'number') wakeThreshold.current = w;
       const ph = defs.find(d => d.key === 'voice.wake_word')?.value;
@@ -468,6 +499,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
       if (key === 'voice.listen_mode' && isMode(value)) setListenMode(value);
       if (key === 'voice.vad_silence_ms' && typeof value === 'number') vadSilenceMs.current = value;
+      if (key === 'voice.vad_silence_conversation_ms' && typeof value === 'number') vadSilenceConvMs.current = value;
       if (key === 'voice.wake_threshold' && typeof value === 'number') {
         wakeThreshold.current = value;
         // retune the LIVE detector — the instance is reused below, so without
@@ -492,6 +524,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // the mic is a battery drain AND makes the OS recording indicator lie.
   useEffect(() => {
     const release = () => {
+      bumpEpoch();
       conversationRef.current = false;
       voiceOpenRef.current = false;
       wakeOn.current = false;
@@ -560,12 +593,28 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     setMicState('transcribing');
     try {
       const { text, speaker: who, speaker_active } = await transcribeSpeech(blob);
-      setMicState('idle');
+      // Only clear the state we set. Phase 4 re-arms the microphone as soon as
+      // the utterance is dispatched, and on a slow transcription the stranded-
+      // re-arm backstop can land BEFORE this line — an unconditional 'idle'
+      // would then paint the bar as not listening while the mic was live.
+      setMicState(s => (s === 'transcribing' ? 'idle' : s));
       // a wake clip is far more useful tagged with WHO said it — the whole
       // point is that the model has never heard this particular child
       lastSpeakerName.current = who ? who.name : '';
       if (text.trim()) {
-        await send({
+        // DISPATCH, don't await. `send` runs the SSE stream to completion, so
+        // awaiting it here meant the caller's continuation — the one that puts
+        // the microphone back — did not run until the entire answer had been
+        // generated. That, not the playback polls the plan blames, is what
+        // kept the mic shut through the reply; deleting the polls alone would
+        // have left the whole generation deaf.
+        //
+        // Through sendRef rather than the captured `send`, which also fixes a
+        // live bug: the arm closure holds the `send` from the render that
+        // armed it, so its `if (busy)` check reads a stale value and a voice
+        // turn landing during a typed one could open a second stream over the
+        // same abortRef. send() never throws — it has its own try/finally.
+        void sendRef.current({
           text, source: 'voice', speak: true, front: opts?.front,
           speakerId: who ? who.profile_id : (speaker_active ? 'unknown' : undefined),
           speakerTag: who && who.role !== 'operator'
@@ -575,7 +624,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       } else setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: "Didn't catch that — try again." }]);
     } catch (err) {
-      setMicState('idle');
+      setMicState(s => (s === 'transcribing' ? 'idle' : s));
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `Transcription failed: ${errText(err)}` }]);
     }
@@ -590,7 +639,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // false = timeout/failure — conversation mode branches on it.
   async function startVadCapture(afterSubmit?: (captured: boolean) => void | Promise<void>,
                                  armTimeoutMs?: number,
-                                 opts?: { barged?: boolean }) {
+                                 opts?: { barged?: boolean; onCaptured?: () => void }) {
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
       const { TapVad } = await import('../voice/vad');
@@ -603,6 +652,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       tapVad.current = v;
       let armTimer: number | undefined;
       let speaking = false;   // inside an utterance — never time out mid-sentence
+      const myEpoch = epoch.current;
+      // Self-cancelling: it drops itself the first time it notices this
+      // capture has been superseded, so the six external teardown paths
+      // (mute, close, wake off, tap cancel, tab hide, unmount) do not each
+      // have to know about it.
+      let stopWatchingSpeech: (() => void) | null = null;
+      const endSpeechWatch = () => { stopWatchingSpeech?.(); stopWatchingSpeech = null; };
       const clearArmTimer = () => { if (armTimer) { clearTimeout(armTimer); armTimer = undefined; } };
       // The timer RESCHEDULES itself rather than being cleared once and
       // forgotten: a misfire (you cleared your throat) used to cancel the arm
@@ -628,9 +684,27 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         const remaining = Math.max(0, armDeadline - now);
         armTimer = window.setTimeout(async () => {
           armTimer = undefined;
+          // `v` is the session-wide singleton, so `tapVad.current !== v` only
+          // answers "is ANYTHING armed" — it cannot tell this capture from the
+          // one that replaced it. Before phase 4 no capture existed during a
+          // reply, so there was nothing to orphan; now the follow-up window is
+          // armed through the whole answer, and switching mode mid-reply used
+          // to leave its timer alive to disarm the NEW capture and close a
+          // conversation the operator was in the middle of.
+          if (myEpoch !== epoch.current) { clearArmTimer(); return; }
           if (tapVad.current !== v) return;             // already captured/cancelled
           if (speaking) { scheduleArmTimer(); return; } // mid-utterance: give it longer
+          // Nor while SHE is audibly talking. Phase 4 keeps the mic open
+          // through the reply, so the window would otherwise count down during
+          // her answer and a long one would close the conversation before you
+          // got a word in — the follow-up window is meant to be your time, not
+          // hers. `playing`, not `speaking`: a PAUSED reply latches `speaking`
+          // true forever (the source node is still assigned, and its onended
+          // cannot fire against a frozen clock), which would mean a paused
+          // conversation never idles out at all.
+          if (speaker.playing) { scheduleArmTimer(true); return; }
           unduck();
+          endSpeechWatch();
           await v.disarm();
           tapVad.current = null;
           emitListening(false);
@@ -648,17 +722,55 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       let barged = opts?.barged ?? false;
       let ducking = false;
       let duckCeiling: number | undefined;
+      let settleTimer: number | undefined;
+      // Phase 4's central safety property. `heardOver` means this utterance
+      // BEGAN while sound was actually coming out of the speaker — so it may
+      // be her, arriving back through an open microphone. See the veto in
+      // onSpeechEnd.
+      let heardOver = false;
+      let echoDucks = 0;
       const unduck = () => {
         if (duckCeiling) { clearTimeout(duckCeiling); duckCeiling = undefined; }
+        if (settleTimer) { clearTimeout(settleTimer); settleTimer = undefined; }
         if (!ducking) return;
+        // Past the flutter cap the duck goes STICKY for the rest of this
+        // reply. Leakage trips the detector, we duck, the leakage drops below
+        // threshold, the VAD misfires, we un-duck, and it trips again — her
+        // volume pumping up and down for the whole answer. Handing the volume
+        // back is the half of that cycle worth giving up: staying quiet in a
+        // room that keeps tripping the mic is the better of the two failures,
+        // and it keeps every later confirm measured against a quiet speaker.
+        if (echoDucks > MAX_ECHO_DUCKS) return;
         ducking = false;
         speaker.duck(false);
       };
       // heard something while she is talking: get out of the way immediately
       const duckForSpeech = () => {
-        if (barged || ducking || !speaker.speaking) return;
+        if (!speaker.playing) return;
+        // Set FIRST and unconditionally. This is the veto's only input, and
+        // it must not depend on whether we happened to duck: gating it behind
+        // the duck meant that once the flutter cap was reached nothing could
+        // set `ducking`, so nothing could confirm a barge-in, so every later
+        // utterance in that reply was vetoed — she talked over you and your
+        // words were silently discarded.
+        heardOver = true;
+        if (barged || ducking) return;
+        echoDucks++;
         ducking = true;
-        speaker.duck(true);
+        // With browser processing the echo canceller has already removed most
+        // of her; the duck is mainly the affordance. In raw mode (phase 5b
+        // turns AEC off) the duck is the ONLY thing standing between her
+        // output and her own ears, so it goes deeper.
+        speaker.duck(true, wakeMic.current === 'raw' ? 0.05 : 0.13);
+        // …and restart the sustain clock once the duck has actually landed
+        // (setTargetAtTime with tau=0.05 settles in ~150 ms), so the 500 ms
+        // that confirms an interruption is measured against a quiet speaker.
+        // Otherwise her own voice — more continuously voiced than yours —
+        // clears that bar more easily than you do.
+        settleTimer = window.setTimeout(() => {
+          settleTimer = undefined;
+          v.resetSustain();
+        }, DUCK_SETTLE_MS);
         // never leave the output ducked if neither outcome ever arrives
         duckCeiling = window.setTimeout(() => { duckCeiling = undefined; unduck(); },
                                         DUCK_CEILING_MS);
@@ -669,7 +781,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       // vetoed it arrives a full redemption window later, so a 180 ms cough
       // read as sustained speech and cut her off mid-answer.
       const confirmBargeIn = () => {
-        if (barged || !ducking) return;   // nothing was talking over
+        // Gated on heardOver — "this utterance began while she was audible" —
+        // rather than on the duck, which is a volume decision and must never
+        // decide whether you are allowed to interrupt her.
+        if (barged || !heardOver) return;
         barged = true;
         speaker.cancel();            // terminal: the turn's flush() can't revive it
         abortRef.current?.abort();   // and stop generating the rest of what she was saying
@@ -681,26 +796,60 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           duckForSpeech();
         },
         onSustained: confirmBargeIn,
-        onMisfire: () => { speaking = false; unduck(); setMicState('armed'); scheduleArmTimer(); },
+        onMisfire: () => {
+          speaking = false; heardOver = false; unduck();
+          setMicState('armed'); scheduleArmTimer();
+        },
         onSpeechEnd: (wav) => {
           speaking = false;
           if (!barged) unduck();
+          // ── the spoke-over veto ────────────────────────────────────────
+          // This utterance started while she was audibly playing and never
+          // earned a confirmed barge-in. It is far more likely her own voice
+          // coming back through the microphone than a person, so it is
+          // DROPPED — not transcribed, not sent, no fresh idle window, and
+          // the mic stays armed for whatever comes next.
+          //
+          // This is what makes a self-sustaining conversation impossible
+          // rather than unlikely: whisper never sees her own words, so she
+          // can never answer herself. It holds with echo cancellation on or
+          // off, which matters because 'raw' mode turns it off. A real
+          // interruption is unaffected — sustaining half a second over a
+          // ducked speaker sets `barged` and lifts the veto.
+          if (heardOver && !barged) {
+            heardOver = false;
+            setMicState('armed');
+            scheduleArmTimer();
+            return;
+          }
+          heardOver = false;
           clearArmTimer();
           // defer out of the VAD's own callback stack before tearing it down —
           // calling destroy() synchronously from within onSpeechEnd wedges the
           // async continuation and the utterance never gets submitted
           setTimeout(async () => {
             armDeadline = 0;            // a real turn earns a fresh window
+            endSpeechWatch();
             await v.disarm();
             tapVad.current = null;
             emitListening(false);
+            // Start watching for the reply BEFORE submitting: submitUtterance
+            // awaits the whole turn, so anything hung off its completion is
+            // already too late to have the mic open during the answer.
+            opts?.onCaptured?.();
             await submitUtterance(wav, { front: barged });
             await afterSubmit?.(true);
           }, 0);
         },
-      }, { silenceMs: vadSilenceMs.current });
+      }, { silenceMs: conversationRef.current ? vadSilenceConvMs.current : vadSilenceMs.current });
       setMicState(s => (s === 'arming' ? 'armed' : s));
       emitListening(true);
+      // The window is YOUR silence, not hers: restart it the moment she stops
+      // speaking, so a long reply does not eat the time you had to answer.
+      stopWatchingSpeech = speaker.subscribe(s => {
+        if (myEpoch !== epoch.current || tapVad.current !== v) { endSpeechWatch(); return; }
+        if (!s.speaking && !speaking) scheduleArmTimer(true);
+      });
       scheduleArmTimer();
     } catch (err) {
       tapVad.current = null;
@@ -716,6 +865,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   async function tapToggle() {
     if (busy || micState === 'transcribing' || micState === 'arming') return;
     if (micState === 'armed' || micState === 'capturing') {   // tap again = cancel
+      bumpEpoch();
       await tapVad.current?.disarm();
       tapVad.current = null;
       setMicState('idle');
@@ -755,20 +905,29 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     void wakeClipsMod().then(m => m.resolveWakeFire(captured, lastSpeakerName.current));
     if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
     if (!captured || followupS.current <= 0) { await resumeWake(); return; }
-    await resumeWake();                              // barge-in while she talks
-    while (speaker.speaking) {                       // let the reply finish
-      await new Promise(r => setTimeout(r, 200));
-      if (!wakeOn.current) return;                   // toggled off mid-reply
-    }
-    // a barge-in mid-reply already started its own capture — don't double-arm
+    // Phase 4: the follow-up window opens NOW, during her reply, rather than
+    // after the audio drains — so you can answer her before she has finished
+    // the sentence, which is what a follow-up window was always for. The
+    // window itself does not start counting down until she stops talking
+    // (see the arm timer), so a long answer no longer eats your time to
+    // respond. Wake listening stops because the VAD has the mic instead.
+    const mine = epoch.current;
     if (tapVad.current || !wakeOn.current || !wakeRef.current) return;
     await wakeRef.current.stop();
+    if (mine !== epoch.current || tapVad.current) return;   // changed while stopping
     inFollowup.current = true;
     await startVadCapture(voiceTurnDone, followupS.current * 1000);
   }
 
   async function onWake() {
     if (Date.now() < wakeIgnoreUntil.current) return;   // still the last fire
+    // Only wake-LISTENING may be woken. Phase 2 leaves the detector running
+    // through a capture so the shared device stays open, and phase 4 now
+    // keeps a VAD armed through her reply as well — so a command containing
+    // the phrase ("tell nova I said hey nova") can re-fire mid-capture and
+    // restart the whole arm on top of the one in progress. The 2000 ms
+    // debounce in wake.ts is nowhere near enough on its own.
+    if (tapVad.current || conversationRef.current) return;
     // Saying the wake word over her IS a barge-in, and it needs both halves:
     // silencing the audio while the turn kept generating meant she went quiet
     // but you still waited out the whole answer before yours was heard.
@@ -788,6 +947,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   async function wakeToggle() {
     if (micState === 'arming' || micState === 'transcribing') return;
     if (wakeOn.current) {                 // turn off
+      bumpEpoch();
       wakeOn.current = false;
       inFollowup.current = false;
       await tapVad.current?.disarm();     // an open follow-up window holds the mic
@@ -832,16 +992,39 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     const idleMs = idleS.current > 0 ? idleS.current * 1000 : undefined;
     await startVadCapture(
       captured => (captured ? voiceLoopDone(true) : closeConversation('idle')),
-      idleMs);
+      idleMs,
+      { onCaptured: rearmIfStranded });
+  }
+
+  /** Liveness backstop, and nothing more.
+   *
+   *  The microphone normally comes back the instant the utterance has been
+   *  transcribed and dispatched — see the `void sendRef.current` note in
+   *  submitUtterance — which is well before she starts speaking, so the whole
+   *  reply plays into an open mic. That path covers every ordinary outcome
+   *  including the ones that make no sound at all: an empty transcript, a
+   *  transcription that threw, a turn where every TTS request failed.
+   *
+   *  What it does NOT cover is a transcription that simply never settles.
+   *  Nothing here waits on a speaker event to decide to arm — deliberately.
+   *  Speaker events are edge-triggered and deduped, so a turn that never
+   *  speaks never calls back, and hanging the microphone off one is how "it
+   *  only activated once" happened in the first place. A wall clock cannot
+   *  fail that way. */
+  function rearmIfStranded() {
+    const mine = epoch.current;
+    window.setTimeout(() => {
+      if (mine !== epoch.current) return;                      // mode changed under us
+      if (!conversationRef.current || tapVad.current) return;   // closed, or already armed
+      void armConversation();
+    }, REARM_CEILING_MS);
   }
 
   async function voiceLoopDone(_captured: boolean) {
+    // Reached as soon as the utterance is dispatched, not when the answer
+    // finishes — so this IS the re-arm, and it happens before she speaks.
     if (!conversationRef.current) { emitListening(false); return; }
-    while (speaker.speaking) {                     // let the reply finish
-      await new Promise(r => setTimeout(r, 200));
-      if (!conversationRef.current) return;
-    }
-    if (!conversationRef.current || tapVad.current) return;   // muted or re-armed
+    if (tapVad.current) return;               // muted, or the backstop got there first
     await armConversation();
   }
 
@@ -850,8 +1033,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     speaker.enable();               // inside the tap gesture — autoplay policy
     if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
     void wakeClipsMod().then(m => m.wakeGaveUp());   // see tapToggle
+    bumpEpoch();
     conversationRef.current = true;
     setConversationOpen(true);
+    speaker.earcon('open');          // the mic is live now — say so out loud
     // take the mic over from any other capture mode
     await tapVad.current?.disarm();
     tapVad.current = null;
@@ -867,6 +1052,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   }
 
   async function closeConversation(_reason?: 'idle') {
+    bumpEpoch();                     // strand every continuation still in flight
+    speaker.earcon('close');         // hands-free: you have to be able to hear it end
     conversationRef.current = false;
     setConversationOpen(false);
     voiceOpenRef.current = false;
@@ -881,11 +1068,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   async function voiceMicToggle() {
     if (micState === 'armed' || micState === 'capturing') {   // mute
+      bumpEpoch();
       await tapVad.current?.disarm();
       tapVad.current = null;
       setMicState('idle');
       emitListening(false);
     } else if (micState === 'idle') {                          // unmute
+      bumpEpoch();
       speaker.cancel();      // never open the mic into her own live playback
       await armConversation();
     }

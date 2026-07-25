@@ -117,10 +117,34 @@ const splitOnDashes = (text: string): string[] =>
 
 interface Chunk { text: string; gap: number }
 
+export interface SpeakerState { speaking: boolean; paused: boolean }
+
 class Speaker {
   enabled = false;
   paused = false;
-  onChange?: (s: { speaking: boolean; paused: boolean }) => void;
+  /** @deprecated single-slot legacy handler — use subscribe(). Kept because
+   *  it reads well at the one UI call site that owns the transport controls. */
+  onChange?: (s: SpeakerState) => void;
+  /** More than one thing needs to know when she starts and stops speaking:
+   *  the transport buttons, and (phase 4) the conversation loop deciding when
+   *  to re-arm the microphone. A single assignable slot meant the second
+   *  consumer silently stole the first one's callback. */
+  private subs = new Set<(s: SpeakerState) => void>();
+
+  subscribe(fn: (s: SpeakerState) => void): () => void {
+    this.subs.add(fn);
+    return () => { this.subs.delete(fn); };
+  }
+
+  /** The current state, for a subscriber that needs to know NOW rather than
+   *  at the next transition. onChange/subscribe are edge-triggered, and a
+   *  turn can produce no audio at all — an empty transcript, a transcription
+   *  that threw, every TTS request failing — so anything that waits for a
+   *  speaking->false edge must first check whether there was ever an edge to
+   *  wait for. That exact gap is the old "it only activated once" bug. */
+  get state(): SpeakerState {
+    return { speaking: this.speaking, paused: this.paused };
+  }
 
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -153,11 +177,28 @@ class Speaker {
       || this.decoded.size > 0 || this.listItems.length > 0;
   }
 
+  /** Sound is coming out of the speaker RIGHT NOW.
+   *
+   *  Deliberately not `speaking`, which goes true the moment a sentence is
+   *  queued for synthesis — a whole network round trip before there is any
+   *  audio. The difference matters wherever the question is "could the
+   *  microphone be hearing her": during that silent gap the answer is no, and
+   *  treating it as yes would make her deaf to a follow-up spoken into her
+   *  own thinking pause, which is exactly when people talk. */
+  get playing(): boolean {
+    return !!this.current && !this.paused;
+  }
+
   private emit() {
     const s = { speaking: this.speaking, paused: this.paused };
     if (s.speaking !== this.last.speaking || s.paused !== this.last.paused) {
       this.last = s;
       this.onChange?.(s);
+      // one throwing subscriber must not deafen the others — the re-arm
+      // continuation is on this list, and a UI error would strand the mic
+      for (const fn of this.subs) {
+        try { fn(s); } catch { /* keep telling the rest */ }
+      }
     }
   }
 
@@ -202,14 +243,45 @@ class Speaker {
     }
   }
 
+  /** A two-note earcon for entering ('open') and leaving ('close')
+   *  conversation mode. Synthesized on the existing AudioContext rather than
+   *  shipped as an asset — it is two sine tones, and a hands-free mode needs
+   *  a sound you can recognise without looking at the screen, which is the
+   *  whole situation it is for. Rising = the mic is live, falling = it is
+   *  not; that pairing is the one convention people already know.
+   *
+   *  Deliberately NOT routed through the duck gain: it must stay audible
+   *  while she is ducked, and it must not colour level() (the orb should not
+   *  pulse for Nova's own beep). */
+  earcon(kind: 'open' | 'close') {
+    if (!this.ctx || !this.enabled) return;
+    const ctx = this.ctx;
+    const notes = kind === 'open' ? [660, 990] : [880, 550];
+    notes.forEach((hz, i) => {
+      const t = ctx.currentTime + i * 0.09;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(hz, t);
+      // short, and well below her speaking level — an earcon that startles
+      // is one the operator turns the whole feature off to escape
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.12, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    });
+  }
+
   /** Duck the output while someone is talking over her — the affordance that
    *  says "heard you" before anything else can. −18 dB, not mute: it has to be
    *  undoable without a gap, because most trips are her own voice leaking into
    *  an open mic. Self-correcting — if the speech doesn't sustain, the caller
    *  un-ducks and she was never actually interrupted. */
-  duck(on: boolean) {
+  duck(on: boolean, depth = 0.13) {
     if (!this.ctx || !this.gain) return;
-    this.gain.gain.setTargetAtTime(on ? 0.13 : 1, this.ctx.currentTime, 0.05);
+    this.gain.gain.setTargetAtTime(on ? depth : 1, this.ctx.currentTime, 0.05);
   }
 
   /** Interrupt: stop speaking and drop everything queued or in flight.
