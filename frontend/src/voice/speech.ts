@@ -5,8 +5,9 @@
  * two fetches in flight) and play strictly in order through Web Audio.
  *
  * Controls: pause()/resume() (suspend the audio clock — step away mid-
- * reply), cancel() (interrupt, drop the rest). `onChange` reports
- * {speaking, paused} so the UI can show the right controls.
+ * reply), cancel() (interrupt, drop the rest), duck() (drop the volume
+ * while someone talks over her). `onChange` reports {speaking, paused} so
+ * the UI can show the right controls.
  *
  * `speaker.level()` exposes live output amplitude (0..1) — the energy
  * input the entity view will consume later (also on window.novaVoice).
@@ -123,7 +124,14 @@ class Speaker {
 
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+  private gain: GainNode | null = null;
   private levelBuf: Float32Array<ArrayBuffer> | null = null;
+  /** cancel() is TERMINAL until the next enable(). Interrupting her used to be
+   *  undone half a second later by the unconditional `speaker.flush()` at the
+   *  end of the turn, and by the deltas still arriving from a stream that
+   *  hadn't finished aborting — she stopped, then carried on where she left
+   *  off. "Stop" has to mean stop. */
+  private stopped = false;
 
   private textBuffer = '';
   private pending: Chunk[] = [];
@@ -159,11 +167,17 @@ class Speaker {
       this.ctx = new AudioContext();
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 512;
-      this.analyser.connect(this.ctx.destination);
+      // The duck gain sits AFTER the analyser on purpose: level() and the orb
+      // keep reading her true energy, so she still looks like she is speaking
+      // at the moment you talk over her — only the loudspeaker gets quieter.
+      this.gain = this.ctx.createGain();
+      this.analyser.connect(this.gain);
+      this.gain.connect(this.ctx.destination);
       this.levelBuf = new Float32Array(this.analyser.fftSize);
     }
     void this.ctx.resume();
     this.enabled = true;
+    this.stopped = false;
   }
 
   disable() {
@@ -188,9 +202,27 @@ class Speaker {
     }
   }
 
-  /** Interrupt: stop speaking and drop everything queued or in flight. */
+  /** Duck the output while someone is talking over her — the affordance that
+   *  says "heard you" before anything else can. −18 dB, not mute: it has to be
+   *  undoable without a gap, because most trips are her own voice leaking into
+   *  an open mic. Self-correcting — if the speech doesn't sustain, the caller
+   *  un-ducks and she was never actually interrupted. */
+  duck(on: boolean) {
+    if (!this.ctx || !this.gain) return;
+    this.gain.gain.setTargetAtTime(on ? 0.13 : 1, this.ctx.currentTime, 0.05);
+  }
+
+  /** Interrupt: stop speaking and drop everything queued or in flight.
+   *  TERMINAL — feed() and flush() do nothing until the next enable(). */
   cancel() {
     this.generation++;
+    this.stopped = true;
+    // leave the output at full volume for whatever speaks next: a barge-in
+    // ducks first and cancels a moment later, and the duck must not outlive it
+    if (this.ctx && this.gain) {
+      this.gain.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.gain.gain.setValueAtTime(1, this.ctx.currentTime);
+    }
     this.textBuffer = '';
     this.pending = [];
     this.leadGap = 0;
@@ -211,14 +243,14 @@ class Speaker {
 
   /** Feed a streaming text delta; speaks as sentences complete. */
   feed(delta: string) {
-    if (!this.enabled) return;
+    if (!this.enabled || this.stopped) return;
     this.textBuffer += delta;
     this.drain(false);
   }
 
   /** The stream ended — speak whatever remains. */
   flush() {
-    if (!this.enabled) return;
+    if (!this.enabled || this.stopped) return;
     this.drain(true);
   }
 

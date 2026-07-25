@@ -37,10 +37,30 @@ const MEL_MAX = 200;     // rolling mel-frame cap
 const PEAK_FLOOR = 0.02;
 const PEAK_QUIET_MS = 700;
 
+// Phase 5a: a short rolling window of what the mic just heard, so a wake
+// attempt that turns out to be worth learning from has audio to learn from.
+// It is a RING that is overwritten continuously and never written to disk on
+// its own — a clip only leaves this module when something labels it, and
+// only when the operator has turned learning on.
+const RING_SECS = 3;
+const RING_SR = 16000;
+
+export interface WakeCapture {
+  kind: 'fire' | 'near';
+  score: number;
+  threshold: number;
+  audio: Float32Array;      // ~3 s ending at the moment of the peak
+}
+
 export interface WakeOptions {
   model?: string;            // wake-phrase key (see wakeCatalog); default hey_jarvis
   threshold?: number;        // 0..1 detection threshold (tune live)
   onWake: () => void;
+  /** voice.wake_learning. Off means no ring is even allocated. */
+  capture?: boolean;
+  onCapture?: (c: WakeCapture) => void;
+  /** voice.wake_mic_processing, stamped onto logged scores (phase 5b). */
+  mic?: string;
 }
 
 export class WakeWord {
@@ -69,21 +89,62 @@ export class WakeWord {
   private peakFired = false;
   private peakQuietAt = 0;
 
+  /** which phrase model is loaded — rides along on every stored clip, so a
+   *  training set never mixes "hey nova" with "hey jarvis" attempts */
+  phrase = DEFAULT_WAKE;
+  /** voice.wake_mic_processing at the time — stamped on every logged score */
+  private micMode = 'browser';
+  private capture = false;
+  private onCapture?: (c: WakeCapture) => void;
+  private ring: Float32Array | null = null;
+  private ringAt = 0;
+  private fireAudio: Float32Array | null = null;
+
   private constructor(opts: WakeOptions) {
     this.threshold = opts.threshold ?? 0.5;
     this.onWake = opts.onWake;
+    this.capture = !!opts.capture;
+    this.onCapture = opts.onCapture;
+    if (opts.mic) this.micMode = opts.mic;
   }
 
   /** Retune a RUNNING detector. Without this, `voice.wake_threshold` changes
    *  do nothing until wake is toggled off and on (the instance is reused at
    *  the ChatPanel call site), which silently invalidates any measurement of
    *  a threshold change. */
-  setTuning(opts: { threshold?: number }): void {
+  setTuning(opts: { threshold?: number; capture?: boolean; mic?: string }): void {
     if (typeof opts.threshold === 'number') this.threshold = opts.threshold;
+    if (opts.mic) this.micMode = opts.mic;
+    if (typeof opts.capture === 'boolean') {
+      this.capture = opts.capture;
+      // turning it off drops the buffered audio immediately — "off" should
+      // not mean "off from the next session"
+      if (!opts.capture) { this.ring = null; this.fireAudio = null; }
+    }
+  }
+
+  private pushRing(block: Float32Array): void {
+    if (!this.capture) return;
+    if (!this.ring) { this.ring = new Float32Array(RING_SECS * RING_SR); this.ringAt = 0; }
+    const ring = this.ring;
+    for (let i = 0; i < block.length; i++) {
+      ring[this.ringAt] = block[i];
+      this.ringAt = (this.ringAt + 1) % ring.length;
+    }
+  }
+
+  /** The last RING_SECS of audio, oldest first. */
+  private snapshot(): Float32Array | null {
+    if (!this.ring) return null;
+    const out = new Float32Array(this.ring.length);
+    out.set(this.ring.subarray(this.ringAt));
+    out.set(this.ring.subarray(0, this.ringAt), this.ring.length - this.ringAt);
+    return out;
   }
 
   static async create(opts: WakeOptions): Promise<WakeWord> {
     const w = new WakeWord(opts);
+    w.phrase = opts.model ?? DEFAULT_WAKE;
     const model = WAKE_CATALOG[opts.model ?? DEFAULT_WAKE] ?? WAKE_CATALOG[DEFAULT_WAKE];
     const opt: ort.InferenceSession.SessionOptions = { executionProviders: ['wasm'] };
     w.mel = await ort.InferenceSession.create('/wake/melspectrogram.onnx', opt);
@@ -104,6 +165,7 @@ export class WakeWord {
   async start(): Promise<void> {
     this.acc = []; this.raw = []; this.cooldownUntil = 0;
     this.peakMax = 0; this.peakFired = false; this.peakQuietAt = 0;
+    this.ring = null; this.ringAt = 0; this.fireAudio = null;   // never carry old audio in
     await this.primeBuffers();
     await micBroker.acquire();
     this.unsubscribe = micBroker.subscribe((frame) => this.onAudio(frame));
@@ -175,19 +237,32 @@ export class WakeWord {
 
   private closePeak(): void {
     if (this.peakMax > 0) {
+      const kind = this.peakFired ? 'fire' : 'near';
       recordWakeEvent({
         at: Date.now(),
         score: this.peakMax,
-        kind: this.peakFired ? 'fire' : 'near',
+        kind,
         threshold: this.threshold,
+        mic: this.micMode,
       });
+      if (this.capture && this.onCapture) {
+        // For a fire, the audio was snapshotted AT the fire — by the time the
+        // peak closes (700 ms of quiet later) the ring has already started
+        // filling with the command that followed the phrase.
+        const audio = this.fireAudio ?? this.snapshot();
+        if (audio) {
+          this.onCapture({ kind, score: this.peakMax, threshold: this.threshold, audio });
+        }
+      }
     }
     this.peakMax = 0;
     this.peakFired = false;
     this.peakQuietAt = 0;
+    this.fireAudio = null;
   }
 
   private onAudio(block: Float32Array): void {
+    this.pushRing(block);
     for (let i = 0; i < block.length; i++) this.acc.push(block[i] * 32767);   // int16-valued
     if (!this.busy && this.acc.length >= CHUNK) void this.pump();
   }
@@ -214,8 +289,17 @@ export class WakeWord {
             this.dbgAt = performance.now();
           }
         }
-        const fired = s >= this.threshold && performance.now() >= this.cooldownUntil;
-        this.trackPeak(s, fired);
+        // Crossing the bar and ACTING on it are different things: the 2 s
+        // debounce suppresses the second and third chunk of the same phrase.
+        // The log records the crossing, because a peak that scored 1.0 and was
+        // merely debounced is not a near miss — filing it as one overstates
+        // how badly the wake word is doing and, now that clips are kept, would
+        // teach a retrained model that its own best detections were failures.
+        const crossed = s >= this.threshold;
+        const fired = crossed && performance.now() >= this.cooldownUntil;
+        // once per peak — the phrase, before the command that follows it
+        if (crossed && this.capture && !this.fireAudio) this.fireAudio = this.snapshot();
+        this.trackPeak(s, crossed);
         if (fired) {
           this.cooldownUntil = performance.now() + 2000;   // debounce
           this.onWake();

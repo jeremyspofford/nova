@@ -43,6 +43,18 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   autoGainControl: true,
 };
 
+/** voice.wake_mic_processing = 'raw' (phase 5b). Chrome's noise suppression
+ *  is tuned for adult speech and attacks a high-F0 signal, and none of that
+ *  processing exists in the chain the wake model was trained on
+ *  (tools/wake-training/featurize.py). It is a plausible one-line fix for the
+ *  child problem — and a real change to what the sensitivity setting means,
+ *  which is why it is a setting with a warning and not a silent default. */
+const RAW_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
 const TAP_WORKLET = `
 class WakeTap extends AudioWorkletProcessor {
   process(inputs) {
@@ -69,9 +81,20 @@ class MicBroker {
   /** Serialises concurrent acquires — wake and VAD can both arrive within a
    *  frame of each other, and two getUserMedia calls would defeat the point. */
   private opening: Promise<void> | null = null;
+  private processing: 'browser' | 'raw' = 'browser';
 
   get open(): boolean {
     return !!this.stream?.active;
+  }
+
+  /** Choose what the browser does to the signal before we see it. Takes
+   *  effect on the next open, and forces one if the device is already up —
+   *  constraints are fixed at getUserMedia time, so a setting that only
+   *  applied after a page reload would look like it did nothing. */
+  setProcessing(mode: 'browser' | 'raw'): void {
+    if (mode === this.processing) return;
+    this.processing = mode;
+    if (this.open) void this.dispose();
   }
 
   /** Take a reference to the shared device, opening it if needed. Prompts for
@@ -91,7 +114,8 @@ class MicBroker {
 
   private async doOpen(): Promise<void> {
     if (!this.open) {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: this.processing === 'raw' ? RAW_CONSTRAINTS : AUDIO_CONSTRAINTS });
       // The OS can revoke the device (unplugged, taken by another app). Tell
       // consumers rather than silently going deaf — a conversation mode that
       // looks live but hears nothing is worse than one that stops.

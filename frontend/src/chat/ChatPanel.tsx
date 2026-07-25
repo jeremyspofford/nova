@@ -330,6 +330,14 @@ interface ChatPanelProps {
 const MIN_W = 320;
 const MAX_W = 760;
 
+// Barge-in (talking over her): duck the moment a voice is heard, cut the turn
+// only once that voice has HELD — vad.ts's onSustained, which reads frame
+// probabilities live (see the note there for why a timer cannot do this).
+// A hard ceiling so no path can leave the output quietly ducked forever;
+// comfortably longer than the 500 ms sustain, so a real interruption always
+// resolves before it.
+const DUCK_CEILING_MS = 2500;
+
 export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsOpen,
                            discussPayload, onDiscussHandled }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
@@ -423,6 +431,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const wakeOn = useRef(false);
   const wakeThreshold = useRef(0.5);
   const wakeWord = useRef(DEFAULT_WAKE);
+  const wakeLearning = useRef(false);          // voice.wake_learning
+  const wakeMic = useRef<'browser' | 'raw'>('browser');   // voice.wake_mic_processing
+  const lastSpeakerName = useRef('');          // who transcribe matched, for clip labels
   const followupS = useRef(8);        // wake mode: 0 = off
   const inFollowup = useRef(false);   // current VAD arm is a follow-up window
   // ── conversation mode: tap in once, the mic stays hot turn after turn ──
@@ -450,6 +461,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (typeof fw === 'number') followupS.current = fw;
       const ci = defs.find(d => d.key === 'voice.conversation_idle_s')?.value;
       if (typeof ci === 'number') idleS.current = ci;
+      applyWakeLearning(defs.find(d => d.key === 'voice.wake_learning')?.value);
+      applyWakeMic(defs.find(d => d.key === 'voice.wake_mic_processing')?.value);
     }).catch(() => {});
     const onChange = (e: Event) => {
       const { key, value } = (e as CustomEvent).detail as { key: string; value: unknown };
@@ -464,6 +477,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (key === 'voice.wake_word' && typeof value === 'string' && value) wakeWord.current = value;
       if (key === 'voice.followup_window_s' && typeof value === 'number') followupS.current = value;
       if (key === 'voice.conversation_idle_s' && typeof value === 'number') idleS.current = value;
+      if (key === 'voice.wake_learning') applyWakeLearning(value);
+      if (key === 'voice.wake_mic_processing') applyWakeMic(value);
     };
     window.addEventListener('nova:setting-changed', onChange);
     return () => window.removeEventListener('nova:setting-changed', onChange);
@@ -501,6 +516,30 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     };
   }, []);
 
+  // ── wake-word learning (phase 5a/5b) ───────────────────────────────────
+  // Both settings have to reach a RUNNING detector: turning learning off must
+  // stop it now and drop what is held, not at the next page load, and the mic
+  // mode has to force a device re-open because constraints are fixed at
+  // getUserMedia time. Loaded lazily, like the rest of the voice stack.
+  const wakeClipsMod = () => import('../voice/wakeClips');
+
+  function applyWakeLearning(value: unknown) {
+    if (typeof value !== 'boolean') return;
+    wakeLearning.current = value;
+    wakeRef.current?.setTuning({ capture: value });
+    void wakeClipsMod().then(m =>
+      m.setWakeLearning(value, { phrase: wakeWord.current, mic: wakeMic.current }));
+  }
+
+  function applyWakeMic(value: unknown) {
+    if (value !== 'browser' && value !== 'raw') return;
+    wakeMic.current = value;
+    wakeRef.current?.setTuning({ mic: value });
+    void import('../voice/micBroker').then(m => m.micBroker.setProcessing(value));
+    void wakeClipsMod().then(m =>
+      m.setWakeLearning(wakeLearning.current, { mic: value }));
+  }
+
   function toggleSpeech() {
     const next = !speech;
     setSpeech(next);
@@ -514,14 +553,20 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // one utterance -> text + who was speaking; the speaker echo rides the
   // chat request exactly like `source` does (personalization, never auth —
   // the server only ever narrows on it)
-  async function submitUtterance(blob: Blob) {
+  // `front`: this utterance interrupted her, so it goes to the FRONT of the
+  // queue — you cut her off to say it, waiting behind three typed follow-ups
+  // would be the wrong answer to the wrong question.
+  async function submitUtterance(blob: Blob, opts?: { front?: boolean }) {
     setMicState('transcribing');
     try {
       const { text, speaker: who, speaker_active } = await transcribeSpeech(blob);
       setMicState('idle');
+      // a wake clip is far more useful tagged with WHO said it — the whole
+      // point is that the model has never heard this particular child
+      lastSpeakerName.current = who ? who.name : '';
       if (text.trim()) {
         await send({
-          text, source: 'voice', speak: true,
+          text, source: 'voice', speak: true, front: opts?.front,
           speakerId: who ? who.profile_id : (speaker_active ? 'unknown' : undefined),
           speakerTag: who && who.role !== 'operator'
             ? { name: who.name, role: who.role }
@@ -544,7 +589,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // afterSubmit(captured): true = an utterance was captured and submitted,
   // false = timeout/failure — conversation mode branches on it.
   async function startVadCapture(afterSubmit?: (captured: boolean) => void | Promise<void>,
-                                 armTimeoutMs?: number) {
+                                 armTimeoutMs?: number,
+                                 opts?: { barged?: boolean }) {
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
       const { TapVad } = await import('../voice/vad');
@@ -584,17 +630,61 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           armTimer = undefined;
           if (tapVad.current !== v) return;             // already captured/cancelled
           if (speaking) { scheduleArmTimer(); return; } // mid-utterance: give it longer
+          unduck();
           await v.disarm();
           tapVad.current = null;
           emitListening(false);
           await afterSubmit?.(false);                   // back to wake listening
         }, remaining);
       };
+      // ── talking over her ────────────────────────────────────────────────
+      // Two separate moments, deliberately. Her volume drops the INSTANT the
+      // detector hears a voice — that is the affordance, and it has to be
+      // immediate to read as "she heard me". Cutting the turn short waits for
+      // the speech to SUSTAIN, because an open mic also hears her own output:
+      // a false cut mid-answer is far worse than a 500 ms late one. If it was
+      // echo or a cough, the VAD misfires, we un-duck, nothing was captured,
+      // and she never noticed being doubted.
+      let barged = opts?.barged ?? false;
+      let ducking = false;
+      let duckCeiling: number | undefined;
+      const unduck = () => {
+        if (duckCeiling) { clearTimeout(duckCeiling); duckCeiling = undefined; }
+        if (!ducking) return;
+        ducking = false;
+        speaker.duck(false);
+      };
+      // heard something while she is talking: get out of the way immediately
+      const duckForSpeech = () => {
+        if (barged || ducking || !speaker.speaking) return;
+        ducking = true;
+        speaker.duck(true);
+        // never leave the output ducked if neither outcome ever arrives
+        duckCeiling = window.setTimeout(() => { duckCeiling = undefined; unduck(); },
+                                        DUCK_CEILING_MS);
+      };
+      // …and only cut her off once the voice has actually HELD (vad.ts's
+      // onSustained, measured from frame probabilities). Deciding this from a
+      // timer after onSpeechStart does not work: the misfire that would have
+      // vetoed it arrives a full redemption window later, so a 180 ms cough
+      // read as sustained speech and cut her off mid-answer.
+      const confirmBargeIn = () => {
+        if (barged || !ducking) return;   // nothing was talking over
+        barged = true;
+        speaker.cancel();            // terminal: the turn's flush() can't revive it
+        abortRef.current?.abort();   // and stop generating the rest of what she was saying
+        unduck();                    // she is silent now — hand the volume back
+      };
       await v.arm({
-        onSpeechStart: () => { speaking = true; clearArmTimer(); setMicState('capturing'); },
-        onMisfire: () => { speaking = false; setMicState('armed'); scheduleArmTimer(); },
+        onSpeechStart: () => {
+          speaking = true; clearArmTimer(); setMicState('capturing');
+          duckForSpeech();
+        },
+        onSustained: confirmBargeIn,
+        onMisfire: () => { speaking = false; unduck(); setMicState('armed'); scheduleArmTimer(); },
         onSpeechEnd: (wav) => {
           speaking = false;
+          if (!barged) unduck();
           clearArmTimer();
           // defer out of the VAD's own callback stack before tearing it down —
           // calling destroy() synchronously from within onSpeechEnd wedges the
@@ -604,7 +694,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             await v.disarm();
             tapVad.current = null;
             emitListening(false);
-            await submitUtterance(wav);
+            await submitUtterance(wav, { front: barged });
             await afterSubmit?.(true);
           }, 0);
         },
@@ -634,6 +724,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     }
     speaker.enable();               // reserve the audio context in the gesture
     if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    // reaching for the button while wake listening is on is the honest form
+    // of "it didn't hear me" — keep whatever nearly fired just before it
+    void wakeClipsMod().then(m => m.wakeGaveUp());
     await startVadCapture();
   }
 
@@ -656,6 +749,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // window: just talk, no wake phrase. Silence closes it back to wake-only.
   async function voiceTurnDone(captured: boolean) {
     inFollowup.current = false;
+    // label the wake fire by what actually happened: a turn was taken, or the
+    // arm timed out with nobody talking. No-op when no fire is pending (this
+    // also runs at the end of follow-up windows).
+    void wakeClipsMod().then(m => m.resolveWakeFire(captured, lastSpeakerName.current));
     if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
     if (!captured || followupS.current <= 0) { await resumeWake(); return; }
     await resumeWake();                              // barge-in while she talks
@@ -672,7 +769,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   async function onWake() {
     if (Date.now() < wakeIgnoreUntil.current) return;   // still the last fire
+    // Saying the wake word over her IS a barge-in, and it needs both halves:
+    // silencing the audio while the turn kept generating meant she went quiet
+    // but you still waited out the whole answer before yours was heard.
+    const interrupting = speaker.speaking || !!abortRef.current;
     speaker.cancel();                    // barge-in: stop any current reply
+    abortRef.current?.abort();           // …and stop producing the rest of it
     // NOT stopping wake here (phase 2): wake and the VAD share one device via
     // micBroker, so stopping would release it and pay the open cost again on
     // the very next turn. Wake fires during capture are ignored by phase.
@@ -680,7 +782,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     inFollowup.current = false;
     // capture the command, then hand off to conversation mode; if nothing is
     // said within 10 s (false fire), give up and resume wake listening
-    await startVadCapture(voiceTurnDone, 10_000);
+    await startVadCapture(voiceTurnDone, 10_000, { barged: interrupting });
   }
 
   async function wakeToggle() {
@@ -702,7 +804,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     try {
       const { WakeWord } = await import('../voice/wake');
       const w = wakeRef.current ?? await WakeWord.create({
-        model: wakeWord.current, threshold: wakeThreshold.current, onWake });
+        model: wakeWord.current, threshold: wakeThreshold.current, onWake,
+        capture: wakeLearning.current, mic: wakeMic.current,
+        onCapture: c => { void wakeClipsMod().then(m => m.onWakeCapture(c)); } });
       wakeRef.current = w;
       wakeOn.current = true;
       await w.start();
@@ -745,6 +849,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   async function openConversation() {
     speaker.enable();               // inside the tap gesture — autoplay policy
     if (!speech) { setSpeech(true); localStorage.setItem('nova.speech', '1'); }
+    void wakeClipsMod().then(m => m.wakeGaveUp());   // see tapToggle
     conversationRef.current = true;
     setConversationOpen(true);
     // take the mic over from any other capture mode
@@ -992,7 +1097,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     window.dispatchEvent(new CustomEvent('nova:chat-activity', { detail: { active, kind } }));
 
   async function send(opts?: { text?: string; source?: string; speak?: boolean;
-                               speakerId?: string;
+                               speakerId?: string; front?: boolean;
                                speakerTag?: { name: string; role: string } }) {
     const message = (opts?.text ?? input).trim();
     // composer sends carry the picked attachments; voice/queued turns don't
@@ -1006,7 +1111,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       // the turn that requested it. The operator saw their word or their
       // click accepted and nothing happen. Queue it instead; the drain
       // effect sends it whole the moment the turn ends.
-      if (opts?.text) setQueue(q => [...q, { ...opts, text: opts.text as string }]);
+      if (opts?.text) {
+        const turn: QueuedTurn = { ...opts, text: opts.text };
+        // a barge-in goes first: you cut her off to say it
+        setQueue(q => (opts.front ? [turn, ...q] : [...q, turn]));
+      }
       return;
     }
     if (opts?.text === undefined) { setInput(''); setPending([]); }

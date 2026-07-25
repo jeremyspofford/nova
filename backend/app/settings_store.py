@@ -320,6 +320,28 @@ SETTING_DEFS: list[dict] = [
      "label": "Wake word sensitivity",
      "description": ("Detection threshold for the wake word (lower = more "
                      "sensitive / more false triggers). Tune it to your voice.")},
+    {"key": "voice.wake_learning", "type": "boolean", "default": False,
+     "section": "Voice",
+     "label": "Learn the wake word from use",
+     "description": ("Keep short audio clips of wake attempts, labelled by "
+                     "what happened next — it fired and you spoke, it fired "
+                     "and nobody did, or it nearly fired and you had to say "
+                     "it again. That last one is what 'I have to say it three "
+                     "times' looks like in data, and it is the only way to "
+                     "capture a child's experience without asking the child "
+                     "to do anything. Off by default. Clips stay on this "
+                     "machine in data/wake-training/, and every one of them "
+                     "can be played and deleted below.")},
+    {"key": "voice.wake_mic_processing", "type": "enum", "default": "browser",
+     "options": ["browser", "raw"], "section": "Voice",
+     "label": "Wake word mic processing",
+     "description": ("'browser' lets Chrome apply noise suppression and "
+                     "automatic gain — tuned for adult speech, and it attacks "
+                     "the high-pitched signal a child produces. 'raw' turns "
+                     "both off, which is a plausible one-line fix for the "
+                     "kid problem AND a change to what the sensitivity "
+                     "setting means, so switch it deliberately and watch the "
+                     "wake scores below.")},
     {"key": "voice.followup_window_s", "type": "number", "default": 8,
      "min": 0, "max": 20, "section": "Voice",
      "label": "Follow-up window (seconds)",

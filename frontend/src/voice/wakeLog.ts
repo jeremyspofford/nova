@@ -19,6 +19,11 @@ export interface WakeEvent {
   score: number;           // peak score of the attempt
   kind: 'fire' | 'near';   // did it cross the threshold?
   threshold: number;       // what the bar was at the time
+  /** voice.wake_mic_processing in effect. Scores are only comparable within
+   *  one mic chain — noise suppression and AGC change the signal the model
+   *  sees, so without this the 'browser' vs 'raw' comparison phase 5b is for
+   *  would be averaging two different experiments together. */
+  mic?: string;
 }
 
 const KEY = 'nova.wakeLog';
@@ -85,4 +90,21 @@ export function wakeSummary(sinceMs = 24 * 60 * 60 * 1000) {
     bestNearMiss: best,
     total: recent.length,
   };
+}
+
+/** Per mic-processing mode, so 'browser' vs 'raw' can actually be compared
+ *  (phase 5b) instead of argued about. Only modes with events appear. */
+export function wakeByMic(sinceMs = 14 * 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - sinceMs;
+  const out = new Map<string, { fires: number; near: number; bestNear: number; peak: number }>();
+  for (const e of events) {
+    if (e.at < cutoff) continue;
+    const key = e.mic || 'browser';
+    const row = out.get(key) ?? { fires: 0, near: 0, bestNear: 0, peak: 0 };
+    if (e.kind === 'fire') row.fires++;
+    else { row.near++; row.bestNear = Math.max(row.bestNear, e.score); }
+    row.peak = Math.max(row.peak, e.score);
+    out.set(key, row);
+  }
+  return [...out.entries()].map(([mic, v]) => ({ mic, ...v }));
 }

@@ -2,9 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import {
   getVoiceHealth, synthesizeSpeech,
   UserProfile, listProfiles, createProfile, deleteProfile, enrollVoiceClip,
+  WakeClipListing, listWakeClips, wakeClipAudio, deleteWakeClip, deleteAllWakeClips,
 } from '../../api';
 import { Mic } from '../../voice/mic';
 import { WAKE_CATALOG } from '../../voice/wakeCatalog';
+import { wakeSummary, wakeByMic, clearWakeLog, subscribeWakeLog } from '../../voice/wakeLog';
 
 /** Household voices — who Nova can recognize when someone speaks
  *  (docs/plans/speaker-id.md). Enrollment records a few short clips; each
@@ -135,6 +137,182 @@ export function HouseholdVoices() {
         </>
       )}
       {msg && <div className="text-xs text-teal-400">{msg}</div>}
+    </div>
+  );
+}
+
+const LABEL_TEXT: Record<string, string> = {
+  positive: 'heard you',
+  false_fire: 'fired at nothing',
+  near_miss: 'nearly heard you',
+};
+
+const ago = (secs: number) => {
+  const m = Math.round((Date.now() / 1000 - secs) / 60);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+};
+
+/** Wake-word learning — the evidence trail and the clips it keeps.
+ *
+ *  Two halves that only mean something together. The SCORES (kept in this
+ *  browser, no audio, always on) say how close each attempt came; the CLIPS
+ *  (opt-in, on this machine) are the audio behind the labelled ones. Near
+ *  misses are the number to watch: they are the attempts that came close and
+ *  were ignored — "I had to say it three times" as a number.
+ *
+ *  The scores half also closes a real gap: the log had been recording for a
+ *  release with nothing anywhere that could read it back or clear it, which
+ *  is not something to ask an operator to consent to.
+ */
+export function WakeLearning() {
+  const [listing, setListing] = useState<WakeClipListing | null>(null);
+  const [sum, setSum] = useState(() => wakeSummary());
+  const [byMic, setByMic] = useState(() => wakeByMic());
+  const [playing, setPlaying] = useState<string | null>(null);
+  const [msg, setMsg] = useState('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const refresh = async () => {
+    try { setListing(await listWakeClips()); } catch { /* backend offline */ }
+  };
+  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    const resync = () => { setSum(wakeSummary()); setByMic(wakeByMic()); };
+    resync();
+    return subscribeWakeLog(resync);
+  }, []);
+  // object URLs are revoked when playback ends or another clip starts
+  useEffect(() => () => { audioRef.current?.pause(); }, []);
+
+  const play = async (id: string) => {
+    setMsg('');
+    try {
+      if (audioRef.current) { audioRef.current.pause(); URL.revokeObjectURL(audioRef.current.src); }
+      const url = await wakeClipAudio(id);
+      const el = new Audio(url);
+      audioRef.current = el;
+      setPlaying(id);
+      el.onended = () => { setPlaying(null); URL.revokeObjectURL(url); };
+      await el.play();
+    } catch (e) { setPlaying(null); setMsg(String(e)); }
+  };
+
+  const remove = async (id: string) => {
+    try { await deleteWakeClip(id); await refresh(); }
+    catch (e) { setMsg(String(e)); }
+  };
+
+  const removeAll = async () => {
+    if (!listing?.total) return;
+    if (!window.confirm(
+      `Delete all ${listing.total} wake clips? The recordings go for good, and `
+      + `with them anything a retrained wake word could have learned from them.`)) return;
+    try { await deleteAllWakeClips(); await refresh(); }
+    catch (e) { setMsg(String(e)); }
+  };
+
+  const counts = listing?.counts ?? {};
+  return (
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40 px-3 py-2.5 space-y-2">
+      <div>
+        <div className="text-sm text-stone-200">Wake word evidence</div>
+        <div className="text-xs text-stone-500">
+          How the wake word is actually doing, from ordinary use. Near misses
+          are attempts that came close and were ignored — the number that
+          should fall as it learns your household.
+        </div>
+      </div>
+
+      <div className="text-xs text-stone-400 border-t border-stone-800 pt-2">
+        Last 24 hours: <span className="text-stone-200">{sum.fires}</span> woke her,{' '}
+        <span className={sum.nearMisses ? 'text-amber-400' : 'text-stone-200'}>
+          {sum.nearMisses}</span> near {sum.nearMisses === 1 ? 'miss' : 'misses'}
+        {sum.bestNearMiss > 0 && (
+          <> · closest {sum.bestNearMiss.toFixed(2)}</>
+        )}
+        {sum.total === 0 && <span className="text-stone-600"> — nothing heard yet</span>}
+        {sum.total > 0 && (
+          <button onClick={() => { clearWakeLog(); }}
+            className="ml-2 text-stone-600 hover:text-red-400">clear</button>
+        )}
+      </div>
+
+      {byMic.length > 1 && (
+        <div className="text-xs text-stone-500 border-t border-stone-800 pt-2 space-y-0.5">
+          <div className="text-stone-400">By mic processing (two weeks)</div>
+          {byMic.map(r => (
+            <div key={r.mic}>
+              <span className="text-stone-300">{r.mic}</span>: {r.fires} fired,{' '}
+              {r.near} near, best score {r.peak.toFixed(2)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="border-t border-stone-800 pt-2 space-y-1.5">
+        {!listing ? (
+          <div className="text-xs text-stone-500">Loading clips…</div>
+        ) : !listing.enabled && listing.total === 0 ? (
+          <div className="text-xs text-stone-500">
+            Learning is off, so no audio is kept. Turn on “Learn the wake word
+            from use” below and Nova will start keeping the few seconds around
+            each labelled attempt — here, on this machine, playable and
+            deletable.
+          </div>
+        ) : (
+          <>
+            <div className="text-xs text-stone-400 flex items-center justify-between gap-2">
+              <span>
+                {listing.total} clip{listing.total === 1 ? '' : 's'}
+                {listing.total > 0 && (
+                  <span className="text-stone-500">
+                    {' '}· {counts.positive ?? 0} good, {counts.near_miss ?? 0} near,{' '}
+                    {counts.false_fire ?? 0} false · {Math.round(listing.bytes / 1024)} KB
+                  </span>
+                )}
+              </span>
+              {listing.total > 0 && (
+                <button onClick={removeAll} className="shrink-0 text-stone-600 hover:text-red-400">
+                  delete all
+                </button>
+              )}
+            </div>
+            {listing.total === 0 && (
+              <div className="text-xs text-stone-500">
+                Nothing captured yet — clips appear as the wake word is used.
+              </div>
+            )}
+            {listing.clips.slice(0, 12).map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-2 text-xs">
+                <span className="min-w-0 truncate text-stone-300">
+                  <span className={c.label === 'positive' ? 'text-teal-500'
+                    : c.label === 'near_miss' ? 'text-amber-500' : 'text-stone-500'}>
+                    {LABEL_TEXT[c.label] ?? c.label}
+                  </span>
+                  <span className="text-stone-500">
+                    {' '}· {ago(c.at)}
+                    {typeof c.score === 'number' && <> · score {c.score.toFixed(2)}</>}
+                    {c.speaker && <> · {c.speaker}</>}
+                  </span>
+                </span>
+                <span className="shrink-0 flex items-center gap-2">
+                  <button onClick={() => play(c.id)}
+                    className={`px-2 py-0.5 rounded border border-stone-700 hover:border-teal-600 ${
+                      playing === c.id ? 'text-teal-400' : 'text-stone-300'}`}>
+                    {playing === c.id ? 'playing' : 'play'}
+                  </button>
+                  <button onClick={() => remove(c.id)}
+                    className="text-stone-600 hover:text-red-400">delete</button>
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+      {msg && <div className="text-xs text-amber-400">{msg}</div>}
     </div>
   );
 }
