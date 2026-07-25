@@ -32,7 +32,20 @@ export interface VadCallbacks {
   onSpeechStart: () => void;
   onSpeechEnd: (wav: Blob) => void;
   onMisfire: () => void;   // spoke too briefly — nothing to send
+  /** Fired once per utterance, the moment speech has been continuously
+   *  present for SUSTAIN_MS. Needed because the start/end/misfire callbacks
+   *  CANNOT answer "are they still talking?": the library only reports the
+   *  end of an utterance after redemptionMs (1100 ms) of silence, so half a
+   *  second after onSpeechStart every 180 ms blip still looks like ongoing
+   *  speech. Measured: a cough confirmed as a barge-in and cut her off. This
+   *  reads the per-frame speech probability instead, which is live. */
+  onSustained?: () => void;
 }
+
+// silero v5 runs 512-sample frames at 16 kHz
+const FRAME_MS = 32;
+const SUSTAIN_MS = 500;    // how long a voice must hold to count as "talking to her"
+const SUSTAIN_GRACE = 3;   // frames below threshold tolerated between words (~96 ms)
 
 export class TapVad {
   private vad: MicVAD | null = null;
@@ -107,6 +120,11 @@ export class TapVad {
   private async build(dbg: boolean): Promise<MicVAD> {
     const t0 = performance.now();
     let speechAt = 0;
+    // sustained-speech tracking (see onSustained)
+    let voiced = 0;      // consecutive-ish voiced frames
+    let quiet = 0;       // voiceless frames since the last voiced one
+    let sustained = false;
+    const resetSustain = () => { voiced = 0; quiet = 0; sustained = false; };
     const vad = await MicVAD.new({
       // self-hosted assets — never the library's CDN defaults
       baseAssetPath: '/vad/',
@@ -127,6 +145,19 @@ export class TapVad {
       minSpeechMs: 250,
       redemptionMs: this.silenceMs,
       preSpeechPadMs: 400,      // a touch more, so the wake→VAD handoff keeps your first word
+      onFrameProcessed: (probs) => {
+        if (probs.isSpeech >= 0.35) {          // == positiveSpeechThreshold
+          voiced++; quiet = 0;
+          if (!sustained && voiced * FRAME_MS >= SUSTAIN_MS) {
+            sustained = true;
+            if (dbg) console.debug(`[vad] SUSTAINED (${voiced} voiced frames)`);
+            this.cb?.onSustained?.();
+          }
+        } else if (++quiet > SUSTAIN_GRACE) {
+          // a gap between words is not the end of speech; a real pause is
+          voiced = 0; sustained = false;
+        }
+      },
       onSpeechStart: () => {
         speechAt = performance.now();
         if (dbg) console.debug('[vad] speech start');
@@ -134,9 +165,11 @@ export class TapVad {
       },
       onVADMisfire: () => {
         if (dbg) console.debug('[vad] MISFIRE (spoke < minSpeechMs) — back to armed');
+        resetSustain();
         this.cb?.onMisfire();
       },
       onSpeechEnd: (audio: Float32Array) => {
+        resetSustain();
         const secs = audio.length / 16000;
         let sum = 0;
         for (let i = 0; i < audio.length; i++) sum += audio[i] * audio[i];
