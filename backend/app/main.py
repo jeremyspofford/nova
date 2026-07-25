@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import (db, ingest_backfill, ingest_worker, leader, model_warmer,
-                 rules, scheduler, settings_store)
+from app import (db, http as http_pool, ingest_backfill, ingest_worker,
+                 leader, model_warmer, rules, scheduler, settings_store)
 from app.config import settings
 from app.llm import providers
 from app.memory.memory import memory
@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await leader.stop()   # releases the advisory lock promptly on clean exit
+    await http_pool.aclose()
     await db.close_pool()
 
 
