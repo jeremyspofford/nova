@@ -1493,7 +1493,6 @@ async def ingest_summary_endpoint():
 async def ingest_jobs_endpoint(status: str | None = None, limit: int = 100):
     """Full job list, optionally filtered by status (queued|running|done|
     skipped|failed)."""
-    from app import ingest_jobs
     limit = max(1, min(500, limit))
     async with db.acquire() as conn:
         if status:

@@ -1045,8 +1045,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             except json.JSONDecodeError:
                 parsed.append((tc, {}, True))
 
-        # 1 = exactly the old sequential loop (the flag's default), so the
-        # revert is a settings change, not a deploy. Read per turn.
+        # Setting to 1 gives exactly the old sequential loop, so the revert
+        # is a settings change, not a deploy. Read per turn. (The DEFAULT is
+        # 3 — settings_store.SETTING_DEFS — which both this comment and the
+        # setting's own description used to call 1; the `or 1` below is only
+        # the falsy-guard, never the default.)
         concurrency = max(1, int(settings_store.get("agents.tool_concurrency") or 1))
 
         i = 0

@@ -223,6 +223,16 @@ SETTING_DEFS: list[dict] = [
                      "VRAM/disk history behind the Observability sparklines) "
                      "are kept. One row per instance per minute; pruned by "
                      "the fleet leader.")},
+    {"key": "retention.audit_days", "type": "number", "default": 30,
+     "min": 1, "max": 365, "section": "Observability",
+     "label": "Audit-row retention (days)",
+     "description": ("How long finished bookkeeping rows are kept: the tool "
+                     "activity journalled against each turn, decided consent "
+                     "cards, cleared resource alerts, and acted-on "
+                     "recommendations. Traces and resource history have their "
+                     "own settings above; these four had no prune at all, and "
+                     "tool rows alone were ~85% of the messages table. "
+                     "Conversation turns are never touched.")},
     {"key": "monitor.alerts_enabled", "type": "boolean", "default": True,
      "section": "Observability", "label": "Resource alerts",
      "description": ("Notify when a machine crosses the thresholds below or "

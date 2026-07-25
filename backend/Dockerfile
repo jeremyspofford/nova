@@ -7,5 +7,18 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e .
 
+# The application itself. It used to be absent: only pyproject.toml was
+# copied, so the image held the dependencies and none of the code, and every
+# container was really running the ./backend bind mount from docker-compose.
+# That works exactly once — on this machine. The bind mount still shadows
+# this in dev, so nothing changes day to day; the difference is that the
+# image can now stand on its own.
+COPY app ./app
+
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# No --reload here. uvicorn's reloader is a dev tool (an extra watcher
+# process, a restart on any file touch, no worker management) and it was the
+# production entrypoint because it was the only entrypoint. docker-compose
+# adds it back for the dev container, which is where it belongs.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

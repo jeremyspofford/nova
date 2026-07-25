@@ -25,13 +25,24 @@ def _refuse_split_state() -> None:
     """A secondary pointed at a central PG while keeping the default local
     memory dir is a split-brain entity — half its mind in the shared DB,
     half on a disk no other instance can see (remote-shared-state trap).
-    Refuse loudly unless the operator explicitly opts in."""
+    Refuse loudly unless the operator explicitly opts in.
+
+    Reads the HOST path, not the container one. It used to check
+    settings.okf_memory_dir, which docker-compose hardcodes to
+    /app/data/memory — one of the very strings in the default set below — so
+    with a remote DATABASE_URL this always fired, and the remedy it printed
+    ("point NOVA_MEMORY_DIR at the shared memory dir") could never clear it,
+    because NOVA_MEMORY_DIR only moves the host side of the bind mount. The
+    container path is invariant by design; the host path is the one that
+    says whether the store is actually shared, and compose already passes it
+    as NOVA_MEMORY_DIR_HOST."""
     import os
     from urllib.parse import urlparse
 
     host = (urlparse(settings.database_url).hostname or "").lower()
     local_db = host in {"postgres", "localhost", "127.0.0.1", "::1", ""}
-    default_mem = settings.okf_memory_dir.rstrip("/") in {
+    mem_dir = os.environ.get("NOVA_MEMORY_DIR_HOST") or settings.okf_memory_dir
+    default_mem = mem_dir.rstrip("/") in {
         "./data/memory", "data/memory", "/app/data/memory"}
     if not local_db and default_mem \
             and os.environ.get("NOVA_ALLOW_SPLIT_STATE") != "1":

@@ -32,7 +32,7 @@ Rails, each from the review:
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
 log = logging.getLogger(__name__)
 
