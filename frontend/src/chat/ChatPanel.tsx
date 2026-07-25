@@ -397,7 +397,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const [listenMode, setListenMode] = useState<'ptt' | 'tap' | 'wake'>('ptt');
   const mic = useRef(new Mic());
   useEffect(() => () => mic.current.dispose(), []);   // release the device on unmount
-  const tapVad = useRef<TapVad | null>(null);
+  const tapVad = useRef<TapVad | null>(null);      // armed right now
+  const vadInstance = useRef<TapVad | null>(null); // the warm model, across turns
+  // wake keeps running while we capture (shared device); ignore its fires
+  // for a moment so the word that woke us cannot immediately re-trigger
+  const wakeIgnoreUntil = useRef(0);
   const vadSilenceMs = useRef(1100);
   const wakeRef = useRef<WakeWord | null>(null);
   const wakeOn = useRef(false);
@@ -462,6 +466,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       wakeOn.current = false;
       inFollowup.current = false;
       void tapVad.current?.disarm();
+      void vadInstance.current?.dispose();
       tapVad.current = null;
       void wakeRef.current?.stop();
     };
@@ -527,7 +532,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     setMicState('arming');          // first use downloads the detector (~15 MB)
     try {
       const { TapVad } = await import('../voice/vad');
-      const v = new TapVad();
+      // ONE instance for the whole session (phase 2). Constructing per turn
+      // rebuilt the silero model and reopened the microphone every time —
+      // ~2000ms of dead mic between the wake word and anything listening.
+      // The broker holds the device; this holds the warm model.
+      if (!vadInstance.current) vadInstance.current = new TapVad();
+      const v = vadInstance.current;
       tapVad.current = v;
       let armTimer: number | undefined;
       let speaking = false;   // inside an utterance — never time out mid-sentence
@@ -537,9 +547,23 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       // timeout permanently, leaving the mic armed forever with no automatic
       // release. Harmless in an 8 s follow-up window, fatal for a mode that is
       // meant to stay open.
-      const scheduleArmTimer = () => {
+      // A DEADLINE, not a sliding window. The timer reschedules itself rather
+      // than being cleared once and forgotten — a misfire used to cancel the
+      // arm timeout permanently, leaving the mic armed forever. But
+      // rescheduling the FULL window on every misfire traded that for a
+      // slower version of the same bug: onMisfire fires for any burst under
+      // minSpeechMs, so a room with intermittent noise resets the window
+      // indefinitely and the hot mic never auto-closes — precisely the
+      // ambient-room case conversation mode is for. So the deadline is fixed
+      // when the window opens, and a misfire resumes the REMAINDER of it.
+      // Only a real utterance (a turn actually taken) earns a fresh window.
+      let armDeadline = 0;
+      const scheduleArmTimer = (fresh = false) => {
         if (!armTimeoutMs) return;
         clearArmTimer();
+        const now = Date.now();
+        if (fresh || !armDeadline) armDeadline = now + armTimeoutMs;
+        const remaining = Math.max(0, armDeadline - now);
         armTimer = window.setTimeout(async () => {
           armTimer = undefined;
           if (tapVad.current !== v) return;             // already captured/cancelled
@@ -548,7 +572,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           tapVad.current = null;
           emitListening(false);
           await afterSubmit?.(false);                   // back to wake listening
-        }, armTimeoutMs);
+        }, remaining);
       };
       await v.arm({
         onSpeechStart: () => { speaking = true; clearArmTimer(); setMicState('capturing'); },
@@ -560,6 +584,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           // calling destroy() synchronously from within onSpeechEnd wedges the
           // async continuation and the utterance never gets submitted
           setTimeout(async () => {
+            armDeadline = 0;            // a real turn earns a fresh window
             await v.disarm();
             tapVad.current = null;
             emitListening(false);
@@ -630,8 +655,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   }
 
   async function onWake() {
+    if (Date.now() < wakeIgnoreUntil.current) return;   // still the last fire
     speaker.cancel();                    // barge-in: stop any current reply
-    await wakeRef.current?.stop();        // release the wake mic while capturing
+    // NOT stopping wake here (phase 2): wake and the VAD share one device via
+    // micBroker, so stopping would release it and pay the open cost again on
+    // the very next turn. Wake fires during capture are ignored by phase.
+    wakeIgnoreUntil.current = Date.now() + 1500;
     inFollowup.current = false;
     // capture the command, then hand off to conversation mode; if nothing is
     // said within 10 s (false fire), give up and resume wake listening

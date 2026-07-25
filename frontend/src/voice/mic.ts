@@ -39,6 +39,14 @@ export class Mic {
   async warm(): Promise<void> {
     this.cancelIdleRelease();
     if (!this.stream || !this.stream.active) {
+      // Push-to-talk keeps its OWN stream (MediaRecorder wants a plain one),
+      // but it must not coexist with the shared conversation device: two live
+      // captures of the same mic double the OS indicator, and on some setups
+      // the second acquire returns a degraded stream. The broker's linger
+      // means the shared one can still be open minutes after a conversation
+      // ended, so ask it to let go first.
+      const { micBroker } = await import('./micBroker');
+      if (micBroker.open) await micBroker.dispose();
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
   }
