@@ -111,6 +111,35 @@ def _model_block(agent: dict) -> str:
 # rendered block; hardware changes on the order of reboots, not turns
 _platform_cache: tuple[float, str] | None = None
 _PLATFORM_TTL_S = 300
+# strong ref: an unreferenced task can be collected mid-flight
+_platform_refresh: asyncio.Task | None = None
+
+
+def _refresh_platform_soon() -> None:
+    """Re-detect off the turn's critical path, one refresh at a time."""
+    global _platform_refresh
+    if _platform_refresh and not _platform_refresh.done():
+        return
+
+    async def _run():
+        global _platform_cache
+        try:
+            block = await _render_platform_block()
+            if block:
+                _platform_cache = (time.monotonic(), block)
+        except Exception:
+            log.exception("Platform facts refresh failed; keeping the last known")
+
+    _platform_refresh = asyncio.ensure_future(_run())
+
+
+async def warm_platform_facts() -> None:
+    """Called from the scheduler tick so the cache is populated (and stays
+    fresh) without any turn ever paying for a probe."""
+    global _platform_cache
+    block = await _render_platform_block()
+    if block:
+        _platform_cache = (time.monotonic(), block)
 
 
 async def _platform_block() -> str:
@@ -125,6 +154,28 @@ async def _platform_block() -> str:
     now = time.monotonic()
     if _platform_cache and now - _platform_cache[0] < _PLATFORM_TTL_S:
         return _platform_cache[1]
+    # A cache MISS must not be paid for by whoever happens to be asking.
+    # This block is awaited during prompt assembly, before the first LLM
+    # call, and refreshing it means two HTTP round-trips to the sidecar with
+    # 5s and 25s timeouts — so on a healthy box one turn in every five
+    # minutes wore ~300ms of dead air, and if ollama was restarting it wore
+    # up to thirty seconds of it, AFTER the meta frame, with the UI showing
+    # a live stream producing nothing. Serve what we last knew and refresh
+    # behind the turn; hardware changes on the order of reboots.
+    if _platform_cache:
+        _refresh_platform_soon()
+        return _platform_cache[1]
+    # Cold start only: nothing known yet, so this one turn waits. The
+    # scheduler warms it on its first tick, so in practice nobody does.
+    block = await _render_platform_block()
+    if block:
+        _platform_cache = (now, block)
+    return block
+
+
+async def _render_platform_block() -> str:
+    """Probe and render. Empty string on failure — a missing block must
+    never break a turn."""
     try:
         from app import hardware
         hw = await hardware.detect()
@@ -136,11 +187,11 @@ async def _platform_block() -> str:
             gpu = "NVIDIA runtime present (VRAM not yet measured)"
         else:
             gpu = "none (CPU-only inference)"
-        block = (
+        return (
             "## Platform facts (live)\n"
             f"GPU: {gpu}. RAM: {hw.get('sizing_ram_gb') or '?'} GB. "
-            f"CPU cores: {hw.get('cpu_cores') or '?'}. Detected fresh this "
-            "turn, not remembered.\n"
+            f"CPU cores: {hw.get('cpu_cores') or '?'}. Detected on this "
+            "machine, not remembered.\n"
             "If memories or journals disagree with these numbers, the "
             "memories are outdated — detection is working, so never claim "
             "it is broken or ask the operator for these specs. Memories "
@@ -148,8 +199,6 @@ async def _platform_block() -> str:
             "features they call missing may have shipped since. For current "
             "platform state (hardware, installed models, available "
             "capabilities), trust this block and your tools, never a memory.")
-        _platform_cache = (now, block)
-        return block
     except Exception:
         log.exception("Platform facts unavailable; continuing without them")
         return ""

@@ -29,6 +29,8 @@ from typing import AsyncIterator, Optional
 
 import httpx
 
+from app import http as http_pool
+
 log = logging.getLogger(__name__)
 
 
@@ -65,67 +67,72 @@ class OpenAICompatClient:
         produced_output = False
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream("POST", f"{self.base_url}/chat/completions",
-                                         json=payload, headers=headers) as resp:
-                    if resp.status_code != 200:
-                        body = (await resp.aread()).decode(errors="replace")[:500]
-                        log.error("LLM API %s from %s: %s", resp.status_code, self.base_url, body)
-                        hint = ("" if resp.status_code != 404 else
-                                f" — '{model}' is not available on this server "
-                                f"(not pulled?)")
-                        yield {"type": "error",
-                               "error": f"LLM API error {resp.status_code}: {body}{hint}",
-                               "error_class": "http_status",
-                               "status_code": resp.status_code}
-                        return
+            # Shared pool, NOT a per-call client: this is the hottest
+            # outbound path in the app and a fresh client meant a fresh TCP
+            # + TLS handshake before every single LLM round, thrown away the
+            # moment the round finished. Timeout stays per-request.
+            client = http_pool.client()
+            async with client.stream("POST", f"{self.base_url}/chat/completions",
+                                     json=payload, headers=headers,
+                                     timeout=self.timeout) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode(errors="replace")[:500]
+                    log.error("LLM API %s from %s: %s", resp.status_code, self.base_url, body)
+                    hint = ("" if resp.status_code != 404 else
+                            f" — '{model}' is not available on this server "
+                            f"(not pulled?)")
+                    yield {"type": "error",
+                           "error": f"LLM API error {resp.status_code}: {body}{hint}",
+                           "error_class": "http_status",
+                           "status_code": resp.status_code}
+                    return
 
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except json.JSONDecodeError:
-                            log.warning("Unparseable stream chunk: %.200s", data)
-                            continue
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        log.warning("Unparseable stream chunk: %.200s", data)
+                        continue
 
-                        if chunk.get("usage"):
-                            yield {"type": "usage", "usage": chunk["usage"]}
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
+                    if chunk.get("usage"):
+                        yield {"type": "usage", "usage": chunk["usage"]}
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
 
-                        content = delta.get("content")
-                        if content:
-                            produced_output = True
-                            yield {"type": "text", "text": content}
+                    content = delta.get("content")
+                    if content:
+                        produced_output = True
+                        yield {"type": "text", "text": content}
 
-                        # A reasoning model's scratchpad arrives on its own
-                        # key. It is NOT text: text is the answer — spoken by
-                        # TTS, shown in the bubble, persisted as the reply.
-                        # Deliberately does not set produced_output: thinking
-                        # alone has caused no side effect, so a stream that
-                        # dies here is still safe to retry elsewhere.
-                        reasoning = delta.get("reasoning")
-                        if reasoning:
-                            yield {"type": "reasoning", "text": reasoning}
+                    # A reasoning model's scratchpad arrives on its own key.
+                    # It is NOT text: text is the answer — spoken by TTS,
+                    # shown in the bubble, persisted as the reply.
+                    # Deliberately does not set produced_output: thinking
+                    # alone has caused no side effect, so a stream that dies
+                    # here is still safe to retry elsewhere.
+                    reasoning = delta.get("reasoning")
+                    if reasoning:
+                        yield {"type": "reasoning", "text": reasoning}
 
-                        for tc in delta.get("tool_calls") or []:
-                            produced_output = True
-                            idx = tc.get("index", 0)
-                            slot = pending_calls.setdefault(
-                                idx, {"id": "", "name": "", "arguments": ""})
-                            if tc.get("id"):
-                                slot["id"] = tc["id"]
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                slot["name"] += fn["name"]
-                            if fn.get("arguments"):
-                                slot["arguments"] += fn["arguments"]
+                    for tc in delta.get("tool_calls") or []:
+                        produced_output = True
+                        idx = tc.get("index", 0)
+                        slot = pending_calls.setdefault(
+                            idx, {"id": "", "name": "", "arguments": ""})
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            slot["arguments"] += fn["arguments"]
 
         except httpx.HTTPError as e:
             # the distinction that decides whether a fallback is safe: a

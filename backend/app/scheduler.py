@@ -64,6 +64,13 @@ async def run_one(automation: dict) -> tuple[bool, str]:
 async def tick():
     # every instance reports its own hardware — sampling is never gated
     await sysmon.maybe_sample()
+    # keep the prompt's platform block warm HERE, so no chat turn ever
+    # waits on a sidecar probe to build its prompt
+    try:
+        from app.agents import runner as agent_runner
+        await agent_runner.warm_platform_facts()
+    except Exception:
+        log.exception('platform facts warm failed; the turn path falls back')
     # everything below is fleet-singleton work: exactly one instance may
     # run automations and prunes, or they double-run on a shared DB
     if not instances.is_leader():

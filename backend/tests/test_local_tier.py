@@ -76,14 +76,17 @@ class FakeClient:
 
 
 async def collect(client_factory):
-    import httpx
-    saved = httpx.AsyncClient
-    httpx.AsyncClient = client_factory
+    # The seam is app.http.client() now, not httpx.AsyncClient: the LLM path
+    # takes its client from the shared connection pool instead of building a
+    # throwaway one per request. Patch where the client comes FROM.
+    from app import http as http_pool
+    saved = http_pool.client
+    http_pool.client = lambda: client_factory()
     try:
         c = openai_compat.OpenAICompatClient("http://x/v1", "k")
         return [e async for e in c.stream([{"role": "user", "content": "hi"}], "m")]
     finally:
-        httpx.AsyncClient = saved
+        http_pool.client = saved
 
 
 def _chunk(**delta):

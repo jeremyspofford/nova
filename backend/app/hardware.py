@@ -8,6 +8,7 @@ observed from Ollama /api/ps during model probes and read back from the
 most recent probe results. No cached hardware.json — the v2 staleness trap.
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -106,10 +107,12 @@ async def _probe_observations() -> dict:
 
 
 async def detect() -> dict:
-    nvidia = await _nvidia_runtime()
+    # The sidecar probe and the DB lookup are independent, so they overlap.
+    # They used to run strictly one after another, which put the /gpu
+    # round-trip in front of a query that never needed to wait for it.
+    nvidia, obs = await asyncio.gather(_nvidia_runtime(), _probe_observations())
     details = await _gpu_details() if nvidia else \
         {"gpu_name": None, "vram_total_gb": None}
-    obs = await _probe_observations()
     platform = _platform()
     ram = _ram_gb()
     override = settings_store.get("inference.memory_gb_override") or 0
