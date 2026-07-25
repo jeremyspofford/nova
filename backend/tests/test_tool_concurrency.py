@@ -99,7 +99,7 @@ class LLMScript:
         self.rounds = rounds
         self.seen: list[list[dict]] = []
 
-    def stream_chat(self, messages, model, tools=None):
+    def stream_chat(self, messages, model, tools=None, **kwargs):
         self.seen.append([dict(m) for m in messages])
         rnd = self.rounds[min(len(self.seen) - 1, len(self.rounds) - 1)]
 

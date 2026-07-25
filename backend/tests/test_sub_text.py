@@ -76,7 +76,7 @@ class Script:
     def __init__(self):
         self.calls = 0
 
-    def stream_chat(self, messages, model, tools=None):
+    def stream_chat(self, messages, model, tools=None, **kwargs):
         self.calls += 1
         n = self.calls
 
@@ -168,7 +168,7 @@ async def test_forwarding_in_a_group():
         def __init__(self):
             self.calls = 0
 
-        def stream_chat(self, messages, model, tools=None):
+        def stream_chat(self, messages, model, tools=None, **kwargs):
             self.calls += 1
             n = self.calls
 

@@ -34,6 +34,20 @@ def is_local(model: str) -> bool:
     return model.split(":", 1)[0] == "ollama"
 
 
+def _resolve_local(model_name: str) -> tuple["OllamaNativeClient", str]:
+    """Local models go through ollama's OWN api, not its OpenAI shim.
+
+    The shim silently drops both controls a local model needs — `think` and
+    `options.num_ctx` (measured; see llm/ollama_native.py). Same event
+    vocabulary out, so nothing upstream can tell the difference.
+    """
+    from app import settings_store
+    from app.llm.ollama_native import OllamaNativeClient
+    base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+    timeout = float(settings_store.get("inference.ollama_timeout_s") or 300)
+    return OllamaNativeClient(base, timeout=timeout), model_name
+
+
 def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
     if ":" not in model:
         raise ValueError(f"Unknown model format: {model!r} (expected 'slug:model')")
@@ -95,14 +109,56 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
         "error_class": "prompt_too_long", "status_code": None}
 
 
+async def resolve_thinking(model: str, preference: str) -> Optional[bool]:
+    """Turn an agent's auto/on/off preference into a `think` value, or None
+    to send nothing at all.
+
+    Capability comes from the SERVER (llm/capabilities.py), never from the
+    model's name — a hardcoded list of which models reason is wrong the day
+    a new one is pulled, and wrong silently. Three rules:
+
+      auto            -> None. Send nothing; the model does what it does.
+                         This is exactly the behavior that shipped before
+                         this setting existed.
+      on/off, capable -> the boolean.
+      on/off, not capable (or unknown) -> None, with a log line. Asking a
+                         model that cannot reason to think is not an error
+                         worth failing a turn over.
+    """
+    if preference not in ("on", "off"):
+        return None
+    if not is_local(model):
+        # `think` is ollama's extension; a cloud provider's reasoning
+        # controls are its own and are not wired here yet
+        return None
+    from app.llm import capabilities
+    capable = await capabilities.supports(model, "thinking")
+    if capable:
+        return preference == "on"
+    log.info("thinking=%s ignored for %s (server reports capability: %s)",
+             preference, model, capable)
+    return None
+
+
 async def stream_chat(messages: list, model: str,
-                      tools: Optional[list] = None) -> AsyncIterator[dict]:
+                      tools: Optional[list] = None,
+                      thinking: str = "auto") -> AsyncIterator[dict]:
     target = effective_model(model)
+    think = await resolve_thinking(target, thinking)
     if is_local(target):
         refusal = await _refuse_local_overflow(target, messages)
         if refusal:
             yield refusal
             return
+    if is_local(target):
+        from app import settings_store
+        client, model_name = _resolve_local(target.split(":", 1)[1])
+        num_ctx = int(settings_store.get("inference.ollama_num_ctx") or 0)
+        async for event in client.stream(messages, model_name, tools,
+                                         include_usage=True, think=think,
+                                         num_ctx=num_ctx or None):
+            yield event
+        return
     client, model_name = _resolve(target)
     # include_usage: exact token counts in a final usage chunk — feeds the
     # turn ledger; providers that don't support it simply omit the event

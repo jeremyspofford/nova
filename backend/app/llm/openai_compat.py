@@ -4,6 +4,7 @@ Event vocabulary yielded by stream():
     {"type": "text", "text": str}                    incremental content delta
     {"type": "tool_calls", "tool_calls": [           complete calls, end of turn
         {"id": str, "name": str, "arguments": str}]}
+    {"type": "reasoning", "text": str}               a thinking model's scratchpad
     {"type": "usage", "usage": dict}                 only with include_usage
     {"type": "done"}
     {"type": "error", "error": str, "error_class": str, "status_code": int|None}
@@ -41,7 +42,8 @@ class OpenAICompatClient:
 
     async def stream(self, messages: list, model: str,
                      tools: Optional[list] = None,
-                     include_usage: bool = False) -> AsyncIterator[dict]:
+                     include_usage: bool = False,
+                     think: Optional[bool] = None) -> AsyncIterator[dict]:
         headers = {"Content-Type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -51,6 +53,10 @@ class OpenAICompatClient:
             payload["tools"] = tools
         if include_usage:  # exact token counts in a final usage chunk
             payload["stream_options"] = {"include_usage": True}
+        if think is not None:
+            # ollama's own extension, honored on this OpenAI-compatible
+            # endpoint; servers that don't know it ignore an unknown field
+            payload["think"] = think
 
         # Tool-call deltas arrive fragmented; merge them by choice index.
         pending_calls: dict[int, dict] = {}
@@ -97,6 +103,16 @@ class OpenAICompatClient:
                         if content:
                             produced_output = True
                             yield {"type": "text", "text": content}
+
+                        # A reasoning model's scratchpad arrives on its own
+                        # key. It is NOT text: text is the answer — spoken by
+                        # TTS, shown in the bubble, persisted as the reply.
+                        # Deliberately does not set produced_output: thinking
+                        # alone has caused no side effect, so a stream that
+                        # dies here is still safe to retry elsewhere.
+                        reasoning = delta.get("reasoning")
+                        if reasoning:
+                            yield {"type": "reasoning", "text": reasoning}
 
                         for tc in delta.get("tool_calls") or []:
                             produced_output = True

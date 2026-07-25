@@ -90,7 +90,7 @@ class Script:
         self.calls = 0
         self.seen: list[list[dict]] = []
 
-    def stream_chat(self, messages, model, tools=None):
+    def stream_chat(self, messages, model, tools=None, **kwargs):
         self.seen.append([dict(m) for m in messages])
         self.calls += 1
         first = self.calls == 1

@@ -916,6 +916,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             round_text = ""
             tool_calls = []
             failure = None
+            reasoning_chars = 0
+            think_stream = _SubTextBatcher()
             async with trace.span(
                     "llm_call", llm_router.effective_model(round_model)) as lsp:
                 lsp["agent"] = agent.get("name")
@@ -927,8 +929,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     messages, model=llm_router.effective_model(round_model),
                     exempt_ids=dispatch_result_ids, bulk_ids=bulk_result_ids,
                     detail=lsp)
-                async for event in llm_router.stream_chat(messages, round_model,
-                                                          tools or None):
+                async for event in llm_router.stream_chat(
+                        messages, round_model, tools or None,
+                        thinking=agent.get("thinking") or "auto"):
                     etype = event.get("type")
                     if etype == "text":
                         round_text += event["text"]
@@ -942,6 +945,18 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                             for chunk in sub_stream.feed(event["text"]):
                                 yield {"type": "sub_text", "text": chunk,
                                        "agent": agent.get("name")}
+                    elif etype == "reasoning":
+                        # A thinking model's scratchpad. It rides the phase-5
+                        # accordion channel rather than `text`, which means
+                        # TTS never speaks it and it is never persisted as
+                        # the reply — the same reasons sub_text exists. Until
+                        # now these tokens were paid for and dropped on the
+                        # floor.
+                        reasoning_chars += len(event["text"])
+                        for chunk in think_stream.feed(event["text"]):
+                            yield {"type": "sub_text", "text": chunk,
+                                   "agent": agent.get("name"),
+                                   "kind": "thinking"}
                     elif etype == "tool_calls":
                         tool_calls = event["tool_calls"]
                     elif etype == "usage":
@@ -963,6 +978,12 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 for chunk in (sub_stream.drain() if dispatch_depth else []):
                     yield {"type": "sub_text", "text": chunk,
                            "agent": agent.get("name")}
+                for chunk in think_stream.drain():
+                    yield {"type": "sub_text", "text": chunk,
+                           "agent": agent.get("name"), "kind": "thinking"}
+                if reasoning_chars:
+                    # the ledger's answer to "what did thinking cost me?"
+                    lsp["reasoning_chars"] = reasoning_chars
                 lsp["completion_chars"] = len(round_text)
                 lsp["tool_calls_requested"] = len(tool_calls)
 

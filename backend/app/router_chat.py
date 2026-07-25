@@ -98,6 +98,13 @@ async def chat_stream(request: ChatRequest):
         override = settings_store.get("voice.model_override")
         if override:
             main_agent = {**main_agent, "model": override}
+        # A spoken reply is one or two sentences; thinking before it is
+        # mostly latency on the most latency-sensitive path there is
+        # (measured: 1.0s vs 2.2s for the same answer). Voice gets its own
+        # setting because it shares the main agent's ROW but not its job.
+        voice_thinking = settings_store.get("voice.thinking") or "auto"
+        if voice_thinking != "auto":
+            main_agent = {**main_agent, "thinking": voice_thinking}
 
     model_eff = effective_model(main_agent["model"])
     total_budget = settings_store.get(
@@ -392,7 +399,7 @@ async def list_agents_endpoint():
 
 
 _AGENT_EDITABLE_FIELDS = {"model", "enabled", "description", "system_prompt",
-                          "allowed_tools", "routing_keywords"}
+                          "allowed_tools", "routing_keywords", "thinking"}
 
 
 @router.patch("/api/v1/agents/{agent_id}")
@@ -408,6 +415,9 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
                 status_code=403,
                 detail="system agents are always active — constrain them with "
                        "rules and tool grants instead")
+    if allowed.get("thinking") not in (None, "auto", "on", "off"):
+        raise HTTPException(status_code=422,
+                            detail="thinking must be 'auto', 'on', or 'off'")
     if "model" in allowed and ":" not in str(allowed["model"]):
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
@@ -460,6 +470,27 @@ async def list_models_endpoint(full: bool = False):
     without credentials never appear in either view."""
     from app import models_catalog
     return await models_catalog.list_models(full=full)
+
+
+@router.get("/api/v1/models/capabilities")
+async def model_capabilities_endpoint():
+    """What the LOCAL server says each installed model can do.
+
+    The UI uses this to decide whether to offer a thinking toggle at all.
+    Nothing infers capability from a model's name — this is the server's
+    own answer, cached, and a model it cannot describe simply gets no
+    entry rather than a guess.
+    """
+    from app.llm import capabilities as caps
+    from app import models_catalog
+    out: dict[str, list[str]] = {}
+    for m in await models_catalog.list_models():
+        if m.get("provider") != "ollama":
+            continue
+        found = await caps.capabilities(m["id"])
+        if found:
+            out[m["id"]] = sorted(found)
+    return out
 
 
 @router.post("/api/v1/models/pull")

@@ -208,7 +208,7 @@ class DispatchScript:
         self.n = n
         self.calls = 0
 
-    def stream_chat(self, messages, model, tools=None):
+    def stream_chat(self, messages, model, tools=None, **kwargs):
         self.calls += 1
         i = self.calls
 

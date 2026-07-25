@@ -914,6 +914,18 @@ export interface AgentInfo {
   allowed_tools: string[] | null;
   routing_keywords: string[] | null;
   is_system: boolean;
+  /** auto = whatever the model does on its own; on/off force it, and only
+   *  apply to models the inference server reports as thinking-capable. */
+  thinking?: 'auto' | 'on' | 'off';
+}
+
+/** Capabilities the LOCAL inference server reports for a model, e.g.
+ *  ['completion','tools','thinking']. Empty for cloud models — nothing here
+ *  is inferred from a model's NAME. */
+export async function getModelCapabilities(): Promise<Record<string, string[]>> {
+  const r = await apiFetch(`${API_URL}/api/v1/models/capabilities`);
+  if (!r.ok) return {};
+  return (await r.json()) as Record<string, string[]>;
 }
 
 export async function getAgents(): Promise<AgentInfo[]> {

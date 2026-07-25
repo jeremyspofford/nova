@@ -14,10 +14,10 @@ from app import db
 log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "name", "description", "system_prompt", "model", "allowed_tools",
-           "routing_keywords", "enabled", "is_system", "created_at")
+           "routing_keywords", "enabled", "is_system", "created_at", "thinking")
 
 _UPDATABLE = {"name", "description", "system_prompt", "model",
-              "allowed_tools", "routing_keywords", "enabled"}
+              "allowed_tools", "routing_keywords", "enabled", "thinking"}
 
 
 def _row_to_dict(row) -> dict:

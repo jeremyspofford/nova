@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
-  AgentInfo, ModelInfo, createAgent, deleteAgent, getAgents, getModels, patchAgent,
+  AgentInfo, ModelInfo, createAgent, deleteAgent, getAgents, getModelCapabilities,
+  getModels, patchAgent,
 } from '../../api';
 import { agentDisplayName } from '../../names';
 import { Toggle, CardsSkeleton } from '../ui';
@@ -17,6 +18,8 @@ export function AgentsTab() {
   const [editing, setEditing] = useState<AgentInfo | null>(null);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // what the LOCAL server says each model can do — never inferred from names
+  const [caps, setCaps] = useState<Record<string, string[]>>({});
   const emptyForm = {
     name: '', description: '', system_prompt: '', model: '',
     allowed_tools: '', routing_keywords: '',
@@ -31,6 +34,34 @@ export function AgentsTab() {
   useEffect(() => {
     getModels(showAllModels).then(setModels).catch(() => {});
   }, [showAllModels]);
+  useEffect(() => {
+    getModelCapabilities().then(setCaps).catch(() => {});
+  }, []);
+
+  async function setThinking(a: AgentInfo, thinking: 'auto' | 'on' | 'off') {
+    try {
+      await patchAgent(a.id, { thinking });
+      setAgents(prev => prev.map(x => x.id === a.id ? { ...x, thinking } : x));
+    } catch (e) { setStatus(String(e)); }
+  }
+
+  /** Only for models the server reports as thinking-capable — a model that
+   *  cannot reason gets no control rather than a dead one. */
+  const thinkingSelect = (a: AgentInfo) => {
+    if (!(caps[a.model] ?? []).includes('thinking')) return null;
+    return (
+      <select
+        value={a.thinking ?? 'auto'}
+        onChange={e => setThinking(a, e.target.value as 'auto' | 'on' | 'off')}
+        title="Reasoning models think before answering. Off is markedly faster for short replies; on is worth it for hard, multi-step work. Auto leaves the model to its own default."
+        className="text-[11px] bg-stone-800 border border-stone-600 rounded px-1 py-0.5 text-stone-300"
+      >
+        <option value="auto">thinking: auto</option>
+        <option value="on">thinking: on</option>
+        <option value="off">thinking: off</option>
+      </select>
+    );
+  };
 
   async function setModel(a: AgentInfo, model: string) {
     try {
@@ -212,6 +243,7 @@ export function AgentsTab() {
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {modelSelect(a.model, v => setModel(a, v))}
+                  {thinkingSelect(a)}
                   {(
                     <button
                       onClick={() => startEdit(a)}

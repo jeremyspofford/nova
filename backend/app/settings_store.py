@@ -279,6 +279,18 @@ SETTING_DEFS: list[dict] = [
                      "A local model is strongly recommended if the mic is "
                      "always listening — cloud here means ambient speech "
                      "leaves the machine and bills per utterance.")},
+    {"key": "voice.thinking", "type": "enum", "default": "off",
+     "options": ["auto", "on", "off"], "section": "Voice",
+     "label": "Thinking on voice turns",
+     "description": ("Reasoning models think before they answer. A spoken "
+                     "reply is one or two sentences, so that thinking is "
+                     "mostly latency: measured on this machine, the same "
+                     "question answered in 1.0s with thinking off versus "
+                     "2.2s with it on — identical answer. Off by default for "
+                     "voice; auto leaves the model to its own default, and "
+                     "applies only to models the local server reports as "
+                     "thinking-capable. Typed chat is unaffected — that is "
+                     "the per-agent setting in Library -> Agents.")},
     {"key": "voice.listen_mode", "type": "enum", "default": "ptt",
      "options": ["ptt", "tap", "wake"], "section": "Voice", "label": "Mic mode",
      "description": ("How the mic engages. Hold-to-talk always works; "
