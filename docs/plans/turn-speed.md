@@ -247,12 +247,35 @@ evidence rather than assumption.
     grading pipeline would be a disqualifying bias. It is not one: both
     runs get a byte-identical round-1 prompt (3627 tokens) and took the
     same tool path, so the asymmetry was small-sample sampling noise.
-  * **Still open, and the honest state of both rails:** shelf-life passes
-    6 of 8 (prices or hours still slip into a topic about one run in
-    four); the superseded-figures rail passes 4 of 6. Both are materially
-    better than before and neither is solved. The right next move is the
-    eval pipeline's judge layer plus more samples per task — not more
-    prompt revisions hill-climbed against two tasks.
+  * **Both rails now CLOSED, on n=10 measurements (2026-07-24).** The
+    earlier "6 of 8 / 4 of 6" numbers were too small to act on, which is
+    itself the finding: the CLI grew `--repeat N`, which reports pass
+    RATES and marks a check that fails in SOME runs as flaky rather than
+    broken. With that resolution:
+    - **Shelf-life: 8/10, and only 1 of 10 runs leaked an ephemeral fact**
+      (all five checks failed together in that one run — one bad write,
+      not five problems). A second failure was a different flake entirely:
+      one run never called write_memory at all. Migration 051 did its job;
+      no further action.
+    - **Superseded figures: 5/10 before, 10/10 after.** Four attempts to
+      fix it with WORDS all sat at 30–50%: a rule in the agent prompt
+      (051), tightened (052), moved to the end of the prompt (053), and
+      finally placed in write_memory's own description at the point of use
+      — that last one measured WORSE and was reverted rather than left in
+      to cost tokens on every turn. What worked was to stop asking and
+      check: `app/durability.py` flags a topic that stores a figure it
+      also calls wrong, and the warning rides the write_memory RESULT with
+      the item_id, so the model can self-correct in the same turn. It
+      fired 3 times in 10 runs and the model rewrote every one; the check
+      that had been failing half the time failed zero times.
+    - Precision was verified, not assumed: zero false positives across the
+      whole news-summarizer suite, including `attribution-conflict`, the
+      task where two sources disagree and attributing both is the CORRECT
+      answer (2/2).
+    - The detector warns, never blocks and never edits. "The paper was
+      retracted after the 2T figure was fabricated" is a legitimate
+      durable record with the identical shape, so a false positive must
+      cost one sentence in a tool result, not a lost write.
 
 The v1 premise "qwen3:30b-a3b Q4 fits the 3090 with room" FAILS
 arithmetic on the real box: ~18.6GB weights + ~3GB KV@32k + ~1–1.5GB

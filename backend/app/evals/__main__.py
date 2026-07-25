@@ -145,6 +145,33 @@ def _print_run(result: eval_runner.RunResult) -> None:
     print(f"    scratch     {result.scratch_dir}")
 
 
+def _print_rates(task_ref: str, runs: list[dict]) -> None:
+    """Pass RATES across repeats, and which checks are flaky.
+
+    A single run of a stochastic model answers "did it pass this time",
+    which is not the question anyone actually has. One clean run cannot
+    tell 100% from 70%, and a rail that holds three times in four is a
+    different object from one that holds always — the first is a finding,
+    the second is a fix. A check that fails in SOME runs and passes in
+    others is called out separately: that is the signature of a rail the
+    model half-follows, as opposed to one it does not know about.
+    """
+    n = len(runs)
+    print(f"\n  --- {task_ref}: {n} runs per side ---")
+    for side in ("champion", "challenger"):
+        reports = [r[f"{side}_contract"] for r in runs]
+        passed = sum(1 for rep in reports if rep.passed)
+        model = runs[0][side].model
+        print(f"  {side:<11} {passed}/{n} runs passed every contract   ({model})")
+        tally: dict[str, int] = {}
+        for rep in reports:
+            for failure in rep.failures:
+                tally[failure.key] = tally.get(failure.key, 0) + 1
+        for key, count in sorted(tally.items(), key=lambda kv: -kv[1]):
+            shape = "ALWAYS" if count == n else f"{count}/{n} runs"
+            print(f"      {'✗' if count == n else '~'} {key}: failed in {shape}")
+
+
 async def cmd_run(args: argparse.Namespace) -> int:
     tasks = suites.resolve(args.ref)
     if args.scratch_root:
@@ -162,18 +189,30 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     await _bootstrap()
     pairs = []
+    repeat = max(1, int(args.repeat))
     try:
         for task in tasks:
             print(f"\n=== {task.ref} — {task.title}")
-            pair = await eval_runner.run_pair(
-                task, args.champion, args.challenger,
-                scratch_root=scratch_root, record=args.record)
-            pairs.append(pair)
-            for side in ("champion", "challenger"):
-                report = checks.evaluate(task.contract, pair[side])
-                pair[f"{side}_contract"] = report
-                _print_run(pair[side])
-                _print_contract(report)
+            task_runs = []
+            for attempt in range(repeat):
+                if repeat > 1:
+                    print(f"\n  run {attempt + 1} of {repeat}")
+                # each repeat gets its own scratch tree, so --keep leaves all
+                # of them side by side instead of the last one only
+                root = scratch_root / f"run{attempt + 1}" if repeat > 1 else scratch_root
+                root.mkdir(parents=True, exist_ok=True)
+                pair = await eval_runner.run_pair(
+                    task, args.champion, args.challenger,
+                    scratch_root=root, record=args.record)
+                for side in ("champion", "challenger"):
+                    report = checks.evaluate(task.contract, pair[side])
+                    pair[f"{side}_contract"] = report
+                    _print_run(pair[side])
+                    _print_contract(report)
+                task_runs.append(pair)
+                pairs.append(pair)
+            if repeat > 1:
+                _print_rates(task.ref, task_runs)
     finally:
         await _shutdown()
 
@@ -208,11 +247,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if gradeable:
         champ_ok = sum(1 for p in gradeable if p["champion_contract"].passed)
         chall_ok = sum(1 for p in gradeable if p["challenger_contract"].passed)
-        print(f"\ncontract scoreboard ({len(gradeable)} gradeable task(s)): "
+        print(f"\ncontract scoreboard ({len(gradeable)} gradeable run(s)): "
               f"champion {champ_ok}, challenger {chall_ok}")
-        regressions = [p["task"] for p in gradeable
-                       if p["champion_contract"].passed
-                       and not p["challenger_contract"].passed]
+        regressions = sorted({p["task"] for p in gradeable
+                              if p["champion_contract"].passed
+                              and not p["challenger_contract"].passed})
         if regressions:
             print("challenger broke contracts the champion kept: "
                   + ", ".join(regressions))
@@ -240,6 +279,10 @@ def main(argv: list[str]) -> int:
                      help="where sandbox memory dirs go (default: a temp dir)")
     run.add_argument("--keep", action="store_true",
                      help="leave the scratch dirs on disk to inspect")
+    run.add_argument("--repeat", type=int, default=1, metavar="N",
+                     help="run each task N times per side and report pass "
+                          "RATES plus flaky checks — one run cannot tell "
+                          "100%% from 70%%")
     run.add_argument("--record", action="store_true",
                      help="execute live tools and capture results instead of "
                           "replaying fixtures")

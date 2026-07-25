@@ -12,7 +12,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from app import db
+from app import db, durability
 from app.agents import registry as agent_registry
 from app.memory.memory import memory
 from app.memory.store import _slugify
@@ -37,7 +37,7 @@ async def _write_memory(args, ctx):
     content = args.get("content", "")
     if not content:
         return "Error: content is required"
-    return _j(await memory.write(
+    result = await memory.write(
         content,
         type=args.get("type", "journal"),
         title=args.get("title"),
@@ -54,7 +54,19 @@ async def _write_memory(args, ctx):
         # brain's writes-arc survives month rollovers mechanically
         maintained_by=ctx.get("automation"),
         source_type="tool",
-    ))
+    )
+    # Durability check on topics only — a journal IS the record of what
+    # happened, including what turned out to be wrong. The write already
+    # succeeded: this hands the model back a reason and an item_id so it can
+    # correct itself in the same turn, which is the only moment it still can.
+    if args.get("type") == "topic" and result.get("status") == "written":
+        found = durability.detect(content)
+        if found:
+            log.warning("Durability: topic %s records a figure it calls wrong "
+                        "(%s)", result.get("id"), found[:120])
+            result["warning"] = durability.WARNING.format(
+                found=found, item_id=result.get("id"))
+    return _j(result)
 
 
 async def _read_memory_item(args, ctx):
