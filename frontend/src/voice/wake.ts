@@ -18,11 +18,11 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { WAKE_CATALOG, DEFAULT_WAKE } from './wakeCatalog';
 import { recordWakeEvent } from './wakeLog';
+import { micBroker } from './micBroker';
 
 ort.env.wasm.wasmPaths = '/vad/';   // reuse the self-hosted ORT wasm from phase 3
 ort.env.wasm.numThreads = 1;        // single-thread SIMD — no COOP/COEP needed
 
-const SR = 16000;
 const CHUNK = 1280;      // 80 ms @ 16 kHz — one wake step
 const RAW_MAX = 1760;    // melspec window: chunk + 480-sample lead-in
 const BINS = 32;         // mel features
@@ -37,17 +37,6 @@ const MEL_MAX = 200;     // rolling mel-frame cap
 const PEAK_FLOOR = 0.02;
 const PEAK_QUIET_MS = 700;
 
-const TAP_WORKLET = `
-class WakeTap extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch) this.port.postMessage(ch.slice(0));
-    return true;
-  }
-}
-registerProcessor('wake-tap', WakeTap);
-`;
-
 export interface WakeOptions {
   model?: string;            // wake-phrase key (see wakeCatalog); default hey_jarvis
   threshold?: number;        // 0..1 detection threshold (tune live)
@@ -60,9 +49,7 @@ export class WakeWord {
   private wake!: ort.InferenceSession;
   private melIn = ''; private embIn = ''; private wakeIn = '';
 
-  private ctx: AudioContext | null = null;
-  private stream: MediaStream | null = null;
-  private node: AudioWorkletNode | null = null;
+  private unsubscribe: (() => void) | null = null;
 
   private acc: number[] = [];         // incoming samples awaiting a full chunk
   private raw: number[] = [];         // last <=1760 int16-valued samples
@@ -109,35 +96,26 @@ export class WakeWord {
   }
 
   /** Begin listening. Throws if the mic is denied. Re-primes buffers so each
-   *  listening session (e.g. resuming after a command) starts clean. */
+   *  listening session (e.g. resuming after a command) starts clean.
+   *
+   *  No longer opens a device: it takes a reference on the shared one and
+   *  subscribes to frames (phase 2). Resuming after a command used to cost a
+   *  full getUserMedia + AudioContext; it is now a Set.add. */
   async start(): Promise<void> {
     this.acc = []; this.raw = []; this.cooldownUntil = 0;
     this.peakMax = 0; this.peakFired = false; this.peakQuietAt = 0;
     await this.primeBuffers();
-    this.ctx = new AudioContext({ sampleRate: SR });
-    await this.ctx.resume();
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: 'application/javascript' }));
-    await this.ctx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
-    const src = this.ctx.createMediaStreamSource(this.stream);
-    this.node = new AudioWorkletNode(this.ctx, 'wake-tap');
-    this.node.port.onmessage = (e) => this.onAudio(e.data as Float32Array);
-    src.connect(this.node);
-    // a muted sink keeps the graph pulling without audible output
-    const sink = this.ctx.createGain();
-    sink.gain.value = 0;
-    this.node.connect(sink).connect(this.ctx.destination);
+    await micBroker.acquire();
+    this.unsubscribe = micBroker.subscribe((frame) => this.onAudio(frame));
   }
 
   async stop(): Promise<void> {
     // a fire stops the detector immediately, so the peak is still open here —
     // without this flush, successful wakes would never reach the log
     this.closePeak();
-    this.stream?.getTracks().forEach(t => t.stop());
-    if (this.node) this.node.port.onmessage = null;
-    if (this.ctx) { try { await this.ctx.close(); } catch { /* closed */ } }
-    this.stream = null; this.node = null; this.ctx = null;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    micBroker.release();
     this.acc = []; this.raw = [];
   }
 
