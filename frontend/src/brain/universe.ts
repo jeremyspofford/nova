@@ -1432,10 +1432,25 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     renderer.autoClear = true;
   }
 
+  // `paused` is occlusion (an overlay covering the canvas, or the phone's
+  // chat panel); document.hidden is the tab. Either one stops the loop —
+  // and this is the expensive one: a bloom composer doing two full render
+  // passes per frame.
+  let paused = false;
   const onVisibility = () => {
-    if (document.hidden) {
-      cancelAnimationFrame(raf);
-    } else if (!destroyed) {
+    // ALWAYS cancel before deciding. `frame` reschedules itself
+    // unconditionally, and `raf` names only the most recent handle — so
+    // scheduling without cancelling first starts a SECOND self-perpetuating
+    // chain whose handle is lost forever. That is not theoretical: Brain.tsx
+    // seeds the renderer with setPaused(occluded) right after creation, so
+    // every non-occluded load (i.e. the normal desktop one) hit it, ran the
+    // two-pass bloom composer at double cost from mount, and left the
+    // pre-existing document.hidden pause unable to stop it. The phone path
+    // seeds setPaused(true), which cancels cleanly — which is exactly why
+    // measuring only on the phone missed it.
+    cancelAnimationFrame(raf);
+    raf = 0;
+    if (!document.hidden && !paused && !destroyed) {
       lastTime = performance.now();
       raf = requestAnimationFrame(frame);
     }
@@ -1444,6 +1459,8 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   raf = requestAnimationFrame(frame);
 
   return {
+    setPaused(next: boolean) { paused = next; onVisibility(); },
+
     setData(nodes: GraphNode[], edges: GraphEdge[]) {
       const fp = JSON.stringify([
         nodes.map(n => [n.id, n.label, n.type, n.mtime, n.enabled, n.interval_minutes]),
