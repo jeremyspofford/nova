@@ -1,4 +1,5 @@
-"""The durability detector: a topic that stores a figure it also calls wrong.
+"""The write-time detectors: a topic that stores a figure it calls wrong,
+and a topic whose tags leave it unconnected in the graph.
 
     docker compose exec backend python tests/test_durability.py
 
@@ -13,7 +14,7 @@ import sys
 
 sys.path.insert(0, "/app/backend")
 
-from app import durability                                 # noqa: E402
+from app import durability, tagging                        # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -89,9 +90,40 @@ def test_warning_text():
     check("leaves the legitimate case open", "genuinely is the subject" in msg)
 
 
+def test_tag_hygiene():
+    print("5. tag hygiene: a topic whose tags are ALL generic floats alone")
+    # the Bear Mountain incident's tag set — every one of these is a
+    # category, none of them a subject
+    check("all-generic tags are flagged",
+          tagging.detect(["zoo", "new-york", "nature"]) is not None)
+    check("...and the flag names them",
+          set(tagging.detect(["zoo", "new-york"])) == {"zoo", "new-york"})
+
+    # ONE specific tag is enough to connect the note; broad labels alongside
+    # it are normal and useful for search
+    check("one specific tag among generic ones is fine",
+          tagging.detect(["bear-mountain", "zoo", "new-york"]) is None)
+    check("entirely specific tags are fine",
+          tagging.detect(["kimi-k3", "moe-models"]) is None)
+
+    check("no tags at all is the write path's business, not this check",
+          tagging.detect([]) is None and tagging.detect(None) is None)
+    check("case and whitespace do not smuggle a generic tag past it",
+          tagging.detect(["  ZOO  "]) is not None)
+
+
+def test_tag_warning_text():
+    print("6. the tag warning says what to do")
+    msg = tagging.WARNING.format(found="zoo, new-york", item_id="topics/x.md")
+    check("names the item", "topics/x.md" in msg)
+    check("explains the graph consequence", "edges" in msg)
+    check("keeps broad tags legitimate", "Keep the broad ones" in msg)
+
+
 def main():
     for t in (test_catches_the_real_thing, test_leaves_correct_writes_alone,
-              test_sentence_scoped, test_warning_text):
+              test_sentence_scoped, test_warning_text, test_tag_hygiene,
+              test_tag_warning_text):
         t()
         print()
     if FAILURES:

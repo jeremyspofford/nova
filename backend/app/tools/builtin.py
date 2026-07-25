@@ -12,7 +12,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from app import db, durability
+from app import db, durability, tagging
 from app.agents import registry as agent_registry
 from app.memory.memory import memory
 from app.memory.store import _slugify
@@ -60,12 +60,21 @@ async def _write_memory(args, ctx):
     # succeeded: this hands the model back a reason and an item_id so it can
     # correct itself in the same turn, which is the only moment it still can.
     if args.get("type") == "topic" and result.get("status") == "written":
+        warnings = []
         found = durability.detect(content)
         if found:
             log.warning("Durability: topic %s records a figure it calls wrong "
                         "(%s)", result.get("id"), found[:120])
-            result["warning"] = durability.WARNING.format(
-                found=found, item_id=result.get("id"))
+            warnings.append(durability.WARNING.format(
+                found=found, item_id=result.get("id")))
+        floating = tagging.detect(args.get("tags"))
+        if floating:
+            log.warning("Tag hygiene: topic %s has only generic tags (%s) — "
+                        "it will earn no graph edges", result.get("id"), floating)
+            warnings.append(tagging.WARNING.format(
+                found=", ".join(floating), item_id=result.get("id")))
+        if warnings:
+            result["warning"] = " ".join(warnings)
     return _j(result)
 
 
