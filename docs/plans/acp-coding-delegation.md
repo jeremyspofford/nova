@@ -52,6 +52,18 @@ OpenRouter key) — only the coding agent's own credentials.
 
 ### Workspaces + git discipline
 
+> **CORRECTION (2026-07-25, docs/plans/capability-and-containment.md):** a
+> git worktree is NOT a portable containment unit. Its `.git` is a `gitdir:`
+> pointer to an absolute path in the parent repo, and commits inside it
+> write refs into the parent's `.git/refs/heads` — so mounting "just the
+> worktree" requires the parent `.git` writable at the same absolute path
+> inside the container, which is the opposite of confinement. Rename the
+> parent and git dies with `fatal: not a git repository`. Replace the
+> mounted-worktree design below with: clone into a private volume, export
+> with `git bundle`. That also makes the LOCKED operator-merge gate
+> mechanical rather than procedural. Phase 0 should NOT re-derive this.
+> Also: ban ACP's `auto` permission mode explicitly.
+
 Operator registers repos in Settings (edit-mode gated; a `workspaces`
 table — path, name, enabled). Every session runs on a **fresh worktree
 under `.worktrees/nova/<task-slug>`** inside the repo (matches the
