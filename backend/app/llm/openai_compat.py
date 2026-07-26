@@ -29,7 +29,7 @@ from typing import AsyncIterator, Optional
 
 import httpx
 
-from app import http as http_pool
+from app import http as http_pool, redact
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +76,13 @@ class OpenAICompatClient:
                                      json=payload, headers=headers,
                                      timeout=self.timeout) as resp:
                 if resp.status_code != 200:
-                    body = (await resp.aread()).decode(errors="replace")[:500]
+                    # A provider 400 routinely ECHOES the offending request
+                    # content, and on a tool round that content is the tool
+                    # messages. This body reaches the browser, the span, the
+                    # turn error, an automation summary, memory on disk, and
+                    # an ntfy push — scrub it where it is born, once.
+                    body = redact.scrub_text(
+                        (await resp.aread()).decode(errors="replace"), 500)
                     log.error("LLM API %s from %s: %s", resp.status_code, self.base_url, body)
                     hint = ("" if resp.status_code != 404 else
                             f" — '{model}' is not available on this server "

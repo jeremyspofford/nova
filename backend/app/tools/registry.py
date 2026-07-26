@@ -12,7 +12,7 @@ import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
-from app import bg, db
+from app import bg, db, redact
 from app.tools import builtin, fixtures
 from app.tools.http_executor import execute_http_tool
 
@@ -364,8 +364,12 @@ async def _dispatch(name: str, args: dict, ctx: dict) -> str:
         try:
             return await BUILTIN_TOOLS[name]["execute"](args, ctx)
         except Exception as e:
+            # The exception text becomes the tool RESULT — model context, a
+            # messages row for 30 days, and the SSE stream. httpx puts the
+            # entire request URL, query string included, inside its exception
+            # string, so `{e}` is a credential leak on every failed fetch.
             log.exception("Builtin tool %s failed", name)
-            return f"Error executing {name}: {e}"
+            return f"Error executing {name}: {redact.scrub_text(str(e), 500)}"
 
     db_tools = await _load_db_tools()
     if name in db_tools:
@@ -375,7 +379,7 @@ async def _dispatch(name: str, args: dict, ctx: dict) -> str:
                 return await execute_http_tool(tool, args)
             except Exception as e:
                 log.exception("HTTP tool %s failed", name)
-                return f"Error executing {name}: {e}"
+                return f"Error executing {name}: {redact.scrub_text(str(e), 500)}"
         return f"Error: tool {name} has unsupported execution_type {tool['execution_type']}"
 
     if name.startswith("mcp:"):
@@ -392,6 +396,6 @@ async def _dispatch(name: str, args: dict, ctx: dict) -> str:
             return await mcp_client.call_tool(server, tool_name, args, timeout, size_cap_kb)
         except Exception as e:
             log.exception("MCP tool %s failed", name)
-            return f"Error executing {name}: {e}"
+            return f"Error executing {name}: {redact.scrub_text(str(e), 500)}"
 
     return f"Error: unknown tool '{name}'"

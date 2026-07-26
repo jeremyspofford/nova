@@ -34,7 +34,7 @@ from typing import Optional
 
 import httpx
 
-from app import settings_store
+from app import redact, settings_store
 
 log = logging.getLogger(__name__)
 
@@ -95,9 +95,14 @@ class NtfyProvider(Provider):
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             return {"ok": False, "error": f"ntfy rejected the message: "
-                    f"{e.response.status_code} {e.response.text[:200]}"}
+                    f"{e.response.status_code} "
+                    f"{redact.scrub_text(e.response.text, 200)}"}
         except httpx.HTTPError as e:
-            return {"ok": False, "error": f"could not reach ntfy at {server}: {e}"}
+            # a custom ntfy server URL can carry basic-auth userinfo, and the
+            # exception text repeats the full request URL
+            return {"ok": False,
+                    "error": f"could not reach ntfy at {redact.host_of(server)}: "
+                             f"{type(e).__name__}"}
         try:
             msg_id = resp.json().get("id")
         except ValueError:
@@ -122,8 +127,20 @@ class WebhookProvider(Provider):
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
         except httpx.HTTPError as e:
-            return {"ok": False, "error": f"webhook POST to {url} failed: {e}"}
-        log.info("notification accepted by webhook (%s) status=%s", url, resp.status_code)
+            # HOST ONLY, and never str(e). A Slack/Discord/Zapier webhook
+            # carries its secret in the PATH, and httpx puts the full request
+            # URL inside its exception text — so both halves of the obvious
+            # message leak the credential. This string is the notify_operator
+            # tool's RESULT: it goes into the model's context, back out to the
+            # LLM provider on the next round, and into a messages row for 30
+            # days. The status code and failure kind are what an operator
+            # actually needs; the URL they already know.
+            detail = (f"HTTP {e.response.status_code}"
+                      if isinstance(e, httpx.HTTPStatusError) else type(e).__name__)
+            return {"ok": False,
+                    "error": f"webhook POST to {redact.host_of(url)} failed: {detail}"}
+        log.info("notification accepted by webhook (%s) status=%s",
+                 redact.host_of(url), resp.status_code)
         return {"ok": True, "id": None}
 
 
