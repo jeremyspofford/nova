@@ -414,7 +414,34 @@ async def _build_system_prompt(agent: dict, query: str, *,
             others = [a for a in await agent_registry.list_agents(enabled_only=True)
                       if a["name"] != agent.get("name")]
             if others:
-                lines = "\n".join(f"- {a['name']}: {a['description']}" for a in others)
+                # The description is what the OPERATOR hoped an agent would
+                # do; the grants are what it can actually do. Printing only
+                # the first turns an aspiration into a fact main will repeat
+                # to the operator's face — on 2026-07-26 `coder` advertised
+                # "writing code, running tests, git commit" while holding one
+                # grant that resolves to a weather lookup, and main truthfully
+                # relayed that it could run shell commands, because its own
+                # prompt said so. Naming the tools makes the promise checkable
+                # and makes routing better: main can see who actually holds
+                # web_search.
+                from app.tools import registry as tool_registry
+                db_names: list[str] = []
+                if any("db:*" in (a.get("allowed_tools") or []) for a in others):
+                    db_names = sorted((await tool_registry._load_db_tools()).keys())
+
+                def _can_call(a: dict) -> str:
+                    allowed = a.get("allowed_tools")
+                    if allowed is None:
+                        return "every tool"
+                    names: list[str] = []
+                    for t in allowed:
+                        names.extend(db_names if t == "db:*" else [t])
+                    return ", ".join(names) if names else "NOTHING — no tools granted"
+
+                lines = "\n".join(
+                    f"- {a['name']}: {a['description']}\n"
+                    f"    can actually call: {_can_call(a)}"
+                    for a in others)
                 parts.append(
                     "## Available specialists (dispatch_to_agent)\n" + lines
                     + "\n"

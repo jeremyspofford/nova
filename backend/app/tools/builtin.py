@@ -96,8 +96,37 @@ async def _delete_memory_item(args, ctx):
 # ── agents ───────────────────────────────────────────────────────────────
 
 async def _list_agents(args, ctx):
+    # `model` and `allowed_tools` are here because their absence was a dead
+    # end on 2026-07-26: asked what the coder agent was bound to and what it
+    # could call, Nova called this tool, got back a name and a description,
+    # and told the operator it could not check without access to the Nova UI.
+    # Both fields are read-only facts about her own configuration, and the
+    # question "why is this agent failing" is unanswerable without them.
+    # system_prompt stays out — it is long, and manage_agents(action='get')
+    # returns it for the one agent actually being diagnosed.
     agents = await agent_registry.list_agents(enabled_only=True)
-    slim = [{k: a[k] for k in ("name", "description", "routing_keywords", "is_system")}
+    # Expand `db:*` to the tool names it resolves to. Returned raw, the
+    # wildcard reads like a promise of breadth and got inferred as
+    # "filesystem, shell, git operations" on 2026-07-26 when it actually
+    # resolves to two HTTP lookups. A grant list is only an honest answer to
+    # "what can this agent do" if it names things.
+    from app.tools import registry as tool_registry
+    db_names: list[str] = []
+    if any("db:*" in (a.get("allowed_tools") or []) for a in agents):
+        db_names = sorted((await tool_registry._load_db_tools()).keys())
+
+    def _grants(a):
+        allowed = a.get("allowed_tools")
+        if allowed is None:
+            return "every tool"
+        names = []
+        for t in allowed:
+            names.extend(db_names if t == "db:*" else [t])
+        return names or ["NOTHING — no tools granted"]
+
+    slim = [{**{k: a[k] for k in ("name", "description", "routing_keywords",
+                                 "is_system", "model")},
+             "can_call": _grants(a)}
             for a in agents]
     return _j(slim)
 
@@ -138,6 +167,27 @@ async def _manage_agents(args, ctx):
 
     if action == "list":
         return await _list_agents(args, ctx)
+
+    if action in ("get", "inspect"):
+        # Read an agent's FULL configuration. Its absence was a live dead end
+        # on 2026-07-26: the operator asked why `coder` was failing, and the
+        # agent-manager — whose entire job is managing agents — could only
+        # answer "those live in the Nova UI, not in the API I have access
+        # to". list returns name/description/keywords only, so nothing Nova
+        # could reach could see a model binding, a grant list or a prompt.
+        # Read-only on purpose: `update` already exists and is confined by
+        # _escalating_grants and the system-agent protections.
+        ident = args.get("agent_id") or args.get("name", "")
+        agent = None
+        if ident:
+            agent = (await agent_registry.get_agent_by_name(ident)
+                     if not _looks_like_uuid(ident)
+                     else await agent_registry.get_agent(ident))
+        if not agent:
+            return f"Error: agent '{ident}' not found"
+        return _j({k: agent.get(k) for k in
+                   ("name", "description", "enabled", "model", "allowed_tools",
+                    "routing_keywords", "is_system", "system_prompt")})
 
     if action == "create":
         name = args.get("name", "").strip()
@@ -1293,7 +1343,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
     },
     "manage_agents": {
         "name": "manage_agents",
-        "description": ("Manage the agent registry: list, create, update, or disable agents. "
+        "description": ("Manage the agent registry: list, get, create, update, or disable agents. "
                         "System agents (main, guardian, the managers) cannot be deleted, "
                         "disabled, or have their prompt, model or tools changed from here — "
                         "only the operator can, in Settings. You may only grant tools you "
@@ -1301,7 +1351,12 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "may name builtins, specific DB-created tools, or 'db:*' for all "
                         "DB-created tools."),
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["list", "create", "update", "disable"]},
+            "action": {"type": "string",
+                       "enum": ["list", "get", "create", "update", "disable"],
+                       "description": ("'list' names every agent; 'get' returns ONE agent's "
+                                       "full config — model, allowed_tools and system_prompt "
+                                       "— which is how you diagnose an agent that is "
+                                       "misbehaving.")},
             "name": {"type": "string"},
             "description": {"type": "string"},
             "system_prompt": {"type": "string"},
