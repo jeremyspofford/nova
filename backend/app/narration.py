@@ -46,8 +46,14 @@ _COMPILED = [re.compile(p, re.IGNORECASE) for p in _PATTERNS]
 # dash/colon, the "Done — saved it" shape) so third-party subjects ("the
 # digest updated it") and possessives ("it's own") never match.
 _COMPLETION_PATTERNS = [
+    # `dispatched` belongs here for the same reason the rest do: the future
+    # tense list above catches "I'll dispatch the tool-creator", but a model
+    # that says "I dispatched the tool-creator and it is building it now" is
+    # making the identical claim about work that equally never happened —
+    # the 2026-07-14 incident, told after the fact instead of before it.
     r"\b(?:I['’]ve|I have|I) (?:just |now )?(?:saved|created|added|updated|"
-    r"deleted|removed|scheduled|wrote|written|built|set (?:it |that |this )?up)\b",
+    r"deleted|removed|scheduled|wrote|written|built|dispatched|"
+    r"set (?:it |that |this )?up)\b",
     r"(?:^\s*|[—–:;-]\s*)(?:saved|created|added|updated|deleted|scheduled|"
     r"logged|noted)\s+(?:it|that|this|them|one)\b(?!['’])",
     r"\b(?:it|that|this)['’]s (?:been )?(?:saved|created|added|updated|"
@@ -64,6 +70,15 @@ _RECAP_MARKERS = re.compile(
     r"\bpreviously\b|\bthe other day\b|\balready\b|\bbefore\b|"
     r"\bback (?:then|when)\b", re.IGNORECASE)
 
+# A sentence that is hypothesising, not reporting. "If I dispatched the
+# agent, it would take a few minutes" describes a road not taken, and
+# accusing her of fabricating it is exactly the false positive that teaches
+# an operator to ignore the banner. This guard only became necessary WITH
+# past-tense dispatch matching: no conditional can contain "I'll dispatch",
+# so the future-tense patterns never collided with one.
+_CONDITIONAL_MARKERS = re.compile(
+    r"\bif\b|\bunless\b|\bwhether\b|\bin case\b|\bwould have\b", re.IGNORECASE)
+
 _SENTENCES = re.compile(r"[.!?\n]+")
 
 
@@ -78,7 +93,7 @@ def detect(final_text: str, tool_calls_made: int) -> str | None:
         if m:
             return m.group(0)
     for sentence in _SENTENCES.split(final_text):
-        if _RECAP_MARKERS.search(sentence):
+        if _RECAP_MARKERS.search(sentence) or _CONDITIONAL_MARKERS.search(sentence):
             continue
         for pat in _COMPLETION_COMPILED:
             m = pat.search(sentence)

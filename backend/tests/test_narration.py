@@ -1,0 +1,215 @@
+"""Narration detector — the fabrication banner, and what it must not cry wolf at.
+
+    docker compose exec backend python tests/test_narration.py
+
+This module exists because of two live incidents on 2026-07-14: an agent
+streamed "I'll dispatch the tool-creator… I'll wait for it to confirm",
+called nothing, and the described work silently never happened. The operator
+believed it and waited.
+
+It is a regex heuristic, so PRECISION IS THE DESIGN — a banner that says
+"she announced an action but called no tool" is an accusation, and one false
+accusation costs more than several missed catches. That makes both halves
+worth pinning, and until now neither was: the module had no tests at all,
+and the only two places that mentioned it were stubs switching it OFF
+(test_sub_text.py, test_local_tier.py).
+
+Three layers here, in order of what would hurt most if it broke:
+
+  1. MUST FLAG — the phrasings from the real incidents, in every tense.
+  2. MUST NOT FLAG — asking permission, honest recaps of earlier work,
+     conditionals, and third-party subjects. These are correct behaviour and
+     flagging them trains the operator to ignore the banner.
+  3. THE GATE — any turn that actually ran a tool is never flagged, whatever
+     it says. That is the runner's ground truth and the reason past-tense
+     matching is safe at all.
+
+Layer 4 runs the REAL runner with a scripted model and asserts the event
+that draws the banner actually comes out — the regex being right is not the
+same as the operator seeing anything.
+"""
+
+import asyncio
+import sys
+import tempfile
+
+sys.path.insert(0, "/app/backend")
+
+from app import narration, settings_store, trace            # noqa: E402
+from app.agents import runner                               # noqa: E402
+from app.llm import router as llm_router                    # noqa: E402
+from app.memory import memory as memory_mod                 # noqa: E402
+from app.tools import registry as tool_registry             # noqa: E402
+
+FAILURES: list[str] = []
+SCRATCH_MEM = tempfile.mkdtemp(prefix="nova-narration-")
+
+AGENT = {"id": "a1", "name": "main", "model": "openrouter:test",
+         "system_prompt": "You coordinate.", "allowed_tools": None}
+
+
+def check(label, cond, detail=""):
+    print(f"  {'PASS' if cond else 'FAIL'}  {label}" + (f"   [{detail}]" if detail else ""))
+    if not cond:
+        FAILURES.append(label)
+
+
+# ── 1. must flag: the announcements that turned out to be fiction ─────────
+
+MUST_FLAG = [
+    # the two 2026-07-14 incidents, verbatim in shape
+    "I'll dispatch the tool-creator to build that for you.",
+    "Dispatching this to the tool-creator now.",
+    "I'm waiting for the tool-creator to confirm.",
+    # past tense — the same lie told after the fact. glm-5.2 does this.
+    "I dispatched the tool-creator and it is building the tool now.",
+    "I have dispatched the model-manager.",
+    "I've just dispatched the tool-creator.",
+    # past-tense completion claims (the 2026-07-17 addition)
+    "Done — saved it with no tags.",
+    "I've created the note.",
+    "The automation is now scheduled.",
+    "It's been saved.",
+]
+
+# ── 2. must NOT flag: correct behaviour that looks superficially similar ──
+
+MUST_NOT_FLAG = [
+    # asking permission is exactly right
+    "Want me to create that note?",
+    "Should I dispatch the tool-creator for this?",
+    "I can create that if you'd like.",
+    # honest recaps of earlier work — the per-sentence past-time exemption
+    "I created that yesterday.",
+    "I dispatched it earlier, so it should be done by now.",
+    "I already saved that one.",
+    # conditionals: describing what WOULD happen is not a claim that it did
+    "If I dispatched the agent, it would take a few minutes.",
+    "Unless I dispatched it, nothing would have run.",
+    # third-party subjects — someone else did it, not this turn
+    "The digest updated it overnight.",
+    "The ingestion agent saved that page.",
+    # plain conversation that happens to contain the verbs
+    "Your note is in memory under the travel tag.",
+    "That tool already exists.",
+]
+
+
+def test_patterns():
+    print("1. must flag — announced or claimed action, zero tools")
+    for text in MUST_FLAG:
+        hit = narration.detect(text, 0)
+        check(f"flags: {text[:58]}", hit is not None, str(hit))
+
+    print("2. must NOT flag — permission, recaps, conditionals, third parties")
+    for text in MUST_NOT_FLAG:
+        hit = narration.detect(text, 0)
+        check(f"quiet: {text[:58]}", hit is None, f"matched {hit!r}")
+
+
+# ── 3. the gate: a turn that really ran a tool is never accused ───────────
+
+def test_gate():
+    print("3. the zero-tool gate")
+    for text in MUST_FLAG:
+        check(f"silent when a tool ran: {text[:44]}",
+              narration.detect(text, 1) is None)
+    check("empty text is never flagged", narration.detect("", 0) is None)
+    check("no text at all is never flagged", narration.detect(None, 0) is None)
+
+
+# ── 4. end to end: the banner event really leaves the runner ─────────────
+# The regex being right does not prove the operator sees anything. This
+# drives the REAL runner with a scripted model and asserts the event that
+# ChatPanel renders the amber banner from actually arrives.
+
+class Script:
+    """A model that announces a dispatch and then calls nothing."""
+
+    def __init__(self, text):
+        self.text = text
+
+    def stream_chat(self, *a, **kw):
+        text = self.text
+
+        async def gen():
+            for token in text.split(" "):
+                yield {"type": "text", "text": token + " "}
+        return gen()
+
+
+def install(script):
+    llm_router.stream_chat = script.stream_chat
+    llm_router.effective_model = lambda m: m
+    settings_store._cache["agents.tool_concurrency"] = 1
+    settings_store._cache["agents.max_dispatches_per_turn"] = 3
+    trace._flush = lambda t: asyncio.sleep(0)
+
+    from app.agents import registry as agent_registry
+
+    async def get_agent(name):
+        return {"id": name, "name": name, "enabled": True,
+                "model": "openrouter:test", "system_prompt": "s",
+                "allowed_tools": []}
+
+    agent_registry.get_agent_by_name = get_agent
+
+    async def get_agent_tools(agent, exclude=None):
+        return [{"type": "function", "function": {
+            "name": "dispatch_to_agent", "description": "d", "parameters": {}}}]
+
+    tool_registry.get_agent_tools = get_agent_tools
+
+    async def _empty(*a, **kw):
+        return ""
+
+    runner._platform_block = _empty
+    runner._entities_block = _empty
+    runner._mcp_index_block = _empty
+
+
+async def run_turn(text):
+    install(Script(text))
+    events = []
+    with memory_mod.sandbox(memory_mod.OkfMemory(base_dir=SCRATCH_MEM)):
+        async with trace.turn("test"):
+            async for ev in runner.run_agent(
+                    AGENT, [{"role": "user", "content": "go"}]):
+                events.append(ev)
+    return events
+
+
+def narration_events(events):
+    # the runner yields the activity FLAT — {"type": "activity", "kind": ...}
+    # — and router_chat re-wraps it for the SSE stream, so this is the shape
+    # at this layer, not the nested one the browser sees
+    return [e for e in events
+            if e.get("type") == "activity" and e.get("kind") == "narration"]
+
+
+async def test_end_to_end():
+    print("4. end to end — the banner event leaves the real runner")
+    events = await run_turn(
+        "I dispatched the tool-creator and it is building the tool now.")
+    hits = narration_events(events)
+    check("a past-tense dispatch claim with no tool call raises the banner",
+          len(hits) == 1, f"{len(hits)} narration events")
+
+    events = await run_turn("Your note is in memory under the travel tag.")
+    check("an ordinary answer raises nothing",
+          narration_events(events) == [], str(narration_events(events)))
+
+
+def main() -> int:
+    test_patterns()
+    test_gate()
+    asyncio.run(test_end_to_end())
+    if FAILURES:
+        print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:6]))
+        return 1
+    print("all checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
