@@ -281,12 +281,16 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
-    # nginx resolves the backend's address once at startup, so a backend
-    # recreated without web leaves :8080 502ing at a stale container IP.
-    # The healthcheck makes that visible in `docker compose ps` instead of
-    # looking like a frontend bug.
+    # /health traverses nginx AND its proxy to the backend, so red here means
+    # the phone path is genuinely broken rather than just slow.
+    # 127.0.0.1, not localhost: the container's /etc/hosts maps localhost to
+    # ::1 as well, wget tries that first, and nginx listens on IPv4 only — so
+    # the check failed on every probe since it was added and `docker compose
+    # ps` showed web (unhealthy) while it was happily serving 200s. A column
+    # that is always red is worse than no column, because the next real
+    # outage looks identical to it.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 5s
       retries: 3
