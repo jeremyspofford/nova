@@ -419,7 +419,22 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
                     {res.containers.map(c => (
                       <tr key={c.name} className="border-t border-stone-800">
                         <td className="px-3 py-1 truncate">{c.service || c.name}</td>
-                        <td className={`px-3 py-1 ${c.state === 'running' ? 'text-emerald-400' : 'text-stone-500'}`}>{c.state}</td>
+                        {/* docker's healthcheck verdict outranks its state:
+                            a container whose check has been failing for an
+                            hour still reports "running", so showing state
+                            alone paints a confident green over a service that
+                            is down. No check declared stays neutral — that is
+                            not the same as passing one. */}
+                        <td className={`px-3 py-1 ${
+                          c.health === 'unhealthy' ? 'text-red-400'
+                            : c.health === 'starting' ? 'text-amber-400'
+                              : c.state === 'running' ? 'text-emerald-400' : 'text-stone-500'}`}
+                          title={c.health ? `docker healthcheck: ${c.health}` : 'no healthcheck declared'}>
+                          {c.state}
+                          {c.health && c.health !== 'healthy' && (
+                            <span className="text-stone-500"> ({c.health})</span>
+                          )}
+                        </td>
                         <td className="px-3 py-1 text-right"
                           title={c.cpu_pct != null
                             ? `${(c.cpu_pct / 100).toFixed(2)} cores · ${c.cpu_pct}% of one core (docker stats)`

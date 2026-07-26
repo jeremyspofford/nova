@@ -225,6 +225,26 @@ def _parse_bytes(s: str) -> float | None:
     return None
 
 
+def _health(status: str) -> str | None:
+    """docker's healthcheck verdict, dug out of the Status string.
+
+    `{{.State}}` is only "running" / "exited" — a container whose healthcheck
+    has been failing for an hour still reports "running", so a board built on
+    State alone shows a confident green for a service that is down. The
+    verdict only exists in `{{.Status}}` ("Up 5 minutes (unhealthy)").
+    None means the service declares no healthcheck, which is honestly
+    different from passing one and must not be coloured as if it were.
+    """
+    low = status.lower()
+    if "(healthy)" in low:
+        return "healthy"
+    if "(unhealthy)" in low:
+        return "unhealthy"
+    if "health: starting" in low:
+        return "starting"
+    return None
+
+
 def _containers() -> dict:
     """Per-service state + live CPU/mem for this instance's compose project.
     `docker ps -a` gives every service (incl. stopped); `docker stats` adds
@@ -232,15 +252,17 @@ def _containers() -> dict:
     ps = subprocess.run(
         ["docker", "ps", "-a",
          "--filter", f"label=com.docker.compose.project={PROJECT}",
-         "--format", '{{.Names}}\t{{.Label "com.docker.compose.service"}}\t{{.State}}'],
+         "--format", '{{.Names}}\t{{.Label "com.docker.compose.service"}}'
+                     '\t{{.State}}\t{{.Status}}'],
         capture_output=True, text=True, timeout=10)
     rows: dict[str, dict] = {}
     for line in ps.stdout.splitlines():
         cols = line.split("\t")
-        if len(cols) != 3 or not cols[0]:
+        if len(cols) != 4 or not cols[0]:
             continue
-        name, service, state = cols
+        name, service, state, status = cols
         rows[name] = {"name": name, "service": service, "state": state,
+                      "health": _health(status),
                       "cpu_pct": None, "mem_used_gb": None, "mem_total_gb": None}
     stats = subprocess.run(
         ["docker", "stats", "--no-stream", "--format",

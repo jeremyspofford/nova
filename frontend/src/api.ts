@@ -423,6 +423,9 @@ export interface GpuStat {
 export interface ContainerStat {
   name: string; service: string; state: string;
   cpu_pct: number | null; mem_used_gb: number | null; mem_total_gb: number | null;
+  /** docker's healthcheck verdict. null = the service declares no check,
+   *  which is honestly different from passing one. */
+  health?: 'healthy' | 'unhealthy' | 'starting' | null;
 }
 export interface SystemResources {
   instance: { id: string; label: string; leader: boolean };
