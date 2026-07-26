@@ -1418,6 +1418,61 @@ pulled forward (cloud coding spend needs caps before it grows). Wave 4 —
 #33 T4–T5, #36 stage 3. Wave 5 — #36 stage 4, only after its activation
 checklist passes.
 
+### Waiting on Jeremy (captured 2026-07-25 — answers unblock work already scoped)
+
+Each of these is a decision, not a task; the implementation behind it is
+small and understood. Recommendations are stated so a one-word answer moves
+it. Raised at the end of the voice + monitoring + redaction session.
+
+**Only Jeremy can do:**
+- **Talk to her in a real room.** The fake-microphone rig used to verify
+  voice phases 3/4/5 feeds a WAV, so it cannot reproduce ACOUSTIC ECHO —
+  her own voice re-entering an open mic is the one untested surface of the
+  whole voice lane. Check: does she ever cut herself off mid-reply
+  (especially with `voice.wake_mic_processing = raw`, where echo
+  cancellation is off), does the volume duck feel like "she heard me", and
+  are the new entering/leaving earcons pleasant or annoying. If she
+  self-cuts, the levers in order are the raw duck depth (ChatPanel
+  `duckForSpeech`), then `SUSTAIN_MS` in `voice/vad.ts`.
+- **Wake-word learning is OFF and no household voices are enrolled.** The
+  kid fix cannot progress until labelled clips exist, and turning on
+  household audio capture is deliberately not something Nova decides.
+  Settings → Voice.
+
+**Yes/no, then it gets built:**
+- **Scrub the ~30 days of already-stored trace/activity rows?**
+  Recommendation: NO — irreversible rewrite of the operator's own history,
+  and retention ages them out anyway.
+- **Instance retirement.** Nothing in the tree ever deletes an `instances`
+  row (`grep -rn "DELETE FROM instances"` is empty), so sysmon's
+  clear-on-retire branch can never fire: six dead test instances have held
+  permanent red "has not reported for 3 minutes" alerts since 2026-07-24,
+  with the age frozen at the moment each was raised. Any second machine
+  simply switched off does the same. Recommendation: retire after 7 days
+  silent, DELETE the row. Needs: the number, and delete vs tombstone.
+- **`notify.ntfy.server_mode` defaults to `public`** = https://ntfy.sh, an
+  unauthenticated topic anyone who guesses the string can subscribe to.
+  Three callers push model-controlled or error-derived text through it:
+  `raise_recommendation` bodies, automation failure summaries (which are
+  concatenated LLM error strings), and the first 120 chars of every reply on
+  turns over 20s. A `builtin` ntfy service already ships. Recommendation:
+  default to builtin. Is public intentional?
+- **`GET /api/v1/mcp/servers` returns auth headers verbatim** and ToolsTab
+  loads the bearer token into a text input. Possibly deliberate — they have
+  to be editable somehow. Recommendation: mask with a "replace" affordance
+  rather than round-tripping the token.
+
+**Presentation/product calls, each blocking a scoped item:**
+- Cost price map (#30 loose end): list price from the catalog, or what
+  Jeremy actually pays (an OpenRouter tier only he knows)? And should the
+  Turn Inspector show dollars per turn at all?
+- Followed-sources management UI: a 7th Library tab, or grow the existing
+  source node panel? Plus: may an authenticated operator click bypass the
+  consent gate to unfollow?
+- Executable skill payloads (#18): the deliverable is a go/no-go, and a
+  "go" relaxes a rail locked by name in `docs/plans/self-improvement.md`
+  ("self-tuning edits prompt text, never capability").
+
 ### Discussion backlog (captured 2026-07-21 — to scope/plan, not yet numbered)
 
 Raised by Jeremy in one session; each needs a planning pass before it joins
