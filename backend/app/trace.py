@@ -32,7 +32,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app import bg, db, instances
+from app import bg, db, instances, redact
 
 log = logging.getLogger(__name__)
 
@@ -44,39 +44,20 @@ _parent_var: contextvars.ContextVar[Optional[uuid.UUID]] = contextvars.ContextVa
 ARG_LIMIT = 2000     # chars of redacted-args JSON kept per span
 RESULT_HEAD = 500    # chars of a tool result kept (plus its full size)
 
-# key-name redaction: any dict key that smells like a credential
-_SECRET_KEY = re.compile(
-    r"token|secret|password|passwd|api[_-]?key|apikey|authorization|bearer|"
-    r"credential|private[_-]?key", re.IGNORECASE)
-# value-shape redaction: bearer headers, sk-style keys, JWTs
-_SECRET_VAL = re.compile(
-    r"Bearer\s+\S+|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}|\beyJ[A-Za-z0-9_-]{20,}")
-
-_MASK = "•••"
+# Redaction lives in app/redact.py — ONE policy, shared with the activity
+# trail in the runner. It used to live here alone, which meant the copy of a
+# tool's arguments that survives LONGER (the role='tool' message rows, 30
+# days, vs. these spans at 14) was the copy nothing scrubbed at all.
 
 
 def redact_text(text: str, limit: int = RESULT_HEAD) -> str:
     """Scrub secret-shaped values out of free text and truncate."""
-    return _SECRET_VAL.sub(_MASK, text or "")[:limit]
-
-
-def _redact_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {k: (_MASK if _SECRET_KEY.search(k) else _redact_value(v))
-                for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact_value(v) for v in value]
-    if isinstance(value, str):
-        return _SECRET_VAL.sub(_MASK, value)
-    return value
+    return redact.scrub_text(text, limit)
 
 
 def redact_args(args: dict) -> str:
     """Tool args as a scrubbed, truncated JSON string (empty dict on failure)."""
-    try:
-        return json.dumps(_redact_value(args))[:ARG_LIMIT]
-    except Exception:
-        return "{}"
+    return redact.scrub_args(args, ARG_LIMIT)
 
 
 class _Turn:
@@ -124,7 +105,11 @@ async def turn(source: str, *, conversation_id: str | None = None,
         t.status = "cancelled"
         raise
     except Exception as e:
-        t.set_error(str(e))
+        # An escaping exception is the LONGEST unredacted field in the
+        # ledger (2000 chars) and httpx puts the full request URL in its
+        # exception text — so this is where a fetch's query-string key came
+        # to rest for 14 days.
+        t.set_error(redact.scrub_text(str(e)))
         raise
     finally:
         t.finished_at = datetime.now(timezone.utc)

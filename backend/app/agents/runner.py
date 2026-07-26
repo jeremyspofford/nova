@@ -18,7 +18,7 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import bg, narration, settings_store, timefmt, trace
+from app import bg, narration, redact, settings_store, timefmt, trace
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory.memory import memory
@@ -1236,17 +1236,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                           "with corrected arguments.")
                 yield {"type": "activity", "kind": "tool_start", "name": name,
                        "agent": agent.get("name"),
-                       "args": (tc["arguments"] or "")[:200],
-                       "detail": (tc["arguments"] or "")[:200]}
+                       "args": redact.scrub_json_text(tc["arguments"] or "", 200),
+                       "detail": redact.scrub_json_text(tc["arguments"] or "", 200)}
                 async with trace.span("tool", name) as tsp:
                     tsp["agent"] = agent.get("name")
                     tsp["error"] = "malformed_arguments"
-                    tsp["args"] = trace.redact_text(tc["arguments"] or "", 2000)
+                    # scrub_json_text, not redact_text: this is the RAW
+                    # argument blob, recorded because it failed to parse, and
+                    # text scrubbing alone never applies the key-name rule —
+                    # so {"api_key": "..."} survived in the one place it was
+                    # stored unparsed.
+                    tsp["args"] = redact.scrub_json_text(tc["arguments"] or "", 2000)
                     tsp["result_size"] = len(result)
                     tsp["result_head"] = result
                 yield {"type": "activity", "kind": "tool_result", "name": name,
                        "agent": agent.get("name"),
-                       "args": (tc["arguments"] or "")[:200],
+                       "args": redact.scrub_json_text(tc["arguments"] or "", 200),
                        "detail": result[:200]}
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
@@ -1353,7 +1358,11 @@ async def _run_dispatch(args: dict, parent_depth: int,
 
 
 def _brief(args: dict) -> str:
-    try:
-        return json.dumps(args)[:200]
-    except Exception:
-        return ""
+    """The one-line argument summary shown on an activity card — and, via
+    router_chat, persisted as a role='tool' message row for 30 days.
+
+    This was `json.dumps(args)[:200]` with no redaction of any kind, which
+    made it the longest-lived UNSCRUBBED copy of every tool call Nova made:
+    the turn ledger's careful scrubbing was defeated by reading the other
+    table. Same policy as the ledger now, from the same module."""
+    return redact.scrub_args(args, 200)
