@@ -17,6 +17,7 @@ import type { TapVad } from '../voice/vad';
 import type { WakeWord } from '../voice/wake';
 import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
 import { useAssistantName } from '../useAssistantName';
+import { groupModels } from '../models';
 
 /** An attachment as the message list shows it — preview only exists for
  *  images picked this session (history rows come back name-only). */
@@ -1608,7 +1609,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               className="min-w-0 max-w-[11rem] truncate bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-[11px] text-stone-400 hover:text-stone-200"
               title="Model for the main agent (applies next message)"
             >
-              {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {groupModels(models).map(g => (
+                <optgroup key={g.slug} label={g.label}>
+                  {g.models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </optgroup>
+              ))}
               {!models.some(m => m.id === mainAgent.model) && (
                 <option value={mainAgent.model}>{mainAgent.model}</option>
               )}
@@ -1706,7 +1711,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                     onChange={e => changeModel(e.target.value)}
                     className="mt-1 w-full bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-300"
                   >
-                    {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {groupModels(models).map(g => (
+                      <optgroup key={g.slug} label={g.label}>
+                        {g.models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </optgroup>
+                    ))}
                     {!models.some(m => m.id === mainAgent.model) && (
                       <option value={mainAgent.model}>{mainAgent.model}</option>
                     )}

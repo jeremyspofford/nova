@@ -9,6 +9,7 @@ import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, Notifi
 import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices, WakeLearning } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
 import { BundledInference, ModelStorage } from './inference';
+import { groupModels } from '../../models';
 
 export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
@@ -109,6 +110,7 @@ export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: stri
       const scoped = d.model_scope === 'ollama'
         ? models.filter(m => m.provider === 'ollama')
         : models;
+      const groups = groupModels(scoped);
       return (
         <select
           value={String(d.value)}
@@ -116,11 +118,24 @@ export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: stri
           className="shrink-0 max-w-[16rem] bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
         >
           {d.allow_empty && <option value="">(agent's model)</option>}
-          {scoped.map(m => (
-            <option key={m.id} value={d.model_scope === 'ollama' ? m.name : m.id}>
-              {m.name}
-            </option>
-          ))}
+          {/* an ollama-scoped setting is already single-provider, so a lone
+              group heading would be noise — group only when the list really
+              spans more than one place a model can run */}
+          {groups.length === 1
+            ? scoped.map(m => (
+              <option key={m.id} value={d.model_scope === 'ollama' ? m.name : m.id}>
+                {m.name}
+              </option>
+            ))
+            : groups.map(g => (
+              <optgroup key={g.slug} label={g.label}>
+                {g.models.map(m => (
+                  <option key={m.id} value={d.model_scope === 'ollama' ? m.name : m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
           {/* keep the stored value selectable even if not currently listed */}
           {!!d.value && !scoped.some(m =>
             (d.model_scope === 'ollama' ? m.name : m.id) === d.value) && (

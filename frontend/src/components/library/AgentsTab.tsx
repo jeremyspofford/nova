@@ -6,6 +6,7 @@ import {
 import { agentDisplayName } from '../../names';
 import { Toggle, CardsSkeleton } from '../ui';
 import { ConcurrentLoad, DetectSuggest } from './models-shared';
+import { groupModels } from '../../models';
 
 /** Per-agent model + status — every agent has its OWN model. */
 export function AgentsTab() {
@@ -186,7 +187,11 @@ export function AgentsTab() {
       className="max-w-[14rem] bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-xs text-stone-300"
     >
       {placeholder && <option value="">{placeholder}</option>}
-      {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+      {groupModels(models).map(g => (
+        <optgroup key={g.slug} label={g.label}>
+          {g.models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </optgroup>
+      ))}
       {!!value && !models.some(m => m.id === value) && (
         <option value={value}>{value} (not detected)</option>
       )}
