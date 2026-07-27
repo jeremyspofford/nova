@@ -168,6 +168,60 @@ succeeds with one, and the consent cannot be reused.
 **Phase 5 — ACP coding delegation.** `acp-coding-delegation.md` phase 0,
 unchanged in position, with the corrections below.
 
+## Phase 3 as built, and a scoping correction (2026-07-27)
+
+Built: `mcp-runner` carries a read-only mount of the repo named file by file
+(`backend/app`, `backend/tests`, `frontend/src`, `docs/`, plus ROADMAP.md,
+CLAUDE.md, README.md, docker-compose.yml). `.env`, `data/`, `node_modules`
+and `.git` are excluded structurally rather than by a filter. The filesystem
+server is baked into the image and registered as `node <path>`, declared
+read-only so its tools classify as READERs under the phase-2 fence.
+
+**The grant was wrong and has been revoked.** It went to `main`, which meant
+seven filesystem tool definitions rode every conversational turn (~1,160
+tokens) so that Nova could browse Python she has no reason to read. Jeremy's
+correction, and it is right: reading Nova's own source is for work that
+TARGETS Nova's own source — the self-maintenance case — not for the front
+door. The coder lane exists to build OTHER applications.
+
+So the mount and the server stay registered and proven, granted to nothing.
+The grant belongs to whichever agent owns "change something about Nova
+herself" when that agent exists (see `acp-coding-delegation.md`). Re-granting
+is one PATCH; the plumbing does not need rebuilding.
+
+The general rule this is an instance of: capability goes to the agent whose
+job needs it, never to `main` because `main` is convenient. `main` already
+deliberately lacks manage_agents, manage_tools and manage_rules for the same
+reason.
+
+## The librarian — deferred, and what it would be for
+
+NOT built. Recorded because the reasoning is worth keeping.
+
+**The problem it solves.** Some documents cannot fit the answering model's
+context. Measured 2026-07-27: ROADMAP.md is ~40k tokens — 2.4x a local
+model's ENTIRE 16k window, and larger than the 24k cloud budget.
+runner.py is ~24k. Nova tried to read ROADMAP.md, could not, and flailed.
+
+**The shape.** A specialist bound to a long-context model that reads whole
+files and returns an ANSWER, while `main` stays on a small or local model.
+It needs nothing new architecturally: dispatch exists, per-agent models
+exist, and dispatch depth is already capped at 1.
+
+**The routing decision must be mechanical.** `llm/router.py`
+`_refuse_local_overflow` already computes whether a prompt fits
+`inference.ollama_num_ctx`. The backend decides whether to read directly or
+delegate; the model is not asked to judge whether something will fit.
+
+**Why it is deferred.** Cheap traversal may make whole-file reads rare
+enough that it never earns its place. Build the catalogue tools first and
+see what is actually left over.
+
+**The risk to design against if it is built.** Chunk-and-summarise is a NEW
+invention surface: a fabricated chunk summary becomes "fact" for every later
+chunk, which is the laundering shape phase 1 fenced for memory. A summary
+must be marked a summary and carry its source, never presented as the file.
+
 ## What changes in the existing plans
 
 **`acp-coding-delegation.md`** — one correction, found by running it:
