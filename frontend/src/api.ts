@@ -102,6 +102,27 @@ export async function deleteAllWakeClips(): Promise<number> {
   return (await r.json()).deleted as number;
 }
 
+// ── slash commands: operator verbs that never reach a model ───────────────
+
+export interface SlashCommand { name: string; summary: string; detail: string }
+
+export async function listCommands(): Promise<SlashCommand[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/commands`);
+  if (!r.ok) return [];
+  return (await r.json()).commands as SlashCommand[];
+}
+
+export async function runCommand(name: string, arg = ''): Promise<string> {
+  const r = await apiFetch(`${API_URL}/api/v1/commands/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ arg }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || `/${name} failed`);
+  return (body.message as string) || 'Done.';
+}
+
 /** Who transcribe recognized on a voice turn (docs/plans/speaker-id.md). */
 export interface SpeakerMatch {
   profile_id: string;

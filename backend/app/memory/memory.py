@@ -322,15 +322,63 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
 
     # ── retrieval ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _best_window(body: str, terms: set[str], width: int) -> str:
+        """The passage that actually matches, not the first `width` chars.
+
+        Taking the head is right for a short distilled note and wrong for
+        everything else here. A journal is APPEND-ONLY: its head is the
+        oldest entry of the day, so "what did we decide earlier" could never
+        retrieve the decision — measured 2026-07-27, the index ranked the
+        journal top for three different queries and the snippet still
+        returned that morning's news digest every time. Topics have the same
+        shape at 51 KB of video transcript.
+
+        No match anywhere falls back to the head, which is the right answer
+        for a note whose opening lines are its summary.
+        """
+        body = body.strip()
+        if len(body) <= width or not terms:
+            return body[:width]
+        low = body.lower()
+        # Where do the query terms actually OCCUR? Scanning fixed windows and
+        # taking the best start put the match at the window's trailing edge,
+        # where it was truncated away — the region was right and the excerpt
+        # was still useless. So find the positions, pick the densest one, and
+        # CENTRE on it.
+        hits: list[int] = []
+        for t in terms:
+            start = low.find(t)
+            while start != -1:
+                hits.append(start)
+                start = low.find(t, start + 1)
+        if not hits:
+            return body[:width]
+        hits.sort()
+        best_at, best_n = hits[0], 0
+        for h in hits:
+            n = sum(1 for x in hits if h <= x < h + width)
+            if n > best_n:
+                best_n, best_at = n, h
+        # sit the match about a quarter in, so there is context on both sides
+        start = max(0, best_at - width // 4)
+        nl = body.rfind("\n", start, start + width // 5)
+        if nl > start:
+            start = nl + 1
+        out = body[start:start + width].strip()
+        return out if start == 0 else "… " + out
+
     def _snippets(self, results: list[tuple[str, float]], max_chars: int,
-                  snippet_chars: int) -> tuple[list[str], list[str]]:
+                  snippet_chars: int, query: str = "") -> tuple[list[str], list[str]]:
+        terms = {t for t in re.findall(r"[a-z0-9]+", (query or "").lower())
+                 if len(t) > 2}
         lines, ids, used = [], [], 0
         for doc_id, score in results:
             parsed = self.store.read_file(doc_id)
             if not parsed:
                 continue
             fm, body = parsed
-            snippet = body[:snippet_chars].strip()
+            snippet = self._best_window(body, terms, snippet_chars)
             header = f"### {fm.get('title', doc_id)}"
             # Age + provenance make staleness reasoning possible: an agent can
             # only decide to refresh knowledge it can see the age and source of.
@@ -354,7 +402,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         max_chars = max_chars or settings.memory_context_max_chars
         results = self.index.search(query, type_filter={"topic", "journal", "source"},
                                     top_k=settings.memory_context_top_k)
-        lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS)
+        lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
         return {
             "context": text,
@@ -365,7 +413,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     async def skills_context(self, query: str) -> dict:
         """Applicable skills — full-enough bodies that they can actually steer behavior."""
         results = self.index.search(query, type_filter={"skill"}, top_k=3)
-        lines, ids = self._snippets(results, 2500, _SKILL_SNIPPET_CHARS)
+        lines, ids = self._snippets(results, 2500, _SKILL_SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
         return {"context": text, "total_tokens": len(text.split()), "memory_ids": ids}
 

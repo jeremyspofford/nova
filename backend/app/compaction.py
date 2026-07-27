@@ -45,9 +45,16 @@ async def maybe_compact(conversation_id: str, model: str,
                          AND role IN ('user','assistant')
                          AND content IS NOT NULL AND content <> ''
                          AND created_at < $2
-                         AND created_at > COALESCE(
-                             (SELECT summary_upto FROM conversations WHERE id = $1),
-                             'epoch'::timestamptz)
+                         -- never reach back across a /clear: the watermark
+                         -- is a floor even if summary_upto is null, or the
+                         -- next compaction would rebuild the summary the
+                         -- operator just discarded and hand the cleared
+                         -- conversation back as a paraphrase
+                         AND created_at > GREATEST(
+                             COALESCE((SELECT summary_upto FROM conversations
+                                        WHERE id = $1), 'epoch'::timestamptz),
+                             COALESCE((SELECT cleared_at FROM conversations
+                                        WHERE id = $1), 'epoch'::timestamptz))
                        ORDER BY created_at ASC""",
                     uuid.UUID(conversation_id), boundary)
                 prev = await conn.fetchval(

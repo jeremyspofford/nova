@@ -1,10 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  streamChat, getActiveConversation, getAgents, getMessages, getModels,
-  patchAgent, getPendingConsents, decideConsent, Activity, Consent,
-  ModelInfo, TraceSummary,
-  getRecCards, decideRecCard, RecCard,
+  Activity,
+  Consent,
+  ModelInfo,
+  RecCard,
+  SlashCommand,
+  TraceSummary,
+  decideConsent,
+  decideRecCard,
+  getActiveConversation,
+  getAgents,
+  getMessages,
+  getModels,
+  getPendingConsents,
+  getRecCards,
+  listCommands,
+  patchAgent,
+  runCommand,
+  streamChat,
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { TurnInspector } from './TurnInspector';
@@ -34,6 +48,9 @@ type Item =
    *  never persisted, so it does not come back on reload. */
   | { id: string; kind: 'subtext'; agent: string; turnId: string; content: string }
   | { id: string; kind: 'error'; content: string }
+  // a slash command's own reply — neither the operator nor Nova said it,
+  // so it must not look like either
+  | { id: string; kind: 'note'; content: string }
   | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
 
 type ConsentItem = Extract<Item, { kind: 'consent' }>;
@@ -203,6 +220,13 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
       </div>
     );
   }
+  if (item.kind === 'note') {
+    return (
+      <div key={item.id} className="text-xs text-stone-400 border border-stone-700/70 bg-stone-800/40 rounded px-3 py-2 whitespace-pre-wrap">
+        {item.content}
+      </div>
+    );
+  }
   // phones follow the mockup register: the user speaks in a quiet pill, the
   // assistant answers as plain text on the dark ground — no bubble
   const bubble = item.role === 'user'
@@ -368,6 +392,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // and a consent approval carries its source, and queueing only the text
   // would silently downgrade both (a spoken question answered in silence).
   const [queue, setQueue] = useState<QueuedTurn[]>([]);
+  // ── slash commands ──────────────────────────────────────────────────
+  // The palette exists so the command set is discoverable rather than
+  // folklore: a verb nobody can find is a verb nobody uses. Fetched from
+  // the backend, so adding a command server-side makes it appear here with
+  // no UI change.
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [cmdIdx, setCmdIdx] = useState(0);
+  useEffect(() => { listCommands().then(setCommands).catch(() => {}); }, []);
+  // Open only while the command NAME is still being typed. Once there is a
+  // space the operator is writing an argument, and a menu over their text
+  // is in the way.
+  const cmdPrefix = /^\/([a-z0-9-]*)$/i.exec(input.trim());
+  const cmdMatches = cmdPrefix
+    ? commands.filter(c => c.name.startsWith(cmdPrefix[1].toLowerCase()))
+    : [];
+  const paletteOpen = cmdMatches.length > 0;
+  useEffect(() => { setCmdIdx(0); }, [input]);
+
+
   const abortRef = useRef<AbortController | null>(null);
   // proactive recommendation cards Nova/automations raised (keystone)
   const [recs, setRecs] = useState<RecCard[]>([]);
@@ -1427,9 +1470,51 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
 
   // Enter / Send: send now when idle, otherwise queue the follow-up so it
   // fires automatically when the current reply finishes.
+  async function runSlash(name: string, arg: string) {
+    setInput('');
+    try {
+      const message = await runCommand(name, arg);
+      // /clear empties the transcript, because leaving the old turns on
+      // screen after clearing the context would show a conversation Nova
+      // can no longer see — the worst kind of lie a UI can tell.
+      if (name === 'clear') setItems([]);
+      setItems(prev => [...prev, { id: uid(), kind: 'note', content: message }]);
+    } catch (err) {
+      setItems(prev => [...prev, { id: uid(), kind: 'error', content: errText(err) }]);
+    }
+    inputRef.current?.focus();
+  }
+
+  /** Enter/Tab/arrows while the palette is open. Returns true if handled. */
+  function paletteKey(e: React.KeyboardEvent): boolean {
+    if (!paletteOpen) return false;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault(); setCmdIdx(i => (i + 1) % cmdMatches.length); return true;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCmdIdx(i => (i - 1 + cmdMatches.length) % cmdMatches.length); return true;
+    }
+    if (e.key === 'Escape') { setInput(''); return true; }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault();
+      void runSlash(cmdMatches[cmdIdx].name, '');
+      return true;
+    }
+    return false;
+  }
+
   function submitComposer() {
     const msg = input.trim();
     if (!msg && pending.length === 0) return;
+    // A leading slash is a command only when it MATCHES one. "/home/jeremy/
+    // workspace/nova is the path" is a sentence, and swallowing it would be
+    // worse than having no commands at all.
+    const slash = /^\/([a-z0-9-]+)(?:\s+([\s\S]*))?$/i.exec(msg);
+    if (slash && commands.some(c => c.name === slash[1].toLowerCase())) {
+      void runSlash(slash[1].toLowerCase(), slash[2] || '');
+      return;
+    }
     if (busy) {
       // text queues; attachments wait in the composer for the next idle send
       if (msg) { setQueue(q => [...q, { text: msg }]); setInput(''); }
@@ -1520,6 +1605,27 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const micModeGlyph =
     micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳'
       : listenMode === 'wake' && micState === 'wake' ? '👂' : '🎤';
+
+  const commandPalette = paletteOpen ? (
+    <div className="absolute bottom-full left-0 right-0 mb-1 z-20 rounded-lg border border-stone-700 bg-stone-900/95 backdrop-blur shadow-xl overflow-hidden">
+      {cmdMatches.map((c, i) => (
+        <button
+          key={c.name}
+          type="button"
+          onMouseEnter={() => setCmdIdx(i)}
+          onClick={() => void runSlash(c.name, '')}
+          className={`w-full text-left px-3 py-2 ${i === cmdIdx ? 'bg-stone-800' : ''}`}
+        >
+          <span className="text-sm text-teal-400 font-mono">/{c.name}</span>
+          <span className="text-xs text-stone-400"> — {c.summary}</span>
+          {i === cmdIdx && c.detail && (
+            <span className="block text-[11px] text-stone-500 mt-0.5">{c.detail}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
 
   return (
     <aside
@@ -1969,6 +2075,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           className="relative px-3 pt-1.5"
           style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
         >
+          {commandPalette}
           {attachOpen && (
             <div className="absolute bottom-full left-3 mb-1 z-30 min-w-[11rem] rounded-2xl border border-stone-700 bg-stone-900/95 backdrop-blur shadow-2xl overflow-hidden">
               <button type="button"
@@ -2024,6 +2131,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => {
+                if (paletteKey(e)) return;
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   submitComposer();
@@ -2111,8 +2219,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       ) : (
       <form
         onSubmit={e => { e.preventDefault(); submitComposer(); }}
-        className="border-t border-stone-700 p-3 flex items-end gap-2"
+        className="relative border-t border-stone-700 p-3 flex items-end gap-2"
       >
+        {commandPalette}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
@@ -2131,6 +2240,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
+            if (paletteKey(e)) return;
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               submitComposer();
