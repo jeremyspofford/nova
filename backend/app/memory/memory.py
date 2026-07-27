@@ -11,6 +11,7 @@ context so a graded turn can never touch the operator's real memory.
 import asyncio
 import contextlib
 import contextvars
+import functools
 import logging
 import re
 from pathlib import Path
@@ -139,7 +140,9 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             writer_world_reading=bool(fm.get("world_read")),
             has_source_url=bool(fm.get("source_url")))
         self.index.upsert(doc_id, fm.get("title", doc_id), body,
-                          doc_type, priority, mtime, origin=origin)
+                          doc_type, priority, mtime, origin=origin,
+                          description=str(fm.get("description") or ""),
+                          tags=self.store.extract_tags(fm))
 
     # ── writes ───────────────────────────────────────────────────────────
 
@@ -477,6 +480,148 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                         "priority": fm.get("priority", 0),
                         "updated": str(fm.get("timestamp", ""))[:10]})
         return out
+
+    # ── catalogue ────────────────────────────────────────────────────────
+    #
+    # What she knows, as a shape she can afford to look at. Retrieval before
+    # this was search-only: a document that did not match the current
+    # phrasing did not exist that turn, and there was no way to ask "what is
+    # in here?" at all — the operator had the MemoryAtlas panel and the
+    # /memory/graph endpoint, and the agent had nothing.
+    #
+    # Read straight off the BM25 index, so this cannot describe a corpus that
+    # is not the corpus search is running against.
+
+    # A description that only restates the title is worse than none: it
+    # doubles the listing's cost and teaches nothing. Measured 2026-07-27,
+    # 86 of 97 live descriptions are one of two writer-generated f-strings
+    # ("Full <src> transcript of <title>", "Followed source — <title>").
+    # Detected by COMPARING against the title rather than by matching those
+    # two strings — a template list would rot silently the day the writer's
+    # wording changes, and the point of a derived check is that it cannot.
+    _ECHO_EXTRA_WORDS = 3
+    _ECHO_STOPWORDS = frozenset({
+        "a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "or",
+        "the", "to", "with", "full", "s"})
+
+    # a collection of one is just a document
+    _COLLAPSE_MIN = 2
+
+    @classmethod
+    def _describes_nothing(cls, description: str, title: str) -> bool:
+        """True when the description is a restatement of the title."""
+        words = re.compile(r"[a-z0-9]+")
+        extra = (set(words.findall(description.lower()))
+                 - set(words.findall(title.lower()))
+                 - cls._ECHO_STOPWORDS)
+        return len(extra) <= cls._ECHO_EXTRA_WORDS
+
+    async def catalogue(self, *, kind: Optional[str] = None,
+                        tag: Optional[str] = None,
+                        contains: Optional[str] = None,
+                        max_chars: int = 6000) -> dict:
+        """The corpus as a bounded listing.
+
+        `max_chars` is a real ceiling, not a hint. Over it, whole tag-groups
+        collapse into one line each ("35 documents tagged src-cloud-codes")
+        and, past that, the tail is dropped with an explicit count — because
+        the failure this tool exists to prevent is a model answering from
+        something it never saw, and a listing that silently ends is exactly
+        how you cause that.
+        """
+        want_kind = (kind or "").strip().lower() or None
+        want_tag = (tag or "").strip().lower() or None
+        needle = (contains or "").strip().lower() or None
+
+        rows: list[tuple[str, dict]] = []
+        by_kind: dict[str, int] = {}
+        for doc_id, meta in self.index.docs.items():
+            doc_kind = meta.get("type") or "topic"
+            tags = [str(t).lower() for t in meta.get("tags") or []]
+            if want_kind and doc_kind != want_kind:
+                continue
+            if want_tag and want_tag not in tags:
+                continue
+            if needle and needle not in str(meta.get("title", "")).lower() \
+                    and needle not in str(meta.get("description", "")).lower():
+                continue
+            rows.append((doc_id, meta))
+            by_kind[doc_kind] = by_kind.get(doc_kind, 0) + 1
+
+        rows.sort(key=lambda r: (r[1].get("type") or "",
+                                 -int(r[1].get("priority") or 0),
+                                 str(r[1].get("title", "")).lower()))
+
+        def entry(doc_id: str, meta: dict) -> dict:
+            title = str(meta.get("title") or doc_id)
+            out = {"id": doc_id, "title": title,
+                   "kind": meta.get("type") or "topic",
+                   "chars": int(meta.get("chars") or 0),
+                   "origin": meta.get("origin") or provenance.THIRD_PARTY}
+            desc = str(meta.get("description") or "").strip()
+            if desc and not self._describes_nothing(desc, title):
+                out["description"] = desc
+            return out
+
+        docs = [entry(d, m) for d, m in rows]
+        cost = lambda items: sum(len(str(i)) for i in items)  # noqa: E731
+
+        # Collapse largest-first into collections. Only when the caller has
+        # NOT already narrowed by tag — drilling into a tag and being handed
+        # that same tag back collapsed would be a dead end.
+        collections: list[dict] = []
+        if not want_tag and cost(docs) > max_chars:
+            alive = {d["id"]: d for d in docs}
+            groups: dict[str, list[str]] = {}
+            for doc_id, meta in rows:
+                for t in meta.get("tags") or []:
+                    # _GENERIC_TAGS names what KIND of thing a note is, not
+                    # what it is about. Those same labels are already barred
+                    # from creating graph edges, and they make terrible
+                    # collections for the same reason: 82 of 114 live
+                    # documents share "media" and "transcript", so collapsing
+                    # on one would hide the entire corpus behind a word that
+                    # says nothing. The per-source tags underneath it are the
+                    # ones that mean something.
+                    if str(t).lower() in self._GENERIC_TAGS:
+                        continue
+                    groups.setdefault(str(t), []).append(doc_id)
+            while cost(docs) + cost(collections) > max_chars:
+                live = {t: [i for i in ids if i in alive]
+                        for t, ids in groups.items()}
+                best = max((t for t, ids in live.items()
+                            if len(ids) >= self._COLLAPSE_MIN),
+                           key=lambda t: len(live[t]), default=None)
+                if best is None:
+                    break
+                members = live[best]
+                collections.append({
+                    "tag": best, "documents": len(members),
+                    "chars": sum(alive[i]["chars"] for i in members),
+                    "kinds": sorted({alive[i]["kind"] for i in members}),
+                    # the LEAST trusted member, so a collection can never
+                    # look safer than what is inside it
+                    "origin": functools.reduce(
+                        provenance.lower_of,
+                        (alive[i]["origin"] for i in members)),
+                    "list_with": {"tag": best},
+                })
+                for i in members:
+                    alive.pop(i, None)
+                docs = [d for d in docs if d["id"] in alive]
+
+        # Still over? Drop the tail and SAY SO. Never silently.
+        omitted = 0
+        while docs and cost(docs) + cost(collections) > max_chars:
+            docs.pop()
+            omitted += 1
+
+        return {"total": len(rows), "by_kind": by_kind,
+                "collections": collections, "documents": docs,
+                "omitted": omitted,
+                "filter": {k: v for k, v in
+                           (("kind", want_kind), ("tag", want_tag),
+                            ("contains", needle)) if v}}
 
     async def delete_item(self, doc_id: str) -> bool:
         async with self._lock:

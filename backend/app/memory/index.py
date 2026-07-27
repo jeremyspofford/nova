@@ -20,7 +20,7 @@ class BM25Index:
     B = 0.75
 
     def __init__(self):
-        self.docs: dict[str, dict] = {}          # doc_id -> {title, type, priority, mtime}
+        self.docs: dict[str, dict] = {}          # doc_id -> see upsert()
         self.doc_terms: dict[str, Counter] = {}  # doc_id -> term counts
         self.doc_lengths: dict[str, int] = {}
         self.postings: dict[str, set[str]] = {}  # term -> doc_ids
@@ -47,16 +47,28 @@ class BM25Index:
 
     def upsert(self, doc_id: str, title: str, body: str, doc_type: str,
                priority: int = 0, mtime: float = 0.0,
-               origin: str = "third_party"):
+               origin: str = "third_party", description: str = "",
+               tags: Optional[list[str]] = None):
         self.remove(doc_id)
         terms = Counter(_tokenize(f"{title} {body}"))
         # `origin` rides with the document because the decision that needs it
         # — may this text reach an agent that can act? — is made at retrieval
         # time, and re-reading every hit off disk to find out would put a
         # file read in the middle of prompt assembly.
+        #
+        # `description`, `tags` and `chars` ride along for the CATALOGUE, and
+        # living here is the point rather than a convenience: the index is
+        # rebuilt from the files at startup and re-patched on every write, so
+        # a catalogue built from it cannot drift from the corpus without
+        # search drifting by exactly the same amount. A separately-maintained
+        # listing would be a second copy of the truth with nothing
+        # reconciling it. Note these are NOT tokenized — search covers
+        # title+body only, and widening what BM25 scores is a retrieval-
+        # quality change that has no business riding along with a listing.
         self.docs[doc_id] = {"title": title, "type": doc_type,
                              "priority": priority, "mtime": mtime,
-                             "origin": origin}
+                             "origin": origin, "description": description,
+                             "tags": list(tags or []), "chars": len(body)}
         self.doc_terms[doc_id] = terms
         self.doc_lengths[doc_id] = sum(terms.values())
         for term in terms:

@@ -76,9 +76,17 @@ def tier(source_type: Optional[str], writer_world_reading: bool = False,
     on 2026-07-27 carried one, because `ingestion` fetched them and
     write_memory stamps "tool" for every caller. Without this they would all
     have counted as the operator's own material.
+
+    That evidence demotes ANY tier above third_party, not only first_party,
+    and the difference is not academic: `OkfMemory.write` defaults to
+    source_type="chat", so a caller passing a source_url without naming a
+    source_type produced a CONVERSATION-tier document holding fetched text —
+    and conversation deliberately does not disarm the actor tools. No live
+    document hit this on 2026-07-27; it was reachable by default, which is
+    the kind of hole that lands months later in a call site nobody re-reads.
     """
     base = _SOURCE_TYPE_TIER.get((source_type or "").strip().lower(), THIRD_PARTY)
-    if base == FIRST_PARTY and (writer_world_reading or has_source_url):
+    if base != THIRD_PARTY and (writer_world_reading or has_source_url):
         return THIRD_PARTY
     return base
 

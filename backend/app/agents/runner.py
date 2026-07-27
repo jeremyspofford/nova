@@ -436,7 +436,6 @@ async def _build_system_prompt(agent: dict, query: str, *,
                 # prompt said so. Naming the tools makes the promise checkable
                 # and makes routing better: main can see who actually holds
                 # web_search.
-                from app.tools import registry as tool_registry
                 db_names: list[str] = []
                 if any("db:*" in (a.get("allowed_tools") or []) for a in others):
                     db_names = sorted((await tool_registry._load_db_tools()).keys())
@@ -924,6 +923,46 @@ _last_fallback_notice = 0.0
 _FALLBACK_NOTICE_EVERY_S = 1800   # debounce: at most one alert per 30 min
 
 
+# Ceiling for ONE tool result, as a share of the turn's real context window.
+# Sits above the share read_memory_item pages itself into, so a paginated
+# read passes through whole and this only ever catches the genuinely
+# oversized.
+_RESULT_FRACTION = 0.6
+
+
+def _cap_result(result: str, model: str) -> str:
+    """Bound one tool result — and say so, loudly, when it is cut.
+
+    This replaces a bare `result[:8000]`. The slice was the quiet kind of
+    wrong: it cut mid-JSON, so the model received an unterminated object with
+    no marker and no way to know anything was missing, and then answered from
+    it. Measured on the live trace before the fix: 104 results cut this way,
+    including 15 of 55 `read_memory_item` calls — one showed the model 8,000
+    of 169,673 characters, 4.7% of the document, and nothing said so.
+
+    That is a machine for inventing things. A model cannot flag a gap it was
+    never shown, so the truncation has to announce itself; every guess we
+    care about starts as a lookup that silently returned less than it
+    promised.
+
+    The ceiling is DERIVED from the model actually running the turn, for the
+    same reason the read cap is: 8,000 characters is simultaneously reckless
+    for a 16k local window and absurd for a 200k cloud one.
+    """
+    from app.agents import context_trim
+    cap = max(4000, int(context_trim.ceiling_for(model) * _RESULT_FRACTION)
+              * context_trim._CHARS_PER_TOKEN)
+    if len(result) <= cap:
+        return result
+    shown = result[:cap]
+    log.warning("tool result truncated: %d of %d chars (model %s)",
+                cap, len(result), model)
+    return (shown + f"\n\n[TRUNCATED — you were shown {cap:,} of "
+            f"{len(result):,} characters. The rest was NOT sent and you have "
+            f"not seen it. Do not answer as though you read the whole thing: "
+            f"say what you saw, or narrow the call and run it again.]")
+
+
 async def _fallback_target(agent: dict, failed_model: str,
                            failure: dict) -> Optional[str]:
     """The model to retry this round on, or None to surface the failure.
@@ -1050,6 +1089,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     ctx = {"untrusted_context": bool(prompt_signals.get("untrusted_context")),
            "agent_id": agent.get("id"), "agent_name": agent.get("name"),
+           # so a tool can size its own result against the window it has to
+           # fit — kept current below when a round falls back to another model
+           "model": agent["model"],
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
            # CANONICAL names, not the wire names the provider requires:
@@ -1168,6 +1210,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 yield {"type": "text", "text": note}
             _notify_fallback(agent, round_model, target, failure)
             round_model = target
+            # the fallback may have a very different window; tools that size
+            # themselves against it must not keep quoting the dead model's
+            ctx["model"] = target
 
         final_text += round_text
 
@@ -1372,7 +1417,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                        "detail": result[:200]}
 
             messages.append({"role": "tool", "tool_call_id": tc["id"],
-                             "content": result[:8000]})
+                             "content": _cap_result(result, round_model)})
     else:
         note = "\n\n[Stopped: reached the tool-round limit for one turn.]"
         final_text += note

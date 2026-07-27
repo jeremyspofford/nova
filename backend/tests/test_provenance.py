@@ -68,6 +68,16 @@ def main() -> int:
           pv.tier("tool", writer_world_reading=True) == pv.THIRD_PARTY)
     check("a source_url alone demotes it — this is the 9-of-13 case",
           pv.tier("tool", has_source_url=True) == pv.THIRD_PARTY)
+    check("a source_url demotes a CONVERSATION document too, not just a "
+          "first-party one — OkfMemory.write defaults to source_type='chat', "
+          "so a caller passing a source_url and nothing else was writing "
+          "fetched text at a tier that leaves the actor tools armed",
+          pv.tier("chat", has_source_url=True) == pv.THIRD_PARTY)
+    check("...and a world-reading writer demotes conversation as well",
+          pv.tier("chat", writer_world_reading=True) == pv.THIRD_PARTY)
+    check("a plain chat document with neither is still conversation — the "
+          "demotion needs EVIDENCE, or every transcript blocks every action",
+          pv.tier("chat") == pv.CONVERSATION)
     check("ingestion's grants make it world-reading",
           pv.writer_is_world_reading(["web_search", "fetch_url", "write_memory"]))
     check("main's grants do not",

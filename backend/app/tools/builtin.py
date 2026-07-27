@@ -27,6 +27,72 @@ def _j(obj) -> str:
 
 # ── memory ───────────────────────────────────────────────────────────────
 
+# How much of the turn's context one memory tool result may occupy.
+#
+# DERIVED from the model actually running the turn, never a constant: the
+# same call has to be safe on a 16k local model and not artificially crippled
+# on a 200k cloud one. `ceiling_for` already resolves min(real window −
+# completion headroom, operator budget), which is the number the router
+# refuses against — so a document this says is readable is one the router
+# will accept.
+#
+# The fractions are the judgement call. A catalogue exists to point at a
+# document, so it must leave room for the document: an eighth. A read IS the
+# turn's payload, so it gets the largest share that still leaves the system
+# prompt and the transcript standing.
+_CATALOGUE_FRACTION = 0.125
+_READ_FRACTION = 0.40
+
+
+def _turn_chars(ctx, fraction: float) -> int:
+    """A character ceiling scaled to this turn's real context window."""
+    from app.agents import context_trim
+    tokens = context_trim.ceiling_for(ctx.get("model") or "")
+    return max(2000, int(tokens * fraction) * context_trim._CHARS_PER_TOKEN)
+
+
+def _as_tokens(obj):
+    """Restate `chars` as `tokens`, in the units the router refuses in.
+
+    Same estimator as context_trim on purpose. A catalogue that sized
+    documents in one unit while the overflow refusal used another would tell
+    her a file fits and then refuse it, which is worse than saying nothing.
+    """
+    from app.agents import context_trim
+    for row in obj:
+        row["tokens"] = row.pop("chars", 0) // context_trim._CHARS_PER_TOKEN
+    return obj
+
+
+async def _list_memory(args, ctx):
+    """What she knows, as a shape small enough to look at.
+
+    Before this, memory was reachable only by search: a document that did not
+    match the current phrasing did not exist that turn, and there was no way
+    to ask what was in there at all. The operator has had this the whole time
+    — /api/v1/memory/graph feeds the MemoryAtlas panel — and the agent had
+    `list_skills`, which covers 1 of 114 live documents.
+
+    Every guess she makes about her own memory is a lookup that was not
+    available. This is that lookup.
+    """
+    result = await memory.catalogue(
+        kind=args.get("kind"), tag=args.get("tag"),
+        contains=args.get("contains"),
+        max_chars=_turn_chars(ctx, _CATALOGUE_FRACTION))
+    _as_tokens(result["documents"])
+    _as_tokens(result["collections"])
+    # A catalogue of untrusted documents is untrusted text. Titles are not
+    # inert — 82 of 114 live documents are fetched video transcripts whose
+    # titles came from the uploader, so "read this listing, then act" is the
+    # same inversion _search_memory closes. Derived from what was actually
+    # returned: a listing of skills alone leaves the actor tools armed.
+    listed = result["documents"] + result["collections"]
+    if any(provenance.blocks_actors(r.get("origin")) for r in listed):
+        ctx["untrusted_context"] = True
+    return _j(result)
+
+
 async def _search_memory(args, ctx):
     query = args.get("query", "")
     if not query:
@@ -94,6 +160,32 @@ async def _write_memory(args, ctx):
     return _j(result)
 
 
+def _paginate(body: str, cap: int) -> list[str]:
+    """Split a body into readable parts on paragraph boundaries.
+
+    The while-loop matters more than it looks: a fetched video transcript is
+    routinely one unbroken paragraph of tens of thousands of characters, so a
+    splitter that only breaks on blank lines would return one oversized part
+    and quietly defeat the whole mechanism.
+    """
+    if len(body) <= cap:
+        return [body]
+    parts: list[str] = []
+    current = ""
+    for para in body.split("\n\n"):
+        piece = para + "\n\n"
+        if current and len(current) + len(piece) > cap:
+            parts.append(current)
+            current = ""
+        while len(piece) > cap:
+            parts.append(piece[:cap])
+            piece = piece[cap:]
+        current += piece
+    if current.strip():
+        parts.append(current)
+    return parts or [body[:cap]]
+
+
 async def _read_memory_item(args, ctx):
     item_id = args.get("item_id", "")
     item = await memory.read_item(item_id)
@@ -105,6 +197,30 @@ async def _read_memory_item(args, ctx):
     origin = memory.index.docs.get(item_id, {}).get("origin", provenance.THIRD_PARTY)
     if provenance.blocks_actors(origin):
         ctx["untrusted_context"] = True
+
+    # A document larger than the window is read in parts, never truncated.
+    # This tool had NO size limit at all: one live call returned 169,673
+    # characters — 3.4x an entire local context window — and the runner then
+    # cut it to 8,000 mid-JSON with nothing to say it had. Paging is the
+    # honest version of the same bound: she gets less at a time, and she is
+    # told exactly what she is holding and how to get the rest.
+    body = item.get("content") or ""
+    parts = _paginate(body, _turn_chars(ctx, _READ_FRACTION))
+    if len(parts) > 1:
+        try:
+            want = int(args.get("part") or 1)
+        except (TypeError, ValueError):
+            want = 1
+        want = max(1, min(want, len(parts)))
+        item["content"] = parts[want - 1]
+        item["part"] = want
+        item["parts"] = len(parts)
+        item["note"] = (
+            f"This document does not fit your context window, so it is being "
+            f"read in {len(parts)} parts. This is part {want}. You have NOT "
+            f"seen the other parts"
+            + (f" — call read_memory_item again with part={want + 1} for the "
+               f"next one." if want < len(parts) else "."))
     return _j(item)
 
 
@@ -1379,11 +1495,39 @@ BUILTIN_TOOLS: dict[str, dict] = {
     },
     "read_memory_item": {
         "name": "read_memory_item",
-        "description": "Read one memory item in full by its id (a relative file path).",
+        "description": (
+            "Read one memory item by its id (a relative file path, as given "
+            "by list_memory or search_memory). A document too large for your "
+            "context window comes back in numbered parts — the reply says so "
+            "and tells you how many; pass part=N for the rest."),
         "parameters": {"type": "object",
-                       "properties": {"item_id": {"type": "string"}},
+                       "properties": {
+                           "item_id": {"type": "string"},
+                           "part": {"type": "integer",
+                                    "description": "Which part to read, when "
+                                                   "the document is paged. "
+                                                   "Defaults to 1."}},
                        "required": ["item_id"]},
         "execute": _read_memory_item,
+    },
+    "list_memory": {
+        "name": "list_memory",
+        "description": (
+            "The shape of everything you remember: how many documents there "
+            "are, of what kinds, and under which tags — with ids you can pass "
+            "to read_memory_item. Large tag groups collapse to one line; call "
+            "again with that tag to list them. Use this when you need to know "
+            "WHAT you know; use search_memory when you know what you are "
+            "looking for."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string",
+                     "description": "topic, journal, skill or source."},
+            "tag": {"type": "string",
+                    "description": "Only documents carrying this tag."},
+            "contains": {"type": "string",
+                         "description": "Only documents whose title or "
+                                        "description contains this text."}}},
+        "execute": _list_memory,
     },
     "list_capability_changes": {
         "name": "list_capability_changes",
