@@ -46,11 +46,17 @@ class BM25Index:
         self.doc_lengths.pop(doc_id, None)
 
     def upsert(self, doc_id: str, title: str, body: str, doc_type: str,
-               priority: int = 0, mtime: float = 0.0):
+               priority: int = 0, mtime: float = 0.0,
+               origin: str = "third_party"):
         self.remove(doc_id)
         terms = Counter(_tokenize(f"{title} {body}"))
+        # `origin` rides with the document because the decision that needs it
+        # — may this text reach an agent that can act? — is made at retrieval
+        # time, and re-reading every hit off disk to find out would put a
+        # file read in the middle of prompt assembly.
         self.docs[doc_id] = {"title": title, "type": doc_type,
-                             "priority": priority, "mtime": mtime}
+                             "priority": priority, "mtime": mtime,
+                             "origin": origin}
         self.doc_terms[doc_id] = terms
         self.doc_lengths[doc_id] = sum(terms.values())
         for term in terms:

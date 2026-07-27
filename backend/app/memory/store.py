@@ -121,7 +121,7 @@ class OkfStore:
                                     else self.base_dir))
 
     def append_concept(self, doc_id: str, content: str,
-                       prepend: bool = False) -> str:
+                       prepend: bool = False, world_read: bool = False) -> str:
         """Add content to an existing concept file, preserving its body and
         frontmatter (timestamp bumped). The mechanical half of running
         logs/digests: the caller sends ONLY the delta, so generation cost
@@ -135,6 +135,13 @@ class OkfStore:
             raise FileNotFoundError(f"memory item '{doc_id}' not found")
         fm, body = self.parse_frontmatter(path.read_text())
         fm["timestamp"] = datetime.now(timezone.utc).isoformat()
+        # ORIGIN IS MONOTONE: an append may lower a document's trust, never
+        # raise it. This method preserves the target's frontmatter, so
+        # without this an agent holding fetched web content could append into
+        # a first-party note and have the delta inherit its stamp —
+        # laundering, in a single call, using a feature built for digests.
+        if world_read:
+            fm["world_read"] = True
         new_body = (f"{content.strip()}\n\n{body}" if prepend
                     else f"{body}\n\n{content.strip()}")
         path.write_text(f"{self.render_frontmatter(fm)}\n\n{new_body}\n")
@@ -151,6 +158,12 @@ class OkfStore:
         if not path.exists():
             fm = self.render_frontmatter({
                 "type": "journal", "title": f"Journal {date}", "date": date,
+                # A journal is a TRANSCRIPT: it can quote a page the model
+                # just read, and it can quote Nova's own mistaken claims
+                # back to her a day later. Stamped so the index does not
+                # have to infer it, and so journals written before this
+                # still land as untrusted by the fail-closed default.
+                "source_type": "conversation",
             })
             path.write_text(f"{fm}\n\n{entry}")
         else:
