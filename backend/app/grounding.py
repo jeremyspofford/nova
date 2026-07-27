@@ -106,16 +106,29 @@ def candidates(text: str) -> set[str]:
         for match in _MULTIWORD.finditer(stripped):
             phrase = match.group().strip()
             words = phrase.split()
-            # A sentence-initial run USED to be dropped outright, on the
-            # grounds that the first word's capitalisation proves nothing.
-            # But a fabricated name very often opens a sentence — "Karen Wu
-            # approved it", "Six Labs offers" — and dropping them meant the
-            # commonest shape of the thing this module exists to catch walked
-            # straight past. The first word alone is still uninformative; a
-            # RUN of capitalised words is not, because ordinary prose does
-            # not capitalise its second word. What survives from the old rule
-            # is _STRUCTURAL, extended with the list-header nouns that are
-            # the real false positives here.
+            # SENTENCE-INITIAL RUNS ARE CHECKED WITHOUT THEIR FIRST WORD, and
+            # this cost two attempts to get right.
+            #
+            # Dropping them entirely missed the commonest shape of a
+            # fabricated name — one that opens a sentence. Keeping them whole
+            # was worse: measured over a real backfill, it refused summaries
+            # on "Appointed David V", "Asserted AI" and "On Mac" — a
+            # sentence-opening verb or preposition glued to a perfectly real
+            # proper noun, which no source will ever contain as a phrase.
+            #
+            # The first word of a sentence is capitalised by grammar, so it
+            # carries no evidence either way; every word after it is
+            # capitalised by choice. Checking the tail keeps the catch ("Karen
+            # Wu" -> "Wu", absent from the source, still flagged) and drops
+            # the whole false class ("On Mac" -> "Mac", present, passes).
+            #
+            # THE COST, stated: a two-word invention that opens a sentence is
+            # now judged on its second word alone, so "Six Labs" leans on
+            # "Labs" being absent. Mid-sentence names — where that original
+            # catch actually occurred — are unaffected.
+            if stripped.startswith(phrase) and len(words) > 1:
+                words = words[1:]
+                phrase = " ".join(words)
             if all(w.lower() in _STRUCTURAL for w in words):
                 continue
             # ALL-CAPS is emphasis, a heading, or a prompt fragment echoed

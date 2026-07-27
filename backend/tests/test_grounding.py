@@ -156,17 +156,30 @@ def main() -> int:
           grounding.ungrounded(carried, f"{prev}\n\n{aged}") == [],
           str(grounding.ungrounded(carried, f"{prev}\n\n{aged}")))
     check("a name in NEITHER the previous summary nor the messages is caught "
-          "even when it opens a sentence — the commonest shape of a "
-          "fabricated name, and one an earlier version walked straight past",
+          "mid-sentence, whole",
           "Karen Wu" in grounding.ungrounded(
+              f"{carried} It was signed off by Karen Wu.", f"{prev}\n\n{aged}"),
+          str(grounding.ungrounded(f"{carried} It was signed off by Karen Wu.",
+                                   f"{prev}\n\n{aged}")))
+    check("...and caught by its TAIL when it opens a sentence, where the "
+          "first word is capitalised by grammar and proves nothing",
+          "Wu" in grounding.ungrounded(
               f"{carried} Karen Wu approved it.", f"{prev}\n\n{aged}"),
           str(grounding.ungrounded(f"{carried} Karen Wu approved it.",
                                    f"{prev}\n\n{aged}")))
-    check("...and a sentence-initial LIST HEADER is not mistaken for one",
-          grounding.ungrounded("Key Points follow. Next Steps are listed.",
-                               "unrelated source") == [],
-          str(grounding.ungrounded("Key Points follow. Next Steps are listed.",
-                                   "unrelated source")))
+
+    print("4d. the false positives a real backfill produced, and the tail rule "
+          "that killed them")
+    # Keeping sentence-initial runs WHOLE refused real summaries on these:
+    # a sentence-opening verb or preposition glued to a genuine proper noun,
+    # a phrase no source will ever contain.
+    for summary, source in (
+            ("Appointed David V to the board.", "the board appointed David V"),
+            ("Asserted AI will change things.", "he asserted that AI will change"),
+            ("On Mac you can run it locally.", "on a mac you can run this")):
+        check(f"passes: {summary[:34]}",
+              grounding.ungrounded(summary, source) == [],
+              str(grounding.ungrounded(summary, source)))
 
     print("5. the caller's own header is not the model's claim")
     header = "topics/some-video-full-transcript.md"
