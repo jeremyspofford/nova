@@ -169,6 +169,19 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
         </div>
       );
     }
+    if (item.activity.kind === 'capability') {
+      // Claimed an ability nothing in the toolset provides. Distinct from
+      // the narration banner above: that one is work announced and never
+      // done, this one is work that could never have been done. Said in the
+      // operator's terms, because "no tool provides that" is the fact they
+      // need — the model's wording is not.
+      return (
+        <div key={item.id} className={`text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
+          ⚠ {agentDisplayName(item.activity.name)} {item.activity.detail} — treat
+          that claim as <b>false</b>.
+        </div>
+      );
+    }
     if (item.activity.kind === 'degraded') {
       // the turn ran, but without something it needed. Said out loud so a
       // confident answer written with no memory is distinguishable from a
@@ -317,7 +330,8 @@ function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
     trace = [];
   };
   for (const item of items) {
-    if (item.kind === 'activity' && item.fromHistory && item.activity.kind !== 'narration') {
+    if (item.kind === 'activity' && item.fromHistory
+        && item.activity.kind !== 'narration' && item.activity.kind !== 'capability') {
       trace.push(item);
     } else {
       flush();

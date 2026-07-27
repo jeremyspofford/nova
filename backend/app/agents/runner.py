@@ -18,7 +18,8 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import bg, narration, redact, settings_store, timefmt, trace
+from app import (bg, capability_claims, narration, redact, settings_store,
+                 timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory.memory import memory
@@ -1356,6 +1357,21 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         final_text += note
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
+
+    # capability-claim check: text that asserts an ABILITY no granted tool
+    # provides. Sibling of narration and a different failure — narration is
+    # about work announced and not done, this is about work that could never
+    # have been done. Checked against the turn's RESOLVED toolset, so it
+    # goes quiet by itself the day the capability actually lands.
+    claimed = capability_claims.detect(final_text, [
+        t["function"]["name"] for t in (tools or [])])
+    if claimed:
+        yield {"type": "activity", "kind": "capability",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": (f"claimed {claimed} access, which no tool in this "
+                          f"turn's toolset provides")}
+        log.warning("Capability claim: agent=%s model=%s claimed=%s",
+                    agent.get("name"), agent.get("model"), claimed)
 
     # narration detector: text that announces actions + zero tool calls =
     # the described work silently never happened. Make it loud.
