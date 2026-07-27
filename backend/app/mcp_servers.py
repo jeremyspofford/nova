@@ -22,9 +22,9 @@ from app import db, mcp_client
 log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "name", "transport", "url", "command", "args", "headers",
-           "enabled", "always_inject", "tools_hash", "status", "status_detail",
-           "last_seen", "created_at", "updated_at")
-_EDIT_FIELDS = {"url", "command", "args", "headers"}
+           "enabled", "always_inject", "read_only", "tools_hash", "status",
+           "status_detail", "last_seen", "created_at", "updated_at")
+_EDIT_FIELDS = {"url", "command", "args", "headers", "read_only"}
 _TRANSPORTS = ("http", "stdio")
 
 # A stdio server's `command` is EXECUTED, verbatim, in the mcp-runner
@@ -211,3 +211,16 @@ async def list_tools_for(server_id: str) -> list[dict]:
         out.append({"name": r["name"], "description": r["description"],
                     "parameters_schema": schema})
     return out
+
+
+async def read_only_slugs() -> set[str]:
+    """Names of servers the operator declared read-only.
+
+    Read fresh rather than cached: revoking the declaration has to take
+    effect on the next tool call, not at the next restart. It is one indexed
+    lookup on a table with single-digit rows.
+    """
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT name FROM mcp_servers WHERE read_only AND enabled")
+    return {r["name"] for r in rows}
