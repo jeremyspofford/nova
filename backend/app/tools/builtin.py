@@ -160,32 +160,6 @@ async def _write_memory(args, ctx):
     return _j(result)
 
 
-def _paginate(body: str, cap: int) -> list[str]:
-    """Split a body into readable parts on paragraph boundaries.
-
-    The while-loop matters more than it looks: a fetched video transcript is
-    routinely one unbroken paragraph of tens of thousands of characters, so a
-    splitter that only breaks on blank lines would return one oversized part
-    and quietly defeat the whole mechanism.
-    """
-    if len(body) <= cap:
-        return [body]
-    parts: list[str] = []
-    current = ""
-    for para in body.split("\n\n"):
-        piece = para + "\n\n"
-        if current and len(current) + len(piece) > cap:
-            parts.append(current)
-            current = ""
-        while len(piece) > cap:
-            parts.append(piece[:cap])
-            piece = piece[cap:]
-        current += piece
-    if current.strip():
-        parts.append(current)
-    return parts or [body[:cap]]
-
-
 async def _read_memory_item(args, ctx):
     item_id = args.get("item_id", "")
     item = await memory.read_item(item_id)
@@ -204,8 +178,9 @@ async def _read_memory_item(args, ctx):
     # cut it to 8,000 mid-JSON with nothing to say it had. Paging is the
     # honest version of the same bound: she gets less at a time, and she is
     # told exactly what she is holding and how to get the rest.
+    from app.agents import context_trim
     body = item.get("content") or ""
-    parts = _paginate(body, _turn_chars(ctx, _READ_FRACTION))
+    parts = context_trim.paginate(body, _turn_chars(ctx, _READ_FRACTION))
     if len(parts) > 1:
         try:
             want = int(args.get("part") or 1)

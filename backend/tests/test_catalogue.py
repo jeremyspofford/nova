@@ -227,7 +227,7 @@ async def run() -> None:
 
             print("6b. one unbroken paragraph still pages — the real transcript shape")
             one_para = "word " * 20000
-            pieces = builtin._paginate(one_para, 5000)
+            pieces = context_trim.paginate(one_para, 5000)
             check("a body with no blank lines is still split",
                   len(pieces) > 1, f"{len(pieces)} parts")
             check("no piece exceeds the cap",

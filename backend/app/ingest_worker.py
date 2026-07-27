@@ -26,6 +26,35 @@ PACE_SLEEP_S = 2    # small gap between jobs — polite to the media worker / Yo
 _PURGE_EVERY = 500  # drain iterations between old-row purges (cheap housekeeping)
 
 
+async def summarise_ingest(core: dict) -> None:
+    """Distil one freshly-written transcript, best-effort.
+
+    Swallows everything. The transcript is already on disk and the job is
+    already marked done by the time this runs, so a provider outage or a bad
+    model reply may cost the summary and must not cost the ingest.
+    """
+    item_id = core.get("full_transcript_item_id")
+    if not item_id:
+        return
+    try:
+        from app import transcript_summary
+        from app.agents import registry as agent_registry
+        agent = await agent_registry.get_agent_by_name("ingestion")
+        if not agent or not agent.get("model"):
+            log.warning("summary: no ingestion agent/model; skipping %s", item_id)
+            return
+        await transcript_summary.summarise(
+            item_id, title=core.get("title") or "",
+            url=core.get("url") or "",
+            # the transcript's own tags, read back off the index so the
+            # summary clusters with it and its channel rather than floating
+            tags=list(memory.index.docs.get(item_id, {}).get("tags") or []),
+            model=agent["model"])
+    except Exception:  # noqa: BLE001 — never let a summary kill a done ingest
+        log.exception("summary failed for %s; the transcript is unaffected",
+                      item_id)
+
+
 async def _process(job: dict) -> None:
     """Run one claimed job to a terminal state. Never raises for an ingest
     failure — it records the outcome on the row; only a programming error
@@ -58,6 +87,12 @@ async def _process(job: dict) -> None:
         if media_key:
             await ingest_jobs.purge_superseded_siblings(media_key)
         log.info("ingested: %s", core.get("title") or job["url"])
+        # The transcript is safe on disk and the job is already done; a
+        # summary is an improvement on top and must never be able to undo
+        # that. Anything missed here is found again by the reconciler in
+        # transcript_backfill, which derives the gap from the corpus rather
+        # than from a queue nobody re-reads.
+        await summarise_ingest(core)
     elif status == "already_ingested":
         await ingest_jobs.mark_skipped(job_id, reason="already ingested",
                                        title=core.get("title"))

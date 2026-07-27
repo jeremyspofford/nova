@@ -133,6 +133,37 @@ def ceiling_for(model: str) -> int:
     return budget
 
 
+def paginate(body: str, cap: int) -> list[str]:
+    """Split content into parts that each fit `cap` characters.
+
+    Lives here because it is the same question the rest of this module
+    answers — what fits in a window — and it has two callers that must not
+    drift apart: `read_memory_item`, which hands the model one part at a
+    time, and the transcript summariser, which walks every part.
+
+    The while-loop is not defensive padding. A fetched video transcript is
+    routinely one unbroken paragraph of tens of thousands of characters, so
+    a splitter that only breaks on blank lines returns one oversized part
+    and quietly defeats the whole mechanism.
+    """
+    if len(body) <= cap:
+        return [body]
+    parts: list[str] = []
+    current = ""
+    for para in body.split("\n\n"):
+        piece = para + "\n\n"
+        if current and len(current) + len(piece) > cap:
+            parts.append(current)
+            current = ""
+        while len(piece) > cap:
+            parts.append(piece[:cap])
+            piece = piece[cap:]
+        current += piece
+    if current.strip():
+        parts.append(current)
+    return parts or [body[:cap]]
+
+
 def _trimmable(message: dict) -> bool:
     return message.get("role") == "tool" and isinstance(message.get("content"), str)
 
