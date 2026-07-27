@@ -250,7 +250,7 @@ export interface Activity {
   /** `degraded` = the turn ran, but something it needed was missing (memory
    *  unreadable, the reply not persisted). Pairs with the backend's
    *  honest-receipts change; harmless if that half is not deployed. */
-  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'agent_reply'
+  kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'capability' | 'agent_reply'
       | 'degraded';
   name: string;
   agent?: string;
