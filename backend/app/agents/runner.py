@@ -1052,7 +1052,12 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
            "agent_id": agent.get("id"), "agent_name": agent.get("name"),
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
-           "granted": {t["function"]["name"] for t in tools}}
+           # CANONICAL names, not the wire names the provider requires:
+           # grants are stored as `mcp:<server>/<tool>` and execute_tool
+           # canonicalises what the model calls back, so a wire-named set
+           # here would refuse every MCP tool as ungranted.
+           "granted": {tool_registry.canonical_name(t["function"]["name"])
+                       for t in tools}}
 
     final_text = ""
     calls_made = 0
@@ -1351,7 +1356,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     have = {t["function"]["name"] for t in tools}
                     new_defs = [d for d in found if d["function"]["name"] not in have]
                     tools.extend(new_defs)
-                    ctx["granted"] = {t["function"]["name"] for t in tools}
+                    ctx["granted"] = {tool_registry.canonical_name(t["function"]["name"])
+                                      for t in tools}
                     result = ("Loaded: " + ", ".join(
                         d["function"]["name"] for d in new_defs)) if new_defs \
                         else f"No unloaded MCP tools matched '{query}'."
