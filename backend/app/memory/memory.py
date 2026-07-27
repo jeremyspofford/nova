@@ -417,11 +417,20 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             used += len(line)
         return lines, ids
 
-    async def context(self, query: str, max_chars: Optional[int] = None) -> dict:
+    async def context(self, query: str, max_chars: Optional[int] = None,
+                      origins: Optional[set[str]] = None) -> dict:
         """Relevant memories (topics + journals; skills are retrieved separately)."""
         max_chars = max_chars or settings.memory_context_max_chars
+        # `origins` narrows retrieval by TRUST, not by topic. An agent that
+        # can change what Nova is able to do does not get raw third-party
+        # text injected into its prompt automatically — 87% of the corpus is
+        # ingested transcripts, so without this the untrusted-context signal
+        # would be true on essentially every turn and any rule keyed on it
+        # would either fire constantly or mean nothing. Third-party material
+        # stays reachable, but only when she deliberately goes and gets it.
         results = self.index.search(query, type_filter={"topic", "journal", "source"},
-                                    top_k=settings.memory_context_top_k)
+                                    top_k=settings.memory_context_top_k,
+                                    origins=origins)
         lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
         # The origin mix of what was actually RETRIEVED — not of the corpus.
@@ -435,7 +444,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             "total_tokens": len(text.split()),
             "memory_ids": ids,
             "origins": origins,
-            "untrusted": any(not provenance.is_trusted(o) for o in origins),
+            "untrusted": any(provenance.blocks_actors(o) for o in origins),
         }
 
     async def skills_context(self, query: str) -> dict:

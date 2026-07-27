@@ -31,7 +31,16 @@ async def _search_memory(args, ctx):
     query = args.get("query", "")
     if not query:
         return "Error: query is required"
-    return _j(await memory.context(query))
+    result = await memory.context(query)
+    # THE INVERSION. "Search memory, then act on what you find" is the move
+    # that defeats a prompt warning, because the warning is in the prompt and
+    # the instruction arrives in the result. Here, pulling untrusted text into
+    # the turn is the very act that disarms the tools that could act on it —
+    # for the rest of this turn, mechanically, whether or not the model
+    # noticed what it just read.
+    if result.get("untrusted"):
+        ctx["untrusted_context"] = True
+    return _j(result)
 
 
 async def _write_memory(args, ctx):
@@ -86,8 +95,17 @@ async def _write_memory(args, ctx):
 
 
 async def _read_memory_item(args, ctx):
-    item = await memory.read_item(args.get("item_id", ""))
-    return _j(item) if item else "Error: item not found"
+    item_id = args.get("item_id", "")
+    item = await memory.read_item(item_id)
+    if not item:
+        return "Error: item not found"
+    # Same inversion as _search_memory, and this is the door that matters
+    # more: it returns the FULL untruncated body of one document, which is
+    # exactly how you would fetch an instruction planted in a transcript.
+    origin = memory.index.docs.get(item_id, {}).get("origin", provenance.THIRD_PARTY)
+    if provenance.blocks_actors(origin):
+        ctx["untrusted_context"] = True
+    return _j(item)
 
 
 async def _delete_memory_item(args, ctx):

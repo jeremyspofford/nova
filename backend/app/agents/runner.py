@@ -22,6 +22,7 @@ from app import (bg, capability_claims, narration, redact, settings_store,
                  timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
+from app.memory import provenance
 from app.memory.memory import memory
 from app.tools import registry as tool_registry
 
@@ -368,6 +369,7 @@ async def _build_system_prompt(agent: dict, query: str, *,
                                system_suffix: str | None = None,
                                speaker: dict | None = None,
                                tool_names: list[str] | None = None,
+                               signals: dict | None = None,
                                degraded: list[str] | None = None) -> str:
     """Slot-based prompt assembly — persona-layer phase 1.
 
@@ -466,7 +468,15 @@ async def _build_system_prompt(agent: dict, query: str, *,
             log.exception("Agent index injection failed; continuing without it")
     try:
         async with trace.span("stage", "memory_retrieval") as sp:
-            mem = await memory.context(query)
+            # An agent that can change what Nova is able to do does not get
+            # raw third-party text injected automatically. It stays
+            # reachable through search_memory — which taints the turn and
+            # disarms those same tools, deliberately.
+            actor_holder = any(tool_registry.is_actor(n) for n in (tool_names or []))
+            mem = await memory.context(
+                query,
+                origins=({provenance.FIRST_PARTY, provenance.CONVERSATION}
+                         if actor_holder else None))
             if mem["context"]:
                 # Framed as data, not instructions. Memory is not all
                 # first-party: ingest_media writes video transcripts verbatim
@@ -486,6 +496,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
             skills = await memory.skills_context(query)
             if skills["context"]:
                 parts.append(f"## Applicable Skills\n{skills['context']}")
+            if signals is not None and mem.get("untrusted"):
+                signals["untrusted_context"] = True
+            sp["memory_origins"] = ",".join(sorted(set(mem.get("origins") or [])))
             sp["memory_chars"] = len(mem["context"])
             sp["skills_chars"] = len(skills["context"])
     except Exception:
@@ -1018,10 +1031,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     degraded: list[str] = []
     async with trace.span("stage", "build_prompt") as psp:
+        prompt_signals: dict = {}
         system_prompt = await _build_system_prompt(
             agent, query, include_index=can_dispatch,
             conversation_summary=conversation_summary, system_suffix=system_suffix,
-            speaker=speaker, degraded=degraded,
+            speaker=speaker, degraded=degraded, signals=prompt_signals,
             tool_names=[t["function"]["name"] for t in tools])
         psp["prompt_chars"] = len(system_prompt)
         psp["agent"] = agent.get("name")
@@ -1034,7 +1048,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                "name": "context", "agent": agent.get("name"), "detail": note}
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
-    ctx = {"agent_id": agent.get("id"), "agent_name": agent.get("name"),
+    ctx = {"untrusted_context": bool(prompt_signals.get("untrusted_context")),
+           "agent_id": agent.get("id"), "agent_name": agent.get("name"),
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
            "granted": {t["function"]["name"] for t in tools}}

@@ -63,7 +63,8 @@ class BM25Index:
             self.postings.setdefault(term, set()).add(doc_id)
 
     def search(self, query: str, type_filter: Optional[set[str]] = None,
-               top_k: int = 5) -> list[tuple[str, float]]:
+               top_k: int = 5,
+               origins: Optional[set[str]] = None) -> list[tuple[str, float]]:
         q_terms = _tokenize(query)
         if not q_terms or not self.docs:
             return []
@@ -78,6 +79,8 @@ class BM25Index:
             for doc_id in doc_ids:
                 meta = self.docs[doc_id]
                 if type_filter and meta["type"] not in type_filter:
+                    continue
+                if origins and meta.get("origin", "third_party") not in origins:
                     continue
                 tf = self.doc_terms[doc_id][term]
                 dl = self.doc_lengths[doc_id]
