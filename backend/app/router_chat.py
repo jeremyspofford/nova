@@ -16,7 +16,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import automations, bg, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
+from app import automations, bg, commands, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.tools import registry as tool_registry
@@ -56,6 +56,21 @@ _VOICE_BREVITY = (
 
 def _sse(obj) -> str:
     return f"data: {json.dumps(obj)}\n\n"
+
+
+@router.get("/api/v1/commands")
+async def list_commands():
+    """The slash-command catalog — the palette reads this rather than
+    hard-coding a list, so a new command shows up without a UI change."""
+    return {"commands": commands.catalog()}
+
+
+@router.post("/api/v1/commands/{name}")
+async def run_command(name: str, body: dict | None = None):
+    cmd = commands.REGISTRY.get(name.lower())
+    if not cmd or not cmd.run:
+        raise HTTPException(status_code=404, detail=f"no such command: /{name}")
+    return await cmd.run((body or {}).get("arg", ""))
 
 
 @router.post("/api/v1/chat/stream")
