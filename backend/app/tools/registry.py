@@ -41,9 +41,39 @@ async def _load_db_tools() -> dict[str, dict]:
     return out
 
 
+# ── wire names ───────────────────────────────────────────────────────────
+# Providers constrain tool names to ^[a-zA-Z0-9_-]{1,128}$ — Anthropic 400s
+# on anything else. Nova's canonical MCP name is `mcp:<server>/<tool>`, which
+# contains both a colon and a slash, so the FIRST real MCP server registered
+# broke every turn for that agent with "tools.13.custom.name: String should
+# match pattern". The client shipped complete and had simply never been
+# exercised against a live server, because none had ever been registered.
+#
+# The canonical form stays canonical everywhere it matters — grants, the
+# ACTOR check, the audit trail. Only the copy handed to the model is
+# rewritten, and execute_tool accepts either form so the round trip closes.
+_WIRE_SEP = "__"
+
+
+def wire_name(name: str) -> str:
+    if not name.startswith("mcp:"):
+        return name
+    return "mcp" + _WIRE_SEP + name[len("mcp:"):].replace("/", _WIRE_SEP, 1)
+
+
+def canonical_name(name: str) -> str:
+    """Wire form back to `mcp:<server>/<tool>`; anything else untouched."""
+    prefix = "mcp" + _WIRE_SEP
+    if not name.startswith(prefix):
+        return name
+    rest = name[len(prefix):]
+    server, sep, tool = rest.partition(_WIRE_SEP)
+    return f"mcp:{server}/{tool}" if sep else name
+
+
 def _to_llm_def(tool: dict) -> dict:
     return {"type": "function", "function": {
-        "name": tool["name"],
+        "name": wire_name(tool["name"]),
         "description": tool["description"],
         "parameters": tool["parameters"],
     }}
@@ -398,6 +428,8 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     agent) — enforced here so a model inventing an ungranted tool name is
     refused rather than executed.
     """
+    # the model answers with the wire name it was given
+    name = canonical_name(name)
     granted = ctx.get("granted")
     if granted is not None and name not in granted:
         return f"Error: tool '{name}' is not granted to this agent"

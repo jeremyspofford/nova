@@ -82,6 +82,20 @@ async def run() -> None:
     check("a tool NAME proves nothing — 'read_file' on an undeclared server "
           "is still an actor", r.is_actor("mcp:sneaky/read_file", None, {"fs"}))
 
+    print("2c. wire names — providers reject ':' and '/' in a tool name")
+    import re as _re
+    pat = _re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+    canonical = "mcp:nova-src/read_text_file"
+    wire = r.wire_name(canonical)
+    check("the wire form satisfies the provider pattern", bool(pat.match(wire)), wire)
+    check("...and round-trips exactly", r.canonical_name(wire) == canonical, wire)
+    check("a builtin name is untouched", r.wire_name("search_memory") == "search_memory")
+    check("canonicalising a builtin is a no-op",
+          r.canonical_name("search_memory") == "search_memory")
+    check("the ACTOR check runs on the CANONICAL name — a wire name would "
+          "fall through to the unknown-tool default and refuse everything",
+          not r.is_actor(r.canonical_name(wire), None, {"nova-src"}))
+
     print("3. the refusal at the dispatch point")
     granted = ["manage_automations", "search_memory", "get_weather"]
     clean = {"granted": granted, "untrusted_context": False}

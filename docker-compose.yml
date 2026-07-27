@@ -162,6 +162,32 @@ services:
     environment:
       HOME: /home/mcp
       NPM_CONFIG_CACHE: /home/mcp/.npm
+    volumes:
+      # The read-only view of the repo Nova may READ (containment plan
+      # phase 3). Named file by file and directory by directory, so what is
+      # excluded is excluded STRUCTURALLY rather than by a filter that could
+      # drift:
+      #   .env            never mounted — it holds NOVA_AUTH_TOKEN and the
+      #                   provider keys, and a granted read tool would hand
+      #                   them to whichever cloud model is answering
+      #   frontend/       only src/ — node_modules is thousands of
+      #                   third-party packages whose READMEs are
+      #                   attacker-controlled text, i.e. an injection
+      #                   surface handed straight to a read tool
+      #   tools/          omitted entirely — it carries a .venv and the
+      #                   wake-training data/
+      #   data/           omitted — memory and wake clips, which Nova
+      #                   already reaches through her own tools
+      #   .git/           omitted — history is the git server's job, and it
+      #                   can only surface TRACKED content (.env is not)
+      - ./backend/app:/workspace/backend/app:ro
+      - ./backend/tests:/workspace/backend/tests:ro
+      - ./frontend/src:/workspace/frontend/src:ro
+      - ./docs:/workspace/docs:ro
+      - ./ROADMAP.md:/workspace/ROADMAP.md:ro
+      - ./CLAUDE.md:/workspace/CLAUDE.md:ro
+      - ./README.md:/workspace/README.md:ro
+      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
 
   # Media ingestion worker (optional): docker compose --profile media up -d
   # yt-dlp (1000+ sites — YouTube, Vimeo, Twitch, direct .mp4/.mp3 links,
