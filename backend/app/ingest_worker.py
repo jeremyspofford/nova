@@ -37,19 +37,16 @@ async def summarise_ingest(core: dict) -> None:
     if not item_id:
         return
     try:
-        from app import transcript_summary
+        from app import summariser
         from app.agents import registry as agent_registry
         agent = await agent_registry.get_agent_by_name("ingestion")
         if not agent or not agent.get("model"):
             log.warning("summary: no ingestion agent/model; skipping %s", item_id)
             return
-        await transcript_summary.summarise(
-            item_id, title=core.get("title") or "",
-            url=core.get("url") or "",
-            # the transcript's own tags, read back off the index so the
-            # summary clusters with it and its channel rather than floating
-            tags=list(memory.index.docs.get(item_id, {}).get("tags") or []),
-            model=agent["model"])
+        # nothing media-specific passed: the summariser reads what the
+        # document is, where it came from and how far it is trusted off the
+        # document's own frontmatter
+        await summariser.summarise(item_id, model=agent["model"])
     except Exception:  # noqa: BLE001 — never let a summary kill a done ingest
         log.exception("summary failed for %s; the transcript is unaffected",
                       item_id)

@@ -1,0 +1,159 @@
+"""Find long documents that have no summary, and write the missing ones.
+
+    docker compose exec backend python -m app.summary_backfill --dry-run
+    docker compose exec backend python -m app.summary_backfill --limit 3
+    docker compose exec backend python -m app.summary_backfill
+
+The gap is DERIVED from the corpus, never tracked in a table. A queue that
+records "summarised: yes" is a second copy of the truth, and it is wrong the
+moment a summary is deleted by hand or a worker dies between writing a
+document and writing its summary — which is exactly the window
+`summarise_ingest` leaves open on purpose, because an ingest must not wait on
+a model call. Reading the answer off the documents means this is correct
+after any crash, any manual edit, and any partial run, with nothing to
+reconcile.
+
+WHAT QUALIFIES is derived too, and deliberately not "anything tagged as a
+transcript". A document needs a summary when it is long enough that reading
+it whole is a problem — so the threshold is a real context window, the same
+`ceiling_for` the router refuses against, rather than a number someone picked.
+Journals are excluded: a journal IS the record of a conversation, and a
+distillation of one is a worse version of something already written down.
+
+Pairing is by TITLE: `<name>` pairs with `<name> — summary`. Slug rules live
+inside the store and coupling to them would buy nothing.
+
+Writing to live memory, so: --dry-run reports and changes nothing, --limit
+bounds a trial run, and re-running is safe because the summary write uses
+replace=True on a deterministic title.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+
+log = logging.getLogger(__name__)
+
+# A journal is the record of what was said; summarising it produces a worse
+# copy of something already durable.
+_SKIP_KINDS = frozenset({"journal"})
+
+# Share of a real context window above which a document is "long". Anything
+# under this can simply be read, and a summary would be pure overhead.
+_LONG_FRACTION = 0.25
+
+
+def _pending(docs: dict, min_chars: int) -> list[tuple[str, str]]:
+    """(doc_id, title) for every long document lacking a summary."""
+    from app.summariser import SUMMARY_SUFFIX
+    summarised = {
+        str(m.get("title", ""))[: -len(SUMMARY_SUFFIX)]
+        for m in docs.values()
+        if str(m.get("title", "")).endswith(SUMMARY_SUFFIX)
+    }
+    out = []
+    for doc_id, meta in sorted(docs.items()):
+        title = str(meta.get("title", ""))
+        if not title or title.endswith(SUMMARY_SUFFIX):
+            continue
+        if (meta.get("type") or "topic") in _SKIP_KINDS:
+            continue
+        if int(meta.get("chars") or 0) < min_chars:
+            continue
+        if title not in summarised:
+            out.append((doc_id, title))
+    return out
+
+
+async def run(dry_run: bool = False, limit: int | None = None,
+              min_chars: int | None = None) -> int:
+    from app import db, settings_store
+    from app.agents import registry as agent_registry
+    from app.memory.memory import memory
+
+    await db.init_pool()
+    await settings_store.warm()
+    await memory.startup()
+
+    agent = await agent_registry.get_agent_by_name("ingestion")
+    model = (agent or {}).get("model") or ""
+
+    from app.agents import context_trim
+    if min_chars is None:
+        min_chars = int(context_trim.ceiling_for(model) * _LONG_FRACTION) \
+            * context_trim._CHARS_PER_TOKEN
+    pending = _pending(memory.index.docs, min_chars)
+    print(f"{len(memory.index.docs)} documents indexed; {len(pending)} are "
+          f"longer than {min_chars:,} chars and have no summary")
+    # The threshold answers "too long to read whole", which is only one of the
+    # two reasons to summarise. The other — undistilled material where search
+    # returns filler and no survey is possible — applies at any length, and on
+    # this corpus that is a 79-document difference. State it rather than
+    # letting a default quietly decide.
+    if min_chars > 0:
+        everything = _pending(memory.index.docs, 0)
+        if len(everything) > len(pending):
+            print(f"  ({len(everything)} have no summary at any length — "
+                  f"--min-chars 0 to include them)")
+    if limit:
+        pending = pending[:limit]
+        print(f"limited to {len(pending)}")
+    if dry_run:
+        for doc_id, base in pending:
+            chars = memory.index.docs[doc_id].get("chars", 0)
+            print(f"  would summarise  {chars:>8,} chars  {base[:64]}")
+        await db.close_pool()
+        return 0
+
+    if not model:
+        print("no ingestion agent or model configured — nothing done")
+        await db.close_pool()
+        return 1
+    print(f"summarising on {model}\n")
+
+    from app import summariser
+    written = failed = 0
+    for n, (doc_id, base) in enumerate(pending, 1):
+        meta = memory.index.docs.get(doc_id, {})
+        print(f"[{n}/{len(pending)}] {base[:60]} "
+              f"({meta.get('chars', 0):,} chars) ... ", end="", flush=True)
+        try:
+            got = await summariser.summarise(doc_id, model=model)
+        except Exception as exc:  # noqa: BLE001 — one bad document must not stop the run
+            log.exception("summary failed for %s", doc_id)
+            print(f"FAILED ({type(exc).__name__})")
+            failed += 1
+            continue
+        if got:
+            print("ok")
+            written += 1
+        else:
+            print("skipped (no usable summary)")
+            failed += 1
+
+    print(f"\nwritten: {written}   not written: {failed}")
+    await db.close_pool()
+    return 0
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.WARNING)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="report what is missing and write nothing")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="summarise at most this many")
+    ap.add_argument("--min-chars", type=int, default=None,
+                    help="only documents at least this long. Defaults to a "
+                         "quarter of the summarising model's real context "
+                         "window; 0 includes every undistilled document.")
+    args = ap.parse_args()
+    return asyncio.run(run(dry_run=args.dry_run, limit=args.limit,
+                           min_chars=args.min_chars))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

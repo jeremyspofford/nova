@@ -3,7 +3,7 @@
 Sibling of narration.py and capability_claims.py, and the same shape: a
 mechanical check against ground truth, not an instruction to be careful.
 
-The instruction was already there. `transcript_summary._SYSTEM` says "Report
+The instruction was already there. `summariser._SYSTEM` says "Report
 only what the transcript actually says... do not add context from your own
 knowledge", and the first summary ever written under it listed a company
 called "Six Labs" that appears nowhere in its transcript, and claimed a rate
