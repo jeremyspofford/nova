@@ -12,7 +12,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from app import db, durability, tagging
+from app import capability_events, db, durability, tagging
 from app.agents import registry as agent_registry
 from app.memory.memory import memory
 from app.memory.store import _slugify
@@ -129,6 +129,25 @@ async def _list_agents(args, ctx):
              "can_call": _grants(a)}
             for a in agents]
     return _j(slim)
+
+
+async def _list_capability_changes(args, ctx):
+    """Further back than the prompt block shows."""
+    from app import capability_events
+    limit = min(int(args.get("limit") or 25), 100)
+    hours = args.get("hours")
+    return _j(await capability_events.recent(
+        limit=limit, hours=int(hours) if hours else None))
+
+
+async def _list_skills(args, ctx):
+    """Every skill, by name. Skills used to be reachable ONLY through a
+    fuzzy search over their bodies, so Nova could not say what she knew how
+    to do — a skill that did not match the current phrasing simply did not
+    exist that turn. Names are cheap; bodies stay on demand."""
+    skills = await memory.list_skills()
+    return _j([{k: sk.get(k) for k in ("id", "title", "description")}
+               for sk in skills])
 
 
 async def _escalating_grants(requested, ctx) -> list[str]:
@@ -300,6 +319,9 @@ async def _manage_tools(args, ctx):
             except Exception as e:  # unique violation etc.
                 return f"Error creating tool: {e}"
         log.info("Tool created live: %s -> %s", name, host)
+        capability_events.record(capability_events.TOOL, name, "created",
+                                 actor=ctx.get("agent_name") or "an agent",
+                                 detail={"host": host})
         return _j({"status": "created", "name": name,
                    "note": "Tool is live immediately - no restart needed."})
 
@@ -308,6 +330,9 @@ async def _manage_tools(args, ctx):
         async with db.acquire() as conn:
             result = await conn.execute(
                 "UPDATE tools SET enabled = false, updated_at = now() WHERE name = $1", name)
+        if result.endswith("1"):
+            capability_events.record(capability_events.TOOL, name, "disabled",
+                                     actor=ctx.get("agent_name") or "an agent")
         return _j({"status": "disabled" if result.endswith("1") else "not_found", "name": name})
 
     return f"Error: unknown action '{action}' (use list/create/disable)"
@@ -1334,6 +1359,30 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "properties": {"item_id": {"type": "string"}},
                        "required": ["item_id"]},
         "execute": _read_memory_item,
+    },
+    "list_capability_changes": {
+        "name": "list_capability_changes",
+        "description": ("Recent changes to what you and your agents can do — "
+                        "agents and tools created, enabled, disabled or "
+                        "deleted, and which tool grants were added or "
+                        "revoked, with who did it. The prompt shows the last "
+                        "few; use this to look further back, or to answer "
+                        "'why can't I do X any more'."),
+        "parameters": {"type": "object", "properties": {
+            "limit": {"type": "integer", "description": "max events (default 25)"},
+            "hours": {"type": "integer", "description": "only the last N hours"},
+        }},
+        "execute": _list_capability_changes,
+    },
+    "list_skills": {
+        "name": "list_skills",
+        "description": ("Every skill you have, by name and description. Use "
+                        "read_memory_item with a skill's id for its full "
+                        "text. Answers 'what do you know how to do' — the "
+                        "fuzzy memory search only surfaces skills that match "
+                        "the current wording, so it cannot."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _list_skills,
     },
     "list_agents": {
         "name": "list_agents",

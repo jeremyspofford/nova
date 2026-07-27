@@ -81,7 +81,8 @@ async def get_agent_by_name(name: str) -> Optional[dict]:
 
 async def create_agent(name: str, description: str, system_prompt: str, model: str,
                        allowed_tools: Optional[list[str]] = None,
-                       routing_keywords: Optional[list[str]] = None) -> str:
+                       routing_keywords: Optional[list[str]] = None,
+                       actor: str | None = None) -> str:
     agent_id = uuid.uuid4()
     async with db.acquire() as conn:
         await conn.execute(
@@ -91,10 +92,14 @@ async def create_agent(name: str, description: str, system_prompt: str, model: s
             agent_id, name, description, system_prompt, model,
             allowed_tools, routing_keywords)
     log.info("Agent created: %s", name)
+    from app import capability_events as ce
+    ce.record(ce.AGENT, name, "created", actor=actor or "operator",
+              detail={"model": model, "granted": sorted(allowed_tools or [])})
     return str(agent_id)
 
 
-async def update_agent(agent_id: str, *, operator: bool = False, **updates) -> bool:
+async def update_agent(agent_id: str, *, operator: bool = False,
+                       actor: str | None = None, **updates) -> bool:
     """`operator=True` is the human at the Settings UI, reached only through
     the authenticated HTTP route. Everything else — every tool call, every
     dispatch — is a model and gets the _SYSTEM_PROTECTED guard."""
@@ -114,17 +119,48 @@ async def update_agent(agent_id: str, *, operator: bool = False, **updates) -> b
         set_clauses.append(f"{key} = ${i}")
         params.append(value)
     async with db.acquire() as conn:
+        # read BEFORE the write: an allowed_tools change is only meaningful
+        # as a delta, and afterwards the previous value is gone
+        prev = await conn.fetchrow(
+            "SELECT name, enabled, model, allowed_tools FROM agents WHERE id = $1",
+            uuid.UUID(agent_id))
         result = await conn.execute(
             f"UPDATE agents SET {', '.join(set_clauses)}, updated_at = now() WHERE id = $1",
             *params)
-    return result.endswith("1")
+    ok = result.endswith("1")
+    if ok and prev:
+        _record_update(dict(prev), updates, operator, actor)
+    return ok
 
 
-async def disable_agent(agent_id: str, *, operator: bool = False) -> bool:
-    return await update_agent(agent_id, operator=operator, enabled=False)
+def _record_update(prev: dict, updates: dict, operator: bool, actor: str | None) -> None:
+    """Turn an UPDATE into the smallest true statement about it."""
+    from app import capability_events as ce
+    who = actor or ("operator" if operator else "an agent")
+    detail = {}
+    if "allowed_tools" in updates:
+        detail.update(ce.diff_grants(prev.get("allowed_tools"),
+                                     updates["allowed_tools"]))
+    if "model" in updates and updates["model"] != prev.get("model"):
+        detail["model"] = updates["model"]
+    # enabled is its own verb, because "disabled" is the change an operator
+    # most needs Nova to notice and "updated" would bury it
+    if "enabled" in updates and updates["enabled"] != prev.get("enabled"):
+        ce.record(ce.AGENT, prev["name"],
+                  "enabled" if updates["enabled"] else "disabled",
+                  actor=who, detail=detail)
+        return
+    if detail or set(updates) - {"enabled"}:
+        ce.record(ce.AGENT, prev["name"], "updated", actor=who, detail=detail)
 
 
-async def delete_agent(agent_id: str) -> str:
+async def disable_agent(agent_id: str, *, operator: bool = False,
+                        actor: str | None = None) -> bool:
+    return await update_agent(agent_id, operator=operator, actor=actor,
+                              enabled=False)
+
+
+async def delete_agent(agent_id: str, *, actor: str | None = None) -> str:
     """Returns 'deleted' | 'not_found' | 'is_system'. System agents (main,
     the managers, guardian) can never be deleted — disable is their only
     off-switch."""
@@ -137,4 +173,6 @@ async def delete_agent(agent_id: str) -> str:
             return "is_system"
         await conn.execute("DELETE FROM agents WHERE id = $1", uuid.UUID(agent_id))
     log.info("Agent deleted: %s", row["name"])
+    from app import capability_events as ce
+    ce.record(ce.AGENT, row["name"], "deleted", actor=actor or "operator")
     return "deleted"

@@ -279,15 +279,24 @@ async def create_http_tool(name: str, description: str, url_template: str,
         except Exception as e:  # unique violation etc.
             raise ValueError(f"could not create tool: {e}")
     log.info("Tool created by operator: %s -> %s", name, host)
+    from app import capability_events as ce
+    ce.record(ce.TOOL, name, "created", actor="operator", detail={"host": host})
     return {"id": str(row["id"]), "name": name}
 
 
 async def set_tool_enabled(tool_id: str, enabled: bool) -> bool:
     async with db.acquire() as conn:
+        row = await conn.fetchrow("SELECT name FROM tools WHERE id = $1",
+                                  uuid.UUID(tool_id))
         result = await conn.execute(
             "UPDATE tools SET enabled = $2, updated_at = now() WHERE id = $1",
             uuid.UUID(tool_id), enabled)
-    return result.endswith("1")
+    ok = result.endswith("1")
+    if ok and row:
+        from app import capability_events as ce
+        ce.record(ce.TOOL, row["name"], "enabled" if enabled else "disabled",
+                  actor="operator")
+    return ok
 
 
 async def delete_tool(tool_id: str) -> str:
@@ -301,6 +310,8 @@ async def delete_tool(tool_id: str) -> str:
             return "is_system"
         await conn.execute("DELETE FROM tools WHERE id = $1", uuid.UUID(tool_id))
     log.info("Tool deleted by operator: %s", row["name"])
+    from app import capability_events as ce
+    ce.record(ce.TOOL, row["name"], "deleted", actor="operator")
     return "deleted"
 
 
