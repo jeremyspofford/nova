@@ -366,6 +366,7 @@ async def _build_system_prompt(agent: dict, query: str, *,
                                conversation_summary: str | None = None,
                                system_suffix: str | None = None,
                                speaker: dict | None = None,
+                               tool_names: list[str] | None = None,
                                degraded: list[str] | None = None) -> str:
     """Slot-based prompt assembly — persona-layer phase 1.
 
@@ -503,6 +504,28 @@ async def _build_system_prompt(agent: dict, query: str, *,
         # backstop.
         parts.append(f"## Your name\nYour name is {name}. If asked your "
                      f"name, answer exactly \"{name}\".")
+        # What she can ACTUALLY do, asserted late because this is a
+        # must-win instruction. "Can you write code or run shell commands?"
+        # got a confident "Yes... I should have been doing this the whole
+        # time. That's on me." on 2026-07-27 — with no such tool in reach,
+        # right after a turn where the operator said she provided no value
+        # if she needed hand-holding. The tool DEFINITIONS were in the
+        # request the whole time; a model under social pressure answers a
+        # capability question from the conversation, not from its schema, so
+        # the toolset is stated in prose where the pressure is.
+        # Deliberately not a list of things she cannot do — that list would
+        # go stale the moment a capability lands. The rule is closed-world.
+        if tool_names:
+            parts.append(
+                "## What you can actually do\n"
+                "These are every tool you can call this turn:\n"
+                + ", ".join(sorted(tool_names)) + ".\n"
+                "That list is COMPLETE. If something is not in it you cannot "
+                "do it — not by trying harder, not by dispatching, not "
+                "later in this conversation. Asked whether you can do "
+                "something, check the list and answer from it. Saying yes to "
+                "be agreeable, when the tool is not there, wastes the "
+                "operator's time on work that will never happen.")
         # channel register: the caller's suffix (voice) or the typed default
         parts.append(system_suffix or _TYPED_REGISTER)
     else:
@@ -989,7 +1012,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         system_prompt = await _build_system_prompt(
             agent, query, include_index=can_dispatch,
             conversation_summary=conversation_summary, system_suffix=system_suffix,
-            speaker=speaker, degraded=degraded)
+            speaker=speaker, degraded=degraded,
+            tool_names=[t["function"]["name"] for t in tools])
         psp["prompt_chars"] = len(system_prompt)
         psp["agent"] = agent.get("name")
         if degraded:
