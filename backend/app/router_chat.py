@@ -461,7 +461,19 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
     ok = await agent_registry.update_agent(agent_id, operator=True, **allowed)
     if not ok:
         raise HTTPException(status_code=404, detail="agent not found")
-    return {"status": "updated"}
+    # A model change gets its fitness reported back, never blocked. These are
+    # facts with a stated basis — no tool support, a window smaller than this
+    # agent's measured prompts — and the operator may have a reason. Applied
+    # first so the answer describes what is now live, and non-fatal: a
+    # metadata probe must not fail a successful write.
+    warnings: list[dict] = []
+    if "model" in allowed:
+        try:
+            from app import model_fitness
+            warnings = await model_fitness.assess_for_agent(agent_id)
+        except Exception:  # noqa: BLE001
+            log.debug("fitness check failed after agent update", exc_info=True)
+    return {"status": "updated", "warnings": warnings}
 
 
 @router.post("/api/v1/agents", status_code=201)
@@ -1205,7 +1217,85 @@ async def patch_settings(changes: dict):
             applied[key] = value
         except (KeyError, ValueError) as e:
             raise HTTPException(status_code=422, detail=str(e))
-    return {"applied": applied}
+    # The fallback answers for EVERY agent when a provider is unreachable, so
+    # its requirements are the union of all of theirs — which is how a 1.9GB
+    # model came to stand in for the whole system without anyone choosing that.
+    warnings: list[dict] = []
+    if "inference.local_fallback_model" in applied:
+        try:
+            from app import model_fitness
+            warnings = (await model_fitness.check_fallback())["findings"]
+        except Exception:  # noqa: BLE001
+            log.debug("fallback fitness check failed", exc_info=True)
+    return {"applied": applied, "warnings": warnings}
+
+
+@router.get("/api/v1/evals/suites")
+async def evals_suites():
+    """Available suites, with what each has actually cost before.
+
+    The cost figures are the operator warning: a suite is minutes of wall
+    clock and real tokens, so the button has to say so before it is pressed.
+    Measured from previous runs — never estimated when there is no history.
+    """
+    from app import eval_runs
+    from app.evals import suites as suite_mod
+    out = []
+    for name in suite_mod.list_suites():
+        try:
+            suite = suite_mod.load_suite(name)
+        except Exception:  # noqa: BLE001 — one broken suite must not hide the rest
+            log.warning("suite %s failed to load", name, exc_info=True)
+            continue
+        out.append({"suite": name, "agent": suite.agent,
+                    "description": suite.description,
+                    "tasks": len(suite.task_ids),
+                    "cost": await eval_runs.estimate(name)})
+    return {"suites": out, "verdicts": await eval_runs.latest_verdicts()}
+
+
+@router.post("/api/v1/evals/run")
+async def evals_run(body: dict):
+    """Run one suite against one model. Explicit, never automatic."""
+    from app import eval_runs
+    suite = str(body.get("suite") or "").strip()
+    model = str(body.get("model") or "").strip()
+    if not suite or not model:
+        raise HTTPException(status_code=422, detail="suite and model are required")
+    try:
+        return await eval_runs.start(suite, model)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"no suite named {suite!r}")
+
+
+@router.get("/api/v1/evals/runs")
+async def evals_runs(agent: str | None = None, limit: int = 20):
+    from app import eval_runs
+    return {"runs": await eval_runs.recent(agent, min(limit, 100))}
+
+
+@router.get("/api/v1/models/fitness")
+async def models_fitness(agent: str | None = None):
+    """Whether the models in use can do the jobs they were given.
+
+    Facts with a stated basis, never scores — see model_fitness. Cheap enough
+    to call from a dropdown: no model is invoked.
+    """
+    from app import model_fitness
+    from app.agents import registry as agent_registry
+    out: dict = {"fallback": await model_fitness.check_fallback(),
+                 "installed_local": await model_fitness.rank_local(),
+                 "agents": []}
+    for a in await agent_registry.list_agents(enabled_only=False):
+        if agent and a.get("name") != agent:
+            continue
+        findings = await model_fitness.assess_for_agent(str(a["id"]))
+        if findings or agent:
+            out["agents"].append({"name": a.get("name"), "model": a.get("model"),
+                                  "findings": findings})
+    return out
 
 
 @router.post("/api/v1/notify/test")

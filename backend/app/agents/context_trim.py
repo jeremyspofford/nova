@@ -124,10 +124,22 @@ def ceiling_for(model: str) -> int:
 
     The budget setting is the always-present half; the real window only ever
     lowers it, so a 32k model is protected even though the setting says 60k.
+
+    RESOLVED THROUGH `effective_model` FIRST, and that is not a detail. A
+    cloud model whose provider is not configured is silently swapped for the
+    local fallback before the call leaves — so the window that matters is the
+    fallback's, not the one the agent row names. Measured 2026-07-27: a
+    summariser sizing against `openrouter:z-ai/glm-5.2` computed 60,000
+    tokens while the call actually went to `ollama:qwen2.5:3b` with 12,384
+    usable, and the router then refused prompts this function had just
+    declared safe. Everything downstream — catalogue bounds, paged reads,
+    summary chunking — inherits that lie, because they all size against this
+    number precisely so it agrees with the refusal.
     """
     from app import settings_store
+    from app.llm import router as llm_router
     budget = int(settings_store.get("agents.intraturn_budget") or 60000)
-    real = model_context(model)
+    real = model_context(llm_router.effective_model(model))
     if real:
         return max(2000, min(budget, real - _COMPLETION_HEADROOM))
     return budget

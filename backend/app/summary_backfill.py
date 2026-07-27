@@ -46,10 +46,17 @@ _SKIP_KINDS = frozenset({"journal"})
 _LONG_FRACTION = 0.25
 
 
-def _pending(docs: dict, min_chars: int) -> list[tuple[str, str]]:
-    """(doc_id, title) for every long document lacking a summary."""
+def _pending(docs: dict, min_chars: int,
+             force: bool = False) -> list[tuple[str, str]]:
+    """(doc_id, title) for every long document lacking a summary.
+
+    `force` re-summarises documents that already have one. Needed after the
+    first run wrote 76 summaries on the wrong model; the write itself uses
+    replace=True on a deterministic title, so this overwrites in place and
+    deletes nothing.
+    """
     from app.summariser import SUMMARY_SUFFIX
-    summarised = {
+    summarised = set() if force else {
         str(m.get("title", ""))[: -len(SUMMARY_SUFFIX)]
         for m in docs.values()
         if str(m.get("title", "")).endswith(SUMMARY_SUFFIX)
@@ -69,13 +76,21 @@ def _pending(docs: dict, min_chars: int) -> list[tuple[str, str]]:
 
 
 async def run(dry_run: bool = False, limit: int | None = None,
-              min_chars: int | None = None) -> int:
+              min_chars: int | None = None, force: bool = False) -> int:
     from app import db, settings_store
     from app.agents import registry as agent_registry
     from app.memory.memory import memory
 
+    from app.llm import providers
+
     await db.init_pool()
     await settings_store.warm()
+    # Without this the provider cache is empty, is_configured() is False for
+    # every cloud slug, and router.effective_model silently swaps the model
+    # for the local fallback — so the first run of this script summarised 76
+    # documents on ollama:qwen2.5:3b while reporting glm-5.2. A standalone
+    # script has to warm everything the server warms at startup.
+    await providers.warm()
     await memory.startup()
 
     agent = await agent_registry.get_agent_by_name("ingestion")
@@ -85,7 +100,7 @@ async def run(dry_run: bool = False, limit: int | None = None,
     if min_chars is None:
         min_chars = int(context_trim.ceiling_for(model) * _LONG_FRACTION) \
             * context_trim._CHARS_PER_TOKEN
-    pending = _pending(memory.index.docs, min_chars)
+    pending = _pending(memory.index.docs, min_chars, force)
     print(f"{len(memory.index.docs)} documents indexed; {len(pending)} are "
           f"longer than {min_chars:,} chars and have no summary")
     # The threshold answers "too long to read whole", which is only one of the
@@ -146,13 +161,15 @@ def main() -> int:
                     help="report what is missing and write nothing")
     ap.add_argument("--limit", type=int, default=None,
                     help="summarise at most this many")
+    ap.add_argument("--force", action="store_true",
+                    help="re-summarise documents that already have a summary")
     ap.add_argument("--min-chars", type=int, default=None,
                     help="only documents at least this long. Defaults to a "
                          "quarter of the summarising model's real context "
                          "window; 0 includes every undistilled document.")
     args = ap.parse_args()
     return asyncio.run(run(dry_run=args.dry_run, limit=args.limit,
-                           min_chars=args.min_chars))
+                           min_chars=args.min_chars, force=args.force))
 
 
 if __name__ == "__main__":

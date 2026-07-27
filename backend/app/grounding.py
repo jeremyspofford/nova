@@ -105,7 +105,16 @@ def candidates(text: str) -> set[str]:
                 if len(words) < 3:
                     continue
                 phrase = " ".join(words[1:])
-            if all(w.lower() in _STRUCTURAL for w in phrase.split()):
+            words = phrase.split()
+            if all(w.lower() in _STRUCTURAL for w in words):
+                continue
+            # ALL-CAPS is emphasis, a heading, or a prompt fragment echoed
+            # back — never a proper noun. Measured over 86 real summaries:
+            # this alone caused four refusals, including "IS EVERY VERSION OF
+            # HTMX EVER PUBLISHED", which threw away the very summary used to
+            # validate this module's precision. A capitalised NAME has
+            # lowercase letters in it.
+            if all(w.isupper() for w in words if len(w) > 1):
                 continue
             found.add(phrase)
     for match in _DIGIT_TOKEN.finditer(text):
@@ -126,6 +135,12 @@ def _grounded(candidate: str, source_norm: str) -> bool:
     # a summary's "11" against a transcript's "eleven"
     word = _NUMBER_WORDS.get(normalised)
     if word and word in source_norm:
+        return True
+    # Plural where the source was singular. "CRUD APIs" against a transcript
+    # saying "a CRUD API" is not a fabrication, and refusing a whole summary
+    # over an 's' is the kind of pedantry that gets a check switched off.
+    singular = _norm(re.sub(r"(\w)s\b", r"\1", candidate))
+    if singular and singular != normalised and singular in source_norm:
         return True
     # A MEASUREMENT — digits with a unit glued on, "35.4kb", "1ms", "60s".
     # The number is the claim; the unit is the summary's own shorthand for

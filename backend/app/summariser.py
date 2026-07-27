@@ -258,8 +258,15 @@ async def summarise(item_id: str, *, model: str) -> Optional[str]:
         return None
 
     description, summary_body = _split(text)
-    note = (f"Summary of **{title}**.\n\n"
-            f"This is a summary, not the source. Full text: `{item_id}`"
+    # [[wikilink]], not a code-quoted path. The graph resolves links by title
+    # into real edges (memory.graph), so the backticked id the first version
+    # wrote left every summary floating beside its source with no edge to it —
+    # they only appeared related because they shared tags, which is the same
+    # coincidental bridging _GENERIC_TAGS exists to prevent. The id stays too:
+    # the link is for the graph, the id is what read_memory_item takes.
+    note = (f"Summary of [[{title}]].\n\n"
+            f"This is a summary, not the source. The full text is "
+            f"[[{title}]] — read it with `{item_id}`."
             + (f"\nOriginal: {url}" if url else "") + "\n\n" + summary_body)
 
     written = await memory.write(

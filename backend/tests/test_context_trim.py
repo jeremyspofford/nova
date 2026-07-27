@@ -90,6 +90,14 @@ def test_ceiling():
         {"id": "openrouter:huge", "provider": "openrouter", "context_length": 1_000_000},
         {"id": "ollama:qwen3:8b", "provider": "ollama"},
     ]
+    # ceiling_for resolves through effective_model, so a cloud model only
+    # keeps its own window while its provider is actually usable. Mirror
+    # production here; the unconfigured case is asserted on its own below.
+    from app.llm import providers
+    saved_providers = dict(providers._cache)
+    providers._cache["openrouter"] = {
+        "slug": "openrouter", "enabled": True, "needs_key": False,
+        "api_key": None, "api_key_env": None, "base_url": "", "name": "or"}
     try:
         check("a 16k model lowers the 60k budget (minus completion headroom)",
               context_trim.ceiling_for("openrouter:small") == 12000,
@@ -109,8 +117,23 @@ def test_ceiling():
         settings_store._cache["inference.ollama_num_ctx"] = 16384
         check("a cloud model missing from the catalog falls back",
               context_trim.ceiling_for("openrouter:never-seen") == 60000)
+
+        # THE 2026-07-27 BUG. A cloud model whose provider is not configured
+        # is swapped for the local fallback before the call leaves — so the
+        # window that matters is the fallback's. Sizing against the model the
+        # agent row NAMES produced a 60,000-token budget for a call that
+        # actually went to ollama:qwen2.5:3b, and the router then refused
+        # prompts this function had just declared safe. Everything that sizes
+        # against this number does so precisely so it agrees with that refusal.
+        providers._cache.pop("openrouter", None)
+        check("an unconfigured cloud model is sized by the LOCAL FALLBACK it "
+              "will actually run on, not by the window it claims",
+              context_trim.ceiling_for("openrouter:huge") == 12384,
+              str(context_trim.ceiling_for("openrouter:huge")))
     finally:
         models_catalog._cache["models"] = saved
+        providers._cache.clear()
+        providers._cache.update(saved_providers)
 
 
 # ── 3. trimming behavior ─────────────────────────────────────────────────

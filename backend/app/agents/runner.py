@@ -1069,6 +1069,21 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
     degraded: list[str] = []
+    # A cloud model whose provider is not configured is swapped for the local
+    # fallback before the call leaves, and until now the ONLY trace of that
+    # was a log line. So Nova could answer an entire conversation on a 1.9GB
+    # 3B model while the UI, the trace and the agent's own prompt all named
+    # the model the operator picked — a silent downgrade of every answer.
+    # This is the same rule as the truncation marker and the narration
+    # detector: a degradation nobody is told about is one nobody can weigh.
+    swapped = llm_router.effective_model(agent["model"])
+    if swapped != agent["model"]:
+        degraded.append(
+            f"{agent['model']} is unavailable (its provider is not "
+            f"configured), so this ran on {swapped} instead")
+        log.warning("model downgrade: %s -> %s for agent %s",
+                    agent["model"], swapped, agent.get("name"))
+
     async with trace.span("stage", "build_prompt") as psp:
         prompt_signals: dict = {}
         system_prompt = await _build_system_prompt(

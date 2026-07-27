@@ -117,6 +117,27 @@ def main() -> int:
           "5.6" in " ".join(grounding.candidates("It ships with GPT 5.6 now.")),
           str(grounding.candidates("It ships with GPT 5.6 now.")))
 
+    print("4b. what a run over 86 real summaries taught, that two did not")
+    # The first version was validated on two documents and looked perfect. At
+    # scale it refused 12 summaries, of which roughly 7 were its own fault —
+    # including the HTMX summary used above as the precision exemplar, killed
+    # by "IS EVERY VERSION OF HTMX EVER PUBLISHED". Every case below is real.
+    for caps in ("IS EVERY VERSION OF HTMX EVER PUBLISHED",
+                 "CLAIMS MADE, FOR RESOLUTION, NAMES OR VERSIONS",
+                 "US AI", "GB VRAM", "GB RAM"):
+        check(f"ALL-CAPS is emphasis, not a name: {caps[:38]}",
+              caps not in grounding.candidates(f"It needs {caps} for this."),
+              str(grounding.candidates(f"It needs {caps} for this.")))
+    check("a capitalised NAME has lowercase letters in it, so real entities "
+          "survive the same rule",
+          "Nvidia Spark" in grounding.candidates("It needs Nvidia Spark here."))
+    check("'CRUD APIs' against a source saying 'a CRUD API' is not a "
+          "fabrication — refusing a summary over an 's' is how a check gets "
+          "switched off",
+          grounding._grounded("CRUD APIs", grounding._norm("build a CRUD API")))
+    check("but a plural that is genuinely absent is still caught",
+          not grounding._grounded("Spark GPUs", grounding._norm("build a CRUD API")))
+
     print("5. the caller's own header is not the model's claim")
     header = "topics/some-video-full-transcript.md"
     check("a file path passed as `ignore` is not reported",
