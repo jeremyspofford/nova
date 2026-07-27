@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from app import capability_events, db, durability, tagging
 from app.agents import registry as agent_registry
+from app.memory import provenance
 from app.memory.memory import memory
 from app.memory.store import _slugify
 
@@ -54,6 +55,12 @@ async def _write_memory(args, ctx):
         # brain's writes-arc survives month rollovers mechanically
         maintained_by=ctx.get("automation"),
         source_type="tool",
+        # Derived from what the CALLING agent holds, never from its name: an
+        # agent that can reach the world writes third-party content whatever
+        # mechanism it used. ctx["granted"] is the resolved grant set for
+        # this turn, so a new agent given fetch_url is distrusted correctly
+        # with no edit here.
+        world_read=provenance.writer_is_world_reading(ctx.get("granted")),
     )
     # Durability check on topics only — a journal IS the record of what
     # happened, including what turned out to be wrong. The write already

@@ -18,6 +18,7 @@ from typing import Optional
 
 from app import timefmt
 from app.config import settings
+from app.memory import provenance
 from app.memory.index import BM25Index
 from app.memory.store import OkfStore
 
@@ -128,8 +129,17 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             priority = int(fm.get("priority", 0))
         except (TypeError, ValueError):
             priority = 0
+        # Journals have no source_type of their own — they are transcripts,
+        # and a transcript can quote a page the model just read, or Nova's
+        # own mistaken claim, straight back into a later prompt.
+        doc_type = fm.get("type", "topic")
+        source_type = fm.get("source_type") or ("journal" if doc_type == "journal" else None)
+        origin = provenance.tier(
+            source_type,
+            writer_world_reading=bool(fm.get("world_read")),
+            has_source_url=bool(fm.get("source_url")))
         self.index.upsert(doc_id, fm.get("title", doc_id), body,
-                          fm.get("type", "topic"), priority, mtime)
+                          doc_type, priority, mtime, origin=origin)
 
     # ── writes ───────────────────────────────────────────────────────────
 
@@ -224,7 +234,8 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     prepend: bool = False, replace: bool = False,
                     maintained_by: Optional[str] = None,
                     author: Optional[str] = None,
-                    source_type: str = "chat", link_pass: bool = True) -> dict:
+                    source_type: str = "chat", link_pass: bool = True,
+                    world_read: bool = False) -> dict:
         """Write to memory. journal → append to today's file; skill/topic → concept
         file. append=True + item_id adds content to the end of an existing item
         instead of replacing it (running logs/digests write only the delta);
@@ -247,7 +258,8 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                             "error": "append/prepend requires item_id"}
                 try:
                     doc_id = self.store.append_concept(item_id, content,
-                                                       prepend=prepend)
+                                                       prepend=prepend,
+                                                       world_read=world_read)
                 except FileNotFoundError as e:
                     return {"status": "error", "error": str(e)}
                 self._index_file(doc_id)
@@ -259,6 +271,14 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                             "error": f"title is required when writing a {type}"}
                 metadata = {"type": type, "title": title, "priority": priority,
                             "source_type": source_type, "enabled": True}
+                # WHO held the pen, not just which mechanism wrote it.
+                # write_memory stamps source_type="tool" for every caller,
+                # and `ingestion` — whose whole job is fetching web pages —
+                # holds write_memory, so the mechanism alone made the least
+                # trustworthy content look first-party. Recorded as a
+                # property of the write so trust stays DERIVED from grants.
+                if world_read:
+                    metadata["world_read"] = True
                 if author:
                     metadata["author"] = author
                 if description:
@@ -404,10 +424,18 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                                     top_k=settings.memory_context_top_k)
         lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
+        # The origin mix of what was actually RETRIEVED — not of the corpus.
+        # Phase 2 turns `untrusted` into a refusal at execute_tool; phase 1
+        # only has to make it true and available.
+        origins = [self.index.docs.get(i, {}).get("origin",
+                                                  provenance.THIRD_PARTY)
+                   for i in ids]
         return {
             "context": text,
             "total_tokens": len(text.split()),
             "memory_ids": ids,
+            "origins": origins,
+            "untrusted": any(not provenance.is_trusted(o) for o in origins),
         }
 
     async def skills_context(self, query: str) -> dict:
