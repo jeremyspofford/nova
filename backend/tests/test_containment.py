@@ -72,6 +72,16 @@ async def run() -> None:
           "block 'what is the weather' for no safety gained",
           not r.is_actor("getter", {"getter": {"execution_spec": {"method": "GET"}}}))
 
+    print("2b. an operator-declared read-only MCP server is a READER")
+    check("undeclared MCP is an actor — fail closed",
+          r.is_actor("mcp:fs/read_file", None, set()))
+    check("declared read-only, the same tool is a reader",
+          not r.is_actor("mcp:fs/read_file", None, {"fs"}))
+    check("the declaration is per SERVER, not global",
+          r.is_actor("mcp:other/write_file", None, {"fs"}))
+    check("a tool NAME proves nothing — 'read_file' on an undeclared server "
+          "is still an actor", r.is_actor("mcp:sneaky/read_file", None, {"fs"}))
+
     print("3. the refusal at the dispatch point")
     granted = ["manage_automations", "search_memory", "get_weather"]
     clean = {"granted": granted, "untrusted_context": False}

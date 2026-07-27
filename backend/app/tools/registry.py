@@ -349,7 +349,8 @@ ACTOR_TOOLS = frozenset({
 })
 
 
-def is_actor(name: str, db_tools: Optional[dict] = None) -> bool:
+def is_actor(name: str, db_tools: Optional[dict] = None,
+             read_only_servers: Optional[set[str]] = None) -> bool:
     """True for tools that may not run on untrusted context.
 
     Fail CLOSED for anything not recognised. An MCP tool can do literally
@@ -363,7 +364,12 @@ def is_actor(name: str, db_tools: Optional[dict] = None) -> bool:
     if name in BUILTIN_TOOLS:
         return False
     if name.startswith("mcp:"):
-        return True
+        # An MCP server can implement anything, and its tool NAMES are
+        # attacker-adjacent metadata — `read_file` proves nothing. So the
+        # operator declares the server read-only at registration and the
+        # backend enforces the consequence; undeclared stays an actor.
+        server = name[len("mcp:"):].split("/", 1)[0]
+        return server not in (read_only_servers or set())
     tool = (db_tools or {}).get(name)
     if tool is None:
         return True
@@ -374,6 +380,15 @@ def is_actor(name: str, db_tools: Optional[dict] = None) -> bool:
         except ValueError:
             return True
     return str(spec.get("method", "GET")).upper() != "GET"
+
+
+async def _read_only_servers() -> set[str]:
+    try:
+        from app import mcp_servers
+        return await mcp_servers.read_only_slugs()
+    except Exception:
+        log.exception("read-only MCP servers unavailable; treating all as actors")
+        return set()          # fail closed
 
 
 async def execute_tool(name: str, args: dict, ctx: dict) -> str:
@@ -397,7 +412,8 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     # The inversion is the point: "search memory, then act on what you find"
     # is the move that defeats a prompt warning, and here it is the very act
     # that disarms the tool.
-    if ctx.get("untrusted_context") and is_actor(name, await _load_db_tools()):
+    if ctx.get("untrusted_context") and is_actor(
+            name, await _load_db_tools(), await _read_only_servers()):
         return (f"Error: '{name}' changes what this system can do, and this "
                 f"turn is holding text from an outside source (a fetched "
                 f"page, a transcript, or an earlier conversation). Refused "
