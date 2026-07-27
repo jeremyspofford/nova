@@ -138,6 +138,30 @@ services:
   mcp-runner:
     build: ./mcp-runner
     restart: unless-stopped
+    # This container EXECUTES operator-registered stdio MCP servers — npx and
+    # uvx fetch and run third-party packages. It was root, with a writable
+    # root filesystem, full default capabilities and no host mounts only by
+    # omission. The launcher allow-list stops arbitrary COMMANDS; nothing
+    # stopped an allowed launcher from running a hostile package.
+    #
+    # No host mounts here, ever, and none by default: a workspace directory
+    # for a filesystem server gets mounted read-only and named explicitly
+    # (containment plan phase 3), never the parent of the repo, which holds
+    # .env.
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # npx/uvx need somewhere to unpack; tmpfs is wiped on restart and
+      # cannot persist a compromised package across a recreate
+      - /tmp:size=512m
+      - /home/mcp/.npm:size=256m
+      - /home/mcp/.cache:size=256m
+    environment:
+      HOME: /home/mcp
+      NPM_CONFIG_CACHE: /home/mcp/.npm
 
   # Media ingestion worker (optional): docker compose --profile media up -d
   # yt-dlp (1000+ sites — YouTube, Vimeo, Twitch, direct .mp4/.mp3 links,

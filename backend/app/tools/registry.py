@@ -329,6 +329,53 @@ def is_error_result(result: str) -> bool:
     return head.startswith("error") or head.startswith("blocked by rule")
 
 
+# ── the fence: which tools may not run on untrusted context ──────────────
+#
+# ACTOR = a verb whose effect ESCAPES memory. Changing what Nova or her
+# agents can do, and destroying things. Deliberately NOT "anything that
+# writes": `ingestion` exists to turn fetched web pages into topics, so a
+# rule that blocked writes under untrusted context would break the one agent
+# designed to handle untrusted content — and it holds none of these.
+#
+# The set is small on purpose. Every entry is a verb where a poisoned page
+# reaching the model turns into a durable change to the system.
+ACTOR_TOOLS = frozenset({
+    "manage_agents",       # who exists and what they may call
+    "manage_tools",        # what exists to call
+    "manage_rules",        # the guardrails themselves
+    "manage_automations",  # unattended future turns
+    "pull_model",          # what runs on the box
+    "delete_memory_item",  # destruction
+})
+
+
+def is_actor(name: str, db_tools: Optional[dict] = None) -> bool:
+    """True for tools that may not run on untrusted context.
+
+    Fail CLOSED for anything not recognised. An MCP tool can do literally
+    anything its server implements, and a DB tool that is not a plain GET is
+    a write to somewhere — neither can be assumed harmless. A GET-only
+    http_call IS a read, and treating it as an actor would block "what's the
+    weather" on most turns for no safety gained.
+    """
+    if name in ACTOR_TOOLS:
+        return True
+    if name in BUILTIN_TOOLS:
+        return False
+    if name.startswith("mcp:"):
+        return True
+    tool = (db_tools or {}).get(name)
+    if tool is None:
+        return True
+    spec = tool.get("execution_spec") or {}
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            return True
+    return str(spec.get("method", "GET")).upper() != "GET"
+
+
 async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     """Single dispatch point for every tool call (dispatch_to_agent is runner-inlined).
 
@@ -339,6 +386,24 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     granted = ctx.get("granted")
     if granted is not None and name not in granted:
         return f"Error: tool '{name}' is not granted to this agent"
+
+    # THE CONTAINMENT INVARIANT (docs/plans/capability-and-containment.md):
+    # no turn may both hold untrusted-origin text in its context and execute
+    # a tool classified as ACTOR. Checked here because this is the single
+    # dispatch point, and mechanically because the alternative — telling the
+    # model in its prompt to be careful — is the control that already failed
+    # twice this week.
+    #
+    # The inversion is the point: "search memory, then act on what you find"
+    # is the move that defeats a prompt warning, and here it is the very act
+    # that disarms the tool.
+    if ctx.get("untrusted_context") and is_actor(name, await _load_db_tools()):
+        return (f"Error: '{name}' changes what this system can do, and this "
+                f"turn is holding text from an outside source (a fetched "
+                f"page, a transcript, or an earlier conversation). Refused "
+                f"mechanically — untrusted text must not be able to reach a "
+                f"tool like this. Tell the operator what you would have done "
+                f"and let them decide.")
 
     # guardrails — fail-open on engine errors, never on rule matches
     try:

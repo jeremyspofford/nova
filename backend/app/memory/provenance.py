@@ -97,4 +97,27 @@ def lower_of(a: Optional[str], b: Optional[str]) -> str:
 
 
 def is_trusted(t: Optional[str]) -> bool:
+    """First-party only. Used where the question is 'did the operator or
+    Nova author this', e.g. deciding what to auto-retrieve."""
     return t == FIRST_PARTY
+
+
+def blocks_actors(t: Optional[str]) -> bool:
+    """Does holding this text disarm the capability-changing tools?
+
+    THIRD_PARTY only — raw text Nova fetched from the world. Not
+    `conversation`, and the distinction is load-bearing rather than
+    generous: journals are retrieved on essentially every turn, so keying
+    the fence on "anything not first-party" tainted every turn and blocked
+    Nova from listing her own automations. A control that fires always is
+    the same as no control, except that it also breaks the product.
+
+    Unknown still counts, because unknown is third_party by construction.
+
+    THE RESIDUAL, stated rather than papered over: a journal is a transcript
+    and can quote a page the model read aloud, so injected text can reach a
+    later turn second-hand. It arrives as a quotation inside a conversation
+    rather than as a document presented as knowledge, which is weaker — and
+    phase 4's consent gate is what covers the high-value verbs regardless.
+    """
+    return (t or THIRD_PARTY) == THIRD_PARTY
