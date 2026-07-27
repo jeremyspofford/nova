@@ -398,6 +398,14 @@ async def _build_system_prompt(agent: dict, query: str, *,
     entities = await _entities_block()
     if entities:
         parts.append(entities)
+    # what CHANGED, which the state block above cannot say
+    try:
+        from app import capability_events
+        changes = await capability_events.prompt_block()
+        if changes:
+            parts.append(changes)
+    except Exception:
+        log.exception("capability changes unavailable; continuing without them")
     mcp_index = await _mcp_index_block(agent)
     if mcp_index:
         parts.append(mcp_index)
