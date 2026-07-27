@@ -12,7 +12,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from app import conversations, db, settings_store, trace
+from app import conversations, db, grounding, settings_store, trace
 from app.llm import router as llm_router
 
 log = logging.getLogger(__name__)
@@ -26,6 +26,15 @@ _SYSTEM = """You maintain the running summary of one long, continuous conversati
 Merge the previous summary with the newly aged-out messages into ONE updated summary, at most 300 words, plain text.
 Preserve, in priority order: stable facts about the user and their preferences; decisions that were made; open threads, requests, or commitments not yet resolved; notable outcomes.
 Drop pleasantries and transient detail. Never invent content. Output only the summary text."""
+
+_REGROUND = """These terms appear in your summary but NOT anywhere in the previous summary or the messages you were given:
+
+{terms}
+
+You invented them. Rewrite the summary with every one of them removed, along with any claim that depended on them. Change nothing else. Output only the summary text.
+
+YOUR SUMMARY:
+{draft}"""
 
 
 async def maybe_compact(conversation_id: str, model: str,
@@ -104,6 +113,52 @@ async def maybe_compact(conversation_id: str, model: str,
             if not summary:
                 log.warning("compaction produced empty summary; skipping update")
                 return
+
+            # THE GROUNDING GATE, and this is the highest-leverage place for
+            # it in the system. A rolling summary is not one document you can
+            # delete — it is injected into the system prompt of EVERY
+            # subsequent turn in this conversation, where the model reads it
+            # as established fact about the person it is talking to. A name
+            # or a number invented here is invisible from then on.
+            #
+            # _SYSTEM already says "Never invent content". That is the same
+            # prompt-shaped control that failed on 2026-07-27, when a summary
+            # written under "report only what the transcript actually says"
+            # invented a company and a rate limit. The control has to be a
+            # check.
+            #
+            # The source is the previous summary PLUS the new messages: a
+            # correct updated summary carries facts forward out of the old
+            # one, and grading it against the new messages alone would flag
+            # every one of them.
+            source = f"{prev or ''}\n\n{transcript}"
+            invented = grounding.ungrounded(summary, source)
+            if invented:
+                log.warning("compaction: %d unsupported terms (%s) — asking "
+                            "for a correction", len(invented),
+                            ", ".join(invented[:6]))
+                fixed = ""
+                async for event in llm_router.stream_chat(
+                        [{"role": "system", "content": _SYSTEM},
+                         {"role": "user", "content": _REGROUND.format(
+                             terms="\n".join(f"- {t}" for t in invented),
+                             draft=summary)}], compaction_model):
+                    if event.get("type") == "text":
+                        fixed += event["text"]
+                if fixed.strip():
+                    summary = fixed.strip()
+                invented = grounding.ungrounded(summary, source)
+                if invented:
+                    # Watermark unchanged, exactly as on an LLM error above:
+                    # these messages stay pending and are retried on a later
+                    # turn with more context. Refusing costs continuity for a
+                    # while; accepting would put a fabrication in front of
+                    # every future turn permanently.
+                    log.error("compaction REFUSED — still unsupported after a "
+                              "correction pass: %s. The summary was NOT "
+                              "updated; these messages will be retried.",
+                              ", ".join(invented[:6]))
+                    return
 
             upto = rows[-1]["created_at"]
             await conversations.set_summary(conversation_id, summary, upto)

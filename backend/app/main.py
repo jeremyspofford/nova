@@ -67,6 +67,10 @@ async def lifespan(app: FastAPI):
     # from the start; followers keep retrying every 30s in the background
     await leader.start()
     await ingest_backfill.run()   # one-time repair: anchor drifting source ingests
+    # an eval runs in-process, so a restart (including any --reload edit)
+    # kills it; without this its row stays 'running' and reads as in-flight
+    from app import eval_runs
+    await eval_runs.reconcile_orphans()
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())

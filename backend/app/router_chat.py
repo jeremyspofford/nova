@@ -1286,6 +1286,7 @@ async def models_fitness(agent: str | None = None):
     from app import model_fitness
     from app.agents import registry as agent_registry
     out: dict = {"fallback": await model_fitness.check_fallback(),
+                 "roles": await model_fitness.check_roles(),
                  "installed_local": await model_fitness.rank_local(),
                  "agents": []}
     for a in await agent_registry.list_agents(enabled_only=False):

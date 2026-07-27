@@ -39,6 +39,27 @@ _lock = asyncio.Lock()
 _running: Optional[str] = None
 
 
+async def reconcile_orphans() -> int:
+    """Close out runs that a restart killed mid-flight.
+
+    A run executes in-process (asyncio.create_task), and the dev server runs
+    with --reload, so ANY source edit kills it. Without this the row stays
+    `running` forever and reads as "still going" — the same silent-limbo
+    shape the ingest queue already fixed by requeuing orphaned rows at
+    startup. Marked `error`, never `failed`: the harness died, which is not a
+    verdict on the model, and recording it as one would be a lie that later
+    shows up in a picker.
+    """
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "UPDATE eval_runs SET status='error', finished_at=now(), "
+            "       error='interrupted by a backend restart' "
+            " WHERE status='running' RETURNING id")
+    if rows:
+        log.warning("eval: %d run(s) were interrupted by a restart", len(rows))
+    return len(rows)
+
+
 async def estimate(suite: str) -> dict:
     """What this suite has cost before — the basis for the operator warning.
 

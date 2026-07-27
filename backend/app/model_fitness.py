@@ -215,6 +215,61 @@ async def rank_local() -> list[dict]:
     return sorted(out, key=lambda m: m["billions"] or 0, reverse=True)
 
 
+# Model choices that are NOT an agent row. Each is a setting that quietly
+# routes real work to a model nobody picked in the agent list, which is
+# exactly how the smallest model on the machine ended up doing some of the
+# most consequential writing in the system.
+#   (setting key, human name, what its output does, blank means)
+_ROLE_SETTINGS = [
+    ("compaction.model", "conversation compaction",
+     "its output is injected into the system prompt of EVERY later turn in "
+     "that conversation, where it is read as established fact",
+     "inherits the conversation's own model"),
+    ("voice.model_override", "voice replies",
+     "its output is spoken aloud, so a mistake is heard rather than read",
+     "inherits the answering agent's model"),
+]
+
+
+async def check_roles() -> list[dict]:
+    """Fitness of the models bound to ROLES rather than to agents.
+
+    An agent's model is visible in the agent list. A role's model is a
+    settings key, so nothing surfaces it next to the work it does — and the
+    work can matter more. Compaction is the case that proves it: a rolling
+    summary seeds every subsequent turn, and it was running on the smallest
+    model installed with `Never invent content` in its prompt as the only
+    control.
+    """
+    from app import settings_store
+    installed = await rank_local()
+    smallest_first = sorted(installed, key=lambda m: m["billions"] or 0)
+    out = []
+    for key, label, consequence, blank_means in _ROLE_SETTINGS:
+        raw = str(settings_store.get(key) or "").strip()
+        if not raw:
+            out.append({"setting": key, "role": label, "model": None,
+                        "findings": [], "note": f"unset — {blank_means}"})
+            continue
+        model = raw if ":" in raw else f"ollama:{raw}"
+        findings = await assess(model, needs_tools=False, role=f"{label}")
+        # The specific thing worth saying, and the reason this function
+        # exists: a consequential role running on the least capable thing
+        # available, where nobody would see it.
+        if installed and model == smallest_first[0]["model"] and len(installed) > 1:
+            bigger = [m for m in installed if m["model"] != model][:3]
+            findings.append({
+                "severity": ADVISORY, "check": "smallest_installed",
+                "detail": f"{label} runs on {model}, the smallest model "
+                          f"installed, and {consequence}. Larger options: "
+                          + ", ".join(f"{m['model']} ({m['parameter_size']})"
+                                      for m in bigger)
+                          + f". Clearing {key} would {blank_means}."})
+        out.append({"setting": key, "role": label, "model": model,
+                    "findings": findings})
+    return out
+
+
 async def check_fallback() -> dict:
     """Is the local fallback fit to stand in for every agent?
 

@@ -70,6 +70,12 @@ _STRUCTURAL = frozenset({
     "in", "on", "at", "by", "as", "an", "a", "of", "to", "from", "is", "are",
     "was", "were", "not", "no", "all", "some", "most", "other", "another",
     "first", "second", "third", "next", "last", "new", "old", "main",
+    # nouns a summary uses to head a list. These are the realistic false
+    # positives once sentence-initial phrases became candidates — "Key
+    # Points", "Next Steps", "Breaking Changes" are formatting, not names.
+    "points", "steps", "changes", "takeaways", "findings", "highlights",
+    "details", "features", "topics", "items", "sections", "updates",
+    "breaking", "covered", "mentioned", "recommended", "conclusion",
 })
 
 _MULTIWORD = re.compile(
@@ -99,13 +105,17 @@ def candidates(text: str) -> set[str]:
             continue
         for match in _MULTIWORD.finditer(stripped):
             phrase = match.group().strip()
-            # drop a run that only exists because the sentence started
-            if stripped.startswith(phrase):
-                words = phrase.split()
-                if len(words) < 3:
-                    continue
-                phrase = " ".join(words[1:])
             words = phrase.split()
+            # A sentence-initial run USED to be dropped outright, on the
+            # grounds that the first word's capitalisation proves nothing.
+            # But a fabricated name very often opens a sentence — "Karen Wu
+            # approved it", "Six Labs offers" — and dropping them meant the
+            # commonest shape of the thing this module exists to catch walked
+            # straight past. The first word alone is still uninformative; a
+            # RUN of capitalised words is not, because ordinary prose does
+            # not capitalise its second word. What survives from the old rule
+            # is _STRUCTURAL, extended with the list-header nouns that are
+            # the real false positives here.
             if all(w.lower() in _STRUCTURAL for w in words):
                 continue
             # ALL-CAPS is emphasis, a heading, or a prompt fragment echoed

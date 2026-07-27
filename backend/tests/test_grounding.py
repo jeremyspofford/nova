@@ -138,6 +138,36 @@ def main() -> int:
     check("but a plural that is genuinely absent is still caught",
           not grounding._grounded("Spark GPUs", grounding._norm("build a CRUD API")))
 
+    print("4c. compaction — the highest-leverage place this check runs")
+    # A rolling summary is injected into the system prompt of every later
+    # turn, so a name invented here is read as established fact from then on
+    # and is invisible. The source it must be graded against is the PREVIOUS
+    # SUMMARY PLUS the newly aged-out messages: a correct update carries
+    # facts forward out of the old summary, and grading against the new
+    # messages alone would flag every one of them as invented.
+    prev = "Jeremy works on Nova and prefers plain words over emojis."
+    aged = ("User: let's use the qwen3:14b model for that\n\n"
+            "Nova: understood, I'll switch the fallback")
+    carried = ("Jeremy works on Nova and prefers plain words. He chose "
+               "qwen3:14b for the fallback.")
+    check("a fact carried forward from the previous summary is NOT a "
+          "fabrication — grading against the new messages alone would flag "
+          "every one of them",
+          grounding.ungrounded(carried, f"{prev}\n\n{aged}") == [],
+          str(grounding.ungrounded(carried, f"{prev}\n\n{aged}")))
+    check("a name in NEITHER the previous summary nor the messages is caught "
+          "even when it opens a sentence — the commonest shape of a "
+          "fabricated name, and one an earlier version walked straight past",
+          "Karen Wu" in grounding.ungrounded(
+              f"{carried} Karen Wu approved it.", f"{prev}\n\n{aged}"),
+          str(grounding.ungrounded(f"{carried} Karen Wu approved it.",
+                                   f"{prev}\n\n{aged}")))
+    check("...and a sentence-initial LIST HEADER is not mistaken for one",
+          grounding.ungrounded("Key Points follow. Next Steps are listed.",
+                               "unrelated source") == [],
+          str(grounding.ungrounded("Key Points follow. Next Steps are listed.",
+                                   "unrelated source")))
+
     print("5. the caller's own header is not the model's claim")
     header = "topics/some-video-full-transcript.md"
     check("a file path passed as `ignore` is not reported",
