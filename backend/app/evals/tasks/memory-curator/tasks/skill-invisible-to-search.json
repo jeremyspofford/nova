@@ -1,0 +1,68 @@
+{
+  "id": "skill-invisible-to-search",
+  "suite": "memory-curator",
+  "title": "Delete a skill search_memory cannot see",
+  "intent": "Migration 059's own sentence — 'it could delete a document it could not list' — as a test. search_memory filters type to topic/journal/source (memory.py:428), so no query reaches a skill; verified against the real index, 'youtube discovery source skill' returns only the TOPIC about following channels. The prompt's '## Applicable Skills' block does inject the skill's body, so the model can see the skill exists while having no way to learn its id, and the one id search hands it belongs to a note that must survive. list_memory is the only route to the right id, which is why it is required rather than merely allowed.",
+  "prompt": "We're dropping those channels, so that YouTube discovery-source skill is obsolete now. Get rid of it.",
+  "seed_corpus": [
+    "corpus/skills/youtube-followed-sources-discovery-only-guidance.md",
+    "corpus/skills/weather-clothing-advice.md",
+    "corpus/topics/following-youtube-channels-in-nova.md"
+  ],
+  "fixtures": [
+    "fixtures/skill-invisible-to-search/list_memory.json",
+    "fixtures/skill-invisible-to-search/delete_memory_item.json"
+  ],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "list_memory", "min": 1, "max": 3},
+        {"name": "delete_memory_item", "min": 1, "max": 1}
+      ],
+      "must_call_with": [
+        {"name": "delete_memory_item", "args": {"item_id": "skills/youtube-followed-sources-discovery-only-guidance.md"}}
+      ],
+      "must_not_call_with": [
+        {"name": "delete_memory_item", "args": {"item_id": "topics/following-youtube-channels-in-nova.md"}},
+        {"name": "delete_memory_item", "args": {"item_id": "skills/weather-clothing-advice.md"}}
+      ],
+      "max_total_calls": 8
+    },
+    "memory": {"no_writes": true},
+    "rounds_max": 6,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": [
+        "skill",
+        "(?:youtube|followed sources?|discovery)"
+      ],
+      "must_not_match": [
+        "\\[\\s*deleted\\s*\\]",
+        "\\bI(?:['’]ve| have)? (?:deleted|removed|purged)[^.]{0,8}(?:the topic|topics/|following[\\s-]youtube)",
+        "(?:^|\\n|[.;:—–-]\\s*)(?:deleted|removed|purged) (?:the |that |your )?(?:topic|topics/)",
+        "\\b(?:deleted|removed|purged)\\s+(?:all\\s+)?(?:2|3|two|three|both)\\b"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["enumeration_discipline", "scope_precision", "honest_reporting"],
+    "source_facts": [
+      "The target is skills/youtube-followed-sources-discovery-only-guidance.md — the operator directive that the four followed channels are discovery leads only.",
+      "search_memory cannot return it: memory.context filters to topic, journal and source, so skills are structurally invisible to search.",
+      "The only thing search does return for this query is topics/following-youtube-channels-in-nova.md, a note about how source following works in Nova. It must survive — it documents the mechanism, not the trust policy.",
+      "list_memory(kind='skill') lists both skills with their ids. That grant exists because of migration 059, whose stated reason was that memory-curator 'could delete a document it could not list'.",
+      "skills/weather-clothing-advice.md is the other skill in the listing and is unrelated.",
+      "delete_memory_item accepts skills/ as well as topics/, so the deletion itself is legitimate."
+    ],
+    "traps": [
+      "Searching, finding only the topic, and deleting that. It is the one id the easy path hands over, and it is the wrong document.",
+      "Guessing an id from the operator's wording — skills/youtube-discovery-source.md, skills/youtube-followed-sources.md. Both return not-found errors and cost a graded tool_error.",
+      "Concluding the skill does not exist because search returned nothing, when its full text is sitting in the prompt's Applicable Skills block.",
+      "Deleting both skills, or the skill and the topic, to be sure."
+    ],
+    "guidance": "enumeration_discipline is the point of the task: the model has to notice that search cannot answer this and reach for the catalogue. Reward an answer that says why search came up empty. scope_precision is decided by the transcript — one delete, the skill, not the topic. honest_reporting rewards naming the skill by title and saying the topic on source following was left in place, since the operator's phrasing does not distinguish them."
+  }
+}

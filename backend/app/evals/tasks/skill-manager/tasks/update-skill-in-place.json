@@ -1,0 +1,71 @@
+{
+  "id": "update-skill-in-place",
+  "suite": "skill-manager",
+  "title": "Correct one rule inside an existing skill without forking or truncating it",
+  "intent": "The update-in-place rail, ported to skills: a write with no item_id creates a SECOND skill, and two skills covering the same ground both get injected by skills_context, so the agent that reads them is handed a contradiction. The second half is carry-forward — item_id alone is a REPLACE (store.py:118), so a model that sends only the corrected section silently deletes the other four rules while its own report says it fixed the threshold. The skill body is longer than the 700-char window skills_context injects (memory.py:29), so the whole document is only knowable through read_memory_item.",
+  "prompt": "The 'Refreshing a Stale Topic' skill has the staleness threshold wrong — it says 30 days and it should be 90. Fix that. Everything else in there is right, so leave it exactly as it is.",
+  "seed_corpus": [
+    "corpus/skills/refreshing-a-stale-topic.md",
+    "corpus/skills/youtube-followed-sources-are-discovery-only.md"
+  ],
+  "fixtures": ["fixtures/update-skill-in-place/list_memory.json"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [
+        {"name": "read_memory_item", "min": 1, "max": 3},
+        {"name": "write_memory", "min": 1, "max": 1}
+      ],
+      "must_call_with": [
+        {"name": "read_memory_item", "args": {"item_id": "skills/refreshing-a-stale-topic.md"}},
+        {"name": "write_memory", "args": {"item_id": "skills/refreshing-a-stale-topic.md"}}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"append": true}},
+        {"name": "write_memory", "args": {"prepend": true}}
+      ],
+      "max_total_calls": 6
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [
+        {"item_id": "skills/refreshing-a-stale-topic.md", "mode": "replace", "count": 1}
+      ],
+      "write_content": {
+        "must_match": ["(?:what changed|the diffs?|old value)", "\\b90[\\s-]*days?\\b"],
+        "must_not_match": ["\\b30[\\s-]*days?\\b"],
+        "must_contain": ["item_id", "contradict", "404", "kimi", "parked domain"],
+        "max_chars": 3200
+      }
+    },
+    "rounds_max": 6,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["\\b90\\b", "(?:in place|skills/refreshing-a-stale-topic|the existing skill)"],
+      "must_not_match": [
+        "(?<!not )(?<!n't )(?<!never )(?:created|wrote|added) a new skill",
+        "(?<!not )(?<!n't )(?<!never )(?:created|wrote|added|made|started) a second skill"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["update_in_place_discipline", "carry_forward", "change_reporting", "conciseness"],
+    "source_facts": [
+      "The skill is skills/refreshing-a-stale-topic.md, five numbered rules, written 2026-07-19.",
+      "Rule 1 currently says a topic is stale when its frontmatter timestamp is more than 30 days old. The operator says 90.",
+      "Rule 2 (refresh in place with item_id, no item_id creates a second topic, the Kimi K3 note twice), rule 3 (carry forward what the new source does not contradict), rule 4 (report the diff — old value, new value, and what stayed the same) and rule 5 (do not refresh when the source_url 404s, is parked, or has changed subject) are all correct and must survive unchanged.",
+      "write_memory with item_id and neither append nor prepend REPLACES the body (store.py:118). The content argument is therefore the whole corrected document, not the delta.",
+      "The frontmatter description, tags and category are preserved automatically by write_concept's merge (store.py:106) and do not need re-supplying."
+    ],
+    "traps": [
+      "Writing with no item_id, which creates a second skill with a near-identical slug. Both are then retrievable and they disagree about the threshold.",
+      "Sending only the corrected rule 1 as the content of a replace, which deletes rules 2 through 5. The agent's report says the threshold is fixed and it is — in a document that no longer says anything else.",
+      "Using append=true to bolt a corrected rule 1 onto the end, which leaves the wrong 30-day rule in the body above it. Two thresholds in one skill is worse than the wrong one alone.",
+      "Leaving '30 days' in as a parenthetical history note ('previously 30 days'). A skill is read and followed, not studied — another agent handed both numbers has to guess.",
+      "Answering without reading the item first, and reconstructing the other four rules from the 700-char snippet in the prompt, which is truncated."
+    ],
+    "guidance": "carry_forward is the primary dimension: check every one of rules 2 through 5 is present in the stored body with its specifics intact (item_id, the Kimi K3 incident, 'does not contradict', the 404/parked-domain case). Score change_reporting on naming the old and new values rather than saying the skill was updated. Conciseness is a tiebreak — this is one read and one write."
+  }
+}

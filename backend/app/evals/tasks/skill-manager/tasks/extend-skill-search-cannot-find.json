@@ -1,0 +1,73 @@
+{
+  "id": "extend-skill-search-cannot-find",
+  "suite": "skill-manager",
+  "title": "Find the skill search_memory cannot see, and extend it instead of forking a second one",
+  "intent": "search_memory filters retrieval to {topic, journal, source} (memory.py:434) — it can never return a skill. The skill-manager system prompt nevertheless tells the agent to 'look up the exact id first (search_memory)', advice migration 020 wrote before the type filter mattered. So the obvious move returns nothing, and the obvious conclusion — no such skill exists — is wrong. list_memory is the only granted tool that can see a skill. The corpus makes the wrong turn attractive as well as available: two seeded TOPICS about tool descriptions rank high for this query, so a model that searches gets plausible hits and can end up rewriting a fetched MCP page instead of its own skill.",
+  "prompt_file": "prompts/extend-skill-search-cannot-find.md",
+  "seed_corpus": [
+    "corpus/skills/writing-a-tool-description-other-agents-can-act-on.md",
+    "corpus/skills/tool-result-verification-checklist.md",
+    "corpus/topics/mcp-filesystem-server-tool-descriptions.md",
+    "corpus/topics/nova-builtin-tool-inventory.md"
+  ],
+  "fixtures": ["fixtures/extend-skill-search-cannot-find/list_memory.json"],
+  "budget_seconds": 300,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "write_memory", "min": 1, "max": 1}],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"item_id": "skills/writing-a-tool-description-other-agents-can-act-on.md"}}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"type": "topic"}},
+        {"name": "write_memory", "args": {"item_id": "topics/mcp-filesystem-server-tool-descriptions.md"}},
+        {"name": "write_memory", "args": {"item_id": "topics/nova-builtin-tool-inventory.md"}}
+      ],
+      "max_total_calls": 6
+    },
+    "memory": {
+      "no_new_topics": true,
+      "write_content": {
+        "must_match": [
+          "\\bfail(?:ure|ures|s|ed|ing)?\\b",
+          "(?:when not to|do(?:n'?t| not) (?:use|call|reach)|instead of (?:this|it)|reach for [^.\\n]{0,60} instead|is not the (?:right|correct) tool)"
+        ],
+        "must_contain": ["Error:"],
+        "must_not_contain": ["read_text_file", "list_directory", "move_file"],
+        "max_chars": 3500
+      }
+    },
+    "rounds_max": 7,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": [
+        "(?:existing skill|already (?:had|has|have|covers?|covered|contains?|says?|said)|skills/writing-a-tool-description-other-agents-can-act-on)"
+      ],
+      "must_not_match": [
+        "(?:^|\\n)\\s*(?:created|wrote) a new skill",
+        "(?<!not )(?<!n't )(?<!never )(?:created|wrote|added|started) a (?:new|second) skill\\b",
+        "\\b(?:read_text_file|list_directory|move_file)\\b"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["discovery", "duplicate_avoidance", "coverage", "source_discipline"],
+    "source_facts": [
+      "skills/writing-a-tool-description-other-agents-can-act-on.md already exists and already covers two of the four points the operator listed: say what it DOES not what it IS, and say what comes back.",
+      "The two points it does NOT cover are the failure modes (what an `Error:` means for the caller's next step, and what the tool still does not do when it succeeds) and when NOT to reach for it, naming the right tool instead.",
+      "search_memory cannot return a skill at all — it filters to {topic, journal, source}. list_memory(kind='skill') returns the id, and read_memory_item on that id returns the full body.",
+      "topics/mcp-filesystem-server-tool-descriptions.md is a fetched third-party page listing read_text_file, list_directory and move_file. It is evidence about the problem, not the skill, and it is not this agent's document to rewrite.",
+      "topics/nova-builtin-tool-inventory.md is a conversation-tier note counting builtins. Also not a skill."
+    ],
+    "traps": [
+      "Searching, finding nothing, and creating a second skill on the same subject. Both then get injected by skills_context and the reader has to pick.",
+      "Following the agent's own system prompt, which says to look the id up with search_memory — advice that predates the type filter and cannot work for a skill.",
+      "Updating topics/mcp-filesystem-server-tool-descriptions.md because it ranked first and is about tool descriptions. It is a captured web page; editing it destroys a record of what that server actually advertised.",
+      "Pasting the MCP server's example descriptions into the skill, which turns operating guidance into a transcript of somebody else's API.",
+      "Rewriting the two sections that were already correct, so the diff is unreviewable and the operator cannot tell what actually changed."
+    ],
+    "guidance": "discovery and duplicate_avoidance are the point: the winning run is the one that ends with ONE skill on this subject holding all four points. Either mode is legitimate — append the two missing sections, or replace with a merged document — but a replace must keep the two existing sections intact. Score source_discipline on leaving both seeded topics untouched and on not importing the MCP server's strings as if they were house guidance."
+  }
+}

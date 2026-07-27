@@ -1,0 +1,22 @@
+{
+  "tool": "list_memory",
+  "notes": "list_memory is the ONLY tool in this agent's grant that can see a skill: search_memory filters retrieval to {topic, journal, source} (memory.py:434), so no skill is reachable through it. list_memory is also not in fixtures.LIVE_OK, so it cannot execute against the scratch store and has to be served. Every row here is DERIVED from the exact corpus this task seeds \u2014 ids, kinds, origins and token counts all agree with the files on disk, so the listing can never describe a corpus that is not the one read_memory_item is reading. Entries cover the two kind filters; any other call (contains=, tag=, or no args at all) falls to the default, which is the whole catalogue. Origins: a skill is source_type=tool with no source_url written by an agent holding no world-reading tool, so first_party; a topic carrying a source_url, or a media transcript, is third_party.",
+  "entries": [
+    {
+      "match": {
+        "kind": "skill"
+      },
+      "result": "{\"total\": 1, \"by_kind\": {\"skill\": 1}, \"collections\": [], \"documents\": [{\"id\": \"skills/youtube-followed-sources-are-discovery-only.md\", \"title\": \"YouTube Followed Sources Are Discovery Only\", \"kind\": \"skill\", \"tokens\": 270, \"origin\": \"first_party\", \"description\": \"The four followed YouTube channels are leads, not evidence \\u2014 verify independently before acting on or recommending anything learned from them.\"}], \"omitted\": 0, \"filter\": {\"kind\": \"skill\"}}"
+    },
+    {
+      "match": {
+        "kind": "topic"
+      },
+      "notes": "this task seeds no topic \u2014 an honest empty listing, which is a real answer and not a miss",
+      "result": "{\"total\": 0, \"by_kind\": {}, \"collections\": [], \"documents\": [], \"omitted\": 0, \"filter\": {\"kind\": \"topic\"}}"
+    }
+  ],
+  "default": {
+    "result": "{\"total\": 1, \"by_kind\": {\"skill\": 1}, \"collections\": [], \"documents\": [{\"id\": \"skills/youtube-followed-sources-are-discovery-only.md\", \"title\": \"YouTube Followed Sources Are Discovery Only\", \"kind\": \"skill\", \"tokens\": 270, \"origin\": \"first_party\", \"description\": \"The four followed YouTube channels are leads, not evidence \\u2014 verify independently before acting on or recommending anything learned from them.\"}], \"omitted\": 0, \"filter\": {}}"
+  }
+}

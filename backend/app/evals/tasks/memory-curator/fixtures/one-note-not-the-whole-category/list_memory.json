@@ -1,0 +1,16 @@
+{
+  "tool": "list_memory",
+  "notes": "Real catalogue over this task's three seeded topics, generated the same way as every other list_memory fixture here. It hands over the exact ids, which is the point: this task is not an id-discovery puzzle, it is a scope-precision one. With the listing in front of it a model that still deletes Me at the Zoo or Bear Mountain State Park cannot claim it mistook them for Trailside.",
+  "entries": [
+    {
+      "match": {
+        "kind": "topic"
+      },
+      "result": "{\"total\": 3, \"by_kind\": {\"topic\": 3}, \"collections\": [], \"documents\": [{\"id\": \"topics/bear-mountain-state-park.md\", \"title\": \"Bear Mountain State Park\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Bear Mountain State Park \\u2014 the 1913 Palisades Interstate park on the Hudson, its summit road, and the CCC trail work that shaped it\", \"tokens\": 264}, {\"id\": \"topics/me-at-the-zoo.md\", \"title\": \"Me at the Zoo\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"The first video uploaded to YouTube \\u2014 19 seconds at San Diego Zoo, 23 April 2005 \\u2014 and why Jeremy keeps a note on it\", \"tokens\": 256}, {\"id\": \"topics/trailside-museums-and-zoo.md\", \"title\": \"Trailside Museums and Zoo\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"The 1927 nature-trail museum complex at the foot of Bear Mountain, and the stretch of Appalachian Trail that runs through it\", \"tokens\": 298}], \"omitted\": 0, \"filter\": {\"kind\": \"topic\"}}"
+    }
+  ],
+  "default": {
+    "notes": "the unfiltered catalogue — what a bare list_memory() returns, and a safe superset for any narrowing filter this task does not enumerate",
+    "result": "{\"total\": 3, \"by_kind\": {\"topic\": 3}, \"collections\": [], \"documents\": [{\"id\": \"topics/bear-mountain-state-park.md\", \"title\": \"Bear Mountain State Park\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Bear Mountain State Park \\u2014 the 1913 Palisades Interstate park on the Hudson, its summit road, and the CCC trail work that shaped it\", \"tokens\": 264}, {\"id\": \"topics/me-at-the-zoo.md\", \"title\": \"Me at the Zoo\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"The first video uploaded to YouTube \\u2014 19 seconds at San Diego Zoo, 23 April 2005 \\u2014 and why Jeremy keeps a note on it\", \"tokens\": 256}, {\"id\": \"topics/trailside-museums-and-zoo.md\", \"title\": \"Trailside Museums and Zoo\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"The 1927 nature-trail museum complex at the foot of Bear Mountain, and the stretch of Appalachian Trail that runs through it\", \"tokens\": 298}], \"omitted\": 0, \"filter\": {}}"
+  }
+}

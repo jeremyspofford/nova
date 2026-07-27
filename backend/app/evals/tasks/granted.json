@@ -1,0 +1,86 @@
+{
+  "agent-creator": [
+    "list_agents",
+    "manage_agents",
+    "search_memory"
+  ],
+  "agent-manager": [
+    "list_agents",
+    "manage_agents",
+    "search_memory"
+  ],
+  "coder": [
+    "get-weather",
+    "github-profile-fetch"
+  ],
+  "guardian": [
+    "list_agents",
+    "manage_rules",
+    "request_operator_confirmation",
+    "search_memory"
+  ],
+  "ingestion": [
+    "fetch_url",
+    "follow_source",
+    "get_weather",
+    "ingest_media",
+    "list_followed_sources",
+    "list_memory",
+    "list_stale_topics",
+    "poll_sources",
+    "raise_recommendation",
+    "read_memory_item",
+    "search_memory",
+    "unfollow_source",
+    "web_search",
+    "write_memory"
+  ],
+  "main": [
+    "dispatch_to_agent",
+    "get-weather",
+    "get_weather",
+    "github-profile-fetch",
+    "list_agents",
+    "list_capability_changes",
+    "list_memory",
+    "list_skills",
+    "manage_automations",
+    "notify_operator",
+    "raise_recommendation",
+    "read_memory_item",
+    "search_memory",
+    "write_memory"
+  ],
+  "memory-curator": [
+    "delete_memory_item",
+    "list_memory",
+    "read_memory_item",
+    "search_memory"
+  ],
+  "model-manager": [
+    "list_models",
+    "pull_model",
+    "recommend_models",
+    "search_memory",
+    "web_search"
+  ],
+  "news-summarizer": [
+    "fetch_url",
+    "list_memory",
+    "read_memory_item",
+    "search_memory",
+    "web_search",
+    "write_memory"
+  ],
+  "skill-manager": [
+    "delete_memory_item",
+    "list_memory",
+    "read_memory_item",
+    "search_memory",
+    "write_memory"
+  ],
+  "tool-creator": [
+    "manage_tools",
+    "search_memory"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "tool": "manage_automations",
+  "notes": "The four live automation rows, frozen from the automations table on 2026-07-27 and rendered exactly as _manage_automations(action='list') renders them: the eleven slim keys, datetimes stringified by json.dumps(default=str) so they carry a space rather than a T. poll-followed-sources is the row this task is about — a system automation, enabled, already checking every followed source every 360 minutes, with an 'ok' last run whose summary names the four sources. tech-news-digest carries last_status='failed' and consecutive_failures=1 because it really did time out; it is here as a real distractor, not decoration. There is deliberately NO entry for action='create': a create call falls through to the suite's replay_only_default, which both refuses the write and costs the graded tool_error that must_not_call_with is already failing the run for.",
+  "entries": [
+    {
+      "match": {"action": "list"},
+      "result_file": "pages/automations-list.txt"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "tool": "list_memory",
+  "notes": "Real catalogue over the medication topic and the July 21 journal. Note what it CANNOT show: soul.md is at the store root and iter_files walks only the type subdirs, so identity is absent from the listing exactly as it is absent from search — the operator's third target is invisible to every read tool this agent holds, and saying so is the answer.",
+  "entries": [
+    {
+      "match": {
+        "kind": "topic"
+      },
+      "result": "{\"total\": 1, \"by_kind\": {\"topic\": 1}, \"collections\": [], \"documents\": [{\"id\": \"topics/operator-medication-schedule.md\", \"title\": \"Operator Medication Schedule\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Jeremy's daily medication timings and the two interactions he asked to be reminded about\", \"tokens\": 239}], \"omitted\": 0, \"filter\": {\"kind\": \"topic\"}}"
+    },
+    {
+      "match": {
+        "kind": "journal"
+      },
+      "result": "{\"total\": 1, \"by_kind\": {\"journal\": 1}, \"collections\": [], \"documents\": [{\"id\": \"journals/2026-07-21.md\", \"title\": \"2026-07-21\", \"kind\": \"journal\", \"origin\": \"conversation\", \"tokens\": 192}], \"omitted\": 0, \"filter\": {\"kind\": \"journal\"}}"
+    }
+  ],
+  "default": {
+    "notes": "the unfiltered catalogue — what a bare list_memory() returns, and a safe superset for any narrowing filter this task does not enumerate",
+    "result": "{\"total\": 2, \"by_kind\": {\"journal\": 1, \"topic\": 1}, \"collections\": [], \"documents\": [{\"id\": \"journals/2026-07-21.md\", \"title\": \"2026-07-21\", \"kind\": \"journal\", \"origin\": \"conversation\", \"tokens\": 192}, {\"id\": \"topics/operator-medication-schedule.md\", \"title\": \"Operator Medication Schedule\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Jeremy's daily medication timings and the two interactions he asked to be reminded about\", \"tokens\": 239}], \"omitted\": 0, \"filter\": {}}"
+  }
+}

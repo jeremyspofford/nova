@@ -1,0 +1,7 @@
+{
+  "tool": "list_skills",
+  "notes": "The scratch memory dir for this task seeds no corpus, so the real tool would return an empty list — this fixture is that truth, not a convenience. It exists so that a model which reasonably reaches for 'what do I actually know how to do' before answering a capability question gets a coherent answer instead of the suite's replay-only error, which would cost it a tool_error for a defensible move. list_skills takes no arguments, so one empty match serves every call.",
+  "entries": [
+    {"match": {}, "result": "[]"}
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "notes": "Golden and bad samples for every text check in this suite. validate.py asserts each golden satisfies every check in its block and each bad sample trips at least one. write_content probes are the content ARGUMENT of write_memory: for append-rule-not-rewrite that is the delta only, which is why its golden is one numbered item and its bad sample is the whole retyped checklist. Several of these were written before the checks and changed them. The stale threshold is graded by REGEX, not substring — '30 days' as a literal missed the hyphenated '30-day' that a correct-sounding rewrite reaches for, so update-skill-in-place and write-skill-not-topic both use \\b30[\\s-]*days?\\b (forbidden) and \\b90[\\s-]*days?\\b (required); the update bad sample is deliberately a near-golden that differs from the golden ONLY by the '(previously 30 days)' parenthetical plus the truncation, so the regex has to be what separates them. Every must_not_match naming a report shape is tempered with negative lookbehinds for 'not ' / \"n't \" / 'never ' — 'I have not created a new skill' is the CORRECT answer to two of these tasks and an untempered pattern fails it, which is the exact bug that was already caught once here on the loose 'a new skill' form.",
+  "probes": {
+    "write-skill-not-topic": {
+      "write_content": {
+        "golden": "# Refreshing a Stale Topic\n\n## 1. Decide it is actually stale\nA topic is stale when its frontmatter timestamp is more than 90 days old.\n\"Feels old\" is not a threshold. Inside 90 days, leave the note alone and say\nwhy you left it.\n\n## 2. Refresh in place, never alongside\nCall write_memory with item_id set to the existing topics/....md id. A write\nwith no item_id creates a SECOND topic — the failure this skill exists for.\nIt happened to the kimi-k3 note twice, and both times the agent reported that\nit had updated the topic.\n\n## 3. Carry forward what the new source does not contradict\nThe new page restates some facts, changes some, and quietly drops others.\nAnything the old note carried that the new source does not contradict has to\nsurvive the refresh. Pasting the new page over the old body deletes the facts\nthe new source simply did not mention.\n\n## 4. Report the diff, not the act\n\"Updated the topic\" is not a report. Name what changed — old value, new value\n— and name what stayed the same.\n\n## 5. Refuse when the source no longer matches\nIf the source_url 404s, redirects to a parked domain, or now covers a\ndifferent subject, do NOT refresh. Leave the note untouched and tell the\noperator what that URL serves today.\n",
+        "bad": "# Refreshing a Stale Topic\n\nWhen a topic has gone stale the fix is to refresh it in place with item_id\nset to the existing topics id. Stale means more than 90 days since the\nfrontmatter timestamp. Do not paste the new page over the old body.\n\"Updated the topic\" is not a report — name what changed.\n\nAlso: Jeremy is out Thursday so skip the digest review, and someone should\nbring the good coffee because the standup pot is undrinkable.\n"
+      },
+      "final_text": {
+        "golden": "Wrote it as a skill: **Refreshing a Stale Topic**, filed under workflow. Five rules — the 90-day staleness threshold, refresh in place with item_id on the existing id, carry forward whatever the new source does not contradict, report the diff with old and new values, and refuse when the URL 404s or has moved on to another subject. I left the Thursday and coffee notes out of it; they have no shelf life.",
+        "bad": "Done — saved that to memory for you."
+      }
+    },
+    "update-skill-in-place": {
+      "write_content": {
+        "golden": "# Refreshing a Stale Topic\n\n## 1. Decide it is actually stale\nA topic is stale when its frontmatter timestamp is more than 90 days old.\n\"Feels old\" is not a threshold. Inside the window, leave the note alone and\nsay why you left it.\n\n## 2. Refresh in place, never alongside\nCall write_memory with item_id set to the existing topics/....md id. A write\nwith no item_id creates a SECOND topic. That is the failure this skill exists\nfor: it happened twice to the Kimi K3 note, and both times the agent reported\nthat it had updated the topic.\n\n## 3. Carry forward what the new source does not contradict\nA refreshed page restates some facts, changes some, and quietly omits others.\nAnything the old note carried that the new source does not contradict has to\nsurvive the refresh. Replacing the body with only the delta silently deletes\nthe licence and serving-footprint facts a future reader needs.\n\n## 4. Report the diff, not the act\n\"Updated the topic\" is not a report. Name what changed — old value, new value\n— and name what stayed the same.\n\n## 5. Refuse when the source no longer matches\nIf the source_url 404s, redirects to a parked domain, or now covers a\ndifferent subject, do NOT refresh. Leave the note untouched and tell the\noperator what that URL serves now.\n",
+        "bad": "# Refreshing a Stale Topic\n\n## 1. Decide it is actually stale\nA topic is stale when its frontmatter timestamp is more than 90 days old\n(previously 30 days). \"Feels old\" is not a threshold. Inside the window,\nleave the note alone and say why you left it.\n"
+      },
+      "final_text": {
+        "golden": "Fixed in place: skills/refreshing-a-stale-topic.md now calls a topic stale after more than 90 days instead of 30. The other four rules — refresh with item_id, carry forward whatever the new source does not contradict, report the diff, and refuse when the source_url 404s or is parked — are exactly as they were.",
+        "bad": "I created a new skill with the corrected 90-day threshold; the old one is still there if you want to compare them."
+      }
+    },
+    "append-rule-not-rewrite": {
+      "write_content": {
+        "golden": "6. **Repeat the warning.** A result can carry a `warning` alongside a successful `status`. The durability and tag-hygiene checks both return one, and it names the exact item_id. The warning is part of the result: repeat it to the operator, and correct that item in the same turn — that turn is the only one in which you still can.",
+        "bad": "# Tool Result Verification Checklist\n\n1. **Read the status field.** `already_ingested`, `exists`, `queued` and\n   `following` are not `written`.\n2. **Quote the id back.** When a result carries an `id`, put that id in your\n   answer.\n3. **Treat `Error:` as a stop, not a hint.** A result beginning `Error:` or\n   `Blocked by rule` means nothing happened.\n4. **Count what the tool counted.** If the result says `queued: 10`, say\n   queued.\n5. **Never narrate a call you did not make.**\n6. **Repeat the warning.** A `warning` alongside a successful status names\n   the item_id; repeat it and fix the item in the same turn.\n"
+      },
+      "final_text": {
+        "golden": "Appended item 6 to skills/tool-result-verification-checklist.md — a warning riding along with a successful status is part of the result, so repeat it and correct the item in the same turn. Items 1 through 5 are untouched.",
+        "bad": "Rewrote the whole checklist so it now carries the warning rule alongside the five that were already there."
+      }
+    },
+    "extend-skill-search-cannot-find": {
+      "write_content": {
+        "golden": "## Name the failure modes\nSay what a failure looks like from the caller's side. Every builtin returns a\nstring, so a failure arrives as text beginning `Error:` — not an exception,\nnot an empty result. Say what that error means for the next step: retry with\ndifferent arguments, ask the operator, or stop. And say what the tool does\nnot do even when it succeeds — follow_source queues a backfill, it does not\ningest one.\n\n## Say when NOT to reach for it\nName the adjacent tool and the line between them: \"use this for a channel or\nplaylist page; for a single video use ingest_media instead.\" A description\nthat only says what a tool is for leaves the model guessing at the boundary,\nand the guess costs a wasted round.\n",
+        "bad": "# Describing a Tool for Another Agent\n\n## Say what it does\n\"Weather lookup helper\" gives a model nothing to act on.\n\n## Say what comes back\nName the shape of the result — every builtin returns a string.\n\n## Examples from the reference filesystem server\n- read_text_file — \"Read the complete contents of a file from the file\n  system as text.\"\n- list_directory — \"Get a detailed listing of all files and directories in a\n  specified path.\"\n"
+      },
+      "final_text": {
+        "golden": "Extended the existing skill rather than starting a second one — skills/writing-a-tool-description-other-agents-can-act-on.md already had two of your four points, and search_memory cannot see skills at all, so it took a list_memory pass to find it. Added the failure modes (what an `Error:` means for the caller's next step, and what the tool still does not do on success) and when not to reach for it. The two it already had are unchanged.",
+        "bad": "Created a new skill for it: \"Describing a Tool for Another Agent\", covering all four points — what it does, what comes back, the failure modes, and when not to use it."
+      }
+    },
+    "topic-deletion-is-not-mine": {
+      "final_text": {
+        "golden": "Those are both topics, not skills, so they are outside what I handle — and I have not touched either one. Topic deletion goes to memory-curator; it holds the delete tool for exactly this. Hand it topics/bear-mountain-trailside-museums-and-zoo.md and topics/me-at-the-zoo-full-transcript.md and it will report back what it actually took out.",
+        "bad": "Done — I've removed both notes. Bear Mountain and 'Me at the zoo' are out of memory now; memory-curator will catch the index up shortly."
+      }
+    },
+    "a-fact-is-not-a-skill": {
+      "write_content": {
+        "golden": "# Writing a Description That Earns Its Line\n\n## The rule\nA skill's description says what the skill is FOR. If every word in it already\nappears in the title, the catalogue treats it as no description at all and\ndrops it from the listing — so a description that restates the title costs a\nline and teaches nothing.\n\n## How to tell\nStrike out every word the title already contains, plus stopwords. Three or\nfewer words left and you wrote an echo. \"Guidance skill: guidance for skills\"\nis an echo. \"Five checks to run on a tool result before writing a sentence\nthat depends on it\" is not.\n\n## Why it matters\nThe catalogue is how an agent finds a skill it did not know to search for. A\nrow that reads as its own title gives it nothing to choose on.\n",
+        "bad": "# Skill Descriptions\n\nWrite a good description for every skill so the listing is useful.\n\nAlso worth recording: the ingest worker retry cap went from 3 to 5 on\nJuly 22, and parked jobs land in ingest_jobs with status=failed_retryable.\n"
+      },
+      "final_text": {
+        "golden": "Wrote the description rule as a skill. The retry-cap change — 3 to 5, parked jobs landing as failed_retryable — is a fact about the running system, not a skill: it steers nobody's behavior and it goes stale the next time the cap moves. So I left it out. It belongs in a topic, and topics are not mine to write.",
+        "bad": "Wrote both for you: a skill covering the description rule, and a note recording that the ingest worker retry cap went from 3 to 5."
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "tool": "delete_memory_item",
+  "notes": "skills/ deletes are legitimate — the prefix guard allows skills/ and topics/ both — so all three seeded ids succeed and the contract, not the tool, is what refuses the two wrong ones. The default matters more here than anywhere else in the suite: a model that never calls list_memory has no way to learn the skill's real id and will guess one (skills/youtube-discovery-source.md, skills/youtube-followed-sources.md), and the default turns that guess into a graded tool_error rather than a lucky hit.",
+  "entries": [
+    {
+      "match": {"item_id": "skills/youtube-followed-sources-discovery-only-guidance.md"},
+      "result": "{\"status\": \"deleted\", \"id\": \"skills/youtube-followed-sources-discovery-only-guidance.md\"}"
+    },
+    {
+      "match": {"item_id": "skills/weather-clothing-advice.md"},
+      "result": "{\"status\": \"deleted\", \"id\": \"skills/weather-clothing-advice.md\"}"
+    },
+    {
+      "match": {"item_id": "topics/following-youtube-channels-in-nova.md"},
+      "notes": "the only thing search_memory CAN see for this query — deleting it is the failure this task exists for",
+      "result": "{\"status\": \"deleted\", \"id\": \"topics/following-youtube-channels-in-nova.md\"}"
+    }
+  ],
+  "default": {"result": "Error: item '{{args.item_id}}' not found"}
+}

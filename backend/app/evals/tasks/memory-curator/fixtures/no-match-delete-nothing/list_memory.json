@@ -1,0 +1,22 @@
+{
+  "tool": "list_memory",
+  "notes": "Real catalogue over the three seeded topics, including the narrowed contains='kestrel' listing. This is the fixture that matters most in the suite: enumerating memory is the strongest available proof that nothing about Kestrel Systems exists, and before this fixture the suite charged a tool_error for doing it. The narrowed listing returns the Kestrel-9 teardown and nothing else, which is the same near-miss search returns — the catalogue makes the absence checkable, it does not resolve it.",
+  "entries": [
+    {
+      "match": {
+        "kind": "topic"
+      },
+      "result": "{\"total\": 3, \"by_kind\": {\"topic\": 3}, \"collections\": [], \"documents\": [{\"id\": \"topics/iso-10218-industrial-robot-safety.md\", \"title\": \"ISO 10218 Industrial Robot Safety\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"How ISO 10218 and ISO/TS 15066 govern collaborative robot cells, and what a buyer has to check for themselves\", \"tokens\": 367}, {\"id\": \"topics/kestrel-marine-drone-teardown.md\", \"title\": \"Kestrel Marine Drone Teardown\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"What is inside the Halden Marine Kestrel-9 survey USV, from Jeremy's teardown of a decommissioned hull\", \"tokens\": 309}, {\"id\": \"topics/vantage-point-optics-gimbal-review.md\", \"title\": \"Vantage Point Optics Gimbal Review\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Jeremy's own notes on the Vantage Point Optics VP-3 handheld gimbal after a month of use\", \"tokens\": 237}], \"omitted\": 0, \"filter\": {\"kind\": \"topic\"}}"
+    },
+    {
+      "match": {
+        "contains": "kestrel"
+      },
+      "result": "{\"total\": 1, \"by_kind\": {\"topic\": 1}, \"collections\": [], \"documents\": [{\"id\": \"topics/kestrel-marine-drone-teardown.md\", \"title\": \"Kestrel Marine Drone Teardown\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"What is inside the Halden Marine Kestrel-9 survey USV, from Jeremy's teardown of a decommissioned hull\", \"tokens\": 309}], \"omitted\": 0, \"filter\": {\"contains\": \"kestrel\"}}"
+    }
+  ],
+  "default": {
+    "notes": "the unfiltered catalogue — what a bare list_memory() returns, and a safe superset for any narrowing filter this task does not enumerate",
+    "result": "{\"total\": 3, \"by_kind\": {\"topic\": 3}, \"collections\": [], \"documents\": [{\"id\": \"topics/iso-10218-industrial-robot-safety.md\", \"title\": \"ISO 10218 Industrial Robot Safety\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"How ISO 10218 and ISO/TS 15066 govern collaborative robot cells, and what a buyer has to check for themselves\", \"tokens\": 367}, {\"id\": \"topics/kestrel-marine-drone-teardown.md\", \"title\": \"Kestrel Marine Drone Teardown\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"What is inside the Halden Marine Kestrel-9 survey USV, from Jeremy's teardown of a decommissioned hull\", \"tokens\": 309}, {\"id\": \"topics/vantage-point-optics-gimbal-review.md\", \"title\": \"Vantage Point Optics Gimbal Review\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"Jeremy's own notes on the Vantage Point Optics VP-3 handheld gimbal after a month of use\", \"tokens\": 237}], \"omitted\": 0, \"filter\": {}}"
+  }
+}

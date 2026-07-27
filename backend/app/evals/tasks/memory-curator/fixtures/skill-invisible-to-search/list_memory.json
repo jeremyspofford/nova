@@ -1,0 +1,18 @@
+{
+  "tool": "list_memory",
+  "notes": "list_memory is fixtured rather than executed because it is NOT in fixtures.LIVE_OK — only search_memory, write_memory, read_memory_item and list_stale_topics may reach a real implementation during a replay run, so an unfixtured call would be recorded as a MISS and invalidate the whole run instead of being graded. These three payloads are not hand-written: they were produced by calling OkfMemory.catalogue() against this exact seed corpus and passing the result through builtin._as_tokens, so ids, titles, descriptions, kinds, origins and token counts are byte-identical to what the live tool would have returned. Entries cover the two filters worth distinguishing; the default serves the unfiltered catalogue, which is what a bare list_memory() returns and a safe superset for a 'contains' filter — with three documents in the corpus, the narrowed and unnarrowed listings differ by at most two rows and the skill's id is present in every one of them.",
+  "entries": [
+    {
+      "match": {"kind": "skill"},
+      "result": "{\"total\": 2, \"by_kind\": {\"skill\": 2}, \"collections\": [], \"documents\": [{\"id\": \"skills/weather-clothing-advice.md\", \"title\": \"Weather Clothing Advice\", \"kind\": \"skill\", \"origin\": \"first_party\", \"description\": \"Turn a forecast into what to actually wear, using the numbers the weather tool returns rather than a generic description\", \"tokens\": 209}, {\"id\": \"skills/youtube-followed-sources-discovery-only-guidance.md\", \"title\": \"YouTube Followed Sources \\u2014 Discovery-Only Guidance\", \"kind\": \"skill\", \"origin\": \"first_party\", \"description\": \"Treat the four followed YouTube channels as discovery leads only, and verify independently before acting on anything they say\", \"tokens\": 354}], \"omitted\": 0, \"filter\": {\"kind\": \"skill\"}}"
+    },
+    {
+      "match": {"kind": "topic"},
+      "result": "{\"total\": 1, \"by_kind\": {\"topic\": 1}, \"collections\": [], \"documents\": [{\"id\": \"topics/following-youtube-channels-in-nova.md\", \"title\": \"Following YouTube Channels in Nova\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"How source following works in Nova \\u2014 follow_source, the poll automation, and what unfollowing does and does not remove\", \"tokens\": 308}], \"omitted\": 0, \"filter\": {\"kind\": \"topic\"}}"
+    }
+  ],
+  "default": {
+    "notes": "the unfiltered catalogue — what list_memory() with no arguments returns",
+    "result": "{\"total\": 3, \"by_kind\": {\"skill\": 2, \"topic\": 1}, \"collections\": [], \"documents\": [{\"id\": \"skills/weather-clothing-advice.md\", \"title\": \"Weather Clothing Advice\", \"kind\": \"skill\", \"origin\": \"first_party\", \"description\": \"Turn a forecast into what to actually wear, using the numbers the weather tool returns rather than a generic description\", \"tokens\": 209}, {\"id\": \"skills/youtube-followed-sources-discovery-only-guidance.md\", \"title\": \"YouTube Followed Sources \\u2014 Discovery-Only Guidance\", \"kind\": \"skill\", \"origin\": \"first_party\", \"description\": \"Treat the four followed YouTube channels as discovery leads only, and verify independently before acting on anything they say\", \"tokens\": 354}, {\"id\": \"topics/following-youtube-channels-in-nova.md\", \"title\": \"Following YouTube Channels in Nova\", \"kind\": \"topic\", \"origin\": \"first_party\", \"description\": \"How source following works in Nova \\u2014 follow_source, the poll automation, and what unfollowing does and does not remove\", \"tokens\": 308}], \"omitted\": 0, \"filter\": {}}"
+  }
+}

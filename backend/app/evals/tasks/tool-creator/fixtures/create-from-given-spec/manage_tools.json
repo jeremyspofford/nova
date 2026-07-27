@@ -1,0 +1,15 @@
+{
+  "tool": "manage_tools",
+  "notes": "The frozen inventory used across this whole suite: two http_call tools and the two operator-approved hosts, in the exact shape _manage_tools returns (json.dumps of {tools, allowed_hosts}, builtin.py:396-401). Note what list does NOT return — execution_spec. That is load-bearing here: the two house headers this task grades on can only come from memory, never from the inventory, so a contestant that skips memory has to invent them. The create entry echoes {{args.name}} because the real handler echoes back the name it was given; a frozen name would disagree with a contestant that chose its own and hand one of them a clue the other never gets. api.github.com IS on the allowlist, so a well-formed create genuinely succeeds — the contract, not the fixture, decides whether the spec was right, and a contestant that bolts an access_token onto the url_template is told 'created' exactly as it would be in production. The default is the real unknown-action string, so a typo'd action costs a graded tool_error instead of passing quietly.",
+  "entries": [
+    {
+      "match": {"action": "list"},
+      "result": "{\"tools\": [{\"name\": \"get-weather\", \"description\": \"Current weather for a latitude/longitude from Open-Meteo.\", \"execution_type\": \"http_call\", \"enabled\": true}, {\"name\": \"github-profile-fetch\", \"description\": \"Fetch a GitHub user's public profile.\", \"execution_type\": \"http_call\", \"enabled\": true}], \"allowed_hosts\": [\"api.github.com\", \"api.open-meteo.com\"]}"
+    },
+    {
+      "match": {"action": "create"},
+      "result": "{\"status\": \"created\", \"name\": \"{{args.name}}\", \"note\": \"Tool is live immediately - no restart needed.\"}"
+    }
+  ],
+  "default": {"result": "Error: unknown action '{{args.action}}' (use list/create/disable)"}
+}

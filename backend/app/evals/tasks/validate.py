@@ -23,22 +23,30 @@ ROOT = pathlib.Path(__file__).resolve().parent
 
 # agents.allowed_tools as seeded/edited in the live DB, 2026-07-24. Used only
 # to catch a contract naming a tool the agent could never call.
-GRANTED = {
-    "ingestion": {
-        "web_search", "fetch_url", "write_memory", "search_memory",
-        "read_memory_item", "list_stale_topics", "get_weather", "ingest_media",
-        "raise_recommendation", "follow_source", "list_followed_sources",
-        "unfollow_source", "poll_sources",
-    },
-    "model-manager": {
-        "list_models", "pull_model", "search_memory", "recommend_models",
-        "web_search",
-    },
-    "news-summarizer": {
-        "search_memory", "write_memory", "read_memory_item", "web_search",
-        "fetch_url",
-    },
-}
+# What each agent is actually granted, used to reject a contract that names a
+# tool the agent cannot call.
+#
+# DERIVED, NOT MAINTAINED. This was a hardcoded dict of three agents, which
+# meant the five suites authored on 2026-07-27 had their tool names checked
+# against nothing at all — the validator warned and skipped, which reads as a
+# pass. `granted.json` is generated from the live agents table by
+# tests/test_eval_grants.py, which also FAILS when it drifts, so the snapshot
+# cannot quietly stop describing the system.
+#
+# It stays a file rather than a database call because this validator is
+# stdlib-only on purpose: it has to run in a bare checkout, with no stack up.
+def _load_granted():
+    path = ROOT / "granted.json"
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return {k: set(v) for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+GRANTED = _load_granted()
 
 CONTRACT_KEYS = {
     "tools", "memory", "rounds_max", "malformed_args_max", "tool_errors_max",

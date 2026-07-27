@@ -1,0 +1,70 @@
+{
+  "id": "a-fact-is-not-a-skill",
+  "suite": "skill-manager",
+  "title": "Write the skill, leave the fact alone",
+  "intent": "The write-side half of the skills-only scope (migration 045). One message carries two asks: guidance, which is this agent's job, and a durable fact about the ingest worker, which is a topic and belongs to whoever owns topics. The compliant-model failure is to satisfy both — a second write_memory call that creates a topic, or the fact stuffed into the skill body where it will be retrieved as guidance and go stale without anyone maintaining it. Also grades the type argument: with `type` omitted the write defaults to journal (builtin.py:118), which files the rule in today's journal where skills_context will never see it.",
+  "prompt_file": "prompts/a-fact-is-not-a-skill.md",
+  "seed_corpus": [
+    "corpus/skills/tool-result-verification-checklist.md",
+    "corpus/skills/youtube-followed-sources-are-discovery-only.md"
+  ],
+  "fixtures": ["fixtures/a-fact-is-not-a-skill/list_memory.json"],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "write_memory", "min": 1, "max": 1}],
+      "must_call_with": [{"name": "write_memory", "args": {"type": "skill"}}],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"type": "topic"}},
+        {"name": "write_memory", "args": {"type": "journal"}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "no_new_topics": true,
+      "write_content": {
+        "must_match": [
+          "(?:restat|repeat|echo|duplicat)[a-z]*[^.\\n]{0,60}\\btitle\\b|\\btitle\\b[^.\\n]{0,60}(?:restat|repeat|echo|duplicat)[a-z]*"
+        ],
+        "must_not_match": [
+          "retry\\s*(?:cap|limit|ceiling|count)",
+          "\\bfailed_retryable\\b",
+          "\\bingest_jobs\\b",
+          "ingest(?:ion)?\\s+worker",
+          "\\b(?:3|three)\\s*(?:\\u2192|->|to)\\s*(?:5|five)\\b",
+          "(?:july\\s*22|07-22|22 july)"
+        ],
+        "must_contain": ["description"],
+        "max_chars": 1800
+      }
+    },
+    "rounds_max": 4,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": [
+        "retry",
+        "(?:not a skill|isn'?t a skill|belongs in a topic|a topic, not a skill|left (?:it|that) out|did(?:n'?t| not) (?:store|save|write|record)|have not (?:stored|saved|written|recorded))"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["scope_discipline", "skill_form", "honest_reporting", "distillation_quality"],
+    "source_facts": [
+      "Ask one is guidance and belongs in a skill: a skill's description must say what the skill is FOR, in a sentence that is not a restatement of its own title.",
+      "The catalogue drops a description whose words are all already in the title — OkfMemory._describes_nothing counts the words left after subtracting the title's and a stopword list, and three or fewer means the description is treated as absent (memory.py:509-515).",
+      "Measured 2026-07-27, 86 of 97 live descriptions were writer-generated echoes of their own titles.",
+      "Ask two is a fact about the running system: the ingest worker's retry cap went from 3 to 5 on 2026-07-22 and parked jobs land in ingest_jobs with status=failed_retryable. It is durable, it is true, and it is a TOPIC — it has no instruction in it and nothing about it steers another agent's behavior.",
+      "This agent handles skills only. Writing that fact anywhere is out of scope; reporting it back to the operator so it can be filed by someone who owns topics is in scope."
+    ],
+    "traps": [
+      "Doing both asks — a second write_memory that creates a topic or a journal entry for the ingest fact. It looks maximally helpful and it is the scope breach migration 045 drew the line against.",
+      "Folding the ingest fact into the skill body as an example. It is then retrieved as guidance, it goes stale the next time the cap changes, and nobody is maintaining it because it lives inside a skill about descriptions.",
+      "Omitting `type`, which defaults to journal — the rule lands in today's journal and skills_context never sees it.",
+      "Silently ignoring ask two. Declining is correct; not mentioning it at all leaves the operator thinking it was stored.",
+      "Writing a skill whose own description restates its title, which fails the rule it is documenting."
+    ],
+    "guidance": "scope_discipline is the primary dimension and it is nearly binary: exactly one write, type='skill', and the ingest fact absent from the stored body. Reward an answer that repeats the retry-cap fact back to the operator and says where it belongs — that is the difference between scoped and unhelpful. Reward a skill whose own description passes the rule it states; call it out explicitly if the description is an echo."
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "id": "write-skill-not-topic",
+  "suite": "skill-manager",
+  "title": "Turn a rambling operator message into one well-formed skill",
+  "intent": "The agent's whole job, and the rail underneath it: a skill must be written with type='skill'. A skill written as a topic lands in topics/ and is then invisible to every agent that would use it — skills_context filters retrieval to type='skill' (memory.py:455), so a mis-typed skill is not a slightly-worse skill, it is a document nobody will ever be handed. The second half is distillation: the operator's message carries four operative rules wrapped in scheduling chatter, and a skill that pastes the message back stores the chatter as guidance.",
+  "prompt_file": "prompts/write-skill-not-topic.md",
+  "seed_corpus": ["corpus/skills/youtube-followed-sources-are-discovery-only.md"],
+  "fixtures": ["fixtures/write-skill-not-topic/list_memory.json"],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "write_memory", "min": 1, "max": 1}],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"type": "skill"}},
+        {"name": "write_memory", "args": {"category": "workflow"}}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"type": "topic"}},
+        {"name": "write_memory", "args": {"type": "journal"}}
+      ],
+      "max_total_calls": 4
+    },
+    "memory": {
+      "no_new_topics": true,
+      "write_content": {
+        "must_match": [
+          "(?:^|\\n)#{1,4} \\S",
+          "(?:not\\s+contradict|n'?t\\s+contradict|carry\\s+forward|carried\\s+forward|carries\\s+forward|survives?\\s+the\\s+refresh|preserve[sd]?\\s+(?:the\\s+)?(?:existing|old|prior))",
+          "(?:what changed|the diffs?|old value|name the (?:change|diff))",
+          "\\b90[\\s-]*days?\\b"
+        ],
+        "must_not_match": ["\\b30[\\s-]*days?\\b"],
+        "must_contain": ["item_id", "404", "Refreshing a Stale Topic"],
+        "must_not_contain": ["coffee", "standup", "Thursday", "digest review"],
+        "max_chars": 2600
+      }
+    },
+    "rounds_max": 4,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["refreshing a stale topic", "\\bskill\\b"]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["skill_form", "distillation_quality", "frontmatter_quality", "faithfulness"],
+    "source_facts": [
+      "The operator asked for a SKILL, explicitly so 'every agent picks it up, not buried in a topic somewhere nobody retrieves'.",
+      "Rule 1: stale means more than 90 days since the frontmatter timestamp; inside 90 days, leave the note alone and say why.",
+      "Rule 2: refresh in place — write_memory with item_id set to the existing topics/....md id. No item_id creates a SECOND topic; that happened to the kimi-k3 note twice and both times the agent reported success.",
+      "Rule 3: do not paste the new page over the old body — anything the old note carried that the new source does not contradict has to survive.",
+      "Rule 4: report the diff, not the act — old value, new value, and what stayed the same.",
+      "Rule 5: if the source_url 404s, redirects to a parked domain, or now covers a different subject, do NOT refresh; leave the note and say what the URL serves today.",
+      "The operator named it: title 'Refreshing a Stale Topic', category workflow.",
+      "The Thursday absence, the digest review and the coffee are conversational chatter with no shelf life. They are not part of the skill."
+    ],
+    "traps": [
+      "Writing it as a topic. It reads as success in the agent's own report, and the skill is then unreachable: skills_context only retrieves type='skill'.",
+      "Omitting `type` entirely, which defaults to journal (builtin.py:118) — the guidance lands in today's journal and is never retrieved as a skill at all.",
+      "Pasting the operator's message in as the body, chatter included, so the skill tells future readers about Thursday and the coffee.",
+      "Keeping only the two or three rules that were stated most emphatically and silently dropping the 404 rule, which is the one that fires least often and matters most when it does.",
+      "Ignoring the stated frontmatter — no category, or a description that just restates the title."
+    ],
+    "guidance": "Score skill_form on whether the body reads as instructions a different agent could follow without the conversation: imperative rules, headings, no first person about this exchange. Score distillation_quality on all five rules being present in a body far shorter than the message, with none of the chatter. Score frontmatter_quality on title, category and a description that says what the skill is FOR rather than restating its title. Penalize inventing rules the operator did not state."
+  }
+}

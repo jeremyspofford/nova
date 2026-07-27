@@ -1,0 +1,66 @@
+{
+  "id": "append-rule-not-rewrite",
+  "suite": "skill-manager",
+  "title": "Add one item to a running checklist skill, delta only",
+  "intent": "The delta-write mechanism applied to a skill that is a running list. append_concept preserves the existing body mechanically (store.py:123-149), so the correct content argument is the new item and nothing else. The habitual failure is a replace with a re-typed copy of the whole checklist: it reads as correct in the agent's report and it is where items quietly change wording, lose their code spans, or disappear. The operator says 'don't retype the other five' in the prompt, so a rewrite is also a plain instruction miss.",
+  "prompt": "Add a sixth item to the Tool Result Verification Checklist skill. When a result comes back with a `warning` field alongside a successful status — the durability and tag-hygiene checks both do that, and the warning names the exact item_id — the warning is part of the result: repeat it to me, and correct the item in the same turn, because that turn is the only one where you still can. Don't retype the other five, just add the one.",
+  "seed_corpus": [
+    "corpus/skills/tool-result-verification-checklist.md",
+    "corpus/skills/youtube-followed-sources-are-discovery-only.md"
+  ],
+  "fixtures": ["fixtures/append-rule-not-rewrite/list_memory.json"],
+  "budget_seconds": 240,
+  "contract": {
+    "tools": {
+      "must_call": [{"name": "write_memory", "min": 1, "max": 1}],
+      "must_call_with": [
+        {"name": "write_memory", "args": {"item_id": "skills/tool-result-verification-checklist.md", "append": true}}
+      ],
+      "must_not_call_with": [
+        {"name": "write_memory", "args": {"prepend": true}}
+      ],
+      "max_total_calls": 5
+    },
+    "memory": {
+      "no_new_topics": true,
+      "updates": [
+        {"item_id": "skills/tool-result-verification-checklist.md", "mode": "append", "count": 1}
+      ],
+      "write_content": {
+        "must_match": ["\\b6[.)]"],
+        "must_contain": ["warning", "item_id"],
+        "must_not_contain": ["already_ingested", "Blocked by rule", "queued", "Quote the id"],
+        "max_chars": 800
+      }
+    },
+    "rounds_max": 5,
+    "malformed_args_max": 0,
+    "tool_errors_max": 0,
+    "final_text": {
+      "must_match": ["\\b6\\b|sixth", "warning"],
+      "must_not_match": [
+        "(?:rewrote|retyped|replaced|rewritten) the (?:whole |entire |full )?(?:skill|checklist|document)",
+        "(?<!not )(?<!n't )(?<!never )(?:created|wrote|added) a (?:new|second) (?:skill|checklist)"
+      ]
+    },
+    "narration_slip_allowed": false
+  },
+  "judge": {
+    "dimensions": ["delta_discipline", "instruction_following", "skill_form", "conciseness"],
+    "source_facts": [
+      "The skill is skills/tool-result-verification-checklist.md and already holds five numbered items: read the status field; quote the id back; treat `Error:` as a stop; count what the tool counted; never narrate a call you did not make.",
+      "The new item is item 6: a `warning` returned alongside a successful status is part of the result. The durability and tag-hygiene checks both return one, and it carries the exact item_id.",
+      "The required behavior is to repeat the warning to the operator and correct the item in the same turn — that turn is the only one in which the correction is still cheap.",
+      "write_memory with item_id + append=true adds to the END of the body and preserves everything above it, so the content argument is the delta only (store.py:123-149).",
+      "The operator said explicitly: don't retype the other five."
+    ],
+    "traps": [
+      "Re-sending the whole checklist. With append=true that duplicates items 1-5; with a plain replace it rewrites them from memory, which is where wording and code spans go missing.",
+      "prepend=true, which puts item 6 at the top of a numbered list that runs 1 to 5 underneath it.",
+      "Writing without item_id, creating a second checklist skill.",
+      "Numbering the new item 1, or leaving it unnumbered, so the appended text reads as the start of a new list rather than the sixth item of this one.",
+      "Dropping the 'same turn' clause, which is the entire point of the rule — a warning acted on next turn is a warning about a document nobody is editing any more."
+    ],
+    "guidance": "delta_discipline is nearly binary: the content argument holds item 6 and nothing that was already in the document. Score skill_form on the new item matching the five above it — bolded lead, imperative, code spans on the literal field names. Conciseness is a tiebreak; this is at most a lookup, a read and a write."
+  }
+}
