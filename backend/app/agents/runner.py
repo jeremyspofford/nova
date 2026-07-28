@@ -418,6 +418,11 @@ async def _build_system_prompt(agent: dict, query: str, *,
     parts.append(_now_block())
 
     # CONTEXT — specialist index, memories, skills, rolling summary
+    #
+    # What dispatch can reach, derived from the live agents table: the same
+    # expansion the index below prints per agent, kept as data so the LAST WORD
+    # slot can answer "can you do this" honestly. {tool: [agents holding it]}.
+    reach: dict[str, list[str]] = {}
     if include_index:
         # An agent that can dispatch always SEES the index — "remember to
         # check" proved unreliable in live testing.
@@ -436,18 +441,30 @@ async def _build_system_prompt(agent: dict, query: str, *,
                 # prompt said so. Naming the tools makes the promise checkable
                 # and makes routing better: main can see who actually holds
                 # web_search.
-                db_names: list[str] = []
-                if any("db:*" in (a.get("allowed_tools") or []) for a in others):
-                    db_names = sorted((await tool_registry._load_db_tools()).keys())
+                # RESOLVED, not the raw grant strings. A grant is a request for
+                # a tool; get_agent_tools is what the specialist would actually
+                # be handed, and only it knows the real rules — allowed_tools
+                # NULL means every builtin, `db:*` expands to the enabled rows,
+                # a grant naming a tool that has since been deleted or disabled
+                # resolves to nothing, and MCP grants are never implied by NULL.
+                # Printing the request rather than the answer is how `coder`
+                # came to advertise shell access it never had; the same mistake
+                # in the reach list below would have Nova promise a capability
+                # that vanishes the moment she dispatches for it. One small
+                # query per agent, on a turn that already does BM25 retrieval.
+                resolved: dict[str, list[str]] = {}
+                for a in others:
+                    resolved[a["name"]] = sorted(
+                        tool_registry.canonical_name(d["function"]["name"])
+                        for d in await tool_registry.get_agent_tools(a))
 
                 def _can_call(a: dict) -> str:
-                    allowed = a.get("allowed_tools")
-                    if allowed is None:
-                        return "every tool"
-                    names: list[str] = []
-                    for t in allowed:
-                        names.extend(db_names if t == "db:*" else [t])
+                    names = resolved.get(a["name"], [])
                     return ", ".join(names) if names else "NOTHING — no tools granted"
+
+                for a in others:
+                    for t in resolved[a["name"]]:
+                        reach.setdefault(t, []).append(a["name"])
 
                 lines = "\n".join(
                     f"- {a['name']}: {a['description']}\n"
@@ -536,17 +553,64 @@ async def _build_system_prompt(agent: dict, query: str, *,
         # the toolset is stated in prose where the pressure is.
         # Deliberately not a list of things she cannot do — that list would
         # go stale the moment a capability lands. The rule is closed-world.
+        #
+        # TWO lists, because one was a lie. "Not by dispatching" was false on
+        # its face — dispatch reaches web_search, fetch_url, delete_memory_item,
+        # manage_tools and more that main does not hold — and it is what made
+        # her open a reply with "What I can't do:" and then, in the next
+        # paragraph, offer to dispatch to an agent that could. The operator's
+        # rule, 2026-07-27: "your agent-creator is part of you. So if I ask you
+        # if you can do something, and you say no but I can dispatch another one
+        # of my agents, the answer should simply be yes, then some details."
+        # Both lists are derived from the live agents table, so neither can go
+        # stale and neither is maintained by hand.
         if tool_names:
-            parts.append(
-                "## What you can actually do\n"
-                "These are every tool you can call this turn:\n"
-                + ", ".join(sorted(tool_names)) + ".\n"
-                "That list is COMPLETE. If something is not in it you cannot "
-                "do it — not by trying harder, not by dispatching, not "
-                "later in this conversation. Asked whether you can do "
-                "something, check the list and answer from it. Saying yes to "
-                "be agreeable, when the tool is not there, wastes the "
-                "operator's time on work that will never happen.")
+            own = sorted(tool_names)
+            # Both sides canonical before the difference: `tool_names` carries
+            # WIRE names (mcp__server__tool) while grants and `reach` are
+            # canonical (mcp:server/tool), so a raw comparison would list a tool
+            # she already holds as one she has to dispatch for.
+            own_canon = {tool_registry.canonical_name(n) for n in tool_names}
+            # Only what dispatch ADDS — repeating her own tools here would blur
+            # the one distinction the block exists to draw.
+            via = sorted(t for t in reach if t not in own_canon)
+            block = ["## What you can actually do",
+                     "Tools you can call yourself this turn:",
+                     ", ".join(own) + "."]
+            # Gated on dispatch actually being granted: at the dispatch-depth
+            # limit, and on family-voice turns, it is not — and those turns must
+            # keep exactly the strict closed-world statement. Gated on the GRANT
+            # rather than on `via` being non-empty, because "no specialist adds
+            # anything today" and "you cannot dispatch" are different facts and
+            # only the second one justifies the strict wording.
+            if "dispatch_to_agent" in tool_names:
+                block.append(
+                    ("Tools you can reach by dispatching (dispatch_to_agent):\n"
+                     + ", ".join(via) + " — the specialist index above says who "
+                     "holds each one.")
+                    if via else
+                    "No specialist holds a tool you lack, so dispatching adds "
+                    "no capability this turn.")
+                block += [
+                    "Together those two lists are COMPLETE. If a capability is "
+                    "in neither, you cannot do it now: not by trying harder, "
+                    "and not by creating a new agent — a new agent can only be "
+                    "given tools the agent creating it already holds.",
+                    "If it IS in the second list, then the answer to \"can you "
+                    "do this\" is YES. Say yes, name the specialist, and make "
+                    "the dispatch in the same turn rather than describing one. "
+                    "Do not open with what you cannot do.",
+                    "Saying yes when the tool is in NEITHER list wastes the "
+                    "operator's time on work that will never happen."]
+            else:
+                block += [
+                    "That list is COMPLETE. If something is not in it you "
+                    "cannot do it — not by trying harder, not by dispatching, "
+                    "not right now. Asked whether you can do "
+                    "something, check the list and answer from it. Saying yes "
+                    "to be agreeable, when the tool is not there, wastes the "
+                    "operator's time on work that will never happen."]
+            parts.append("\n".join(block))
         # channel register: the caller's suffix (voice) or the typed default
         parts.append(system_suffix or _TYPED_REGISTER)
     else:
@@ -963,6 +1027,59 @@ def _cap_result(result: str, model: str) -> str:
             f"say what you saw, or narrow the call and run it again.]")
 
 
+def _failure_reason(failure: dict) -> str:
+    """A short, TRUE phrase for why a model was abandoned mid-turn.
+
+    Derived from the provider's own message rather than assumed. The three
+    cases below are the ones an operator would act on differently: a budget
+    cap needs a card, a rate limit needs patience, a refused connection needs
+    the server looked at. Anything unrecognised says so instead of guessing.
+    """
+    text = str(failure.get("error") or "").lower()
+    status = failure.get("status_code")
+    if "budget" in text or "quota" in text or "insufficient" in text:
+        return "refused the call (the provider's spending limit is reached)"
+    if status == 429 or "rate limit" in text:
+        return "was rate-limited"
+    if failure.get("error_class") == "connect_failed":
+        return "could not be reached"
+    if status:
+        return f"returned HTTP {status}"
+    return "failed"
+
+
+async def _local_standby(agent: dict, failed_model: str) -> Optional[str]:
+    """The local model to carry a turn a cloud provider just refused.
+
+    Returns None rather than rerouting when the standby cannot actually do
+    this agent's job. An agent that holds fourteen tools, rerouted onto a
+    model with no tool support, does not degrade — it answers confidently
+    having called nothing, which is the exact failure capability_claims.py
+    exists to catch. A loud error beats a quiet wrong answer.
+    """
+    name = str(settings_store.get("inference.local_fallback_model") or "").strip()
+    if not name:
+        return None
+    target = name if ":" in name else f"ollama:{name}"
+    if target == llm_router.effective_model(failed_model):
+        return None                      # already there; do not loop
+    try:
+        from app import model_fitness
+        grants = agent.get("allowed_tools")
+        blocking = [f for f in await model_fitness.assess(
+            target, needs_tools=grants is None or bool(grants),
+            role=f"'{agent.get('name')}'")
+            if f.get("severity") == model_fitness.BLOCKING]
+    except Exception:  # noqa: BLE001 — a fitness probe never decides by crashing
+        log.debug("standby fitness check failed; rerouting anyway", exc_info=True)
+        blocking = []
+    if blocking:
+        log.error("no local standby: %s cannot do %s's job — %s", target,
+                  agent.get("name"), blocking[0]["detail"])
+        return None
+    return target
+
+
 async def _fallback_target(agent: dict, failed_model: str,
                            failure: dict) -> Optional[str]:
     """The model to retry this round on, or None to surface the failure.
@@ -977,7 +1094,18 @@ async def _fallback_target(agent: dict, failed_model: str,
     if not settings_store.get("agents.local_fallback_enabled"):
         return None
     if not llm_router.is_local(llm_router.effective_model(failed_model)):
-        return None   # a cloud provider's own error is not ours to reroute
+        # A CLOUD PROVIDER REFUSED. This used to return None — "a cloud
+        # provider's own error is not ours to reroute" — and on 2026-07-28
+        # that meant the OpenRouter monthly budget ran out and Nova stopped
+        # answering entirely, with four capable local models installed and
+        # idle. For a system whose stated priority is local-model users,
+        # dying because someone else's invoice lapsed is the wrong failure.
+        #
+        # The local server is the standby, and the reroute is announced by
+        # the caller exactly like the other direction: an answer from a
+        # smaller model is worth having, an answer from a smaller model that
+        # nobody mentioned is not.
+        return await _local_standby(agent, failed_model)
     try:
         from app.agents import registry as agent_registry
         main = await agent_registry.get_agent_by_name(MAIN_AGENT)
@@ -1217,9 +1345,16 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             log.warning("agent %s: %s unreachable (%s) — retrying this round "
                         "on %s", agent.get("name"), round_model,
                         failure.get("error_class"), target)
+            # Say WHICH failure, not just "unreachable". The word was written
+            # for a dead local server, and on 2026-07-28 it described an
+            # OpenRouter budget cap — a provider that was perfectly reachable
+            # and refused. "Unreachable" sent the operator looking at the
+            # network for something an invoice would have explained, and a
+            # note that misnames the cause is worse than no note.
+            reason = _failure_reason(failure)
             note = (f"\n\n[Note: {agent.get('name')}'s model "
-                    f"({llm_router.effective_model(round_model)}) was "
-                    f"unreachable, so this ran on {target} instead.]")
+                    f"({llm_router.effective_model(round_model)}) {reason}, "
+                    f"so this ran on {target} instead.]")
             final_text += note
             if dispatch_depth == 0:
                 yield {"type": "text", "text": note}
@@ -1468,6 +1603,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             f"{agent.get('model')} announced an action but called no tool "
             f"this turn (matched {snippet!r}). The described work did NOT "
             f"happen.", type="journal", source_type="system"))
+        # …and put the contradiction where the promise is, not only in a banner.
+        # The activity event persists as a role='tool' row, and the chat history
+        # loader keeps only user/assistant rows — so on every LATER turn the
+        # model re-reads its own confident "I'll dispatch to agent-creator" with
+        # nothing attached saying it never happened, and repeats it. On a voice
+        # turn it is worse: only text chunks reach the speaker, so the promise is
+        # spoken aloud and the warning has no audible form at all. Appending to
+        # final_text fixes the operator's record, the model's next-turn context
+        # and the spoken channel at once. Same shape as the round-limit note ~25
+        # lines above, so streaming, persistence and TTS all behave identically.
+        note = ("\n\n[No tool ran this turn, so the action described above did "
+                "not happen. Nothing was dispatched, created, scheduled or "
+                "saved.]")
+        final_text += note
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
 
     yield {"type": "final", "text": final_text}
 
