@@ -104,9 +104,63 @@ async def run() -> None:
         check("a dead registry degrades to the honest unknown block, not an "
               "exception — identity is on every turn, so it can never raise",
               "do NOT know" in block, block[:90])
+        print("6. the graph links what genuinely shares a subject")
+        await test_tag_edges()
     finally:
         voiceprints.list_profiles = saved
         await db.close_pool()
+
+
+# ── the graph's tag edges ────────────────────────────────────────────────
+
+async def test_tag_edges() -> None:
+    """A shared tag is a relationship only while it is specific.
+
+    graph() linked tag members as a CHAIN — members[i] -> members[i+1] in
+    iter_files order, which is alphabetical by path. It kept the edge count
+    down by making every edge false: 34% of all live edges asserted that "19
+    Hidden Features" relates to "4 Ways to Build Stunning Websites" relates to
+    "7 Rules To Use GPT 5.6". They are adjacent in the alphabet.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from app.memory.memory import OkfMemory, sandbox
+
+    tmp = Path(tempfile.mkdtemp(prefix="nova-graph-"))
+    try:
+        mem = OkfMemory(base_dir=str(tmp))
+        await mem.startup()
+        with sandbox(mem):
+            # three notes sharing ONE specific subject: a real relationship
+            for i in range(3):
+                await mem.write(f"body {i}", type="topic", title=f"Small {i}",
+                                tags=["quantisation"], link_pass=False)
+            # eight sharing a broad label: a category, not a relationship
+            for i in range(8):
+                await mem.write(f"body {i}", type="topic", title=f"Big {i}",
+                                tags=["src-some-channel"], link_pass=False)
+            g = await mem.graph()
+            by_id = {n["id"]: n["label"] for n in g["nodes"]}
+            pairs = {(by_id.get(e["source"], ""), by_id.get(e["target"], ""))
+                     for e in g["edges"] if e.get("kind") == "tag"}
+
+            small = {p for p in pairs if p[0].startswith("Small")}
+            check("a 3-member tag earns its REAL clique — every pair, not a "
+                  "path through them", len(small) == 3, str(sorted(small)))
+            check("...and the pairs are the actual members",
+                  all(a.startswith("Small") and b.startswith("Small")
+                      for a, b in small))
+
+            big = {p for p in pairs if p[0].startswith("Big") or p[1].startswith("Big")}
+            check("an 8-member tag earns NO edges — above the threshold it "
+                  "names a category, and the label still rides on every node "
+                  "for search", not big, str(sorted(big)[:4]))
+
+            check("no edge is created from mere alphabetical adjacency",
+                  ("Big 0", "Big 1") not in pairs)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:

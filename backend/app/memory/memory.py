@@ -507,6 +507,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     # a collection of one is just a document
     _COLLAPSE_MIN = 2
 
+    # Above this many members a tag is a CATEGORY, not a relationship, and
+    # earns no graph edges. See the reasoning and the measured distribution
+    # in graph() — the live corpus has nothing at all between 5 and 25.
+    _TAG_CLIQUE_MAX = 5
+
     @classmethod
     def _describes_nothing(cls, description: str, title: str) -> bool:
         """True when the description is a restatement of the title."""
@@ -711,11 +716,48 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                 seen.add((e["source"], target))
                 resolved.append({"source": e["source"], "target": target, "kind": "link"})
         for tag, members in tag_map.items():
-            for i in range(len(members) - 1):
-                pair = (members[i], members[i + 1])
-                if pair not in seen:
-                    seen.add(pair)
-                    resolved.append({"source": pair[0], "target": pair[1], "kind": "tag"})
+            # A SHARED TAG IS A RELATIONSHIP ONLY WHILE IT IS SPECIFIC.
+            #
+            # This used to link members[i] -> members[i+1] — a CHAIN, in
+            # store.iter_files() order, which is alphabetical by path. It kept
+            # the edge count down (a 65-member tag is 2,080 pairs) by making
+            # every edge false: the graph asserted that "19 Hidden Features"
+            # relates to "4 Ways to Build Stunning Websites" relates to "7
+            # Rules To Use GPT 5.6", sampled verbatim on 2026-07-28, and they
+            # are simply adjacent in the alphabet. 34% of all live edges were
+            # this. Two neighbours in that chain had no more in common than
+            # two at opposite ends.
+            #
+            # Frequency decides it, MEASURED rather than listed. _GENERIC_TAGS
+            # above says the same thing — a label naming a note's KIND earns
+            # no edge — but as a hand-maintained set that must be extended
+            # every time a new broad label appears. Counting members needs no
+            # maintenance and the live corpus separates itself cleanly:
+            #
+            #     1 member    40 tags        25 members   1 tag
+            #     2 members   69 tags        28 members   1 tag
+            #     3-5         4 tags         31 members   1 tag
+            #                                65 members   1 tag
+            #
+            # Nothing between 5 and 25. Below the gap a tag names a specific
+            # subject two or three notes genuinely share; above it, the four
+            # per-channel tags, it names a category. So a small tag now earns
+            # its REAL clique — every pair, not an arbitrary path — and a
+            # large one earns nothing.
+            #
+            # Nothing is lost by that: the tag still rides on each node as a
+            # search label, and for these four the transcripts already carry
+            # `Source: [[Channel]]`, so channel membership is in the graph as
+            # an anchor to a real node. An edge here would restate it, worse.
+            if len(members) > self._TAG_CLIQUE_MAX:
+                continue
+            for i in range(len(members)):
+                for j in range(i + 1, len(members)):
+                    pair = (members[i], members[j])
+                    if pair not in seen:
+                        seen.add(pair)
+                        resolved.append({"source": pair[0], "target": pair[1],
+                                         "kind": "tag"})
 
         return {"nodes": nodes, "edges": resolved}
 
