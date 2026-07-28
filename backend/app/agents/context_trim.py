@@ -105,7 +105,16 @@ def model_context(model: str) -> Optional[int]:
     # happily build a 40k prompt for a 16k local model, which the router
     # then refuses — trimming has to aim at the window the call must fit.
     if model.split(":", 1)[0] == "ollama":
-        from app import settings_store
+        from app import local_context, settings_store
+        # The window this model will ACTUALLY be given, when that has been
+        # worked out. Dynamic sizing hands qwen3:14b 40,960 while the flat
+        # setting says 16,384, and a trimmer aiming at the wrong one of those
+        # either wastes most of the window or builds a prompt the server
+        # truncates from the head. None before the first resolve, which lands
+        # on the setting — the smaller, safer number.
+        resolved = local_context.cached(model)
+        if resolved:
+            return resolved
         configured = int(settings_store.get("inference.ollama_num_ctx") or 0)
         return configured or None
     try:

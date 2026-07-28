@@ -103,6 +103,51 @@ async def _sidecar(client: httpx.AsyncClient, path: str) -> dict | None:
         return None
 
 
+async def _vram_consumers(gpu: dict | None) -> list[dict]:
+    """Who is holding the VRAM, as far as it can honestly be attributed.
+
+    The VRAM meter reads the WHOLE card, so whisper and kokoro have always
+    been inside that bar — invisibly. A number you cannot attribute is one
+    you cannot act on: "19 of 24GB" does not tell you whether to unload a
+    model or stop a service.
+
+    What can be named is named. ollama reports its own resident models and
+    their exact footprint on /api/ps, so those are facts. Everything else is
+    reported as one honest remainder rather than guessed at: per-process GPU
+    attribution needs `nvidia-smi --query-compute-apps`, which under WSL2
+    returns [N/A] / [Not Found] — measured on this box 2026-07-28 — so
+    naming whisper and kokoro individually is not possible here, and
+    pretending otherwise would be inventing a breakdown.
+    """
+    used_gb = sum(float(g.get("mem_used_gb") or 0)
+                  for g in (gpu or {}).get("gpus") or [])
+    if not used_gb:
+        return []
+    out: list[dict] = []
+    named = 0.0
+    try:
+        from app import settings_store
+        base = str(settings_store.get("inference.ollama_url")).rstrip("/")
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(f"{base}/api/ps")
+            resp.raise_for_status()
+            for m in resp.json().get("models") or []:
+                gb = round(int(m.get("size_vram") or 0) / 1e9, 2)
+                if gb <= 0:
+                    continue
+                named += gb
+                out.append({"name": m.get("name"), "gb": gb, "kind": "model",
+                            "context_length": m.get("context_length")})
+    except Exception as exc:  # noqa: BLE001 — attribution never breaks the board
+        log.debug("ollama /api/ps unavailable for VRAM attribution: %s", exc)
+    other = round(used_gb - named, 2)
+    if other > 0.1:
+        out.append({"name": "other services", "gb": other, "kind": "other",
+                    "note": "whisper, kokoro and anything else on this GPU — "
+                            "per-process attribution is unavailable under WSL"})
+    return sorted(out, key=lambda c: c["gb"], reverse=True)
+
+
 async def snapshot() -> dict:
     """This instance's live resource reading. Sidecar calls + the CPU sample
     run concurrently so the whole thing costs ~one CPU window, not the sum."""
@@ -126,6 +171,8 @@ async def snapshot() -> dict:
         "cpu": {"pct": cpu_pct, "cores": os.cpu_count(), "load1": _load1()},
         "mem": _mem(),
         "gpu": gpu,                                   # {"gpus":[...]} or None
+        # who is inside the VRAM bar, so the number is actionable
+        "vram_consumers": await _vram_consumers(gpu),
         "disk": disk,
         "containers": (containers or {}).get("containers", []),
         "sampled_at": time.time(),

@@ -107,8 +107,31 @@ _REGROUND = (
     "\n\nYOUR SUMMARY:\n{draft}")
 
 
+class ProviderExhausted(RuntimeError):
+    """The provider will refuse every further call until a human acts.
+
+    Distinguished from a transient failure because retrying is not merely
+    useless, it is harmful. On 2026-07-28 an OpenRouter budget cap returned
+    403 for every request and a supervisor loop retried roughly two thousand
+    times, hammering the endpoint and hiding the real cause behind a wall of
+    "skipped (no usable summary)". A caller iterating over documents has to
+    be able to tell "this one failed" from "stop".
+    """
+
+
+# Provider messages that mean a human must intervene. Matched on the text
+# because the status code does not distinguish them: 403 is also a bad key,
+# and 429 is sometimes a monthly cap rather than a burst limit.
+_TERMINAL = ("budget", "quota", "insufficient", "credit",
+             "payment", "billing", "suspended", "unauthorized")
+
+
 async def _complete(messages: list[dict], model: str) -> Optional[str]:
-    """One non-streaming completion. None on any provider failure."""
+    """One non-streaming completion. None on a transient failure.
+
+    Raises ProviderExhausted when the provider has refused in a way that the
+    next call will hit identically.
+    """
     from app.llm import router as llm_router
     out: list[str] = []
     async for event in llm_router.stream_chat(messages, model, tools=None):
@@ -116,8 +139,11 @@ async def _complete(messages: list[dict], model: str) -> Optional[str]:
         if kind == "text":
             out.append(event.get("text") or "")
         elif kind == "error":
+            detail = str(event.get("error") or "")
             log.warning("summary: model call failed on %s: %s", model,
-                        str(event.get("error"))[:200])
+                        detail[:200])
+            if any(word in detail.lower() for word in _TERMINAL):
+                raise ProviderExhausted(detail[:300])
             return None
     text = "".join(out).strip()
     return text or None

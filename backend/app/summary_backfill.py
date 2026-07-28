@@ -137,6 +137,16 @@ async def run(dry_run: bool = False, limit: int | None = None,
               f"({meta.get('chars', 0):,} chars) ... ", end="", flush=True)
         try:
             got = await summariser.summarise(doc_id, model=model)
+        except summariser.ProviderExhausted as exc:
+            # STOP, do not continue. Every remaining document would hit the
+            # same refusal, and a loop that keeps going turns one actionable
+            # error into hundreds of "skipped" lines that bury it.
+            print("STOPPED")
+            print(f"\nThe provider has refused and will keep refusing:\n  {exc}\n"
+                  f"{written} written before this. Nothing else was attempted — "
+                  f"re-run once it is resolved and it will resume from here.")
+            await db.close_pool()
+            return 2
         except Exception as exc:  # noqa: BLE001 — one bad document must not stop the run
             log.exception("summary failed for %s", doc_id)
             print(f"FAILED ({type(exc).__name__})")

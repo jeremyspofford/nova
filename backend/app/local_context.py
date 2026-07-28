@@ -213,6 +213,23 @@ async def resolve(model: str) -> Optional[int]:
         return setting or None
 
 
+def cached(model: str) -> Optional[int]:
+    """The last window resolved for this model, without probing anything.
+
+    A synchronous reader for `context_trim.model_context`, which is sync and
+    called from sync code. Without it the trimmer keeps sizing local models
+    from the flat setting while the router hands them something else —
+    exactly the disagreement between "what fits" and "what we planned for"
+    that made the effective_model bug expensive. Returns None before the
+    first resolve, which lands the caller on the setting: the smaller,
+    safer number.
+    """
+    if not model.startswith("ollama:"):
+        return None
+    hit = _cache.get(model.split(":", 1)[1])
+    return hit[1] if hit and hit[0] > time.monotonic() else None
+
+
 async def note_spill(model: str) -> None:
     """After a load, check whether it spilled — and remember if it did.
 
