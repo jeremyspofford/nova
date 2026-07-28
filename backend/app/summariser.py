@@ -51,6 +51,22 @@ _MAX_SUMMARY_RATIO = 0.5
 
 SUMMARY_SUFFIX = " — summary"
 
+# Suffixes the ingest path already appends. Stripped before the summary's own
+# suffix goes on, or a title reads "X — full transcript — summary", which is
+# both clumsy and misleading: the document is a summary OF a transcript, not
+# a transcript that is also a summary. Derived from the writer's own naming
+# (see _ingest_media_core), not from arbitrary trimming.
+_SOURCE_SUFFIXES = (" — full transcript",)
+
+
+def summary_title(source_title: str) -> str:
+    """The title a summary of `source_title` should carry."""
+    for suffix in _SOURCE_SUFFIXES:
+        if source_title.endswith(suffix):
+            source_title = source_title[: -len(suffix)]
+            break
+    return f"{source_title}{SUMMARY_SUFFIX}"
+
 # What to call the source in the prompt. Telling the model it is reading
 # speech-to-text genuinely improves the result — it drops filler and sponsor
 # reads — so the noun is kept, but it is READ OFF the document rather than
@@ -297,7 +313,7 @@ async def summarise(item_id: str, *, model: str) -> Optional[str]:
 
     written = await memory.write(
         note, type="topic", replace=True,
-        title=f"{title}{SUMMARY_SUFFIX}",
+        title=summary_title(title),
         description=description,
         category=str(fm.get("category") or "knowledge"),
         # the source's own tags, so the summary clusters with it and with

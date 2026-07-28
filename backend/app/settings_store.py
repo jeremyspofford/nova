@@ -105,14 +105,18 @@ SETTING_DEFS: list[dict] = [
     {"key": "inference.ollama_num_ctx", "type": "number", "default": 16384,
      "min": 2048, "max": 262144, "section": "Inference",
      "label": "Local context window (tokens)",
-     "description": ("What the local server is configured to hold — it must "
-                     "match OLLAMA_CONTEXT_LENGTH on the ollama service "
-                     "(docker-compose.yml). Nova refuses a local call whose "
-                     "prompt would exceed it instead of sending it: the "
-                     "server drops the FRONT of an oversized prompt, which "
-                     "is where the system prompt lives, and answers anyway "
-                     "with no error. Bigger costs VRAM — the KV cache grows "
-                     "with it.")},
+     "description": ("A CEILING, not the value, while the setting below is "
+                     "on: each local model is given the largest window it "
+                     "supports that also fits in VRAM, and this caps that — "
+                     "but only once you have actually set it, since an "
+                     "untouched default is not a decision. Turn automatic "
+                     "sizing off and this becomes the single window every "
+                     "local model gets. Either way Nova refuses a local call "
+                     "whose prompt would exceed the window it will really "
+                     "get, instead of sending it: the server drops the FRONT "
+                     "of an oversized prompt, which is where the system "
+                     "prompt lives, and answers anyway with no error. Bigger "
+                     "costs VRAM — the KV cache grows with it.")},
     {"key": "inference.dynamic_context", "type": "boolean", "default": True,
      "section": "Inference",
      "label": "Size the local context window automatically",

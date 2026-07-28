@@ -13,12 +13,11 @@ a model call. Reading the answer off the documents means this is correct
 after any crash, any manual edit, and any partial run, with nothing to
 reconcile.
 
-WHAT QUALIFIES is derived too, and deliberately not "anything tagged as a
-transcript". A document needs a summary when it is long enough that reading
-it whole is a problem — so the threshold is a real context window, the same
-`ceiling_for` the router refuses against, rather than a number someone picked.
-Journals are excluded: a journal IS the record of a conversation, and a
-distillation of one is a worse version of something already written down.
+WHAT QUALIFIES is measured, not picked. A document earns a summary when a
+summary would actually be smaller — see _MIN_SOURCE_CHARS, whose threshold
+comes from the compression of the first 63 real pairs. Journals are excluded:
+a journal IS the record of a conversation, and a distillation of one is a
+worse version of something already written down.
 
 Pairing is by TITLE: `<name>` pairs with `<name> — summary`. Slug rules live
 inside the store and coupling to them would buy nothing.
@@ -41,9 +40,26 @@ log = logging.getLogger(__name__)
 # copy of something already durable.
 _SKIP_KINDS = frozenset({"journal"})
 
-# Share of a real context window above which a document is "long". Anything
-# under this can simply be read, and a summary would be pure overhead.
-_LONG_FRACTION = 0.25
+# The size below which summarising does not pay, MEASURED rather than picked.
+# Compression across the first 63 real summary/source pairs, 2026-07-28:
+#
+#     source size   n    median summary/source
+#       0 –  8k     7          40%
+#       8 – 12k    16          29%
+#      12 – 20k    25          21%
+#      20 – 40k    12          11%
+#         40k+      3           7%
+#
+# Under 8k a "summary" runs 40% of its source and is a reformat, not a
+# distillation — it costs a model call and a permanent second document to
+# save very little. From 12k the median is a 5x reduction and worth having.
+#
+# This replaces a context-window fraction, which answered the wrong question.
+# "Too long to read whole" was only ever one of the two reasons to summarise,
+# and it is now the weaker one: local models get 40,960 tokens since dynamic
+# sizing landed, so almost nothing fails to fit. What summaries are actually
+# for is survey and retrieval quality, and those are a COMPRESSION argument.
+_MIN_SOURCE_CHARS = 12_000
 
 
 def _pending(docs: dict, min_chars: int,
@@ -55,10 +71,13 @@ def _pending(docs: dict, min_chars: int,
     replace=True on a deterministic title, so this overwrites in place and
     deletes nothing.
     """
-    from app.summariser import SUMMARY_SUFFIX
+    from app.summariser import SUMMARY_SUFFIX, summary_title
+    # Pair on the summary's OWN naming rule rather than on string surgery:
+    # summary_title strips "— full transcript" before appending, so slicing
+    # the suffix off here would leave a stem that never matches its source
+    # and every transcript would read as pending forever.
     summarised = set() if force else {
-        str(m.get("title", ""))[: -len(SUMMARY_SUFFIX)]
-        for m in docs.values()
+        str(m.get("title", "")) for m in docs.values()
         if str(m.get("title", "")).endswith(SUMMARY_SUFFIX)
     }
     out = []
@@ -70,7 +89,13 @@ def _pending(docs: dict, min_chars: int,
             continue
         if int(meta.get("chars") or 0) < min_chars:
             continue
-        if title not in summarised:
+        # Accept the LEGACY title too. 63 summaries were written before
+        # summary_title stripped "— full transcript", so pairing only on the
+        # new form would mark every one of them pending and re-spend a model
+        # call each to produce a document that already exists. Their titles
+        # correct themselves whenever one is re-summarised with --force.
+        if (summary_title(title) not in summarised
+                and f"{title}{SUMMARY_SUFFIX}" not in summarised):
             out.append((doc_id, title))
     return out
 
@@ -96,10 +121,8 @@ async def run(dry_run: bool = False, limit: int | None = None,
     agent = await agent_registry.get_agent_by_name("ingestion")
     model = (agent or {}).get("model") or ""
 
-    from app.agents import context_trim
     if min_chars is None:
-        min_chars = int(context_trim.ceiling_for(model) * _LONG_FRACTION) \
-            * context_trim._CHARS_PER_TOKEN
+        min_chars = _MIN_SOURCE_CHARS
     pending = _pending(memory.index.docs, min_chars, force)
     print(f"{len(memory.index.docs)} documents indexed; {len(pending)} are "
           f"longer than {min_chars:,} chars and have no summary")
@@ -174,9 +197,10 @@ def main() -> int:
     ap.add_argument("--force", action="store_true",
                     help="re-summarise documents that already have a summary")
     ap.add_argument("--min-chars", type=int, default=None,
-                    help="only documents at least this long. Defaults to a "
-                         "quarter of the summarising model's real context "
-                         "window; 0 includes every undistilled document.")
+                    help="only documents at least this long. Defaults to "
+                         f"{_MIN_SOURCE_CHARS:,}, the size below which a "
+                         "summary measurably stops being much smaller than "
+                         "its source; 0 includes every undistilled document.")
     args = ap.parse_args()
     return asyncio.run(run(dry_run=args.dry_run, limit=args.limit,
                            min_chars=args.min_chars, force=args.force))
