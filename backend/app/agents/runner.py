@@ -330,20 +330,63 @@ _UNKNOWN_REGISTER = (
     "the operator's to change.")
 
 
-def _speaker_block(speaker: dict | None) -> str:
-    """FACTS block: who the current voice turn belongs to. Same idiom as
-    _now_block — live data, imperative, empty when there's nothing to say."""
-    if not speaker:
-        return ""
-    role = speaker.get("role")
+async def _identity_block(speaker: dict | None) -> str:
+    """FACTS block: who the current turn belongs to, on EVERY channel.
+
+    This used to return "" whenever `speaker` was empty, and `speaker` is
+    only populated for voice — so typed chat had no identity at all. On
+    2026-07-28 the operator asked "do you know who I am?" and was told "I
+    know you're my operator, but I don't have your name stored", then, when
+    he pointed out his name IS in memory, "I don't use it as an identifier
+    for you — my focus is on being your companion, not on storing personal
+    details like names." No such policy exists. He said "Goodbye."
+
+    Identity cannot be RETRIEVED, which is why nothing found it. Measured
+    that day: "Do you know who I am?" pulled 3,149 characters of memory
+    containing no mention of his name, because BM25 has no way to bridge "who
+    am I" to "Jeremy" — there is no shared token. You would have to already
+    know the answer to search for it. So identity is injected, always, like
+    the clock.
+
+    ABSENCE IS STATED, never left blank, and that is the load-bearing half. A
+    gap she is told about is one she asks about; a gap she is not told about
+    is one she fills with invention, which is precisely what happened.
+    """
+    from app import voiceprints
     lines = ["## Who you're speaking with (live)"]
-    if role == "unknown":
-        lines.append("An unrecognized voice — not an enrolled household "
-                     "member. Address them as a guest.")
-    else:
-        lines.append(f"{speaker.get('name')} — role: {role}.")
-        if speaker.get("persona_notes"):
-            lines.append(speaker["persona_notes"])
+
+    if speaker and speaker.get("role") == "unknown":
+        # An unmatched voice is a QUESTION, not a silent guest. Treating it as
+        # an anonymous guest and moving on is why the profile table has sat
+        # empty since it shipped: nothing ever asks.
+        lines.append("An unrecognized voice — it matches no enrolled "
+                     "household member. Address them as a guest, and if the "
+                     "conversation allows it, ask who they are so they can "
+                     "be enrolled.")
+        return "\n".join(lines)
+
+    person = speaker
+    if not person:
+        # No voice signal means typed chat, which is the operator by
+        # definition. One registry: the operator is a row like anyone else.
+        try:
+            person = next((p for p in await voiceprints.list_profiles()
+                           if p.get("role") == "operator"), None)
+        except Exception:  # noqa: BLE001 — identity never breaks a turn
+            log.debug("operator lookup failed", exc_info=True)
+            person = None
+
+    if not person or not (person.get("name") or "").strip():
+        lines.append(
+            "You do NOT know this person's name. Nobody is enrolled as the "
+            "operator. Do not guess it, do not claim to have it, and do not "
+            "invent a reason for not having it — say plainly that you don't "
+            "know it and offer to remember it.")
+        return "\n".join(lines)
+
+    lines.append(f"{person.get('name')} — role: {person.get('role') or 'operator'}.")
+    if person.get("persona_notes"):
+        lines.append(str(person["persona_notes"]))
     return "\n".join(lines)
 
 
@@ -412,9 +455,7 @@ async def _build_system_prompt(agent: dict, query: str, *,
     mcp_index = await _mcp_index_block(agent)
     if mcp_index:
         parts.append(mcp_index)
-    spk = _speaker_block(speaker)
-    if spk:
-        parts.append(spk)
+    parts.append(await _identity_block(speaker))
     parts.append(_now_block())
 
     # CONTEXT — specialist index, memories, skills, rolling summary
