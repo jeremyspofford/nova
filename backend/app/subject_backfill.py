@@ -66,7 +66,14 @@ def _connectable(tags: list[str], counts: dict, generic: frozenset,
     """
     return [t for t in tags
             if t.lower() not in generic and t not in intra_pair
-            and 2 <= counts.get(t, 0) <= clique_max]
+            # A count of ONE still qualifies, and that distinction is what
+            # stops this churning. The question is "does this document have a
+            # SUBJECT", not "is that subject shared yet" — a document tagged
+            # `rust` is finished while it is still the only one, because the
+            # NEXT document tagged `rust` is what creates the edge. Requiring
+            # a partner sent pass 2 back over 52 already-correct documents at
+            # a model call each, changing nothing.
+            and 1 <= counts.get(t, 0) <= clique_max]
 
 
 async def run(dry_run: bool = False, limit: Optional[int] = None) -> int:
@@ -92,7 +99,20 @@ async def run(dry_run: bool = False, limit: Optional[int] = None) -> int:
             counts[t] = counts.get(t, 0) + 1
             members.setdefault(t, []).append(doc_id)
 
-    # tags carried only by one document and its own summary — see _connectable
+    # The ONE tag every ingested video carries that can never be shared:
+    # _video_tag(title), the title slug (builtin.py). Identifying it by name
+    # rather than by member-count is what stops this from also discarding a
+    # genuine subject that has simply not found its partner yet — the mistake
+    # that kept re-tagging documents already correctly tagged.
+    def _auto_tag(doc_id: str) -> set[str]:
+        title = str(docs[doc_id].get("title", "")).lower()
+        slug = "".join(c if c.isalnum() else "-" for c in title)
+        while "--" in slug:
+            slug = slug.replace("--", "-")
+        slug = slug.strip("-")
+        return {t for t in docs[doc_id].get("tags") or []
+                if t and slug.startswith(t.lower())}
+
     def _stem(doc_id: str) -> str:
         """The shared identity of a document and its summary.
 
@@ -109,7 +129,8 @@ async def run(dry_run: bool = False, limit: Optional[int] = None) -> int:
         return t.strip()
     intra_pair = frozenset(
         t for t, ids in members.items()
-        if len({_stem(i) for i in ids}) == 1)
+        if len({_stem(i) for i in ids}) == 1
+        and any(t in _auto_tag(i) for i in ids))
 
     # Pair each source with its summary so one call serves both.
     by_title = {str(m.get("title", "")): d for d, m in docs.items()}
