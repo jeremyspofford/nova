@@ -5,6 +5,7 @@ import { AutomationsTab } from './AutomationsTab';
 import { RulesTab } from './RulesTab';
 import { ToolsTab } from './ToolsTab';
 import { SkillsTab } from './SkillsTab';
+import { OverlayScrim } from '../ui';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
  *  skills. Entity management pulled out of Settings so Settings can be
@@ -20,18 +21,22 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
     (KINDS as readonly string[]).includes(kind ?? '') ? (kind as Kind) : 'agents';
 
   return (
-    <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
+    <OverlayScrim onClose={onClose}>
       <div
-        className="w-[46rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[46rem] max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
-          <div className="flex gap-1 text-sm">
+          {/* six tabs want 427px; a squeezed card is 360. min-w-0 releases
+              the flex item's automatic minimum size so the row shrinks
+              instead of bursting out over the chat, and auto (not hidden)
+              keeps the tabs it hides reachable. */}
+          <div className="flex gap-1 text-sm min-w-0 overflow-x-auto nice-scroll">
             {KINDS.map(k => (
               <button
                 key={k}
                 onClick={() => navigate(`/library/${k}`)}
-                className={`px-3 py-1.5 rounded capitalize ${
+                className={`px-3 py-1.5 rounded capitalize shrink-0 ${
                   active === k ? 'bg-teal-700/50 text-teal-200' : 'text-stone-400 hover:text-stone-200'}`}
               >
                 {k}
@@ -49,6 +54,6 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
             : <SkillsTab />}
         </div>
       </div>
-    </div>
+    </OverlayScrim>
   );
 }

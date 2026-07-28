@@ -6,7 +6,7 @@ import {
   ResourceHistory, ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
-import { CardsSkeleton } from './ui';
+import { CardsSkeleton, OverlayScrim } from './ui';
 
 /** The Observability board (docs/plans/observability-board.md, phase 1) — a
  *  dedicated top-level panel: service health, live resource gauges for this
@@ -194,9 +194,9 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   const cores = res?.cpu.cores ?? null;
 
   return (
-    <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
+    <OverlayScrim onClose={onClose}>
       <div
-        className="w-[52rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[52rem] max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-3">
@@ -521,6 +521,6 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
           </>}
         </div>
       </div>
-    </div>
+    </OverlayScrim>
   );
 }

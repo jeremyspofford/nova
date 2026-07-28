@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { deleteMemoryItem, getBrainGraph, getMemoryItem, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
+import { OverlayScrim } from '../components/ui';
+import { GUTTER, setShellInsets } from '../shell/insets';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 import { tagColor } from '../brain/systems';
@@ -16,6 +18,9 @@ const ATLAS_LEFT = 16;
 // the sidebar-style detail card is `w-[26rem]` — used to tuck the legend past
 // the whole left-column stack when both it and the Atlas are open.
 const DETAIL_W = 416;
+// the narrowest band still worth dodging into — below this a centred overlay
+// gives up and uses the whole content area
+const MIN_BAND = 360;
 
 const TYPE_BADGE: Record<string, string> = {
   topic: 'bg-teal-900/60 text-teal-300 border-teal-700',
@@ -98,6 +103,9 @@ export function Brain() {
   // small screens: chat IS the app (the /chat tab), the canvas one tab away
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [viewportW, setViewportW] = useState(() => window.innerWidth);
+  // the content area's own width — the rail's expand/collapse changes it
+  // without touching window.innerWidth, so the window is not a stand-in
+  const [boxW, setBoxW] = useState(0);
   const mobileChat = pathname === '/chat';
   const mobileRef = useRef(isMobile);
 
@@ -185,6 +193,34 @@ export function Brain() {
   useEffect(() => {
     rendererRef.current?.configure?.({ leftInset: atlasInset });
   }, [atlasInset]);
+
+  // Same band, published for everyone else. The routed overlays are siblings
+  // of this component, not children, and they cover the panels they need to
+  // measure — so the numbers have to travel. Mirrors the mount condition on
+  // ChatPanel below: on a phone the chat is full-bleed and there is no band.
+  const chatInset = isMobile || !chatOpen ? 0 : chatWidth;
+  // the sidebar-style detail card shares the left column with the Atlas and
+  // outlives a route change, so it is coverage too — legendLeft below has
+  // always treated it that way, and the band has to agree
+  const detailInset = !isMobile && detail && prefs.detailStyle === 'sidebar'
+    ? (atlasOpen ? ATLAS_LEFT + atlasWidth + 16 : ATLAS_LEFT) + DETAIL_W : 0;
+  const bandLeft = Math.max(atlasInset, detailInset);
+  useLayoutEffect(() => {
+    // Report what the panels actually cover — under-report by even a pixel
+    // and the card slides under the chat, which is the whole bug.
+    //
+    // Measured, never window.innerWidth: expanding the rail moves this box
+    // 180px with no window resize at all, and a stale width here squeezed a
+    // card to 180px (reproduced). boxW is 0 until the first size().
+    const box = boxW || rootRef.current?.clientWidth || window.innerWidth;
+    // All or nothing. When the panels leave less than a card needs — both
+    // dragged wide on a laptop, or junk in localStorage, which is possible
+    // because a persisted width is never re-clamped on load — stop dodging
+    // and centre in the whole box, the way it worked before. Splitting the
+    // difference gave a card that was cramped AND still overlapping.
+    const fits = bandLeft + chatInset <= box - MIN_BAND - GUTTER * 2;
+    setShellInsets(fits ? { left: bandLeft, right: chatInset } : { left: 0, right: 0 });
+  }, [bandLeft, chatInset, boxW]);
 
   // The legend shares the left column with the Atlas (and the sidebar-style
   // detail card), so it must dock to the *right* of whatever's open there
@@ -325,6 +361,9 @@ export function Brain() {
       // so isMobile alone does not tell the chat panel to re-measure
       setViewportW(window.innerWidth);
       const box = rootRef.current;
+      // the ResizeObserver below is the only signal a rail toggle produces —
+      // it has to reach the inset band, not just the canvas
+      setBoxW(box?.clientWidth ?? window.innerWidth);
       renderer.resize(
         (box?.clientWidth ?? window.innerWidth) -
           (mobileRef.current || !chatOpenRef.current ? 0 : chatWidthRef.current),
@@ -686,19 +725,16 @@ export function Brain() {
       )}
 
       {detail && prefs.detailStyle === 'modal' ? (
-        <div
-          className="absolute inset-0 z-20 flex items-center justify-center bg-black/50"
-          onClick={() => setDetail(null)}
-        >
+        <OverlayScrim variant="card" onClose={() => setDetail(null)}>
           <div
-            className="w-[42rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+            className="w-[42rem] max-w-full max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
             onClick={e => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
           >
             {renderDetail(true)}
           </div>
-        </div>
+        </OverlayScrim>
       ) : detail && (
         <aside
           className="absolute top-16 left-4 bottom-4 z-20 w-[26rem] max-w-[calc(100vw-2rem)] md:max-w-[calc(100vw-27rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl"

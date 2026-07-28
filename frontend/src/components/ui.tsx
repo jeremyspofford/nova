@@ -1,4 +1,35 @@
+import { ReactNode } from 'react';
+import { GUTTER, useShellInsets } from '../shell/insets';
 
+/** The scrim every centred overlay sits on, and the one thing they all used
+ *  to get wrong: the side panels are overlays too, so the box is full-width
+ *  and `justify-center` centres against a band the operator cannot see.
+ *
+ *  Padding by the published insets centres in the CLEAR band, while the
+ *  scrim itself stays `inset-0` on purpose — it has to keep dimming the
+ *  panels, and clicking over the chat has always closed the overlay. Shrink
+ *  the box instead and those clicks fall through to a chat that is visually
+ *  behind a modal but still takes typing. */
+export function OverlayScrim({ onClose, variant = 'page', children }: {
+  onClose: () => void;
+  /** `page` — a routed surface, above the canvas chrome, top-anchored.
+   *  `card` — the memory detail modal, level with the Atlas it covers. */
+  variant?: 'page' | 'card';
+  children: ReactNode;
+}) {
+  const { left, right } = useShellInsets();
+  return (
+    <div
+      className={`absolute inset-0 flex justify-center ${variant === 'page'
+        ? 'z-30 items-start pt-16 bg-black/40'
+        : 'z-20 items-center bg-black/50'}`}
+      style={{ paddingLeft: left + GUTTER, paddingRight: right + GUTTER }}
+      onClick={onClose}
+    >
+      {children}
+    </div>
+  );
+}
 
 /** One switch to rule all the tabs — a real toggle with a label that says
  *  what it controls, replacing the ambiguous "enabled" text chips. Disable

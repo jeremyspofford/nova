@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getIngestSummary, retryIngestJob, IngestJob, IngestStatus, IngestSummary } from '../api';
-import { CardsSkeleton } from './ui';
+import { CardsSkeleton, OverlayScrim } from './ui';
 
 /** Ingestion activity — the operator's live, per-item view of Nova's durable
  *  background ingest queue (migration 041). Following a source no longer blocks
@@ -89,14 +89,9 @@ export function ActivityPage({ onClose }: { onClose: () => void }) {
     (a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status]);
 
   return (
-    <div
-      // absolute to the shell's content area — covering the viewport would
-      // block the rail while the page is open
-      className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40"
-      onClick={onClose}
-    >
+    <OverlayScrim onClose={onClose}>
       <div
-        className="w-[42rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[42rem] max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -195,6 +190,6 @@ export function ActivityPage({ onClose }: { onClose: () => void }) {
         </>
         )}
       </div>
-    </div>
+    </OverlayScrim>
   );
 }

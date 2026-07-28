@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getSettings, SettingDef } from '../../api';
 import { SettingsTab } from './SettingsTab';
 import { StorageCard, PhoneSetupCard } from './cards';
-import { CardsSkeleton } from '../ui';
+import { CardsSkeleton, OverlayScrim } from '../ui';
 
 /** True settings only — the entity managers live in the Library. A left
  *  section list replaces the old single scroll; sections come from the
@@ -38,9 +38,11 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const active = nav.find(s => slug(s) === section) ?? nav[0];
 
   return (
-    <div className="absolute inset-0 z-30 flex items-start justify-center pt-16 bg-black/40" onClick={onClose}>
+    <OverlayScrim onClose={onClose}>
+      {/* grows on wide screens, then clamps to whatever band the side panels
+          leave — `max-w-full` is 100% of the scrim's padded content box */}
       <div
-        className="w-[54rem] max-w-[calc(100vw-1rem)] md:max-w-[calc(100vw-26rem)] h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[54rem] xl:w-[60rem] 2xl:w-[68rem] max-w-full h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
@@ -78,6 +80,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
-    </div>
+    </OverlayScrim>
   );
 }
