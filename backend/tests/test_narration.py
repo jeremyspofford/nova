@@ -92,6 +92,14 @@ MUST_NOT_FLAG = [
     # plain conversation that happens to contain the verbs
     "Your note is in memory under the travel tag.",
     "That tool already exists.",
+    # 2026-07-27: the future-tense arm scanned the WHOLE reply, so an offer of
+    # help buried in an otherwise-correct answer flagged the turn — and once
+    # the correction started being appended and spoken, that defaced a good
+    # answer out loud. Asking is not announcing, wherever in the reply it sits.
+    "Do you want to start there, or would you rather I dispatch to "
+    "agent-creator now with a sketch of what we're building?",
+    "Here are the options. Want me to dispatch to memory-curator?",
+    "That one needs the curator. Should I dispatch to it now?",
 ]
 
 
@@ -200,10 +208,37 @@ async def test_end_to_end():
           narration_events(events) == [], str(narration_events(events)))
 
 
+def final_text(events):
+    finals = [e for e in events if e.get("type") == "final"]
+    return finals[-1]["text"] if finals else ""
+
+
+async def test_correction_is_in_the_reply():
+    # The banner alone was not enough. It persists as a role='tool' row, and
+    # the chat history loader keeps only user/assistant rows — so the model
+    # re-read its own promise on every later turn and never the correction.
+    # The contradiction has to travel with the text it contradicts.
+    print("5. the correction is stamped into the reply, not only the banner")
+    events = await run_turn(
+        "I dispatched the tool-creator and it is building the tool now.")
+    text = final_text(events)
+    check("the flagged reply ends with the correction",
+          "did not happen" in text, repr(text[-90:]))
+    check("…and it is STREAMED too, so it reaches the operator and the speaker",
+          any(e.get("type") == "text" and "did not happen" in e.get("text", "")
+              for e in events))
+
+    events = await run_turn("Your note is in memory under the travel tag.")
+    check("a clean answer is left exactly as written",
+          "did not happen" not in final_text(events),
+          repr(final_text(events)))
+
+
 def main() -> int:
     test_patterns()
     test_gate()
     asyncio.run(test_end_to_end())
+    asyncio.run(test_correction_is_in_the_reply())
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:6]))
         return 1

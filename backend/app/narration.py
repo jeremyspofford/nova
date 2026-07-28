@@ -80,6 +80,19 @@ _CONDITIONAL_MARKERS = re.compile(
     r"\bif\b|\bunless\b|\bwhether\b|\bin case\b|\bwould have\b", re.IGNORECASE)
 
 _SENTENCES = re.compile(r"[.!?\n]+")
+# Same split, but KEEPING the terminator. "?" is the entire signal for "that
+# was a question, not a claim", and the plain split above throws it away.
+_SENTENCES_KEEP = re.compile(r"([.!?\n]+)")
+
+
+def _clauses(text: str):
+    """(sentence, terminator) pairs, blank sentences dropped."""
+    parts = _SENTENCES_KEEP.split(text)
+    for i in range(0, len(parts), 2):
+        body = parts[i]
+        end = parts[i + 1] if i + 1 < len(parts) else ""
+        if body.strip():
+            yield body, end
 
 
 def detect(final_text: str, tool_calls_made: int) -> str | None:
@@ -88,10 +101,21 @@ def detect(final_text: str, tool_calls_made: int) -> str | None:
     ground truth — with any real call this turn, nothing is flagged."""
     if tool_calls_made or not final_text:
         return None
-    for pat in _COMPILED:
-        m = pat.search(final_text)
-        if m:
-            return m.group(0)
+    # The future-tense arm is per-sentence for the same reason the completion
+    # arm always was. It used to scan the WHOLE reply, so one offer to help
+    # anywhere in it — "would you rather I dispatch to agent-creator now with a
+    # sketch?" — flagged the turn, wrote a journal line asserting the work did
+    # not happen, and (since the correction is now appended to the reply and
+    # read aloud) contradicted an answer that was correct. The module's own
+    # docstring has always said questions must not be matched; only the
+    # completion arm actually honoured it.
+    for body, end in _clauses(final_text):
+        if "?" in end or _CONDITIONAL_MARKERS.search(body):
+            continue
+        for pat in _COMPILED:
+            m = pat.search(body)
+            if m:
+                return m.group(0)
     for sentence in _SENTENCES.split(final_text):
         if _RECAP_MARKERS.search(sentence) or _CONDITIONAL_MARKERS.search(sentence):
             continue
