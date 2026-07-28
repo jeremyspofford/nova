@@ -7,6 +7,7 @@
 import type { GraphNode, GraphEdge } from '../api';
 import { createGalaxy, GALAXY_LEGEND } from './galaxy';
 import { createGraph2D, GRAPH_LEGEND } from './graph2d';
+import { createIdentity, IDENTITY_LEGEND } from './identity';
 import { createNova, NOVA_LEGEND } from './nova';
 import { createUniverse, UNIVERSE_LEGEND } from './universe';
 
@@ -45,11 +46,25 @@ export interface LegendEntry {
   note?: string;
 }
 
-export const THEMES: Record<string, { label: string; create: RendererFactory; legend: LegendEntry[] }> = {
+export interface ThemeEntry {
+  label: string;
+  create: RendererFactory;
+  legend: LegendEntry[];
+  /** A view of HER rather than of her memory. The voice overlay picks one of
+   *  these; a data view has nothing to say in a hands-free conversation. */
+  presence?: boolean;
+  /** Too heavy to run live in a 220x130 settings card alongside every other
+   *  renderer. The picker draws a placeholder for these instead of spinning
+   *  up another WebGL context and fetching a model nobody asked to see. */
+  heavy?: boolean;
+}
+
+export const THEMES: Record<string, ThemeEntry> = {
   graph: { label: 'Graph', create: createGraph2D, legend: GRAPH_LEGEND },
   galaxy: { label: 'Galaxy', create: createGalaxy, legend: GALAXY_LEGEND },
   universe: { label: 'Universe', create: createUniverse, legend: UNIVERSE_LEGEND },
-  nova: { label: 'Nova', create: createNova, legend: NOVA_LEGEND },
+  nova: { label: 'Nova', create: createNova, legend: NOVA_LEGEND, presence: true },
+  identity: { label: 'Identity', create: createIdentity, legend: IDENTITY_LEGEND, presence: true, heavy: true },
 };
 
 export const DEFAULT_THEME = 'graph';

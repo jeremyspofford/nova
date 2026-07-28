@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
+import { getSettings } from '../api';
 import { createNova } from '../brain/nova';
-import type { RendererHandle } from '../brain/theme';
+import { THEMES, type RendererHandle } from '../brain/theme';
 
 /** Full-screen voice mode — the ChatGPT-voice register, but the orb is ours.
  *  Black space, Nova large and centered, a slim control row at the bottom:
  *  a text field (typing mid-voice-mode is allowed), the mic (mute/unmute the
  *  listening loop), and a close button back to the chat.
  *
- *  The orb is the same createNova renderer the canvas uses — it reacts to
- *  the shared `nova:chat-activity` events and the speaker singleton, so
- *  listening / thinking / speaking all read on her without extra wiring. */
+ *  Whichever PRESENCE view you have chosen is the one that shows up here —
+ *  the orb, or her face. It reacts to the shared `nova:chat-activity` events
+ *  and the speaker singleton, so listening / thinking / speaking all read on
+ *  her without extra wiring. A data view (graph, galaxy, universe) has
+ *  nothing to say in a hands-free conversation, so those fall back to the orb.
+ *
+ *  This is also the one surface where the face earns its keep: it is the
+ *  register where you are looking at her while she talks. */
 
 interface VoiceOverlayProps {
   assistantName: string;
@@ -24,16 +30,34 @@ export function VoiceOverlay({ assistantName, micState, busy,
                                onMicToggle, onClose, onSendText }: VoiceOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [text, setText] = useState('');
+  // null = still asking. The canvas is keyed on this so the renderer is built
+  // once, against the right view — a canvas that has handed out one kind of
+  // context can never hand out another.
+  const [view, setView] = useState<string | null>(null);
 
   useEffect(() => {
+    let live = true;
+    getSettings()
+      .then(defs => {
+        if (!live) return;
+        const chosen = String(defs.find(d => d.key === 'brain.view')?.value ?? 'nova');
+        setView(THEMES[chosen]?.presence ? chosen : 'nova');
+      })
+      .catch(() => { if (live) setView('nova'); });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!view) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     let renderer: RendererHandle;
     try {
-      renderer = createNova(canvas);
+      renderer = THEMES[view].create(canvas);
     } catch (err) {
-      console.error('voice orb failed to start:', err);
-      return;
+      // one bad view must not cost you voice mode
+      console.error(`voice presence view "${view}" failed to start:`, err);
+      try { renderer = createNova(canvas); } catch { return; }
     }
     renderer.configure?.({ orbScale: 1.8 });
     const size = () => renderer.resize(window.innerWidth, window.innerHeight);
@@ -51,7 +75,7 @@ export function VoiceOverlay({ assistantName, micState, busy,
       window.removeEventListener('nova:chat-activity', onActivity);
       renderer.destroy();
     };
-  }, []);
+  }, [view]);
 
   const listening = micState === 'armed' || micState === 'wake';
   const hearing = micState === 'capturing' || micState === 'recording';
@@ -75,7 +99,9 @@ export function VoiceOverlay({ assistantName, micState, busy,
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
       {/* the orb owns the whole backdrop; controls float over it */}
-      <canvas ref={canvasRef} className="absolute inset-0" />
+      {/* keyed per view: a canvas that has held one kind of context cannot
+          hand out another, so switching views needs a fresh element */}
+      <canvas key={view ?? 'pending'} ref={canvasRef} className="absolute inset-0" />
 
       <div
         className="relative mt-auto flex items-center gap-2 px-4"

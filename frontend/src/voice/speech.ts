@@ -11,15 +11,27 @@
  *
  * `speaker.level()` exposes live output amplitude (0..1) — the energy
  * input the entity view will consume later (also on window.novaVoice).
+ *
+ * `speaker.mouth()` goes further: each sentence is analysed into a viseme
+ * track the moment it decodes, which is a whole network round trip before it
+ * plays, so the face can read the mouth shape for any instant of the audio
+ * rather than chasing an amplitude meter one frame behind. See visemes.ts.
  */
 
 import { synthesizeSpeech } from '../api';
+import { buildTrack, sampleTrack, MOUTH_REST } from './visemes';
+import type { MouthFrame, VisemeTrack } from './visemes';
 
 const MAX_BUFFER = 220;          // flush unpunctuated ramble at this length
 const MAX_INFLIGHT = 2;          // bounded pipeline: cheap to barge in on
 const LIST_GAP = 0.35;           // seconds of breath before a list item
 const PARA_GAP = 0.5;            // longer beat when a new paragraph starts
 const DASH_GAP = 0.18;           // brief breath after a spoken (spaced) dash
+
+/** How far ahead of the audible playhead the mouth is read, in seconds.
+ *  Real mouths lead the sound — the lips close before you hear the /p/ — and
+ *  a face that moves exactly on the sample reads as very slightly late. */
+const MOUTH_LEAD = 0.03;
 
 // ── number/symbol normalization: kokoro reads "10,000" digit-by-digit and
 //    narrates bare symbols; convert to how a person would say them ──────────
@@ -167,6 +179,15 @@ class Speaker {
   private seqToPlay = 0;           // next chunk number allowed to play
   private decoded = new Map<number, AudioBuffer>();
   private gapBySeq = new Map<number, number>();
+  private trackBySeq = new Map<number, VisemeTrack>();
+  /** The track and audio-clock start time of whatever is playing now. The
+   *  start is in the FUTURE during a scheduled gap, which is what makes her
+   *  close her mouth for the breath between phrases instead of holding the
+   *  last shape. */
+  private currentTrack: VisemeTrack | null = null;
+  private currentStart = 0;
+  private lvlEnv = 0;              // smoothed level, only for the fallback mouth
+  private lvlAt = 0;
   private failed = new Set<number>();
   private current: AudioBufferSourceNode | null = null;
   private generation = 0;          // bump = everything in flight is stale
@@ -301,6 +322,9 @@ class Speaker {
     this.listItems = [];
     this.decoded.clear();
     this.gapBySeq.clear();
+    this.trackBySeq.clear();
+    // barge-in has to close her mouth, not freeze it mid-vowel
+    this.currentTrack = null;
     this.failed.clear();
     this.seqNext = 0;
     this.seqToPlay = 0;
@@ -333,6 +357,37 @@ class Speaker {
     let sum = 0;
     for (let i = 0; i < this.levelBuf.length; i++) sum += this.levelBuf[i] ** 2;
     return Math.min(1, Math.sqrt(sum / this.levelBuf.length) * 4);
+  }
+
+  /** The mouth shape for the audio audible RIGHT NOW.
+   *
+   *  Indexed off the audio clock rather than a wall clock, which hands three
+   *  behaviours over for free: a suspended context (pause) freezes the mouth
+   *  mid-word, a scheduled gap puts the start in the future so she closes for
+   *  the breath, and the earcon never produces a track so the beep cannot
+   *  move her lips.
+   *
+   *  outputLatency is subtracted because ctx.currentTime is the sample being
+   *  written, not the one being heard — without it the face runs early by
+   *  however deep the output buffer is, which on a phone is enough to see. */
+  mouth(): MouthFrame {
+    if (!this.ctx) return MOUTH_REST;
+    if (this.currentTrack) {
+      const audible = this.ctx.currentTime - (this.ctx.outputLatency || 0);
+      return sampleTrack(this.currentTrack, audible - this.currentStart + MOUTH_LEAD);
+    }
+    // No track for this sentence — analysis failed, or something is playing
+    // that never went through it. Fall back to the amplitude meter: a worse
+    // mouth, but a moving one. Shape channels stay neutral rather than
+    // guessing, because a wrong lip shape is more distracting than none.
+    if (!this.playing) return MOUTH_REST;
+    const now = this.ctx.currentTime;
+    const dt = Math.min(0.1, Math.max(0, now - this.lvlAt));
+    this.lvlAt = now;
+    const lv = this.level();
+    const tau = lv > this.lvlEnv ? 0.09 : 0.45;   // quick to open, slow to settle
+    this.lvlEnv += (lv - this.lvlEnv) * (1 - Math.exp(-dt / tau));
+    return { open: this.lvlEnv, round: 0, wide: 0, close: 1 - this.lvlEnv };
   }
 
   private pushRaw(raw: string) {
@@ -407,6 +462,15 @@ class Speaker {
           const buf = await this.ctx.decodeAudioData(wav);
           if (gen !== this.generation) return;
           this.decoded.set(seq, buf);
+          // ~4ms for a typical sentence, and it buys the face a mouth shape
+          // for every instant of the audio instead of a meter one frame late.
+          // Guarded on its own: a face is a nicety, the voice is the feature,
+          // and an analysis bug must never cost her a sentence.
+          try {
+            this.trackBySeq.set(seq, buildTrack(buf));
+          } catch (err) {
+            console.warn('[voice] viseme analysis failed; the mouth falls back to amplitude:', err);
+          }
           this.playNext();
         } catch (err) {
           console.warn('[voice] tts failed:', err);
@@ -428,6 +492,7 @@ class Speaker {
     while (this.failed.has(this.seqToPlay)) {
       this.failed.delete(this.seqToPlay);
       this.gapBySeq.delete(this.seqToPlay);
+      this.trackBySeq.delete(this.seqToPlay);
       this.seqToPlay++;
     }
     const buf = this.decoded.get(this.seqToPlay);
@@ -435,16 +500,21 @@ class Speaker {
     this.decoded.delete(this.seqToPlay);
     const gap = this.gapBySeq.get(this.seqToPlay) ?? 0;
     this.gapBySeq.delete(this.seqToPlay);
+    const track = this.trackBySeq.get(this.seqToPlay) ?? null;
+    this.trackBySeq.delete(this.seqToPlay);
     this.seqToPlay++;
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.connect(this.analyser);
     src.onended = () => {
       this.current = null;
+      this.currentTrack = null;
       this.playNext();
       this.emit();
     };
     this.current = src;
+    this.currentTrack = track;
+    this.currentStart = this.ctx.currentTime + gap;
     src.start(this.ctx.currentTime + gap);   // gap = silent breath before it
     this.emit();
   }
@@ -452,5 +522,27 @@ class Speaker {
 
 export const speaker = new Speaker();
 
-declare global { interface Window { novaVoice?: { level: () => number } } }
-window.novaVoice = { level: () => speaker.level() };
+declare global {
+  interface Window {
+    novaVoice?: {
+      level: () => number;
+      mouth: () => MouthFrame;
+      say?: (text: string) => void;
+    };
+  }
+}
+// Also the verification surface: "is her mouth in sync" is answerable by
+// sampling this against the track, rather than by looking at a screenshot.
+window.novaVoice = { level: () => speaker.level(), mouth: () => speaker.mouth() };
+
+if (import.meta.env.DEV) {
+  // Speak a line without a chat turn. The face lane has now been shelved
+  // twice, and one cause both times was tuning the mouth against a synthetic
+  // envelope because driving the real one meant waiting on a model. Must
+  // still be called from a gesture — the autoplay policy is not negotiable.
+  window.novaVoice.say = (text: string) => {
+    speaker.enable();
+    speaker.feed(text.endsWith('.') ? text : `${text}.`);
+    speaker.flush();
+  };
+}

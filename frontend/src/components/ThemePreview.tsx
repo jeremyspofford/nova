@@ -10,7 +10,10 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  const heavy = !!THEMES[themeKey].heavy;
+
   useEffect(() => {
+    if (heavy) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     // a machine that can't create a WebGL context (headless, old GPU) must
@@ -30,7 +33,7 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
     const t1 = setTimeout(() => renderer?.recenter?.(), 500);
     const t2 = setTimeout(() => renderer?.recenter?.(), 1400);
     return () => { clearTimeout(t1); clearTimeout(t2); renderer?.destroy(); };
-  }, [themeKey]);
+  }, [themeKey, heavy]);
 
   return (
     <button
@@ -39,7 +42,17 @@ export function ThemePreview({ themeKey, selected, onSelect }: {
       className={`text-left rounded-lg overflow-hidden border-2 transition ${selected ? 'border-teal-500' : 'border-stone-700 hover:border-stone-500'
         }`}
     >
-      <canvas ref={canvasRef} width={220} height={130} className="block pointer-events-none" />
+      {heavy ? (
+        // A live preview here would mean another WebGL context and a model
+        // download for a card the size of a business card. The picker is not
+        // worth that; the view itself is one click away.
+        <div className="w-[220px] h-[130px] flex items-center justify-center
+                        bg-gradient-to-b from-sky-950 to-stone-950 text-stone-500 text-xs">
+          Select to view
+        </div>
+      ) : (
+        <canvas ref={canvasRef} width={220} height={130} className="block pointer-events-none" />
+      )}
       <div className={`px-2 py-1 text-xs capitalize ${selected ? 'bg-teal-900/50 text-teal-200' : 'bg-stone-800 text-stone-400'
         }`}>
         {THEMES[themeKey].label}{selected ? ' ✓' : ''}

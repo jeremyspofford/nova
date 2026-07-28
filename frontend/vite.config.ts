@@ -68,8 +68,10 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api/, /^\/health/],
         runtimeCaching: [],
         // wasm runtimes + onnx models (VAD, wake) load on demand and
-        // browser-cache — never precache them into the service worker
-        globIgnores: ['**/vad/**', '**/wake/**', '**/*.wasm'],
+        // browser-cache — never precache them into the service worker.
+        // Same for the identity view's head model and basis transcoder: they
+        // are fetched only if that view is the one you chose.
+        globIgnores: ['**/vad/**', '**/wake/**', '**/*.wasm', '**/models/**', '**/basis/**'],
         // web push lives in a small static file so the SW stays generated
         // (no injectManifest migration); push-sw.js is precached by glob
         importScripts: ['push-sw.js'],
