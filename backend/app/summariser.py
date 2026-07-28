@@ -123,6 +123,64 @@ _REGROUND = (
     "\n\nYOUR SUMMARY:\n{draft}")
 
 
+_SUBJECTS = (
+    "List the 2 to 4 SPECIFIC SUBJECTS this text is about, as short "
+    "kebab-case tags.\n\n"
+    "A subject is a named thing another document could also be about — "
+    "model-context-protocol, rate-limiting, rust, kv-cache, tailwind. NOT the "
+    "kind of thing this is (video, transcript, tutorial, news), NOT a broad "
+    "field (technology, ai, programming, software), NOT the title restated.\n"
+    "Only subjects the text actually discusses. Output the tags on one line, "
+    "comma separated, nothing else.\n\nTEXT:\n{body}")
+
+_TAG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,38}")
+
+# What a subject tag must not be. Broad fields and formats name a category,
+# and a category earns no graph edge (see memory.graph) — so a tag from this
+# list is a wasted call at best and misleading in a listing at worst.
+_NOT_A_SUBJECT = frozenset({
+    "video", "transcript", "tutorial", "news", "guide", "overview", "review",
+    "technology", "tech", "ai", "artificial-intelligence", "programming",
+    "software", "development", "coding", "computer-science", "engineering",
+    "tools", "tips", "learning", "education", "content", "media", "general",
+})
+
+
+async def subject_tags(text: str, source: str, model: str) -> list[str]:
+    """Specific subjects `text` is about, each one verified against `source`.
+
+    THIS IS WHY THE GRAPH IS EMPTY. A followed-source video is written with
+    tags ["media", "transcript", "src-<channel>", "<title-slug>"] — the first
+    two are generic, the third has 65 members and names a category, and the
+    fourth is derived from the title so it is unique to that one video. Every
+    ingested video therefore arrives sharing no subject with anything, and
+    the batch path never runs the agent that would have assigned one. Fixing
+    the chain edges made the graph honest; this is what gives it anything
+    true to say.
+
+    Grounded like everything else here: a subject that does not appear in the
+    source is dropped rather than trusted, because a fabricated tag does not
+    merely mislabel one document — it invents a RELATIONSHIP between every
+    document that gets it.
+    """
+    from app import grounding
+    raw = await _complete(
+        [{"role": "system", "content": _SYSTEM},
+         {"role": "user", "content": _SUBJECTS.format(body=text)}], model)
+    if not raw:
+        return []
+    source_norm = grounding._norm(source)
+    out: list[str] = []
+    for candidate in _TAG_RE.findall(raw.lower().replace(",", " ")):
+        if candidate in _NOT_A_SUBJECT or candidate in out:
+            continue
+        # every word of the tag has to be IN the source, or it is invented
+        if all(grounding._norm(w) in source_norm
+               for w in candidate.split("-") if len(w) > 2):
+            out.append(candidate)
+    return out[:4]
+
+
 class ProviderExhausted(RuntimeError):
     """The provider will refuse every further call until a human acts.
 
@@ -200,6 +258,20 @@ def summary_source_type(source_type: Optional[str], has_url: bool) -> str:
         # keep the source's own stamp so the reason stays legible on disk
         return source_type or "media_transcript"
     return "chat"
+
+
+async def _safe_subjects(text: str, source: str, model: str) -> list[str]:
+    """subject_tags, but a failure costs tags rather than the whole summary."""
+    try:
+        tags = await subject_tags(text, source, model)
+        if tags:
+            log.info("summary subjects: %s", ", ".join(tags))
+        return tags
+    except ProviderExhausted:
+        raise                      # the caller must still stop, not retry
+    except Exception:  # noqa: BLE001
+        log.debug("subject tagging failed; writing without them", exc_info=True)
+        return []
 
 
 async def summarise(item_id: str, *, model: str) -> Optional[str]:
@@ -316,9 +388,13 @@ async def summarise(item_id: str, *, model: str) -> Optional[str]:
         title=summary_title(title),
         description=description,
         category=str(fm.get("category") or "knowledge"),
-        # the source's own tags, so the summary clusters with it and with
-        # whatever it belongs to, instead of floating alone in the graph
-        tags=list(memory.index.docs.get(item_id, {}).get("tags") or []),
+        # The source's own tags keep the summary clustered with it and its
+        # channel — plus SUBJECT tags, which are the only ones that can
+        # connect it to a different document. Derived from the summary and
+        # checked against the source; failure here costs tags, never the
+        # summary.
+        tags=list(memory.index.docs.get(item_id, {}).get("tags") or [])
+        + await _safe_subjects(summary_body, body, model),
         source_url=url or None,
         source_type=summary_source_type(source_type, bool(url)),
         link_pass=False)
