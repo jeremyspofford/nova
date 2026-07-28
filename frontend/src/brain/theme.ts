@@ -22,6 +22,10 @@ export interface RendererHandle {
   configure?(options: Record<string, unknown>): void;
   /** Reset the camera/viewport to frame the whole scene. */
   recenter?(): void;
+  /** Pull back until every cluster is in frame. Distinct from recenter():
+   *  home framing keeps the bodies you interact with readable, and the size
+   *  differentiation between clusters is only visible from further out. */
+  fitAll?(): void;
   /** Navigate to a node (Atlas click): fly the camera there, select it. */
   focusNode?(id: string): void;
   /** Live activity for presence-style views: chat stream / dispatch / tool

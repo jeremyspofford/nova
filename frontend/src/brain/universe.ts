@@ -18,7 +18,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import type { GraphNode, GraphEdge } from '../api';
 import type { LegendEntry, RendererHandle, RendererOpts } from './theme';
-import { computeSystems, hashStr as hash, tagColor, MEMORY_BODY_TYPES, TAG_COLORS } from './systems';
+import { computeSystems, hashStr as hash, tagColor, TAG_COLORS } from './systems';
 
 // ── palette (kept in family with graph2d/galaxy; tag palette in systems.ts) ─
 const COLOR = {
@@ -40,8 +40,93 @@ const BINARY_NOVA_ORBIT = 30, BINARY_USER_ORBIT = 85;
 const AGENT_R_MIN = 85, AGENT_R_MAX = 150;
 const SKILL_R = 175;
 const BELT_R = 235;
-const SHELL_R = 950;
 const ROGUE_R = 560;
+const STAR_R = 9;          // the system star's mesh scale
+const MOON_R = 2.3;        // topic-moon body radius
+
+/** Extent of the home tier — the radius the memory shell must clear.
+ *  Derived from the outermost thing actually drawn at home: a comet's
+ *  aphelion (763), the rogue drift sphere, the belt and the skill ring. */
+const HOME_EXT = Math.max(265 + 175, ROGUE_R * 1.20, BELT_R, SKILL_R);
+
+/** Fraction of a shell's slots actually used. Filling every slot looks
+ *  machined; leaving gaps gives irregular angular spacing while every
+ *  occupied slot is still at least `sep` from its neighbours. */
+const SHELL_FILL = 0.6;
+
+/** How far a shell may tilt out of the system plane (radians). Enough that a
+ *  system reads as a three-dimensional thing rather than a flat orrery. */
+const MAX_INCL = 0.5;
+
+/** tan(half-FOV) for the 50° camera below — every framing distance derives
+ *  from it, so nothing has to guess how far away "fits on screen" is. */
+const FOV_TAN = Math.tan((50 * Math.PI) / 360);
+/** Camera distance at which a sphere of `radius` fills half the viewport. */
+const frameDist = (radius: number) => (2 * radius) / FOV_TAN;
+
+/** A memory system's spacing rules, derived entirely from its own membership. */
+function systemGeometry(count: number, maxR: number) {
+  // clear space between neighbouring surfaces, a bit over a body diameter
+  let sep = 4.6 * maxR;
+  // a moon clump must fit inside its parent's cell or the guarantee leaks
+  const moonEnv = maxR + MOON_R + 1.0 + MOON_R;
+  if (moonEnv > sep / 2) sep = 2 * moonEnv;
+  const r0 = STAR_R + maxR + sep * 1.6;            // clear the core
+  return { sep, r0, count };
+}
+
+/** Concentric orbital shells — things in space orbit things.
+ *
+ *  Each shell is a real orbit: its own radius, its own inclination, and its
+ *  own Keplerian period, so inner bodies genuinely lap outer ones. What makes
+ *  that safe is the geometry, not luck:
+ *
+ *  - **Within a shell**, every body shares one radius and one period, so the
+ *    angular gaps never change. Slots are sized by `cap` such that the chord
+ *    between adjacent slots is ≥ `sep`.
+ *  - **Between shells**, `|a − b| ≥ ||a| − |b||` (reverse triangle
+ *    inequality) and the radii differ by ≥ `sep`. That holds for ANY phase,
+ *    ANY tilt and ANY pair of periods — which is exactly why each shell is
+ *    free to orbit at its own rate without the arrangement ever shearing
+ *    into a jam, the failure mode of per-BODY orbits.
+ *
+ *  Append-stable: shell capacities and quotas depend only on radius, so a new
+ *  document takes the next free slot and moves nothing. Filling outward in
+ *  ascending-mtime order makes "oldest orbits closest" emergent.
+ */
+function orbitalShells(g: ReturnType<typeof systemGeometry>, seed: number) {
+  const shells: {
+    r: number; cap: number; q: THREE.Quaternion; period: number; phase: number;
+  }[] = [];
+  const seats: { shell: number; slot: number }[] = [];
+  for (let k = 0; seats.length < g.count; k++) {
+    const r = g.r0 + k * g.sep;
+    // most bodies whose adjacent-slot chord 2·r·sin(π/cap) is still ≥ sep
+    const cap = Math.max(1, Math.floor(Math.PI / Math.asin(Math.min(1, g.sep / (2 * r)))));
+    const rnd = mulberry32(seed ^ Math.imul(k + 1, 0x85ebca6b));
+    // deterministic shuffle, then take a quota — occupied slots land at
+    // irregular angles instead of a machined even ring
+    const slots = [...Array(cap).keys()];
+    for (let a = cap - 1; a > 0; a--) {
+      const b_ = Math.floor(rnd() * (a + 1));
+      [slots[a], slots[b_]] = [slots[b_], slots[a]];
+    }
+    const node = rnd() * Math.PI * 2;
+    const axis = new THREE.Vector3(Math.cos(node), 0, Math.sin(node));
+    shells.push({
+      r, cap,
+      q: new THREE.Quaternion().setFromAxisAngle(axis, (rnd() - 0.5) * 2 * MAX_INCL),
+      period: 46 * Math.pow(r / 110, 1.5),      // Kepler: outer shells run slower
+      phase: rnd() * Math.PI * 2,
+    });
+    const quota = Math.max(1, Math.round(cap * SHELL_FILL));
+    for (let s = 0; s < quota && seats.length < g.count; s++) {
+      seats.push({ shell: k, slot: slots[s] });
+    }
+  }
+  const rMax = shells.length ? shells[shells.length - 1].r : g.r0;
+  return { shells, seats, rMax };
+}
 
 /** What each celestial form means — rendered by Brain's legend panel. */
 export const UNIVERSE_LEGEND: LegendEntry[] = [
@@ -109,8 +194,15 @@ interface LabelEntry extends LabelKind {
   sprite: THREE.Sprite;
   /** World position of the system this label belongs to (semantic zoom key). */
   sysCenter: THREE.Vector3;
+  /** Radius of that system — every crossfade threshold scales off it, so a
+   *  2-body system and a 70-body one hand over at their own sizes. */
+  sysExtent: number;
   baseHeight: number;
   bodyId: string | null;
+  /** Screen AABB, refreshed per frame by the declutter pass. */
+  sx: number; sy: number; sw: number; sh: number;
+  /** Eased acceptance weight — hysteresis against strobing (see frame()). */
+  vis: number;
 }
 
 /** Sprites on this layer skip the bloom chain and render in a crisp overlay
@@ -119,7 +211,8 @@ export const LABEL_LAYER = 1;
 
 /** Canvas-texture label sprite — in-scene positioning, bloom-free overlay. */
 function makeLabel(text: string, color: string, kind: LabelKind['kind'],
-                   sysCenter: THREE.Vector3, bodyId: string | null): LabelEntry {
+                   sysCenter: THREE.Vector3, bodyId: string | null,
+                   sysExtent: number = HOME_EXT): LabelEntry {
   const fontPx = 46;
   const pad = 28;
   const c = document.createElement('canvas');
@@ -152,7 +245,8 @@ function makeLabel(text: string, color: string, kind: LabelKind['kind'],
   const baseHeight = kind === 'sysname' ? 46 : kind === 'anchor' ? 17 : 11;
   sprite.scale.set(baseHeight * (c.width / c.height), baseHeight, 1);
   sprite.visible = false;
-  return { sprite, kind, sysCenter, baseHeight, bodyId };
+  return { sprite, kind, sysCenter, sysExtent, baseHeight, bodyId,
+           sx: 0, sy: 0, sw: 0, sh: 0, vis: 0 };
 }
 
 // invisible-but-raycastable material for oversized hit proxies on small bodies
@@ -205,7 +299,15 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   }
 
   // ── camera state (galaxy conventions: drag orbit, wheel zoom, idle spin) ─
-  let yaw = 0.6, pitch = 0.32, dist = 620;
+  /** Home framing: the belt with a little air. Was a literal 620. */
+  const HOME_DIST = 1.25 * frameDist(BELT_R) / 2;
+  let yaw = 0.6, pitch = 0.32, dist = HOME_DIST;
+  /** Zoom limits, recomputed from the built scene in build(). The floor must
+   *  let a single body fill the frame — the old literal 120 sat ABOVE the
+   *  ~25 a planet needs, so no planet could ever be inspected. */
+  let zoomMin = 3 * camera.near;
+  let zoomMax = frameDist(HOME_EXT);
+  const clampDist = (d: number) => Math.max(zoomMin, Math.min(zoomMax, d));
   const camTarget = new THREE.Vector3(0, 0, 0);
   function applyCamera() {
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -232,15 +334,24 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   const ambient = new THREE.Group();
   scene.add(ambient);
 
+  // Starfield backdrop. The dome RIDES THE CAMERA (repositioned every frame
+  // in frame()) instead of sitting on a fixed shell at the origin. A fixed
+  // shell is a bounded room: zoom far enough out and you fly through the back
+  // wall and watch the sky end. Following the camera is how a skybox works —
+  // the stars are always the same distance away, so space has no edge, which
+  // is also the physically honest reading (real stars show no parallax at
+  // these scales, but they never run out either).
+  const starDome = new THREE.Group();
+  ambient.add(starDome);   // in `ambient` so destroy()'s disposeTree finds it
   {
-    // starfield backdrop
     const rand = mulberry32(1337);
-    const N = 1600;
+    const N = 2600;
     const pos = new Float32Array(N * 3);
     const col = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
+      // shell thickness gives a little depth without any of it being reachable
       const v = new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5)
-        .normalize().multiplyScalar(3800 + rand() * 900);
+        .normalize().multiplyScalar(4200 + rand() * 1400);
       pos.set([v.x, v.y, v.z], i * 3);
       const b = 0.35 + rand() * 0.65;
       const warm = rand();
@@ -253,7 +364,11 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       size: 2.1, sizeAttenuation: false, vertexColors: true,
       transparent: true, opacity: 0.85, depthWrite: false,
     });
-    ambient.add(new THREE.Points(g, m));
+    const points = new THREE.Points(g, m);
+    // the dome moves with the camera, so per-star frustum culling against a
+    // stale bounding sphere would blink whole patches out
+    points.frustumCulled = false;
+    starDome.add(points);
 
     // two faint ambient nebulae near home
     const neb1 = makeGlowSprite('#1a5a5a', 1500, 0.05);
@@ -338,10 +453,13 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   }
   const meteorRand = mulberry32(4242);
   function spawnMeteor(m: Meteor, now: number) {
+    // Spawned around the CAMERA, inside the star dome. Anchored to the origin
+    // they only ever streaked past the home system, and were a speck or
+    // off-screen entirely once you pulled back.
     const d = new THREE.Vector3(
       meteorRand() - 0.5, meteorRand() - 0.5, meteorRand() - 0.5)
-      .normalize().multiplyScalar(1500 + meteorRand() * 700);
-    m.head.copy(d);
+      .normalize().multiplyScalar(2200 + meteorRand() * 900);
+    m.head.copy(camera.position).add(d);
     m.vel.set(meteorRand() - 0.5, (meteorRand() - 0.5) * 0.4, meteorRand() - 0.5)
       .normalize().multiplyScalar(500 + meteorRand() * 400);
     m.life = 1.1;
@@ -357,7 +475,9 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   let fingerprint = '';
   let novaGroup: THREE.Group | null = null;   // for the always-on anchor labels
   let livePos = new Map<string, THREE.Vector3>();          // world positions by node id
-  let liveSystems: { label: string; center: THREE.Vector3 }[] = [];
+  let liveSystems: { label: string; center: THREE.Vector3; extent: number; count: number }[] = [];
+  /** Distance that frames the whole sky — the HUD's "Fit all". */
+  let fitAllDist = frameDist(HOME_EXT);
   let bodyGroups = new Map<string, THREE.Object3D>();      // node id → body group
   let adj = new Map<string, Set<string>>();                // real-relation adjacency
   let coreId: string | null = null;
@@ -434,7 +554,14 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         return p ? { x: p.x, y: p.y, z: p.z } : null;
       },
       systems: () => liveSystems.map(s =>
-        ({ label: s.label, x: s.center.x, y: s.center.y, z: s.center.z })),
+        ({ label: s.label, x: s.center.x, y: s.center.y, z: s.center.z,
+           extent: s.extent, count: s.count, dist: s.center.length() })),
+      /** Labels currently accepted by the declutter pass, with screen boxes. */
+      labels: () => labels
+        .filter(l => l.sprite.visible)
+        .map(l => ({ id: l.bodyId, kind: l.kind, x: l.sx, y: l.sy, w: l.sw, h: l.sh })),
+      camera: () => ({ dist, zoomMin, zoomMax, fitAllDist,
+                       t: simT, rotationSpeed, updaters: updaters.length }),
     };
   }
 
@@ -508,17 +635,20 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     /** a body = group placed by its updater; mesh + optional glow + label + hit proxy */
     function makeBody(id: string, mesh: THREE.Mesh, size: number,
                       labelText: string | null, labelColor: string,
-                      sysCenter: THREE.Vector3, labelKind: LabelKind['kind'] = 'body') {
+                      sysCenter: THREE.Vector3, labelKind: LabelKind['kind'] = 'body',
+                      sysExtent: number = HOME_EXT) {
       const group = new THREE.Group();
       group.userData.nodeId = id;
-      group.userData.focusDist = Math.max(110, size * 26);   // body + its moons in frame
+      // frame the body and any moons it carries; the old max(110, …) floor
+      // sat far above the distance at which a planet fills the view
+      group.userData.focusDist = frameDist(size + size + MOON_R + 1.0 + MOON_R);
       bodyGroups.set(id, group);
       group.add(mesh);
       const proxy = makeHitProxy(Math.max(6, size * 1.9), id);
       group.add(proxy);
       pickables.push(proxy);
       if (labelText) {
-        addLabel(makeLabel(labelText, labelColor, labelKind, sysCenter, id),
+        addLabel(makeLabel(labelText, labelColor, labelKind, sysCenter, id, sysExtent),
                  group, size * 2 + 7);
       }
       dataRoot.add(group);
@@ -527,11 +657,16 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     }
 
     /** pulsing halo for memories touched in the last 24h — "Nova just learned this" */
-    function freshFlare(group: THREE.Group, node: GraphNode, color: string, size: number) {
+    function freshFlare(group: THREE.Group, node: GraphNode, color: string, size: number,
+                        sep = Infinity) {
       const age = nowSec - node.mtime;
       if (age > 86400) return;
       const strong = age < 3600;
-      const flare = makeGlowSprite(color, size * (strong ? 7 : 5), 0);
+      // capped against the cell: a fresh flare may kiss its neighbours but
+      // must not swallow them — in a daily-ingesting channel the entire
+      // newest arc is flaring at once
+      const flare = makeGlowSprite(
+        color, Math.min(size * (strong ? 7 : 5), 1.15 * sep), 0);
       group.add(flare);
       const h = hash(node.id) % 628 / 100;
       updaters.push(({ t }) => {
@@ -887,7 +1022,6 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
 
     // ═══ memory layer → star systems (shared computation — see systems.ts,
     // the Atlas panel groups from the very same call) ═══
-    const memIds = new Set(nodes.filter(n => MEMORY_BODY_TYPES.has(n.type)).map(n => n.id));
     const linkEdges = edges.filter(e => e.kind === 'link');
     // personal facts — docs carrying an `about: user` arc to the operator
     const aboutIds = new Set(edges.filter(e => e.kind === 'about').map(e => e.source));
@@ -907,13 +1041,65 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       fullDegree.set(e.target, (fullDegree.get(e.target) ?? 0) + 1);
     }
 
+    // Link adjacency built once. The old code called linkEdges.find() per
+    // topic in three separate loops — ~16k comparisons on the live corpus.
+    const linkOf = new Map<string, GraphEdge[]>();
+    for (const e of linkEdges) {
+      (linkOf.get(e.source) ?? linkOf.set(e.source, []).get(e.source)!).push(e);
+      (linkOf.get(e.target) ?? linkOf.set(e.target, []).get(e.target)!).push(e);
+    }
+    const planetSize = (n: GraphNode) => 3.5 + Math.min(fullDegree.get(n.id) ?? 0, 6) * 0.8;
+
+    // moons: a topic wiki-linked to exactly one other topic orbits it.
+    // Resolved once for the whole graph rather than per system per loop.
+    const moonSet = new Set<string>();
+    for (const n of nodes) {
+      if (n.type !== 'topic' || linkDegree.get(n.id) !== 1) continue;
+      const e = linkOf.get(n.id)?.[0];
+      if (!e) continue;
+      const otherId = e.source === n.id ? e.target : e.source;
+      const other = byId.get(otherId);
+      if (other && other.type === 'topic' && (linkDegree.get(otherId) ?? 0) >= 2) {
+        moonSet.add(n.id);
+      }
+    }
+
+    // Geometry first, placement second: a system's distance from home is a
+    // function of its own extent, so extent has to exist before the centre.
+    const parts = systems.map(sys => {
+      const topics = sys.members.filter(m => m.type === 'topic');
+      // Radius means AGE: oldest holds the inner orbits, newest the rim.
+      // Filling outward in growth order is also what makes an ingest free —
+      // it takes the next free seat and moves nothing. (Tried ordering by
+      // citation count instead; reverted. It cost that stability, and link
+      // degree is only ever 0/1/2 on this corpus, so it bought three coarse
+      // bands rather than a ranking.)
+      const planets = topics.filter(m => !moonSet.has(m.id))
+        .sort((a, b) => a.mtime - b.mtime || a.id.localeCompare(b.id));
+      const maxR = planets.reduce((a, m) => Math.max(a, planetSize(m)), 3.5);
+      const geo = systemGeometry(Math.max(planets.length, 1), maxR);
+      const orb = orbitalShells(geo, hash(sys.key));
+      return {
+        planets, maxR, geo, orb,
+        moons: topics.filter(m => moonSet.has(m.id)),
+        sources: sys.members.filter(m => m.type === 'source'),
+        extent: orb.rMax + maxR,
+      };
+    });
+    /** Radius the camera must be able to frame — drives the zoom ceiling. */
+    let worldExtent = HOME_EXT;
+
     systems.forEach((sys, si) => {
-      const members = sys.members;
-      const rand = mulberry32(hash(sys.key));
-      const center = fibonacciSphere(si, Math.max(systems.length, 2), SHELL_R);
-      center.x += (rand() - 0.5) * 160;
-      center.y += (rand() - 0.5) * 160;
-      center.z += (rand() - 0.5) * 160;
+      const { planets, moons, sources, maxR, geo, orb, extent: E } = parts[si];
+      // Distance from home derives from this system's OWN extent: it clears
+      // the home cloud by twice its own radius. Nothing couples it to any
+      // other system, so one ingest can never translate the whole sky.
+      const R = HOME_EXT + 3.3 * E;
+      // `si` is the systems.ts sys.key ordering — NEVER a size ordering. Two
+      // systems one member apart would swap shell directions on any ingest
+      // that ties them, teleporting both.
+      const center = fibonacciSphere(si, Math.max(systems.length, 2), 1).multiplyScalar(R);
+      worldExtent = Math.max(worldExtent, R + E);
       const sysGroup = new THREE.Group();
       sysGroup.position.copy(center);
       dataRoot.add(sysGroup);
@@ -922,76 +1108,92 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       const dominant = sys.name;
       const sysColor = sys.color;
 
-      const star = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color: COLOR.sysStar }));
-      star.scale.setScalar(9);
-      sysGroup.add(star, makeGlowSprite(COLOR.sysStar, 95, 0.55));
-      addLabel(makeLabel(dominant, sysColor, 'sysname', center, null), sysGroup, 34);
-      sysGroup.add(makeGlowSprite(sysColor, 380, 0.05));   // per-system nebula tint
+      // A source anchor IS the sun of its system — the channel every member
+      // came from, and the most connected node in it. Only draw the generic
+      // star when nothing real occupies the centre.
+      if (!sources.length) {
+        const star = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color: COLOR.sysStar }));
+        star.scale.setScalar(STAR_R);
+        sysGroup.add(star);
+      }
+      // glow and nebula scale with the system — they were flat 95 and 380,
+      // which swallowed a 2-planet system whole
+      sysGroup.add(makeGlowSprite(COLOR.sysStar, Math.max(40, 0.8 * E), 0.55));
+      addLabel(makeLabel(dominant, sysColor, 'sysname', center, null, E), sysGroup, 34);
+      sysGroup.add(makeGlowSprite(sysColor, 3.2 * E, 0.05));   // per-system nebula tint
       // clicking a system's star flies the camera there (recenter returns home)
       const sysProxy = makeHitProxy(16, '');
       sysProxy.userData.focus = center;
+      sysProxy.userData.focusDist = 1.25 * frameDist(E) / 2;
       sysGroup.add(sysProxy);
       pickables.push(sysProxy);
-      liveSystems.push({ label: dominant, center });
+      liveSystems.push({ label: dominant, center, extent: E, count: sys.members.length });
 
-      const topics = members.filter(m => m.type === 'topic');
-      const sources = members.filter(m => m.type === 'source');
-
-      // moons: a topic wiki-linked to exactly one other topic orbits it
-      const isMoon = (m: GraphNode) => {
-        if (linkDegree.get(m.id) !== 1) return false;
-        const e = linkEdges.find(x => x.source === m.id || x.target === m.id)!;
-        const otherId = e.source === m.id ? e.target : e.source;
-        const other = byId.get(otherId);
-        return !!other && other.type === 'topic' && (linkDegree.get(otherId) ?? 0) >= 2;
-      };
-      const moons = topics.filter(isMoon);
-      const planets = topics.filter(m => !moons.includes(m));
-
+      // ── the cluster ─────────────────────────────────────────────────────
+      // Positions come from the blue-noise scatter computed above: no visible
+      // geometric rule, a hard minimum separation, and stable under append.
+      // No guide curves and no arms — an exact spiral reads as drawn rather
+      // than grown, which is the thing this replaced.
       const times = planets.map(p => p.mtime);
       const lo = Math.min(...times), hi = Math.max(...times);
-      const ranked = [...planets].sort((a, b) => b.mtime - a.mtime);   // recent innermost
+      const orbiting: { g: THREE.Object3D; shell: number; ang: number }[] = [];
 
-      for (const p of planets) {
-        const prand = mulberry32(hash(p.id));
-        const rank = ranked.indexOf(p);
-        const r = 36 + rank * (62 / Math.max(1, planets.length - 1) || 0) + (prand() - 0.5) * 8;
-        const q = orbitQuat(prand, 0.2);
-        const phase = prand() * Math.PI * 2;
-        const period = 34 * Math.pow(r / 55, 1.5);
-        const deg = fullDegree.get(p.id) ?? 0;
-        const size = 3.5 + Math.min(deg, 6) * 0.8;
+      planets.forEach((p, i) => {
+        const seat = orb.seats[i];
+        const sh = orb.shells[seat.shell];
+        const size = planetSize(p);
         const recency = hi > lo ? (p.mtime - lo) / (hi - lo) : 0.5;
         const color = tagColor(p);
         const mesh = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color }));
         mesh.scale.setScalar(size);
-        const group = makeBody(p.id, mesh, size, p.label, color, center);
-        group.add(makeGlowSprite(color, size * 4.5, 0.25 + recency * 0.3));
-        freshFlare(group, p, color, size);
-        const ring = orbitRing(r, q, color, 0.05);
+        const group = makeBody(p.id, mesh, size, p.label, color, center, 'body', E);
+        // A sprite's scale IS its world WIDTH, so an uncapped size*4.5 halo is
+        // 26.6 wu across — wider than the gap between bodies, and it then goes
+        // through bloom. Cap it against the cell or the bodies separate and
+        // the picture does not.
+        group.add(makeGlowSprite(color, Math.min(size * 4.5, 0.88 * geo.sep),
+                                 0.25 + recency * 0.3));
+        freshFlare(group, p, color, size, geo.sep);
+        orbiting.push({ g: group, shell: seat.shell, ang: (seat.slot * 2 * Math.PI) / sh.cap });
+      });
+
+      // one faint path per shell — this is what makes the motion read as
+      // orbiting rather than drifting. One Line per shell, not per body.
+      for (const sh of orb.shells) {
+        const ring = orbitRing(sh.r, sh.q, sysColor, 0.055);
         ring.position.copy(center);
         dataRoot.add(ring);
+      }
+
+      if (orbiting.length) {
+        const scratch = new THREE.Vector3();
         updaters.push(({ t }) => {
-          const a = phase + t * (Math.PI * 2 / period);
-          group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r)
-            .applyQuaternion(q).add(center);
+          for (const b of orbiting) {
+            const sh = orb.shells[b.shell];
+            const a = b.ang + sh.phase + t * ((Math.PI * 2) / sh.period);
+            scratch.set(Math.cos(a) * sh.r, 0, Math.sin(a) * sh.r)
+              .applyQuaternion(sh.q).add(center);
+            b.g.position.copy(scratch);
+          }
         });
       }
 
       for (const m of moons) {
-        const e = linkEdges.find(x => x.source === m.id || x.target === m.id)!;
+        const e = linkOf.get(m.id)![0];
         const parentId = e.source === m.id ? e.target : e.source;
         const parentPos = posOf.get(parentId);
         const mrand = mulberry32(hash(m.id));
-        const r = 11 + mrand() * 4;
+        // derived from the parent so the clump fits inside its own cell —
+        // systemGeometry() widens SEP if this envelope ever outgrows it
+        const r = (byId.get(parentId) ? planetSize(byId.get(parentId)!) : maxR) + MOON_R + 1.0;
         const q = orbitQuat(mrand, 0.6);
         const phase = mrand() * Math.PI * 2;
-        const size = 2.3;
+        const size = MOON_R;
         const color = tagColor(m);
         const mesh = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color }));
         mesh.scale.setScalar(size);
-        const group = makeBody(m.id, mesh, size, m.label, color, center);
-        freshFlare(group, m, color, size);
+        const group = makeBody(m.id, mesh, size, m.label, color, center, 'body', E);
+        freshFlare(group, m, color, size, geo.sep);
         updaters.push(({ t }) => {
           const a = phase + t * (Math.PI * 2 / 11);
           group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r).applyQuaternion(q);
@@ -999,40 +1201,46 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         });
       }
 
-      // sources — interstellar visitors loitering near the topics that cite them
-      // (world space like planets, so posOf stays world-valid for the arcs)
-      for (const s of sources) {
-        const link = linkEdges.find(x =>
-          (x.source === s.id && memIds.has(x.target)) ||
-          (x.target === s.id && memIds.has(x.source)));
-        const anchorId = link ? (link.source === s.id ? link.target : link.source) : null;
-        const anchorPos = anchorId ? posOf.get(anchorId) : undefined;
-        const srand = mulberry32(hash(s.id));
-        const offset = new THREE.Vector3(srand() - 0.5, (srand() - 0.5) * 0.5, srand() - 0.5)
-          .normalize().multiplyScalar(14);
+      // sources — the channel a system came from IS its sun, so it sits at the
+      // centre. It used to loiter 14 wu from an arbitrary drive-by topic while
+      // its 66 arcs radiated from that offset, which read as a passer-by; it
+      // was also the last body escaping the spacing budget.
+      sources.forEach((s, k) => {
         const size = 2.6;
         const mesh = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color: COLOR.source }));
         mesh.scale.set(size * 2.1, size * 0.7, size * 0.7);   // elongated — it came from outside
-        const group = makeBody(s.id, mesh, size, s.label, COLOR.source, center);
+        const group = makeBody(s.id, mesh, size, s.label, COLOR.source, center, 'body', E);
+        // a lone source takes the centre exactly; several share a tight ring
+        const ring = sources.length === 1 ? 0 : STAR_R + size + 3;
+        const ang = (k * 2 * Math.PI) / Math.max(sources.length, 1);
+        group.position.copy(center)
+          .add(new THREE.Vector3(Math.cos(ang) * ring, 0, Math.sin(ang) * ring));
+        // tail points away from the HOME star — this thing came from outside.
+        // Static now that the body is: no per-frame updater needed.
+        const tailDir = group.position.clone().normalize();
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), tailDir);
         const tail = new THREE.Mesh(unitCone, new THREE.MeshBasicMaterial({
           color: COLOR.source, transparent: true, opacity: 0.16,
           blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
         }));
+        const len = 12;
+        tail.scale.set(1.4, len, 1.4);
+        tail.position.copy(group.position).addScaledVector(tailDir, len / 2);
+        tail.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tailDir);
         dataRoot.add(tail);
-        const tailDir = new THREE.Vector3();
-        updaters.push(() => {
-          if (anchorPos) group.position.copy(anchorPos).add(offset);
-          else group.position.copy(center).add(offset).addScaledVector(offset, 2);
-          // tail points away from the HOME star — this thing came from outside
-          tailDir.copy(group.position).normalize();
-          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), tailDir);
-          const len = 12;
-          tail.scale.set(1.4, len, 1.4);
-          tail.position.copy(group.position).addScaledVector(tailDir, len / 2);
-          tail.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tailDir);
-        });
-      }
+      });
     });
+
+    // The camera must be able to frame the whole sky and to close on a single
+    // body — both limits derived, replacing the literals 3200 and 120 (that
+    // floor sat ABOVE the ~25 a planet needs, so no planet was ever
+    // inspectable).
+    // Generous both ways: close enough to sit among the bodies, far enough to
+    // leave the whole sky behind you. The old literals (120 / 3200) made the
+    // wheel feel like it hit a wall in both directions.
+    zoomMin = Math.max(1.5 * camera.near, frameDist(1.0));
+    zoomMax = (3.0 * worldExtent) / FOV_TAN;
+    fitAllDist = Math.min(zoomMax, 1.15 * frameDist(worldExtent) / 2);
 
     // link edges as faint arcs (real relations only — tag chains never draw).
     // Journals excluded: their posOf is belt-local, and the belt already
@@ -1206,6 +1414,14 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   function pick(): THREE.Object3D | null {
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObjects(pickables, false);
+    // A real body always beats a system's fly-to proxy. The proxy is a
+    // radius-16 sphere sitting at the system centre, so "nearest hit wins"
+    // made every body inside it unselectable — you got a camera flight
+    // instead. That is load-bearing now the source anchor sits at the centre.
+    for (const h of hits) {
+      const id = h.object.userData.pickId;
+      if (typeof id === 'string' && id) return h.object;
+    }
     return hits[0]?.object ?? null;
   }
   const pickId = (o: THREE.Object3D | null): string | null => {
@@ -1234,7 +1450,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       // so pinch jitter doesn't cancel a follow)
       const [a, b] = [...activePointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (pinchDist > 0) dist = Math.max(120, Math.min(3200, dist * (pinchDist / d)));
+      if (pinchDist > 0) dist = clampDist(dist * (pinchDist / d));
       pinchDist = d;
       const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
       pinchPan += Math.abs(cx - pinchCx) + Math.abs(cy - pinchCy);
@@ -1272,10 +1488,12 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       setNdc(e);
       const hit = pick();
       if (hit?.userData.focus) {
-        // fly to the system rather than opening a detail
+        // fly to the system rather than opening a detail — framed to ITS
+        // size, not the flat 340 every system used to arrive at
         followObj = null;
         flyTarget = (hit.userData.focus as THREE.Vector3).clone();
-        distTarget = 340;
+        distTarget = (hit.userData.focusDist as number | undefined)
+          ?? 1.25 * frameDist(HOME_EXT) / 2;
       } else {
         const id = pickId(hit);
         opts?.onNodeClick?.(id);
@@ -1291,7 +1509,9 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     e.preventDefault();
     // manual zoom overrides flight, but zooming while tracking a body is fine
     flyTarget = null; distTarget = null;
-    dist = Math.max(120, Math.min(3200, dist * (e.deltaY > 0 ? 1.08 : 1 / 1.08)));
+    // 1.16 per notch, not 1.08 — the range is now ~1000x, and a small step
+    // over that span reads as a stuck wheel rather than as travel
+    dist = clampDist(dist * (e.deltaY > 0 ? 1.16 : 1 / 1.16));
   };
   const onContextMenu = (e: Event) => e.preventDefault();   // right-drag pans
 
@@ -1312,6 +1532,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   let destroyed = false;
   const camPos = new THREE.Vector3();
   const followPos = new THREE.Vector3();
+  const projV = new THREE.Vector3();   // scratch for the label declutter pass
 
   function frame(now: number) {
     raf = requestAnimationFrame(frame);
@@ -1333,10 +1554,15 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       if (camTarget.distanceTo(flyTarget) < 1) flyTarget = null;
     }
     if (distTarget !== null) {
-      dist += (distTarget - dist) * k;
-      if (Math.abs(dist - distTarget) < 1) distTarget = null;
+      // clamp here too: a flight target is the third path that writes `dist`,
+      // and it used to escape both interactive clamps entirely
+      const dt_ = clampDist(distTarget);
+      dist += (dt_ - dist) * k;
+      if (Math.abs(dist - dt_) < 1) distTarget = null;
     }
     applyCamera();
+    // keep the sky centred on the eye — this is what makes the field endless
+    starDome.position.copy(camera.position);
 
     const ctx: UpdateCtx = { t: simT, now: now / 1000, dt };
     for (const u of updaters) u(ctx);
@@ -1385,34 +1611,94 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       canvas.style.cursor = hit ? 'pointer' : 'grab';
     }
 
-    // semantic zoom: distance to each label's system decides what's readable
+    // ── semantic zoom, then screen-space declutter ─────────────────────────
+    // Each label crossfades against ITS OWN system's extent, so a 2-body
+    // system and a 70-body one hand over at their own scales rather than at
+    // literals tuned for a fixed 950 shell.
     camPos.copy(camera.position);
+    const vw = canvas.clientWidth || canvas.width || 1;
+    const vh = canvas.clientHeight || canvas.height || 1;
+    const wants: { l: LabelEntry; a: number; d: number }[] = [];
     for (const l of labels) {
-      const d = camPos.distanceTo(l.sysCenter);
+      const E = l.sysExtent;
       let alpha = 0;
       if (l.kind === 'anchor') {
         alpha = labelMode === 'off' ? 0 : 0.92;
       } else if (l.kind === 'sysname') {
-        alpha = labelMode === 'off' ? 0 : Math.max(0, Math.min(1, (d - 500) / 280));
+        const d = camPos.distanceTo(l.sysCenter);
+        alpha = labelMode === 'off' ? 0
+          : Math.max(0, Math.min(1, (d - 2.2 * E) / (1.1 * E)));
       } else if (l.kind === 'quiet') {
         alpha = labelMode === 'on' ? 0.85 : 0;
       } else {
+        // distance to the BODY, not to its system centre. The old form keyed
+        // every label in a system off one point, so all 67 switched on at the
+        // same instant and piled into an unreadable stack.
+        const p = l.bodyId ? livePos.get(l.bodyId) : null;
+        const d = camPos.distanceTo(p ?? l.sysCenter);
         alpha = labelMode === 'on' ? 1
           : labelMode === 'off' ? 0
-            : Math.max(0, Math.min(1, (560 - d) / 260));
+            : Math.max(0, Math.min(1, (2.2 * E - d) / (1.1 * E)));
       }
       if (highlightSet) {
         const bid = normId(l.bodyId);
         alpha *= bid && highlightSet.has(bid) ? 1 : 0.05;
       }
       if (l.bodyId && l.bodyId === hoveredId) alpha = 1;   // hover pierces the dim
+
       const mat = l.sprite.material as THREE.SpriteMaterial;
-      mat.opacity = alpha;
-      l.sprite.visible = alpha > 0.02;
       const h = l.baseHeight * labelScale;
       const w = h * ((mat.map as THREE.CanvasTexture).image.width /
                      (mat.map as THREE.CanvasTexture).image.height);
       l.sprite.scale.set(w, h, 1);
+
+      if (alpha <= 0.02) { l.sw = 0; wants.push({ l, a: 0, d: Infinity }); continue; }
+      // screen box: a label sprite is ~90 world units wide against ~24 of
+      // body spacing, so spacing the BODIES apart can never make the labels
+      // legible on its own.
+      l.sprite.getWorldPosition(projV);
+      const d = camPos.distanceTo(projV);
+      projV.project(camera);
+      const px = ((projV.x + 1) / 2) * vw;
+      const py = ((1 - projV.y) / 2) * vh;
+      const scale = vh / (2 * Math.max(d, 1) * FOV_TAN);
+      l.sx = px; l.sy = py; l.sw = w * scale; l.sh = h * scale;
+      const onScreen = projV.z < 1
+        && px > -l.sw && px < vw + l.sw && py > -l.sh && py < vh + l.sh;
+      wants.push({ l, a: onScreen ? alpha : 0, d });
+    }
+
+    // Greedy non-overlapping selection. Incumbency is the hysteresis: a label
+    // already shown outranks a newcomer, so the idle auto-orbit (which never
+    // stops) can't make the set churn while the view sits still.
+    wants.sort((p, q) => {
+      const rank = (x: typeof p) =>
+        (x.l.bodyId && x.l.bodyId === hoveredId ? 3 : 0)
+        + (x.l.kind === 'anchor' || x.l.kind === 'sysname' ? 2 : 0)
+        + x.l.vis;
+      return rank(q) - rank(p) || p.d - q.d;
+    });
+    const cap = Math.max(8, Math.floor((0.25 * vw * vh) / 9000));
+    const taken: LabelEntry[] = [];
+    for (const cd of wants) {
+      const l = cd.l;
+      let ok = cd.a > 0.02 && taken.length < cap;
+      if (ok) {
+        for (const t of taken) {
+          if (Math.abs(l.sx - t.sx) * 2 < l.sw + t.sw
+              && Math.abs(l.sy - t.sy) * 2 < l.sh + t.sh) { ok = false; break; }
+        }
+      }
+      if (ok) taken.push(l);
+      // Asymmetric ease. Fading IN slowly is the hysteresis — it stops the
+      // never-ending idle auto-orbit from strobing the set while the view
+      // sits still. Fading OUT quickly matters for a different reason: a
+      // label on its way out is still drawn but no longer holds a slot, so a
+      // slow fade would let it overlap whatever replaced it.
+      l.vis += ((ok ? 1 : 0) - l.vis) * Math.min(1, dtReal / (ok ? 0.4 : 0.1));
+      const mat = l.sprite.material as THREE.SpriteMaterial;
+      mat.opacity = cd.a * l.vis;
+      l.sprite.visible = mat.opacity > 0.02;
     }
 
     composer.render();
@@ -1502,7 +1788,14 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       yaw = 0.6; pitch = 0.32;
       select(null);
       flyTarget = new THREE.Vector3(0, 0, 0);
-      distTarget = 620;
+      distTarget = HOME_DIST;
+    },
+    /** Pull back until every system is in frame — the size differentiation is
+     *  only visible from out here, and home framing deliberately isn't. */
+    fitAll() {
+      select(null);
+      flyTarget = new THREE.Vector3(0, 0, 0);
+      distTarget = fitAllDist;
     },
     focusNode(id: string) {
       select(id);   // Atlas navigation: same flight + highlight as a click

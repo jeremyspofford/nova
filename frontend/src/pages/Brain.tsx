@@ -85,6 +85,9 @@ export function Brain() {
   const [atlasOpen, setAtlasOpen] = useState(false);
   // nonce so re-clicking the same count re-scrolls an already-open Atlas
   const [atlasFocus, setAtlasFocus] = useState<{ type: string; nonce: number } | null>(null);
+  // whether the live renderer offers "Fit all" — a ref read in render would
+  // not re-run when the theme swaps, so the capability is state
+  const [hasFitAll, setHasFitAll] = useState(false);
   const [legendOpen, setLegendOpen] = useState(() =>
     window.innerWidth >= 768 && localStorage.getItem('nova.brain.legend') !== '0');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -303,6 +306,7 @@ export function Brain() {
       renderer = THEMES[DEFAULT_THEME].create(canvas, { onNodeClick: openDetail });
     }
     rendererRef.current = renderer;
+    setHasFitAll(!!renderer.fitAll);
     renderer.setPaused?.(occludedRef.current);
     renderer.configure?.({
       rotationSpeed: prefsRef.current.rotationSpeed,
@@ -623,6 +627,20 @@ export function Brain() {
             <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
           </svg>
         </button>
+        {hasFitAll && (
+          <button
+            onClick={() => rendererRef.current?.fitAll?.()}
+            className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
+            title="Pull back until every cluster is in frame"
+            aria-label="Fit all"
+          >
+            {/* corner brackets: "frame everything", distinct from recenter */}
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 9V4a1 1 0 0 1 1-1h5M15 3h5a1 1 0 0 1 1 1v5M21 15v5a1 1 0 0 1-1 1h-5M9 21H4a1 1 0 0 1-1-1v-5" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {legendOpen && (
