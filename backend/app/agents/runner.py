@@ -1060,7 +1060,12 @@ async def _local_standby(agent: dict, failed_model: str) -> Optional[str]:
     name = str(settings_store.get("inference.local_fallback_model") or "").strip()
     if not name:
         return None
-    target = name if ":" in name else f"ollama:{name}"
+    # "qwen2.5:3b" already contains a colon — its TAG separator, not a
+    # provider prefix. Testing for ":" read it as fully qualified and handed
+    # back a bare name, which only worked because effective_model then failed
+    # to resolve "qwen2.5" as a provider and fell back a second time. This
+    # setting names a local model by definition, so the prefix is not a guess.
+    target = name if name.startswith("ollama:") else f"ollama:{name}"
     if target == llm_router.effective_model(failed_model):
         return None                      # already there; do not loop
     try:

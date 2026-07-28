@@ -155,10 +155,37 @@ async def test_fallback_decision():
             AGENT, "ollama:qwen3:14b", {"error_class": "mid_stream"})
         check("mid_stream never falls back", target is None, str(target))
 
+        # REVERSED 2026-07-28. This asserted that a cloud provider's own error
+        # is not rerouted. Then the OpenRouter monthly budget ran out, every
+        # turn 403'd, and Nova stopped answering entirely with four capable
+        # local models installed and idle. Dying because somebody else's
+        # invoice lapsed is the wrong failure for a local-first system, so the
+        # local server is the standby in this direction too.
         target = await runner._fallback_target(
             {**AGENT, "model": "openrouter:z-ai/glm-5.2"},
             "openrouter:z-ai/glm-5.2", {"error_class": "http_status"})
-        check("a cloud provider's own error is not rerouted", target is None)
+        check("a cloud provider refusing DOES reroute to the local standby",
+              target == "ollama:qwen2.5:3b", str(target))
+
+        # ...but only when the standby can actually do the job. An agent
+        # holding tools, rerouted onto a model without tool support, answers
+        # confidently having called nothing — the failure capability_claims.py
+        # exists to catch. A loud error beats a quiet wrong answer.
+        import app.model_fitness as mf
+        real_assess = mf.assess
+
+        async def _no_tools(model, **kw):
+            return [{"severity": mf.BLOCKING, "check": "tools",
+                     "detail": "no tool support"}]
+        mf.assess = _no_tools
+        try:
+            target = await runner._fallback_target(
+                {**AGENT, "model": "openrouter:z-ai/glm-5.2"},
+                "openrouter:z-ai/glm-5.2", {"error_class": "http_status"})
+            check("a standby that cannot call this agent's tools is refused, "
+                  "and the turn fails loudly instead", target is None, str(target))
+        finally:
+            mf.assess = real_assess
 
         # keyless local-first install: main is on the SAME dead server
         agent_registry.get_agent_by_name = await main_on("ollama:qwen3:8b")
