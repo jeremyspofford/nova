@@ -56,6 +56,16 @@ export class TapVad {
    *  lets ONE instance serve turn after turn. */
   private cb: VadCallbacks | null = null;
   private silenceMs = 1100;
+  /** The AudioContext the model was BUILT against. vad-web resolves
+   *  `audioContext` once, at construction, and holds that object — unlike
+   *  `getStream`, which it re-invokes — so a cached model outlives its context
+   *  and start() then throws InvalidStateError on a closed one. Worse, the
+   *  library sets initializationState='initializing' BEFORE it touches the
+   *  context, and its `case "initializing"` arm just warns and returns: every
+   *  later start() resolves, `live` goes true, the bar says "listening", and
+   *  nothing is heard for the rest of the page session. Keeping the reference
+   *  is what lets ensure() notice and rebuild. */
+  private builtCtx: AudioContext | null = null;
 
   /** Begin listening for one utterance's worth of speech. `silenceMs` = the
    *  trailing silence that ends the turn (voice.vad_silence_ms). Throws if the
@@ -66,6 +76,19 @@ export class TapVad {
     const t0 = performance.now();
     this.cb = cb;
     const wanted = opts?.silenceMs ?? 1100;
+    // Re-entrancy. `disarm()` is single-shot (`if (!this.live) return`) but
+    // `arm()` was not, so arming an already-live instance took a SECOND broker
+    // reference that nothing would ever give back — the device then stayed open
+    // for the rest of the session. Harmless until something could arm twice;
+    // the stranded-re-arm backstop can, by design, so the guard lands with it.
+    if (this.live) {
+      if (wanted !== this.silenceMs) {
+        this.silenceMs = wanted;
+        this.vad!.setOptions({ redemptionMs: wanted });
+      }
+      if (dbg) console.debug(`[vad] arm() on a live detector — retuned only (silence=${wanted}ms)`);
+      return;
+    }
     await micBroker.acquire();
     await this.ensure(dbg);
     // Retune in place. This used to DESTROY and rebuild the model, on the
@@ -86,6 +109,32 @@ export class TapVad {
     if (dbg) console.debug(`[vad] armed in ${Math.round(performance.now() - t0)}ms (silence=${this.silenceMs}ms)`);
   }
 
+  /** Build the model WITHOUT listening, so the wake word never has to wait for
+   *  it. `startOnLoad: false` means MicVAD.new only loads silero and builds the
+   *  FrameProcessor; the audio graph is created in start().
+   *
+   *  This closes the one gap phase 2 left open. Phase 2 made the model live
+   *  across turns, so every turn AFTER the first arms in milliseconds — but the
+   *  instance is lazy at the call site and is disposed on tab-hide, so the
+   *  FIRST wake fire of every page session still paid the full build with the
+   *  detector deaf throughout. No amount of preSpeechPadMs can recover audio
+   *  the frame processor never saw.
+   *
+   *  Be aware it DOES open the shared device (build() awaits the broker's
+   *  context and stream), so only call it when the microphone is already
+   *  legitimately open — i.e. when wake listening is on. */
+  async prewarm(): Promise<void> {
+    const dbg = typeof localStorage !== 'undefined' && localStorage.getItem('nova.vadDebug') === '1';
+    await micBroker.acquire();
+    try {
+      await this.ensure(dbg);
+    } finally {
+      // Hold no reference of our own: the model outlives this call, the device
+      // reference must not. arm() takes its own.
+      micBroker.release();
+    }
+  }
+
   /** Stop listening. Keeps the model warm and holds nothing open itself — the
    *  broker's refcount decides when the device actually closes, so the next
    *  turn arms in milliseconds instead of seconds. */
@@ -100,7 +149,7 @@ export class TapVad {
   /** Tear the model down for good — teardown, tab-hide, voice off. */
   async dispose(): Promise<void> {
     const v = this.vad;
-    this.vad = null; this.building = null; this.cb = null;
+    this.vad = null; this.building = null; this.cb = null; this.builtCtx = null;
     if (this.live) { this.live = false; micBroker.release(); }
     if (v) { try { await v.destroy(); } catch { /* already gone */ } }
   }
@@ -124,6 +173,17 @@ export class TapVad {
   private resetSustainFn: (() => void) | null = null;
 
   private async ensure(dbg: boolean): Promise<MicVAD> {
+    // Reuse only a model whose context is STILL THE LIVE ONE. The broker closes
+    // its context 20 s after the last reference goes (wake off, mute, mode
+    // change) and allocates a fresh one on the next open, so "we already built
+    // it" is not the same question as "it still works". Checked here rather
+    // than at the call sites because both arm() and prewarm() need it and only
+    // this function knows whether a build is being skipped.
+    const ctx = await micBroker.getContext();
+    if (this.vad && (this.builtCtx !== ctx || this.builtCtx?.state === 'closed')) {
+      if (dbg) console.debug('[vad] context was replaced under the cached model — rebuilding');
+      await this.dispose();
+    }
     if (this.vad) return this.vad;
     if (!this.building) this.building = this.build(dbg);
     this.vad = await this.building;
@@ -139,13 +199,19 @@ export class TapVad {
     let sustained = false;
     const resetSustain = () => { if (dbg) console.debug(`[vad] resetSustain (had ${voiced} voiced)`); voiced = 0; quiet = 0; sustained = false; };
     this.resetSustainFn = resetSustain;
+    // Remember what we bind to, so ensure() can tell a warm model from a
+    // stale one. Resolved into a local first: the value handed to the library
+    // and the value we remember must be the same object, or the staleness
+    // check is testing the wrong thing.
+    const ctx = await micBroker.getContext();
+    this.builtCtx = ctx;
     const vad = await MicVAD.new({
       // self-hosted assets — never the library's CDN defaults
       baseAssetPath: '/vad/',
       onnxWASMBasePath: '/vad/',
       model: 'v5',
       // the shared device (phase 2) — see the header for why these matter
-      audioContext: await micBroker.getContext(),
+      audioContext: ctx,
       getStream: () => micBroker.getStream(),
       pauseStream: async () => { /* never stop the shared tracks */ },
       resumeStream: async (s: MediaStream) => s,

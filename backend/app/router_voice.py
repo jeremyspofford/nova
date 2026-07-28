@@ -86,6 +86,23 @@ async def tts(req: TTSRequest):
     return Response(content=r.content, media_type="audio/wav")
 
 
+@router.post("/api/v1/voice/warm")
+async def warm():
+    """Tell whisper a transcription is coming, so the model is loaded before
+    the clip arrives rather than while the microphone sits closed.
+
+    Called the instant the wake word fires — not when audio shows up. Every
+    failure is swallowed: a warm-up that can 503 would break the mic path to
+    save it a second, which is the wrong trade in every case."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.post(f"{settings.whisper_url}/warm")
+        return {"warm": r.status_code == 200}
+    except Exception as e:            # noqa: BLE001 — advisory, never fatal
+        log.debug("whisper warm-up skipped: %s", e)
+        return {"warm": False}
+
+
 @router.post("/api/v1/voice/transcribe")
 async def transcribe(request: Request):
     """Proxy a recorded push-to-talk utterance to whisper. The browser sends

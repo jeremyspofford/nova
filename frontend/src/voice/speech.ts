@@ -250,28 +250,71 @@ class Speaker {
    *  whole situation it is for. Rising = the mic is live, falling = it is
    *  not; that pairing is the one convention people already know.
    *
+   *  'listening' and 'gaveup' are the SINGLE-note pair, for a wake fire and
+   *  for the arm window closing with nobody talking. They exist because the
+   *  silence after "Hey Nova" was making the operator pause to find out
+   *  whether he had been heard — and a ~1.1 s pause is exactly what the
+   *  endpointer reads as "that was the whole sentence", so the wake phrase
+   *  became a chat turn on its own (measured 2026-07-27). One note rather
+   *  than two so it reads as "go ahead" and not "the mode changed".
+   *
    *  Deliberately NOT routed through the duck gain: it must stay audible
    *  while she is ducked, and it must not colour level() (the orb should not
-   *  pulse for Nova's own beep). */
-  earcon(kind: 'open' | 'close') {
-    if (!this.ctx || !this.enabled) return;
+   *  pulse for Nova's own beep). Nor does it assign `this.current`, so
+   *  `playing` stays false — otherwise arming the mic would set the
+   *  spoke-over veto's `heardOver` against her own beep. */
+  earcon(kind: 'open' | 'close' | 'listening' | 'gaveup') {
+    // NOT gated on `enabled`. That flag means "read replies aloud", and muting
+    // her voice must not also mute the microphone cues — doing so would take
+    // the "she is listening" signal away from the operator and hand back the
+    // composing pause that swallows the first half of a sentence. Safe because
+    // disable() calls cancel(), so no spoken output can leak through here, and
+    // this method never touches `current` or the speech queue.
+    if (!this.ctx) return;
+    // Her reply is deliberately paused, which suspends the clock. Scheduling
+    // against a frozen currentTime does not fail — it queues the note to fire
+    // whenever playback resumes, so the operator gets a stray beep minutes
+    // later describing a moment that has long passed. Say nothing instead.
+    if (this.paused) return;
+    // A CLOSED context throws InvalidStateError from createOscillator. That
+    // matters far more than a missing beep: earcon() is now called from
+    // onWake, synchronously, BEFORE the capture is armed — so a throw here
+    // would mean the wake word fires and nothing whatsoever happens, which is
+    // the exact bug this whole change set exists to remove. Dropping the
+    // `enabled` guard above removed the flag that used to hide this by
+    // accident, so the guard has to be explicit and the body has to be safe.
+    if (this.ctx.state === 'closed') return;
     const ctx = this.ctx;
-    const notes = kind === 'open' ? [660, 990] : [880, 550];
-    notes.forEach((hz, i) => {
-      const t = ctx.currentTime + i * 0.09;
-      const osc = ctx.createOscillator();
-      const g = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(hz, t);
-      // short, and well below her speaking level — an earcon that startles
-      // is one the operator turns the whole feature off to escape
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.12, t + 0.015);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
-      osc.connect(g).connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 0.1);
-    });
+    const notes = kind === 'open' ? [660, 990]
+      : kind === 'close' ? [880, 550]
+      : kind === 'listening' ? [880] : [550];
+    // …and belt-and-braces around the scheduling itself. A cue is a nicety; the
+    // microphone is the feature. Nothing in here may ever reach its caller.
+    const play = () => {
+      try {
+        notes.forEach((hz, i) => {
+          const t = ctx.currentTime + i * 0.09;
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(hz, t);
+          // short, and well below her speaking level — an earcon that startles
+          // is one the operator turns the whole feature off to escape
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.12, t + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
+          osc.connect(g).connect(ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.1);
+        });
+      } catch (err) {
+        console.warn('[voice] earcon skipped:', err);
+      }
+    };
+    // Suspended for any other reason (autoplay policy, a backgrounded tab that
+    // has just come back): resume FIRST, then schedule against a running clock.
+    if (ctx.state === 'suspended') { void ctx.resume().then(play).catch(() => {}); return; }
+    play();
   }
 
   /** Duck the output while someone is talking over her — the affordance that

@@ -141,11 +141,25 @@ export interface TranscribeResult {
 }
 
 /** Transcribe a recorded utterance; resolves to text + who was speaking. */
+/** Tell the STT engine a clip is coming. Fire-and-forget by design: it exists
+ *  only to move a model load OFF the path where the microphone is closed, so
+ *  its own failure must cost nothing. Called when the wake word fires. */
+export async function warmSpeech(): Promise<void> {
+  try {
+    await apiFetch(`${API_URL}/api/v1/voice/warm`, { method: 'POST' });
+  } catch { /* the transcribe call will load it the slow way */ }
+}
+
 export async function transcribeSpeech(blob: Blob): Promise<TranscribeResult> {
   const r = await apiFetch(`${API_URL}/api/v1/voice/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': blob.type || 'application/octet-stream' },
     body: blob,
+    // A hard deadline, because the caller closes the microphone for the whole
+    // round trip: an unbounded request turns a slow transcription into a
+    // permanently deaf app that only a page reload recovers. 30 s is well past
+    // a cold large-v3 load (~14 s measured) and well short of "gave up on it".
+    signal: AbortSignal.timeout(30_000),
   });
   if (!r.ok) {
     const detail = await r.json().then(j => j.detail).catch(() => r.statusText);

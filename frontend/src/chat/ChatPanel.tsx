@@ -26,7 +26,7 @@ import { VoiceOverlay } from './VoiceOverlay';
 import { agentDisplayName, displayName } from '../names';
 import { speaker } from '../voice/speech';
 import { Mic } from '../voice/mic';
-import { transcribeSpeech, getSettings } from '../api';
+import { transcribeSpeech, warmSpeech, getSettings } from '../api';
 import type { TapVad } from '../voice/vad';
 import type { WakeWord } from '../voice/wake';
 import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
@@ -550,6 +550,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (typeof fw === 'number') followupS.current = fw;
       const ci = defs.find(d => d.key === 'voice.conversation_idle_s')?.value;
       if (typeof ci === 'number') idleS.current = ci;
+      applyStopPhrases(defs.find(d => d.key === 'voice.stop_phrases')?.value);
       applyWakeLearning(defs.find(d => d.key === 'voice.wake_learning')?.value);
       applyWakeMic(defs.find(d => d.key === 'voice.wake_mic_processing')?.value);
     }).catch(() => {});
@@ -567,6 +568,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (key === 'voice.wake_word' && typeof value === 'string' && value) wakeWord.current = value;
       if (key === 'voice.followup_window_s' && typeof value === 'number') followupS.current = value;
       if (key === 'voice.conversation_idle_s' && typeof value === 'number') idleS.current = value;
+      if (key === 'voice.stop_phrases') applyStopPhrases(value);
       if (key === 'voice.wake_learning') applyWakeLearning(value);
       if (key === 'voice.wake_mic_processing') applyWakeMic(value);
     };
@@ -622,6 +624,65 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       m.setWakeLearning(value, { phrase: wakeWord.current, mic: wakeMic.current }));
   }
 
+  // ── "bye" — the verbal off switch ───────────────────────────────────────
+  //
+  // Hands-free means your hands are busy, so "tap the mic to stop" is the one
+  // instruction the mode cannot assume you can follow. Saying it has to work.
+  //
+  // Mechanical, not interpreted: an exact match on the WHOLE normalised
+  // utterance against a list the operator owns. No model is asked whether you
+  // sounded like you were leaving — that would be a judgement call on the one
+  // action that must never fire by accident, and never failing to fire is the
+  // other half of it. Whole-utterance is what keeps "say bye to grandma" and
+  // "goodbye is such a formal word" from cutting you off mid-thought.
+  const stopPhrases = useRef<Set<string>>(new Set());
+
+  function applyStopPhrases(value: unknown) {
+    if (typeof value !== 'string') return;
+    stopPhrases.current = new Set(
+      value.split(',').map(p => normalisePhrase(p)).filter(Boolean));
+  }
+
+  /** lowercase, strip everything that is not a letter, digit or single space.
+   *  Whisper punctuates and capitalises ("Goodbye." / "Bye!"), and none of that
+   *  should decide whether the microphone closes. */
+  function normalisePhrase(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function isStopPhrase(text: string): boolean {
+    if (!stopPhrases.current.size) return false;      // empty setting = off
+    return stopPhrases.current.has(normalisePhrase(text));
+  }
+
+  /** Everything off, now: any reply in flight, the capture, the follow-up
+   *  window, the wake detector, conversation mode. Deliberately the same
+   *  end state as tapping the mic off, so there is one "stopped", not two. */
+  async function stopListening() {
+    bumpEpoch();                       // strand every continuation in flight
+    speaker.cancel();                  // she stops talking too — "bye" means done
+    abortRef.current?.abort();
+    conversationRef.current = false;
+    setConversationOpen(false);
+    voiceOpenRef.current = false;
+    setVoiceOpen(false);
+    wakeOn.current = false;
+    inFollowup.current = false;
+    await tapVad.current?.disarm();
+    tapVad.current = null;
+    void vadInstance.current?.dispose();
+    vadInstance.current = null;
+    await wakeRef.current?.stop();
+    wakeRef.current = null;
+    setMicState('idle');
+    emitListening(false);
+    // The falling two-note already means "voice has ended" everywhere else in
+    // this file, so it means it here too. That plus the mic going struck-through
+    // is the receipt; a chat bubble saying "stopped" every time you said bye
+    // would be clutter in the transcript you actually want to read.
+    try { speaker.earcon('close'); } catch { /* never worth the stop */ }
+  }
+
   function applyWakeMic(value: unknown) {
     if (value !== 'browser' && value !== 'raw') return;
     wakeMic.current = value;
@@ -647,7 +708,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // `front`: this utterance interrupted her, so it goes to the FRONT of the
   // queue — you cut her off to say it, waiting behind three typed follow-ups
   // would be the wrong answer to the wrong question.
-  async function submitUtterance(blob: Blob, opts?: { front?: boolean }) {
+  /** Returns true when the utterance ENDED the session (a stop phrase), so the
+   *  caller knows not to run its re-arm continuation. */
+  async function submitUtterance(blob: Blob, opts?: { front?: boolean }): Promise<boolean> {
     setMicState('transcribing');
     try {
       const { text, speaker: who, speaker_active } = await transcribeSpeech(blob);
@@ -659,6 +722,14 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       // a wake clip is far more useful tagged with WHO said it — the whole
       // point is that the model has never heard this particular child
       lastSpeakerName.current = who ? who.name : '';
+      // "bye" — checked BEFORE anything is sent, so the word that ends the
+      // session never also becomes a message she has to answer. Returning here
+      // skips afterSubmit too, which is what makes the stop final rather than
+      // something the follow-up window re-opens half a second later.
+      if (isStopPhrase(text)) {
+        await stopListening();
+        return true;
+      }
       if (text.trim()) {
         // DISPATCH, don't await. `send` runs the SSE stream to completion, so
         // awaiting it here meant the caller's continuation — the one that puts
@@ -686,6 +757,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `Transcription failed: ${errText(err)}` }]);
     }
+    return false;
   }
 
   // arm the in-browser VAD to capture ONE utterance, then submit it. Shared
@@ -760,9 +832,24 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           // true forever (the source node is still assigned, and its onended
           // cannot fire against a frozen clock), which would mean a paused
           // conversation never idles out at all.
-          if (speaker.playing) { scheduleArmTimer(true); return; }
+          // `playing` is `!!this.current && !paused` — false in the gap between
+          // a sentence being queued and its buffer decoding, which on a slow TTS
+          // round trip is seconds long. So the window could close, and now
+          // audibly beep, in the middle of a reply. `speaking && !paused` covers
+          // that gap while keeping the reason `playing` was chosen in the first
+          // place: a paused reply latches `speaking` true forever, and a paused
+          // conversation still has to be able to idle out.
+          if (speaker.playing || (speaker.speaking && !speaker.paused)) {
+            scheduleArmTimer(true); return;
+          }
           unduck();
           endSpeechWatch();
+          // The window opening is audible, so the window closing has to be too
+          // — otherwise "she stopped listening" is a thing you only discover by
+          // talking to a mic that is no longer there. Not in conversation mode:
+          // that path ends in closeConversation, which plays its own two-note
+          // 'close', and two sounds for one event reads as a fault.
+          if (!conversationRef.current) speaker.earcon('gaveup');
           await v.disarm();
           tapVad.current = null;
           emitListening(false);
@@ -895,8 +982,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             // awaits the whole turn, so anything hung off its completion is
             // already too late to have the mic open during the answer.
             opts?.onCaptured?.();
-            await submitUtterance(wav, { front: barged });
-            await afterSubmit?.(true);
+            // "bye" ends the session, so the continuation that would re-arm
+            // the microphone must not run. Skipping it explicitly rather than
+            // relying on stopListening's flags to make it a no-op: the stop has
+            // one obvious line, not a chain of guards that each have to hold.
+            const stopped = await submitUtterance(wav, { front: barged });
+            if (!stopped) await afterSubmit?.(true);
           }, 0);
         },
       }, { silenceMs: conversationRef.current ? vadSilenceConvMs.current : vadSilenceMs.current });
@@ -935,13 +1026,18 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     // reaching for the button while wake listening is on is the honest form
     // of "it didn't hear me" — keep whatever nearly fired just before it
     void wakeClipsMod().then(m => m.wakeGaveUp());
+    void warmSpeech();              // a clip is coming; see onWake
     await startVadCapture();
   }
 
   // ── wake word: listen hands-free; the trigger arms a VAD capture ──
   async function resumeWake() {
     if (!wakeOn.current || !wakeRef.current) { setMicState('idle'); return; }
-    try { await wakeRef.current.start(); setMicState('wake'); }
+    // Never repaint over 'transcribing'. The stranded-re-arm backstop can now
+    // reach this while a clip is still in flight, and that state is what the
+    // mic buttons are gated on — relabelling it would un-gate them and tell the
+    // operator the turn is over while it is still running.
+    try { await wakeRef.current.start(); setMicState(s => (s === 'transcribing' ? s : 'wake')); }
     catch (err) {
       // say so — dying silently here is "wake worked once, then never again"
       wakeOn.current = false;
@@ -974,7 +1070,33 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     await wakeRef.current.stop();
     if (mine !== epoch.current || tapVad.current) return;   // changed while stopping
     inFollowup.current = true;
-    await startVadCapture(voiceTurnDone, followupS.current * 1000);
+    void warmSpeech();                 // another clip is seconds away — see onWake
+    speaker.earcon('listening');       // the window is open; you do not have to guess
+    await startVadCapture(voiceTurnDone, followupS.current * 1000,
+                          { onCaptured: rearmIfStranded });
+  }
+
+  /** Open the mic for one utterance RIGHT NOW, no wake phrase required.
+   *
+   *  Shared by the wake word firing and by the operator simply tapping the
+   *  microphone. Those used to be different features with different buttons —
+   *  a "mic" that meant hands-free and a "Talk" that meant continuous — sitting
+   *  side by side as identical pills with nothing to tell them apart. On the
+   *  phone they rendered as two microphone icons in a row. Operator, having
+   *  looked at it: "there's also a Talk button, so that's confusing."
+   *
+   *  One control now, and the difference is a state rather than a mode: tapping
+   *  starts this immediately, and when it closes with nothing said the caller
+   *  drops back to waiting for the phrase instead of switching off. */
+  async function listenNow() {
+    inFollowup.current = false;
+    // A transcription is ~2 s away and the browser closes the mic for its whole
+    // round trip, so start the model load off that path (see /warm).
+    void warmSpeech();
+    // …and say so out loud. Wrapped: this runs between the decision to listen
+    // and the mic actually opening, so a failed beep must never cost the turn.
+    try { speaker.earcon('listening'); } catch { /* a beep is never worth a turn */ }
+    await startVadCapture(voiceTurnDone, 10_000, { onCaptured: rearmIfStranded });
   }
 
   async function onWake() {
@@ -996,13 +1118,23 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     // micBroker, so stopping would release it and pay the open cost again on
     // the very next turn. Wake fires during capture are ignored by phase.
     wakeIgnoreUntil.current = Date.now() + 1500;
+    // Capture the command, then hand back to the follow-up window; if nothing
+    // is said within 10 s (a false fire) listenNow's caller resumes waiting.
+    // `barged` rides along because saying the phrase over her IS an interrupt.
     inFollowup.current = false;
-    // capture the command, then hand off to conversation mode; if nothing is
-    // said within 10 s (false fire), give up and resume wake listening
-    await startVadCapture(voiceTurnDone, 10_000, { barged: interrupting });
+    void warmSpeech();
+    try { speaker.earcon('listening'); } catch { /* a beep is never worth the turn */ }
+    await startVadCapture(voiceTurnDone, 10_000,
+                          { barged: interrupting, onCaptured: rearmIfStranded });
   }
 
   async function wakeToggle() {
+    // Left as it was. Relaxing this to allow a mid-transcription "off" looked
+    // like a useful escape hatch, but review showed it is dead code: both mic
+    // buttons are `disabled` on exactly that state, so the branch is
+    // unreachable from the UI. The wedge it was meant to escape is now bounded
+    // mechanically instead — a 30 s deadline on the transcribe request and the
+    // stranded-re-arm backstop, neither of which needs the operator to notice.
     if (micState === 'arming' || micState === 'transcribing') return;
     if (wakeOn.current) {                 // turn off
       bumpEpoch();
@@ -1012,6 +1144,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       tapVad.current = null;
       await wakeRef.current?.stop();
       wakeRef.current = null;
+      // Turning wake off drops the last broker reference, so the shared
+      // AudioContext closes 20 s later — and a model built by prewarm() would
+      // outlive it, then fail silently on the next fire. ensure() detects that
+      // and rebuilds; disposing here means it never has to.
+      void vadInstance.current?.dispose();
+      vadInstance.current = null;
       setMicState('idle');
       emitListening(false);
       return;
@@ -1029,6 +1167,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       wakeOn.current = true;
       await w.start();
       setMicState('wake');
+      // A tap means "listen to me now", not "arm a trigger and wait". So the
+      // microphone opens immediately for one utterance — no phrase needed for
+      // the sentence you tapped in order to say — and when that window closes
+      // with nothing said, voiceTurnDone drops back to waiting for the phrase
+      // rather than switching off. That is the whole of what the separate Talk
+      // button used to buy, folded into the control you already pressed.
+      //
+      // This also subsumes the VAD prewarm: arming builds silero, so the first
+      // fire no longer pays for the build with the detector deaf.
+      await listenNow();
     } catch (err) {
       wakeOn.current = false; wakeRef.current = null;
       setMicState('idle');
@@ -1047,6 +1195,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   /** Arm for the next turn. Silence for `voice.conversation_idle_s` closes the
    *  mode — the only automatic release for a mic that otherwise stays hot. */
   async function armConversation() {
+    // Conversation mode has the longest closed-mic round trip of any mode —
+    // every turn ends in a transcription — and it was the one path with no
+    // warm-up. /warm is idempotent and costs nothing when the model is already
+    // resident, so this covers openConversation, voiceLoopDone, the unmute and
+    // the stranded re-arm from one place.
+    void warmSpeech();
     const idleMs = idleS.current > 0 ? idleS.current * 1000 : undefined;
     await startVadCapture(
       captured => (captured ? voiceLoopDone(true) : closeConversation('idle')),
@@ -1068,13 +1222,27 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
    *  Speaker events are edge-triggered and deduped, so a turn that never
    *  speaks never calls back, and hanging the microphone off one is how "it
    *  only activated once" happened in the first place. A wall clock cannot
-   *  fail that way. */
+   *  fail that way.
+   *
+   *  It used to protect conversation mode ALONE, which is backwards: wake mode
+   *  is the worse case. A follow-up window stops the wake detector before it
+   *  arms the VAD, so a transcription that never settles leaves no VAD, no arm
+   *  timer, no speaker subscription AND no wake detector — completely deaf,
+   *  with not even the trigger phrase left to recover with. That is what "you're
+   *  on and then off instantly" describes. It now re-arms whatever mode is
+   *  actually live. */
   function rearmIfStranded() {
     const mine = epoch.current;
     window.setTimeout(() => {
       if (mine !== epoch.current) return;                      // mode changed under us
-      if (!conversationRef.current || tapVad.current) return;   // closed, or already armed
-      void armConversation();
+      if (tapVad.current) return;                              // already armed
+      if (conversationRef.current) { void armConversation(); return; }
+      if (!wakeOn.current) return;
+      // Mid-follow-up the wake detector is stopped, so re-opening the window is
+      // the only way back; otherwise hands-free listening is the resting state.
+      if (inFollowup.current) { void startVadCapture(voiceTurnDone, followupS.current * 1000,
+                                                     { onCaptured: rearmIfStranded }); return; }
+      void resumeWake();
     }, REARM_CEILING_MS);
   }
 
@@ -1102,8 +1270,14 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     await armConversation();
   }
 
-  /** The phone's presentation of the same mode. */
+  /** The phone's full-screen orb: hands-free, indefinitely, until you leave.
+   *
+   *  Moved out of the composer, where it sat as a second microphone button
+   *  beside the first and read as a rival rather than a different thing. It is
+   *  a place you GO, not a control you reach for mid-sentence, so it lives in
+   *  the drawer now. The composer keeps exactly one mic. */
   async function openVoice() {
+    setDrawerOpen(false);
     setVoiceOpen(true);
     voiceOpenRef.current = true;
     await openConversation();
@@ -1598,27 +1772,67 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     : busy ? `${assistantName} is thinking…`
     : 'Muted — tap the mic to listen again';
 
-  // shared by both composers' mode mic (wake / tap / hold)
-  const micModeTitle =
-    listenMode === 'wake'
-      ? (micState === 'wake' ? `Listening for “${wakeLabel(wakeWord.current)}” — tap to stop`
-        : micState === 'armed' ? (inFollowup.current
-          ? 'Still listening — just talk, no wake phrase needed'
-          : 'Wake word heard — speak now')
-          : micState === 'capturing' ? 'Heard you — capturing…'
-            : micState === 'arming' ? 'Loading wake word…'
-              : `Tap to listen hands-free for “${wakeLabel(wakeWord.current)}”`)
-      : listenMode === 'tap'
-        ? (micState === 'armed' ? 'Listening — tap to cancel'
-          : micState === 'capturing' ? 'Hearing you…'
-            : micState === 'arming' ? 'Loading speech detector…'
-              : 'Tap to talk (auto-stops when you pause)')
-        : (micState === 'recording' ? 'Recording — release to send' : 'Hold to talk');
+  // (micModeTitle used to live here — a second, subtly different set of
+  //  strings for the same states, reachable only by hovering. Both composers
+  //  now read micStatus.label below, so there is one sentence per state and
+  //  the tooltip cannot drift from the thing on screen.)
   const micModeLabel =
     listenMode === 'wake' ? 'Wake word' : listenMode === 'tap' ? 'Tap to talk' : 'Hold to talk';
-  const micModeGlyph =
-    micState === 'transcribing' ? '…' : micState === 'arming' ? '⏳'
-      : listenMode === 'wake' && micState === 'wake' ? '👂' : '🎤';
+
+  // ── what the microphone is doing, in words ──────────────────────────────
+  //
+  // One derived status, used by every mic surface. It replaces a glyph
+  // vocabulary (mic / ear / hourglass / dots) that told the story backwards:
+  // the EAR meant "waiting for the wake phrase", and it turned back into a
+  // plain microphone at the exact moment the phrase was heard and you were
+  // meant to start talking — the single most important transition in the flow,
+  // signalled by an icon disappearing, with both states sharing one pulsing
+  // teal. Operator, 2026-07-27, having just watched it and given up: "the ear
+  // looks dumb, and can you make it easier to understand wtf is going on".
+  //
+  // So: the icon is always a microphone, and the STATE is carried by colour
+  // and a sentence. The colours are inverted from what they were — waiting is
+  // now calm and steady, and only "go ahead, I am recording you" pulses. A
+  // pulse should mean the machine wants something from you.
+  const micStatus: { label: string; tone: 'off' | 'standby' | 'go' | 'hearing' | 'working' } =
+    micState === 'transcribing' ? { label: 'Got that — one moment', tone: 'working' }
+    : micState === 'arming' ? { label: 'Getting the microphone ready…', tone: 'working' }
+    : micState === 'recording' ? { label: 'Recording — let go to send', tone: 'hearing' }
+    : micState === 'capturing' ? { label: 'I can hear you', tone: 'hearing' }
+    : micState === 'armed'
+      ? { label: inFollowup.current ? 'Still listening — just talk'
+                                    : 'Listening — go ahead', tone: 'go' }
+      : listenMode === 'wake'
+        ? (micState === 'wake'
+            ? { label: `Waiting for “${wakeLabel(wakeWord.current)}”`, tone: 'standby' }
+            : { label: `Tap to listen for “${wakeLabel(wakeWord.current)}”`, tone: 'off' })
+        : listenMode === 'tap'
+          ? { label: 'Tap to talk', tone: 'off' }
+          : { label: 'Hold to talk', tone: 'off' };
+
+  // Colour is the state. Only 'hearing' and 'go' pulse — those are the two
+  // moments where the operator is meant to act or is being recorded.
+  const micToneClass =
+    micStatus.tone === 'hearing' ? 'bg-red-600 text-white animate-pulse'
+    : micStatus.tone === 'go' ? 'bg-teal-500 text-stone-950 animate-pulse'
+    : micStatus.tone === 'standby' ? 'bg-stone-800 text-teal-300 ring-1 ring-teal-700'
+    : micStatus.tone === 'working' ? 'bg-stone-700 text-stone-300'
+    : 'bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50';
+  const micDotClass =
+    micStatus.tone === 'hearing' ? 'bg-red-500 animate-pulse'
+    : micStatus.tone === 'go' ? 'bg-teal-400 animate-pulse'
+    : micStatus.tone === 'standby' ? 'bg-teal-600'
+    : micStatus.tone === 'working' ? 'bg-stone-500' : 'bg-stone-600';
+
+  // One microphone, struck through when nothing is listening.
+  const micIcon = (size = 16) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+      {micStatus.tone === 'off' && <path d="M3 3l18 18" />}
+    </svg>
+  );
 
   const commandPalette = paletteOpen ? (
     <div className="absolute bottom-full left-0 right-0 mb-1 z-20 rounded-lg border border-stone-700 bg-stone-900/95 backdrop-blur shadow-xl overflow-hidden">
@@ -1800,6 +2014,17 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             >
               <span className="w-[18px] h-[18px] shrink-0 rounded-full bg-gradient-to-br from-amber-100 via-amber-300 to-teal-400" />
               {assistantName}'s universe
+            </button>
+            <button
+              onClick={() => void openVoice()}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
+                <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+              </svg>
+              Hands-free mode
             </button>
             <button
               onClick={() => { setDrawerOpen(false); navigate('/activity'); }}
@@ -2081,6 +2306,20 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         </div>
       )}
 
+      {/* The mic state, said out loud in text. The round button on the phone
+          has no room for a sentence, and a coloured circle alone is exactly
+          the thing that was unreadable — you cannot tell "waiting for the wake
+          phrase" from "talking to you right now" by hue. Hidden when nothing
+          is listening, so it is never chrome; conversation mode has its own
+          bar and does not need a second one. */}
+      {!conversationOpen && micStatus.tone !== 'off' && (
+        <div className={`flex items-center gap-2 ${
+          mobile ? 'px-4 pb-1' : 'px-3 pt-2 border-t border-stone-800'}`}>
+          <span className={`shrink-0 w-2 h-2 rounded-full ${micDotClass}`} />
+          <span className="truncate text-xs text-stone-400">{micStatus.label}</span>
+        </div>
+      )}
+
       {mobile ? (
         // the mockup composer: one rounded pill — +, the field, then the mic
         // (voice mode) or, once there's something to send, the send arrow
@@ -2175,16 +2414,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               onPointerUp={listenMode === 'ptt' ? pttEnd : undefined}
               onPointerCancel={listenMode === 'ptt' ? pttEnd : undefined}
               disabled={micState === 'transcribing' || micState === 'arming'}
-              title={micModeTitle}
-              aria-label={micModeLabel}
-              className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center select-none touch-none text-sm ${
-                micState === 'recording' || micState === 'capturing'
-                  ? 'bg-red-600 text-white animate-pulse'
-                  : micState === 'armed' || micState === 'wake'
-                    ? 'bg-teal-700 text-teal-100 animate-pulse'
-                    : 'text-stone-300 disabled:opacity-40'}`}
+              title={micStatus.label}
+              aria-label={`${micModeLabel}. ${micStatus.label}`}
+              className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center select-none touch-none ${micToneClass}`}
             >
-              {micModeGlyph}
+              {micIcon(17)}
             </button>
             {input.trim() || pending.length > 0 ? (
               <button
@@ -2213,21 +2447,14 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void openVoice()}
-                aria-label={`Talk with ${assistantName}`}
-                title={`Talk with ${assistantName}`}
-                className="shrink-0 w-9 h-9 rounded-full bg-stone-100 text-stone-900 flex items-center justify-center"
-              >
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
-                  <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
-                </svg>
-              </button>
-            )}
+            ) : null}
+            {/* The full-screen voice overlay used to hang off a SECOND mic
+                button here, which rendered as two microphone icons side by
+                side with nothing to distinguish them. The mode mic above now
+                covers both jobs, so this slot is empty rather than confusing.
+                openVoice/VoiceOverlay are deliberately left intact — the orb
+                is worth keeping, it just needs a home that isn't a rival to
+                the control next to it. */}
           </div>
         </form>
       ) : (
@@ -2271,34 +2498,25 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           onPointerUp={listenMode === 'ptt' ? pttEnd : undefined}
           onPointerCancel={listenMode === 'ptt' ? pttEnd : undefined}
           disabled={micState === 'transcribing' || micState === 'arming' || conversationOpen}
-          title={conversationOpen ? 'Conversation mode has the mic' : micModeTitle}
-          aria-label={micModeLabel}
-          className={`px-3 py-2 rounded text-sm transition select-none touch-none ${
-            conversationOpen
-              ? 'bg-stone-800 text-stone-500'
-              : micState === 'recording' || micState === 'capturing'
-                ? 'bg-red-600 text-white animate-pulse'
-                : micState === 'armed' || micState === 'wake'
-                  ? 'bg-teal-700 text-teal-100 animate-pulse'
-                  : 'bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50'}`}
+          title={conversationOpen ? 'Conversation mode has the mic' : micStatus.label}
+          aria-label={`${micModeLabel}. ${micStatus.label}`}
+          className={`shrink-0 px-2.5 py-2 rounded text-sm transition select-none touch-none ${
+            conversationOpen ? 'bg-stone-800 text-stone-500' : micToneClass}`}
         >
-          {micModeGlyph}
+          {/* Icon only. The sentence lived in here briefly and it was wrong:
+              "Tap to listen for “Hey Nova”" is a wide, nowrap label sitting in
+              the same flex row as the message box, so the thing you type in
+              shrank every time the microphone had something to say. The status
+              line above the composer carries the words for both layouts. */}
+          {micIcon(16)}
         </button>
-        {/* Conversation mode: one click buys a back-and-forth with no wake
-            phrase between turns. This loop already existed but was reachable
-            only from the phone composer. */}
-        {!conversationOpen && (
-          <button
-            type="button"
-            onClick={() => void openConversation()}
-            disabled={micState === 'arming' || micState === 'transcribing'}
-            title={`Talk with ${assistantName} — the mic stays open until you end it`}
-            aria-label={`Talk with ${assistantName}`}
-            className="px-3 py-2 rounded text-sm transition bg-stone-700 hover:bg-stone-600 text-stone-200 disabled:opacity-50"
-          >
-            Talk
-          </button>
-        )}
+        {/* "Talk" (conversation mode) stood here as a second, equal-weight
+            voice button beside the mic. They were a MODE and an ACTION drawn
+            as identical pills, which is why neither read as anything: the mic
+            meant "wait for the phrase", Talk meant "stay open until I say
+            stop", and the UI said neither. Tapping the mic now opens the
+            microphone straight away and falls back to waiting for the phrase
+            when you stop, which is what having both was really for. */}
         {busy && !!input.trim() && (
           <button
             type="button"

@@ -181,6 +181,28 @@ async def health():
     return {**state, "idle_unload_s": IDLE_UNLOAD_S, "speaker": spk_state}
 
 
+@app.post("/warm")
+async def warm():
+    """Load the model NOW, because a transcription is coming in a second or two.
+
+    The idle unload (IDLE_UNLOAD_S) hands VRAM back when nobody is talking,
+    which is right — but it makes the FIRST utterance after a quiet spell pay
+    the whole reload, and the browser has the microphone closed for the entire
+    round trip. Measured on 2026-07-27: 7.8 s of reload sat between "Hey Nova"
+    and its transcript, and every word the operator spoke into that window was
+    heard by nothing at all.
+
+    Deliberately reuses `_build` / `lock` / `last_used` rather than adding a
+    second load path: bumping the same scalar the reaper compares means a live
+    voice session mechanically cannot be unloaded out from under itself."""
+    global last_used
+    async with lock:
+        if model is None:
+            await asyncio.to_thread(_build)
+        last_used = time.monotonic()
+    return {"loaded": model is not None, "device": active_device}
+
+
 @app.post("/embed")
 async def embed(request: Request):
     """Speaker embedding for one utterance. Returns {embedding: null} for
@@ -249,11 +271,17 @@ async def transcribe(request: Request):
         return text, info.language, info.language_probability
 
     global last_used
+    t0 = time.monotonic()
     async with lock:                          # load (if idle-unloaded) + run, atomically
-        if model is None:
+        cold = model is None                  # …and a reload the caller waited for
+        if cold:
             await asyncio.to_thread(_build)
         last_used = time.monotonic()
         text, lang, prob = await asyncio.to_thread(run)
-    log.info("transcribed %d bytes -> %r (%s %.2f, %s)",
-             len(audio), text[:80], lang, prob, active_device)
+    # elapsed + cold are here so `docker compose logs whisper` alone answers
+    # "did /warm beat the clip?" — the reload is invisible in a bare transcript
+    # line, and it is the difference between 0.7 s and 14 s of a deaf mic.
+    log.info("transcribed %d bytes in %.2fs%s -> %r (%s %.2f, %s)",
+             len(audio), time.monotonic() - t0, " COLD" if cold else "",
+             text[:80], lang, prob, active_device)
     return {"text": text, "language": lang, "language_probability": prob}

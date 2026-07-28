@@ -365,6 +365,19 @@ SETTING_DEFS: list[dict] = [
                      "listening this long so you can just keep talking — no "
                      "wake phrase needed. The mic button pulses while the "
                      "window is open. 0 = every turn needs the wake phrase.")},
+    {"key": "voice.stop_phrases", "type": "string",
+     "default": ("bye, bye bye, goodbye, good bye, see ya, see you, "
+                 "see ya later, see you later, talk to you later, "
+                 "stop listening, that's all, never mind"),
+     "section": "Voice",
+     "label": "Phrases that end listening",
+     "description": ("Say one of these on its own and Nova stops listening "
+                     "immediately — no tap, no wake phrase, and it is never "
+                     "sent as a message. Comma-separated; the whole utterance "
+                     "must match, so \"say bye to grandma\" is unaffected. "
+                     "Do NOT add \"thank you\": whisper invents that phrase "
+                     "out of near-silent audio, so it would stop the mic by "
+                     "itself. Empty = the feature is off.")},
     {"key": "voice.conversation_idle_s", "type": "number", "default": 120,
      "min": 0, "max": 900, "section": "Voice",
      "label": "Conversation mode idle timeout (seconds)",
