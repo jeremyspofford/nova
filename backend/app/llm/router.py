@@ -85,9 +85,15 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
     path. The server-wide OLLAMA_CONTEXT_LENGTH is the real knob; this
     setting mirrors it so the client can refuse loudly rather than guess.
     """
-    from app import settings_store
+    from app import local_context, settings_store
     from app.agents import context_trim
-    limit = int(settings_store.get("inference.ollama_num_ctx") or 0)
+    # Refuse against the window this call will ACTUALLY get, not the flat
+    # setting. With dynamic sizing on they differ by design — refusing a
+    # 30k-token prompt because a stale 16,384 said so, on a model that was
+    # about to be given 40,960, would be a refusal invented by bookkeeping.
+    limit = await local_context.resolve(model) or 0
+    if limit <= 0:
+        limit = int(settings_store.get("inference.ollama_num_ctx") or 0)
     if limit <= 0:
         return None
     # leave the same completion headroom the trimmer reserves
@@ -151,13 +157,20 @@ async def stream_chat(messages: list, model: str,
             yield refusal
             return
     if is_local(target):
-        from app import settings_store
+        from app import local_context
         client, model_name = _resolve_local(target.split(":", 1)[1])
-        num_ctx = int(settings_store.get("inference.ollama_num_ctx") or 0)
+        # Per model, from what it supports and what fits — see local_context.
+        # Falls back to the flat setting whenever anything cannot be measured.
+        num_ctx = await local_context.resolve(target)
         async for event in client.stream(messages, model_name, tools,
                                          include_usage=True, think=think,
                                          num_ctx=num_ctx or None):
             yield event
+        # Did that window actually fit? ollama does not fail when the KV
+        # cache overflows — it moves part of the model into system RAM and
+        # answers slowly. Reading /api/ps afterwards turns that into a fact,
+        # and the next call for this model comes back smaller.
+        await local_context.note_spill(target)
         return
     client, model_name = _resolve(target)
     # include_usage: exact token counts in a final usage chunk — feeds the

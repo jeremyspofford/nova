@@ -209,6 +209,10 @@ async def test_fallback_decision():
 
 async def test_local_overflow_refusal():
     print("3. an oversized local prompt is refused, not silently truncated")
+    # The refusal must measure against the window the call will ACTUALLY get.
+    # With dynamic sizing that is per-model and measured; this block pins the
+    # FLAT path, and the block after it pins the dynamic one.
+    settings_store._cache["inference.dynamic_context"] = False
     settings_store._cache["inference.ollama_num_ctx"] = 8192
     big = [{"role": "system", "content": "S" * 60_000},
            {"role": "user", "content": "go"}]
@@ -227,6 +231,41 @@ async def test_local_overflow_refusal():
     settings_store._cache["inference.ollama_num_ctx"] = 32768
     check("and it is sized by the setting, not a constant",
           await llm_router._refuse_local_overflow("ollama:qwen3:14b", big) is None)
+
+    # DYNAMIC SIZING. The threshold has to follow the per-model window, or a
+    # prompt gets refused by bookkeeping: a stale flat 8,192 rejecting a call
+    # that was about to be handed 40,960 is a refusal nobody's hardware asked
+    # for. Stub the resolver so this asserts the wiring, not the GPU.
+    from app import local_context
+    saved_resolve = local_context.resolve
+    settings_store._cache["inference.dynamic_context"] = True
+    settings_store._cache["inference.ollama_num_ctx"] = 8192
+    try:
+        async def _wide(model):
+            return 262144
+        local_context.resolve = _wide
+        check("a prompt inside the MEASURED window passes, even though the "
+              "flat setting is far smaller",
+              await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
+              is None)
+
+        async def _narrow(model):
+            return 8192
+        local_context.resolve = _narrow
+        check("...and one outside it is still refused",
+              await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
+              is not None)
+
+        async def _unknown(model):
+            return None
+        local_context.resolve = _unknown
+        check("when nothing can be measured it falls back to the setting, so "
+              "the old behaviour survives a dead sidecar",
+              await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
+              is not None)
+    finally:
+        local_context.resolve = saved_resolve
+        settings_store._cache["inference.dynamic_context"] = False
 
 
 # ── 4. the dispatch budget, in a real turn ───────────────────────────────

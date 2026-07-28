@@ -113,6 +113,22 @@ SETTING_DEFS: list[dict] = [
                      "is where the system prompt lives, and answers anyway "
                      "with no error. Bigger costs VRAM — the KV cache grows "
                      "with it.")},
+    {"key": "inference.dynamic_context", "type": "boolean", "default": True,
+     "section": "Inference",
+     "label": "Size the local context window automatically",
+     "description": ("Pick each local model's context window from what it "
+                     "actually supports and what actually fits in VRAM, "
+                     "instead of applying one number to all of them. One "
+                     "number cannot be right for both a 3B and a model with "
+                     "a 262,144-token window, and getting it wrong is "
+                     "invisible: ollama does not fail when the KV cache will "
+                     "not fit, it moves part of the model into system RAM "
+                     "and runs slowly. Nova measures the model's real "
+                     "ceiling, the free VRAM and what the cache costs per "
+                     "token, then checks afterwards whether it spilled and "
+                     "lowers that model next time. With this on, the setting "
+                     "above becomes a CEILING rather than the value. Turn it "
+                     "off to go back to one fixed window.")},
     {"key": "inference.ollama_timeout_s", "type": "number", "default": 300,
      "min": 30, "max": 900, "section": "Inference",
      "label": "Local request timeout (seconds)",

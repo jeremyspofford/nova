@@ -299,11 +299,17 @@ async def check_fallback() -> dict:
               if (m["billions"] or 0) > (mine["billions"] or 0 if mine else 0)
               and "tools" in m["capabilities"]]
     if bigger:
+        # Say WHAT IS TRUE. This claimed "is the smallest tool-capable model
+        # installed" whenever anything larger existed, which is a different
+        # statement and was false the moment the fallback moved off the 3B.
+        # A gauge that overstates is one the operator stops reading.
+        rank = len(bigger) + 1
         findings.append({
-            "severity": ADVISORY, "check": "smallest_installed",
-            "detail": f"{model} is the smallest tool-capable model installed, "
-                      f"and it answers for every agent when a provider is "
-                      f"unreachable. Larger installed options: "
+            "severity": ADVISORY, "check": "larger_available",
+            "detail": f"{model} answers for every agent when a provider is "
+                      f"unreachable, and it is #{rank} of "
+                      f"{len(installed)} installed by size. Larger "
+                      f"tool-capable options: "
                       + ", ".join(f"{m['model']} ({m['parameter_size']})"
                                   for m in bigger[:3])})
     return {"model": model, "findings": findings,
