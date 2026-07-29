@@ -30,6 +30,10 @@ AGENT = "agent"
 TOOL = "tool"
 SKILL = "skill"
 MCP_SERVER = "mcp_server"
+# Who Nova recognises. A person carries a ROLE, and a role narrows tools
+# (voice.family_tools), so creating or learning about one changes what the
+# system will do — which is the definition this log exists for.
+PERSON = "person"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.

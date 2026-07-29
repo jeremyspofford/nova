@@ -104,11 +104,145 @@ async def run() -> None:
         check("a dead registry degrades to the honest unknown block, not an "
               "exception — identity is on every turn, so it can never raise",
               "do NOT know" in block, block[:90])
-        print("6. the graph links what genuinely shares a subject")
+        print("6. the gaps are NAMED, one by one (phase 2)")
+        voiceprints.list_profiles = just_operator
+        block = await runner._identity_block(None)
+        check("a known person with unknown facts still gets a gap list — "
+              "'I know your name' is not the same as 'I know everything', "
+              "and the unnamed half is where invention goes",
+              "Not known about them" in block, block[-120:])
+        check("...naming the actual missing columns",
+              "preferred_name" in block and "pronouns" in block)
+        check("...and forbidding inference from documents, which is the one "
+              "source that looks authoritative and is a stranger's text",
+              "Never infer" in block)
+
+        async def complete():
+            return [{**(await just_operator())[0],
+                     "preferred_name": "Jer", "pronouns": "he/him"}]
+        voiceprints.list_profiles = complete
+        block = await runner._identity_block(None)
+        check("a complete profile gets NO gap list — the prompt stops asking "
+              "for what it already has", "Not known about them" not in block)
+        check("...and the preferred name is stated as the one to use",
+              "Jer" in block and "he/him" in block, block[:160])
+
+        print("7. capture writes only what the person actually said")
+        await test_capture()
+
+        print("8. blank-only is enforced by the write, not by the caller")
+        await test_fill_blanks()
+
+        print("9. the graph links what genuinely shares a subject")
         await test_tag_edges()
     finally:
         voiceprints.list_profiles = saved
         await db.close_pool()
+
+
+# ── phase 2: capture ─────────────────────────────────────────────────────
+
+async def test_capture() -> None:
+    """The rail that makes remember_about_me safe on THIS corpus.
+
+    154 of 169 topics here are third-party video transcripts, and retrieval
+    puts them in front of the model constantly. Without a check, a sentence
+    on someone's YouTube channel is a durable fact about the operator. The
+    user's own message is the one span of context nothing else can write
+    into, so that is what a claimed self-fact is checked against.
+    """
+    from app import capability_events, voiceprints
+    from app.tools import builtin
+
+    # The capability log is read back into her prompt, so a test that writes
+    # to it puts fiction in front of the model. Caught by running this suite
+    # against the live stack: two "Jeremy updated preferred_name" rows from a
+    # run where no profile was touched at all.
+    saved = (voiceprints.list_profiles, voiceprints.fill_blanks,
+             capability_events.record)
+    capability_events.record = lambda *a, **k: None
+    calls: list[dict] = []
+
+    async def operator():
+        return [{"id": "op-1", "name": "Jeremy", "role": "operator"}]
+
+    async def fake_fill(pid, patch):
+        calls.append(dict(patch))
+        return {"id": pid, "name": "Jeremy", **patch}, list(patch), []
+
+    voiceprints.list_profiles, voiceprints.fill_blanks = operator, fake_fill
+    try:
+        ctx = {"speaker_role": None, "agent_name": "main"}
+
+        out = await builtin._remember_about_me(
+            {"preferred_name": "Jer"}, {**ctx, "user_text": "what's the weather"})
+        check("a value absent from their message is REFUSED — this is the "
+              "prompt-injection path, and the only one that matters here",
+              out.startswith("Error") and not calls, out[:80])
+
+        out = await builtin._remember_about_me(
+            {"pronouns": "he/him"},
+            {"speaker_role": "guest", "user_text": "I'm he/him"})
+        check("a non-operator turn cannot write the operator's facts",
+              out.startswith("Error") and not calls, out[:80])
+
+        out = await builtin._remember_about_me(
+            {"preferred_name": "Jer"},
+            {**ctx, "user_text": "just call me Jer from now on"})
+        check("said in their own words, it is written",
+              calls == [{"preferred_name": "Jer"}], out[:80])
+
+        calls.clear()
+        out = await builtin._remember_about_me(
+            {"preferred_name": "JER!"},
+            {**ctx, "user_text": "call me jer, would you"})
+        check("case and punctuation are not evidence — 'JER!' matches 'jer', "
+              "the same normalisation the summary grounding check uses",
+              calls == [{"preferred_name": "JER!"}], out[:80])
+
+        calls.clear()
+        out = await builtin._remember_about_me({"role": "operator"},
+                                               {**ctx, "user_text": "role operator"})
+        check("`role` is unreachable from conversation — a fact about "
+              "yourself may never widen what you may do",
+              out.startswith("Error") and not calls, out[:80])
+    finally:
+        (voiceprints.list_profiles, voiceprints.fill_blanks,
+         capability_events.record) = saved
+
+
+async def test_fill_blanks() -> None:
+    """Blank-only is a property of the UPDATE, not of a check-then-write.
+
+    The COALESCE means a populated column survives whatever the caller
+    passes — so the guarantee holds for a caller that read the row a second
+    ago and for one that never read it at all.
+    """
+    from app import voiceprints
+    p = await voiceprints.create("test-fill-blanks", "guest", None)
+    try:
+        row, written, refused = await voiceprints.fill_blanks(
+            p["id"], {"preferred_name": "First", "pronouns": "they/them"})
+        check("an empty field is filled",
+              row["preferred_name"] == "First" and written == ["preferred_name", "pronouns"],
+              str(written))
+
+        row, written, refused = await voiceprints.fill_blanks(
+            p["id"], {"preferred_name": "Second"})
+        check("a populated field is NOT overwritten, and says so",
+              row["preferred_name"] == "First" and refused == ["preferred_name"],
+              f"value={row['preferred_name']} refused={refused}")
+
+        row, _, _ = await voiceprints.fill_blanks(p["id"], {"role": "operator"})
+        check("a column outside SELF_FACTS is ignored entirely — no role "
+              "escalation through the fill path", row["role"] == "guest")
+
+        check("blanks() reports what is still missing",
+              voiceprints.blanks(row) == [], str(voiceprints.blanks(row)))
+        check("...and everything, for a person who does not exist yet",
+              voiceprints.blanks(None) == list(voiceprints.SELF_FACTS))
+    finally:
+        await voiceprints.delete(p["id"])
 
 
 # ── the graph's tag edges ────────────────────────────────────────────────
@@ -142,8 +276,15 @@ async def test_tag_edges() -> None:
                                 tags=["src-some-channel"], link_pass=False)
             g = await mem.graph()
             by_id = {n["id"]: n["label"] for n in g["nodes"]}
+            # BOTH shared-tag kinds. A tag carried by an entity node (a
+            # channel, a source) means co-MEMBERSHIP and ships as `tag`; a
+            # plain subject shared between topics means AFFINITY and ships as
+            # `subject`, because clustering unions over `tag` and would
+            # otherwise merge every channel that shares one subject (measured
+            # 2026-07-28: 157 of 171 documents into a single component).
+            # These notes have no entity node, so their tag is a subject.
             pairs = {(by_id.get(e["source"], ""), by_id.get(e["target"], ""))
-                     for e in g["edges"] if e.get("kind") == "tag"}
+                     for e in g["edges"] if e.get("kind") in ("tag", "subject")}
 
             small = {p for p in pairs if p[0].startswith("Small")}
             check("a 3-member tag earns its REAL clique — every pair, not a "
@@ -159,6 +300,12 @@ async def test_tag_edges() -> None:
 
             check("no edge is created from mere alphabetical adjacency",
                   ("Big 0", "Big 1") not in pairs)
+
+            kinds = {e.get("kind") for e in g["edges"]}
+            check("a subject shared between plain topics is an AFFINITY edge, "
+                  "not co-membership — clustering unions `tag` only, so "
+                  "calling this `tag` merges every channel sharing a subject",
+                  "subject" in kinds and "tag" not in kinds, str(sorted(kinds)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -246,6 +246,22 @@ SETTING_DEFS: list[dict] = [
                      "behind the duration chips) are kept. Traces are "
                      "diagnostics, not memory — pruning them loses nothing "
                      "Nova knows.")},
+    {"key": "autonomy.goal_scoped_actions", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Capability-creating actions need an approved goal",
+     "description": ("Creating agents, tools and automations, pulling models, "
+                     "and allowing a new outbound host run only under a goal "
+                     "you approved — one card, then she works inside it until "
+                     "it is met. Research and memory are never gated. Turn "
+                     "this OFF and those actions become entirely ungated, "
+                     "which is what they were before this shipped.")},
+    {"key": "monitor.retire_after_days", "type": "number", "default": 7,
+     "section": "Observability", "label": "Retire a silent instance after (days)",
+     "description": ("An instance that has not reported for this long is "
+                     "deleted from the fleet, and its open alerts clear with "
+                     "it. Without this a machine you simply switch off holds "
+                     "a red 'unreachable' card forever, because nothing else "
+                     "ever removes the row. It re-registers by itself if it "
+                     "comes back. 0 disables retirement.")},
     {"key": "monitor.retention_days", "type": "number", "default": 7,
      "min": 1, "max": 90, "section": "Observability",
      "label": "Resource history retention (days)",

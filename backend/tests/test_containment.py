@@ -97,14 +97,25 @@ async def run() -> None:
           not r.is_actor(r.canonical_name(wire), None, {"nova-src"}))
 
     print("3. the refusal at the dispatch point")
-    granted = ["manage_automations", "search_memory", "get_weather"]
+    # `delete_memory_item` rather than `manage_automations`, and the choice
+    # matters: since goal-scoped autonomy shipped, the capability-CREATING
+    # verbs also need an approved goal, so a clean turn calling one is
+    # refused for a reason that has nothing to do with containment. This
+    # check exists to prove the untrusted-context fence lets clean turns
+    # through, so it has to use an ACTOR verb no other gate touches —
+    # deletion is ACTOR and deliberately outside GOAL_SCOPED_TOOLS.
+    granted = ["delete_memory_item", "search_memory", "get_weather"]
     clean = {"granted": granted, "untrusted_context": False}
     tainted = {"granted": granted, "untrusted_context": True}
 
-    out = await r.execute_tool("manage_automations", {"action": "list"}, clean)
-    check("an actor runs on a clean turn", not out.startswith("Error:"), out[:60])
+    out = await r.execute_tool("delete_memory_item",
+                               {"item_id": "topics/does-not-exist.md"}, clean)
+    check("an actor runs on a clean turn — reaching its own not-found is a "
+          "PASS here; what matters is that the fence did not stop it",
+          "changes what this system can do" not in out, out[:70])
 
-    out = await r.execute_tool("manage_automations", {"action": "list"}, tainted)
+    out = await r.execute_tool("delete_memory_item",
+                               {"item_id": "topics/does-not-exist.md"}, tainted)
     check("the SAME call is refused on a tainted turn",
           out.startswith("Error:"), out[:60])
     check("...and the refusal says why, in the operator's terms",

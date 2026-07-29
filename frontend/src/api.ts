@@ -176,6 +176,11 @@ export interface UserProfile {
   id: string;
   name: string;
   role: 'operator' | 'kid' | 'guest';
+  /** what they want to be called, and how to refer to them. Nullable on
+   *  purpose — null is what makes Nova say she doesn't know rather than
+   *  invent a reason for not knowing. */
+  preferred_name: string | null;
+  pronouns: string | null;
   persona_notes: string | null;
   enrolled: boolean;
   enrolled_clips: number;
@@ -198,6 +203,22 @@ export async function createProfile(
     body: JSON.stringify({ name, role, persona_notes: personaNotes ?? null }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'create failed');
+  return r.json();
+}
+
+/** Edit a profile. This is the ONLY way to change a fact Nova already holds:
+ *  remember_about_me fills blanks and refuses to overwrite, so correcting
+ *  something is deliberately the operator's move, where the old value is
+ *  visible next to the new one. */
+export async function updateProfile(
+  id: string, patch: Partial<Pick<UserProfile, 'name' | 'preferred_name' | 'pronouns' | 'persona_notes'>>,
+): Promise<UserProfile> {
+  const r = await apiFetch(`${API_URL}/api/v1/profiles/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'update failed');
   return r.json();
 }
 
@@ -1219,6 +1240,8 @@ export interface ModelRecommendation {
   profile: string;
   current_model: string;
   current_valid: boolean | null;
+  /** the model is inherited (compaction with no override), not chosen */
+  current_inherited?: boolean;
   status: 'keep' | 'switch' | 'no_fit';
   suggested_model: string | null;
   reason: string;

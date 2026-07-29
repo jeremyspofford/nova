@@ -1,12 +1,53 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   getVoiceHealth, synthesizeSpeech,
-  UserProfile, listProfiles, createProfile, deleteProfile, enrollVoiceClip,
+  UserProfile, listProfiles, createProfile, updateProfile, deleteProfile, enrollVoiceClip,
   WakeClipListing, listWakeClips, wakeClipAudio, deleteWakeClip, deleteAllWakeClips,
 } from '../../api';
 import { Mic } from '../../voice/mic';
 import { WAKE_CATALOG } from '../../voice/wakeCatalog';
 import { wakeSummary, wakeByMic, clearWakeLog, subscribeWakeLog } from '../../voice/wakeLog';
+
+/** One editable self-fact on a profile, saved on blur.
+ *
+ *  Empty is a real value here, not a missing one: a blank field is exactly
+ *  what makes Nova SAY she doesn't know it — and what re-arms the
+ *  remember_about_me grant, since that tool exists on a turn only while a
+ *  gap does. So clearing this box is how you let her ask again. */
+function SelfFact({ profile, field, placeholder, onSaved, onError }: {
+  profile: UserProfile;
+  field: 'preferred_name' | 'pronouns';
+  placeholder: string;
+  onSaved: () => Promise<void> | void;
+  onError: (m: string) => void;
+}) {
+  const stored = profile[field] ?? '';
+  const [value, setValue] = useState(stored);
+  // a refresh elsewhere (enrolment, add, remove) re-renders this with new
+  // props; without this the box would keep showing a stale edit
+  useEffect(() => { setValue(stored); }, [stored]);
+
+  const commit = async () => {
+    const next = value.trim();
+    if (next === stored) return;
+    try {
+      await updateProfile(profile.id, { [field]: next || null });
+      await onSaved();
+    } catch (e) { onError(String(e)); setValue(stored); }
+  };
+
+  return (
+    <input
+      value={value}
+      onChange={e => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      placeholder={placeholder}
+      className="min-w-0 flex-1 bg-stone-800/60 border border-stone-800 rounded px-1.5 py-0.5
+                 text-xs text-stone-300 placeholder:text-stone-600 focus:border-teal-700 outline-none"
+    />
+  );
+}
 
 /** Household voices — who Nova can recognize when someone speaks
  *  (docs/plans/speaker-id.md). Enrollment records a few short clips; each
@@ -92,7 +133,8 @@ export function HouseholdVoices() {
       ) : (
         <>
           {profiles.map(p => (
-            <div key={p.id} className="flex items-center justify-between gap-2 text-xs border-t border-stone-800 pt-2">
+          <div key={p.id} className="border-t border-stone-800 pt-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-xs">
               <span className="min-w-0 text-stone-300 truncate">
                 {p.name}
                 <span className="text-stone-500"> · {p.role}</span>
@@ -115,6 +157,16 @@ export function HouseholdVoices() {
                   className="text-stone-600 hover:text-red-400">remove</button>
               </span>
             </div>
+            {/* The correction path. Nova can FILL these from what someone
+                tells her, never overwrite them — so this is where a wrong
+                one gets fixed, with the old value visible while you do it. */}
+            <div className="flex items-center gap-1.5 text-xs">
+              <SelfFact profile={p} field="preferred_name" placeholder="call them…"
+                onSaved={refresh} onError={setMsg} />
+              <SelfFact profile={p} field="pronouns" placeholder="pronouns"
+                onSaved={refresh} onError={setMsg} />
+            </div>
+          </div>
           ))}
           <div className="flex items-center gap-2 border-t border-stone-800 pt-2">
             <input

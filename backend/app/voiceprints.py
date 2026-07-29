@@ -44,8 +44,20 @@ def take_pending() -> list[list[float]]:
     _pending.clear()
     return out
 
-_FIELDS = ("id", "name", "role", "persona_notes", "enrolled_clips",
-           "created_at", "updated_at")
+_FIELDS = ("id", "name", "role", "preferred_name", "pronouns",
+           "persona_notes", "enrolled_clips", "created_at", "updated_at")
+
+# What a person may state about THEMSELVES, and the only columns the
+# conversational capture path can reach. `role` is deliberately absent: roles
+# gate tools (voice.family_tools), so saying a thing about yourself must never
+# be able to widen what you may do. That is the whole difference between
+# personalization and authentication.
+#
+# `name` is here so the prompt block, the tool schema and the grant decision
+# all read ONE list. On an existing row it is NOT NULL and therefore never
+# blank, so it can only ever be supplied at creation — which is exactly the
+# rule, expressed by the schema instead of by a second condition.
+SELF_FACTS = ("name", "preferred_name", "pronouns")
 
 
 def _row(r, with_print: bool = False) -> dict:
@@ -88,9 +100,61 @@ async def create(name: str, role: str, persona_notes: Optional[str]) -> dict:
     return _row(r)
 
 
+def blanks(profile: Optional[dict]) -> list[str]:
+    """Which self-facts this profile does not have. Derived from the row, so
+    adding a column to SELF_FACTS adds it to every prompt and every grant
+    decision at once — there is no second list to keep in step. No profile at
+    all means every fact is missing, including the name."""
+    if not profile:
+        return list(SELF_FACTS)
+    return [f for f in SELF_FACTS if not str(profile.get(f) or "").strip()]
+
+
+async def fill_blanks(profile_id: str, patch: dict) -> tuple[Optional[dict], list[str], list[str]]:
+    """Write self-facts that are currently EMPTY, and only those.
+
+    Returns (row, written, refused). The blank-only rule is enforced by the
+    UPDATE itself rather than by checking first and writing after: COALESCE
+    on the existing value means a populated column survives no matter what
+    the caller passes, so the guarantee holds even against a caller that
+    read the row a second ago and a caller that never read it at all.
+
+    Correcting something already known is deliberately NOT possible here. It
+    is the operator's move, in Settings -> Voice, because "overwrite what you
+    already believe about a person" is a different act from "learn the thing
+    you just said you did not know", and only the second one has an
+    unambiguous moment attached to it.
+    """
+    values = {k: str(patch.get(k) or "").strip()[:120]
+              for k in SELF_FACTS if str(patch.get(k) or "").strip()}
+    if not values:
+        return await get(profile_id), [], []
+    try:
+        pid = uuid_mod.UUID(str(profile_id))
+    except ValueError:
+        return None, [], []
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            before = await conn.fetchrow(
+                "SELECT * FROM user_profiles WHERE id = $1 FOR UPDATE", pid)
+            if not before:
+                return None, [], []
+            sets = ", ".join(
+                f"{k} = COALESCE(NULLIF({k}, ''), ${i + 2})"
+                for i, k in enumerate(values))
+            after = await conn.fetchrow(
+                f"UPDATE user_profiles SET {sets}, updated_at = now() "
+                f"WHERE id = $1 RETURNING *", pid, *values.values())
+    written = [k for k in values if not (before[k] or "").strip()]
+    refused = [k for k in values if k not in written]
+    if written:
+        log.info("profile %s learned %s", before["name"], ", ".join(written))
+    return _row(after), written, refused
+
+
 async def update(profile_id: str, patch: dict) -> Optional[dict]:
     allowed = {k: v for k, v in patch.items()
-               if k in ("name", "role", "persona_notes")}
+               if k in ("name", "role", "persona_notes", *SELF_FACTS)}
     if "role" in allowed and allowed["role"] not in ("operator", "kid", "guest"):
         raise ValueError("role must be operator, kid, or guest")
     if not allowed:

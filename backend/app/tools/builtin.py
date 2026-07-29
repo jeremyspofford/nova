@@ -1183,10 +1183,237 @@ async def _remember_speaker(args, ctx):
     used = pending[-5:]
     for emb in used:
         await voiceprints.add_enrollment(profile["id"], emb)
+    # A new person is a capability change, not a note: a profile carries a
+    # role, and a role narrows the toolset (voice.family_tools). So it lands
+    # in the same log as a grant, where the operator reviews it.
+    capability_events.record(
+        capability_events.PERSON, name, "created",
+        actor=ctx.get("agent_name") or "unknown",
+        detail={"role": "guest", "clips": len(used), "from": "unknown voice"})
     return (f"Remembered {name} as a household guest, learned from "
             f"{len(used)} voice sample(s) of this conversation. Their next "
             f"utterances will be recognized. They remain a guest — only the "
             f"operator can change roles (Settings -> Voice).")
+
+
+async def _propose_goal(args, ctx):
+    """Ask for standing approval to build something, scoped to that thing.
+
+    The move Jeremy asked for: instead of stopping at every step to ask
+    whether to create an agent, a tool, an automation, he approves the GOAL
+    once and Nova works inside it. So this is the call that turns "I can't do
+    that without permission" into one decision he can actually make.
+
+    It grants nothing by itself. It records the goal and raises the operator
+    card; approval is what activates it, in `consents.decide`.
+    """
+    from app import consents, goals
+    from app.tools import registry as tool_registry
+    title = str(args.get("title") or "").strip()
+    target = str(args.get("target") or "").strip()
+    verbs = [str(v).strip() for v in (args.get("verbs") or []) if str(v).strip()]
+    if not title or not target:
+        return ("Error: title and target are both required. The target is the "
+                "finish line the operator can check — 'a router-manager agent "
+                "that can list VLANs and show per-client bandwidth' is a "
+                "target; 'manage the router' is a wish.")
+    unknown = [v for v in verbs if v not in tool_registry.GOAL_SCOPED_TOOLS]
+    if unknown or not verbs:
+        return ("Error: `verbs` must name at least one of: "
+                + ", ".join(sorted(tool_registry.GOAL_SCOPED_TOOLS))
+                + (f" (not: {', '.join(unknown)})" if unknown else "")
+                + ". Guardrail changes and memory deletion are deliberately "
+                  "not pre-approvable by a goal — those stay one decision at "
+                  "a time.")
+    goal = await goals.propose(
+        title, target, verbs,
+        rationale=str(args.get("rationale") or "").strip(),
+        proposed_by=ctx.get("agent_name"),
+        max_actions=args.get("max_actions") or goals.DEFAULT_MAX_ACTIONS)
+    try:
+        await consents.create(
+            "goal.activate", goal["id"],
+            (f"Approve the goal “{title}”?\n\n"
+             f"Done when: {target}\n"
+             f"Pre-approves: {', '.join(sorted(verbs))} — up to "
+             f"{goal['max_actions']} actions, for {goals.DEFAULT_TTL_HOURS} hours."),
+            requested_by=ctx.get("agent_name") or "unknown",
+            conversation_id=ctx.get("conversation_id"))
+    except ValueError as e:
+        return f"Goal recorded ({goal['id']}) but the card was refused: {e}"
+    except Exception:  # noqa: BLE001 — the goal row stands either way
+        log.exception("goal card not raised (goal %s recorded)", goal["id"])
+        return (f"Goal recorded ({goal['id']}) but the approval card could not "
+                f"be shown — the operator can approve it in Settings.")
+    return (f"Proposed the goal “{title}” and put an approval card in "
+            f"front of the operator. Nothing is approved yet: stop here and "
+            f"wait for their decision — do not retry the blocked action until "
+            f"the goal is active.")
+
+
+async def _list_goals(args, ctx):
+    """What she is currently pre-approved to do, and how much is left."""
+    from app import goals
+    live = await goals.active()
+    if not live:
+        return _j({"active_goals": [],
+                   "note": ("Nothing is pre-approved. Actions that create "
+                            "capability will be refused until a goal is "
+                            "approved — call propose_goal.")})
+    return _j({"active_goals": [
+        {"id": g["id"], "title": g["title"], "target": g["target"],
+         "pre_approved": g["approved_verbs"],
+         "actions_left": g["max_actions"] - g["actions_used"],
+         "expires_at": g["expires_at"]} for g in live]})
+
+
+async def _manage_tool_hosts(args, ctx):
+    """Add an outbound host that http_call tools may reach.
+
+    This is the gap that made "manage my router" impossible. `create_http_tool`
+    refuses any URL whose host is not in `tool_host_allowlist`, and — verified
+    2026-07-29 — that table had no INSERT anywhere in the tree: no endpoint,
+    no UI, no tool. Two seeded rows and no way to add a third. Nova told
+    Jeremy to "whitelist your router's API endpoint"; he had no way to do it
+    either.
+
+    Goal-scoped, because it widens where this machine will send requests. It
+    is a deliberately small verb: a hostname, nothing else. No scheme, no
+    path, no credentials — the SSRF guard in http_executor still applies to
+    every request afterwards, so allowlisting a host does not buy reaching a
+    link-local address through it.
+    """
+    from app import capability_events
+    action = str(args.get("action") or "add").strip().lower()
+    host = str(args.get("host") or "").strip().lower()
+    if not host:
+        return "Error: host is required (a bare hostname or IP, e.g. 'router.lan')"
+    if "/" in host or ":" in host or " " in host:
+        return ("Error: pass a bare hostname, not a URL — 'router.lan', not "
+                "'http://router.lan/api'.")
+    async with db.acquire() as conn:
+        if action == "list":
+            rows = await conn.fetch("SELECT host FROM tool_host_allowlist ORDER BY host")
+            return _j({"allowed_hosts": [r["host"] for r in rows]})
+        if action == "remove":
+            result = await conn.execute(
+                "DELETE FROM tool_host_allowlist WHERE host = $1", host)
+            ok = result.endswith("1")
+            capability_events.record(
+                capability_events.TOOL, host, "host_removed",
+                actor=ctx.get("agent_name") or "unknown")
+            return (f"Removed '{host}' from the allowlist." if ok
+                    else f"Error: '{host}' was not on the allowlist.")
+        if action != "add":
+            return "Error: action must be add, remove, or list"
+        spent = (ctx.get("goals_spent") or [{}])[-1]
+        await conn.execute(
+            """INSERT INTO tool_host_allowlist (host, added_by, goal_id)
+               VALUES ($1, $2, $3::uuid) ON CONFLICT (host) DO NOTHING""",
+            host, ctx.get("agent_name"), spent.get("id"))
+    capability_events.record(
+        capability_events.TOOL, host, "host_allowed",
+        actor=ctx.get("agent_name") or "unknown",
+        detail={"goal": spent.get("title")})
+    return (f"'{host}' is now an approved outbound host. An http_call tool "
+            f"targeting it can be created with manage_tools; every request "
+            f"still passes the SSRF guard.")
+
+
+async def _memory_usage_report(args, ctx):
+    """What has accumulated, against what has actually been used.
+
+    Every number here is computed in Python from trace spans and the live
+    index. The model is handed arithmetic it did not do and cannot fudge —
+    asking it to count rows would reproduce the exact failure this codebase
+    is built against.
+    """
+    from app import memory_usage
+    try:
+        days = max(1, min(int(args.get("days") or 14), 90))
+    except (TypeError, ValueError):
+        days = 14
+    return _j(await memory_usage.report(days))
+
+
+async def _remember_about_me(args, ctx):
+    """Learn a fact the operator just stated about themselves.
+
+    He said his name out loud on at least three separate days and it never
+    became a durable fact — journals record, nothing promotes — so on
+    2026-07-28 "do you know who I am?" got "I don't have your name stored",
+    and then an invented policy about why. The identity block now names the
+    gap; this is the other half, the one that closes it.
+
+    TWO mechanical rails, because "only write what the operator told you" is
+    exactly the kind of sentence a prompt cannot enforce:
+
+      1. THE VALUE MUST APPEAR IN THE OPERATOR'S OWN MESSAGE THIS TURN. Not
+         in memory, not in a fetched page, not in a transcript. 154 of this
+         install's 169 topics are third-party video transcripts, and the
+         retrieval layer puts them in front of the model constantly — without
+         this check, "the operator's name is X" written by a stranger on
+         YouTube is a durable fact about Jeremy. The user's own message is
+         the one span of context nothing else can write into.
+      2. BLANKS ONLY, enforced in SQL by voiceprints.fill_blanks. Learning
+         something unknown is unambiguous; overwriting something known is a
+         correction, and corrections are the operator's move in Settings ->
+         Voice, where he can see what he is replacing.
+
+    `role` is unreachable from here by construction (voiceprints.SELF_FACTS),
+    so nothing said in conversation can widen what anybody may do.
+    """
+    if ctx.get("speaker_role") not in (None, "operator"):
+        return ("Error: remember_about_me records the operator's own facts, "
+                "and this turn belongs to someone else.")
+    from app import grounding, voiceprints
+    fields = ", ".join(voiceprints.SELF_FACTS)
+    values = {k: str(args.get(k) or "").strip()[:120]
+              for k in voiceprints.SELF_FACTS
+              if str(args.get(k) or "").strip()}
+    if not values:
+        return f"Error: pass at least one of: {fields}."
+
+    said = str(ctx.get("user_text") or "")
+    unsaid = [k for k, v in values.items() if not grounding.appears_in(v, said)]
+    if unsaid:
+        return ("Error: " + ", ".join(unsaid) + " — those words are not in "
+                "what they just said, so this would be recording something "
+                "you inferred rather than something you were told. Ask them "
+                "directly, then call this with their own words.")
+
+    profile = next((p for p in await voiceprints.list_profiles()
+                    if p.get("role") == "operator"), None)
+    created = False
+    if not profile:
+        if not values.get("name"):
+            return ("Error: nobody is enrolled as the operator yet, so a "
+                    "name is required to create the profile.")
+        profile = await voiceprints.create(values["name"], "operator", None)
+        created = True
+    row, written, refused = await voiceprints.fill_blanks(profile["id"], values)
+    if created:
+        written = ["name"] + written
+
+    # Only a real change is an event. A refused overwrite wrote a "person
+    # updated / fields: []" line, and this log is read back into the prompt —
+    # a change record that records no change is noise in the one place noise
+    # is most expensive.
+    if written:
+        capability_events.record(
+            capability_events.PERSON, (row or profile)["name"],
+            "created" if created else "updated",
+            actor=ctx.get("agent_name") or "unknown",
+            detail={"fields": written, "self_stated": True})
+
+    parts = []
+    if written:
+        parts.append("Saved " + ", ".join(written) + ".")
+    if refused:
+        parts.append("Already knew " + ", ".join(refused) + " — unchanged. "
+                     "To correct any of those, they can edit the profile in "
+                     "Settings -> Voice.")
+    return " ".join(parts) or "Nothing to save."
 
 
 async def _raise_recommendation(args, ctx):
@@ -1764,6 +1991,88 @@ BUILTIN_TOOLS: dict[str, dict] = {
                      "description": "the name the speaker gave for themselves"},
         }, "required": ["name"]},
         "execute": _remember_speaker,
+    },
+    "propose_goal": {
+        "name": "propose_goal",
+        "description": ("Ask the operator to approve a GOAL — one decision "
+                        "that pre-approves the actions needed to reach it, so "
+                        "you can build without asking at every step. Use this "
+                        "the moment an action is refused for lack of a goal, "
+                        "and whenever the operator asks for something that "
+                        "needs new agents, tools, automations or models. Give "
+                        "a finish line they can check, not a wish."),
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "short name for the goal"},
+            "target": {"type": "string",
+                       "description": ("the checkable finish line, e.g. 'a "
+                                       "router-manager agent that can list "
+                                       "VLANs and show per-client bandwidth'")},
+            "verbs": {"type": "array", "items": {"type": "string"},
+                      "description": ("which of manage_agents, manage_tools, "
+                                      "manage_automations, pull_model, "
+                                      "manage_tool_hosts this goal needs")},
+            "rationale": {"type": "string",
+                          "description": "why these are needed (optional)"},
+            "max_actions": {"type": "integer",
+                            "description": "how many actions to ask for (default 25)"},
+        }, "required": ["title", "target", "verbs"]},
+        "execute": _propose_goal,
+    },
+    "list_goals": {
+        "name": "list_goals",
+        "description": ("What the operator has already pre-approved you to "
+                        "do, and how many actions are left on each. Check "
+                        "this before saying you cannot do something."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "execute": _list_goals,
+    },
+    "manage_tool_hosts": {
+        "name": "manage_tool_hosts",
+        "description": ("Add, remove or list the outbound hosts that "
+                        "http_call tools are allowed to reach. Required "
+                        "BEFORE creating a tool that targets a new service "
+                        "(a router, a NAS, an API) — tool creation refuses "
+                        "any host that is not on this list. Pass a bare "
+                        "hostname, not a URL."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["add", "remove", "list"]},
+            "host": {"type": "string",
+                     "description": "bare hostname or IP, e.g. 'router.lan'"},
+        }, "required": ["action"]},
+        "execute": _manage_tool_hosts,
+    },
+    "memory_usage_report": {
+        "name": "memory_usage_report",
+        "description": ("How much of memory is actually being used: per "
+                        "source, how many documents exist and how many were "
+                        "ever retrieved into an answer, plus the "
+                        "never-retrieved list. Read-only. Use it to judge "
+                        "whether what is being collected is earning its "
+                        "place — the counts are computed for you."),
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer",
+                     "description": "window in days (default 14, max 90)"},
+        }, "required": []},
+        "execute": _memory_usage_report,
+    },
+    "remember_about_me": {
+        "name": "remember_about_me",
+        "description": ("Save something the person you're talking with just "
+                        "told you about THEMSELVES — their name, what they "
+                        "want to be called, their pronouns. Use their exact "
+                        "words, and only right after they said it: this "
+                        "refuses anything not present in their own message. "
+                        "It fills gaps only; a fact you already hold is left "
+                        "alone and is theirs to correct in Settings."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string",
+                     "description": "their name, as they stated it"},
+            "preferred_name": {"type": "string",
+                               "description": "what they asked to be called"},
+            "pronouns": {"type": "string",
+                         "description": "e.g. 'he/him', 'she/her', 'they/them'"},
+        }, "required": []},
+        "execute": _remember_about_me,
     },
     "raise_recommendation": {
         "name": "raise_recommendation",

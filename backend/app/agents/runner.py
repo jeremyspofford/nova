@@ -302,6 +302,47 @@ def _family_allowed(available: set[str]) -> set[str]:
     return out - _FAMILY_HARD_EXCLUDE
 
 
+async def _goals_block() -> str:
+    """What she is currently pre-approved to build, stated in the prompt.
+
+    `list_goals` answers the same question, and this block exists anyway for
+    the reason the model block and the entity block exist: a fact she has to
+    spend a call to learn is a fact she answers from the conversation
+    instead. On 2026-07-28 Jeremy asked what it would take for her to manage
+    his router and she described two permission gates — agent creation and
+    tool creation — that did not exist. Not a claimed capability, a claimed
+    RESTRICTION, which nothing in the codebase was checking.
+
+    So the standing scope rides in FACTS, and the gate at execute_tool checks
+    it anyway. State what is true, then check it regardless.
+    """
+    try:
+        from app import goals as goals_store
+        live = await goals_store.active()
+    except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
+        log.debug("goals block failed", exc_info=True)
+        return ""
+    lines = ["## Approved goals (live)"]
+    if not live:
+        lines.append(
+            "None. Actions that CREATE capability — new agents, tools, "
+            "automations, model pulls, new outbound hosts — are refused until "
+            "the operator approves a goal. Everything else is unaffected: "
+            "research, search, memory and dispatch never need one. If the "
+            "operator asks for something that needs building, call "
+            "propose_goal rather than describing what you are not allowed "
+            "to do.")
+        return "\n".join(lines)
+    for g in live:
+        left = g["max_actions"] - g["actions_used"]
+        lines.append(
+            f"- {g['title']} — done when: {g['target']} | pre-approved: "
+            f"{', '.join(g['approved_verbs'])} | {left} action(s) left")
+    lines.append("Work inside these without asking again. Anything outside "
+                 "their approved verbs still needs a new goal.")
+    return "\n".join(lines)
+
+
 _KID_REGISTER = (
     "## Speaking with a child\n"
     "You're talking with {name}, a kid from the household. Use simple, warm "
@@ -376,17 +417,41 @@ async def _identity_block(speaker: dict | None) -> str:
             log.debug("operator lookup failed", exc_info=True)
             person = None
 
+    missing = voiceprints.blanks(person)
+
     if not person or not (person.get("name") or "").strip():
         lines.append(
             "You do NOT know this person's name. Nobody is enrolled as the "
             "operator. Do not guess it, do not claim to have it, and do not "
             "invent a reason for not having it — say plainly that you don't "
             "know it and offer to remember it.")
-        return "\n".join(lines)
+    else:
+        lines.append(f"{person.get('name')} — role: {person.get('role') or 'operator'}.")
+        if (person.get("preferred_name") or "").strip():
+            lines.append(f"Prefers to be called {person['preferred_name']} — "
+                         f"use that name.")
+        if (person.get("pronouns") or "").strip():
+            lines.append(f"Pronouns: {person['pronouns']}.")
+        if person.get("persona_notes"):
+            lines.append(str(person["persona_notes"]))
 
-    lines.append(f"{person.get('name')} — role: {person.get('role') or 'operator'}.")
-    if person.get("persona_notes"):
-        lines.append(str(person["persona_notes"]))
+    # NAME THE GAPS, one line each. The same reasoning as the absent-name
+    # case above, generalised: an unstated gap is one she papers over. On
+    # 2026-07-28 the paper was an invented design policy — "I don't use names
+    # as an identifier for you" — recited twice, which is a claim about how
+    # she is BUILT, and nothing in the codebase can refute those the way
+    # capability_claims.py refutes a claim about what she can do. Removing the
+    # gap is the only control that reaches this, so the gap is spoken.
+    if missing:
+        lines.append("Not known about them: " + ", ".join(missing) + ".")
+        if (person or {}).get("role", "operator") == "operator":
+            # only the operator's own turn carries the tool (granted below on
+            # exactly this condition), so only that turn is told about it
+            lines.append(
+                "If they state one of those in conversation, call "
+                "remember_about_me with exactly the words they used. Never "
+                "infer any of them from memory, documents or transcripts — "
+                "only from what this person just told you about themselves.")
     return "\n".join(lines)
 
 
@@ -444,6 +509,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
     entities = await _entities_block()
     if entities:
         parts.append(entities)
+    goals_block = await _goals_block()
+    if goals_block:
+        parts.append(goals_block)
     # what CHANGED, which the state block above cannot say
     try:
         from app import capability_events
@@ -558,6 +626,17 @@ async def _build_system_prompt(agent: dict, query: str, *,
             sp["memory_origins"] = ",".join(sorted(set(mem.get("origins") or [])))
             sp["memory_chars"] = len(mem["context"])
             sp["skills_chars"] = len(skills["context"])
+            # WHICH documents, not just how many characters of them.
+            #
+            # Without this, "82 transcripts ingested since July, none ever
+            # used in an answer" is not a fact anybody can compute — not the
+            # operator and not Nova. She cannot notice a pattern nobody
+            # measures, and on 2026-07-27 Jeremy's point was exactly that:
+            # she should have proposed the summariser herself. The gap was
+            # never her judgement, it was that the ledger recorded a size and
+            # threw away the identities. Ids only — the bodies are on disk,
+            # and traces are pruned on a 14-day clock.
+            sp["memory_ids"] = list(mem.get("memory_ids") or [])
     except Exception:
         # The turn continues, but it continues BLIND — and a confident answer
         # written with no memory is indistinguishable from a well-remembered
@@ -1240,6 +1319,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             # voice already being heard (auto-enrollment, speaker-id.md)
             if not any(t["function"]["name"] == "remember_speaker" for t in tools):
                 tools.append(tool_registry.builtin_def("remember_speaker"))
+    elif dispatch_depth == 0 and speaker_role in (None, "operator"):
+        # The learn-my-name path, and it is DERIVED: the tool exists on this
+        # turn only while the operator profile actually has a gap, and
+        # disappears the moment every field is known. So there is no window in
+        # which a stray call can rewrite an identity Nova already holds — the
+        # capability and the gap have the same lifetime. A specialist never
+        # gets it (depth 0 only): the operator is not talking to them.
+        try:
+            from app import voiceprints
+            operator = next((p for p in await voiceprints.list_profiles()
+                             if p.get("role") == "operator"), None)
+            if voiceprints.blanks(operator) and not any(
+                    t["function"]["name"] == "remember_about_me" for t in tools):
+                tools.append(tool_registry.builtin_def("remember_about_me"))
+        except Exception:  # noqa: BLE001 — identity never breaks a turn
+            log.debug("operator blank check failed", exc_info=True)
     can_dispatch = any(t["function"]["name"] == "dispatch_to_agent" for t in tools)
 
     degraded: list[str] = []
@@ -1283,6 +1378,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
            "model": agent["model"],
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
+           # the person's OWN words this turn. The one span of context that
+           # no fetched page and no recalled note can write into, which is
+           # what lets remember_about_me check a claimed self-fact against
+           # something instead of trusting the model to have heard it.
+           "user_text": query,
            # CANONICAL names, not the wire names the provider requires:
            # grants are stored as `mcp:<server>/<tool>` and execute_tool
            # canonicalises what the model calls back, so a wire-named set

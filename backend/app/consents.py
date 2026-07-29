@@ -104,6 +104,17 @@ async def decide(consent_id: str, chosen: str) -> Optional[dict]:
                 "WHERE id = $1 AND status = 'pending'", cid)
     if r:
         log.info("Consent %s: %s %s -> %s", consent_id, r["kind"], r["subject"], chosen)
+        # A goal card activates its goal HERE, on the operator's click, not
+        # by an agent noticing the approval and calling something. The whole
+        # value of a standing approval is that the model is not the one who
+        # decides it has been granted — if activation needed an agent to act
+        # on the decision, an agent could act on a decision that never came.
+        if r["kind"] == "goal.activate" and chosen == "approve":
+            from app import goals
+            activated = await goals.activate(r["subject"])
+            if not activated:
+                log.warning("goal %s could not be activated from its consent "
+                            "(already closed?)", r["subject"])
     return _row(r) if r else None
 
 

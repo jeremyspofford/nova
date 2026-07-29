@@ -78,6 +78,9 @@ async def tick():
     await trace.maybe_prune()            # self-limits to once a day
     await sysmon.maybe_prune_samples()   # self-limits to daily
     await retention.maybe_prune()        # tool rows, consents, alerts, recs
+    # BEFORE alert evaluation: retiring an instance clears its open alerts,
+    # and doing it after would leave a red card standing for a whole tick.
+    await sysmon.maybe_retire_instances() # self-limits to daily
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     if not settings_store.get("automations.enabled"):
         return

@@ -96,6 +96,20 @@ def _norm(text: str) -> str:
     return _ALNUM.sub("", text.lower())
 
 
+def appears_in(value: str, source: str) -> bool:
+    """Did `source` actually contain `value`, ignoring case and punctuation?
+
+    The same normalisation trick as the summary check, pointed at a different
+    question: not "is this claim supported by the document" but "did the
+    person in front of me really just say this". Used by remember_about_me,
+    where the source is the operator's own message — text no fetched page and
+    no recalled note can write into, which is what makes it a control rather
+    than a request.
+    """
+    needle = _norm(value)
+    return bool(needle) and needle in _norm(source)
+
+
 def candidates(text: str) -> set[str]:
     """The claims in `text` worth checking against a source."""
     found: set[str] = set()

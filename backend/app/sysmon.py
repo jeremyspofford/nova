@@ -228,6 +228,7 @@ _SAMPLE_GATE_S = 55
 _PRUNE_GATE_S = 24 * 3600
 _last_sample = 0.0
 _last_prune = 0.0
+_last_retire = 0.0
 
 
 async def _reaches() -> dict:
@@ -436,6 +437,65 @@ async def maybe_evaluate_alerts():
                            WHERE instance_id = $1 AND cleared_at IS NULL""", iid)
     except Exception:
         log.exception("alert evaluation failed; next tick retries")
+
+
+async def maybe_retire_instances():
+    """Delete instances that have been silent long enough to be gone for good.
+
+    Nothing in the tree ever deleted an `instances` row, which made the
+    clear-on-retire branch above unreachable code: an instance that stops
+    reporting raises `unreachable`, and since the row never disappears and a
+    dead machine never sends a fresh heartbeat, the alert can never clear by
+    either path. Six test instances from 2026-07-24 held permanent red cards
+    on the board with their age frozen at the moment each was raised, and any
+    second machine simply switched off would do the same.
+
+    Delete rather than tombstone. A tombstone would need its own filter in
+    the fleet view, the alert evaluator and the history endpoint — three
+    places to forget one — while the samples are the actual history and they
+    are on a retention clock anyway. An instance that comes back re-registers
+    itself on its first tick, which is the behaviour that already exists.
+
+    Leader-only and daily on its own gate: fleet-wide housekeeping over
+    shared rows, so running it per-instance would have every backend deleting
+    the same things, and running it every 60s would spend a write transaction
+    a minute on a condition that changes once a day at most.
+    """
+    global _last_retire
+    if not instances.is_leader():
+        return
+    now = time.monotonic()
+    if _last_retire and now - _last_retire < _PRUNE_GATE_S:
+        return
+    _last_retire = now
+    days = int(settings_store.get("monitor.retire_after_days") or 7)
+    if days <= 0:                     # 0 disables retirement entirely
+        return
+    try:
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                gone = await conn.fetch(
+                    """DELETE FROM instances
+                        WHERE last_seen < now() - make_interval(days => $1)
+                          AND id <> $2
+                    RETURNING id, label""",
+                    days, await instances.ensure_id())
+                for row in gone:
+                    # the alert sweep would catch these on the next tick, but
+                    # clearing them in the same transaction means the board is
+                    # never briefly showing a red card for a row that is gone
+                    await conn.execute(
+                        """UPDATE monitor_alerts SET cleared_at = now()
+                            WHERE instance_id = $1 AND cleared_at IS NULL""",
+                        row["id"])
+                    await conn.execute(
+                        "DELETE FROM resource_samples WHERE instance_id = $1",
+                        row["id"])
+        if gone:
+            log.info("Retired %d silent instance(s): %s", len(gone),
+                     ", ".join(r["label"] or str(r["id"]) for r in gone))
+    except Exception:
+        log.exception("instance retirement failed; next tick retries")
 
 
 async def maybe_prune_samples():

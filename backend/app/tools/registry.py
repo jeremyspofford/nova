@@ -12,7 +12,7 @@ import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
-from app import bg, db, redact
+from app import bg, db, goals, redact, settings_store
 from app.tools import builtin, fixtures
 from app.tools.http_executor import execute_http_tool
 
@@ -376,6 +376,33 @@ ACTOR_TOOLS = frozenset({
     "manage_automations",  # unattended future turns
     "pull_model",          # what runs on the box
     "delete_memory_item",  # destruction
+    "manage_tool_hosts",   # where an http_call tool may reach
+})
+
+
+# ── goal scope: which verbs an approved goal may pre-authorise ─────────────
+#
+# Jeremy, 2026-07-28, enumerating what should need approval: agent creation,
+# tool creation, model pulls, automations — with rules explicitly left alone
+# and research always allowed.
+#
+# So this is a SUBSET of ACTOR_TOOLS, and the two exclusions are the point.
+# `manage_rules` already burns a single-use consent for anything that weakens
+# a guardrail; letting a goal pre-approve that would turn the strictest gate
+# in the system into the weakest, since one approval would then cover every
+# later weakening. `delete_memory_item` is destruction of the operator's own
+# knowledge, which is not "building what you need" — it is the one thing a
+# wrong goal could not undo.
+#
+# Everything here CREATES capability. That is the honest line: a goal buys
+# permission to build, never permission to remove a protection or erase a
+# record.
+GOAL_SCOPED_TOOLS = frozenset({
+    "manage_agents",
+    "manage_tools",
+    "manage_automations",
+    "pull_model",
+    "manage_tool_hosts",
 })
 
 
@@ -452,6 +479,35 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
                 f"mechanically — untrusted text must not be able to reach a "
                 f"tool like this. Tell the operator what you would have done "
                 f"and let them decide.")
+
+    # THE GOAL GATE. Verbs that CREATE capability run only against a standing
+    # approval — an active goal whose approved_verbs contain this one, spent
+    # atomically. Without it, the answer is not "no", it is "propose a goal":
+    # the refusal names the exact call that turns this into a yes, because a
+    # gate that dead-ends gets removed and a gate that routes gets used.
+    #
+    # This is the half Jeremy asked for that did not exist. The other half is
+    # a correction: until now `manage_agents`, `manage_tools` and
+    # `manage_automations` were entirely UNGATED — Nova told him on
+    # 2026-07-28 that agent and tool creation "requires operator approval",
+    # and it did not. She was describing guardrails she did not have, which
+    # is the same class of error as claiming a capability she lacks, pointed
+    # the other way and considerably worse.
+    if name in GOAL_SCOPED_TOOLS and settings_store.get("autonomy.goal_scoped_actions"):
+        goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
+        if not goal:
+            return (
+                f"Error: '{name}' changes what this system can do, so it runs "
+                f"only under a goal the operator has approved. No active goal "
+                f"currently pre-approves '{name}' (one may have expired or "
+                f"run out of its approved actions).\n\n"
+                f"Do this instead: call propose_goal with a clear title, a "
+                f"specific finish line the operator can check, and the verbs "
+                f"you need — including '{name}'. They get one card to approve, "
+                f"and then you can work without asking again until the goal "
+                f"is met. Do not retry this call before that approval.")
+        ctx.setdefault("goals_spent", []).append(
+            {"id": goal["id"], "title": goal["title"], "verb": name})
 
     # guardrails — fail-open on engine errors, never on rule matches
     try:

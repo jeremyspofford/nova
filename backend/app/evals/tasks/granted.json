@@ -9,10 +9,6 @@
     "manage_agents",
     "search_memory"
   ],
-  "coder": [
-    "get-weather",
-    "github-profile-fetch"
-  ],
   "guardian": [
     "diagnose",
     "list_agents",
@@ -28,6 +24,7 @@
     "list_followed_sources",
     "list_memory",
     "list_stale_topics",
+    "memory_usage_report",
     "poll_sources",
     "raise_recommendation",
     "read_memory_item",
@@ -44,14 +41,22 @@
     "github-profile-fetch",
     "list_agents",
     "list_capability_changes",
+    "list_goals",
     "list_memory",
     "list_skills",
     "manage_automations",
     "notify_operator",
+    "propose_goal",
     "raise_recommendation",
     "read_memory_item",
     "search_memory",
     "write_memory"
+  ],
+  "maintainer": [
+    "find_mcp_tools",
+    "list_memory",
+    "read_memory_item",
+    "search_memory"
   ],
   "memory-curator": [
     "delete_memory_item",
@@ -82,6 +87,7 @@
     "write_memory"
   ],
   "tool-creator": [
+    "manage_tool_hosts",
     "manage_tools",
     "search_memory"
   ]
