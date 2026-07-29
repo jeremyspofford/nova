@@ -1,0 +1,98 @@
+# Default deny, both directions, then open what is actually needed.
+#
+# k3s enforces NetworkPolicy (embedded kube-router controller) but ships with
+# NO policies, so an un-policed namespace is allow-all. Every fence in
+# capability-and-containment.md is reachable from a pod that can talk
+# anywhere: the backend on the compose network, Postgres, the docker host,
+# the LAN. So the deny comes first and stays first.
+#
+# Ordering note for whoever applies this: apply the deny BEFORE Nova gets
+# deploy rights, not after. A namespace that was briefly open is a namespace
+# whose workloads may already have reached something.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: nova-workloads
+spec:
+  podSelector: {}            # every pod in the namespace
+  policyTypes: [Ingress, Egress]
+  # no ingress or egress rules at all == deny everything
+---
+# DNS is the one universal exception. Without it nothing resolves and every
+# failure looks like a bug in the workload rather than a policy decision —
+# which costs hours and teaches Nova to distrust her own deployments.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: nova-workloads
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Pods in this namespace may talk to EACH OTHER. A deployed service is often
+# several pods (Home Assistant plus a database, say), and forcing every one of
+# those through a named policy would mean Nova cannot deploy anything
+# multi-part without an operator edit — which is the per-action approval
+# Jeremy explicitly removed.
+#
+# This is deliberately the widest rule here, and it is bounded by the
+# namespace: intra-namespace traffic reaches only things she deployed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: nova-workloads
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# TEMPLATE, not an applied policy — copy it per workload that genuinely needs
+# to reach outside.
+#
+# The interesting thing about real cases is how NARROW they are. Home
+# Assistant needs the LAN devices it controls. It does not need Postgres, it
+# does not need the Nova backend, and it does not need the internet at large.
+# The instinct will be to open 0.0.0.0/0 once and stop thinking about it; that
+# turns the boundary back into a formality.
+#
+# Note the `except` blocks. Allowing a LAN range without excluding the host
+# and the compose networks is how a pod reaches the very services this is
+# meant to fence off — and 169.254.0.0/16 is the cloud metadata range, which
+# is the classic SSRF target and matters more once anything runs in a cloud VM.
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: allow-egress-EXAMPLE
+#   namespace: nova-workloads
+# spec:
+#   podSelector:
+#     matchLabels:
+#       nova.local/workload: home-assistant
+#   policyTypes: [Egress]
+#   egress:
+#     - to:
+#         - ipBlock:
+#             cidr: 192.168.1.0/24      # the LAN this service must reach
+#             except:
+#               - 192.168.1.1/32        # not the router's admin interface
+#               - 169.254.0.0/16        # not cloud metadata
+#       ports:
+#         - {protocol: TCP, port: 8123}

@@ -1,0 +1,30 @@
+# Nova's namespace, and the enforcement that makes it a boundary.
+#
+# `restricted` is the strictest Pod Security Standard: no privilege
+# escalation, no host namespaces, no hostPath volumes, non-root only,
+# seccomp required, capabilities dropped. A workload spec asking for any of
+# those is REJECTED BY THE API SERVER — it never runs, whatever the manifest
+# claims about itself.
+#
+# Enforced by LABEL rather than by a cluster-wide admission config file. The
+# PodSecurity admission controller is on by default in k3s, so labels need no
+# server flag and no cluster reconfiguration, and they scope the restriction
+# to exactly the namespace that needs it.
+#
+# `warn` and `audit` are set to the same level on purpose. Enforcement alone
+# rejects silently from Nova's point of view — she sees a refusal with no
+# detail — while warn puts the specific violated control in the API response
+# she gets back. A refusal that explains itself is one she can act on; the
+# alternative is a retry loop against a wall.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nova-workloads
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    # so a human reading `kubectl get ns` knows whose this is and why
+    nova.local/owner: nova
+    nova.local/purpose: agent-deployed-workloads

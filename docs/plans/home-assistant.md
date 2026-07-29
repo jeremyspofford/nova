@@ -85,7 +85,19 @@ anywhere today; this plan is the from-zero path.
 
 ## Design
 
-### Install: compose service, profile "home" (LOCKED on-ramp)
+> **SUPERSEDED 2026-07-29.** Jeremy: *"like docker compose? no. Home
+> assistant is supposed to be something that nova can implement and
+> manage!"* HA is no longer a compose service a human writes. It is the
+> worked example for `capability-acquisition.md` shape 4 — Nova researches
+> how HA is deployed, writes the workload herself, and applies it in a
+> bounded runtime she owns. The section below is kept for its device and
+> integration detail, which is unchanged; the INSTALL mechanism is not.
+>
+> Also superseded: the actuation tiers further down. He chose no approval for
+> managing a running service, reads and writes both, inside a goal. The
+> family clamp and the untrusted-context fence still apply.
+
+### Install: compose service, profile "home" (LOCKED on-ramp — SUPERSEDED, see above)
 
 New service in `docker-compose.yml`, matching the house pattern:
 

@@ -1,0 +1,76 @@
+# The identity Nova acts as, defined by what it CANNOT do.
+#
+# She deploys and manages freely inside this namespace (Jeremy, 2026-07-29:
+# no approval, reads and writes both, inside a goal). So the interesting part
+# of this file is the absences, and each one is load-bearing rather than
+# cautious.
+#
+# NOT GRANTED, and why each would dissolve the boundary:
+#
+#   namespaces (any verb)   — Pod Security enforcement is a LABEL on the
+#                             namespace. Patch the namespace, drop the label,
+#                             and `restricted` is gone. This is the single
+#                             most important omission in the file.
+#   networkpolicies         — same shape: she could delete default-deny.
+#   resourcequotas,         — she could raise her own ceiling.
+#   limitranges
+#   roles, rolebindings,    — an identity that can grant is not bounded by
+#   serviceaccounts           what it was granted. The #18 rule ("nothing an
+#                             agent can write may be the switch") applied to
+#                             a runtime.
+#   anything cluster-scoped — this is a Role, not a ClusterRole. Nodes,
+#                             CRDs, other namespaces, cluster secrets: all
+#                             unreachable by construction rather than by a
+#                             list of denials.
+#   pods/exec, pods/attach  — shell into a running pod is arbitrary code with
+#                             that pod's identity, and it bypasses the spec
+#                             review that Pod Security performs at admission.
+#                             `pods/log` IS granted: reading output is how she
+#                             debugs a deployment, and it grants nothing.
+#
+# GRANTED: the objects a service is made of. Deployments, Services, PVCs,
+# ConfigMaps, Secrets — Secrets included, because a service she deploys needs
+# its own credentials and there is no way to run Home Assistant without one.
+# Those secrets are namespace-scoped and she cannot read any other namespace's.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nova-deployer
+  namespace: nova-workloads
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                      # Role, never ClusterRole
+metadata:
+  name: nova-deployer
+  namespace: nova-workloads
+rules:
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, secrets, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/log]       # debugging, yes. pods/exec, no.
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [events]         # "why is my pod not starting" lives here
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nova-deployer
+  namespace: nova-workloads
+subjects:
+  - kind: ServiceAccount
+    name: nova-deployer
+    namespace: nova-workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nova-deployer

@@ -1,0 +1,64 @@
+# The cap Jeremy expected costs to provide, put where it is enforceable.
+#
+# 2026-07-28, on concurrent goals: "not sure we need to worry about how many.
+# that could be capped somewhere else or by costs?" This is the somewhere
+# else. A goal's `max_actions` bounds how many things she may DO; this bounds
+# how much of the machine the results may occupy. Both are needed: twenty-five
+# approved actions that each deploy a 4GB service is not a bounded outcome.
+#
+# Sized against measured headroom on this box (2026-07-29: 23 GB of 31 GB
+# free, GPU 13.4 of 24.5 used, fifteen containers running). Deliberately
+# modest — the failure this prevents is Nova's experiments making the machine
+# that runs Nova unusable, and a quota that has to be raised occasionally is
+# a much better problem than one that is discovered by swapping.
+#
+# On the multi-node future (Dell for GPU, mini PC for services): re-derive
+# these from the node they actually land on. A quota tuned for a shared WSL2
+# box is wrong on dedicated hardware in both directions.
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nova-quota
+  namespace: nova-workloads
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    # Object counts matter as much as compute. A loop that creates
+    # Deployments is bounded by this and by nothing else — `max_actions`
+    # counts tool CALLS, and one call can ask for many objects.
+    count/deployments.apps: "10"
+    count/statefulsets.apps: "5"
+    count/services: "15"
+    count/persistentvolumeclaims: "10"
+    requests.storage: 20Gi
+    # No LoadBalancers. On k3d that means a host port, which is a hole in
+    # the boundary opened from inside it.
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+---
+# Every container gets bounds whether or not the manifest sets them.
+#
+# This is what stops the quota being trivially evadable: a pod with no limits
+# specified counts as zero against `limits.*`, so without a LimitRange the
+# ceiling above is advisory. It also means Nova does not have to remember to
+# set requests and limits on everything she writes — the namespace does it,
+# which is one less thing that depends on her getting a detail right.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: nova-limits
+  namespace: nova-workloads
+spec:
+  limits:
+    - type: Container
+      default:              {cpu: 500m, memory: 512Mi}
+      defaultRequest:       {cpu: 100m, memory: 128Mi}
+      max:                  {cpu: "2",  memory: 4Gi}
+      min:                  {cpu: 10m,  memory: 32Mi}
+    - type: PersistentVolumeClaim
+      max: {storage: 10Gi}
+      min: {storage: 100Mi}
