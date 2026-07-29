@@ -125,6 +125,41 @@ async def list_subscriptions() -> list[dict]:
     } for r in rows]
 
 
+def _vapid_sub() -> str:
+    """The VAPID contact claim, operator-editable.
+
+    Was a module-level os.environ read, which broke twice over on
+    2026-07-28: the variable was never declared in docker-compose.yml so it
+    could not reach the container, and settings_store's own rule says
+    behavioural config belongs to the app rather than the deployment. A
+    setting is visible in the UI, editable without a compose edit, and
+    applies on the next call instead of the next rebuild.
+    """
+    from app import settings_store
+    configured = str(settings_store.get("notify.webpush.contact") or "").strip()
+    return configured or _VAPID_SUB
+
+
+def _explain(result: str) -> str:
+    """Turn a relay's bare status into something an operator can act on.
+
+    "failed: 403" is what every push to an iPhone returned while the VAPID
+    contact was mailto:nova@localhost — with correct keys, live
+    subscriptions and nothing else wrong. Apple rejects an unroutable
+    contact and says nothing about why, so the operator sees a dead feature
+    and no cause.
+    """
+    if "403" not in result:
+        return result
+    contact = _vapid_sub()
+    if contact == _VAPID_SUB or contact.endswith("@localhost"):
+        return (f"{result} — the push relay refused the request. Apple "
+                f"rejects a non-routable VAPID contact, and this one is "
+                f"still the {contact!r} default. Set a real address in "
+                f"Settings -> Notifications -> Web Push contact address.")
+    return f"{result} — the relay refused the VAPID claim for {contact!r}."
+
+
 def _push_one(sub_info: dict, payload: str, priv: str, urgency: str):
     """One blocking pywebpush delivery — runs in a thread. Returns
     'ok' | 'gone' | 'failed:<detail>'."""
@@ -133,14 +168,14 @@ def _push_one(sub_info: dict, payload: str, priv: str, urgency: str):
         webpush(subscription_info=sub_info, data=payload,
                 vapid_private_key=priv,
                 # pywebpush mutates the claims dict (aud/exp) — fresh per call
-                vapid_claims={"sub": _VAPID_SUB},
+                vapid_claims={"sub": _vapid_sub()},
                 ttl=86400, timeout=10, headers={"Urgency": urgency})
         return "ok"
     except WebPushException as e:
         code = e.response.status_code if e.response is not None else None
         if code in (404, 410):
             return "gone"
-        return f"failed: {code or e}"
+        return _explain(f"failed: {code or e}")
     except Exception as e:  # DNS, TLS, anything — never let one device raise
         return f"failed: {e}"
 

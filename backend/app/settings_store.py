@@ -464,6 +464,20 @@ SETTING_DEFS: list[dict] = [
      "description": ("Priority for notifications that don't set their own "
                      "(ntfy maps this to sound/vibration and lock-screen "
                      "prominence; other providers pass it through).")},
+    {"key": "notify.webpush.contact", "type": "string", "default": "",
+     "section": "Notifications",
+     "label": "Web Push contact address",
+     "description": ("A REACHABLE mailto: or https: address, sent to the push "
+                     "relays as the VAPID `sub` claim so they can contact you "
+                     "about your pushes. Apple's relay "
+                     "(web.push.apple.com) REJECTS a non-routable address "
+                     "with a bare 403 and no explanation — measured "
+                     "2026-07-28, when every push to an iPhone had been "
+                     "failing against the mailto:nova@localhost fallback "
+                     "while the keys and subscriptions were perfectly fine. "
+                     "Google's relay accepts almost anything, so this breaks "
+                     "on exactly one platform and looks like a broken "
+                     "device.")},
     {"key": "notify.push_reply_min_secs", "type": "number", "default": 20,
      "min": 0, "max": 600, "section": "Notifications",
      "label": "Push when a reply takes longer than (seconds)",

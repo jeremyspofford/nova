@@ -256,6 +256,19 @@ async def _list_capability_changes(args, ctx):
         limit=limit, hours=int(hours) if hours else None))
 
 
+async def _diagnose(args, ctx):
+    """Look at her own configuration and failures, instead of guessing.
+
+    Asked on 2026-07-28 why push notifications had stopped, she said "tell me
+    what you're seeing and I can investigate" and then could not: every step
+    the real investigation took was read-only, and she held none of it. The
+    answer was one unset value that made Apple's relay return a bare 403.
+    That is not something a model can reason its way to. It has to look.
+    """
+    from app import diagnostics
+    return _j(await diagnostics.report(args.get("area")))
+
+
 async def _list_skills(args, ctx):
     """Every skill, by name. Skills used to be reachable ONLY through a
     fuzzy search over their bodies, so Nova could not say what she knew how
@@ -1484,6 +1497,22 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                                    "Defaults to 1."}},
                        "required": ["item_id"]},
         "execute": _read_memory_item,
+    },
+    "diagnose": {
+        "name": "diagnose",
+        "description": (
+            "Read your own configuration, recent errors and service "
+            "reachability for one area — Notifications, Voice, Inference, "
+            "Agents, Memory, Observability and so on. Use it when the "
+            "operator reports something not working, BEFORE offering an "
+            "explanation: it shows what is actually set and what has "
+            "actually failed. Read-only; it changes nothing and sends "
+            "nothing. Call with no area for the list of areas."),
+        "parameters": {"type": "object", "properties": {
+            "area": {"type": "string",
+                     "description": "Settings area to inspect. Omit to list "
+                                    "the available areas."}}},
+        "execute": _diagnose,
     },
     "list_memory": {
         "name": "list_memory",
