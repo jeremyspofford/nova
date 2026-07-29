@@ -1027,6 +1027,21 @@ async def memory_graph():
     return await memory.graph()
 
 
+@router.get("/api/v1/memory/subject-affinity")
+async def memory_subject_affinity():
+    """Do any two clusters bind by subject strongly enough to draw?
+
+    Deliberately its own endpoint rather than a field on /memory/graph: it
+    runs 400 shuffles, and the graph is polled every 20s. Reported rather
+    than rendered — the universe view draws nothing off this until `draw`
+    comes back true. See app/subjects.py for why the gate is a permutation
+    null and not a threshold.
+    """
+    from app import subjects
+    g = await memory.graph()
+    return subjects.affinity_report(g["nodes"], g["edges"])
+
+
 @router.get("/api/v1/memory/item/{item_id:path}")
 async def memory_item(item_id: str):
     item = await memory.read_item(item_id)

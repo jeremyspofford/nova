@@ -124,8 +124,63 @@ def test_seed_floor_reports_its_own_redundancy():
           "zoo" in r["load_bearing"])
 
 
+def test_entity_vs_subject_is_the_membership_split():
+    """The distinction the clustering turns on."""
+    t = TagTiers(_corpus())
+    check("a channel tag is entity-backed (membership)", t.is_entity("src-a-channel"))
+    check("a subject tag is not (affinity)", not t.is_entity("bear-mountain"))
+
+
+def test_affinity_gate_can_refuse_AND_can_fire():
+    """A gate that can never fire is as useless as one that can never refuse.
+
+    Both directions are tested because the real corpus answers NO, and a NO
+    from a control that is simply broken looks identical to a true one.
+
+    THREE clusters, not two. With a single pair there is nowhere else for a
+    shuffle to put the sharing, so the null reproduces the observation by
+    construction and nothing can ever clear. The statistic is about sharing
+    being CONCENTRATED on particular pairs — that needs a pair to be
+    concentrated against.
+    """
+    from app.subjects import affinity_report
+
+    def corpus(bonded):
+        """Three link-held clusters of 8. Clusters 0 and 1 share `bonded`
+        subjects with each other; cluster 2 shares nothing with anyone."""
+        nodes, edges = [], []
+        for c in (0, 1, 2):
+            for i in range(8):
+                nid = f"c{c}-d{i}"
+                tags = [f"src-ch{c}"]
+                tags.append(f"bond-{i}" if (c < 2 and i < bonded)
+                            else f"own-{c}-{i}")
+                nodes.append({"id": nid, "type": "topic", "tags": tags})
+                if i:
+                    edges.append({"source": f"c{c}-d0", "target": nid, "kind": "link"})
+            nodes.append({"id": f"src{c}", "type": "source", "tags": [f"src-ch{c}"]})
+            edges.append({"source": f"src{c}", "target": f"c{c}-d0", "kind": "link"})
+        return nodes, edges
+
+    n, e = corpus(bonded=0)
+    r = affinity_report(n, e, trials=200)
+    check("three clusters, no shared subjects -> refuses",
+          r["clusters"] == 3 and not r["draw"], r["reason"][:44])
+
+    n, e = corpus(bonded=8)
+    r = affinity_report(n, e, trials=200)
+    top = r["pairs"][0]
+    check("two of three bonded by subject -> fires on THAT pair",
+          r["draw"] and top["clears"],
+          f"obs={top['observed']} null_max={top['null_max']}")
+    check("and only on that pair",
+          sum(1 for x in r["pairs"] if x["clears"]) == 1)
+
+
 def main():
     for fn in (test_entity_backing_beats_frequency,
+               test_entity_vs_subject_is_the_membership_split,
+               test_affinity_gate_can_refuse_AND_can_fire,
                test_categories_are_caught_without_being_listed,
                test_rare_generics_still_need_the_floor,
                test_inert_is_not_a_verdict,

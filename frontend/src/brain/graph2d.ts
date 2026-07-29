@@ -36,6 +36,9 @@ const EDGE_COLORS: Record<string, string> = {
   guard: 'rgba(239,68,68,0.35)',
   bond: 'rgba(250,204,21,0.35)',
   about: 'rgba(250,204,21,0.28)',   // personal fact → the operator (bond family)
+  // shared SUBJECT — a real relationship, but not co-membership: it never
+  // merges clusters (see memory.graph), so it gets its own dim treatment
+  subject: 'rgba(167,139,250,0.22)',
   writes: 'rgba(59,130,246,0.30)',  // automation → the doc it maintains
 };
 

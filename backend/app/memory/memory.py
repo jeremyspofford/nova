@@ -747,13 +747,29 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             # an anchor to a real node. An edge here would restate it, worse.
             if len(members) > self._TAG_CLIQUE_MAX:
                 continue
+            # MEMBERSHIP vs AFFINITY, and the distinction is load-bearing.
+            #
+            # Two notes tagged with the same channel BELONG to the same thing.
+            # Two notes tagged `claude-code` are merely ABOUT the same thing —
+            # a real relationship, and worth drawing, but not co-membership.
+            # Clustering is a connected component, so it is transitive: one
+            # subject shared across two channels merges both channels
+            # entirely. Measured 2026-07-28, after the summariser began
+            # emitting real subject tags, fourteen such tags had collapsed
+            # 157 of 171 documents into a single component and the view showed
+            # one undifferentiated blob where there had been four channels.
+            #
+            # So subjects ship as their own edge kind. computeSystems unions
+            # over `link` + `tag` only, which restores [67, 33, 32, 25]; the
+            # subject edges stay in the payload because they are true.
+            kind = "tag" if tiers.is_entity(tag) else "subject"
             for i in range(len(members)):
                 for j in range(i + 1, len(members)):
                     pair = (members[i], members[j])
                     if pair not in seen:
                         seen.add(pair)
                         resolved.append({"source": pair[0], "target": pair[1],
-                                         "kind": "tag"})
+                                         "kind": kind})
 
         return {"nodes": nodes, "edges": resolved}
 

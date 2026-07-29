@@ -147,6 +147,17 @@ class TagTiers:
         """May this tag create a graph edge?"""
         return self.tier(tag) == SPECIFIC
 
+    def is_entity(self, tag: str) -> bool:
+        """Is this tag carried by an entity node — i.e. does it NAME a thing?
+
+        The membership/affinity split turns on this. Two notes tagged with the
+        same channel belong to the same thing; two notes tagged with the same
+        SUBJECT are merely about the same thing, and collapsing that
+        distinction merges the corpus (measured: 157 of 171 documents into one
+        component).
+        """
+        return str(tag).strip().lower() in self.entity
+
     def is_structural(self, tag: str) -> bool:
         """Is this tag a category label rather than a subject?
 
