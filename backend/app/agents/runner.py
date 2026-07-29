@@ -18,8 +18,8 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import (bg, capability_claims, narration, redact, settings_store,
-                 timefmt, trace)
+from app import (bg, capability_claims, model_claims, narration, redact,
+                 settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory import provenance
@@ -1616,6 +1616,47 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                              "content": _cap_result(result, round_model)})
     else:
         note = "\n\n[Stopped: reached the tool-round limit for one turn.]"
+        final_text += note
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
+
+    # model-identity check: text that names a DIFFERENT model as the one
+    # answering. `round_model` is what actually generated this turn, including
+    # any mid-turn fallback, so the comparison is against ground truth.
+    #
+    # The correction goes into final_text rather than only a banner, because
+    # this error feeds itself: the banner persists as a role='tool' row, the
+    # history loader keeps only user/assistant rows, so a false claim is
+    # replayed on every later turn and the correction never is. On 2026-07-28
+    # that produced four consecutive wrong answers — the last two written by
+    # reading the first two — while the prompt carried the right model the
+    # whole time. Clearing the conversation fixed it instantly; nothing else
+    # did, which is the argument for correcting the TEXT.
+    # RESOLVED, not the binding. `round_model` is agent["model"] and is only
+    # reassigned by the error-path fallback; the provider-not-configured swap
+    # is applied inline by effective_model at each call site. Comparing against
+    # the binding meant that whenever a swap fired, _model_block told her to
+    # say the swapped name, she said it — correctly — and this check appended a
+    # correction naming a model that had generated nothing. A false accusation
+    # produced by the system's own instruction, deterministic rather than
+    # occasional, written into the reply and read aloud on voice turns.
+    ran_on = llm_router.effective_model(round_model)
+    # The bare-answer path only applies when the operator asked about HER
+    # model; otherwise a bare id is an answer about something else.
+    last_user = next((m.get("content") or "" for m in reversed(turn_messages)
+                      if m.get("role") == "user"), "")
+    wrong_model = model_claims.detect(
+        final_text, ran_on,
+        asked_about_self=model_claims.asks_about_own_model(
+            last_user if isinstance(last_user, str) else ""))
+    if wrong_model:
+        yield {"type": "activity", "kind": "capability",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": (f"said it was running on {wrong_model}, but this "
+                          f"turn ran on {ran_on}")}
+        log.warning("Model claim: agent=%s claimed=%s actual=%s",
+                    agent.get("name"), wrong_model, ran_on)
+        note = model_claims.correction(ran_on)
         final_text += note
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
