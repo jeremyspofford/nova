@@ -239,8 +239,22 @@ def _split(text: str) -> tuple[str, str]:
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", head) if s.strip()]
     while sentences and sentences[-1].rstrip().endswith(":"):
         sentences.pop()
-    desc = " ".join(sentences).strip()[:240]
-    return desc or head[:240], (rest or text)
+    return _clip(" ".join(sentences).strip() or head), (rest or text)
+
+
+def _clip(desc: str, limit: int = 240) -> str:
+    """Cut at a WORD boundary, and say that it was cut.
+
+    A hard `[:240]` produced "...matching the right workload to the right
+    proc" in the live catalogue — a description that ends mid-word reads as
+    corrupt data rather than as an abbreviation, and the catalogue is the
+    one surface she scans to decide what to read in full.
+    """
+    if len(desc) <= limit:
+        return desc
+    cut = desc[:limit - 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > limit // 2 else cut).rstrip(" ,;:") + "…"
 
 
 def summary_source_type(source_type: Optional[str], has_url: bool) -> str:

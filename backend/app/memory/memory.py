@@ -414,6 +414,43 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             used += len(line)
         return lines, ids
 
+    def _collapse_to_summaries(
+            self, results: list[tuple[str, float]]) -> list[tuple[str, float]]:
+        """When a transcript and its own summary both rank, keep the summary.
+
+        Measured 2026-07-28 over the live corpus, once 73 of 84 transcripts
+        had summaries: "vector database compression" returned three summaries
+        AND two of their own transcripts, so two of the five retrieval slots
+        restated a video already in the prompt, at transcript length. The
+        summary is the designed entry point and it carries a [[wikilink]] to
+        the full text, so nothing becomes unreachable — "go read the whole
+        thing" stays one hop, and `search_memory` over transcript BODIES is
+        untouched, which is how "which video mentioned Kimi K3" is answered.
+
+        Matched from the SUMMARY's side, using summariser's own constants,
+        and deliberately tolerant of one historical form. `summary_title`
+        strips " — full transcript" before appending " — summary", but the 73
+        summaries already on disk were written before it did, so they read
+        "X — full transcript — summary". Calling summary_title() on each
+        transcript matched none of them — verified against the live corpus,
+        which is the only reason this is not a one-liner. Stripping the
+        summary suffix and allowing the source suffix to be present or absent
+        covers both eras without renaming a single file, and renaming them
+        would change their ids and break every [[wikilink]] pointing at them.
+        """
+        from app.summariser import SUMMARY_SUFFIX, _SOURCE_SUFFIXES
+        by_title = {(self.index.docs.get(i, {}).get("title") or ""): i
+                    for i, _ in results}
+        superseded: set[str] = set()
+        for title, doc_id in by_title.items():
+            if not title.endswith(SUMMARY_SUFFIX):
+                continue
+            stem = title[: -len(SUMMARY_SUFFIX)]
+            for source in (stem, *(stem + s for s in _SOURCE_SUFFIXES)):
+                if source in by_title and by_title[source] != doc_id:
+                    superseded.add(by_title[source])
+        return [r for r in results if r[0] not in superseded]
+
     async def context(self, query: str, max_chars: Optional[int] = None,
                       origins: Optional[set[str]] = None) -> dict:
         """Relevant memories (topics + journals; skills are retrieved separately)."""
@@ -425,9 +462,13 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         # would be true on essentially every turn and any rule keyed on it
         # would either fire constantly or mean nothing. Third-party material
         # stays reachable, but only when she deliberately goes and gets it.
+        top_k = settings.memory_context_top_k
+        # Over-fetch, then collapse each video onto its summary, then trim.
+        # Fetching top_k and collapsing after would silently shrink the
+        # retrieved set on exactly the queries where collapsing helps most.
         results = self.index.search(query, type_filter={"topic", "journal", "source"},
-                                    top_k=settings.memory_context_top_k,
-                                    origins=origins)
+                                    top_k=top_k * 2, origins=origins)
+        results = self._collapse_to_summaries(results)[:top_k]
         lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
         # The origin mix of what was actually RETRIEVED — not of the corpus.
