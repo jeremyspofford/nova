@@ -40,9 +40,8 @@ const COLOR = {
 // literals: growing the central star put the agents INSIDE it, and there was
 // no way to make Nova dominate without hand-retuning the entire home tier.
 const NOVA_R = 52;
-const DISC_IN = NOVA_R * 1.5;            // accretion disc inner edge
-const DISC_OUT = NOVA_R * 2.5;           // outer edge
-const PHOTON_R = NOVA_R * 1.28;          // photon ring, just off the surface
+const DISC_IN = NOVA_R * 1.35;           // accretion disc inner edge
+const DISC_OUT = NOVA_R * 4.2;           // outer edge — a wide disc, not a band
 const USER_R = NOVA_R * 0.44;
 const BINARY_NOVA_ORBIT = NOVA_R * 0.34; // Nova's own wobble about the barycentre
 const BINARY_USER_ORBIT = DISC_OUT + USER_R * 3;   // the operator clears the disc
@@ -78,6 +77,58 @@ const frameDist = (radius: number) => (2 * radius) / FOV_TAN;
 
 /** Star-dome shell, measured from the camera (it rides along). */
 const DOME_R_MIN = 4200, DOME_R_MAX = 5600;
+
+/** Accretion-disc texture: soft-edged, turbulent, brighter down one limb.
+ *
+ *  RingGeometry's UVs span the full outer disc, so texture radius maps
+ *  directly to world radius — the hole occupies the inner DISC_IN/DISC_OUT
+ *  of it and is simply left transparent. Fading to nothing at BOTH edges is
+ *  what stops the annulus reading as a stamped-out ring. */
+function makeDiscTexture(): THREE.CanvasTexture {
+  const S = 512, C = S / 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const x = c.getContext('2d')!;
+  const inner = DISC_IN / DISC_OUT;
+  const g = x.createRadialGradient(C, C, C * inner * 0.94, C, C, C);
+  // Alphas stay low on purpose. This is additively blended and then passes
+  // through bloom, so anything that looks right as a flat swatch arrives
+  // saturated — the disc has to read as light, not as a surface.
+  g.addColorStop(0.00, 'rgba(255,240,205,0.00)');
+  g.addColorStop(0.05, 'rgba(255,236,186,0.50)');   // hot inner edge
+  g.addColorStop(0.22, 'rgba(255,190,112,0.26)');
+  g.addColorStop(0.52, 'rgba(236,140,150,0.12)');
+  g.addColorStop(0.78, 'rgba(170,110,214,0.05)');
+  g.addColorStop(1.00, 'rgba(120,86,200,0.00)');    // dissolves, never ends
+  x.fillStyle = g;
+  x.fillRect(0, 0, S, S);
+
+  // turbulence: partial arcs at scattered radii, so no two angles look alike
+  const rnd = mulberry32(0x9e37);
+  x.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 220; i++) {
+    const rr = C * (inner + rnd() * (1 - inner) * 0.98);
+    const a0 = rnd() * Math.PI * 2;
+    x.beginPath();
+    x.arc(C, C, rr, a0, a0 + 0.1 + rnd() * 1.1);
+    x.strokeStyle = `rgba(255,${190 + Math.floor(rnd() * 60)},`
+      + `${110 + Math.floor(rnd() * 110)},${(0.015 + rnd() * 0.05).toFixed(3)})`;
+    x.lineWidth = 1 + rnd() * 6;
+    x.stroke();
+  }
+
+  // Doppler-ish beaming — the limb sweeping toward the viewer runs brighter.
+  // Pure asymmetry; it is what tells you the thing is spinning.
+  const d = x.createLinearGradient(0, 0, S, 0);
+  d.addColorStop(0.0, 'rgba(255,246,224,0.20)');
+  d.addColorStop(0.55, 'rgba(255,255,255,0.00)');
+  x.fillStyle = d;
+  x.fillRect(0, 0, S, S);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /** A memory system's spacing rules, derived entirely from its own membership. */
 function systemGeometry(count: number, maxR: number) {
@@ -291,8 +342,11 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
   const unitRock = new THREE.DodecahedronGeometry(1, 0);
   const unitOcta = new THREE.OctahedronGeometry(1, 0);
   const unitCone = new THREE.ConeGeometry(1, 1, 8, 1, true);
+  // built once per renderer, not per rebuild: 220 canvas arcs on every 20s
+  // graph poll is real work for a texture that never changes
+  const discTex = makeDiscTexture();
   const shared = new Set<THREE.BufferGeometry | THREE.Texture>(
-    [glowTex, unitSphere, unitRock, unitOcta, unitCone]);
+    [glowTex, discTex, unitSphere, unitRock, unitOcta, unitCone]);
 
   function makeGlowSprite(color: string, size: number, opacity = 0.55): THREE.Sprite {
     const mat = new THREE.SpriteMaterial({
@@ -694,7 +748,9 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     {
       const star = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color: COLOR.nova }));
       star.scale.setScalar(NOVA_R);
-      const glow = makeGlowSprite(COLOR.nova, NOVA_R * 3.8, 0.8);
+      // a tight corona: at 3.8x it was 198 units wide, laid straight over the
+      // disc, and drowned every bit of structure in it
+      const glow = makeGlowSprite(COLOR.nova, NOVA_R * 2.1, 0.62);
       const proxy = makeHitProxy(NOVA_R * 1.5, 'soul.md');   // the star IS Nova → open the soul
 
       // A supergiant with a black-hole's silhouette — accretion disc and
@@ -703,24 +759,27 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       // things fall, so making Nova one would put memory's anchor where
       // memories go to die; and this whole renderer establishes hierarchy
       // through bloom, which an absence gives nothing to work with.
+      // Two overlapping sheets at slightly different tilts, textured. A flat
+      // ring in a single flat colour is a compact disc: hard edges, uniform
+      // fill, one perfect circle. What stops that reading is soft falloff at
+      // BOTH edges, azimuthal turbulence so no two angles match, and the
+      // brightness asymmetry a rotating disc actually has.
       const discTilt = new THREE.Group();
       discTilt.rotation.set(-0.42, 0, 0.16);
-      const disc = new THREE.Mesh(
-        new THREE.RingGeometry(DISC_IN, DISC_OUT, 96, 3),
-        new THREE.MeshBasicMaterial({
-          color: COLOR.nova, transparent: true, opacity: 0.20,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-          side: THREE.DoubleSide,
-        }));
-      disc.rotation.x = -Math.PI / 2;
-      const photon = new THREE.Mesh(
-        new THREE.TorusGeometry(PHOTON_R, NOVA_R * 0.035, 8, 128),
-        new THREE.MeshBasicMaterial({
-          color: '#ffe9c4', transparent: true, opacity: 0.75,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }));
-      photon.rotation.x = -Math.PI / 2;
-      discTilt.add(disc, photon);
+      const sheet = (tex: THREE.Texture, tilt: number, opacity: number) => {
+        const m = new THREE.Mesh(
+          new THREE.RingGeometry(DISC_IN, DISC_OUT, 128, 8),
+          new THREE.MeshBasicMaterial({
+            map: tex, transparent: true, opacity,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+            side: THREE.DoubleSide,
+          }));
+        m.rotation.set(-Math.PI / 2, 0, tilt);
+        return m;
+      };
+      // second sheet is a WARP, not a cross — a large tilt difference reads
+      // as a shell rather than a disc
+      discTilt.add(sheet(discTex, 0, 0.55), sheet(discTex, 0.38, 0.22));
       novaGroup.add(star, glow, discTilt, proxy);
       pickables.push(proxy);
       addLabel(makeLabel(coreNode?.label || 'Nova', COLOR.nova, 'anchor', HOME_CENTER, 'soul.md'),
@@ -730,7 +789,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       updaters.push(({ t }) => {
         const a = t * (Math.PI * 2 / 90);           // binary period ~90s at speed 1
         ng.position.set(Math.cos(a) * BINARY_NOVA_ORBIT, 0, Math.sin(a) * BINARY_NOVA_ORBIT);
-        glow.scale.setScalar(NOVA_R * (3.8 + Math.sin(t * 0.9) * 0.25));
+        glow.scale.setScalar(NOVA_R * (2.1 + Math.sin(t * 0.9) * 0.16));
         discTilt.rotation.z = 0.16 + t * 0.045;    // the disc turns, slowly
       });
     }
@@ -1342,10 +1401,12 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     zoomMin = Math.max(1.5 * camera.near, frameDist(1.0));
     zoomMax = (3.0 * worldExtent) / FOV_TAN;
     fitAllDist = Math.min(zoomMax, 1.15 * frameDist(worldExtent) / 2);
-    // the far plane has to clear both the scene and the star dome, which
-    // rides the camera at a fixed distance — a literal far would clip the
-    // sky the moment the universe outgrew it
-    camera.far = Math.max(DOME_R_MAX * 1.3, worldExtent * 3);
+    // The far plane is measured from the CAMERA, so it has to clear the whole
+    // scene FROM THE FURTHEST THE CAMERA CAN GET — not just the scene radius.
+    // `worldExtent * 3` was shorter than zoomMax, so pulling back past it
+    // clipped the far side of the universe away a system at a time, which
+    // read as things randomly disappearing on zoom-out.
+    camera.far = Math.max(DOME_R_MAX * 1.3, zoomMax + worldExtent * 1.5);
     camera.updateProjectionMatrix();
 
     // The black hole is a landmark, and it keeps its job: deleted things fall
