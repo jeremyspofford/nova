@@ -35,19 +35,31 @@ const COLOR = {
 };
 
 // ── layout radii (world units) ───────────────────────────────────────────
-const NOVA_R = 26, USER_R = 15;
-const BINARY_NOVA_ORBIT = 30, BINARY_USER_ORBIT = 85;
-const AGENT_R_MIN = 85, AGENT_R_MAX = 150;
-const SKILL_R = 175;
-const BELT_R = 235;
-const ROGUE_R = 560;
+// NOVA_R is the anchor and every radius below is a multiple of it, so the
+// whole universe scales from one number. Before, these were nine independent
+// literals: growing the central star put the agents INSIDE it, and there was
+// no way to make Nova dominate without hand-retuning the entire home tier.
+const NOVA_R = 52;
+const DISC_IN = NOVA_R * 1.5;            // accretion disc inner edge
+const DISC_OUT = NOVA_R * 2.5;           // outer edge
+const PHOTON_R = NOVA_R * 1.28;          // photon ring, just off the surface
+const USER_R = NOVA_R * 0.44;
+const BINARY_NOVA_ORBIT = NOVA_R * 0.34; // Nova's own wobble about the barycentre
+const BINARY_USER_ORBIT = DISC_OUT + USER_R * 3;   // the operator clears the disc
+const AGENT_R_MIN = BINARY_USER_ORBIT * 1.15;
+const AGENT_R_MAX = AGENT_R_MIN * 1.7;
+const SKILL_R = AGENT_R_MAX * 1.15;
+const BELT_R = SKILL_R * 1.3;
+const ROGUE_R = BELT_R * 1.7;
+const COMET_Q_MIN = BELT_R * 1.1;        // nearest aphelion, just past the belt
+const COMET_Q_SPAN = BELT_R * 0.75;      // slowest automations reach this much further
 const STAR_R = 9;          // the system star's mesh scale
 const MOON_R = 2.3;        // topic-moon body radius
 
 /** Extent of the home tier — the radius the memory shell must clear.
  *  Derived from the outermost thing actually drawn at home: a comet's
  *  aphelion (763), the rogue drift sphere, the belt and the skill ring. */
-const HOME_EXT = Math.max(265 + 175, ROGUE_R * 1.20, BELT_R, SKILL_R);
+const HOME_EXT = Math.max(COMET_Q_MIN + COMET_Q_SPAN, ROGUE_R * 1.20, BELT_R, SKILL_R);
 
 /** Fraction of a shell's slots actually used. Filling every slot looks
  *  machined; leaving gaps gives irregular angular spacing while every
@@ -63,6 +75,9 @@ const MAX_INCL = 0.5;
 const FOV_TAN = Math.tan((50 * Math.PI) / 360);
 /** Camera distance at which a sphere of `radius` fills half the viewport. */
 const frameDist = (radius: number) => (2 * radius) / FOV_TAN;
+
+/** Star-dome shell, measured from the camera (it rides along). */
+const DOME_R_MIN = 4200, DOME_R_MAX = 5600;
 
 /** A memory system's spacing rules, derived entirely from its own membership. */
 function systemGeometry(count: number, maxR: number) {
@@ -153,15 +168,6 @@ function mulberry32(seed: number) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** Offset variant (i+0.5)/n — never lands exactly on a pole, even for n=1. */
-function fibonacciSphere(i: number, n: number, radius: number): THREE.Vector3 {
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  const y = 1 - (2 * (i + 0.5)) / n;
-  const r = Math.sqrt(Math.max(0, 1 - y * y));
-  const theta = golden * i;
-  return new THREE.Vector3(Math.cos(theta) * r * radius, y * radius, Math.sin(theta) * r * radius);
 }
 
 /** Kepler's equation E - e·sinE = M, a few Newton steps (e < 0.9 converges fast). */
@@ -351,7 +357,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     for (let i = 0; i < N; i++) {
       // shell thickness gives a little depth without any of it being reachable
       const v = new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5)
-        .normalize().multiplyScalar(4200 + rand() * 1400);
+        .normalize().multiplyScalar(DOME_R_MIN + rand() * (DOME_R_MAX - DOME_R_MIN));
       pos.set([v.x, v.y, v.z], i * 3);
       const b = 0.35 + rand() * 0.65;
       const warm = rand();
@@ -683,14 +689,39 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
 
     novaGroup = new THREE.Group();
     novaGroup.userData.nodeId = coreId ?? 'soul.md';
-    novaGroup.userData.focusDist = 240;
+    novaGroup.userData.focusDist = frameDist(DISC_OUT);
     bodyGroups.set(coreId ?? 'soul.md', novaGroup);
     {
       const star = new THREE.Mesh(unitSphere, new THREE.MeshBasicMaterial({ color: COLOR.nova }));
       star.scale.setScalar(NOVA_R);
       const glow = makeGlowSprite(COLOR.nova, NOVA_R * 3.8, 0.8);
       const proxy = makeHitProxy(NOVA_R * 1.5, 'soul.md');   // the star IS Nova → open the soul
-      novaGroup.add(star, glow, proxy);
+
+      // A supergiant with a black-hole's silhouette — accretion disc and
+      // photon ring wrapped around a LUMINOUS core, not a void. The dark
+      // version was considered and rejected: the black hole is where deleted
+      // things fall, so making Nova one would put memory's anchor where
+      // memories go to die; and this whole renderer establishes hierarchy
+      // through bloom, which an absence gives nothing to work with.
+      const discTilt = new THREE.Group();
+      discTilt.rotation.set(-0.42, 0, 0.16);
+      const disc = new THREE.Mesh(
+        new THREE.RingGeometry(DISC_IN, DISC_OUT, 96, 3),
+        new THREE.MeshBasicMaterial({
+          color: COLOR.nova, transparent: true, opacity: 0.20,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+          side: THREE.DoubleSide,
+        }));
+      disc.rotation.x = -Math.PI / 2;
+      const photon = new THREE.Mesh(
+        new THREE.TorusGeometry(PHOTON_R, NOVA_R * 0.035, 8, 128),
+        new THREE.MeshBasicMaterial({
+          color: '#ffe9c4', transparent: true, opacity: 0.75,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+      photon.rotation.x = -Math.PI / 2;
+      discTilt.add(disc, photon);
+      novaGroup.add(star, glow, discTilt, proxy);
       pickables.push(proxy);
       addLabel(makeLabel(coreNode?.label || 'Nova', COLOR.nova, 'anchor', HOME_CENTER, 'soul.md'),
                novaGroup, NOVA_R + 16);
@@ -700,6 +731,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         const a = t * (Math.PI * 2 / 90);           // binary period ~90s at speed 1
         ng.position.set(Math.cos(a) * BINARY_NOVA_ORBIT, 0, Math.sin(a) * BINARY_NOVA_ORBIT);
         glow.scale.setScalar(NOVA_R * (3.8 + Math.sin(t * 0.9) * 0.25));
+        discTilt.rotation.z = 0.16 + t * 0.045;    // the disc turns, slowly
       });
     }
     {
@@ -895,7 +927,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       const q_ = agentIdx >= 0 && agents.length > 1
         ? AGENT_R_MIN + (agentIdx / (agents.length - 1)) * (AGENT_R_MAX - AGENT_R_MIN)
         : 115;
-      const Q_ = 265 + norm * 175;                   // aphelion beyond the belt
+      const Q_ = COMET_Q_MIN + norm * COMET_Q_SPAN;  // aphelion beyond the belt
       const semi = (q_ + Q_) / 2;
       const ecc = 1 - q_ / semi;
       const semiMinor = semi * Math.sqrt(1 - ecc * ecc);
@@ -1086,20 +1118,73 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         extent: orb.rMax + maxR,
       };
     });
+    // ═══ orbital lanes — everything orbits Nova ═══════════════════════════
+    // The shell mechanism from inside a system, applied one level up. Systems
+    // sharing a lane share its radius and period, so their angular gaps never
+    // change; lanes are separated by more than two cluster extents, so the
+    // reverse triangle inequality keeps different lanes apart at any phase and
+    // any tilt. Nothing can collide, and nothing has to be simulated.
+    const maxExtent = parts.reduce((a, p) => Math.max(a, p.extent), 1);
+    const laneMargin = maxExtent * 0.35;
+    const laneGap = 2 * maxExtent + laneMargin;
+    const laneR0 = HOME_EXT + maxExtent + laneMargin;
+    // Lane by SIZE BAND, so radius still means size and a system only changes
+    // lane when its membership crosses a power of two — meaningful and rare.
+    // A rank-based assignment would swap two systems the moment an ingest tied
+    // them.
+    const bandOf = (n: number) => Math.max(0, Math.floor(Math.log2(Math.max(n, 1))) - 1);
+    const laneMembers = new Map<number, number[]>();
+    parts.forEach((_p, i) => {
+      const band = bandOf(systems[i].members.length);
+      (laneMembers.get(band) ?? laneMembers.set(band, []).get(band)!).push(i);
+    });
+    // Occupied bands compact to consecutive lanes. Mapping bands to fixed
+    // radii is more stable, but log2 bands are sparse — a 2-member and a
+    // 163-member system sit six bands apart, and the view became one distant
+    // speck across an empty void. Compaction only shifts when the SET of
+    // occupied size classes changes, which is far rarer than an ingest.
+    const laneIndex = new Map<number, number>(
+      [...laneMembers.keys()].sort((a, b) => a - b).map((band, i) => [band, i]));
+    const lanes = new Map<number, {
+      r: number; cap: number; q: THREE.Quaternion; period: number; phase: number;
+    }>();
+    for (const band of laneMembers.keys()) {
+      const r = laneR0 + laneIndex.get(band)! * laneGap;
+      const rnd = mulberry32(0x1f83d9ab ^ Math.imul(band + 1, 0x9e3779b1));
+      const node = rnd() * Math.PI * 2;
+      lanes.set(band, {
+        r,
+        cap: Math.max(1, Math.floor(Math.PI / Math.asin(Math.min(1, laneGap / (2 * r))))),
+        q: new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(Math.cos(node), 0, Math.sin(node)), (rnd() - 0.5) * 0.7),
+        // Kepler again: the far lanes drift, they do not race. A full turn is
+        // minutes, not seconds — "everything eventually orbits Nova".
+        period: 900 * Math.pow(r / laneR0, 1.5),
+        phase: rnd() * Math.PI * 2,
+      });
+    }
+
     /** Radius the camera must be able to frame — drives the zoom ceiling. */
     let worldExtent = HOME_EXT;
 
     systems.forEach((sys, si) => {
       const { planets, moons, sources, maxR, geo, orb, extent: E } = parts[si];
-      // Distance from home derives from this system's OWN extent: it clears
-      // the home cloud by twice its own radius. Nothing couples it to any
-      // other system, so one ingest can never translate the whole sky.
-      const R = HOME_EXT + 3.3 * E;
-      // `si` is the systems.ts sys.key ordering — NEVER a size ordering. Two
-      // systems one member apart would swap shell directions on any ingest
-      // that ties them, teleporting both.
-      const center = fibonacciSphere(si, Math.max(systems.length, 2), 1).multiplyScalar(R);
-      worldExtent = Math.max(worldExtent, R + E);
+      const band = bandOf(sys.members.length);
+      const lane = lanes.get(band)!;
+      const seat = laneMembers.get(band)!.indexOf(si);   // stable: sys.key order
+      const laneAng = (seat * 2 * Math.PI) / lane.cap;
+      // Live: the centre is mutated every frame by the updater below, and
+      // every dependent holds a REFERENCE to it — bodies add it, labels
+      // measure to it, the fly-to proxy tracks it. One mutation point moves
+      // the entire system.
+      const center = new THREE.Vector3();
+      const placeCenter = (t: number) => {
+        const a = laneAng + lane.phase + t * ((Math.PI * 2) / lane.period);
+        center.set(Math.cos(a) * lane.r, 0, Math.sin(a) * lane.r)
+          .applyQuaternion(lane.q);
+      };
+      placeCenter(0);
+      worldExtent = Math.max(worldExtent, lane.r + E);
       const sysGroup = new THREE.Group();
       sysGroup.position.copy(center);
       dataRoot.add(sysGroup);
@@ -1121,13 +1206,25 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       sysGroup.add(makeGlowSprite(COLOR.sysStar, Math.max(40, 0.8 * E), 0.55));
       addLabel(makeLabel(dominant, sysColor, 'sysname', center, null, E), sysGroup, 34);
       sysGroup.add(makeGlowSprite(sysColor, 3.2 * E, 0.05));   // per-system nebula tint
-      // clicking a system's star flies the camera there (recenter returns home)
+      // clicking a system's star flies the camera there (recenter returns
+      // home). It TRACKS the system now — a cloned snapshot would fly you to
+      // where the cluster used to be.
       const sysProxy = makeHitProxy(16, '');
       sysProxy.userData.focus = center;
+      sysProxy.userData.follow = sysGroup;
       sysProxy.userData.focusDist = 1.25 * frameDist(E) / 2;
       sysGroup.add(sysProxy);
       pickables.push(sysProxy);
       liveSystems.push({ label: dominant, center, extent: E, count: sys.members.length });
+
+      // Carry the whole system around its lane. Pushed BEFORE the body
+      // updaters so they read this frame's centre, not last frame's.
+      const followers: { g: THREE.Object3D; off: THREE.Vector3 }[] = [];
+      updaters.push(({ t }) => {
+        placeCenter(t);
+        sysGroup.position.copy(center);
+        for (const f of followers) f.g.position.copy(center).add(f.off);
+      });
 
       // ── the cluster ─────────────────────────────────────────────────────
       // Positions come from the blue-noise scatter computed above: no visible
@@ -1159,10 +1256,10 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
 
       // one faint path per shell — this is what makes the motion read as
       // orbiting rather than drifting. One Line per shell, not per body.
+      // PARENTED to sysGroup so they ride the lane; a world-space copy of the
+      // centre would leave the paths behind as the system orbits.
       for (const sh of orb.shells) {
-        const ring = orbitRing(sh.r, sh.q, sysColor, 0.055);
-        ring.position.copy(center);
-        dataRoot.add(ring);
+        sysGroup.add(orbitRing(sh.r, sh.q, sysColor, 0.055));
       }
 
       if (orbiting.length) {
@@ -1213,10 +1310,13 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         // a lone source takes the centre exactly; several share a tight ring
         const ring = sources.length === 1 ? 0 : STAR_R + size + 3;
         const ang = (k * 2 * Math.PI) / Math.max(sources.length, 1);
-        group.position.copy(center)
-          .add(new THREE.Vector3(Math.cos(ang) * ring, 0, Math.sin(ang) * ring));
-        // tail points away from the HOME star — this thing came from outside.
-        // Static now that the body is: no per-frame updater needed.
+        const off = new THREE.Vector3(Math.cos(ang) * ring, 0, Math.sin(ang) * ring);
+        group.position.copy(center).add(off);
+        // It rides the lane with its system. NOT parented to sysGroup: posOf
+        // must stay world-valid, because 37 link arcs terminate on this body.
+        followers.push({ g: group, off });
+        // tail points away from home — this thing came from outside. Oriented
+        // once, from where the system sits at t=0.
         const tailDir = group.position.clone().normalize();
         mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), tailDir);
         const tail = new THREE.Mesh(unitCone, new THREE.MeshBasicMaterial({
@@ -1227,6 +1327,7 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
         tail.scale.set(1.4, len, 1.4);
         tail.position.copy(group.position).addScaledVector(tailDir, len / 2);
         tail.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tailDir);
+        followers.push({ g: tail, off: off.clone().addScaledVector(tailDir, len / 2) });
         dataRoot.add(tail);
       });
     });
@@ -1241,6 +1342,18 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     zoomMin = Math.max(1.5 * camera.near, frameDist(1.0));
     zoomMax = (3.0 * worldExtent) / FOV_TAN;
     fitAllDist = Math.min(zoomMax, 1.15 * frameDist(worldExtent) / 2);
+    // the far plane has to clear both the scene and the star dome, which
+    // rides the camera at a fixed distance — a literal far would clip the
+    // sky the moment the universe outgrew it
+    camera.far = Math.max(DOME_R_MAX * 1.3, worldExtent * 3);
+    camera.updateProjectionMatrix();
+
+    // The black hole is a landmark, and it keeps its job: deleted things fall
+    // in. Derived so it stays OUTSIDE the outermost lane however far the lanes
+    // grow, and scaled so it still reads as huge from out there. It was a flat
+    // 2600 with a 60-unit horizon, which the widened universe swallowed.
+    blackHole.position.set(0.55, 0.2, -0.81).normalize().multiplyScalar(worldExtent * 1.55);
+    blackHole.scale.setScalar(Math.max(1, worldExtent / 900));
 
     // link edges as faint arcs (real relations only — tag chains never draw).
     // Journals excluded: their posOf is belt-local, and the belt already
@@ -1489,9 +1602,10 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
       const hit = pick();
       if (hit?.userData.focus) {
         // fly to the system rather than opening a detail — framed to ITS
-        // size, not the flat 340 every system used to arrive at
-        followObj = null;
-        flyTarget = (hit.userData.focus as THREE.Vector3).clone();
+        // size, not the flat 340 every system used to arrive at, and TRACKING
+        // it, since systems orbit Nova now
+        followObj = (hit.userData.follow as THREE.Object3D | undefined) ?? null;
+        flyTarget = followObj ? null : (hit.userData.focus as THREE.Vector3).clone();
         distTarget = (hit.userData.focusDist as number | undefined)
           ?? 1.25 * frameDist(HOME_EXT) / 2;
       } else {
