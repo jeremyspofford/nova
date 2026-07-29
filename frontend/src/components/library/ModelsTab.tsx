@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
+  AgentInfo, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
 } from '../../api';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
@@ -405,10 +405,78 @@ export function ModelsTab() {
       <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3">
         <SettingsTab only={['Models']} />
       </div>
+      <RolesPanel />
       <PullModel onPulled={() => {}} />
       <ProvidersPanel />
       <CuratedTable />
       <FullCatalog />
+    </div>
+  );
+}
+
+/** Which model does what — every binding in one place.
+ *
+ *  Before this, "which model does what" had no home, and the answer was
+ *  scattered across four screens: the compaction model under Settings →
+ *  Context next to a message-count threshold, the voice model under Voice,
+ *  the local fallback under Inference, and every agent's own binding under
+ *  Agents. The operator went looking for the compaction model in the model
+ *  library — the only place that *looks* like it is about models — and it
+ *  wasn't there. A feature with no binding of its own had also started
+ *  quietly borrowing the compaction model, which is exactly what happens when
+ *  there is nowhere for this question to live.
+ *
+ *  Nothing moved. Every row is still the same setting, saved through the same
+ *  endpoint, so precedence and the Redis sync are untouched — this is a view,
+ *  not a new source of truth. The task rows are DERIVED: SettingsTab renders
+ *  every setting of type `model`, so a role added later appears here on its
+ *  own. The agent rows are read-only on purpose: agents have a real editor
+ *  one tab over, and two write paths onto the same column drift. */
+function RolesPanel() {
+  const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+
+  useEffect(() => { getAgents().then(setAgents).catch(() => setAgents([])); }, []);
+
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3 space-y-4">
+      <div>
+        <h3 className="text-sm text-stone-200">Which model does what</h3>
+        <p className="text-xs text-stone-500 mt-0.5">
+          Every model binding Nova has, in one place. Changing one here is the
+          same as changing it in Settings — this is where you can see them together.
+        </p>
+      </div>
+
+      <div>
+        <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Tasks</h4>
+        <SettingsTab types={['model']} />
+      </div>
+
+      <div>
+        <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Agents</h4>
+        {agents === null ? (
+          <div className="text-xs text-stone-500">Loading…</div>
+        ) : !agents.length ? (
+          <div className="text-xs text-stone-500">No agents.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {agents.map(a => (
+              <div key={a.id} className="flex items-baseline justify-between gap-3 text-sm">
+                <span className={a.enabled ? 'text-stone-200' : 'text-stone-500'}>
+                  {a.name}
+                  {!a.enabled && <span className="text-xs text-stone-600"> (disabled)</span>}
+                </span>
+                <span className="text-xs text-stone-400 font-mono truncate">{a.model}</span>
+              </div>
+            ))}
+            <p className="text-xs text-stone-500 pt-1">
+              Change these in the Agents tab — they are each an agent's own
+              binding, and having two places to write the same field is how
+              they end up disagreeing.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

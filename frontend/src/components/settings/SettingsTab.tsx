@@ -11,7 +11,16 @@ import { StorageCard, PhoneSetupCard } from './cards';
 import { BundledInference, ModelStorage } from './inference';
 import { groupModels } from '../../models';
 
-export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: string[] }) {
+/** `types` renders every setting of the given types FLAT, across all sections
+ *  and ignoring `only`/`exclude` — the shape a cross-cutting panel needs. It
+ *  exists so the model-roles table on the Models page can be derived rather
+ *  than listed: `<SettingsTab types={['model']} />` picks up any future
+ *  model-typed setting on its own, and reuses this file's picker, which
+ *  already knows about model_scope, allow_empty, grouping, saving and the
+ *  live nova:setting-changed echo. A second copy of that dropdown would have
+ *  drifted from this one within a week. */
+export function SettingsTab({ only, exclude, types }:
+  { only?: string[]; exclude?: string[]; types?: string[] }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
@@ -168,6 +177,29 @@ export function SettingsTab({ only, exclude }: { only?: string[]; exclude?: stri
           if (v !== d.value) save(d.key, v);
         }}
       />
+    );
+  }
+
+  if (types) {
+    const picked = defs.filter(d => types.includes(d.type));
+    if (!loaded) return <CardsSkeleton n={1} />;
+    return (
+      <div className="space-y-3">
+        {picked.map(d => (
+          <div key={d.key}
+            className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-4">
+            <div className="min-w-0">
+              <div className="text-sm text-stone-200">{d.label}</div>
+              <div className="text-xs text-stone-500">{d.description}</div>
+            </div>
+            {field(d)}
+          </div>
+        ))}
+        {!picked.length && (
+          <div className="text-xs text-stone-500">Nothing to assign yet.</div>
+        )}
+        {status && <div className="text-xs text-stone-500">{status}</div>}
+      </div>
     );
   }
 

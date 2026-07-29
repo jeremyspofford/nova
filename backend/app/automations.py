@@ -24,7 +24,13 @@ async def _auto_description(instruction: str) -> str:
     flat = " ".join((instruction or "").split())
     fallback = (flat[:117] + "…") if len(flat) > 120 else flat
     try:
-        model = llm_router.effective_model(settings_store.get("compaction.model") or "")
+        # Its OWN role. This used to read `compaction.model` — a feature with
+        # no binding of its own quietly borrowing another's, which is what
+        # happens when there is no home for "which model does what". It also
+        # meant the only way to give automations a model was to change the
+        # summariser's, and the only way to read which model wrote these
+        # descriptions was to know about this line.
+        model = llm_router.effective_model(settings_store.get("automations.model") or "")
         if not model:
             return fallback
         text = ""

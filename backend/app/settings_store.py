@@ -228,6 +228,16 @@ SETTING_DEFS: list[dict] = [
      "min": 60, "max": 900, "section": "Automations",
      "label": "Run timeout (seconds)",
      "description": "Hard cap on a single automation run."},
+    {"key": "automations.model", "type": "model", "default": "",
+     "model_scope": "any", "allow_empty": True, "section": "Automations",
+     "label": "Automation summary model",
+     "description": ("Writes the one-line description on an automation card "
+                     "when you don't supply one. Small and cheap is the right "
+                     "choice — it summarises a sentence you already wrote. "
+                     "Empty = no summary is generated and the card shows a "
+                     "trim of the instruction instead. This used to borrow "
+                     "the compaction model, so changing that silently changed "
+                     "this.")},
     # ── Observability (turn ledger; plan: docs/plans/observability-turn-tracing.md)
     {"key": "trace.retention_days", "type": "number", "default": 14,
      "min": 1, "max": 365, "section": "Observability",
