@@ -14,6 +14,7 @@
     "github-profile-fetch"
   ],
   "guardian": [
+    "diagnose",
     "list_agents",
     "manage_rules",
     "request_operator_confirmation",
@@ -36,6 +37,7 @@
     "write_memory"
   ],
   "main": [
+    "diagnose",
     "dispatch_to_agent",
     "get-weather",
     "get_weather",
