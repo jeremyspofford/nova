@@ -47,9 +47,17 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
-def _generic() -> frozenset:
-    from app.memory.memory import OkfMemory
-    return OkfMemory._GENERIC_TAGS
+def _structural():
+    """Live predicate: does this tag name a KIND rather than a subject?
+
+    Derived from the corpus (app/memory/tagtiers.py) rather than read off a
+    hand-maintained list, so a format tag nobody thought to add is still
+    caught once it spreads. Note this asks whether the tag is a CATEGORY, not
+    whether it currently bridges anything — a brand-new specific tag bridges
+    nothing yet and must not be reported as generic.
+    """
+    from app.memory.memory import memory
+    return memory._tag_tiers().is_structural
 
 
 def detect(tags: Optional[list]) -> Optional[list]:
@@ -62,8 +70,8 @@ def detect(tags: Optional[list]) -> Optional[list]:
     cleaned = [str(t).strip().lower() for t in (tags or []) if str(t).strip()]
     if not cleaned:
         return None      # the missing-tags case is the write path's business
-    generic = _generic()
-    if any(t not in generic for t in cleaned):
+    is_structural = _structural()
+    if any(not is_structural(t) for t in cleaned):
         return None
     return cleaned
 

@@ -22,8 +22,13 @@ from app.config import settings
 from app.memory import provenance
 from app.memory.index import BM25Index
 from app.memory.store import OkfStore
+from app.memory.tagtiers import SEED_FLOOR, TagTiers
 
 log = logging.getLogger(__name__)
+
+# Document types that are memory BODIES — the corpus a tag's reach is
+# measured against. Journals and skills are neither tagged nor clustered.
+_MEMORY_BODY_TYPES = frozenset({"topic", "source"})
 
 _SNIPPET_CHARS = 500
 _SKILL_SNIPPET_CHARS = 700
@@ -56,6 +61,10 @@ class OkfMemory:
         a symlink, say) raises ValueError on every create.
         """
         self.sandboxed = base_dir is not None
+        # last tag classification, fed back in for hysteresis so a tag sitting
+        # on the ceiling cannot flip a system between merged and split across
+        # consecutive 20s polls
+        self._tag_tier_state: dict[str, str] = {}
         if base_dir is None:
             root = settings.okf_memory_dir
         else:
@@ -149,42 +158,26 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     _MAX_LINKED_TAGS = 5
     _MAX_RELATED = 3
 
-    # Tags that name what KIND or FORMAT a note is, not what it is ABOUT.
-    # Fine as search/filter labels, but they must NEVER create graph edges or
-    # be auto-adopted: two notes sharing "zoo" or "transcript" only fall in the
-    # same broad category — they are not related. This is the exact class of
-    # bug where a Bear Mountain hiking attraction got tag-bridged to the "Me at
-    # the zoo" YouTube video through the coincidental word "zoo", and where the
-    # ingestion pipeline's own "media"/"transcript" tags chained together
-    # unrelated videos (a moon-landing clip, a commencement speech, an elephant
-    # video). Named-entity tags (bear-mountain, nasa, voyager, me-at-the-zoo)
-    # are deliberately NOT here — those name a specific subject and SHOULD
-    # cluster. The distinction is common-noun/category vs. named entity; extend
-    # this set as new generic tags surface (it is a label list, not config).
-    _GENERIC_TAGS = frozenset({
-        # format / medium (several of these are auto-applied at ingest time)
-        "media", "transcript", "transcripts", "video", "audio", "image",
-        "photo", "photograph", "article", "document", "note", "notes",
-        "summary", "digest", "overview", "guide", "reference", "data",
-        "source", "sources", "tool", "tools", "content",
-        # broad kinds of place / thing
-        "zoo", "museum", "museums", "park", "state-park", "facilities",
-        "visitor-info", "recreation", "hiking", "trail", "trails", "nature",
-        "animals", "travel", "food", "music", "art", "people", "places",
-        # broad subject areas
-        "history", "science", "technology", "tech", "news", "sports",
-        "sports-news", "tech-news", "ai-news", "culture", "internet-culture",
-        "entertainment", "education", "politics", "business", "finance",
-        "misc", "general", "info", "information",
-        # broad geographies — a shared state/country/region is a LOCATION
-        # category, not a shared subject: Bear Mountain State Park and the NY
-        # Giants are both "new-york" yet wholly unrelated. Add specific broad
-        # places as they recur (a city/state/country almost never means two
-        # notes are about the same thing).
-        "new-york", "new-york-city", "nyc", "united-states", "usa", "us",
-        "america", "california", "texas", "florida", "europe", "asia",
-        "africa", "world", "global",
-    })
+    # The hand-maintained blocklist is gone; see app/memory/tagtiers.py.
+    # Kept as an alias because the eval task schema still names it, and
+    # because it survives as tagtiers.SEED_FLOOR — a floor for tags too rare
+    # for frequency to judge, never a ceiling.
+    _GENERIC_TAGS = SEED_FLOOR
+
+    def _tag_tiers(self) -> TagTiers:
+        """Live tag classification, rebuilt from the index on demand.
+
+        Sourced from the index rather than the files on purpose: it is
+        re-patched on every write, so a classification built from it cannot
+        drift from the corpus without search drifting by exactly as much.
+        """
+        tiers = TagTiers(
+            ((str(d.get("type") or ""), d.get("tags") or [])
+             for d in self.index.docs.values()
+             if str(d.get("type") or "") in _MEMORY_BODY_TYPES),
+            previous=self._tag_tier_state)
+        self._tag_tier_state = tiers.snapshot()
+        return tiers
 
     def _link_pass(self, title: str, content: str, description: str,
                    tags: list[str], item_id: Optional[str]) -> tuple[list[str], list[str]]:
@@ -197,6 +190,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         must not float unconnected next to a bear-mountain system. Titles
         mentioned verbatim come back as related_titles for a wiki-link line.
         """
+        tiers = self._tag_tiers()
         text = f"{title}\n{description}\n{content}".lower()
         own = {t.lower() for t in tags}
         tag_hits: list[str] = []
@@ -221,7 +215,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             for tag in self.store.extract_tags(fm):
                 t = tag.lower()
                 if (t in own or t in tag_hits or len(t) < 3
-                        or t in self._GENERIC_TAGS):
+                        or tiers.is_structural(t)):
                     continue
                 # slug tags match their spoken form: bear-mountain ~ "bear mountain"
                 phrase = re.escape(t).replace(r"\-", r"[\s_-]+")
@@ -574,6 +568,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         # Collapse largest-first into collections. Only when the caller has
         # NOT already narrowed by tag — drilling into a tag and being handed
         # that same tag back collapsed would be a dead end.
+        tiers = self._tag_tiers()
         collections: list[dict] = []
         if not want_tag and cost(docs) > max_chars:
             alive = {d["id"]: d for d in docs}
@@ -588,7 +583,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     # on one would hide the entire corpus behind a word that
                     # says nothing. The per-source tags underneath it are the
                     # ones that mean something.
-                    if str(t).lower() in self._GENERIC_TAGS:
+                    if tiers.is_structural(str(t)):
                         continue
                     groups.setdefault(str(t), []).append(doc_id)
             while cost(docs) + cost(collections) > max_chars:
@@ -658,6 +653,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     # ── graph (Phase E) ──────────────────────────────────────────────────
 
     async def graph(self) -> dict:
+        tiers = self._tag_tiers()
         nodes, edges = [], []
         by_title: dict[str, str] = {}
         tag_map: dict[str, list[str]] = {}
@@ -698,11 +694,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             nodes.append(node)
             by_title[title.lower()] = doc_id
             for tag in self.store.extract_tags(fm):
-                # generic category/format tags label a note's KIND, not its
-                # subject — they must not bridge unrelated notes into a shared
-                # cluster (see _GENERIC_TAGS). The tag still rides on the node
-                # above as a search label; it just earns no relationship edge.
-                if tag.lower() in self._GENERIC_TAGS:
+                # Category/format tags label a note's KIND, not its subject —
+                # they must not bridge unrelated notes into a shared cluster
+                # (see tagtiers). The tag still rides on the node above as a
+                # search label; it just earns no relationship edge.
+                if not tiers.bridges(tag):
                     continue
                 tag_map.setdefault(tag, []).append(doc_id)
             for link in self.store.extract_links(body):

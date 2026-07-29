@@ -308,8 +308,12 @@ def _check_tags(spec: dict, created: list[dict], report: ContractReport,
 
     if spec.get("no_generic"):
         if generic_tags is None:
-            from app.memory.memory import OkfMemory
-            generic_tags = {str(t).lower() for t in OkfMemory._GENERIC_TAGS}
+            # SEED_FLOOR deliberately, not the live structural set: a graded
+            # task writes into a scratch corpus of a handful of documents,
+            # where document frequency has nothing to say. The fixtures were
+            # written against exactly this vocabulary.
+            from app.memory.tagtiers import SEED_FLOOR
+            generic_tags = {str(t).lower() for t in SEED_FLOOR}
         offenders = sorted(all_tags & generic_tags)
         report.add("memory.tags.no_generic", not offenders,
                    f"generic tags {offenders}" if offenders else "none")
