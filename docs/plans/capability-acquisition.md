@@ -446,7 +446,7 @@ onto the critical path because real PRs need a deploy key.
 | 1 | `maintainer` agent reads her own source; `coder` row deleted | nothing | small | **BUILT** |
 | 1b | Goal-scoped autonomy: `goals` table, the gate, `manage_tool_hosts` | consent rail | medium | **BUILT** |
 | 2 | Her runtime: k3d + Calico, namespace policy, quota, default-deny egress | flavour decision | large | **BUILT + attacked** |
-| 3 | The workload tool + `list_workloads` / `apply_workload` / `delete_workload`, goal-scoped | 2 | medium | next |
+| 3 | The workload tool: `deploy_workload` / `list_workloads` / `workload_logs` / `delete_workload`, goal-scoped, on a `deployer` agent | 2 | medium | **BUILT + verified** |
 | 4 | ACCEPTANCE: a service NEITHER of us pre-wired, stood up by her end to end, then deleted | 2, 3 | medium | |
 | 5 | The acquisition router + proposal shapes | 3 | medium | |
 | 6 | Patch grader in the eval harness, then diff-as-recommendation | eval harness | medium | |
@@ -551,10 +551,28 @@ rule the eval harness learned as "the fallthrough case must be refusal".
 
 ## Still needed from Jeremy
 
-Nothing blocking. Phase 2 is closed. Next is phase 3 — the workload tool
-(`apply_workload` / `list_workloads` / `delete_workload`), goal-scoped, so Nova
-can actually reach the namespace that now exists. She has no way to use it yet:
-the boundary is built and proven, and nothing is wired to it.
+Nothing blocking. Phases 2 and 3 are closed — she can reach the namespace and
+deploy into it. Next is phase 5, the acquisition router (phase 4 is the
+acceptance test, which wants the router first).
+
+**Phase 3 as built, 2026-07-29.** `workloads/setup.sh` builds the whole runtime
+reproducibly (fixed API port so the URL survives a recreate, Calico with the
+CIDR pinned off the LAN, the boundary applied, and a ServiceAccount credential
+written to a gitignored `data/runtime/`). `app/workloads.py` talks to the API
+server **as the nova-deployer ServiceAccount over TLS-verified HTTPS** — not a
+kubeconfig, which is the whole point: if this module has a bug, the API server
+refuses anyway. It validates nothing about a manifest on purpose; a Python
+denylist would be a second, weaker authority that drifts from the first.
+
+Four tools on a new `deployer` agent, which deliberately holds no `fetch_url`
+and no `search_memory`: an agent with both research and `deploy_workload`
+would trip the containment invariant on every useful turn and look broken.
+Research and deployment are separate turns by construction.
+
+Verified through a real chat turn, against the cluster rather than her report:
+asked to stand up Redis she proposed a goal scoped to `deploy_workload`, and on
+approval wrote the manifest and deployed it — pod 1/1 Running, Service on 6379.
+Deleted afterwards; the artifact is that she could.
 
 **Scope discipline, recorded because I got it wrong once.** Every phase here
 builds CAPABILITY. No phase delivers a router integration or a Home Assistant

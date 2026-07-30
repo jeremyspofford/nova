@@ -9,6 +9,12 @@
     "manage_agents",
     "search_memory"
   ],
+  "deployer": [
+    "delete_workload",
+    "deploy_workload",
+    "list_workloads",
+    "workload_logs"
+  ],
   "guardian": [
     "diagnose",
     "list_agents",
@@ -44,6 +50,7 @@
     "list_goals",
     "list_memory",
     "list_skills",
+    "list_workloads",
     "manage_automations",
     "notify_operator",
     "propose_goal",

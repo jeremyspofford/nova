@@ -377,33 +377,15 @@ ACTOR_TOOLS = frozenset({
     "pull_model",          # what runs on the box
     "delete_memory_item",  # destruction
     "manage_tool_hosts",   # where an http_call tool may reach
+    "deploy_workload",     # what runs in her namespace
+    "delete_workload",     # and destroying it
 })
 
 
-# ── goal scope: which verbs an approved goal may pre-authorise ─────────────
-#
-# Jeremy, 2026-07-28, enumerating what should need approval: agent creation,
-# tool creation, model pulls, automations — with rules explicitly left alone
-# and research always allowed.
-#
-# So this is a SUBSET of ACTOR_TOOLS, and the two exclusions are the point.
-# `manage_rules` already burns a single-use consent for anything that weakens
-# a guardrail; letting a goal pre-approve that would turn the strictest gate
-# in the system into the weakest, since one approval would then cover every
-# later weakening. `delete_memory_item` is destruction of the operator's own
-# knowledge, which is not "building what you need" — it is the one thing a
-# wrong goal could not undo.
-#
-# Everything here CREATES capability. That is the honest line: a goal buys
-# permission to build, never permission to remove a protection or erase a
-# record.
-GOAL_SCOPED_TOOLS = frozenset({
-    "manage_agents",
-    "manage_tools",
-    "manage_automations",
-    "pull_model",
-    "manage_tool_hosts",
-})
+# The goal-scoped set lives in `scopes` so `builtin` can DESCRIBE it without
+# importing this module (registry imports builtin, not the other way).
+# It was duplicated by hand until the copies disagreed — see scopes.py.
+from app.tools.scopes import GOAL_SCOPED_TOOLS  # noqa: E402,F401
 
 
 def is_actor(name: str, db_tools: Optional[dict] = None,

@@ -47,6 +47,14 @@ services:
       # volumes). Display-only for the backend; the actual mounts are on the
       # ollama/kokoro/whisper services via docker-compose.models.yml.
       NOVA_MODELS_DIR: ${NOVA_MODELS_DIR:-}
+      # Nova's own workload runtime (docs/plans/capability-acquisition.md
+      # shape 4). A URL and a token, deliberately — not a docker-network
+      # coupling — because the same interface reaches a real k3s on another
+      # machine, which is where this is going. Set up with workloads/setup.sh;
+      # the PRESENCE of the token file is what enables the tools, so a stack
+      # with no cluster simply reports the runtime as unconfigured.
+      NOVA_K8S_API_URL: ${NOVA_K8S_API_URL:-https://host.docker.internal:6550}
+      NOVA_K8S_NAMESPACE: ${NOVA_K8S_NAMESPACE:-nova-workloads}
       SEARXNG_URL: http://searxng:8080
       INFERENCE_CONTROL_URL: http://inference-control:9911
       MCP_RUNNER_URL: http://mcp-runner:8100
@@ -64,6 +72,10 @@ services:
       # out; the index rescans on startup and reindexes on write.
       - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
       - ./data/wake-training:/app/data/wake-training
+      # the ServiceAccount credential for her runtime, written by
+      # workloads/setup.sh. Read-only and gitignored: it is a bearer token
+      # scoped to one namespace, and nothing in the backend should rewrite it.
+      - ./data/runtime:/app/data/runtime:ro
       - ./backend:/app/backend:cached
       # tiny shared control channel to the inference-control sidecar: the
       # backend writes the operator-chosen model-store path here, the sidecar

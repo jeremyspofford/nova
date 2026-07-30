@@ -13,6 +13,7 @@ import re
 from urllib.parse import urlparse
 
 from app import capability_events, db, durability, tagging
+from app.tools import scopes
 from app.agents import registry as agent_registry
 from app.memory import provenance
 from app.memory.memory import memory
@@ -1196,6 +1197,71 @@ async def _remember_speaker(args, ctx):
             f"operator can change roles (Settings -> Voice).")
 
 
+async def _deploy_workload(args, ctx):
+    """Apply a manifest into the namespace Nova owns.
+
+    Goal-scoped, and that is the only gate in front of it: inside the
+    namespace she creates and destroys freely (Jeremy, 2026-07-29 — no merge,
+    no per-action approval). Everything that keeps it safe is enforced by the
+    API server, not here: Pod Security refuses privileged/hostPath/host
+    namespaces/root, the quota bounds the size, default-deny egress bounds the
+    reach, and the token is a ServiceAccount that holds none of the verbs that
+    could widen any of it.
+
+    So this executor validates nothing about the manifest on purpose. A Python
+    denylist would be a second, weaker authority that drifts from the API
+    server's, and the day they disagree the model learns to satisfy the wrong
+    one.
+    """
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    manifest = str(args.get("manifest") or "").strip()
+    if not manifest:
+        return ("Error: manifest is required — the YAML for what to deploy. "
+                f"Creatable kinds: {', '.join(sorted(workloads.KINDS))}.")
+    result = await workloads.apply(manifest)
+    if result.get("status") != "ok":
+        # the API server's refusals name the exact violated control; pass them
+        # through so she can fix the manifest rather than guess
+        return _j(result)
+    return _j({**result, "next": ("Check list_workloads for readiness, and "
+                                  "workload_logs if a pod is not starting.")})
+
+
+async def _list_workloads(args, ctx):
+    """What is running in her namespace, and why anything is not."""
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    return _j({**await workloads.listing(), "runtime": await workloads.health()})
+
+
+async def _delete_workload(args, ctx):
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    kind = str(args.get("kind") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not kind or not name:
+        return "Error: kind and name are both required."
+    return _j(await workloads.delete(kind, name))
+
+
+async def _workload_logs(args, ctx):
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    pod = str(args.get("pod") or "").strip()
+    if not pod:
+        return "Error: pod name is required (list_workloads shows them)."
+    try:
+        lines = int(args.get("lines") or 60)
+    except (TypeError, ValueError):
+        lines = 60
+    return await workloads.logs(pod, lines)
+
+
 async def _propose_goal(args, ctx):
     """Ask for standing approval to build something, scoped to that thing.
 
@@ -1217,10 +1283,10 @@ async def _propose_goal(args, ctx):
                 "finish line the operator can check — 'a router-manager agent "
                 "that can list VLANs and show per-client bandwidth' is a "
                 "target; 'manage the router' is a wish.")
-    unknown = [v for v in verbs if v not in tool_registry.GOAL_SCOPED_TOOLS]
+    unknown = [v for v in verbs if v not in scopes.GOAL_SCOPED_TOOLS]
     if unknown or not verbs:
         return ("Error: `verbs` must name at least one of: "
-                + ", ".join(sorted(tool_registry.GOAL_SCOPED_TOOLS))
+                + scopes.verb_list()
                 + (f" (not: {', '.join(unknown)})" if unknown else "")
                 + ". Guardrail changes and memory deletion are deliberately "
                   "not pre-approvable by a goal — those stay one decision at "
@@ -1992,6 +2058,54 @@ BUILTIN_TOOLS: dict[str, dict] = {
         }, "required": ["name"]},
         "execute": _remember_speaker,
     },
+    "deploy_workload": {
+        "name": "deploy_workload",
+        "description": ("Run a service in your own Kubernetes namespace by "
+                        "applying a YAML manifest. This is how you stand up "
+                        "something that has to RUN — a database, a home "
+                        "automation server, a scraper. Multi-document YAML is "
+                        "fine (a Deployment plus a Service plus a PVC). The "
+                        "namespace is imposed; do not set it. Pods must be "
+                        "non-root with allowPrivilegeEscalation false, "
+                        "capabilities dropped and a RuntimeDefault seccomp "
+                        "profile, or the cluster refuses them and tells you "
+                        "exactly which rule you missed."),
+        "parameters": {"type": "object", "properties": {
+            "manifest": {"type": "string",
+                         "description": "the Kubernetes YAML to apply"},
+        }, "required": ["manifest"]},
+        "execute": _deploy_workload,
+    },
+    "list_workloads": {
+        "name": "list_workloads",
+        "description": ("What is currently running in your namespace, with "
+                        "readiness, any pod that is stuck and why, and how "
+                        "much of your resource quota is used. Read-only. "
+                        "Check this before deploying and after."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "execute": _list_workloads,
+    },
+    "workload_logs": {
+        "name": "workload_logs",
+        "description": ("Recent output from one of your pods — the way to "
+                        "find out why a deployment is not working. Read-only."),
+        "parameters": {"type": "object", "properties": {
+            "pod": {"type": "string", "description": "pod name from list_workloads"},
+            "lines": {"type": "integer", "description": "how many lines (default 60)"},
+        }, "required": ["pod"]},
+        "execute": _workload_logs,
+    },
+    "delete_workload": {
+        "name": "delete_workload",
+        "description": ("Remove something you deployed. Use it to clean up "
+                        "after an experiment, or to replace a broken object."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string",
+                     "description": "e.g. Deployment, Service, Job, Pod"},
+            "name": {"type": "string", "description": "the object's name"},
+        }, "required": ["kind", "name"]},
+        "execute": _delete_workload,
+    },
     "propose_goal": {
         "name": "propose_goal",
         "description": ("Ask the operator to approve a GOAL — one decision "
@@ -2008,9 +2122,13 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                        "router-manager agent that can list "
                                        "VLANs and show per-client bandwidth'")},
             "verbs": {"type": "array", "items": {"type": "string"},
-                      "description": ("which of manage_agents, manage_tools, "
-                                      "manage_automations, pull_model, "
-                                      "manage_tool_hosts this goal needs")},
+                      # DERIVED from the enforced set, never retyped. The
+                      # hardcoded copy drifted the hour deploy_workload was
+                      # added: Nova read this list, asked for
+                      # manage_automations to deploy a service, and was right
+                      # to — it was the only thing she had been offered.
+                      "description": ("which of these this goal needs: "
+                                      + scopes.verb_list())},
             "rationale": {"type": "string",
                           "description": "why these are needed (optional)"},
             "max_actions": {"type": "integer",
