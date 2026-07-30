@@ -302,6 +302,83 @@ def _family_allowed(available: set[str]) -> set[str]:
     return out - _FAMILY_HARD_EXCLUDE
 
 
+async def _shapes_block(tool_names: list[str]) -> str:
+    """How to get a capability she does not have — the acquisition router.
+
+    The "What you can actually do" block below answers the closed-world
+    question and stops there, which is right for "can you run shell commands"
+    and wrong for "manage my router". Asked for something genuinely absent she
+    has had two moves: refuse, or describe a permission gate that does not
+    exist (measured 2026-07-28 — she told the operator agent and tool creation
+    "require operator approval" when neither had any gate at all). This is the
+    third move, and it is the one he asked for: work out what SHAPE the thing
+    is and propose it.
+
+    Ordered least-privilege first, and the ordering is the whole instruction:
+    a request servable by an HTTP call must not get a container.
+
+    EVERY LINE IS DERIVED from what is actually available right now. A stack
+    with no cluster is never told it can deploy; an install where the runtime
+    is unconfigured says so. The alternative — a fixed list of five shapes —
+    would be a prompt that lies on any install but this one, and it would lie
+    silently.
+
+    That this router is a prompt at all is deliberate and safe for a
+    structural reason: every branch it can choose ends at a control that is
+    not a prompt. Choosing wrong gets a proposal refused, never a system
+    changed. She is only picking which locked door to knock on.
+    """
+    if "propose_goal" not in (tool_names or []):
+        return ""      # only the agent that can ask is told how to ask
+    from app import workloads
+    from app.tools import scopes
+
+    lines = ["## Getting a capability you do not have",
+             "When the operator asks for something no tool of yours covers, "
+             "do not answer with what you cannot do. Work out which of these "
+             "it is — take the FIRST one that could work, never the most "
+             "powerful — and call propose_goal with the verbs it needs."]
+
+    lines.append("1. ALREADY POSSIBLE — re-read the tool list above. The "
+                 "commonest case is a request you can serve and did not "
+                 "recognise.")
+    lines.append("2. IT HAS AN HTTP API — a declarative tool is enough. Verbs: "
+                 "manage_tools, plus manage_tool_hosts if its host is not "
+                 "already allowed. Cheapest real option; prefer it.")
+    try:
+        hosts = await _allowed_hosts()
+        lines.append(f"   Hosts already allowed: {', '.join(hosts) or '(none)'}.")
+    except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
+        log.debug("host allowlist read failed", exc_info=True)
+
+    lines.append("3. SOMEONE WROTE AN MCP SERVER FOR IT — registering one is "
+                 "the operator's job, not yours. Say which server would do it "
+                 "and let him decide.")
+
+    if workloads.configured():
+        lines.append("4. IT HAS TO RUN SOMEWHERE — deploy it into your own "
+                     "namespace. Verb: deploy_workload. This is the heavy "
+                     "option; do not reach for it when 2 would serve.")
+    else:
+        lines.append("4. IT HAS TO RUN SOMEWHERE — you have no runtime "
+                     "configured, so you cannot deploy anything. Say that "
+                     "plainly; it is the operator's to set up.")
+
+    lines.append("5. IT NEEDS NEW CODE IN NOVA HERSELF — you cannot do this. "
+                 "Describe precisely what would be needed and stop.")
+    lines.append("Research first if you must, but a turn that has read a web "
+                 "page cannot act — so research, then propose, and act on the "
+                 "next turn. Verbs a goal can carry: " + scopes.verb_list() + ".")
+    return "\n".join(lines)
+
+
+async def _allowed_hosts() -> list[str]:
+    from app import db
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT host FROM tool_host_allowlist ORDER BY host")
+    return [r["host"] for r in rows]
+
+
 async def _goals_block() -> str:
     """What she is currently pre-approved to build, stated in the prompt.
 
@@ -512,6 +589,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
     goals_block = await _goals_block()
     if goals_block:
         parts.append(goals_block)
+    shapes = await _shapes_block(tool_names or [])
+    if shapes:
+        parts.append(shapes)
     # what CHANGED, which the state block above cannot say
     try:
         from app import capability_events

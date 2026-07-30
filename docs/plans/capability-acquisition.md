@@ -448,7 +448,7 @@ onto the critical path because real PRs need a deploy key.
 | 2 | Her runtime: k3d + Calico, namespace policy, quota, default-deny egress | flavour decision | large | **BUILT + attacked** |
 | 3 | The workload tool: `deploy_workload` / `list_workloads` / `workload_logs` / `delete_workload`, goal-scoped, on a `deployer` agent | 2 | medium | **BUILT + verified** |
 | 4 | ACCEPTANCE: a service NEITHER of us pre-wired, stood up by her end to end, then deleted | 2, 3 | medium | |
-| 5 | The acquisition router + proposal shapes | 3 | medium | |
+| 5 | The acquisition router + proposal shapes | 3 | medium | **BUILT + verified** |
 | 6 | Patch grader in the eval harness, then diff-as-recommendation | eval harness | medium | |
 | 7 | ACP coding sessions, private clone | `#20` phase 0 spike | large | |
 | 8 | Staging stack + automated verification | `#31` backups | large | |
@@ -551,9 +551,27 @@ rule the eval harness learned as "the fallthrough case must be refusal".
 
 ## Still needed from Jeremy
 
-Nothing blocking. Phases 2 and 3 are closed — she can reach the namespace and
-deploy into it. Next is phase 5, the acquisition router (phase 4 is the
-acceptance test, which wants the router first).
+Nothing blocking. Phases 2, 3 and 5 are closed. Next is phase 4 — the
+acceptance test — and then the self-coding half (6–9), which is gated on `#32`
+secrets for the deploy key.
+
+**Phase 5 as built, 2026-07-29.** `_shapes_block` in runner.py, offered only to
+an agent holding `propose_goal`, and every line DERIVED: the allowlisted hosts
+are read live, and shape 4 appears only when a runtime is actually configured —
+a stack with no cluster is told it cannot deploy rather than being invited to
+try. The five shapes are ordered least-privilege first and the ordering is the
+instruction: a request an HTTP call would serve must not get a container.
+
+The approval card now states CONSEQUENCES derived from the verbs
+(`scopes.consequences`), not from the title she wrote. "Deploy a small helper"
+and "run a new service in her Kubernetes namespace" can both be honest
+descriptions of one goal; only the second is what the operator needs, and
+deriving it from the verb set is what stops the two from ever disagreeing.
+
+Verified with two real turns. "Look up open issues on a GitHub repo" produced
+a goal scoped to `{manage_tools, manage_tool_hosts}` — the cheap shape. "A
+persistent Postgres you control" produced `{deploy_workload}`. She reached for
+the container only when nothing lighter would do.
 
 **Phase 3 as built, 2026-07-29.** `workloads/setup.sh` builds the whole runtime
 reproducibly (fixed API port so the URL survives a recreate, Calico with the

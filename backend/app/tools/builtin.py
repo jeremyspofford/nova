@@ -1296,13 +1296,20 @@ async def _propose_goal(args, ctx):
         rationale=str(args.get("rationale") or "").strip(),
         proposed_by=ctx.get("agent_name"),
         max_actions=args.get("max_actions") or goals.DEFAULT_MAX_ACTIONS)
+    # What he is agreeing to, in plain language and derived from the VERBS —
+    # not from the title or target, which are hers. "Deploy a small helper"
+    # and "run a new service in her Kubernetes namespace" can both be honest
+    # descriptions of the same goal; only the second is the one he needs.
+    effects = "\n".join(f"  • {c}" for c in scopes.consequences(verbs))
     try:
         await consents.create(
             "goal.activate", goal["id"],
             (f"Approve the goal “{title}”?\n\n"
-             f"Done when: {target}\n"
-             f"Pre-approves: {', '.join(sorted(verbs))} — up to "
-             f"{goal['max_actions']} actions, for {goals.DEFAULT_TTL_HOURS} hours."),
+             f"Done when: {target}\n\n"
+             f"This lets her:\n{effects}\n\n"
+             f"Up to {goal['max_actions']} actions, for "
+             f"{goals.DEFAULT_TTL_HOURS} hours. "
+             f"({', '.join(sorted(verbs))})"),
             requested_by=ctx.get("agent_name") or "unknown",
             conversation_id=ctx.get("conversation_id"))
     except ValueError as e:

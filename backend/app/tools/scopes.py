@@ -45,3 +45,31 @@ GOAL_SCOPED_TOOLS = frozenset({
 def verb_list() -> str:
     """The set as prose, for a tool description or an error message."""
     return ", ".join(sorted(GOAL_SCOPED_TOOLS))
+
+
+# What each verb actually MEANS to the operator reading an approval card.
+# Ordered most-consequential first: a goal is described by the biggest thing
+# it can do, because that is what he is really being asked to weigh.
+_CONSEQUENCE: tuple[tuple[str, str], ...] = (
+    ("deploy_workload",   "run a new service in her Kubernetes namespace"),
+    ("manage_tool_hosts", "let her reach a new host on your network or the internet"),
+    ("pull_model",        "download a model onto this machine"),
+    ("manage_agents",     "create or change one of her agents"),
+    ("manage_tools",      "create or change one of her tools"),
+    ("manage_automations", "schedule work that runs unattended"),
+    ("delete_workload",   "tear down services she deployed"),
+)
+
+
+def consequences(verbs) -> list[str]:
+    """Plain-language effects of a verb set, worst first.
+
+    DERIVED FROM THE VERBS, never from anything the model wrote. A goal's
+    title and target are her words and she may describe a container deployment
+    as "a small helper" — honestly, even, since that may be how she thinks of
+    it. What the operator is agreeing to is the verb list, so the card is
+    built from the verb list. The one place these could disagree is the one
+    place it would matter.
+    """
+    have = set(verbs or ())
+    return [text for verb, text in _CONSEQUENCE if verb in have]
