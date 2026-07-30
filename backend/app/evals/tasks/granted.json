@@ -10,8 +10,11 @@
     "search_memory"
   ],
   "deployer": [
+    "allow_host_egress",
+    "allow_internet_egress",
     "delete_workload",
     "deploy_workload",
+    "list_egress",
     "list_workloads",
     "workload_logs"
   ],
@@ -47,6 +50,7 @@
     "github-profile-fetch",
     "list_agents",
     "list_capability_changes",
+    "list_egress",
     "list_goals",
     "list_memory",
     "list_skills",

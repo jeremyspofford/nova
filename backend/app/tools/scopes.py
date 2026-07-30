@@ -39,6 +39,13 @@ GOAL_SCOPED_TOOLS = frozenset({
     # 2026-07-29) means nothing if teardown needs a click.
     "deploy_workload",
     "delete_workload",
+    # The exception path default-deny was missing (phase 4's finding). TWO
+    # verbs, not one, because the card is built from verbs: with a single
+    # `allow_egress` the operator approving "fetch from pypi" would also be
+    # approving "reach my router", and would have no way to tell. Splitting
+    # them is what lets the card state which decision it is.
+    "allow_internet_egress",
+    "allow_host_egress",
 })
 
 
@@ -51,6 +58,10 @@ def verb_list() -> str:
 # Ordered most-consequential first: a goal is described by the biggest thing
 # it can do, because that is what he is really being asked to weigh.
 _CONSEQUENCE: tuple[tuple[str, str], ...] = (
+    ("allow_host_egress", "let her workloads reach a machine on YOUR OWN "
+                          "NETWORK (she must name the address)"),
+    ("allow_internet_egress", "let her workloads reach the public internet "
+                              "(your LAN and the Nova stack stay blocked)"),
     ("deploy_workload",   "run a new service in her Kubernetes namespace"),
     ("manage_tool_hosts", "let her reach a new host on your network or the internet"),
     ("pull_model",        "download a model onto this machine"),

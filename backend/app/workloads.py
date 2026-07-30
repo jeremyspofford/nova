@@ -228,6 +228,122 @@ async def logs(pod: str, lines: int = 60) -> str:
     return r.text or "(no output)"
 
 
+# ── egress: opening a hole, in exactly two shapes ────────────────────────
+#
+# Phase 4's acceptance test found the gap: a workload that needs anything from
+# the network cannot function, and she had no way to ask. Default-deny was
+# doing its job; what was missing was the exception path.
+#
+# NetworkPolicy cannot express a DNS name — only CIDRs and selectors — so
+# "let it reach pypi.org" has no direct translation, and resolving a hostname
+# at policy-write time would pin a CDN address that rotates within the hour.
+# The two shapes below are what IS expressible, and the split is the control:
+#
+#   internet — 0.0.0.0/0 with every private range excluded. Takes no address
+#              argument at all, so there is nothing for a model to widen.
+#   host     — one specific address, and it REFUSES anything public, so this
+#              verb cannot be used to reach the internet by another name.
+#
+# Neither can impersonate the other, and the operator's card says which is
+# which — because "reach pypi" and "reach a box on your LAN" are different
+# decisions and should never arrive as one.
+#
+# The private ranges excluded from `internet` are the whole point of it: the
+# Nova stack, the docker bridges, the LAN and cloud metadata all live there,
+# and they are exactly what a compromised workload would go looking for.
+_PRIVATE = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+            "169.254.0.0/16", "127.0.0.0/8"]
+
+
+def _is_private(cidr: str) -> bool:
+    import ipaddress
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return False
+    return net.is_private or net.is_link_local or net.is_loopback
+
+
+def _egress_policy(name: str, to: list[dict], ports: Optional[list[int]]) -> dict:
+    pol: dict = {
+        "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": {"name": name, "namespace": namespace(),
+                     # so a human reading `kubectl get netpol` can tell an
+                     # agent-opened hole from the boundary itself
+                     "labels": {"nova.local/managed": "egress"}},
+        "spec": {"podSelector": {}, "policyTypes": ["Egress"],
+                 "egress": [{"to": to}]},
+    }
+    if ports:
+        pol["spec"]["egress"][0]["ports"] = [
+            {"protocol": "TCP", "port": int(p)} for p in ports]
+    return pol
+
+
+async def allow_internet_egress() -> dict:
+    """Public internet only — every private range stays denied."""
+    pol = _egress_policy(
+        "egress-internet",
+        [{"ipBlock": {"cidr": "0.0.0.0/0", "except": list(_PRIVATE)}}], None)
+    status, body = await _request(
+        "POST", "/apis/networking.k8s.io/v1/namespaces/"
+                f"{namespace()}/networkpolicies", json_body=pol)
+    if status == 409:
+        return {"status": "ok", "detail": "the internet was already allowed"}
+    if not 200 <= status < 300:
+        return {"status": "error", "detail": _reason(status, body)}
+    log.info("egress opened: public internet (private ranges still denied)")
+    return {"status": "ok",
+            "detail": ("Workloads can now reach the public internet. Your LAN, "
+                       "the Nova stack and cloud metadata are still blocked.")}
+
+
+async def allow_host_egress(cidr: str, ports: Optional[list[int]] = None) -> dict:
+    """One specific private address. Refuses anything public."""
+    cidr = (cidr or "").strip()
+    if "/" not in cidr:
+        cidr = f"{cidr}/32"
+    if not _is_private(cidr):
+        return {"status": "error",
+                "detail": (f"'{cidr}' is not a private address. This verb is "
+                           f"for reaching something on the operator's own "
+                           f"network; use the internet grant for public hosts, "
+                           f"and give an IP or CIDR, never a hostname — a "
+                           f"NetworkPolicy cannot express a DNS name.")}
+    slug = cidr.replace("/", "-").replace(".", "-")
+    pol = _egress_policy(f"egress-host-{slug}",
+                         [{"ipBlock": {"cidr": cidr}}], ports)
+    status, body = await _request(
+        "POST", "/apis/networking.k8s.io/v1/namespaces/"
+                f"{namespace()}/networkpolicies", json_body=pol)
+    if status == 409:
+        return {"status": "ok", "detail": f"{cidr} was already allowed"}
+    if not 200 <= status < 300:
+        return {"status": "error", "detail": _reason(status, body)}
+    log.info("egress opened: %s ports=%s", cidr, ports or "all")
+    return {"status": "ok", "detail": f"Workloads can now reach {cidr}."}
+
+
+async def list_egress() -> dict:
+    """Every policy in the namespace, and which are agent-opened holes."""
+    status, body = await _request(
+        "GET", f"/apis/networking.k8s.io/v1/namespaces/{namespace()}/networkpolicies")
+    if status != 200 or not isinstance(body, dict):
+        return {"status": "error", "detail": _reason(status, body)}
+    out = []
+    for item in body.get("items") or []:
+        meta = item.get("metadata") or {}
+        out.append({
+            "name": meta.get("name"),
+            "opened_by_agent": (meta.get("labels") or {}).get(
+                "nova.local/managed") == "egress",
+            "types": (item.get("spec") or {}).get("policyTypes")})
+    return {"policies": out,
+            "note": ("Nothing here can revoke a grant — that is deliberate. "
+                     "The operator removes one with: kubectl delete "
+                     f"networkpolicy <name> -n {namespace()}")}
+
+
 async def health() -> dict:
     """Is the runtime reachable, and is the boundary the one we think it is?
 

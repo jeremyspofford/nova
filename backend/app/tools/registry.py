@@ -379,6 +379,8 @@ ACTOR_TOOLS = frozenset({
     "manage_tool_hosts",   # where an http_call tool may reach
     "deploy_workload",     # what runs in her namespace
     "delete_workload",     # and destroying it
+    "allow_internet_egress",  # what a workload may reach
+    "allow_host_egress",
 })
 
 

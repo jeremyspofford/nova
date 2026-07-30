@@ -1262,6 +1262,40 @@ async def _workload_logs(args, ctx):
     return await workloads.logs(pod, lines)
 
 
+async def _allow_internet_egress(args, ctx):
+    """Open the public internet to her workloads; private ranges stay denied.
+
+    Goal-scoped, and the two verbs are separate on purpose: "let it fetch from
+    pypi" and "let it reach a box on your LAN" are different decisions and
+    must not arrive on one card. The executor cannot blur them either —
+    internet takes no address, and host refuses anything public.
+    """
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    return _j(await workloads.allow_internet_egress())
+
+
+async def _allow_host_egress(args, ctx):
+    """One private address. Separate verb from the internet one so the
+    operator's approval card can say which of the two he is agreeing to."""
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    ports = args.get("ports") or None
+    if isinstance(ports, str):
+        ports = [p.strip() for p in ports.split(",") if p.strip()]
+    return _j(await workloads.allow_host_egress(
+        str(args.get("address") or ""), ports))
+
+
+async def _list_egress(args, ctx):
+    from app import workloads
+    if not workloads.configured():
+        return _j(await workloads.health())
+    return _j(await workloads.list_egress())
+
+
 async def _propose_goal(args, ctx):
     """Ask for standing approval to build something, scoped to that thing.
 
@@ -2112,6 +2146,41 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "name": {"type": "string", "description": "the object's name"},
         }, "required": ["kind", "name"]},
         "execute": _delete_workload,
+    },
+    "allow_internet_egress": {
+        "name": "allow_internet_egress",
+        "description": ("Let your workloads reach the PUBLIC INTERNET. Egress "
+                        "is denied by default, which is why a service that "
+                        "installs dependencies or calls an external API fails "
+                        "until this is granted. The operator's own network and "
+                        "the Nova stack stay blocked — use allow_host_egress "
+                        "for those. The grant persists; only the operator can "
+                        "revoke it."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "execute": _allow_internet_egress,
+    },
+    "allow_host_egress": {
+        "name": "allow_host_egress",
+        "description": ("Let your workloads reach ONE machine on the "
+                        "operator's own network — his router, a NAS, a "
+                        "service on another box. Give an IP or CIDR, never a "
+                        "hostname: a network policy cannot express DNS. This "
+                        "refuses public addresses; those go through "
+                        "allow_internet_egress. The grant persists."),
+        "parameters": {"type": "object", "properties": {
+            "address": {"type": "string", "description": "IP or CIDR, e.g. 192.168.0.50"},
+            "ports": {"type": "array", "items": {"type": "integer"},
+                      "description": "optional TCP ports; omit for all"},
+        }, "required": ["address"]},
+        "execute": _allow_host_egress,
+    },
+    "list_egress": {
+        "name": "list_egress",
+        "description": ("Which network policies apply to your namespace, and "
+                        "which are holes opened for a workload. Read-only — "
+                        "check this when something cannot reach the network."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "execute": _list_egress,
     },
     "propose_goal": {
         "name": "propose_goal",

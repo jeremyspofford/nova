@@ -591,11 +591,36 @@ template and nothing applies it.
 
 Two consequences worth separating:
 
-* **Runtime egress** (her dashboard reaching the thing it monitors) is a
-  genuine loosening of the boundary and is Jeremy's call, not mine to add
-  hours after building it. The consistent design would be a goal-scoped verb
-  whose card reads "let a workload reach <host>", mirroring
-  `manage_tool_hosts`. **Open decision.**
+* **Runtime egress** — **DECIDED and BUILT 2026-07-29** ("do egress"). Two
+  goal-scoped verbs, and the split is the control: the approval card is
+  composed from a goal's VERBS, so a single `allow_egress` would have meant
+  the operator approving "fetch from pypi" was also approving "reach my
+  router", with nothing on the card to tell him.
+  - `allow_internet_egress` — 0.0.0.0/0 with every private range excluded. It
+    takes NO address argument, so there is nothing for a model to widen.
+  - `allow_host_egress` — one address, and it REFUSES anything public, so it
+    cannot be used to reach the internet by another name. IP or CIDR only: a
+    NetworkPolicy cannot express DNS, and resolving a hostname at write time
+    would pin a CDN address that rotates within the hour.
+
+  Her Role gains `create` on networkpolicies and still no patch, update or
+  delete. NetworkPolicies are ADDITIVE — one can only allow more, never less —
+  so create cannot weaken default-deny, and without the other verbs
+  default-deny cannot be touched by anything reachable from the model. She
+  cannot submit a policy DOCUMENT either: `deploy_workload`'s KINDS map has no
+  NetworkPolicy, so the only route is the two tools, which compose a fixed
+  template from a validated address.
+
+  The consequence, stated because it is real: **a grant PERSISTS and nothing
+  in the system can revoke it**, including the backend. Closing a hole is
+  `kubectl delete networkpolicy <name> -n nova-workloads`. A firewall hole
+  that silently re-closed when a goal expired would be its own surprise.
+
+  Verified: with the internet grant applied, pypi.org and 1.1.1.1 are
+  REACHED while the Nova backend, Postgres, the LAN gateway and cloud
+  metadata all remain blocked. Both test grants were removed afterwards —
+  the capability is the deliverable; opening the operator's firewall is his
+  call, not a side effect of building it.
 * **Build-time egress** (pip) should not need a policy hole at all. She
   installed dependencies at container start *because she cannot build an
   image* — a fragile pattern she was pushed into. An image-build path is the

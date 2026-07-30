@@ -69,9 +69,25 @@ rules:
   # Reading is safe: a NetworkPolicy is not a secret, and the verbs that could
   # weaken one (patch, update, delete) are still absent — as are namespaces,
   # resourcequotas and limitranges, for the same reason.
+  # CREATE, and read. Never patch, update or delete.
+  #
+  # NetworkPolicies are ADDITIVE — one can only ever allow more, never less —
+  # so `create` cannot weaken default-deny, and without patch/update/delete
+  # default-deny cannot be modified or removed by anything reachable from the
+  # model. That asymmetry is what makes opening egress safe to grant at all.
+  #
+  # The consequence, stated because it is a real one: an egress grant PERSISTS.
+  # Nothing here can revoke it, including the backend. Closing a hole is
+  # `kubectl delete networkpolicy <name> -n nova-workloads`, deliberately the
+  # operator's. A firewall hole that silently re-closed when a goal expired
+  # would be its own kind of surprise.
+  #
+  # And she still cannot submit a policy DOCUMENT: deploy_workload's KINDS map
+  # has no NetworkPolicy, so the only way to reach this verb is the two egress
+  # tools, which compose a fixed template from a validated address.
   - apiGroups: ["networking.k8s.io"]
     resources: [networkpolicies]
-    verbs: [get, list]
+    verbs: [get, list, create]
   - apiGroups: [""]
     resources: [resourcequotas, limitranges]
     verbs: [get, list]
