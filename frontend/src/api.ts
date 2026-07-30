@@ -873,6 +873,31 @@ export async function putSecret(
   return r.json();
 }
 
+export interface SecretSource {
+  source: string; label: string; ref_example: string; available: boolean;
+}
+
+export async function secretSources(): Promise<SecretSource[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/secrets/sources`);
+  if (!r.ok) return [];
+  return (await r.json()).sources;
+}
+
+/** Point at a secret held elsewhere. No value is stored for this row —
+ *  "reference, don't mirror". The backend FOLLOWS the reference before
+ *  saving, so a typo fails while you are still looking at it. */
+export async function putExternalSecret(
+  name: string, source: string, ref: string, description = ''): Promise<SecretRow> {
+  const r = await apiFetch(
+    `${API_URL}/api/v1/secrets/${encodeURIComponent(name)}/external`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, ref, description }),
+    });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'could not save it');
+  return r.json();
+}
+
 export async function revealSecret(name: string): Promise<string> {
   const r = await apiFetch(
     `${API_URL}/api/v1/secrets/${encodeURIComponent(name)}/reveal`, { method: 'POST' });

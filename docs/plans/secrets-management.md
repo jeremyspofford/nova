@@ -181,7 +181,40 @@ error, builtin secrets keep working.
    fallback for bootstrap), and migrate every plaintext `llm_providers.api_key`
    row into the store the same way — the providers table keeps only a secret
    reference and the mig-042 plaintext column is emptied once migrated.
-3. **External managers (opt-in).** 1Password + Bitwarden/Vaultwarden resolvers, the
+3. **External managers (opt-in). — SEAM BUILT 2026-07-30, CLI managers
+   gated.** Migration 074, `secret_store.SOURCES` (one resolver per source
+   behind a common signature), `put_external`, source picker in the UI, and a
+   reference that is FOLLOWED before saving so a typo fails while the operator
+   is still looking at it rather than at 3am from someone else's 401.
+
+   **Two sources are live because they need no new binary and could therefore
+   be verified here:** `file` (a path — Docker secrets, Kubernetes secret
+   mounts) and `env` (a variable, for bootstrap and CI). Both prove the
+   property that matters: `value_enc` is NULL for an external row, so the
+   value never enters Nova's database and is asked of the holder at call time.
+
+   **1Password and Bitwarden/Vaultwarden are registered but GATED**, and the
+   honest reason is twofold. Neither `op` nor `bw` is in the backend image, so
+   they need either those binaries added or a small sidecar to hold them —
+   an infrastructure decision. And I have no 1Password service account and no
+   Vaultwarden instance to verify against; shipping an unverifiable resolver
+   and calling the phase done would be exactly the "reported PASS while doing
+   nothing" failure this codebase keeps closing. Selecting one in the UI says
+   precisely which command is missing. Adding either is a resolver function
+   and nothing else — that is what the seam is for.
+
+   **Rotation nudge — BUILT.** `secrets.rotate_after_days` (default 90, 0 to
+   disable), checked daily on the leader's tick. One card per stale secret,
+   ONCE: `recommendations.create` refreshes an undecided card with the same
+   dedupe key and re-pings the operator's devices, so calling it daily would
+   nag about an unchanged secret every day — the sweep skips a dedupe key that
+   already exists in any status. Replacing the value changes the date in the
+   key, which is a genuinely new card. It never rotates anything: only the
+   operator holds the new value.
+
+   Original scope text follows.
+
+   **(as originally written)** **External managers (opt-in).** 1Password + Bitwarden/Vaultwarden resolvers, the
    source picker in the UI, reference validation. **Verify:** a secret sourced from
    1Password resolves at call time with nothing stored in Nova's DB. Tail:
    age-based rotation nudges — a small automation raises a recommendation when a

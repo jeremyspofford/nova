@@ -192,9 +192,9 @@ async def reveal(name: str) -> str:
     if not r:
         raise SecretError(f"no secret named '{name}'")
     if r["source"] != "builtin":
-        raise SecretError(
-            f"'{name}' is held in {r['source']}, not here — Nova stores the "
-            f"reference ({r['ref']}), never the value.")
+        # fetched live from the holder — Nova stores the reference, never
+        # the value, so this is a read-through rather than a lookup
+        return await _resolve_external(r["source"], r["ref"])
     return _decrypt(r["value_enc"])
 
 
@@ -213,6 +213,117 @@ async def used_by(name: str) -> list[str]:
             "WHERE headers::text LIKE '%' || $1 || '%' OR url LIKE '%' || $1 || '%'",
             token)
     return [r["name"] for r in rows]
+
+
+
+
+# ── sources ──────────────────────────────────────────────────────────────
+#
+# Phase 3. "Reference, don't mirror": an external secret's VALUE never enters
+# Nova's database — only the pointer does, and the holder is asked at call
+# time. That is the whole difference between this and copying a vault into
+# Postgres, which the 2026-07-21 decision rejected.
+#
+# Each source is one function behind a common signature, so adding a manager
+# is a resolver plus a CHECK entry and nothing else.
+
+async def _from_file(ref: str) -> str:
+    """A path. Docker secrets (/run/secrets/x), Kubernetes secret mounts,
+    anything the operator arranges to appear in the container. Needs no
+    dependency at all, which is why it is here and 1Password is not yet."""
+    try:
+        with open(ref) as f:
+            return f.read().strip()
+    except OSError as exc:
+        raise SecretError(f"cannot read '{ref}': {exc}") from exc
+
+
+async def _from_env(ref: str) -> str:
+    """A variable. Honest about its limits: env is visible to anything that
+    can read the process, so this is for bootstrap and CI rather than for
+    the credentials the built-in store exists to protect."""
+    val = os.environ.get(ref)
+    if val is None:
+        raise SecretError(f"environment variable '{ref}' is not set")
+    return val.strip()
+
+
+def _needs_cli(tool: str, hint: str):
+    async def _resolver(ref: str) -> str:
+        raise SecretError(
+            f"this secret is held in {tool}, which Nova cannot reach: the "
+            f"`{hint}` command is not installed in the backend image. It "
+            f"needs either that binary added or a small sidecar to hold it — "
+            f"an infrastructure decision, not something this can work around. "
+            f"Until then, store the value in the built-in store instead.")
+    return _resolver
+
+
+# source -> (resolver, human name, what `ref` should look like)
+SOURCES: dict[str, tuple[Any, str, str]] = {
+    "builtin":     (None, "Nova's encrypted store", ""),
+    "file":        (_from_file, "a file in the container",
+                    "/run/secrets/github_pat"),
+    "env":         (_from_env, "an environment variable", "GITHUB_PAT"),
+    "1password":   (_needs_cli("1Password", "op"), "1Password",
+                    "op://Private/GitHub/token"),
+    "bitwarden":   (_needs_cli("Bitwarden", "bw"), "Bitwarden", "<item-id>"),
+    "vaultwarden": (_needs_cli("Vaultwarden", "bw"), "Vaultwarden", "<item-id>"),
+}
+
+
+def source_options() -> list[dict]:
+    """What the UI offers, derived from the table above so a new resolver
+    appears in the picker without a second edit."""
+    return [{"source": k, "label": v[1], "ref_example": v[2],
+             "available": k == "builtin" or not _is_gated(k)}
+            for k, v in SOURCES.items()]
+
+
+def _is_gated(source: str) -> bool:
+    fn = SOURCES.get(source, (None,))[0]
+    return getattr(fn, "__qualname__", "").startswith("_needs_cli")
+
+
+async def put_external(name: str, source: str, ref: str, *,
+                       description: str = "") -> dict:
+    """Record a POINTER. No value is stored, now or ever, for this row."""
+    name = (name or "").strip().lower()
+    if not _NAME_RE.match(name):
+        raise ValueError("name must be lowercase letters, digits, dot, dash "
+                         "or underscore (2-64 chars)")
+    if source not in SOURCES or source == "builtin":
+        raise ValueError(f"unknown external source '{source}' — one of: "
+                         + ", ".join(k for k in SOURCES if k != "builtin"))
+    ref = (ref or "").strip()
+    if not ref:
+        raise ValueError("a reference is required — "
+                         f"e.g. {SOURCES[source][2]}")
+    # Prove it resolves BEFORE saving. A pointer that was never followed is a
+    # broken integration discovered at the worst possible moment, and the
+    # operator is right here to fix a typo.
+    await _resolve_external(source, ref)
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            """INSERT INTO secrets (name, source, ref, description, value_enc)
+               VALUES ($1, $2, $3, $4, NULL)
+               ON CONFLICT (name) DO UPDATE
+                 SET source = EXCLUDED.source, ref = EXCLUDED.ref,
+                     value_enc = NULL,
+                     description = COALESCE(NULLIF(EXCLUDED.description, ''),
+                                            secrets.description),
+                     updated_at = now()
+            RETURNING *""", name, source, ref, (description or "").strip())
+    log.info("secret '%s' now points at %s (%s) — no value stored", name,
+             source, ref)
+    return _public(r)
+
+
+async def _resolve_external(source: str, ref: str) -> str:
+    fn = SOURCES.get(source, (None,))[0]
+    if fn is None:
+        raise SecretError(f"'{source}' has no resolver")
+    return await fn(ref)
 
 
 # ── resolution ───────────────────────────────────────────────────────────
@@ -254,11 +365,11 @@ async def resolve(value: Any) -> Any:
 
     plain: dict[str, str] = {}
     for name, row in found.items():
-        if row["source"] != "builtin":
-            raise SecretError(
-                f"'{name}' is held in {row['source']}, which Nova cannot read "
-                f"yet — external managers are a later phase.")
-        plain[name] = _decrypt(row["value_enc"])
+        if row["source"] == "builtin":
+            plain[name] = _decrypt(row["value_enc"])
+        else:
+            # asked of the holder, at call time, never stored here
+            plain[name] = await _resolve_external(row["source"], row["ref"])
 
     async with db.acquire() as conn:
         await conn.execute(
@@ -275,3 +386,70 @@ async def resolve(value: Any) -> Any:
         return v
 
     return _sub(value)
+
+
+# ── rotation nudge ───────────────────────────────────────────────────────
+
+_last_rotation_check = 0.0
+
+
+async def maybe_nudge_rotation() -> int:
+    """One card per stale secret, once. Leader-gated by the caller.
+
+    Deliberately a nudge and not an action: Nova cannot rotate anything,
+    because only the operator holds the new value. Raising a card she cannot
+    act on herself is the honest shape — the alternative, staying silent about
+    a two-year-old token, is how credentials quietly outlive their purpose.
+
+    `dedupe_key` carries the secret's `updated_at`, so replacing the value
+    makes a genuinely new card possible next time and re-raising for the SAME
+    stale value is impossible.
+    """
+    global _last_rotation_check
+    import time
+    from app import settings_store
+    now = time.monotonic()
+    if _last_rotation_check and now - _last_rotation_check < 24 * 3600:
+        return 0
+    _last_rotation_check = now
+    try:
+        days = int(settings_store.get("secrets.rotate_after_days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+    if days <= 0:
+        return 0
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT name, updated_at FROM secrets "
+            "WHERE updated_at < now() - make_interval(days => $1)", days)
+    if not rows:
+        return 0
+    from app import recommendations
+    raised = 0
+    async with db.acquire() as conn:
+        seen = {k for (k,) in await conn.fetch(
+            "SELECT dedupe_key FROM recommendations WHERE dedupe_key LIKE 'rotate:%'")}
+    for r in rows:
+        age = (r["updated_at"].isoformat() if r["updated_at"] else "?")[:10]
+        # ONCE, and this check is why. `recommendations.create` REFRESHES an
+        # undecided card with the same dedupe_key — resetting it to new and
+        # re-pinging the operator's devices — so calling it daily would nag
+        # about an unchanged secret every day until he answered. Skipping a
+        # key that already exists in ANY status makes the docstring above
+        # true: replacing the value changes the date in the key, which is a
+        # genuinely new card; leaving it alone is silence.
+        if f"rotate:{r['name']}:{age}" in seen:
+            continue
+        try:
+            await recommendations.create(
+                "note", f"Rotate the secret '{r['name']}'?",
+                f"'{r['name']}' has not changed since {age}, which is more "
+                f"than {days} days. Nothing is wrong with it — this is a "
+                f"reminder, and only you can replace the value "
+                f"(Settings -> Secrets). Dismiss if it is fine as it is.",
+                source="secret-store", dedupe_key=f"rotate:{r['name']}:{age}")
+            raised += 1
+        except ValueError:
+            pass          # rate-limited or duplicate; the card already exists
+    log.info("rotation nudge: %d secret(s) past %d days", raised, days)
+    return raised

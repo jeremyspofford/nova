@@ -246,6 +246,12 @@ SETTING_DEFS: list[dict] = [
                      "behind the duration chips) are kept. Traces are "
                      "diagnostics, not memory — pruning them loses nothing "
                      "Nova knows.")},
+    {"key": "secrets.rotate_after_days", "type": "number", "default": 90,
+     "section": "Agents", "label": "Nudge to rotate a secret after (days)",
+     "description": ("A credential that has not been changed in this long "
+                     "gets one recommendation card, once. 0 turns the nudge "
+                     "off. It never rotates anything itself — only the "
+                     "operator holds the new value.")},
     {"key": "autonomy.goal_scoped_actions", "type": "boolean", "default": True,
      "section": "Agents", "label": "Capability-creating actions need an approved goal",
      "description": ("Creating agents, tools and automations, pulling models, "

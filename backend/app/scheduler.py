@@ -81,6 +81,8 @@ async def tick():
     # BEFORE alert evaluation: retiring an instance clears its open alerts,
     # and doing it after would leave a red card standing for a whole tick.
     await sysmon.maybe_retire_instances() # self-limits to daily
+    from app import secret_store
+    await secret_store.maybe_nudge_rotation()  # self-limits to daily
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     if not settings_store.get("automations.enabled"):
         return

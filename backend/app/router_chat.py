@@ -1776,3 +1776,27 @@ async def delete_secret_endpoint(name: str):
     if not await secret_store.delete(name):
         raise HTTPException(status_code=404, detail="secret not found")
     return {"deleted": True, "was_used_by": used}
+
+
+@router.get("/api/v1/secrets/sources")
+async def secret_sources_endpoint():
+    """What the source picker offers, derived from the resolver table so a new
+    manager appears without a second edit."""
+    from app import secret_store
+    return {"sources": secret_store.source_options()}
+
+
+@router.put("/api/v1/secrets/{name}/external")
+async def put_external_secret_endpoint(name: str, body: dict):
+    """Point at a secret held elsewhere. No value is stored for this row —
+    'reference, don't mirror'. The reference is FOLLOWED before saving, so a
+    typo fails while the operator is still looking at it."""
+    from app import secret_store
+    try:
+        return await secret_store.put_external(
+            name, str(body.get("source") or ""), str(body.get("ref") or ""),
+            description=str(body.get("description") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except secret_store.SecretError as e:
+        raise HTTPException(status_code=422, detail=str(e))

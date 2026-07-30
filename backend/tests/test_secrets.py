@@ -132,7 +132,44 @@ async def run() -> None:
                 await conn.execute("DELETE FROM secrets WHERE name = $1",
                                    f"provider_{slug}_key")
 
-        print("8. the agent-facing half is names only")
+        print("8. phase 3 — external sources reference, never mirror")
+        import os as _os
+        tmp = "/tmp/zz-secret-src"
+        open(tmp, "w").write("held-elsewhere\n")
+        await secret_store.put_external("zz-ext-file", "file", tmp)
+        async with db.acquire() as conn:
+            enc = await conn.fetchval(
+                "SELECT value_enc FROM secrets WHERE name = 'zz-ext-file'")
+        check("no value is stored for an external row — the whole point of "
+              "'reference, don't mirror'", enc is None)
+        check("it resolves from the holder at the call",
+              await secret_store.resolve("{{secret:zz-ext-file}}") == "held-elsewhere")
+
+        _os.environ["ZZ_SECRET_ENV"] = "from-env"
+        await secret_store.put_external("zz-ext-env", "env", "ZZ_SECRET_ENV")
+        check("a second source needs only a resolver",
+              await secret_store.resolve("{{secret:zz-ext-env}}") == "from-env")
+
+        try:
+            await secret_store.put_external("zz-ext-bad", "file", "/nope/missing")
+            check("a bad reference is refused AT SAVE", False, "accepted")
+        except secret_store.SecretError:
+            check("a bad reference is refused AT SAVE, while the operator is "
+                  "still looking at it — not at 3am from someone else's 401", True)
+
+        try:
+            await secret_store.put_external("zz-ext-op", "1password", "op://x/y/z")
+            check("a CLI-backed manager is gated", False, "accepted")
+        except secret_store.SecretError as e:
+            check("a CLI-backed manager says exactly what is missing",
+                  "not installed" in str(e), str(e)[:60])
+        check("...and the UI is told it is unavailable",
+              not next(o for o in secret_store.source_options()
+                       if o["source"] == "1password")["available"])
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM secrets WHERE name LIKE 'zz-ext-%'")
+
+        print("9. the agent-facing half is names only")
         from app.tools import builtin
         out = await builtin._list_secret_names({}, {})
         check("no value in the tool result", VALUE not in out)
