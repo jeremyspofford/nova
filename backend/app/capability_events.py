@@ -34,6 +34,11 @@ MCP_SERVER = "mcp_server"
 # (voice.family_tools), so creating or learning about one changes what the
 # system will do — which is the definition this log exists for.
 PERSON = "person"
+# The operator's answer to something she proposed. Not a capability change in
+# itself, and here anyway: this is the one channel by which a decision of his
+# reaches her at all. Before it existed, "approve" was a status column nobody
+# read — he clicked, the card left the banner, and she never found out.
+RECOMMENDATION = "recommendation"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.

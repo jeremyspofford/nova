@@ -119,7 +119,57 @@ async def decide(rec_id: str, choice: str) -> Optional[dict]:
         r = await conn.fetchrow(
             "UPDATE recommendations SET status=$2, decided_at=now(), "
             "decided_by='operator' WHERE id=$1 RETURNING *", rid, new_status)
+    if r:
+        await _receipt(_row(r), new_status)
     return _row(r) if r else None
+
+
+async def _receipt(rec: dict, status: str) -> None:
+    """Leave a trace of the operator's decision. Three of them, deliberately.
+
+    Jeremy, 2026-07-30, after approving a card: "I don't see a trace of it. i
+    don't see it in logs or in chat or in the ui where I thought I might see
+    it." All three were true. `decide()` was a single UPDATE of a status
+    column: no log line, no journal, no event, and nothing acted on it. The
+    card simply left the banner. This is the operator-visible-outcomes rule
+    pointed the other way round — usually the worry is Nova claiming an
+    outcome she did not achieve; here HE performed an action and the system
+    kept no receipt of it.
+
+    So:
+
+    * a LOG LINE, because that is the first place anyone looks;
+    * a JOURNAL entry, because that is durable, searchable and in the graph —
+      the thing that is still there tomorrow;
+    * a CAPABILITY EVENT, which is the load-bearing one. `capability_events.
+      prompt_block()` already rides in every agent's FACTS slot, so this is
+      the channel by which his answer reaches HER. Without it, approval was a
+      decision she could never learn — she proposed, he agreed, and she went
+      on not knowing. An approval nobody can act on is not an approval.
+
+    Never raises: a decision that fails to leave a receipt is a missing line,
+    a decision that fails BECAUSE of one is a broken button.
+    """
+    from app import capability_events
+    verb = {"approved": "approved", "dismissed": "dismissed",
+            "later": "deferred"}.get(status, status)
+    log.info("Recommendation %s by operator: %s", verb, rec["title"])
+    try:
+        capability_events.record(
+            capability_events.RECOMMENDATION, rec["title"][:160], verb,
+            actor="operator",
+            detail={"kind": rec["kind"], "raised_by": rec.get("source")})
+    except Exception:
+        log.exception("capability event for recommendation decision failed")
+    try:
+        from app.memory.memory import memory
+        await memory.write(
+            f"The operator {verb} the recommendation \"{rec['title']}\" "
+            f"(raised by {rec.get('source') or 'unknown'}). "
+            + (f"Its content: {rec['body'][:400]}" if verb == "approved" else ""),
+            type="journal", source_type="chat")
+    except Exception:
+        log.exception("journal write for recommendation decision failed")
 
 
 async def count_new() -> int:
