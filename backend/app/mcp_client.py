@@ -54,7 +54,18 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
     url = server.get("url") or ""
     if not url:
         return "error", [], "no url configured"
-    headers = server.get("headers") or {}
+    # LAST POSSIBLE MOMENT. The stored header holds `{{secret:name}}`; the
+    # token exists only from here to the end of this request, and the trace
+    # redactor already masks `authorization`, so it never reaches the ledger.
+    # A missing secret raises rather than sending an empty credential — an
+    # empty Bearer becomes someone else's confusing 401, three layers from
+    # the actual mistake.
+    from app import secret_store
+    try:
+        headers = await secret_store.resolve(server.get("headers") or {})
+        url = await secret_store.resolve(url)
+    except secret_store.SecretError as exc:
+        return "error", [], str(exc)
     try:
         async with streamablehttp_client(url, headers=headers,
                                          timeout=_CONNECT_TIMEOUT_S) as (read, write, _):
@@ -126,8 +137,9 @@ async def _stdio_call_tool(server: dict, tool_name: str, args: dict,
 
 async def _http_call_tool(server: dict, tool_name: str, args: dict,
                           timeout: float) -> tuple[list[dict], bool]:
-    url = server.get("url") or ""
-    headers = server.get("headers") or {}
+    from app import secret_store
+    url = await secret_store.resolve(server.get("url") or "")
+    headers = await secret_store.resolve(server.get("headers") or {})
     async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()

@@ -838,6 +838,60 @@ export async function decideRecCard(
   return r.json();
 }
 
+
+// ── secrets (docs/plans/secrets-management.md) ────────────────────────────
+//
+// The value NEVER comes back from the list — only `has_value`. Revealing is a
+// separate POST (not GET: a credential must not land in a URL, a history or an
+// access log), and there is no agent-facing path to any of this at all.
+
+export interface SecretRow {
+  name: string;
+  source: string;
+  ref: string | null;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+  last_used_at: string | null;
+  has_value: boolean;
+}
+
+export async function listSecrets(): Promise<SecretRow[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/secrets`);
+  if (!r.ok) throw new Error('Failed to load secrets');
+  return (await r.json()).secrets;
+}
+
+export async function putSecret(
+  name: string, value: string, description = ''): Promise<SecretRow> {
+  const r = await apiFetch(`${API_URL}/api/v1/secrets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value, description }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'could not store it');
+  return r.json();
+}
+
+export async function revealSecret(name: string): Promise<string> {
+  const r = await apiFetch(
+    `${API_URL}/api/v1/secrets/${encodeURIComponent(name)}/reveal`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'could not reveal it');
+  return (await r.json()).value;
+}
+
+export async function secretUsage(name: string): Promise<string[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/secrets/${encodeURIComponent(name)}/usage`);
+  if (!r.ok) return [];
+  return (await r.json()).used_by;
+}
+
+export async function deleteSecret(name: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/secrets/${encodeURIComponent(name)}`,
+                           { method: 'DELETE' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'delete failed');
+}
+
 // ── ingestion queue (migration 041): the durable background ingest lane ──────
 
 export type IngestStatus = 'queued' | 'running' | 'done' | 'skipped' | 'failed';

@@ -5,6 +5,7 @@ import {
 import { THEMES } from '../../brain/theme';
 import { ThemePreview } from '../ThemePreview';
 import { CardsSkeleton } from '../ui';
+import { SecretsCard } from './secrets';
 import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
 import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices, WakeLearning } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
@@ -210,6 +211,7 @@ export function SettingsTab({ only, exclude, types }:
     <div className="space-y-5">
       {!only && <StorageCard />}
       {!only && <PhoneSetupCard defs={defs} />}
+      {!only && <SecretsCard />}
       {sections.map(section => (
         <section key={section}>
           <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>

@@ -1723,3 +1723,56 @@ async def decide_recommendation_endpoint(rec_id: str, body: dict):
     if not row:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return row
+
+
+# ── secrets (docs/plans/secrets-management.md phase 1) — operator-only.
+#    No agent-facing tool exists here, and that is the design rather than an
+#    omission: a value path reachable by a model is a value that reaches a
+#    model. Agents may learn NAMES (phase 2) so they can wire a reference;
+#    the plaintext leaves only through /reveal, below the auth middleware. ──
+
+@router.get("/api/v1/secrets")
+async def list_secrets_endpoint():
+    """Names and metadata. Never a value — `has_value` is the whole of it."""
+    from app import secret_store
+    return {"secrets": await secret_store.list_all()}
+
+
+@router.put("/api/v1/secrets/{name}")
+async def put_secret_endpoint(name: str, body: dict):
+    from app import secret_store
+    try:
+        return await secret_store.put(
+            name, str(body.get("value") or ""),
+            description=str(body.get("description") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except secret_store.SecretError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/secrets/{name}/reveal")
+async def reveal_secret_endpoint(name: str):
+    """POST, not GET: a value must never land in a URL, a browser history or
+    an access log. The auth middleware is the gate — this is the operator's
+    own eye on his own credential."""
+    from app import secret_store
+    try:
+        return {"name": name, "value": await secret_store.reveal(name)}
+    except secret_store.SecretError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/api/v1/secrets/{name}/usage")
+async def secret_usage_endpoint(name: str):
+    from app import secret_store
+    return {"name": name, "used_by": await secret_store.used_by(name)}
+
+
+@router.delete("/api/v1/secrets/{name}")
+async def delete_secret_endpoint(name: str):
+    from app import secret_store
+    used = await secret_store.used_by(name)
+    if not await secret_store.delete(name):
+        raise HTTPException(status_code=404, detail="secret not found")
+    return {"deleted": True, "was_used_by": used}

@@ -111,7 +111,35 @@ error, builtin secrets keep working.
 
 ## Phases (each ends live-verified; changes left uncommitted, summarized)
 
-1. **Builtin store + resolution + MCP integration + Secrets UI.** Migration,
+1. **Builtin store + resolution + MCP integration + Secrets UI. — BUILT
+   2026-07-30.** Migration 072, `app/secret_store.py`, resolution in
+   `mcp_client` at both call sites, five operator endpoints, and Settings →
+   Secrets. Verified: the row holds ciphertext with no recognisable prefix,
+   `list_all`/`names` carry no value, a stored MCP header keeps only
+   `Bearer {{secret:name}}`, a missing reference RAISES before any request
+   goes out, and a resolved token is masked in the ledger both by key name
+   and by value shape. `tests/test_secrets.py` pins all of it.
+
+   **Two corrections to this plan, both found by building it:**
+
+   * **The master key must NOT go to `./data/secret.key`.** `/app/data` is the
+     container's OVERLAY filesystem — only `data/memory`, `data/wake-training`
+     and `data/runtime` are binds. A key written there vanishes on the next
+     `docker compose up -d backend` and takes every stored secret with it,
+     which is this plan's own "unrecoverable" trap sprung by a routine restart
+     rather than by operator error. It now goes to `/state/secret.key`, a
+     named volume already holding the per-host instance id.
+   * **The generated key is PER HOST**, so a second instance sharing this
+     Postgres cannot decrypt these rows. The warning says so, and the UI
+     repeats it — a fleet needs `NOVA_SECRET_KEY` set identically everywhere.
+
+   The module is `secret_store.py`, not `secrets.py`: Python has a stdlib
+   `secrets`, and shadowing it inside `app/` is a footgun for every later
+   import in the package. It matches `settings_store` either way.
+
+   Original scope text follows.
+
+   **(as originally written)** Migration,
    `secrets.py` (create/list/get/decide + `resolve`), AES-GCM with `NOVA_SECRET_KEY`,
    `{{secret:NAME}}` resolution in `mcp_client`, Settings → Secrets. **Verify:** store
    a GitHub PAT as `github_pat`; register the GitHub MCP server with
