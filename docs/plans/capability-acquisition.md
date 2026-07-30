@@ -435,8 +435,8 @@ onto the critical path because real PRs need a deploy key.
 |---|---|---|---|---|
 | 1 | `maintainer` agent reads her own source; `coder` row deleted | nothing | small | **BUILT** |
 | 1b | Goal-scoped autonomy: `goals` table, the gate, `manage_tool_hosts` | consent rail | medium | **BUILT** |
-| 2 | Her runtime: k3d (or chosen flavour), namespace policy, quota, default-deny egress | flavour decision | large | next |
-| 3 | The workload tool + `list_workloads` / `apply_workload` / `delete_workload`, goal-scoped | 2 | medium | |
+| 2 | Her runtime: k3d + Calico, namespace policy, quota, default-deny egress | flavour decision | large | **BUILT + attacked** |
+| 3 | The workload tool + `list_workloads` / `apply_workload` / `delete_workload`, goal-scoped | 2 | medium | next |
 | 4 | Home Assistant as the worked example, deployed by her | 2, 3 | medium | |
 | 5 | The acquisition router + proposal shapes | 3 | medium | |
 | 6 | Patch grader in the eval harness, then diff-as-recommendation | eval harness | medium | |
@@ -486,7 +486,7 @@ call — the upside is that no phase-7 work starts on unmeasured patch quality.
    grow into" in shape 4 — the manifests are the artifact, the cluster is
    disposable.
 
-## Phase 2 — RUN 2026-07-29. Exit criterion NOT met, and that is the result.
+## Phase 2 — RUN 2026-07-29. Exit criterion MET, on the second CNI.
 
 Cluster created (k3d v5.9.0 checksum-verified, k3s v1.35.5, own Docker
 network, no loadbalancer), `workloads/` applied, boundary attacked. Full
@@ -512,12 +512,25 @@ That is not a test artifact. Nova holds `create jobs.batch`, so a short-lived
 workload is inside her granted rights and outside the policy's reach, and PSA
 does not compensate — it constrains what a pod may BE, not who it may talk to.
 
-**The fix is the CNI.** The manifests are right; kube-router's model is what
-leaves the window. Calico or Cilium program policy during CNI ADD, so the pod
-has no unpoliced moment. k3s supports it:
-`--flannel-backend=none --disable-network-policy`, then install the CNI.
-**Until that lands, treat the network half as advisory** — which means shape 4
-is not ready to carry a workload that should not reach the Nova stack.
+**The fix was the CNI — DONE, same session.** The manifests were right;
+kube-router's reconcile-after-start model was what left the window. Rebuilt
+with `--flannel-backend=none --disable-network-policy` and Calico v3.32.1,
+`workloads/` re-applied unchanged. A pod whose first action is the request now
+gets `FIRST_PACKET_curl=28` — dropped before anything leaves it — and the
+short-lived Job that previously reached everything is now blocked on every
+external target, with DNS and intra-namespace traffic still working.
+
+**Exit criterion MET.** All four controls hold.
+
+Two things that came out of the swap and are worth carrying:
+
+* **Pin Calico's pod CIDR.** Its manifest defaults to `192.168.0.0/16`, which
+  is Jeremy's LAN (192.168.0.0/24, gateway .1). Left alone it would hand pods
+  addresses colliding with the network the host routes through. Pinned to
+  10.42.0.0/16.
+* **Calico DROPS where kube-router REJECTED** (curl 28 vs 7). A denied call now
+  presents as a hang rather than an immediate failure — worth knowing before
+  someone debugs a "slow" service that is actually being refused.
 
 Worth carrying forward as method: the first probe reported the boundary as
 mostly holding and was wrong three separate ways, each failure looking like a
@@ -528,6 +541,7 @@ rule the eval harness learned as "the fallthrough case must be refusal".
 
 ## Still needed from Jeremy
 
-Nothing blocking. The next piece is swapping the CNI for Calico or Cilium and
-re-running the attack set; that closes the only open hole and needs no
-decision from him unless he has a preference between the two.
+Nothing blocking. Phase 2 is closed. Next is phase 3 — the workload tool
+(`apply_workload` / `list_workloads` / `delete_workload`), goal-scoped, so Nova
+can actually reach the namespace that now exists. She has no way to use it yet:
+the boundary is built and proven, and nothing is wired to it.

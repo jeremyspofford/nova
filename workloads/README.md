@@ -82,30 +82,52 @@ granted.
 
 ### NetworkPolicy
 
-k3s enforces NetworkPolicy through an embedded kube-router controller, but
-ships with **no policies**, which means the default is allow-all. Default-deny
-is therefore something this directory creates, not something the cluster
-provides. Without it, "deploy a workload" is a route to the Nova stack, the
-host, and the LAN — every fence the containment plan spent five phases
-building, bypassed by a pod.
+Whatever enforces it, a cluster ships with **no policies**, so the default is
+allow-all. Default-deny is something this directory creates, not something the
+cluster provides. Without it, "deploy a workload" is a route to the Nova
+stack, the host, and the LAN — every fence the containment plan spent five
+phases building, bypassed by a pod.
+
+**Which CNI enforces it is not a detail.** k3s's default (kube-router) applies
+policy asynchronously after a pod is already running, which left a ~15-second
+unpoliced window that a short-lived Job walked straight through — measured, see
+Status. Calico attaches policy during CNI ADD, so there is no such moment.
+These manifests were identical on both; only the CNI changed.
 
 Egress is opened deliberately, per workload need, and the interesting case is
 that a service she deploys usually needs LESS than she will assume: Home
 Assistant needs the LAN devices it controls, not Postgres, and not the
 internet at large.
 
-## Status — APPLIED and ATTACKED 2026-07-29. Exit criterion NOT met.
+## Status — APPLIED, ATTACKED, and HOLDING 2026-07-29 (on the second CNI)
 
-Cluster: `k3d cluster create nova --servers 1 --agents 0 --no-lb`, k3d v5.9.0
-(checksum-verified against the release `checksums.txt`), k3s v1.35.5+k3s1, on
-its own Docker network (`k3d-nova`, 172.20.0.0/16) separate from
-`nova_default`. traefik and servicelb disabled — nothing here depends on
-k3d-specific pieces.
+Cluster: k3d v5.9.0 (checksum-verified against the release `checksums.txt`),
+k3s v1.35.5+k3s1, single server, no loadbalancer, traefik and servicelb
+disabled, on its own Docker network separate from `nova_default`. **Calico
+v3.32.1 as the CNI**, with flannel and k3s's own network-policy controller
+disabled:
 
-**Three of the four controls hold. The network one has a hole, and it is the
-hole that matters most for the workload type Nova would actually deploy.**
+    k3d cluster create nova --servers 1 --agents 0 --no-lb \
+      --k3s-arg "--disable=traefik@server:0" \
+      --k3s-arg "--disable=servicelb@server:0" \
+      --k3s-arg "--flannel-backend=none@server:0" \
+      --k3s-arg "--disable-network-policy@server:0" \
+      --k3s-arg "--cluster-cidr=10.42.0.0/16@server:0"
+    # calico.yaml with CALICO_IPV4POOL_CIDR pinned to 10.42.0.0/16
+    kubectl apply -f calico.yaml
+    kubectl apply -f workloads/
 
-### Holds
+**Pin that CIDR.** Calico's manifest ships `CALICO_IPV4POOL_CIDR` commented out
+and defaults to **192.168.0.0/16**, which is Jeremy's LAN (192.168.0.0/24,
+gateway 192.168.0.1). Left at the default it would hand pods addresses that
+collide with the network the host routes through. Verified after the change:
+pods land on 10.42.x.
+
+The first attempt used the default k3s CNI (flannel + kube-router) and
+**failed** — see "The hole that forced the CNI swap" below. Everything now
+holds.
+
+### Verified under Calico
 
 | Attack | Refused by |
 |---|---|
@@ -126,34 +148,43 @@ unpoliced namespace so "blocked" could not be confused with "unreachable":
 * intra-namespace pod-to-pod — 200, as intended
 * DNS — works (`getent hosts kubernetes.default` resolves)
 
-### The hole: pods are unpoliced for their first ~15 seconds
+And the case that broke the first attempt — a pod whose FIRST action is the
+request, so there is no settling time at all:
 
-kube-router reconciles NetworkPolicy asynchronously after a pod starts.
-Measured on the same pod, same target:
+    FIRST_PACKET_curl=28        (dropped)
+
+A short-lived Job, which is what actually matters here, is now dropped on
+every external target: backend, Postgres, the compose bridge, the LAN gateway,
+1.1.1.1, the kube-apiserver. DNS and intra-namespace traffic still work.
+
+### The hole that forced the CNI swap
+
+The first cluster used k3s's defaults — flannel plus the embedded kube-router
+policy controller — and **pods were unpoliced for their first ~15 seconds**.
+kube-router reconciles NetworkPolicy asynchronously, after the pod is already
+running. Measured on one pod against one target:
 
     t=0s    REACHED the Nova backend (curl=0)
     t=15s   rejected
     t=30s   rejected
-    t=60s   rejected
 
-**So a short-lived workload bypasses egress policy entirely.** A Job-based
-probe — which lives a few seconds — reached every single target: the Nova
-backend, Postgres, the compose bridge, the LAN gateway, 1.1.1.1 on the public
-internet, and the kube-apiserver.
+So a short-lived workload bypassed egress policy entirely. The Job-based probe
+— alive for seconds — reached every target in the list above.
 
-This is not a test artifact, it is the containment story failing for the exact
-case that matters: Nova holds `create jobs.batch`, so "deploy a Job that
-exfiltrates" is inside her granted rights and outside the policy's reach.
-Nothing else in the boundary compensates — PSA constrains what a pod may BE,
-not who it may talk to.
+That was not a test artifact. Nova holds `create jobs.batch`, so a Job is
+inside her granted rights and outside the policy's reach, and nothing else in
+the boundary compensates: PSA constrains what a pod may BE, not who it may
+talk to.
 
-**The fix is the CNI, not the policy.** These manifests are correct; kube-router's
-reconcile-after-start model is what leaves the window. A CNI that programs
-policy as part of CNI ADD — Calico or Cilium — has no unpoliced moment,
-because the pod's network does not exist until policy is attached. k3s
-supports this: `--flannel-backend=none --disable-network-policy`, then install
-the CNI. That is the next piece of work, and until it is done the network half
-of this boundary should be treated as advisory.
+**The fix was the CNI, not these manifests** — they were applied unchanged to
+the new cluster. Calico attaches policy as part of CNI ADD, so a pod has no
+unpoliced moment; its network does not exist until policy is on it.
+
+One behavioural difference worth knowing when debugging a workload: kube-router
+REJECTED (curl=7, immediate), Calico DROPS (curl=28, times out). A blocked call
+now looks like a hang rather than a refusal, which is the usual trade and is
+worth remembering before someone spends an hour on a "slow" service that is
+actually being denied.
 
 ### Three false signals, worth recording as method
 
@@ -174,13 +205,6 @@ against an unpoliced control pod. It then showed nothing was blocked at all.
 **A probe whose failure mode is indistinguishable from the property it tests
 proves nothing.** Same rule as the eval harness: the fallthrough case must be
 refusal, never a pass.
-
-### Reproducing
-
-    k3d cluster create nova --servers 1 --agents 0 --no-lb \
-      --k3s-arg "--disable=traefik@server:0" \
-      --k3s-arg "--disable=servicelb@server:0"
-    kubectl apply -f workloads/
 
 Headroom when created: 23 GB of 31 free, GPU 13.4 of 24.5 used.
 
