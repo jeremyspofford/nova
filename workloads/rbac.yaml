@@ -57,6 +57,24 @@ rules:
   - apiGroups: [""]
     resources: [events]         # "why is my pod not starting" lives here
     verbs: [get, list, watch]
+  # READ the policies that constrain her, and only read.
+  #
+  # Added after the phase-4 acceptance test: her dashboard could not reach
+  # pypi.org, she diagnosed it correctly from pod logs, and then had to hedge —
+  # "egress is blocked or not allowed" — because she cannot see the
+  # NetworkPolicy that is doing it. A boundary an agent cannot see is one she
+  # invents explanations for, which is the failure mode this whole codebase
+  # keeps closing. State what is true.
+  #
+  # Reading is safe: a NetworkPolicy is not a secret, and the verbs that could
+  # weaken one (patch, update, delete) are still absent — as are namespaces,
+  # resourcequotas and limitranges, for the same reason.
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [get, list]
   - apiGroups: ["batch"]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch, create, update, patch, delete]
