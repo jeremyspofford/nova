@@ -208,12 +208,22 @@ My recommendation is **k3d**: it is the only option where every control above
 is a declarative object the API server enforces rather than something I write
 and can get wrong, and it is what he was already picturing.
 
-**Home Assistant becomes the worked example, not a special case.** She
-researches how HA is deployed, writes a manifest, applies it in her namespace,
-and then manages it over its API — and per Jeremy's second decision that
-management needs no further approval (see below). The `home` compose profile
-that `home-assistant.md` LOCKED on 2026-07-24 is **superseded** by this: he
-was explicit that HA is not to be a compose service.
+**Home Assistant is an ACCEPTANCE TEST, not a deliverable.** Jeremy,
+2026-07-29, correcting me after I had started treating it as one: *"I was not
+saying I specifically wanted those implemented, the router management system
+or the home assistant instance. I simply want nova to be able to do those."*
+
+So neither HA nor router management is a thing to build. They are the shape of
+request the capability has to survive, and the deliverable is the capability.
+When it comes time to prove it, the stronger test is a service **neither of us
+has pre-wired** — a spec I wrote a plan for is a test of my plan, not of her
+figuring it out. Whatever she stands up in that test gets deleted afterwards;
+the artifact is that she could.
+
+The `home` compose profile that `home-assistant.md` LOCKED on 2026-07-24 is
+still superseded — he was explicit that HA is not to be a compose service —
+but that plan now describes a thing she MAY be asked to do, not a thing on the
+roadmap to do.
 
 **What still needs the host allowlist** (`manage_tool_hosts`, built
 2026-07-29): reaching anything over HTTP that is not hers — his router on the
@@ -437,7 +447,7 @@ onto the critical path because real PRs need a deploy key.
 | 1b | Goal-scoped autonomy: `goals` table, the gate, `manage_tool_hosts` | consent rail | medium | **BUILT** |
 | 2 | Her runtime: k3d + Calico, namespace policy, quota, default-deny egress | flavour decision | large | **BUILT + attacked** |
 | 3 | The workload tool + `list_workloads` / `apply_workload` / `delete_workload`, goal-scoped | 2 | medium | next |
-| 4 | Home Assistant as the worked example, deployed by her | 2, 3 | medium | |
+| 4 | ACCEPTANCE: a service NEITHER of us pre-wired, stood up by her end to end, then deleted | 2, 3 | medium | |
 | 5 | The acquisition router + proposal shapes | 3 | medium | |
 | 6 | Patch grader in the eval harness, then diff-as-recommendation | eval harness | medium | |
 | 7 | ACP coding sessions, private clone | `#20` phase 0 spike | large | |
@@ -545,3 +555,10 @@ Nothing blocking. Phase 2 is closed. Next is phase 3 — the workload tool
 (`apply_workload` / `list_workloads` / `delete_workload`), goal-scoped, so Nova
 can actually reach the namespace that now exists. She has no way to use it yet:
 the boundary is built and proven, and nothing is wired to it.
+
+**Scope discipline, recorded because I got it wrong once.** Every phase here
+builds CAPABILITY. No phase delivers a router integration or a Home Assistant
+instance, and none should: Jeremy named those as examples of what she must be
+able to do, not as things he wants built. If a future session finds itself
+wiring a specific service, the only legitimate reason is phase 4's acceptance
+test — and its output is deleted when the test passes.

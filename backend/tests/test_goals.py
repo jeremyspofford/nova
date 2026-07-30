@@ -128,12 +128,26 @@ async def run() -> None:
 
         print("6. the operator's click is what activates, not an agent's")
         pctx = {"agent_name": "main", "granted": {"propose_goal"}}
+        before = {g["id"] for g in await goals.list_all(limit=200)}
         await builtin._propose_goal(
             {"title": "click test", "target": "a checkable finish line",
              "verbs": ["manage_tools"]}, pctx)
+        # MATCH THE CARD TO THE GOAL THIS TEST JUST MADE, by subject.
+        #
+        # The first version took `next(... if kind == "goal.activate")` from the
+        # pending list — i.e. ANY operator card awaiting a decision. Run against
+        # a live system that had a real proposal waiting, it approved that one
+        # instead and then deleted it in cleanup. It ate a genuine pending
+        # request, and reported PASS while doing it.
+        #
+        # A test that reaches into shared state must address its own rows
+        # explicitly. Same rule the eval harness landed on for real memory.
+        mine = [g["id"] for g in await goals.list_all(limit=200)
+                if g["id"] not in before]
+        check("proposing created exactly one goal", len(mine) == 1, str(mine))
+        made.extend(mine)
         card = next(c for c in await consents.list_pending()
-                    if c["kind"] == "goal.activate")
-        made.append(card["subject"])
+                    if c["kind"] == "goal.activate" and c["subject"] in mine)
         check("a card is raised for the operator", bool(card["question"]))
         check("still proposed before the click",
               (await goals.get(card["subject"]))["status"] == "proposed")
