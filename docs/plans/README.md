@@ -4,6 +4,9 @@ Specs authored with Fable (2026-07-15 onward), written to be executed by
 any model (Sonnet/Opus), one phase per session. ROADMAP.md stays the priority list;
 these are the how.
 
+**Start at [NEXT.md](NEXT.md)** — it says what is actually next and what each
+thing is waiting on. This table is the index of the how.
+
 How to run one: give the implementing session the plan file + CLAUDE.md,
 ask for ONE phase, and hold it to the plan's verification line (real flow
 through :5173 — and :8080 where the plan says so). Leave changes

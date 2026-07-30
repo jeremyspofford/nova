@@ -1,82 +1,101 @@
-# NEXT — lane dispatcher for parallel Claude Code sessions
+# NEXT — what to pick up, and what it is waiting on
 
-Jeremy: open a fresh Claude Code session per lane and say
-"implement lane N from docs/plans/NEXT.md". One lane per session, ever.
-Sessions: this file is your work order. Read your lane's plan doc FULLY
-before writing code — the rails in it are non-negotiable, they came from
-an adversarial review. Project memory (MEMORY.md) and CLAUDE.md load
-automatically; trust them.
+Rewritten 2026-07-30. The previous version was a lane dispatcher for three
+parallel sessions (turn-speed, eval-pipeline, eval-suites); all three landed
+long ago and it had gone stale enough to mislead.
 
-## Standing rules (every lane)
+`ROADMAP.md` stays the priority list and the plan docs are the how. This file
+answers one question: **what is actually next, and what is blocking it.**
 
-- Own branch + worktree under `.worktrees/<lane>` (gitignored). ALWAYS
-  `git -C` — cwd resets have shipped wrong commits to main before.
-- Parallel sessions share the main checkout's git index: never `git add
-  -A`, commit only your own paths by explicit pathspec, and check
-  `git show --stat` after every commit.
-- Verify per the plan doc's phase "Verify:" block, in a parallel rig
-  (one-off backend container: worktree source mount, scratch memory dir,
-  own INSTANCE_ID_FILE, port 8001+) — never deploy your worktree to the
-  live stack. Clean any test rows you create in the shared Postgres.
-- Leave the final change UNCOMMITTED in your worktree and summarize —
-  Jeremy reviews and decides when to commit/push (standing rule). The
-  exception is nothing: do not commit unprompted.
-- Do not touch files outside your lane's declared surface. runner.py and
-  router_chat.py belong to lane 1 until it merges.
+## Standing rules
 
-## Lane 1 — turn-speed Phase 1: parallel read-only tools + cancellation
+- Leave changes UNCOMMITTED and summarize; Jeremy decides when to commit.
+- A parallel session often shares this checkout. Never `git add -A`; stage by
+  explicit pathspec and check `git show --stat` after. When a file is edited by
+  both, split the diff into hunks, classify by whose markers the added lines
+  carry, and `git apply --cached` only yours — then prove the staged tree
+  compiles before committing, because it differs from what is on disk.
+- Verify in the running app, not just in tests. `:5173` gets frontend changes
+  by HMR; `:8080` needs `docker compose build web && docker compose up -d web`.
 
-- Plan: `docs/plans/turn-speed.md` → "Phase 1" (rails are mandatory:
-  read-only whitelist ONLY, cancel-and-await contract, tool-result
-  guarantee per tool_call id, web_search concurrency cap 1–2, span
-  cleanup, `agents.tool_concurrency` flag defaulting to current
-  behavior).
-- Worktree EXISTS: `.worktrees/turn-speed`, branch `turn-speed`
-  (Phase 0 already merged to main from it — pull/rebase on latest main
-  first).
-- Surface: `backend/app/agents/runner.py` (owns it),
-  `backend/app/settings_store.py` (new setting), tests.
-- Model: STRONGEST available (claude-opus-5 or Fable). This is subtle
-  asyncio cancellation work in the hottest loop in the codebase; the
-  plan explicitly exempts it from the cheaper-model convention.
-- Verify: the four checks in the plan's Phase 1 Verify block, including
-  the interject-mid-gather test (no stray tasks via asyncio.all_tasks,
-  trace status cancelled, no post-cancel memory writes).
+## The critical path: capability acquisition
 
-## Lane 2 — model-eval-pipeline Phase 1: harness core
+`docs/plans/capability-acquisition.md` — Jeremy's 2026-07-29 ask (read her own
+code, propose, build, PR; and figure out how to do a thing nobody built).
 
-- Plan: `docs/plans/model-eval-pipeline.md` → "Phases" item 1.
-- New worktree: `.worktrees/eval-pipeline`, branch `eval-pipeline`.
-- Surface: `backend/app/memory/memory.py` (OkfMemory base_dir param),
-  `backend/app/tools/builtin.py` (_mem(ctx) helper, 4 call sites),
-  NEW `backend/app/evals.py`, NEW `backend/app/tools/fixtures.py`,
-  migration `050_...` (source CHECK widening only in this phase).
-- DEFERRED until lane 1 merges (do NOT touch runner.py):
-  the `memory_override` kwarg on run_agent, its ctx plumbing, and the
-  prompt-assembly/narration-write routing. Build everything else;
-  stub the integration behind a TODO(lane-1-merge) and verify what is
-  verifiable without it (memory sandbox isolation, fixtures
-  record/replay via direct execute_tool calls).
-- Model: claude-opus-5.
-- Exit: champion/challenger pair runs from a CLI/endpoint call with
-  real memory untouched (hash data/memory before/after).
+| Phase | State |
+|---|---|
+| 1 `maintainer` reads her own source | **done** (mig 065/066) |
+| 1b goal-scoped autonomy | **done** (mig 067/068) |
+| 2 her own k3s runtime + boundary | **done**, attacked, holding (Calico) |
+| 3 workload tools + `deployer` agent | **done** (mig 069) |
+| 4 acceptance test | **run, passed**, found the egress gap |
+| 5 acquisition router | **done** |
+| 6a `propose_patch` | **done** (mig 071) |
+| 6b patch grader | **blocked on 7** — see below |
+| 7 ACP coding sessions, private clone | **next**, needs the `#20` phase-0 spike |
+| 8 staging stack + verification | needs `#31` backups |
+| 9 branch push + real GitHub PRs | prerequisite `#32` now **met** |
 
-## Lane 3 (optional) — eval suites + fixture corpora authoring
+**Start here: `#20` phase 0 — the ACP validation spike**
+(`docs/plans/acp-coding-delegation.md`). It is a spike on purpose: the ACP
+landscape moves monthly and the findings may reshape phase 7. Two corrections
+already apply to that plan and must survive the spike — a git worktree is NOT a
+portable containment unit (clone into a private volume, export with `git
+bundle`), and the ACP `auto` permission mode is banned.
 
-- Plan: `docs/plans/model-eval-pipeline.md` → "Eval suites — ALL roles".
-- New worktree: `.worktrees/eval-suites`, branch `eval-suites`.
-- Surface: NEW files only — `backend/app/evals/tasks/` (task specs per
-  role: ingestion, model-manager, news-summarizer first) and authored
-  fixture corpora (canned search results + page bodies per task).
-  Zero shared-file conflicts by construction.
-- Model: claude-opus-5 (or sonnet-5 — this is authoring, not systems
-  work).
-- Exit: task specs + fixtures reviewable as data; no code wiring
-  (lane 2 consumes them).
+**Why 6b waits for 7.** A patch grader must apply a patch somewhere. The
+backend can reach only `/app/backend` and `/app/data` — no frontend, no repo
+root, no `.git` — and neither `git` nor `patch` is in the image. Built now it
+would score backend Python and silently ignore everything else, and a partial
+pass reads as a pass. Phase 7 creates the writable clone; the grader then has a
+place to stand. Jeremy's choice of a mechanical grader over eyeballing stands —
+only the order changed.
 
-## Sequencing after these
+## Decisions waiting on Jeremy
 
-turn-speed Phase 2 (overflow trimming) needs lane 1 merged.
-eval-pipeline Phase 2 (grading/storage/worker) needs lane 2 merged.
-turn-speed Phase 3 (local specialist tier) needs Phase 2 + the eval
-gate. Do not start any of these in parallel with their prerequisite.
+1. **CLI secret managers.** 1Password and Bitwarden/Vaultwarden are registered
+   but gated: neither `op` nor `bw` is in the backend image, so they need
+   either those binaries added or a small sidecar to hold them. There is also
+   no account here to verify a resolver against. Adding one is a resolver
+   function and a CHECK entry once that is settled.
+2. **`NOVA_SECRET_KEY`.** Unset, so a per-host key was generated at
+   `/state/secret.key`. Fine for one machine; a second instance sharing this
+   Postgres will not decrypt those rows. Set it in `.env` before the Dell or
+   the mini PC joins.
+3. **The 177 unused transcripts.** `review-memory-usage` raised a card: four
+   followed channels, 177 documents, zero retrievals against journals' 17
+   documents and 75 retrievals. Whether those channels earn their slot is a
+   product call.
+4. **`review-memory-usage` is enabled** and I did not enable it (I seeded it
+   disabled). Leave it on, or switch it back off until the weekly cards are
+   wanted?
+
+## Small, self-contained, unblocked
+
+- **Automation toggles leave no trace.** `automations.py` has zero references
+  to `capability_events`, so enabling or disabling an automation — literally
+  "unattended future turns", which is why it is in `ACTOR_TOOLS` — is recorded
+  nowhere. Found while trying to work out who enabled `review-memory-usage`,
+  and I could not. Small fix, same principle as everything else.
+- **Journals are orphans in the graph.** 15 of 15 connect to nothing
+  (`operator-identity.md` part 3). Arguably correct — a journal is a
+  transcript, not a subject — but it means the graph has no view of what was
+  discussed, which is worth deciding rather than inheriting.
+- **`operator-identity` phase 3** — the invented-policy detector. Conditional
+  by design: build it only if the identity block and capture (both shipped)
+  have NOT stopped her improvising design claims. Check the logs first.
+- **`transcript-summaries` open question** — whether retrieval should prefer a
+  summary over its raw transcript is now moot for duplicates (they collapse),
+  but the ranking question underneath it was never measured.
+
+## Operational state, 2026-07-30
+
+- k3d cluster `nova` is up: Calico CNI, `nova-workloads` namespace, boundary
+  applied and empty. `workloads/setup.sh --recreate` rebuilds the whole thing;
+  the credential it writes to `data/runtime/` is gitignored.
+- Backend reaches the cluster at `https://host.docker.internal:6550` as the
+  `nova-deployer` ServiceAccount. A fixed api-port is why that survives a
+  cluster recreate.
+- 34/34 backend suites pass.
+- Automations recovered from the OpenRouter budget outage; streaks at 0.
