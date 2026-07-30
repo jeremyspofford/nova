@@ -22,7 +22,7 @@ import json
 import logging
 import re
 
-from app import db
+from app import db, secret_store
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,11 @@ _EDIT_FIELDS = {"label", "kind", "base_url", "api_key", "extra_headers",
 _KINDS = ("openai_compat",)
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
-_cache: dict[str, dict] = {}  # slug -> full row (incl. api_key)
+_cache: dict[str, dict] = {}    # slug -> full row (incl. api_key)
+# slug -> DECRYPTED key. Memory only, rebuilt on every warm(), and deliberately
+# not folded back into `_cache` — the API and `_public` read from that, and a
+# resolved key living there is one refactor away from being serialised out.
+_resolved: dict[str, str] = {}
 
 
 # ── known-provider presets: prefill the "add provider" form. All are
@@ -89,6 +93,24 @@ async def warm():
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM llm_providers")
     _cache = {r["slug"]: _row(r) for r in rows}
+    # Resolve `{{secret:...}}` ONCE, here, into a memory-only map. resolve_key
+    # and is_configured are sync and sit on the router's hot path, so they
+    # cannot await a decrypt; and the resolved value must never go back into
+    # the cached row, which `_public` and the API both read from.
+    global _resolved
+    _resolved = {}
+    for slug, row in _cache.items():
+        raw = (row.get("api_key") or "").strip()
+        if not secret_store.references(raw):
+            continue
+        try:
+            _resolved[slug] = await secret_store.resolve(raw)
+        except secret_store.SecretError as exc:
+            # a provider whose secret is gone is UNCONFIGURED, loudly — not
+            # silently keyless, which would look like "no key set" and send
+            # the operator hunting in the wrong place
+            log.error("provider %s references a secret that will not resolve "
+                      "(%s) — treating it as unconfigured", slug, exc)
     # a provider change alters the catalog's source list — drop its cache so
     # newly added / re-keyed providers surface on the next dropdown fetch
     from app import models_catalog
@@ -112,10 +134,14 @@ def known_slugs() -> set[str]:
 
 
 def resolve_key(row: dict) -> str:
-    """The API key to send. The stored key, or for OpenRouter the
-    OPENROUTER_API_KEY env fallback (so existing .env installs keep working).
-    The .env placeholder counts as no key."""
-    key = (row.get("api_key") or "").strip()
+    """The API key to send. A stored reference resolved at warm(), a literal
+    key for rows written before phase 2, or for OpenRouter the
+    OPENROUTER_API_KEY env fallback (so existing .env installs keep working —
+    env stays right for the one bootstrap secret). The .env placeholder counts
+    as no key."""
+    key = _resolved.get(row.get("slug")) or (row.get("api_key") or "").strip()
+    if secret_store.references(key):
+        return ""      # a reference that did not resolve is not a key
     if not key and row["slug"] == "openrouter":
         key = (settings.openrouter_api_key or "").strip()
     if key.startswith("sk-or-v1-your"):  # the .env placeholder
@@ -137,7 +163,17 @@ def _public(row: dict) -> dict:
     key = row.get("api_key") or ""
     d = {k: row[k] for k in _FIELDS if k != "api_key"}
     d["key_set"] = bool(key)
-    d["key_hint"] = key[-4:] if len(key) >= 4 else ""
+    # Since phase 2 the column usually holds `{{secret:name}}`, and the last
+    # four characters of THAT are "ey}}" — a hint that hints at nothing and
+    # looks like a corrupted key. Name the secret instead: that is the useful
+    # fact, and it is not sensitive.
+    refs = secret_store.references(key)
+    if refs:
+        d["key_hint"] = ""
+        d["secret_name"] = sorted(refs)[0]
+    else:
+        d["key_hint"] = key[-4:] if len(key) >= 4 else ""
+        d["secret_name"] = None
     d["configured"] = is_configured(row["slug"])
     return d
 
@@ -160,6 +196,34 @@ def _validate(fields: dict, *, creating: bool):
         raise ValueError("base_url is required")
 
 
+
+async def _stash_key(slug: str, data: dict) -> None:
+    """A bare API key never reaches the `api_key` column.
+
+    Phase 2 of docs/plans/secrets-management.md. Before this, saving a
+    provider key wrote it plaintext into Postgres — the same shape as the MCP
+    header gap phase 1 closed, and the reason the column is emptied rather
+    than merely deprecated. There were zero plaintext keys when this shipped;
+    the point is the NEXT provider the operator adds.
+
+    Mechanical rather than advisory: the diversion happens here, on the single
+    write path, so there is no way to save a provider that leaves a bare key
+    behind — not through the UI, not through the API, not by a future caller
+    that forgets. The column ends up holding `{{secret:provider_<slug>_key}}`
+    and the value lives encrypted in one place.
+    """
+    key = (data.get("api_key") or "").strip()
+    if not key:
+        return
+    if secret_store.references(key):
+        return                       # already a reference; leave it alone
+    name = f"provider_{slug.replace('-', '_')}_key"
+    await secret_store.put(name, key, description=f"API key for {slug}")
+    data["api_key"] = "{{secret:" + name + "}}"
+    log.info("provider %s: key stored as secret '%s'; the column holds a "
+             "reference", slug, name)
+
+
 async def create(slug: str, label: str, base_url: str, **fields) -> dict:
     slug = (slug or "").strip().lower()
     if not _SLUG_RE.match(slug):
@@ -173,6 +237,7 @@ async def create(slug: str, label: str, base_url: str, **fields) -> dict:
     data["label"] = (label or slug).strip()
     data["base_url"] = (base_url or "").strip()
     _validate(data, creating=True)
+    await _stash_key(slug, data)
     if "extra_headers" in data:
         data["extra_headers"] = json.dumps(data["extra_headers"])
     cols = list(data)
@@ -199,6 +264,7 @@ async def update(provider_id: str, **fields) -> str:
         if not data:
             return "no_fields"
         _validate(data, creating=False)
+        await _stash_key(existing["slug"], data)
         if "extra_headers" in data:
             data["extra_headers"] = json.dumps(data["extra_headers"])
         sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(data))

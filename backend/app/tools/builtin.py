@@ -1337,6 +1337,29 @@ async def _propose_patch(args, ctx):
             f"describe the change as made.")
 
 
+async def _list_secret_names(args, ctx):
+    """The NAMES of stored secrets. Never a value, and there is no sibling
+    tool that returns one.
+
+    This is what lets Nova be useful about credentials without ever holding
+    one: asked to wire up an integration she can say "store a token called
+    github_pat in Settings -> Secrets and I will reference it", and she can
+    check whether it is already there. The value path is backend-only by
+    having no other path — see app/secret_store.py.
+    """
+    from app import secret_store
+    names = await secret_store.names()
+    return _j({
+        "secret_names": names,
+        "how_to_use": ("Reference one in a config field as "
+                       "{{secret:<name>}} — never paste a value. The backend "
+                       "substitutes it at the moment of the outbound call."),
+        "note": ("You can see names only. If a token you need is missing, ask "
+                 "the operator to add it in Settings -> Secrets; you cannot "
+                 "store or read one yourself."),
+    })
+
+
 async def _propose_goal(args, ctx):
     """Ask for standing approval to build something, scoped to that thing.
 
@@ -2239,6 +2262,16 @@ BUILTIN_TOOLS: dict[str, dict] = {
                      "description": "unified diff, in the form `git diff` emits"},
         }, "required": ["rationale", "diff"]},
         "execute": _propose_patch,
+    },
+    "list_secret_names": {
+        "name": "list_secret_names",
+        "description": ("Which credentials the operator has stored, BY NAME "
+                        "only — you can never read a value. Use it when an "
+                        "integration needs a token: check whether one already "
+                        "exists, and reference it in config as "
+                        "{{secret:<name>}} rather than asking for the value."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "execute": _list_secret_names,
     },
     "propose_goal": {
         "name": "propose_goal",

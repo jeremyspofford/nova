@@ -94,6 +94,52 @@ async def run() -> None:
             except ValueError:
                 pass
         check("rejects names that would not survive a config string", True)
+
+        print("7. phase 2 — a provider key never reaches the column")
+        from app.llm import providers
+        slug = "zztestprov"
+        raw = "sk-zz-" + "abcdefghij0123456789"
+        try:
+            await providers.create(slug, "ZZ", "https://example.invalid/v1",
+                                   api_key=raw, needs_key=True)
+            async with db.acquire() as conn:
+                col = await conn.fetchval(
+                    "SELECT api_key FROM llm_providers WHERE slug = $1", slug)
+            check("the column holds a REFERENCE, not the key",
+                  col == f"{{{{secret:provider_{slug}_key}}}}", str(col))
+            check("...and the key is nowhere in that column", raw not in (col or ""))
+            check("the value went to the store, encrypted",
+                  await secret_store.reveal(f"provider_{slug}_key") == raw)
+            check("resolve_key still returns the real key at the call",
+                  providers.resolve_key(providers.get(slug)) == raw)
+            check("the public API shape carries no value and names the secret",
+                  raw not in str(providers.list_public())
+                  and any(p.get("secret_name") == f"provider_{slug}_key"
+                          for p in providers.list_public()))
+
+            # the failure that must be LOUD, not silent
+            await secret_store.delete(f"provider_{slug}_key")
+            await providers.warm()
+            check("a provider whose secret is gone reads as UNCONFIGURED, not "
+                  "as keyless — otherwise the operator hunts in the wrong place",
+                  not providers.is_configured(slug)
+                  and providers.resolve_key(providers.get(slug)) == "")
+        finally:
+            row = providers.get(slug)
+            if row:
+                await providers.delete(row["id"])
+            async with db.acquire() as conn:
+                await conn.execute("DELETE FROM secrets WHERE name = $1",
+                                   f"provider_{slug}_key")
+
+        print("8. the agent-facing half is names only")
+        from app.tools import builtin
+        out = await builtin._list_secret_names({}, {})
+        check("no value in the tool result", VALUE not in out)
+        check("...and no tool exists that returns one",
+              not any("secret" in n and "reveal" in n
+                      for n in builtin.BUILTIN_TOOLS),
+              str([n for n in builtin.BUILTIN_TOOLS if "secret" in n]))
     finally:
         async with db.acquire() as conn:
             await conn.execute("DELETE FROM secrets WHERE name = $1", NAME)

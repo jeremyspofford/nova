@@ -148,7 +148,33 @@ error, builtin secrets keep working.
    First consumers queued behind this phase (2026-07-24): `{{secret:ha_token}}`
    (`home-assistant.md` C1) and `{{secret:github_pat}}` (`coding-team-pipeline.md`
    T4) — neither token may be stored anywhere in Nova before this lands.
-2. **Agent ergonomics.** A `list_secret_names` builtin (names only) so Nova can
+2. **Agent ergonomics + plaintext migration. — BUILT 2026-07-30.**
+   `list_secret_names` (names only, granted to main and tool-creator, migration
+   073) and the provider-key diversion.
+
+   The migration turned out to be **prevention rather than cleanup**: there
+   were zero plaintext keys in `llm_providers` when this shipped — the single
+   row was empty and falling back to env. So the work is the NEXT key the
+   operator saves. `providers._stash_key` runs on the single write path, so a
+   bare key is diverted into the store and the column receives
+   `{{secret:provider_<slug>_key}}` — there is no way to save a provider that
+   leaves a bare key behind, not through the UI, not through the API, and not
+   via a future caller that forgets.
+
+   `resolve_key` and `is_configured` are sync and sit on the router's hot path,
+   so they cannot await a decrypt: references are resolved ONCE in `warm()`
+   into a memory-only map that is deliberately not folded back into the cached
+   row, since `_public` and the API both read from that. A provider whose
+   secret has gone reads as UNCONFIGURED with a log line naming the secret —
+   not as silently keyless, which would send the operator hunting in the wrong
+   place. `key_hint` also stopped showing `ey}}` (the tail of the reference)
+   and reports `secret_name` instead.
+
+   Env stays the bootstrap fallback for `OPENROUTER_API_KEY`, unchanged.
+
+   Original scope text follows.
+
+   **(as originally written)** **Agent ergonomics.** A `list_secret_names` builtin (names only) so Nova can
    suggest "store a token named github_pat, then I'll wire it" — and the
    recommendation card for a keyed integration links straight to Settings → Secrets.
    Migrate `openrouter_api_key` to an optional store-backed secret (env stays the

@@ -53,6 +53,7 @@
     "list_egress",
     "list_goals",
     "list_memory",
+    "list_secret_names",
     "list_skills",
     "list_workloads",
     "manage_automations",
@@ -99,6 +100,7 @@
     "write_memory"
   ],
   "tool-creator": [
+    "list_secret_names",
     "manage_tool_hosts",
     "manage_tools",
     "search_memory"
