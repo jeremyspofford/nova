@@ -78,6 +78,21 @@ async def run() -> None:
             # A corpus shaped like the real one: dominated by fetched
             # transcripts under a couple of source tags, with a little
             # first-party material and one document too big to read whole.
+            # The SOURCE documents a followed channel always has. Without
+            # them this fixture was not a small version of the real corpus,
+            # it was a different corpus: `tagtiers` classifies a tag carried
+            # by an entity node (type='source') as SPECIFIC at any frequency,
+            # and everything else by frequency alone. With no source doc,
+            # `src-big-channel` covered 31 of 41 documents and came out
+            # STRUCTURAL — which the collapse skips, so no collection ever
+            # formed and the tail was dropped instead. The live corpus never
+            # hits that: `src-cloud-codes---videos` tags 85 of 193 documents
+            # and is `specific`, because its channel doc exists.
+            for chan in ("Big Channel", "Small Channel"):
+                await mem.write(
+                    f"{chan} — a followed video source.", type="source",
+                    title=chan, tags=[f"src-{chan.lower().replace(' ', '-')}"],
+                    link_pass=False)
             for n in range(30):
                 await mem.write(f"transcript body {n} " + "lorem ipsum " * 40,
                                 type="topic", title=f"Big Channel Video {n}",
@@ -134,7 +149,7 @@ async def run() -> None:
 
             print("2. nothing vanishes quietly")
             check("the true total is reported whatever was shown",
-                  d_small["total"] == d_large["total"] == 41,
+                  d_small["total"] == d_large["total"] == 43,   # +2 source docs
                   f"{d_small['total']} / {d_large['total']}")
             listed = len(d_small["documents"])
             collapsed = sum(c["documents"] for c in d_small["collections"])
@@ -152,7 +167,7 @@ async def run() -> None:
             drill = json.loads(await builtin._list_memory(
                 {"tag": "src-big-channel"}, dict(small)))
             check("the tag lists its members individually",
-                  len(drill["documents"]) == drill["total"] == 31,
+                  len(drill["documents"]) == drill["total"] == 32,  # 30 + enormous + the source doc
                   f"{len(drill['documents'])}/{drill['total']}")
             check("...and does NOT collapse the tag it was asked to expand",
                   not drill["collections"])
