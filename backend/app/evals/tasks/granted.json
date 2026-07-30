@@ -66,6 +66,7 @@
   "maintainer": [
     "find_mcp_tools",
     "list_memory",
+    "propose_patch",
     "read_memory_item",
     "search_memory"
   ],

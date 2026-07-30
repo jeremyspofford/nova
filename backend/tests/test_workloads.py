@@ -117,8 +117,6 @@ async def run() -> None:
     check("a manifest naming kube-system lands in HER namespace instead of "
           "being refused — the boundary is not a thing she can address",
           obj.get("status") == "applied")
-    async with db.acquire():
-        pass
     st, body = await workloads._request(
         "GET", "/api/v1/namespaces/kube-system/configmaps/test-escape")
     check("...and nothing was created over there", st in (403, 404), f"HTTP {st}")

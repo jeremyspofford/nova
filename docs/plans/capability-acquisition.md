@@ -449,7 +449,8 @@ onto the critical path because real PRs need a deploy key.
 | 3 | The workload tool: `deploy_workload` / `list_workloads` / `workload_logs` / `delete_workload`, goal-scoped, on a `deployer` agent | 2 | medium | **BUILT + verified** |
 | 4 | ACCEPTANCE: a service NEITHER of us pre-wired, stood up by her end to end, then deleted | 2, 3 | medium | **RUN — passed, one gap found** |
 | 5 | The acquisition router + proposal shapes | 3 | medium | **BUILT + verified** |
-| 6 | Patch grader in the eval harness, then diff-as-recommendation | eval harness | medium | |
+| 6a | `propose_patch` — a diff on a card, applied by nobody | 1 | small | **BUILT + verified** |
+| 6b | Patch GRADER in the eval harness | **7** (needs the writable clone) | medium | blocked, see below |
 | 7 | ACP coding sessions, private clone | `#20` phase 0 spike | large | |
 | 8 | Staging stack + automated verification | `#31` backups | large | |
 | 9 | Branch push + real GitHub PRs | `#32` secrets (deploy key) | medium | |
@@ -638,8 +639,31 @@ Phases 2, 3, 4 and 5 are closed. Two things:
 
 1. **Runtime egress** — see above. Whether a goal may open a workload's egress
    to a named host, or whether that stays operator-only.
-2. The self-coding half (6–9) is gated on `#32` secrets phase 1 for the deploy
-   key, following his choice of real GitHub PRs.
+2. The self-coding half. **6a is built; the ordering of the rest has to
+   change, and the reason is measured rather than assumed.**
+
+   Jeremy chose a mechanical patch grader over eyeballing diffs, and that
+   decision stands — but a grader needs a complete, writable checkout to apply
+   a patch into, and the backend has none. Only `/app/backend` and `/app/data`
+   are mounted: no frontend, no repo root, no `.git`, and neither `git` nor
+   `patch` is in the image. A grader built against that would score backend
+   Python and silently ignore every other file, and a partial pass reads as a
+   pass. **So 6b depends on 7**, which is what creates the private clone —
+   the dependency runs opposite to the order in this table, and 6b is
+   re-numbered rather than attempted early.
+
+   What 6a proves in the meantime, which is what the gate was FOR: her
+   proposals are worth reading. Asked to review `patches.py` she declined to
+   invent a fault. Pointed at a file with a real one — a dead
+   `async with db.acquire(): pass` left in a test — she found it, explained
+   why it was inert, and produced a correct minimal diff with accurate
+   context. It was applied and the suite still passes.
+
+   Remaining prerequisites, none of them met: 7 needs `#20` phase 0 (the ACP
+   validation spike), 8 needs `#31` (backups, so a staging stack can copy
+   state safely), 9 needs `#32` phase 1 (secrets, for the deploy key). Of
+   those, **`#32` is the one to do next**: it is self-contained, it is a hard
+   prerequisite for the PR path he chose, and it is independently useful.
 
 **Phase 5 as built, 2026-07-29.** `_shapes_block` in runner.py, offered only to
 an agent holding `propose_goal`, and every line DERIVED: the allowlisted hosts

@@ -1296,6 +1296,47 @@ async def _list_egress(args, ctx):
     return _j(await workloads.list_egress())
 
 
+async def _propose_patch(args, ctx):
+    """Put a change to Nova's own source in front of the operator, as a diff.
+
+    The maintainer can read the repository and could not, until now, do
+    anything with what it found but describe it in prose. This is the smallest
+    honest next step: a unified diff on a recommendation card, applied by
+    nobody. It is also the cheapest possible test of whether her code
+    proposals are worth reading at all, which is the question that decides
+    whether the expensive coding lane is worth building.
+
+    It refuses a malformed diff and a diff naming files that do not exist, and
+    it says on the card what it did NOT check — there is no writable checkout
+    here, so "applies cleanly" and "compiles" are not claims this can make.
+    """
+    from app import patches, recommendations
+    diff = str(args.get("diff") or "")
+    rationale = str(args.get("rationale") or "").strip()
+    if not rationale:
+        return ("Error: rationale is required — what the change does and why "
+                "it is worth making. A diff with no argument for it is work "
+                "for the reader.")
+    result = patches.review(diff)
+    if result["status"] != "ok":
+        return "Error: " + result["detail"]
+    title = str(args.get("title") or "").strip() or (
+        "Patch: " + ", ".join(result["files"])[:80])
+    try:
+        rec = await recommendations.create(
+            "patch", title[:200],
+            patches.summary(result, rationale) + "\n\n```diff\n" + diff.strip()
+            + "\n```",
+            source=ctx.get("agent_name") or "maintainer",
+            dedupe_key="patch:" + ",".join(sorted(result["files"]))[:120])
+    except ValueError as e:
+        return f"Error: {e}"
+    return (f"Proposed as a patch card ({rec['id']}): {len(result['files'])} "
+            f"file(s), +{result['added']}/-{result['removed']}. Nothing is "
+            f"applied — the operator reads the diff and decides. Do not "
+            f"describe the change as made.")
+
+
 async def _propose_goal(args, ctx):
     """Ask for standing approval to build something, scoped to that thing.
 
@@ -2181,6 +2222,23 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "check this when something cannot reach the network."),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "execute": _list_egress,
+    },
+    "propose_patch": {
+        "name": "propose_patch",
+        "description": ("Propose a change to Nova's own source code as a "
+                        "unified diff, for the operator to read and decide "
+                        "on. Use it when you have READ the relevant files and "
+                        "found something worth changing. Nothing is applied by "
+                        "this — it produces a card, not a commit. Keep it "
+                        "small: one change that stands on its own."),
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "short summary of the change"},
+            "rationale": {"type": "string",
+                          "description": "what it does and why it is worth making"},
+            "diff": {"type": "string",
+                     "description": "unified diff, in the form `git diff` emits"},
+        }, "required": ["rationale", "diff"]},
+        "execute": _propose_patch,
     },
     "propose_goal": {
         "name": "propose_goal",
