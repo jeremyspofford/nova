@@ -151,6 +151,21 @@ async def stream_chat(messages: list, model: str,
                       thinking: str = "auto") -> AsyncIterator[dict]:
     target = effective_model(model)
     think = await resolve_thinking(target, thinking)
+    if think is False and tools:
+        # Suppressing the reasoning pass collapses tool selection on smaller
+        # local models. Measured 2026-07-30 against the real 20-tool schema,
+        # n=8 per arm: qwen3:8b answering a question whose tool it HELD called
+        # it 8/8 with think unset and 0/8 with think=false once the voice
+        # brevity suffix was in the prompt. Drop either leg and it is 8/8
+        # again; qwen3:14b is 8/8 throughout. A turn that carries tools is a
+        # turn that may need to pick one, so it never gets think=false.
+        #
+        # Derived from this request — the tools are right here. No model list
+        # to maintain, and it self-retires for any model that stops needing it
+        # only when someone measures that and removes this.
+        log.info("thinking=off dropped for %s: turn carries %d tool(s)",
+                 target, len(tools))
+        think = None
     if is_local(target):
         refusal = await _refuse_local_overflow(target, messages)
         if refusal:

@@ -138,10 +138,88 @@ async def test_reasoning_is_not_text():
           Client.payload.get("think") is True, str(Client.payload.get("think")))
 
 
+async def test_tools_outrank_thinking_off():
+    """The rail: a turn that carries tools never gets think=false.
+
+    Measured 2026-07-30 against the real 20-tool schema, n=8 per arm.
+    ollama:qwen3:8b, asked a question whose tool it HELD, with the voice
+    brevity suffix in the prompt: 8/8 tool calls with `think` unset, 0/8
+    with think=false. Every one of Jeremy's ARIA Labs turns took the 0/8
+    path and ended on a promise it never kept.
+
+    So the check reads the TOOLS on the request, not a list of models known
+    to be fragile — that list would be wrong the day a model is pulled, and
+    wrong silently, which is the same argument the rest of this file makes
+    about capability.
+    """
+    print("6. a turn carrying tools never gets think=false")
+    server_says({"qwen3:8b": frozenset({"completion", "tools", "thinking"})})
+
+    from app import local_context
+
+    seen: dict = {}
+
+    class FakeClient:
+        async def stream(self, messages, model_name, tools=None, **kw):
+            seen["think"] = kw.get("think")
+            seen["tools"] = tools
+            return
+            yield          # pragma: no cover — makes this an async generator
+
+    async def _no_refusal(*a, **kw):
+        return None
+
+    async def _ctx(*a, **kw):
+        return 8192
+
+    async def _noop(*a, **kw):
+        return None
+
+    saved = (llm_router._refuse_local_overflow, llm_router._resolve_local,
+             local_context.resolve, local_context.note_spill)
+    llm_router._refuse_local_overflow = _no_refusal
+    llm_router._resolve_local = lambda name: (FakeClient(), name)
+    local_context.resolve = _ctx
+    local_context.note_spill = _noop
+
+    msgs = [{"role": "user", "content": "does ARIA Labs exist on GitHub?"}]
+    toolset = [{"type": "function",
+                "function": {"name": "github-profile-fetch", "parameters": {}}}]
+    try:
+        seen.clear()
+        async for _ in llm_router.stream_chat(msgs, "ollama:qwen3:8b",
+                                              toolset, thinking="off"):
+            pass
+        check("think=off + tools -> no think param reaches the client",
+              seen.get("think") is None, repr(seen.get("think")))
+        check("...and the tools still go out untouched",
+              seen.get("tools") == toolset)
+
+        # The setting is not being ignored wholesale — with no tools on the
+        # turn there is no tool selection to protect, so `off` still means off.
+        seen.clear()
+        async for _ in llm_router.stream_chat(msgs, "ollama:qwen3:8b",
+                                              None, thinking="off"):
+            pass
+        check("think=off with NO tools is still honored",
+              seen.get("think") is False, repr(seen.get("think")))
+
+        # And the rail is one-directional: it suppresses `off`, never forces on.
+        seen.clear()
+        async for _ in llm_router.stream_chat(msgs, "ollama:qwen3:8b",
+                                              toolset, thinking="on"):
+            pass
+        check("think=on + tools is untouched",
+              seen.get("think") is True, repr(seen.get("think")))
+    finally:
+        (llm_router._refuse_local_overflow, llm_router._resolve_local,
+         local_context.resolve, local_context.note_spill) = saved
+
+
 async def main():
     for t in (test_follows_the_server_not_the_name, test_auto_changes_nothing,
               test_unknown_is_not_no, test_cloud_models_untouched,
-              test_reasoning_is_not_text):
+              test_reasoning_is_not_text, test_tools_outrank_thinking_off):
         await t()
         print()
     if FAILURES:
