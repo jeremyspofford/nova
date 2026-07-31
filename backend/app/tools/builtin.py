@@ -1142,7 +1142,8 @@ async def _request_operator_confirmation(args, ctx):
     if rule["is_system"]:
         return (f"Error: '{subject}' is a system protection — no consent can "
                 f"authorize agents to touch it. Do not raise a card; tell the "
-                f"requester only the operator can change it in Settings.")
+                f"requester only the operator can change it, in Library → "
+                f"Rules.")
     try:
         row = await consents.create(
             kind, subject, question,
@@ -1666,10 +1667,14 @@ async def _manage_rules(args, ctx):
         row = await rules_store.get_by_name(args.get("name", ""))
         if not row:
             return f"Error: rule '{args.get('name')}' not found"
-        if row["is_system"] and action != "list":
+        if row["is_system"]:
+            # Every one of update/enable/disable/delete, and no consent path
+            # past this point — `request_operator_confirmation` refuses to
+            # raise a card for a system rule too (see above), so there is
+            # nothing an agent can obtain that would change the answer.
             return (f"Error: '{row['name']}' is a system protection — it cannot be "
-                    f"modified or deleted by agents. Only the operator can change it "
-                    f"in Settings.")
+                    f"modified or deleted by agents, with or without consent. "
+                    f"Only the operator can change it, in Library → Rules.")
         if action == "delete":
             # destructive: only executes against a fresh operator approval
             # (roadmap #29) — validated mechanically, never by LLM judgment
