@@ -310,6 +310,29 @@ def cleanup(sid: str, authorization: str | None = Header(default=None)):
     return {"status": "removed"}
 
 
+class GradePatch(BaseModel):
+    repo: str
+    patch: str
+    test_cmd: str = ""
+
+
+@app.post("/grade")
+def grade_patch(spec: GradePatch, authorization: str | None = Header(default=None)):
+    """Mechanically grade a proposed patch — capability-acquisition 6b.
+
+    Synchronous, unlike `/session`: this clones, applies and runs tests, which
+    is seconds-to-a-minute rather than the minutes a coding session takes, and
+    a caller that has to poll for a yes/no would just poll in a tight loop.
+
+    Same container, same allow-list, same private-clone discipline. The job
+    directory is removed whatever happens — a grader that accumulated
+    checkouts would fill the volume the sessions need.
+    """
+    _guard(authorization)
+    from grade import grade
+    return grade(spec.repo, spec.patch, spec.test_cmd)
+
+
 @app.get("/health")
 def health():
     """Deliberately unauthenticated and deliberately says nothing useful:

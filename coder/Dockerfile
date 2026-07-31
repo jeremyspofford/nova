@@ -32,7 +32,7 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 # container cannot keep.
 RUN pip3 install --no-cache-dir --break-system-packages pytest ruff
 
-COPY acp.py broker.py ./
+COPY acp.py broker.py grade.py ./
 
 # Non-root. /workspaces must exist IN THE IMAGE and be owned by this uid:
 # Docker seeds a fresh named volume from the image path it mounts over, so

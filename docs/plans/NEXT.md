@@ -32,34 +32,53 @@ code, propose, build, PR; and figure out how to do a thing nobody built).
 | 4 acceptance test | **run, passed**, found the egress gap |
 | 5 acquisition router | **done** |
 | 6a `propose_patch` | **done** (mig 071) |
-| 6b patch grader | **UNBLOCKED** — see below |
+| 6b patch grader | **done** 2026-07-31 — `coder/grade.py`, wired into `propose_patch` |
 | 7 ACP coding sessions, private clone | **done** — `#20` phases 0-2, mig 079/080 |
 | 8 staging stack + verification | needs `#31` backups |
 | 9 branch push + real GitHub PRs | prerequisite `#32` now **met** |
 
-**Start here: `#20` phase 3 — policy engine + review surface**
-(`docs/plans/acp-coding-delegation.md`). Phases 0-2 shipped 2026-07-31 and the
-phase-0 findings are appended to that plan; read them before touching this,
-because the headline changed the design: **ACP cannot confine an agent**, so
-the container is the boundary and the permission layer is defence-in-depth on
-top of it. Two concrete gaps phase 3 closes:
+**Start here: `#20` phase 9 — branch push and real GitHub PRs.** It is the
+only remaining step in the self-coding arc whose prerequisites are all met:
+`#32` phase 1 (secrets) shipped, so the deploy key has somewhere to live that
+is not plaintext in the DB, and phases 0-3 + 6b shipped 2026-07-31, so there
+is a branch worth pushing and a mechanical grade to gate on.
 
-- **Command execution is denied wholesale.** The broker's path adjudicator
-  approves a request whose paths all land inside the private clone and denies
-  everything else — including any request that names NO path, which is what a
-  command looks like. So the agent cannot run the tests it just wrote. An
-  allowlisted command set is the fix, and it has to be enforced at the broker
-  (`coder/acp.py::_decide`), not described to the agent.
-- **The diff has no review surface in chat.** Library → Coding shows state,
-  branch and diffstat; a session report that renders the denials and a
-  copyable `git diff` invocation is what makes the operator-merge gate usable
-  rather than nominal.
+Read the phase-0 findings in `acp-coding-delegation.md` first — the headline
+changed the design: **ACP cannot confine an agent**, so the container is the
+boundary and the permission layer is defence-in-depth on top of it. Two things
+that bear directly on phase 9:
 
-**Why 6b is unblocked.** A patch grader must apply a patch somewhere, and the
-backend can reach only `/app/backend` and `/app/data` with neither `git` nor
-`patch` in the image. The coder sidecar now has both, plus a private clone per
-session — so the grader has a place to stand. Jeremy's choice of a mechanical
-grader over eyeballing stands; the order is what changed, and it changed back.
+- `git` is deliberately ABSENT from the session command allow-list
+  (`coder/acp.py`), precisely so a session cannot push. Phase 9 therefore adds
+  a broker VERB that pushes, not an allow-list entry — the broker owns the
+  branch and the commit, and that is what keeps "merge is always the
+  operator's move" true.
+- Jeremy's decision 3 (2026-07-29) was **real PRs from the start**, and this
+  repository is public. The first push is visible on
+  `github.com/jeremyspofford/nova`, so it wants his go-ahead rather than
+  inference from the plan.
+
+Also unblocked and smaller: `#20` phase 4 is research only (local-model lane),
+and the "Small, self-contained" list below has not moved.
+
+**6b is done.** The grader lives in the coder sidecar (`coder/grade.py`,
+`POST /grade`), because that is where the writable clone, git and the test
+runners are — the checkout moved rather than the check. `propose_patch` now
+puts a mechanical verdict on the card instead of the old "NOT CHECKED"
+disclaimer.
+
+Every stage is TRI-STATE — pass / fail / **skip** — and skip never counts as
+success, because "a partial pass reads as a pass" was the plan's own reason
+for not building this early. A markdown-only patch grades PARTIAL with
+`compile: skip — no Python in this patch`, never PASS. A patch that does not
+apply skips the rest with "the patch did not apply, so this was never run". A
+run where nothing could be checked is `inconclusive`. And an absent grade (no
+sidecar) is stated in the same place a grade would have been, so it cannot be
+mistaken for a clean one.
+
+The fourth criterion in the plan — judged against the request — is
+deliberately NOT in the grader: it needs a model, and a judge's opinion must
+never be able to overturn `applies: fail`. It belongs to the caller.
 
 ## Decisions waiting on Jeremy
 

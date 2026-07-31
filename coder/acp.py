@@ -196,7 +196,8 @@ class AcpSession:
                 AcpSession._commands_in(item, out)
         return out
 
-    def _command_ok(self, cmd: str) -> tuple[bool, str]:
+    @staticmethod
+    def _command_ok(cmd: str) -> tuple[bool, str]:
         """Is this a command the session may run?
 
         THE ALLOW-LIST IS ON THE PROGRAM, and the refusal is on the shell.

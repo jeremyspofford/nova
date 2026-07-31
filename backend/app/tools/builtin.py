@@ -1372,21 +1372,33 @@ async def _propose_patch(args, ctx):
     result = patches.review(diff)
     if result["status"] != "ok":
         return "Error: " + result["detail"]
+    # Phase 6b: the three questions review() cannot answer get answered by the
+    # coder sidecar, against a real clone. Jeremy chose a mechanical grader
+    # over eyeballing diffs, and this is where the card stops saying "NOT
+    # CHECKED". A missing grade reads as missing, never as clean.
+    graded = await patches.grade(diff, test_cmd=str(args.get("test_cmd") or ""))
     title = str(args.get("title") or "").strip() or (
         "Patch: " + ", ".join(result["files"])[:80])
     try:
         rec = await recommendations.create(
             "patch", title[:200],
-            patches.summary(result, rationale) + "\n\n```diff\n" + diff.strip()
+            patches.summary(result, rationale)
+            + "\n\n" + patches.grade_summary(graded)
+            + "\n\n```diff\n" + diff.strip()
             + "\n```",
             source=ctx.get("agent_name") or "maintainer",
             dedupe_key="patch:" + ",".join(sorted(result["files"]))[:120])
     except ValueError as e:
         return f"Error: {e}"
+    verdict = (graded or {}).get("verdict") or "not graded"
     return (f"Proposed as a patch card ({rec['id']}): {len(result['files'])} "
-            f"file(s), +{result['added']}/-{result['removed']}. Nothing is "
-            f"applied — the operator reads the diff and decides. Do not "
-            f"describe the change as made.")
+            f"file(s), +{result['added']}/-{result['removed']}. "
+            f"Mechanical grade: {verdict.upper()}"
+            + (f" — {graded['summary']}" if graded else
+               " (the coder sidecar is not running, so nothing was verified)")
+            + ". Nothing is applied — the operator reads the diff and decides. "
+              "Do not describe the change as made, and do not describe an "
+              "ungraded or failing patch as working.")
 
 
 async def _list_secret_names(args, ctx):
@@ -2360,7 +2372,12 @@ BUILTIN_TOOLS: dict[str, dict] = {
                           "description": "what it does and why it is worth making"},
             "diff": {"type": "string",
                      "description": "unified diff, in the form `git diff` emits"},
-        }, "required": ["rationale", "diff"]},
+            "test_cmd": {"type": "string",
+                         "description": "optional test command to run against "
+                                        "the patched tree, e.g. 'pytest -q'. "
+                                        "Only allow-listed runners are "
+                                        "permitted; anything else is reported "
+                                        "as not run rather than as passing."}}, "required": ["rationale", "diff"]},
         "execute": _propose_patch,
     },
     "list_secret_names": {
