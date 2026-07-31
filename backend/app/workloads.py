@@ -22,6 +22,15 @@ with. Adding a Python copy would create a second, weaker authority that drifts
 from the first — and the day they disagree, the wrong one is the one the model
 learns to satisfy.
 
+ONE EXCEPTION, and it is the exception that proves the rule: WHICH IDENTITY a
+pod runs as. Pod Security does not look at that field at any level —
+`baseline` and `restricted` both govern what a container may do, never whose
+token it holds — and Kubernetes has no admission check on ServiceAccount
+selection the way it has `escalate` for RBAC. So there is no upstream
+authority to duplicate here. This is not a second, weaker copy of a rule; it
+is the only copy of a rule the API server does not have. See
+`_identity_requests` for why it matters and `apply` for where it refuses.
+
 The credential's PRESENCE is the feature switch: no token file means no
 runtime, and the tools say so plainly rather than failing obscurely. That
 keeps a stack with no cluster working exactly as before.
@@ -29,7 +38,6 @@ keeps a stack with no cluster working exactly as before.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Any, Optional
@@ -63,6 +71,93 @@ KINDS: dict[str, tuple[str, str]] = {
 }
 
 _TIMEOUT = 20.0
+
+# --- the identity a pod runs as -------------------------------------------
+#
+# rbac.yaml withholds serviceaccounts, roles and rolebindings on the argument
+# that "an identity that can grant is not bounded by what it was granted".
+# A pod spec naming `serviceAccountName: nova-deployer` arrives at the same
+# place through a door that file does not cover. It creates no identity — it
+# BORROWS one, and the token it mounts is this module's own: the whole Role,
+# including `create networkpolicies`, running inside a container that never
+# passes through allow_host_egress or any other check the backend performs.
+# The pod would be able to open its own egress, read every Secret in the
+# namespace, and deploy more of itself.
+#
+# That is reachable from a manifest Nova wrote, and she writes manifests from
+# text — a followed page, a container's logs, an operator's paste. It is the
+# one field in a submission that hands out authority rather than consuming it.
+#
+# Both spellings are doors. `serviceAccount` is the deprecated alias and the
+# API server still honours it, so omitting it would be a hole with a
+# deprecation notice on it.
+_SA_FIELDS = ("serviceAccountName", "serviceAccount")
+
+# Opaque payload, not spec. A ConfigMap or Secret may legitimately carry
+# somebody else's manifest as a string value — a Helm chart, a compose file,
+# an example in a README — and nothing in there is ever submitted to the API
+# server as a pod spec. Refusing a document because of a word inside its data
+# would be a false positive with no security value, and a check that cries
+# wolf is a check that gets deleted.
+_OPAQUE = ("data", "stringData", "binaryData")
+
+
+def _identity_requests(node: Any, path: str = "") -> list[str]:
+    """Every place a document asks for an identity, as dotted paths.
+
+    Derived by walking the tree, never by listing the places. A pod spec sits
+    at `spec` in a Pod, `spec.template.spec` in a Deployment or Job, and
+    `spec.jobTemplate.spec.template.spec` in a CronJob; writing those three
+    down is a list that silently stops covering KINDS the day a kind is added
+    to it. Recursion cannot miss one, and it costs nothing on documents this
+    size.
+    """
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{path}.{key}" if path else key
+            if key in _SA_FIELDS and value:
+                found.append(f"{here}: {value}")
+            elif key == "automountServiceAccountToken" and value:
+                # asking for the token IS asking for the identity — there is
+                # no other reason to want it mounted
+                found.append(f"{here}: {value}")
+            elif key not in _OPAQUE:
+                found.extend(_identity_requests(value, here))
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            found.extend(_identity_requests(item, f"{path}[{i}]"))
+    return found
+
+
+def _deny_token_mounts(node: Any) -> int:
+    """Turn token mounting off on every pod spec in the tree; count them.
+
+    A pod spec is recognised by the field every one of them must have —
+    `containers` — rather than by where it sits, for the same reason the scan
+    above recurses.
+
+    Unlike the refusal this is silent, and the asymmetry is deliberate. A
+    manifest that never mentioned the token is not asking for anything, so
+    switching it off is a DEFAULT, not an instruction countermanded behind
+    her back; a manifest that did ask has already been refused before this
+    runs. The `default` ServiceAccount holds no RoleBinding here, so its
+    token grants almost nothing — but "almost nothing" is a credential
+    sitting in a container's filesystem for anything that gets in to find,
+    and there is no workload here that needs one.
+    """
+    changed = 0
+    if isinstance(node, dict):
+        if isinstance(node.get("containers"), list):
+            node["automountServiceAccountToken"] = False
+            changed += 1
+        for key, value in node.items():
+            if key not in _OPAQUE:
+                changed += _deny_token_mounts(value)
+    elif isinstance(node, list):
+        for item in node:
+            changed += _deny_token_mounts(item)
+    return changed
 
 
 def namespace() -> str:
@@ -130,6 +225,33 @@ async def apply(manifest: str) -> dict:
     if not docs:
         return {"status": "error", "detail": "manifest is empty"}
 
+    # IDENTITY PRE-PASS, before anything is POSTed. The loop below applies as
+    # it goes, so refusing the third document after the first two have landed
+    # leaves half a service running. For a manifest the API server rejects
+    # that is merely untidy — the operator can see it and clean up. A
+    # manifest reaching for a ServiceAccount is not a typo, and half-applying
+    # one is strictly worse than applying none of it: the half that landed is
+    # the half nothing refused. So the whole submission stands or falls.
+    asked = [(str(d.get("kind") or "?"),
+              str((d.get("metadata") or {}).get("name") or "?"), req)
+             for d in docs if isinstance(d, dict)
+             for req in _identity_requests(d)]
+    if asked:
+        where = "; ".join(f"{k}/{n} sets {req}" for k, n, req in asked)
+        log.warning("workload manifest REFUSED (identity): %s", where)
+        return {
+            "status": "error", "applied": 0, "of": len(docs),
+            "detail": (
+                f"Refused, and nothing was applied: a manifest cannot choose "
+                f"the identity its pods run as. {where}. Pods here run as the "
+                f"namespace's `default` ServiceAccount with no token mounted, "
+                f"and that is not yours to override — naming a ServiceAccount "
+                f"hands the pod that account's API rights, and the account "
+                f"this backend holds can deploy, delete and open egress. "
+                f"Remove the field and apply again. If the workload genuinely "
+                f"needs to reach the Kubernetes API, that is an operator "
+                f"decision made in the cluster, not a line in a manifest.")}
+
     results = []
     for doc in docs:
         if not isinstance(doc, dict):
@@ -154,6 +276,8 @@ async def apply(manifest: str) -> dict:
         # boundary. One namespace, always, and it is not hers to choose.
         doc.setdefault("metadata", {})["namespace"] = namespace()
         doc.setdefault("apiVersion", api_version)
+        # imposed the same way and for the same reason: not hers to choose
+        _deny_token_mounts(doc)
 
         status, body = await _request("POST", _path(api_version, plural),
                                       json_body=doc)
