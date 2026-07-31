@@ -45,6 +45,7 @@
   "main": [
     "diagnose",
     "dispatch_to_agent",
+    "fetch_url",
     "get-weather",
     "get_weather",
     "github-profile-fetch",
@@ -62,6 +63,7 @@
     "raise_recommendation",
     "read_memory_item",
     "search_memory",
+    "web_search",
     "write_memory"
   ],
   "maintainer": [
