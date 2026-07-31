@@ -196,13 +196,30 @@ class Session:
                               on_update=self.updates.append)
         self.acp.initialize()
         self.acp.new_session()
-        stop = self.acp.prompt(self.spec.task, deadline=self.deadline)
-        if stop is None:
+        stop, err = self.acp.prompt(self.spec.task, deadline=self.deadline)
+        if err:
+            # Distinct from the clock on purpose — see AcpSession.prompt.
+            self.error = f"the coding agent returned an error: {err}"
+        elif stop is None:
             self.timed_out = True
             self.error = f"killed at the {self.budget_s}s wall clock"
 
+    #: Never committed, whatever the repo's own .gitignore says. A session runs
+    #: the tests it just wrote, so build artefacts appear in the tree; a scratch
+    #: repo with no .gitignore then commits `__pycache__/*.pyc` into the diff the
+    #: operator is supposed to review. The reviewable diff is the deliverable,
+    #: so noise in it is a defect rather than an untidiness.
+    _NEVER_COMMIT = ("__pycache__/", "*.pyc", ".pytest_cache/", "node_modules/",
+                     ".ruff_cache/", "*.egg-info/")
+
     def _capture(self):
         """The deliverable is a branch and a diff. Nothing here merges or pushes."""
+        excl = os.path.join(self.dir, ".git", "info", "exclude")
+        os.makedirs(os.path.dirname(excl), exist_ok=True)
+        with open(excl, "a") as f:
+            f.write("\n" + "\n".join(self._NEVER_COMMIT) + "\n")
+        self._git("rm", "-r", "--cached", "-q", "--ignore-unmatch",
+                  "--", "__pycache__", ".pytest_cache", check=False)
         self._git("add", "-A")
         status = self._git("status", "--porcelain")
         if status.strip():
@@ -212,11 +229,28 @@ class Session:
                                   check=False) if self.commit else ""
 
     def snapshot(self) -> dict:
+        # Denials are promoted out of the update stream and into the report.
+        # A refusal the operator never sees is the same defect as a tool that
+        # narrates work it did not do: the session looks like it simply chose
+        # not to run the tests, when in fact it was stopped. Phase 3's review
+        # surface is mostly this field.
+        denials = [{"why": u.get("why"), "tool": u.get("tool")}
+                   for u in self.updates if u.get("permission") == "denied"]
+        # And what it WAS allowed to run. "Did it actually run the tests?" is
+        # the first question a reviewer asks, and the answer must not be the
+        # agent's own account of itself — that is a claim, and this codebase
+        # already learned that `commands_run` as LLM self-report is worth
+        # nothing. These are the commands the adjudicator approved, recorded
+        # where it approved them.
+        commands = [u.get("tool") for u in self.updates
+                    if u.get("permission") == "allowed" and u.get("tool")]
         return {
             "id": self.id, "state": self.state, "error": self.error,
             "branch": self.branch, "commit": self.commit,
             "diffstat": self.diffstat.strip(),
             "updates": len(self.updates),
+            "denials": denials,
+            "commands": commands,
             "elapsed_s": round(time.time() - self.started, 1),
             "budget_s": self.budget_s,
             "tail": self.updates[-12:],

@@ -1640,6 +1640,10 @@ export interface CoderSession {
   branch: string | null; commit: string | null; diffstat: string | null;
   error: string | null; workspace: string | null; created_at: string | null;
   elapsed_s?: number;
+  // phase 3 review surface: what the adjudicator approved and refused
+  commands?: string[];
+  denials?: { why: string; tool: string }[];
+  review?: string | null;
 }
 
 export async function coderStatus(): Promise<{ configured: boolean }> {

@@ -991,25 +991,57 @@ See README for what works. This file is the ordered backlog.
    sidecar). See `nova-mcp-client-shipped` memory for the full rundown.
 
 20. **ACP coding delegation — coding via protocol, not a bespoke harness
-   (requested 2026-07-17)** — Nova as an Agent Client Protocol CLIENT
-   driving existing coding agents (Claude Code via the `claude-code-acp`
-   adapter, Gemini CLI) instead of building repo/shell/test tooling from
-   scratch. Full spec: `docs/plans/acp-coding-delegation.md` — phase 0 is
-   a validation spike (the protocol landscape moves monthly; findings may
-   reshape the build). Shape: a secretless `coder` sidecar (session
-   broker in the inference-control style) with operator-registered repos
-   mounted ONLY there; every session runs in a fresh worktree under
-   `.worktrees/nova/<task>` (never main, never pushes — merge is always
-   the operator's move); sessions are BACKGROUND jobs
-   (`delegate_coding_task` returns immediately, progress streams to the
-   activity trail, completion journals branch + diffstat + report);
-   v1 permission posture is sandboxed-autonomous (worktree-confined
-   edits + allowlisted commands, diff review as the real gate). Keyed
-   opt-in extra by nature (runs on the operator's Anthropic/Google
-   credentials); the local-model lane (Ornith-35b, per the Later note)
-   is end-phase research. SUPERSEDES the harness assumption in the Later
-   "Coding agent(s)" item. Build AFTER #3 — delegated code edits without
-   an audit trail is flying blind.
+   (requested 2026-07-17)** — **phases 0-2 SHIPPED 2026-07-31**; phase 3
+   (policy engine + review surface) is next, then 4 (local-model lane,
+   research). Nova as an Agent Client Protocol CLIENT driving existing
+   coding agents instead of building repo/shell/test tooling from
+   scratch. Full spec + measured findings:
+   `docs/plans/acp-coding-delegation.md`.
+
+   What SHIPPED differs from the sketch below in three ways the spike
+   forced, and each is written up in the plan:
+
+   - **The adapter is `@agentclientprotocol/claude-agent-acp`**, not
+     `claude-code-acp` — that package is deprecated and renamed, and the
+     project left Zed's org for joint Zed/JetBrains governance.
+   - **ACP is not a security boundary.** Asking permission is `MAY` not
+     `MUST`, declining the client filesystem capability changes nothing
+     (the agent uses its own in-process tools), `cwd` is not enforced,
+     and ACP v2 deletes the mediation surface entirely. So there is no
+     worktree confinement at the protocol level: the CONTAINER is the
+     boundary — no host mounts, work in a private clone in a named
+     volume, non-root, read-only rootfs, caps dropped. A git worktree
+     was already ruled out as a portable containment unit; repos are
+     CLONED FROM THE REMOTE, which also means only committed content
+     ever crosses (so `.env` cannot, by construction).
+   - **Not a keyed opt-in extra.** It runs on the OpenRouter key Nova
+     already has — `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` point the
+     Agent SDK at any Anthropic-Messages-shaped endpoint, and through
+     OpenRouter that reaches Gemini/GPT/Kimi/Llama too.
+
+   **OPEN — `CODER_API_KEY` still needs a dedicated key.** It is set in
+   `.env` and currently holds a COPY of `OPENROUTER_API_KEY`, which is
+   what phase 1 was verified against. That works, and it is the wrong
+   long-term shape for one reason: a coding session is unbounded spend
+   against the same budget Nova's own turns draw on, so a runaway or
+   looping session degrades ordinary chat rather than just costing money.
+   The fix is an OpenRouter key with its own spend cap, pasted into
+   `CODER_API_KEY` in `.env` — nothing else changes, because the sidecar
+   already reads it as a separate variable (`docker-compose.yml`, the
+   `coder` service). Only Jeremy can mint it. Until then the sidecar
+   works; it just shares a wallet. Related: `NOVA_CODER_TOKEN` in the
+   same block is the broker's shared secret, is already generated, and
+   must stay set — unset means the broker refuses every request.
+
+   The rest of the sketch held: a `coder` sidecar with a session broker
+   in the inference-control style; sessions are BACKGROUND jobs
+   (`delegate_coding_task` returns immediately, `check_coding_session`
+   reports); never merges, never pushes — merge is always the operator's
+   move. `delegate_coding_task` is an ACTOR and goal-scoped;
+   `check_coding_session` TAINTS the turn, so read-then-delegate is
+   refused (the deployer two-phase split again). The local-model lane
+   (Ornith-35b, per the Later note) is end-phase research. SUPERSEDES the
+   harness assumption in the Later "Coding agent(s)" item.
 
 21. **Notifications — ntfy wiring (2026-07-17)** — small, and the
    prerequisite for proactive Nova: v3 currently has NO way to reach the

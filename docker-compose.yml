@@ -256,6 +256,17 @@ services:
       # Prefer a SEPARATE, spend-capped key from the one Nova's own turns use,
       # so a runaway coding session cannot exhaust her inference budget.
       ANTHROPIC_AUTH_TOKEN: ${CODER_API_KEY:-}
+      # PIN THE MODEL. Unset, the Agent SDK picks its own default and asks for
+      # a 64k output budget — and OpenRouter refuses a request whose max_tokens
+      # exceeds what the remaining credit affords, so an unpinned coder starts
+      # failing with a 402 as the balance drops while cheaper calls still
+      # succeed. Measured 2026-07-31: "requested up to 64000 tokens, but can
+      # only afford 63871" with $22 left on the key. Pinning makes the cost per
+      # session predictable and the failure mode legible.
+      ANTHROPIC_MODEL: ${CODER_MODEL:-anthropic/claude-sonnet-4.6}
+      ANTHROPIC_DEFAULT_OPUS_MODEL: ${CODER_MODEL:-anthropic/claude-sonnet-4.6}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${CODER_MODEL:-anthropic/claude-sonnet-4.6}
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${CODER_SMALL_MODEL:-anthropic/claude-haiku-4.5}
       CODER_SESSION_BUDGET_S: ${CODER_SESSION_BUDGET_S:-1800}
     volumes:
       # Private clone space. A named volume, not a bind: nothing on the host

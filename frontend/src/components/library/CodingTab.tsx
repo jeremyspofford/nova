@@ -201,6 +201,36 @@ docker compose --profile coder up -d coder</pre>
             {s.diffstat && (
               <pre className="text-xs text-teal-300/80 whitespace-pre-wrap">{s.diffstat}</pre>
             )}
+            {/* What it was allowed to RUN — recorded by the broker's
+                adjudicator, not reported by the agent about itself. "Did it
+                actually run the tests?" is the first review question. */}
+            {!!s.commands?.length && (
+              <details className="text-xs">
+                <summary className="text-stone-500 cursor-pointer">
+                  {s.commands.length} action(s) allowed
+                </summary>
+                <ul className="mt-1 space-y-0.5 font-mono text-stone-400">
+                  {s.commands.map((c, i) => <li key={i} className="truncate">+ {c}</li>)}
+                </ul>
+              </details>
+            )}
+            {/* And what was refused. A denial the operator never sees makes a
+                session look like it simply chose not to try. */}
+            {!!s.denials?.length && (
+              <div className="text-xs space-y-0.5">
+                {s.denials.map((d, i) => (
+                  <div key={i} className="text-amber-400/90">
+                    <span className="font-mono">refused</span> {d.why}
+                    {d.tool && <span className="text-stone-500"> — {d.tool}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {s.review && (
+              <div className="text-xs text-stone-500">
+                review it: <code className="text-stone-400">{s.review}</code>
+              </div>
+            )}
             {s.error && <div className="text-xs text-amber-400">{s.error}</div>}
           </div>
         ))}

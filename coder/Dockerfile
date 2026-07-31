@@ -23,6 +23,15 @@ RUN npm install --no-audit --no-fund @agentclientprotocol/claude-agent-acp@0.64.
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
+# The test runners the session allow-list permits. They must exist HERE,
+# because installing is refused at the adjudicator (`pip` is not an allowed
+# command — a registry install executes arbitrary setup code). Measured
+# 2026-07-31: with the allow-list shipped but pytest absent, the agent wrote a
+# test, tried `pip3 install pytest`, was correctly denied, and could not verify
+# its own fix. An allow-list naming a tool the image lacks is a promise the
+# container cannot keep.
+RUN pip3 install --no-cache-dir --break-system-packages pytest ruff
+
 COPY acp.py broker.py ./
 
 # Non-root. /workspaces must exist IN THE IMAGE and be owned by this uid:

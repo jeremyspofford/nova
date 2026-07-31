@@ -22,6 +22,7 @@ back.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -172,13 +173,18 @@ async def refresh(session_id: str) -> dict:
     b = resp.json()
     await _update(row["id"], state=b.get("state"), branch=b.get("branch"),
                   commit_sha=b.get("commit") or None,
-                  diffstat=b.get("diffstat") or None, error=b.get("error"))
+                  diffstat=b.get("diffstat") or None, error=b.get("error"),
+                  denials=json.dumps(b.get("denials") or []),
+                  commands=json.dumps(b.get("commands") or []))
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM coding_sessions WHERE id = $1", row["id"])
     out = _shape(dict(row))
     out["tail"] = b.get("tail") or []
     out["elapsed_s"] = b.get("elapsed_s")
+    # The review surface (phase 3) comes back through `_shape`, which reads the
+    # persisted columns — so the list endpoint carries it too, and it survives
+    # a sidecar restart. Only the live-only extras are added here.
     return out
 
 
@@ -221,7 +227,18 @@ def _detail(resp: httpx.Response) -> str:
 
 
 def _shape(row: dict) -> dict:
+    def _blob(key):
+        v = row.get(key)
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return []
+        return v or []
     return {"session_id": str(row["id"]), "state": row["state"],
+            "denials": _blob("denials"), "commands": _blob("commands"),
+            "review": (f"git -C <clone> diff {row['commit_sha'][:12]}~1.."
+                       f"{row['commit_sha'][:12]}") if row.get("commit_sha") else None,
             "task": row["task"], "branch": row["branch"],
             "commit": row["commit_sha"], "diffstat": row["diffstat"],
             "error": row["error"], "workspace": row.get("workspace"),

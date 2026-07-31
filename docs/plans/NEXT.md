@@ -32,27 +32,48 @@ code, propose, build, PR; and figure out how to do a thing nobody built).
 | 4 acceptance test | **run, passed**, found the egress gap |
 | 5 acquisition router | **done** |
 | 6a `propose_patch` | **done** (mig 071) |
-| 6b patch grader | **blocked on 7** — see below |
-| 7 ACP coding sessions, private clone | **next**, needs the `#20` phase-0 spike |
+| 6b patch grader | **UNBLOCKED** — see below |
+| 7 ACP coding sessions, private clone | **done** — `#20` phases 0-2, mig 079/080 |
 | 8 staging stack + verification | needs `#31` backups |
 | 9 branch push + real GitHub PRs | prerequisite `#32` now **met** |
 
-**Start here: `#20` phase 0 — the ACP validation spike**
-(`docs/plans/acp-coding-delegation.md`). It is a spike on purpose: the ACP
-landscape moves monthly and the findings may reshape phase 7. Two corrections
-already apply to that plan and must survive the spike — a git worktree is NOT a
-portable containment unit (clone into a private volume, export with `git
-bundle`), and the ACP `auto` permission mode is banned.
+**Start here: `#20` phase 3 — policy engine + review surface**
+(`docs/plans/acp-coding-delegation.md`). Phases 0-2 shipped 2026-07-31 and the
+phase-0 findings are appended to that plan; read them before touching this,
+because the headline changed the design: **ACP cannot confine an agent**, so
+the container is the boundary and the permission layer is defence-in-depth on
+top of it. Two concrete gaps phase 3 closes:
 
-**Why 6b waits for 7.** A patch grader must apply a patch somewhere. The
-backend can reach only `/app/backend` and `/app/data` — no frontend, no repo
-root, no `.git` — and neither `git` nor `patch` is in the image. Built now it
-would score backend Python and silently ignore everything else, and a partial
-pass reads as a pass. Phase 7 creates the writable clone; the grader then has a
-place to stand. Jeremy's choice of a mechanical grader over eyeballing stands —
-only the order changed.
+- **Command execution is denied wholesale.** The broker's path adjudicator
+  approves a request whose paths all land inside the private clone and denies
+  everything else — including any request that names NO path, which is what a
+  command looks like. So the agent cannot run the tests it just wrote. An
+  allowlisted command set is the fix, and it has to be enforced at the broker
+  (`coder/acp.py::_decide`), not described to the agent.
+- **The diff has no review surface in chat.** Library → Coding shows state,
+  branch and diffstat; a session report that renders the denials and a
+  copyable `git diff` invocation is what makes the operator-merge gate usable
+  rather than nominal.
+
+**Why 6b is unblocked.** A patch grader must apply a patch somewhere, and the
+backend can reach only `/app/backend` and `/app/data` with neither `git` nor
+`patch` in the image. The coder sidecar now has both, plus a private clone per
+session — so the grader has a place to stand. Jeremy's choice of a mechanical
+grader over eyeballing stands; the order is what changed, and it changed back.
 
 ## Decisions waiting on Jeremy
+
+0. **`CODER_API_KEY` needs a key of its own.** It is set in `.env` and holds a
+   COPY of `OPENROUTER_API_KEY` — that is what phase 1 was verified against
+   and it works. It is the wrong long-term shape for one reason: a coding
+   session is unbounded spend against the same budget Nova's own turns draw
+   on, so a runaway or looping session degrades ordinary chat rather than just
+   costing money. The fix is an OpenRouter key with its own spend cap pasted
+   into `CODER_API_KEY`; nothing else changes, because the `coder` service in
+   `docker-compose.yml` already reads it as a separate variable. Only Jeremy
+   can mint it. **Also in that block:** `NOVA_CODER_TOKEN`, the broker's
+   shared secret — already generated, must stay set, and unset means the
+   broker refuses every request (which is the intended failure direction).
 
 1. **CLI secret managers.** 1Password and Bitwarden/Vaultwarden are registered
    but gated: neither `op` nor `bw` is in the backend image, so they need
@@ -88,6 +109,24 @@ only the order changed.
 - **`transcript-summaries` open question** — whether retrieval should prefer a
   summary over its raw transcript is now moot for duplicates (they collapse),
   but the ranking question underneath it was never measured.
+
+## Operational state, 2026-07-31
+
+- `#20` phases 0-2 shipped and pushed (`f56e3cf..3571827`, six commits also
+  carrying the workloads SA scrub, the guardian charter fix and the ruff
+  clearance). The `coder` sidecar is an OPTIONAL compose profile: a stack
+  without it behaves exactly as before, because `coder.configured()` derives
+  from the credential rather than a flag.
+- One repository is registered (`nova` ->
+  `https://github.com/jeremyspofford/nova.git`). Sessions clone it fresh from
+  the remote, so the agent sees COMMITTED work only — uncommitted local
+  changes are invisible to it by design.
+- A goal named "Coder Sidecar Access" is ACTIVE (approved during phase-2
+  verification) and pre-authorises `delegate_coding_task`. Revoke it if
+  unattended coding is not wanted right now.
+- 36/36 backend suites pass. `ruff check backend/` is clean except
+  `tests/test_model_binding.py:20`, which belongs to a parallel session's
+  uncommitted work and is theirs to clear.
 
 ## Operational state, 2026-07-30
 
