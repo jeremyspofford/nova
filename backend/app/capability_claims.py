@@ -61,7 +61,15 @@ _CAPABILITIES: list[tuple[str, str, set[str]]] = [
         "git",
         r"\b(?:use|run|do|manage|perform|handle)\b[^.!?]{0,25}\bgit\b"
         r"|\bgit (?:commit|clone|push|pull|checkout|branch|access)\b"
-        r"|\bcommit (?:that|this|it|them|changes)\b",
+        r"|\bcommit (?:that|this|it|them|changes)\b"
+        # The VCS verb WITHOUT the word "git". Asked "can you clone one of my
+        # repos", she said she would — and nothing fired, because every arm
+        # above needs the literal token `git` nearby. The comment at :37
+        # records that this arm was narrowed once because "github" was
+        # satisfying it; narrowing the SATISFIER was right, narrowing the
+        # CLAIM left the most natural phrasing of the ask unmatched.
+        r"|\b(?:clone|fork|check ?out|push to|pull from)\b[^.!?]{0,25}"
+        r"\b(?:repo|repos|repository|repositories)\b",
         {"git", "commit", "repo", "repository", "branch", "clone", "push"},
     ),
     (
@@ -92,10 +100,22 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 _NOT_A_CLAIM = re.compile(
     r"\bcan(?:no|')t\b|\bcannot\b|\bdo(?:n't| not)\b|\bunable\b|\bnot able\b"
     r"|\bno (?:ability|access|way|tool|tools)\b|\bnever\b|\black\b|\blacks\b"
-    r"|\bwithout\b|\bif\b|\bonce\b|\bwould\b|\bcould\b|\bwhen you\b"
-    r"|\bwant me to\b|\bshould i\b|\bused to\b|\bnot yet\b|\byet to\b"
-    r"|\bwish i\b|\bcan you\b|\bdo you\b",
+    r"|\bwithout\b|\bwant me to\b|\bshould i\b|\bused to\b|\bnot yet\b"
+    r"|\byet to\b|\bwish i\b|\bcan you\b|\bdo you\b",
     re.IGNORECASE)
+
+# Hypotheticals, split out of the list above on 2026-07-31 because POSITION
+# decides them and the flat list ignored it. A bare `\bif\b` anywhere exempted
+# the whole sentence, so "I'll check IF I have access to GitHub and if I can
+# clone one of your repos" — a claim with a subordinate clause — was thrown
+# away unexamined. Same defect narration.py had, found the same day.
+#
+#   "If I could run shell commands, I would check myself"  -> before: supposing
+#   "I can read your files if you want"                    -> after:  claiming
+#
+# Only exempts when the marker PRECEDES the matched claim.
+_SUPPOSING = re.compile(
+    r"\bif\b|\bonce\b|\bwould\b|\bcould\b|\bwhen you\b", re.IGNORECASE)
 
 # First person only. "The coder agent writes code" is a claim about an
 # agent, and the dispatch index already states each specialist's real
@@ -117,6 +137,35 @@ def _satisfied(wanted: set[str], tool_names: Iterable[str]) -> bool:
     return any(wanted & _tokens(name) for name in tool_names)
 
 
+# What to SAY, per label. A template over the label alone produced "code
+# editing access" and "machine access access", so the wording lives next to
+# the patterns it describes and is written once per capability.
+_CORRECTION = {
+    "filesystem": "read or write files on this machine",
+    "shell": "run shell commands",
+    "git": "use git",
+    "code editing": "edit code",
+    "machine access": "reach into the operator's machine",
+}
+
+
+def correction(label: str) -> str:
+    """The retraction to append to a reply that claimed `label`.
+
+    Mirrors narration's note. A banner alone is not enough for the same
+    reason it was not enough there: the activity event persists as a
+    role='tool' row and `conversations.to_llm_history` keeps only
+    user/assistant rows, so the CLAIM is replayed on every later turn and the
+    contradiction never is. On voice it is worse — only text reaches the
+    speaker, so the false claim is spoken and the correction has no audible
+    form at all. model_claims.py:159 already argued this and got a
+    correction(); this is its sibling finally getting the same.
+    """
+    what = _CORRECTION.get(label, f"do that ({label})")
+    return (f"\n\n[Correction: I cannot {what}. No tool available to me this "
+            f"turn provides it, so the statement above was wrong.]")
+
+
 def detect(final_text: str, tool_names: Iterable[str]) -> Optional[str]:
     """The claimed capability when the text asserts one no granted tool
     provides; None otherwise.
@@ -131,7 +180,12 @@ def detect(final_text: str, tool_names: Iterable[str]) -> Optional[str]:
     for sentence in _SENTENCES.split(final_text):
         if not _FIRST_PERSON.search(sentence) or _NOT_A_CLAIM.search(sentence):
             continue
+        supposing = _SUPPOSING.search(sentence)
         for label, claim, tools in _COMPILED:
-            if claim.search(sentence) and not _satisfied(tools, names):
-                return label
+            m = claim.search(sentence)
+            if not m or _satisfied(tools, names):
+                continue
+            if supposing and supposing.start() < m.start():
+                continue          # hypothesising, not claiming — see _SUPPOSING
+            return label
     return None

@@ -1911,6 +1911,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                           f"turn's toolset provides")}
         log.warning("Capability claim: agent=%s model=%s claimed=%s",
                     agent.get("name"), agent.get("model"), claimed)
+        bg.spawn(memory.write(
+            f"Capability claim: agent '{agent.get('name')}' on model "
+            f"{agent.get('model')} claimed {claimed} access, which no tool in "
+            f"this turn's resolved toolset provides. The claim was NOT true.",
+            type="journal", source_type="system"))
+        # Same argument as narration below, and this check has been missing it
+        # since it shipped. On 2026-07-30 it fired correctly — "claimed
+        # filesystem access, which no tool in this turn's toolset provides" —
+        # and Jeremy never saw it: it went to a role='tool' row that the
+        # history loader drops, so the claim replayed on every later turn and
+        # the verdict replayed on none. A check whose output nobody reads is
+        # telemetry, not a control.
+        note = capability_claims.correction(claimed)
+        final_text += note
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
 
     # narration detector: text that announces actions + zero tool calls =
     # the described work silently never happened. Make it loud.

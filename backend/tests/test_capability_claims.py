@@ -70,6 +70,11 @@ MUST_FLAG = [
     "I can commit that for you with git.",
     "I'll edit the code in your repo.",
     "I can access your computer directly.",
+    # ARIA Labs, 2026-07-30. Missed live because every git arm required the
+    # literal token `git` beside the verb, so the most natural phrasing of
+    # the request — the operator's own words handed back — went unmatched.
+    "I can clone one of your repos for you.",
+    "I'll clone one of your repos under ARIA Labs.",
 ]
 
 MUST_NOT_FLAG = [
@@ -95,6 +100,19 @@ MUST_NOT_FLAG = [
     "I can search my memory for that file name.",
     "Your note about the repo is in memory under the coffee tag.",
     "I can write a memory note about the deploy script.",
+    # position, not presence — the other half of the same 2026-07-31 fix
+    "If I can clone your repo later, I will start there.",
+    "Once you give me git, I can clone your repos.",
+    # The line that opened the 2026-07-30 incident, and it belongs HERE.
+    # Read plainly she is not claiming she can clone — she is saying she will
+    # find out. The `if` really does precede the verb and really does make it
+    # hypothetical, so this check is right to stay silent. What was wrong
+    # with that turn is that the check she promised never ran, which is
+    # narration.py's job and is now pinned in ITS corpus. Two detectors, two
+    # failures; conflating them is how a precision-critical check starts
+    # crying wolf.
+    "I'll check if I have access to GitHub and if I can clone one of your "
+    "repos under ARIA Labs.",
 ]
 
 
@@ -126,7 +144,25 @@ def main() -> int:
     check("granting shell does NOT silence the filesystem claim",
           cc.detect(fs_claim, TOOLS_WITH_SHELL) == "filesystem")
 
-    print("4. edges")
+    print("4. the correction is a SENTENCE, and it reaches the operator")
+    # Until 2026-07-31 this check only logged a banner. It fired correctly on
+    # 2026-07-30 — "claimed filesystem access, which no tool in this turn's
+    # toolset provides" — and Jeremy never saw it, because the activity event
+    # persists as a role='tool' row and the history loader keeps only
+    # user/assistant rows. So the claim replayed on every later turn and the
+    # verdict replayed on none. A check nobody reads is telemetry.
+    for label in ("filesystem", "shell", "git", "code editing",
+                  "machine access"):
+        note = cc.correction(label)
+        check(f"{label}: reads as a retraction", "I cannot" in note, note.strip()[:70])
+        # the naive f"{label} access" template produced "machine access
+        # access" and "code editing access" — wording lives per label
+        check(f"{label}: no doubled noun", "access access" not in note, note)
+        check(f"{label}: says WHY, not just that", "no tool" in note.lower(), note)
+    check("an unknown label still produces something sayable",
+          "cannot" in cc.correction("teleportation"), cc.correction("teleportation"))
+
+    print("5. edges")
     check("empty text", cc.detect("", TOOLS_TODAY) is None)
     check("no text", cc.detect(None, TOOLS_TODAY) is None)
     check("no tools at all still parses",

@@ -32,6 +32,23 @@ _PATTERNS = [
     # announcing create/change work
     r"\bI['’](?:ll|m going to|m about to) (?:create|build|add|update|delete|write|schedule|pull|set up)\b",
     r"\blet me (?:create|build|schedule|set up)\b",
+    # announcing RETRIEVAL work (2026-07-31). Every verb above mutates, and
+    # the six replies that produced the ARIA Labs incident used none of them:
+    # check, search, look up, confirm, fetch. A read that never happened is
+    # the same silent failure as a write that never happened — the operator
+    # sat for five minutes waiting on a search that was never running.
+    r"\bI['’](?:ll|m going to|m about to) (?:check|search|look up|look into|"
+    r"find|fetch|confirm|verify|browse|query|propose|see if)\b",
+    r"\bI['’]m (?:checking|searching|looking (?:up|into)|fetching|verifying|"
+    r"confirming|querying)\b",
+    r"\blet me (?:check|search|look up|look into|find|fetch|confirm|verify|"
+    r"see if|propose)\b",
+    # the bare sign-offs. These carry no verb at all — they are pure promise,
+    # and they closed four of the six replies. "One moment" in a turn that
+    # ran nothing is a statement about work in flight, and there is none.
+    r"\blet me do (?:that|it|this)\b",
+    r"\bone moment\b",
+    r"\b(?:give me|just) a (?:sec|second|moment)\b",
     # claiming just-completed work
     r"\bI['’]ve just (?:created|built|updated|deleted|scheduled|dispatched|set up)\b",
     r"\bis now (?:created|live|built|scheduled|in place)\b",
@@ -79,6 +96,36 @@ _RECAP_MARKERS = re.compile(
 _CONDITIONAL_MARKERS = re.compile(
     r"\bif\b|\bunless\b|\bwhether\b|\bin case\b|\bwould have\b", re.IGNORECASE)
 
+# POSITION IS THE WHOLE SIGNAL, and ignoring it is what let the ARIA Labs
+# turns through. A bare `\bif\b` anywhere in the sentence exempted it, so
+# "I'll check IF I have access to GitHub" — a promise with a subordinate
+# clause — was read as a hypothetical and never examined. The distinction is
+# purely positional:
+#
+#   "If I dispatched the agent, it would take minutes"  -> if BEFORE the verb
+#   "I'll check if I have access"                       -> if AFTER the verb
+#
+# Only the first is hypothesising. So the guard now applies when the marker
+# PRECEDES the match, and the two live replies that opened the incident are
+# the two that a whole-sentence guard missed.
+#
+# An offer is different again and stays exempt wherever it sits: "I'll check
+# that if you'd like" is asking, and asking is correct behaviour. It has to
+# be its own list rather than a position rule, because the offer trails the
+# verb in exactly the way a real promise does.
+_OFFER_MARKERS = re.compile(
+    r"\bif you(?:'d| would)? (?:like|want|prefer)\b|\bif you want\b|"
+    r"\bwant me to\b|\bwould you like\b|\bshall I\b|\blet me know if\b|"
+    r"\bif that (?:helps|works)\b", re.IGNORECASE)
+
+
+def _exempt(body: str, match) -> bool:
+    """True when this sentence's match is hypothetical or an offer."""
+    if _OFFER_MARKERS.search(body):
+        return True
+    cond = _CONDITIONAL_MARKERS.search(body)
+    return bool(cond and cond.start() < match.start())
+
 _SENTENCES = re.compile(r"[.!?\n]+")
 # Same split, but KEEPING the terminator. "?" is the entire signal for "that
 # was a question, not a claim", and the plain split above throws it away.
@@ -110,17 +157,17 @@ def detect(final_text: str, tool_calls_made: int) -> str | None:
     # docstring has always said questions must not be matched; only the
     # completion arm actually honoured it.
     for body, end in _clauses(final_text):
-        if "?" in end or _CONDITIONAL_MARKERS.search(body):
+        if "?" in end:
             continue
         for pat in _COMPILED:
             m = pat.search(body)
-            if m:
+            if m and not _exempt(body, m):
                 return m.group(0)
     for sentence in _SENTENCES.split(final_text):
-        if _RECAP_MARKERS.search(sentence) or _CONDITIONAL_MARKERS.search(sentence):
+        if _RECAP_MARKERS.search(sentence):
             continue
         for pat in _COMPLETION_COMPILED:
             m = pat.search(sentence)
-            if m:
+            if m and not _exempt(sentence, m):
                 return m.group(0)
     return None
