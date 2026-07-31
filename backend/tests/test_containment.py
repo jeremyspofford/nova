@@ -138,6 +138,90 @@ async def run() -> None:
           "never manage anything", not pv.blocks_actors(pv.CONVERSATION))
     check("first-party does not block actors", not pv.blocks_actors(pv.FIRST_PARTY))
 
+    # ── 6-8: IN-TURN taint (2026-07-31) ──────────────────────────────────
+    # Until now the flag came only from memory provenance and was fixed
+    # before round 1, so "fetch in round 1, act in round 2" walked straight
+    # through. Migration 075 gave main the web and made that reachable.
+    print("6. which tools bring untrusted text IN")
+    for name in ("web_search", "fetch_url", "ingest_media", "poll_sources",
+                 "follow_source", "workload_logs", "get_weather"):
+        check(f"{name} taints the turn", r.returns_untrusted(name))
+    for name in ("search_memory", "read_memory_item", "list_agents",
+                 "write_memory", "manage_agents", "propose_goal"):
+        check(f"{name} does not taint", not r.returns_untrusted(name))
+    check("a db tool taints — an http_call reaches somebody else's host by "
+          "construction, GET or not",
+          r.returns_untrusted("github-profile-fetch"))
+    check("an MCP tool taints — fail closed, a server returns what it likes",
+          r.returns_untrusted("mcp:nova-src/read_text_file"))
+    check("an unknown name taints — fail closed",
+          r.returns_untrusted("something-nobody-registered"))
+
+    print("7. the fence fires once a turn has been tainted mid-flight")
+    # manage_automations is BOTH actor and goal-scoped, so it is refused on a
+    # clean turn too — by the goal gate, with different wording. The point
+    # here is WHICH refusal fires, not that one does.
+    _FENCE = "outside source"
+    _GOAL = "goal the operator has approved"
+    ctx = {"granted": ["manage_automations", "fetch_url"],
+           "untrusted_context": False}
+    clean = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    check("on a CLEAN turn the fence stays silent (the goal gate answers)",
+          _FENCE not in clean and _GOAL in clean, clean[:70])
+    # exactly what _run_tool now does after fetch_url returns
+    ctx["untrusted_context"] = True
+    tainted = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    check("the SAME call is refused by the FENCE once the turn is tainted",
+          _FENCE in tainted, tainted[:80])
+    # Ordering is load-bearing: were the goal gate first, an operator-approved
+    # goal would let a poisoned page spend it. The fence has to win.
+    check("the fence is checked BEFORE the goal gate, so an approved goal "
+          "cannot be spent on a tainted turn", _GOAL not in tainted,
+          tainted[:80])
+
+    print("8. a dispatch cannot launder the taint")
+    # dispatch_to_agent is runner-inlined and never reaches execute_tool, so
+    # the fence cannot refuse it. run_agent must inherit the flag instead.
+    import inspect
+    from app.agents import runner as rn
+    check("run_agent accepts parent_untrusted",
+          "parent_untrusted" in inspect.signature(rn.run_agent).parameters)
+    check("_run_dispatch accepts parent_untrusted",
+          "parent_untrusted" in inspect.signature(rn._run_dispatch).parameters)
+    check("_run_dispatch_group accepts parent_untrusted",
+          "parent_untrusted" in inspect.signature(rn._run_dispatch_group).parameters)
+    src = inspect.getsource(rn.run_agent)
+    check("the sub-agent's ctx ORs the parent's flag in",
+          "or parent_untrusted" in src)
+    check("the group is passed the flag read from the LIVE ctx, so a fetch "
+          "in an earlier round of this turn counts",
+          'parent_untrusted=bool(ctx.get("untrusted_context"))' in src)
+
+    print("9. taint travels BOTH ways across a dispatch")
+    check("the taint event is forwarded out of a sub-agent",
+          "taint" in rn._FORWARDED_FROM_SUB, str(rn._FORWARDED_FROM_SUB))
+    src_all = inspect.getsource(rn)
+    check("run_agent emits it when its own ctx ended up tainted",
+          'yield {"type": "taint"' in src_all)
+    check("the parent CONSUMES it and taints itself",
+          'if ev.get("type") == "taint"' in src_all
+          and 'ctx["untrusted_context"] = True' in src_all)
+    check("...and does not forward it to the client — it is plumbing, "
+          "not a display event", 'continue' in src_all.split(
+              'if ev.get("type") == "taint"')[1][:800])
+
+    print("10. consent cards can find their conversation")
+    # request_operator_confirmation passes ctx.get("conversation_id") into
+    # consents.create, and list_pending filters on it. It was never in ctx,
+    # so every card an agent raised was written with NULL and no UI could
+    # ever show it.
+    check("run_agent takes a conversation_id",
+          "conversation_id" in inspect.signature(rn.run_agent).parameters)
+    check("it reaches the tool ctx", '"conversation_id": conversation_id' in src_all)
+    check("and rides down the dispatch, so a specialist's card lands in the "
+          "operator's chat rather than nowhere",
+          'conversation_id=ctx.get("conversation_id")' in src_all)
+
     await db.close_pool()
 
 

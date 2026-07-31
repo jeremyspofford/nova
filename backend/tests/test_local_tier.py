@@ -308,7 +308,7 @@ async def test_dispatch_budget():
 
     dispatched = []
 
-    async def fake_dispatch(args, depth, automation=None):
+    async def fake_dispatch(args, depth, automation=None, **_kw):
         dispatched.append(args["message"])
         yield {"type": "final", "text": f"report for {args['message']}"}
 

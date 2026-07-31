@@ -194,7 +194,8 @@ async def chat_stream(request: ChatRequest):
             events = agent_runner.run_agent(
                 main_agent, turn_messages,
                 conversation_summary=conversation.get("summary"),
-                system_suffix=voice_suffix, speaker=speaker)
+                system_suffix=voice_suffix, speaker=speaker,
+                conversation_id=conversation_id)
             try:
                 async for event in events:
                     etype = event["type"]

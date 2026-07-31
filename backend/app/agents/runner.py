@@ -889,6 +889,24 @@ async def _run_tool(name: str, args: dict, ctx: dict,
         # Inspector painted a failed call green
         if tool_registry.is_error_result(result):
             tsp["error"] = trace.redact_text(result, 200)
+        # IN-TURN TAINT. Outside text just entered this turn's context, so
+        # every later round is holding it and the fence at
+        # registry.execute_tool must start refusing ACTOR verbs. Set here
+        # because this is the single execution point both the sequential and
+        # the parallel path share, and `ctx` is the same dict every later
+        # call reads.
+        #
+        # Set even when the call ERRORED: a failure still puts the remote's
+        # bytes in front of the model — httpx exceptions embed the URL and
+        # often the response body, which is how tool errors leaked secrets
+        # once already.
+        #
+        # Not reset, ever. Untrusted is a one-way door for the life of the
+        # turn; there is no "the model finished reading it" to detect.
+        if not ctx.get("untrusted_context") and tool_registry.returns_untrusted(name):
+            ctx["untrusted_context"] = True
+            tsp["tainted_turn"] = True
+            log.info("turn tainted by %s — ACTOR tools refused from here", name)
     return result
 
 
@@ -1021,7 +1039,11 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
 # the ONE predicate all three nesting layers use (run_agent -> _run_dispatch
 # -> the parent's dispatch branch): anything here is forwarded upward, and
 # `final` is consumed as the result instead.
-_FORWARDED_FROM_SUB = ("activity", "error", "sub_text")
+# "taint" is structural, not display: the parent INTERCEPTS it (it never
+# reaches the client) and sets its own ctx. It has to travel the same
+# path as the display events because that path is the only one out of a
+# sub-agent.
+_FORWARDED_FROM_SUB = ("activity", "error", "sub_text", "taint")
 
 _SENTENCE_END = (". ", "! ", "? ", ".\n", "!\n", "?\n", "\n\n")
 _SUB_TEXT_MAX_CHARS = 400          # flush long unpunctuated runs anyway
@@ -1093,7 +1115,9 @@ async def _dispatch_backend(agent_name: str) -> str:
 
 async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
                               dispatch_depth: int, automation: Optional[str],
-                              results: dict[str, str]) -> AsyncIterator[dict]:
+                              results: dict[str, str],
+                              parent_untrusted: bool = False,
+                              conversation_id: str | None = None) -> AsyncIterator[dict]:
     """Run consecutive dispatch calls concurrently, across backends only.
 
     Each child gets its OWN task, created inside its own `trace.span`
@@ -1123,7 +1147,9 @@ async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
 
                     async def pump():
                         nonlocal text
-                        agen = _run_dispatch(args, dispatch_depth, automation)
+                        agen = _run_dispatch(args, dispatch_depth, automation,
+                                             parent_untrusted=parent_untrusted,
+                                             conversation_id=conversation_id)
                         try:
                             async for sub in agen:
                                 if sub["type"] == "final":
@@ -1354,7 +1380,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     conversation_summary: str | None = None,
                     system_suffix: str | None = None,
                     automation: str | None = None,
-                    speaker: dict | None = None) -> AsyncIterator[dict]:
+                    speaker: dict | None = None,
+                    parent_untrusted: bool = False,
+                    conversation_id: str | None = None) -> AsyncIterator[dict]:
     """Run one agent turn (with tool rounds) and stream events.
 
     turn_messages: chat-format messages for this turn (history + new user msg),
@@ -1451,13 +1479,28 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                "name": "context", "agent": agent.get("name"), "detail": note}
     messages = [{"role": "system", "content": system_prompt}] + list(turn_messages)
 
-    ctx = {"untrusted_context": bool(prompt_signals.get("untrusted_context")),
+    # `or parent_untrusted`: a dispatch used to launder the taint. The parent
+    # fetches a page, the fence starts refusing its ACTOR tools — and then it
+    # calls dispatch_to_agent, which is NOT an actor, handing the page's
+    # instructions to a specialist that starts clean and may hold pull_model.
+    # The sub-agent's message is written by a parent holding outside text, so
+    # it IS outside text; one flag, inherited downward, never cleared.
+    ctx = {"untrusted_context": (bool(prompt_signals.get("untrusted_context"))
+                                 or parent_untrusted),
            "agent_id": agent.get("id"), "agent_name": agent.get("name"),
            # so a tool can size its own result against the window it has to
            # fit — kept current below when a round falls back to another model
            "model": agent["model"],
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
+           # Which chat this turn belongs to. Absent until 2026-07-31 — never
+           # present, per `git log -S`— so every consent card an agent raised
+           # was written with conversation_id NULL, and `consents.list_pending`
+           # filters `AND conversation_id = $1` using the id the chat UI always
+           # supplies. The cards were real rows nobody could ever see. Rides
+           # down the dispatch too, so guardian's card lands in the operator's
+           # conversation and not in nothing.
+           "conversation_id": conversation_id,
            # the person's OWN words this turn. The one span of context that
            # no fetched page and no recalled note can write into, which is
            # what lets remember_about_me check a claimed self-fact against
@@ -1710,9 +1753,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 if runnable:
                     group_gen = _run_dispatch_group(
                         runnable, dispatch_depth=dispatch_depth,
-                        automation=automation, results=results)
+                        automation=automation, results=results,
+                        # read HERE, not captured earlier: a fetch in an
+                        # earlier round of this same turn has already set it
+                        parent_untrusted=bool(ctx.get("untrusted_context")),
+                        conversation_id=ctx.get("conversation_id"))
                     try:
                         async for ev in group_gen:
+                            if ev.get("type") == "taint":
+                                # a specialist read outside text on our behalf;
+                                # its reply is that text. Consumed here, never
+                                # forwarded to the client.
+                                if not ctx.get("untrusted_context"):
+                                    log.info("turn tainted by dispatch to %s",
+                                             ev.get("agent"))
+                                ctx["untrusted_context"] = True
+                                continue
                             yield ev
                     finally:
                         await group_gen.aclose()
@@ -1887,12 +1943,32 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
 
+    # THE RETURN PATH. Taint rides DOWN into a dispatch (ctx above), and this
+    # is what carries it back UP. Without it the fence had an obvious inverse:
+    # main's own prompt says to dispatch to `ingestion` to research something,
+    # ingestion fetches the attacker's page, distils it, and hands the text
+    # into main's still-clean context — laundering by delegation, which is
+    # what dispatch was already blamed for once (the guardian consent gap).
+    #
+    # Emitted once, at the end, rather than per round: a dispatch runs the
+    # sub-agent to completion before the parent's next tool call, so the
+    # parent's ctx only has to be right by the time it acts again.
+    if ctx.get("untrusted_context"):
+        yield {"type": "taint", "agent": agent.get("name")}
+
     yield {"type": "final", "text": final_text}
 
 
 async def _run_dispatch(args: dict, parent_depth: int,
-                        automation: str | None = None) -> AsyncIterator[dict]:
-    """Inline execution of dispatch_to_agent: run the target agent as a nested turn."""
+                        automation: str | None = None, *,
+                        parent_untrusted: bool = False,
+                        conversation_id: str | None = None) -> AsyncIterator[dict]:
+    """Inline execution of dispatch_to_agent: run the target agent as a nested turn.
+
+    parent_untrusted rides down because dispatch_to_agent is runner-inlined —
+    it never reaches registry.execute_tool, so the containment invariant does
+    not see it and cannot refuse it. The flag is the only thing that follows.
+    """
     from app.agents import registry as agent_registry  # late import (cycle-safe)
 
     agent_name = args.get("agent_name", "")
@@ -1920,7 +1996,9 @@ async def _run_dispatch(args: dict, parent_depth: int,
     sub_final = ""
     async for event in run_agent(agent, [{"role": "user", "content": message}],
                                  dispatch_depth=parent_depth + 1,
-                                 automation=automation):
+                                 automation=automation,
+                                 parent_untrusted=parent_untrusted,
+                                 conversation_id=conversation_id):
         if event["type"] == "final":
             sub_final = event["text"]
         elif event["type"] in _FORWARDED_FROM_SUB:

@@ -59,7 +59,11 @@ class Fleet:
                 "model": self.models.get(name, "openrouter:test"),
                 "system_prompt": "s", "allowed_tools": []}
 
-    async def dispatch(self, args, depth, automation=None):
+    async def dispatch(self, args, depth, automation=None, **_kw):
+        # **_kw: _run_dispatch's keyword-only args are containment plumbing
+        # (parent_untrusted, conversation_id) that this fixture does not
+        # model. Swallowing them keeps the concurrency tests about
+        # concurrency.
         name = args.get("agent_name", "")
         local = llm_router.is_local(self.models.get(name, "openrouter:test"))
         self.live += 1
@@ -262,10 +266,10 @@ async def test_span_parentage():
     # each child opens a span of its own inside its dispatch
     original = fleet.dispatch
 
-    async def dispatch_with_span(args, depth, automation=None):
+    async def dispatch_with_span(args, depth, automation=None, **kw):
         name = args.get("agent_name", "")
         async with trace.span("llm_call", f"child-of-{name}"):
-            async for ev in original(args, depth, automation):
+            async for ev in original(args, depth, automation, **kw):
                 yield ev
 
     runner._run_dispatch = dispatch_with_span

@@ -384,6 +384,61 @@ ACTOR_TOOLS = frozenset({
 })
 
 
+# The other half of the fence: which tools BRING untrusted text in.
+#
+# ACTOR_TOOLS answers "what may not run on outside text". This answers "what
+# makes it outside text", and until 2026-07-31 nothing did — `untrusted_context`
+# was set once per turn from MEMORY provenance (runner.py:1499) and never
+# updated, so a page fetched DURING a turn could not taint the turn that
+# fetched it. Fetch in round 1, act in round 2, fence never fires.
+#
+# That held only by architecture: the agents that fetched held no ACTOR tools
+# (the note above says exactly that about `ingestion`), and the ones with ACTOR
+# tools could not fetch. Migration 075 broke the arrangement by granting main
+# the web, and `model-manager` had been holding web_search next to pull_model
+# since it was seeded.
+#
+# The set is deliberately WIDER than "things that obviously carry prose". A
+# result is untrusted when it crossed the trust boundary, not when it looks
+# dangerous — structured JSON from a third party is still a third party's
+# bytes, and "it is only numbers" is the assumption that ages worst.
+_UNTRUSTED_SOURCE_TOOLS = frozenset({
+    "web_search",     # results are ranked by someone else, and rankable ON PURPOSE
+    "fetch_url",      # the page is entirely the author's
+    "ingest_media",   # a transcript of an arbitrary video is arbitrary text
+    "poll_sources",   # fetches every followed source
+    "follow_source",  # enumerates the remote and returns ITS channel/video titles
+    "workload_logs",  # a workload runs code she wrote; its stdout is not hers
+    "get_weather",    # a fixed API, but still an external host answering
+})
+
+
+def returns_untrusted(name: str) -> bool:
+    """True when this tool's RESULT should taint the turn.
+
+    Fails CLOSED, and more aggressively than `is_actor` does. The asymmetry is
+    deliberate: mis-labelling a tool ACTOR costs a refusal the operator can
+    approve around, while mis-labelling one trusted costs the whole fence. So
+    every db tool counts (an http_call reaches somebody else's host by
+    construction — GET or not, unlike the ACTOR test) and every MCP tool
+    counts (a server can return whatever it likes).
+
+    Takes NO db_tools argument, unlike is_actor: everything not a builtin
+    taints, so there is nothing to look up. This runs after every tool call,
+    and a DB round trip per call to learn a fact already implied by the name
+    would be pure cost — it also made the function unusable anywhere the pool
+    is not up, which is where the tool tests run.
+    """
+    if name in _UNTRUSTED_SOURCE_TOOLS:
+        return True
+    if name in BUILTIN_TOOLS:
+        return False
+    if name.startswith("mcp:"):
+        return True
+    # An unknown name is a db tool or a typo; both taint.
+    return True
+
+
 # The goal-scoped set lives in `scopes` so `builtin` can DESCRIBE it without
 # importing this module (registry imports builtin, not the other way).
 # It was duplicated by hand until the copies disagreed — see scopes.py.
