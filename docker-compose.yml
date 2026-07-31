@@ -58,6 +58,10 @@ services:
       SEARXNG_URL: http://searxng:8080
       INFERENCE_CONTROL_URL: http://inference-control:9911
       MCP_RUNNER_URL: http://mcp-runner:8100
+      # Shared with the mcp-runner service below. That sidecar execs
+      # operator-registered launchers; without this both ends fail closed
+      # (it 503s, nothing runs) rather than trusting the compose network.
+      NOVA_MCP_RUNNER_TOKEN: ${NOVA_MCP_RUNNER_TOKEN:-}
       MEDIA_WORKER_URL: http://media:8500
       NTFY_BUILTIN_URL: http://ntfy:80
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -174,6 +178,8 @@ services:
     environment:
       HOME: /home/mcp
       NPM_CONFIG_CACHE: /home/mcp/.npm
+      # Must match the backend's. Unset = every exec request refused.
+      NOVA_MCP_RUNNER_TOKEN: ${NOVA_MCP_RUNNER_TOKEN:-}
     volumes:
       # The read-only view of the repo Nova may READ (containment plan
       # phase 3). Named file by file and directory by directory, so what is

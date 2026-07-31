@@ -83,6 +83,15 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
         return "error", [], str(e)
 
 
+def _runner_auth() -> dict:
+    """Bearer header for the stdio sidecar. Empty when unconfigured, which
+    the runner answers with 503 rather than executing — the failure is loud
+    on purpose, because the alternative is a silently unauthenticated exec
+    endpoint on the compose network."""
+    token = settings.nova_mcp_runner_token
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 async def _stdio_connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]]:
     command = server.get("command") or ""
     if not command:
@@ -90,6 +99,7 @@ async def _stdio_connect_and_list(server: dict) -> tuple[str, list[dict], Option
     try:
         async with httpx.AsyncClient(timeout=_CONNECT_TIMEOUT_S + 5) as client:
             resp = await client.post(f"{settings.mcp_runner_url}/list_tools",
+                                     headers=_runner_auth(),
                                      json={"command": command, "args": server.get("args") or []})
             resp.raise_for_status()
         return "connected", resp.json()["tools"], None
@@ -127,7 +137,8 @@ async def _stdio_call_tool(server: dict, tool_name: str, args: dict,
                            timeout: float) -> tuple[list[dict], bool]:
     command = server.get("command") or ""
     async with httpx.AsyncClient(timeout=timeout + 5) as client:
-        resp = await client.post(f"{settings.mcp_runner_url}/call_tool", json={
+        resp = await client.post(f"{settings.mcp_runner_url}/call_tool",
+                                 headers=_runner_auth(), json={
             "command": command, "args": server.get("args") or [],
             "tool_name": tool_name, "arguments": args})
         resp.raise_for_status()

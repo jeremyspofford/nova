@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # operator-registered stdio MCP servers as subprocesses; no Docker
     # socket, no DB credentials, no published ports.
     mcp_runner_url: str = "http://mcp-runner:8100"
+    # Shared secret for that sidecar. Unset means the runner refuses every
+    # request (it fails closed) — which is the correct posture, because
+    # "no ports:" made the whole compose network an implicit trust boundary
+    # and anything on it could POST a launcher straight to exec.
+    nova_mcp_runner_token: str = ""
 
     # Media ingestion worker (optional `media` compose profile): yt-dlp +
     # ffmpeg extraction, whisper fallback for caption-less audio and direct
