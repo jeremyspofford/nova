@@ -251,17 +251,40 @@ async def logs(pod: str, lines: int = 60) -> str:
 # The private ranges excluded from `internet` are the whole point of it: the
 # Nova stack, the docker bridges, the LAN and cloud metadata all live there,
 # and they are exactly what a compromised workload would go looking for.
+# NOT-GLOBAL, not "private". The distinction is the bug this list had.
+#
+# 100.64.0.0/10 is CGNAT, which is the whole tailnet, and Python reports it
+# `is_private=False` — so its absence here broke BOTH verbs in the same
+# direction: `internet` handed over every tailnet peer (measured: the Nova
+# API answered 401 and ntfy answered 200 from a policed pod), while `host`
+# refused a single peer as "not private" and pointed the caller at the
+# blanket verb. One missing range, and the only route to one machine was the
+# route to all nine.
+#
+# `web_fetch.py:7-8` records this exact CGNAT miss being fixed there, and the
+# lesson it drew — allow-list what is globally routable, never deny-list what
+# is not — is the same one here. `is_global` is that allow-list inverted, and
+# it is what `_is_private` now tests, so this list and that check cannot
+# disagree. `test_egress_ranges.py` asserts they don't.
 _PRIVATE = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-            "169.254.0.0/16", "127.0.0.0/8"]
+            "169.254.0.0/16", "127.0.0.0/8",
+            "100.64.0.0/10",          # CGNAT — tailscale
+            "0.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4"]
 
 
 def _is_private(cidr: str) -> bool:
+    """True when this address is NOT globally routable.
+
+    The name is kept because the operator-facing wording is "private", but
+    the test is `not is_global`: `is_private` alone answers False for CGNAT
+    and would send a tailnet address to the internet verb.
+    """
     import ipaddress
     try:
         net = ipaddress.ip_network(cidr, strict=False)
     except ValueError:
         return False
-    return net.is_private or net.is_link_local or net.is_loopback
+    return not net.is_global
 
 
 def _egress_policy(name: str, to: list[dict], ports: Optional[list[int]]) -> dict:
