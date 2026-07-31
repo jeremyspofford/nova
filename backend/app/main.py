@@ -14,6 +14,7 @@ from app.config import settings
 from app.llm import providers
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
+from app.router_coder import router as coder_router
 from app.router_system import router as system_router
 from app.router_voice import router as voice_router
 
@@ -249,6 +250,7 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(chat_router)
 app.include_router(voice_router)
 app.include_router(system_router)
+app.include_router(coder_router)
 
 
 @app.get("/health")

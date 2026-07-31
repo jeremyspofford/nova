@@ -5,13 +5,14 @@ import { AutomationsTab } from './AutomationsTab';
 import { RulesTab } from './RulesTab';
 import { ToolsTab } from './ToolsTab';
 import { SkillsTab } from './SkillsTab';
+import { CodingTab } from './CodingTab';
 import { OverlayScrim } from '../ui';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
  *  skills. Entity management pulled out of Settings so Settings can be
  *  settings. */
 
-const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills'] as const;
+const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills', 'coding'] as const;
 type Kind = typeof KINDS[number];
 
 export function LibraryPage({ onClose }: { onClose: () => void }) {
@@ -27,7 +28,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
-          {/* six tabs want 427px; a squeezed card is 360. min-w-0 releases
+          {/* seven tabs want ~500px; a squeezed card is 360. min-w-0 releases
               the flex item's automatic minimum size so the row shrinks
               instead of bursting out over the chat, and auto (not hidden)
               keeps the tabs it hides reachable. */}
@@ -51,6 +52,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
             : active === 'automations' ? <AutomationsTab />
             : active === 'rules' ? <RulesTab />
             : active === 'tools' ? <ToolsTab />
+            : active === 'coding' ? <CodingTab />
             : <SkillsTab />}
         </div>
       </div>

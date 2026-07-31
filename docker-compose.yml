@@ -62,6 +62,11 @@ services:
       # operator-registered launchers; without this both ends fail closed
       # (it 503s, nothing runs) rather than trusting the compose network.
       NOVA_MCP_RUNNER_TOKEN: ${NOVA_MCP_RUNNER_TOKEN:-}
+      # Shared secret for the ACP coding sidecar (`coder` profile). Unset means
+      # the broker refuses everything AND coder.configured() reads delegation
+      # as unavailable — the credential is the feature switch, so a stack
+      # without the sidecar behaves exactly as before.
+      NOVA_CODER_TOKEN: ${NOVA_CODER_TOKEN:-}
       MEDIA_WORKER_URL: http://media:8500
       NTFY_BUILTIN_URL: http://ntfy:80
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -206,6 +211,56 @@ services:
       - ./CLAUDE.md:/workspace/CLAUDE.md:ro
       - ./README.md:/workspace/README.md:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+
+  # ACP coding sidecar (optional): docker compose --profile coder up -d
+  # docs/plans/acp-coding-delegation.md phase 1. Nova drives an existing
+  # coding agent (@agentclientprotocol/claude-agent-acp) rather than carrying
+  # a harness of her own; this container is where that agent runs.
+  #
+  # IT IS THE BOUNDARY, and deliberately so. Phase 0 measured that ACP cannot
+  # confine an agent — asking permission is MAY not MUST, declining the client
+  # filesystem capability changes nothing (the agent uses its own in-process
+  # tools), `cwd` is not enforced, and ACP v2 deletes the mediation surface
+  # altogether. So none of the confinement lives in the protocol:
+  #
+  #   NO host mounts        the repo is never bind-mounted. Work happens in a
+  #                         PRIVATE CLONE inside a named volume, because a git
+  #                         worktree is not a portable containment unit (its
+  #                         .git is a pointer into the parent repo).
+  #   NO docker socket      unlike inference-control.
+  #   NO database, NO NOVA_AUTH_TOKEN — the broker strips them from the
+  #                         agent's environment too (coder/acp.py::_env).
+  #   ONE credential        the coding agent's own model key, and nothing else.
+  coder:
+    build: ./coder
+    profiles: ["coder"]
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512m
+      - /home/coder:size=256m
+    environment:
+      HOME: /home/coder
+      # Must match the backend's. Unset = every request refused, because a
+      # token that defaults to off is not a control (mcp-runner, 2026-07-31).
+      NOVA_CODER_TOKEN: ${NOVA_CODER_TOKEN:-}
+      # The agent's model credential. Points the Claude Agent SDK at any
+      # Anthropic-Messages-shaped endpoint — OpenRouter's was measured working
+      # in phase 0, which reaches Gemini/GPT/Kimi/Llama on the key Nova
+      # already has. NB no /v1: the SDK appends /v1/messages.
+      ANTHROPIC_BASE_URL: ${CODER_BASE_URL:-https://openrouter.ai/api}
+      # Prefer a SEPARATE, spend-capped key from the one Nova's own turns use,
+      # so a runaway coding session cannot exhaust her inference budget.
+      ANTHROPIC_AUTH_TOKEN: ${CODER_API_KEY:-}
+      CODER_SESSION_BUDGET_S: ${CODER_SESSION_BUDGET_S:-1800}
+    volumes:
+      # Private clone space. A named volume, not a bind: nothing on the host
+      # is reachable, and `docker volume rm` is the whole cleanup story.
+      - nova_coder_workspaces:/workspaces
 
   # Media ingestion worker (optional): docker compose --profile media up -d
   # yt-dlp (1000+ sites — YouTube, Vimeo, Twitch, direct .mp4/.mp3 links,
@@ -374,3 +429,5 @@ volumes:
   whisper_models:
   nova_state:
   ntfy_cache:
+  # private clones for the coder sidecar — never a host bind
+  nova_coder_workspaces:

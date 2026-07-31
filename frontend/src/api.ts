@@ -1625,3 +1625,76 @@ export async function* pullModel(name: string): AsyncGenerator<Record<string, un
     }
   }
 }
+
+// ── coding delegation (docs/plans/acp-coding-delegation.md phase 1) ────────
+// Registering a repo and starting a session are OPERATOR actions in this
+// phase; the builtin that lets Nova start one herself is phase 2.
+
+export interface CoderWorkspace {
+  id: string; name: string; git_url: string; default_branch: string;
+  auth_secret: string | null; enabled: boolean;
+}
+
+export interface CoderSession {
+  session_id: string; state: string; task: string;
+  branch: string | null; commit: string | null; diffstat: string | null;
+  error: string | null; workspace: string | null; created_at: string | null;
+  elapsed_s?: number;
+}
+
+export async function coderStatus(): Promise<{ configured: boolean }> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/status`);
+  if (!r.ok) throw new Error('Failed to load coder status');
+  return r.json();
+}
+
+export async function getCoderWorkspaces(): Promise<CoderWorkspace[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/workspaces`);
+  if (!r.ok) throw new Error('Failed to load workspaces');
+  return (await r.json()).workspaces;
+}
+
+export async function addCoderWorkspace(body: {
+  name: string; git_url: string; default_branch?: string;
+}): Promise<CoderWorkspace> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/workspaces`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? 'Failed to add workspace');
+  return r.json();
+}
+
+export async function deleteCoderWorkspace(name: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/workspaces/${encodeURIComponent(name)}`,
+                           { method: 'DELETE' });
+  if (!r.ok) throw new Error('Failed to remove workspace');
+}
+
+export async function getCoderSessions(): Promise<CoderSession[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/sessions`);
+  if (!r.ok) throw new Error('Failed to load sessions');
+  return (await r.json()).sessions;
+}
+
+export async function startCoderSession(body: {
+  workspace: string; task: string; mode?: string; budget_s?: number;
+}): Promise<{ session_id: string; branch: string }> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/sessions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? 'Failed to start session');
+  return r.json();
+}
+
+export async function refreshCoderSession(id: string): Promise<CoderSession> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/sessions/${id}`);
+  if (!r.ok) throw new Error('Failed to load session');
+  return r.json();
+}
+
+export async function killCoderSession(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/coder/sessions/${id}/kill`, { method: 'POST' });
+  if (!r.ok) throw new Error('Failed to stop session');
+}

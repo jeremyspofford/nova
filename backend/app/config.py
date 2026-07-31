@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # and anything on it could POST a launcher straight to exec.
     nova_mcp_runner_token: str = ""
 
+    # ACP coding sidecar (optional `coder` compose profile) —
+    # docs/plans/acp-coding-delegation.md phase 1. Runs a coding agent against
+    # a PRIVATE CLONE in its own volume; no host mounts, no Docker socket, no
+    # DB credentials. Phase 0 measured that ACP cannot confine an agent, so
+    # that container is the boundary rather than the protocol.
+    coder_url: str = "http://coder:8110"
+    # Shared secret for it. Unset means the broker refuses every request, and
+    # `coder.configured()` reads this as "delegation is unavailable" — the
+    # credential IS the feature switch, so there is no flag left switched on
+    # after the sidecar is gone.
+    nova_coder_token: str = ""
+
     # Media ingestion worker (optional `media` compose profile): yt-dlp +
     # ffmpeg extraction, whisper fallback for caption-less audio and direct
     # media URLs (docs/plans/content-ingestion.md).
