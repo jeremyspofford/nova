@@ -1373,7 +1373,6 @@ async def _propose_goal(args, ctx):
     card; approval is what activates it, in `consents.decide`.
     """
     from app import consents, goals
-    from app.tools import registry as tool_registry
     title = str(args.get("title") or "").strip()
     target = str(args.get("target") or "").strip()
     verbs = [str(v).strip() for v in (args.get("verbs") or []) if str(v).strip()]

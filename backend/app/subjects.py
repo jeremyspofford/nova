@@ -30,7 +30,6 @@ from __future__ import annotations
 import itertools
 import random
 from collections import Counter, defaultdict
-from typing import Optional
 
 #: Shuffles per report. Enough to place an observation against a max.
 TRIALS = 400

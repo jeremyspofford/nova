@@ -6,10 +6,14 @@ Reads are synchronous off the provider cache, so no caller had to become async.
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from app.llm import providers
 from app.llm.openai_compat import OpenAICompatClient
+
+if TYPE_CHECKING:  # the runtime import stays inside _resolve_local; this is
+    # only so the quoted annotation there names something that exists.
+    from app.llm.ollama_native import OllamaNativeClient
 
 log = logging.getLogger(__name__)
 

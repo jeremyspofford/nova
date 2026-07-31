@@ -25,12 +25,11 @@ import asyncio
 import contextvars
 import json
 import logging
-import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from app import bg, db, instances, redact
 
