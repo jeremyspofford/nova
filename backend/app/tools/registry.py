@@ -381,6 +381,13 @@ ACTOR_TOOLS = frozenset({
     "delete_workload",     # and destroying it
     "allow_internet_egress",  # what a workload may reach
     "allow_host_egress",
+    # An agent that writes code on her behalf is the largest verb here: the
+    # output is a branch nobody has read yet, and a poisoned page turning into
+    # "delegate a task that adds an exception for evil.example" is precisely
+    # the shape this set exists to refuse. That the operator still gates the
+    # merge is why it is ALLOWED to be goal-scoped, not why it is safe on
+    # untrusted text.
+    "delegate_coding_task",
 })
 
 
@@ -410,6 +417,11 @@ _UNTRUSTED_SOURCE_TOOLS = frozenset({
     "follow_source",  # enumerates the remote and returns ITS channel/video titles
     "workload_logs",  # a workload runs code she wrote; its stdout is not hers
     "get_weather",    # a fixed API, but still an external host answering
+    # The coding agent read an entire repository — third-party READMEs,
+    # dependency manifests, vendored code — and wrote a summary of it. That is
+    # a larger pile of somebody else's words than a pod's stdout, and
+    # workload_logs already taints for the weaker version of the same reason.
+    "check_coding_session",
 })
 
 

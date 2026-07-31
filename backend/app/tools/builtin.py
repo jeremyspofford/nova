@@ -1230,6 +1230,57 @@ async def _deploy_workload(args, ctx):
                                   "workload_logs if a pod is not starting.")})
 
 
+async def _delegate_coding_task(args, ctx):
+    """Hand a coding task to the ACP sidecar — phase 2 of the delegation plan.
+
+    Returns immediately with a session id. That is what makes the reply a TRUE
+    statement rather than narration: the honesty detector sees a real tool call
+    and the work genuinely is running, unlike "I'll go and fix that" followed
+    by nothing.
+
+    Nothing here merges or pushes. The deliverable is a branch and a diff in a
+    private clone, and the operator merging is the gate.
+    """
+    from app import coder
+    workspace = str(args.get("workspace") or "").strip()
+    task = str(args.get("task") or "").strip()
+    if not workspace or not task:
+        return ("Error: workspace and task are both required. Call "
+                "check_coding_session with no id, or ask the operator, to see "
+                "which repositories are registered.")
+    r = await coder.start(workspace, task, mode="default",
+                          budget_s=int(args.get("budget_s") or 0),
+                          requested_by=ctx.get("agent_name") or "nova")
+    if r.get("status") == "error":
+        return f"Error: {r['detail']}"
+    return _j(r)
+
+
+async def _check_coding_session(args, ctx):
+    """How a delegated task is going, or what has been run lately.
+
+    READ-ONLY, but it TAINTS THE TURN (registry._UNTRUSTED_SOURCE_TOOLS). The
+    text it returns was written by a coding agent that just read an entire
+    repository — third-party READMEs, dependency manifests, vendored code —
+    and summarised it. `workload_logs` taints for the weaker version of this
+    reason ("a workload runs code she wrote; its stdout is not hers"); a repo
+    is a larger pile of somebody else's words than a pod's stdout.
+
+    The consequence is the deployer split all over again (migration 076):
+    checking a session ends the turn's ability to start another one. Report
+    what happened and stop; the follow-up is the next turn.
+    """
+    from app import coder
+    if not coder.configured():
+        return ("Coding delegation is not running on this stack. The operator "
+                "starts it with: docker compose --profile coder up -d coder")
+    sid = str(args.get("session_id") or "").strip()
+    if not sid:
+        return _j({"workspaces": [w["name"] for w in await coder.list_workspaces()],
+                   "recent": await coder.recent(10)})
+    return _j(await coder.refresh(sid))
+
+
 async def _list_workloads(args, ctx):
     """What is running in her namespace, and why anything is not."""
     from app import workloads
@@ -2184,6 +2235,51 @@ BUILTIN_TOOLS: dict[str, dict] = {
                          "description": "the Kubernetes YAML to apply"},
         }, "required": ["manifest"]},
         "execute": _deploy_workload,
+    },
+    "delegate_coding_task": {
+        "name": "delegate_coding_task",
+        "description": (
+            "Hand a coding task to a coding agent running in its own "
+            "container. It clones the repository fresh, works on a private "
+            "copy, and produces A BRANCH AND A DIFF — it never merges, never "
+            "pushes, and never touches the operator's working copy. Returns "
+            "immediately with a session id; the work runs for MINUTES, so say "
+            "you have started it and report back later rather than waiting. "
+            "Be specific about which files to change: the agent sees only "
+            "committed code and cannot ask you a follow-up question."),
+        "parameters": {"type": "object", "properties": {
+            "workspace": {"type": "string",
+                          "description": "registered repository name — call "
+                                         "check_coding_session with no "
+                                         "session_id to list them"},
+            "task": {"type": "string",
+                     "description": "what to change, in enough detail that "
+                                    "someone who cannot ask you would get it "
+                                    "right"},
+            "budget_s": {"type": "integer",
+                         "description": "wall-clock seconds before it is "
+                                        "killed (default 1800)"},
+        }, "required": ["workspace", "task"]},
+        "execute": _delegate_coding_task,
+    },
+    "check_coding_session": {
+        "name": "check_coding_session",
+        "description": (
+            "How a delegated coding task is going — state, branch, diffstat, "
+            "and why it stopped. Call with no session_id to list the "
+            "registered repositories and recent sessions. Read-only.\n\n"
+            "READING A SESSION ENDS YOUR ABILITY TO ACT THIS TURN. What comes "
+            "back was written by an agent that just read a whole repository, "
+            "so it is outside text and the containment fence treats it that "
+            "way: after this, delegating another task is refused for the rest "
+            "of the turn. Report what you found and stop — that report IS the "
+            "deliverable."),
+        "parameters": {"type": "object", "properties": {
+            "session_id": {"type": "string",
+                           "description": "from delegate_coding_task; omit to "
+                                          "list repositories and recent runs"},
+        }, "required": []},
+        "execute": _check_coding_session,
     },
     "list_workloads": {
         "name": "list_workloads",

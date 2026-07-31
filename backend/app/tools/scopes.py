@@ -46,6 +46,11 @@ GOAL_SCOPED_TOOLS = frozenset({
     # them is what lets the card state which decision it is.
     "allow_internet_egress",
     "allow_host_egress",
+    # Writing code is pre-authorisable for the same reason deploying is: the
+    # deliverable is a branch in a private clone that nobody has merged, so a
+    # goal buys the RUN, never the landing. The operator merging is untouched
+    # by any approval given here.
+    "delegate_coding_task",
 })
 
 
@@ -69,6 +74,9 @@ _CONSEQUENCE: tuple[tuple[str, str], ...] = (
     ("manage_tools",      "create or change one of her tools"),
     ("manage_automations", "schedule work that runs unattended"),
     ("delete_workload",   "tear down services she deployed"),
+    ("delegate_coding_task", "run a coding agent against a registered "
+                             "repository (it produces a branch and a diff; "
+                             "nothing merges without you)"),
 )
 
 

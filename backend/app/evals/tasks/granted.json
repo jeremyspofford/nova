@@ -43,6 +43,8 @@
     "write_memory"
   ],
   "main": [
+    "check_coding_session",
+    "delegate_coding_task",
     "diagnose",
     "dispatch_to_agent",
     "fetch_url",
