@@ -206,6 +206,7 @@ export const UNIVERSE_LEGEND: LegendEntry[] = [
   { key: 'automation', color: COLOR.comet, label: 'Automations', note: 'comets; period shows cadence' },
   { key: 'rule', color: COLOR.rule, label: 'Rules', note: 'beacons at what they guard' },
   { key: 'skill', color: COLOR.skill, label: 'Skills', note: 'orbital stations' },
+  { color: '#e879f9', label: 'Shared subject', note: 'faint arc between systems that are about the same thing' },
   { color: '#efe9e2', label: 'Fresh memory', note: 'pulsing halo, learned in the last 24h' },
   { color: '#57534e', label: 'Disabled', note: 'grey body, faded orbit' },
   { color: '#b48ead', label: 'Black hole', note: 'deleted things fall in' },
@@ -677,8 +678,14 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     liveSystems = [];
     bodyGroups = new Map();
 
-    // adjacency over real relations only — tag edges are a clustering
-    // construction (chains) and would highlight arbitrary same-tag neighbors
+    // Adjacency over real relations only. A `tag` edge is a MEMBERSHIP
+    // primitive — it asserts "these belong to the same group", and which two
+    // members carry it is arbitrary (the spanning path, not the pair), so
+    // highlighting it would name a neighbour the corpus never claimed.
+    // `subject` edges pass: each one is a true per-pair statement that two
+    // documents share a specific subject, which is exactly a related node.
+    // (Before ROADMAP #37 this filter was accidentally backwards: no `tag`
+    // edge existed at all, and `subject` carried the full arbitrary clique.)
     adj = new Map();
     for (const e of edges) {
       if (e.kind === 'tag') continue;
@@ -1502,9 +1509,48 @@ export function createUniverse(canvas: HTMLCanvasElement, opts?: RendererOpts): 
     // ═══ relationship arcs (#28) — personal facts arc to the operator's
     // star; automations arc to the documents they maintain. Drawn after
     // every body exists so rogue/user positions are live in posOf. ═══
+    // ONE arc per pair of SYSTEMS, not per document. Measured on the live
+    // corpus: 38 subject edges span only 6 system pairs — eleven of them
+    // between the same two channels — so drawing every one rendered a bundle
+    // of near-parallel lines saying a single thing eleven times. Redundancy
+    // 6x, and it read as a cable rather than a relationship.
+    //
+    // What is drawn is still a REAL per-document edge, picked deterministically
+    // from that pair, never a synthesised cluster-to-cluster link. That
+    // distinction is the one the galaxy tier failed: a claim ABOUT two groups
+    // could not beat a permutation null, while "these two specific notes share
+    // this specific subject" is true edge by edge and needs no threshold.
+    const subjectArcs = (): GraphEdge[] => {
+      const sysOf = new Map<string, string>();
+      systems.forEach(s => s.members.forEach(m => sysOf.set(m.id, s.key)));
+      const best = new Map<string, GraphEdge>();
+      const candidates = edges.filter(e => e.kind === 'subject')
+        .sort((a, b) => (a.source + a.target).localeCompare(b.source + b.target));
+      for (const e of candidates) {
+        const a = sysOf.get(e.source), b = sysOf.get(e.target);
+        if (!a || !b || a === b) continue;
+        const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+        if (!best.has(key)) best.set(key, e);
+      }
+      return [...best.values()];
+    };
+
     const relationSets: { kinds: GraphEdge[]; color: string; opacity: number }[] = [
       { kinds: edges.filter(e => e.kind === 'about'), color: COLOR.nova, opacity: 0.22 },
       { kinds: edges.filter(e => e.kind === 'writes'), color: '#9fd4ff', opacity: 0.3 },
+      // Subject affinity (ROADMAP #37). The ONLY arcs here that cross a
+      // cluster boundary — every other line relates a document to something
+      // it belongs to, so the view could show nothing at all about how two
+      // systems relate. They were in the payload and rendered nowhere.
+      //
+      // This is not the milky-way tier the permutation null refused. That
+      // was a CLUSTER-level arm, a claim about two groups that a shuffle
+      // reproduced 200 times out of 200. Each of these is a per-document
+      // statement that two specific notes share one specific subject, true
+      // edge by edge, and it survives the null because it never generalises.
+      // NOT graph2d's violet: in this view #a78bfa is already Agents, and an
+      // arc the same colour as a body reads as belonging to it.
+      { kinds: subjectArcs(), color: '#e879f9', opacity: 0.16 },
     ];
     for (const set of relationSets) {
       const drawable = set.kinds.filter(e =>

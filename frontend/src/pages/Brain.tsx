@@ -462,6 +462,9 @@ export function Brain() {
     const seen = new Set<string>();
     const out: GraphNode[] = [];
     for (const e of graphData.edges) {
+      // `tag` is membership and its endpoints are an arbitrary pair from the
+      // spanning path; `subject` is a true claim about these two documents.
+      // See the same filter in universe.ts and ROADMAP #37.
       if (e.kind === 'tag') continue;
       const other = e.source === id ? e.target : e.target === id ? e.source : null;
       if (!other || seen.has(other)) continue;

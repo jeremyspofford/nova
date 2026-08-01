@@ -248,13 +248,18 @@ async def test_fill_blanks() -> None:
 # ── the graph's tag edges ────────────────────────────────────────────────
 
 async def test_tag_edges() -> None:
-    """A shared tag is a relationship only while it is specific.
+    """Links anchor; a tag may extend a component but never fuse two anchors.
 
-    graph() linked tag members as a CHAIN — members[i] -> members[i+1] in
-    iter_files order, which is alphabetical by path. It kept the edge count
-    down by making every edge false: 34% of all live edges asserted that "19
-    Hidden Features" relates to "4 Ways to Build Stunning Websites" relates to
-    "7 Rules To Use GPT 5.6". They are adjacent in the alphabet.
+    THIS TEST IS WHY THE BUG SHIPPED (ROADMAP #37). It asserted that an
+    8-member tag earns no edges — encoding a clique cap that ran AHEAD of the
+    membership decision and made `kind = "tag"` unreachable for every tag that
+    could ever have been membership. It passed throughout, because it never
+    built a `source` node and so never took that branch at all. Measured
+    2026-07-31 on the live corpus: zero `tag` edges, and clustering over
+    `link + tag` set-identical to `link` alone.
+
+    So the case that matters most below is the one that did not exist: two
+    source-anchored components sharing a subject tag.
     """
     import shutil
     import tempfile
@@ -274,38 +279,72 @@ async def test_tag_edges() -> None:
             for i in range(8):
                 await mem.write(f"body {i}", type="topic", title=f"Big {i}",
                                 tags=["src-some-channel"], link_pass=False)
+            # TWO ANCHORED CHANNELS sharing one subject tag. This is the shape
+            # the old test lacked, and the only one that exercises the
+            # membership-vs-affinity decision at all.
+            for n in ("One", "Two"):
+                await mem.write(f"channel {n}", type="source",
+                                title=f"Channel {n}", link_pass=False)
+                await mem.write(f"a video\n\nSource: [[Channel {n}]]",
+                                type="topic", title=f"Vid {n}",
+                                tags=["agentic-coding"], link_pass=False)
+
             g = await mem.graph()
             by_id = {n["id"]: n["label"] for n in g["nodes"]}
-            # BOTH shared-tag kinds. A tag carried by an entity node (a
-            # channel, a source) means co-MEMBERSHIP and ships as `tag`; a
-            # plain subject shared between topics means AFFINITY and ships as
-            # `subject`, because clustering unions over `tag` and would
-            # otherwise merge every channel that shares one subject (measured
-            # 2026-07-28: 157 of 171 documents into a single component).
-            # These notes have no entity node, so their tag is a subject.
-            pairs = {(by_id.get(e["source"], ""), by_id.get(e["target"], ""))
-                     for e in g["edges"] if e.get("kind") in ("tag", "subject")}
+            label_of = {v: k for k, v in by_id.items()}
 
-            small = {p for p in pairs if p[0].startswith("Small")}
-            check("a 3-member tag earns its REAL clique — every pair, not a "
-                  "path through them", len(small) == 3, str(sorted(small)))
-            check("...and the pairs are the actual members",
-                  all(a.startswith("Small") and b.startswith("Small")
-                      for a, b in small))
+            def component(label: str) -> frozenset:
+                """computeSystems' own rule: union over link + tag."""
+                adj: dict = {}
+                for e in g["edges"]:
+                    if e.get("kind") not in ("link", "tag"):
+                        continue
+                    adj.setdefault(e["source"], set()).add(e["target"])
+                    adj.setdefault(e["target"], set()).add(e["source"])
+                start, seen_, stack = label_of[label], set(), [label_of[label]]
+                while stack:
+                    cur = stack.pop()
+                    if cur in seen_:
+                        continue
+                    seen_.add(cur)
+                    stack.extend(adj.get(cur, ()))
+                assert start in seen_
+                return frozenset(by_id.get(i, "") for i in seen_)
 
-            big = {p for p in pairs if p[0].startswith("Big") or p[1].startswith("Big")}
-            check("an 8-member tag earns NO edges — above the threshold it "
-                  "names a category, and the label still rides on every node "
-                  "for search", not big, str(sorted(big)[:4]))
+            pairs = {(by_id.get(e["source"], ""), by_id.get(e["target"], "")):
+                     e.get("kind") for e in g["edges"]}
 
-            check("no edge is created from mere alphabetical adjacency",
-                  ("Big 0", "Big 1") not in pairs)
+            small = component("Small 0")
+            check("a shared subject CLUSTERS hand-written notes — a fresh "
+                  "install has tags and nothing else, and used to become one "
+                  "singleton per note",
+                  {"Small 0", "Small 1", "Small 2"} <= small, str(sorted(small)))
 
-            kinds = {e.get("kind") for e in g["edges"]}
-            check("a subject shared between plain topics is an AFFINITY edge, "
-                  "not co-membership — clustering unions `tag` only, so "
-                  "calling this `tag` merges every channel sharing a subject",
-                  "subject" in kinds and "tag" not in kinds, str(sorted(kinds)))
+            one, two = component("Vid One"), component("Vid Two")
+            check("a tag spanning two anchored channels does NOT fuse them — "
+                  "clustering is transitive, so one shared subject would "
+                  "merge both channels entirely",
+                  one != two and "Vid Two" not in one, str(sorted(one)))
+            check("...each channel keeps its own anchor",
+                  "Channel One" in one and "Channel Two" in two,
+                  f"{sorted(one)} | {sorted(two)}")
+            check("...and the tag still ships, as AFFINITY",
+                  pairs.get(("Vid One", "Vid Two")) == "subject"
+                  or pairs.get(("Vid Two", "Vid One")) == "subject",
+                  str({k: v for k, v in pairs.items() if "Vid" in k[0]}))
+
+            check("a pair the link already joined earns no tag edge — "
+                  "restating it is what the 4,950-pair channel cliques were",
+                  pairs.get(("Vid One", "Channel One")) == "link"
+                  and ("Channel One", "Vid One") not in pairs,
+                  str({k: v for k, v in pairs.items() if "Channel One" in k}))
+
+            big = {p for p, k in pairs.items()
+                   if k in ("tag", "subject")
+                   and (p[0].startswith("Big") or p[1].startswith("Big"))}
+            check("a tag too broad to be specific still earns nothing — the "
+                  "TIER decides that, and it runs before any of this",
+                  not big, str(sorted(big)[:4]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

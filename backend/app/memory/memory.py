@@ -542,9 +542,11 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
     # a collection of one is just a document
     _COLLAPSE_MIN = 2
 
-    # Above this many members a tag is a CATEGORY, not a relationship, and
-    # earns no graph edges. See the reasoning and the measured distribution
-    # in graph() — the live corpus has nothing at all between 5 and 25.
+    # NO LONGER USED BY graph(): the two-stage rule there replaced it, having
+    # measured that this cap ran ahead of the membership decision and made it
+    # unreachable (ROADMAP #37). It survives only for subject_backfill's
+    # `_connectable` heuristic, which asks a different question — "would this
+    # document get any tag edge at all" — and has its own pass to earn.
     _TAG_CLIQUE_MAX = 5
 
     @classmethod
@@ -752,65 +754,88 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             if target and (e["source"], target) not in seen:
                 seen.add((e["source"], target))
                 resolved.append({"source": e["source"], "target": target, "kind": "link"})
-        for tag, members in tag_map.items():
-            # A SHARED TAG IS A RELATIONSHIP ONLY WHILE IT IS SPECIFIC.
-            #
-            # This used to link members[i] -> members[i+1] — a CHAIN, in
-            # store.iter_files() order, which is alphabetical by path. It kept
-            # the edge count down (a 65-member tag is 2,080 pairs) by making
-            # every edge false: the graph asserted that "19 Hidden Features"
-            # relates to "4 Ways to Build Stunning Websites" relates to "7
-            # Rules To Use GPT 5.6", sampled verbatim on 2026-07-28, and they
-            # are simply adjacent in the alphabet. 34% of all live edges were
-            # this. Two neighbours in that chain had no more in common than
-            # two at opposite ends.
-            #
-            # Frequency decides it, MEASURED rather than listed. _GENERIC_TAGS
-            # above says the same thing — a label naming a note's KIND earns
-            # no edge — but as a hand-maintained set that must be extended
-            # every time a new broad label appears. Counting members needs no
-            # maintenance and the live corpus separates itself cleanly:
-            #
-            #     1 member    40 tags        25 members   1 tag
-            #     2 members   69 tags        28 members   1 tag
-            #     3-5         4 tags         31 members   1 tag
-            #                                65 members   1 tag
-            #
-            # Nothing between 5 and 25. Below the gap a tag names a specific
-            # subject two or three notes genuinely share; above it, the four
-            # per-channel tags, it names a category. So a small tag now earns
-            # its REAL clique — every pair, not an arbitrary path — and a
-            # large one earns nothing.
-            #
-            # Nothing is lost by that: the tag still rides on each node as a
-            # search label, and for these four the transcripts already carry
-            # `Source: [[Channel]]`, so channel membership is in the graph as
-            # an anchor to a real node. An edge here would restate it, worse.
-            if len(members) > self._TAG_CLIQUE_MAX:
-                continue
-            # MEMBERSHIP vs AFFINITY, and the distinction is load-bearing.
-            #
-            # Two notes tagged with the same channel BELONG to the same thing.
-            # Two notes tagged `claude-code` are merely ABOUT the same thing —
-            # a real relationship, and worth drawing, but not co-membership.
-            # Clustering is a connected component, so it is transitive: one
-            # subject shared across two channels merges both channels
-            # entirely. Measured 2026-07-28, after the summariser began
-            # emitting real subject tags, fourteen such tags had collapsed
-            # 157 of 171 documents into a single component and the view showed
-            # one undifferentiated blob where there had been four channels.
-            #
-            # So subjects ship as their own edge kind. computeSystems unions
-            # over `link` + `tag` only, which restores [67, 33, 32, 25]; the
-            # subject edges stay in the payload because they are true.
-            kind = "tag" if tiers.is_entity(tag) else "subject"
-            for i in range(len(members)):
-                for j in range(i + 1, len(members)):
-                    pair = (members[i], members[j])
-                    if pair not in seen:
-                        seen.add(pair)
-                        resolved.append({"source": pair[0], "target": pair[1],
-                                         "kind": kind})
+        # ── TWO-STAGE CLUSTERING (ROADMAP #37) ──────────────────────────
+        #
+        # WHAT WAS WRONG. The clique cap below ran BEFORE the membership
+        # decision, so `kind = "tag"` was never reached for any tag that
+        # exceeded it — and the only tags that can be membership (entity
+        # tags, one per followed channel) sit at df 100/36/33/25. Measured
+        # 2026-07-31: ZERO `tag` edges existed, and clustering over
+        # `link + tag` was set-identical to `link` alone. The two commits
+        # were three hours apart (58ffa84 added the cap, ede5286 added the
+        # decision underneath it) and every test still passed, because the
+        # test corpus never built a `source` node and so never exercised
+        # the branch at all.
+        #
+        # Worse than dead: a newly-followed channel DOES emit `tag` edges
+        # for its first five documents and then silently loses all of them
+        # on the sixth ingest.
+        #
+        # THE RULE NOW, one criterion, no cap, no entity test:
+        #
+        #   Links anchor. A tag may EXTEND a component, but never fuse two
+        #   that each already own a source — that is affinity, not
+        #   membership.
+        #
+        # The refusal is evaluated at UNION TIME against the live partition,
+        # not per-tag against a frozen one, and that distinction is the
+        # whole fix. Checking each tag against the original link partition
+        # scores [137, 36, 26]: every individual tag spans only one anchor
+        # and passes, but one unanchored note chains two channels through
+        # successive tags and transitivity fuses them — the exact blob
+        # ede5286 exists to prevent, one hop later.
+        #
+        # A pair already in the same component earns NO edge: the link that
+        # put them there already says it, and restating it is what the old
+        # 4,950-pair channel cliques were. Measured on the live corpus:
+        # 11 rogues -> 2, four channels intact at one source each, and 9
+        # `tag` + 40 subject edges emitted with 357 redundant pairs skipped.
+        # The two survivors carry only df=1 tags and no tag rule can reach
+        # them.
+        parent: dict[str, str] = {}
+
+        def _root(x: str) -> str:
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for e in resolved:                      # stage 1: links only, so far
+            ra, rb = _root(e["source"]), _root(e["target"])
+            if ra != rb:
+                parent[ra] = rb
+        # A component "owns a source" when it contains a source-typed node —
+        # derived from the node's own type, never from a tag naming
+        # convention, so a channel added tomorrow anchors with no edit here.
+        anchored = {_root(n["id"]) for n in nodes if n.get("type") == "source"}
+
+        def _merge(a: str, b: str) -> None:
+            ra, rb = _root(a), _root(b)
+            if ra == rb:
+                return
+            parent[ra] = rb
+            if ra in anchored:
+                anchored.discard(ra)
+                anchored.add(rb)
+
+        # Sorted so the partition is deterministic: which anchor absorbs a
+        # contested note must not depend on filesystem order.
+        for tag in sorted(tag_map):
+            members = sorted(set(tag_map[tag]))
+            for a, b in zip(members, members[1:]):
+                ra, rb = _root(a), _root(b)
+                if ra == rb:
+                    continue                    # the link already says it
+                if ra in anchored and rb in anchored:
+                    kind = "subject"            # two things that each belong
+                else:
+                    _merge(a, b)
+                    kind = "tag"
+                pair = (a, b)
+                if pair not in seen:
+                    seen.add(pair)
+                    resolved.append({"source": a, "target": b, "kind": kind})
 
         return {"nodes": nodes, "edges": resolved}
 
