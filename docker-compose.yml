@@ -111,17 +111,19 @@ services:
     profiles: ["inference"]
     ports:
       - "127.0.0.1:11434:11434"
-    environment:
-      # The context window every local model loads with. Pinned rather than
-      # left to the server default for two reasons: the default has changed
-      # between ollama releases (0.31 ships 32768), and the KV cache is what
-      # decides whether two models co-reside — a 14b at 32k costs 5.1GB of
-      # KV and evicts the voice model on a 24GB card, where at 16k it costs
-      # ~2.5GB and they both stay resident (measured 2026-07-24).
-      # Nova's `inference.ollama_num_ctx` setting must match this: the
-      # backend refuses a prompt that would overflow it, because ollama
-      # silently drops the FRONT of an oversized prompt — the system prompt.
-      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+    # DELIBERATELY NO OLLAMA_CONTEXT_LENGTH. It used to pin 16384 so that
+    # Nova's matching setting could mirror it; both are gone (2026-07-31).
+    # The backend now sends options.num_ctx per call, computed per model by
+    # `local_context` from the attention shape the model publishes and the
+    # VRAM actually free — one number, measured, and it fits a 3B and a
+    # 262,144-token model correctly where a single pin could not.
+    #
+    # Leaving it UNSET is not merely tidier. Upstream, `usesAutomaticNumCtx`
+    # is `envconfig.ContextLength() == 0`, so setting it at all made every
+    # request non-automatic and silently disabled two of ollama's own
+    # protections: its VRAM-tier default, and `reduceAutoNumCtxForLoadOOM`,
+    # the backoff that retries a failed load at 32768 then 4096. Those are
+    # the safety net under any call that arrives without a num_ctx.
     volumes:
       - ollama_models:/root/.ollama
     restart: unless-stopped

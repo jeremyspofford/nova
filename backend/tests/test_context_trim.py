@@ -16,7 +16,6 @@ import sys
 
 sys.path.insert(0, "/app/backend")
 
-from app import settings_store                             # noqa: E402
 from app.agents import context_trim                        # noqa: E402
 
 FAILURES: list[str] = []
@@ -30,7 +29,23 @@ def check(label, cond, detail=""):
 
 
 def set_budget(n):
-    settings_store._cache["agents.intraturn_budget"] = n
+    """Make `openrouter:test`'s ceiling come out at exactly n.
+
+    There is no budget setting to turn any more — the ceiling is the model's
+    own window less room to answer in — so this gives the test model a real
+    window instead. `effective_model` is on the path, so openrouter has to
+    look configured or the call is swapped for the local fallback and the
+    window seeded here is never consulted.
+    """
+    from app import models_catalog
+    from app.llm import providers
+    from app.agents import context_trim as ct
+    providers._cache["openrouter"] = {
+        "slug": "openrouter", "enabled": True, "needs_key": False,
+        "api_key": None, "api_key_env": None, "base_url": "", "name": "or"}
+    models_catalog._cache["models"] = [
+        {"id": "openrouter:test", "provider": "openrouter",
+         "context_length": n + ct._COMPLETION_HEADROOM}]
 
 
 def tool_msg(call_id, text):
@@ -81,7 +96,7 @@ def test_estimator():
 # ── 2. the ceiling ───────────────────────────────────────────────────────
 
 def test_ceiling():
-    print("2. ceiling: the setting, lowered by the model's real window")
+    print("2. ceiling: the model's own window, less room to answer in")
     set_budget(60000)
     from app import models_catalog
     saved = models_catalog._cache.get("models")
@@ -99,24 +114,48 @@ def test_ceiling():
         "slug": "openrouter", "enabled": True, "needs_key": False,
         "api_key": None, "api_key_env": None, "base_url": "", "name": "or"}
     try:
-        check("a 16k model lowers the 60k budget (minus completion headroom)",
+        check("a 16k model gets its own window, less room to answer in",
               context_trim.ceiling_for("openrouter:small") == 12000,
               str(context_trim.ceiling_for("openrouter:small")))
-        check("a 1M model does not RAISE it",
-              context_trim.ceiling_for("openrouter:huge") == 60000)
-        # phase 3: for a LOCAL model the configured server window IS the real
-        # one — ollama reports none, and trimming has to aim at the window the
-        # call must actually fit or the router refuses it
-        settings_store._cache["inference.ollama_num_ctx"] = 16384
-        check("a local model is sized by the configured server window",
+        # This used to assert the flat 60k budget CAPPED a big model. It no
+        # longer does, and that is the change: the ceiling is where trimming
+        # engages, so capping it below the real window trims a turn that
+        # would have fitted. What must not scale without bound is the HISTORY
+        # replayed, and that is bounded on its own terms below.
+        check("a 1M model is not trimmed early on account of a number "
+              "somebody typed",
+              context_trim.ceiling_for("openrouter:huge") == 996000,
+              str(context_trim.ceiling_for("openrouter:huge")))
+        check("...but its history budget is still bounded, because replaying "
+              "348k tokens a turn is dollars to re-read what compaction "
+              "already summarised",
+              context_trim.history_budget_for("openrouter:huge")
+              == context_trim._HISTORY_MAX,
+              str(context_trim.history_budget_for("openrouter:huge")))
+        check("a SMALL window scales its history down instead — the 6,000 "
+              "flat budget was most of an 8k model's window",
+              context_trim.history_budget_for("openrouter:small") < 6000,
+              str(context_trim.history_budget_for("openrouter:small")))
+        # phase 3: for a LOCAL model the window local_context SIZED it to is
+        # the real one — ollama's catalog reports none, and trimming has to
+        # aim at the window the call must actually fit or the router refuses
+        # it. There is no setting to read here any more; the sizer is the only
+        # source, so this seeds its cache the way a resolve() would have.
+        from app import local_context
+        local_context._cache["qwen3:8b"] = (float("inf"), 16384)
+        check("a local model is sized by the window it was actually given",
               context_trim.ceiling_for("ollama:qwen3:8b") == 12384,
               str(context_trim.ceiling_for("ollama:qwen3:8b")))
-        settings_store._cache["inference.ollama_num_ctx"] = 0
-        check("...and falls back to the budget when it is unset",
-              context_trim.ceiling_for("ollama:qwen3:8b") == 60000)
-        settings_store._cache["inference.ollama_num_ctx"] = 16384
-        check("a cloud model missing from the catalog falls back",
-              context_trim.ceiling_for("openrouter:never-seen") == 60000)
+        local_context._cache.pop("qwen3:8b", None)
+        check("...and falls back to the unknown-window default before "
+              "anything has sized it, because unknown is honest and a guess "
+              "is not",
+              context_trim.ceiling_for("ollama:qwen3:8b")
+              == context_trim._UNKNOWN_WINDOW - context_trim._COMPLETION_HEADROOM)
+        local_context._cache["qwen3:8b"] = (float("inf"), 16384)
+        check("a cloud model missing from the catalog falls back too",
+              context_trim.ceiling_for("openrouter:never-seen")
+              == context_trim._UNKNOWN_WINDOW - context_trim._COMPLETION_HEADROOM)
 
         # THE 2026-07-27 BUG. A cloud model whose provider is not configured
         # is swapped for the local fallback before the call leaves — so the
@@ -126,10 +165,16 @@ def test_ceiling():
         # prompts this function had just declared safe. Everything that sizes
         # against this number does so precisely so it agrees with that refusal.
         providers._cache.pop("openrouter", None)
+        # Seed the window for the model the call actually LANDS on. The flat
+        # setting this used to lean on applied to every local model at once,
+        # which is exactly why it was deleted — sizing is per model now, so
+        # the test has to name the model too.
+        local_context._cache["qwen2.5:3b"] = (float("inf"), 16384)
         check("an unconfigured cloud model is sized by the LOCAL FALLBACK it "
               "will actually run on, not by the window it claims",
               context_trim.ceiling_for("openrouter:huge") == 12384,
               str(context_trim.ceiling_for("openrouter:huge")))
+        local_context._cache.pop("qwen2.5:3b", None)
     finally:
         models_catalog._cache["models"] = saved
         providers._cache.clear()

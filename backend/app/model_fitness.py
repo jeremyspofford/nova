@@ -131,7 +131,6 @@ async def assess(model: str, *, needs_tools: bool = False,
                  needs_tokens: Optional[int] = None,
                  role: str = "this role") -> list[dict]:
     """Findings for one model against one role's actual requirements."""
-    from app import settings_store
     facts = await describe(model)
     caps = facts.get("capabilities")
     findings: list[dict] = []
@@ -148,21 +147,25 @@ async def assess(model: str, *, needs_tools: bool = False,
             "detail": f"{role} receives image attachments and {model} cannot "
                       f"read them."})
 
-    # The window the call will ACTUALLY get. For a local model that is the
-    # server-wide setting, not the weights' maximum — ollama truncates from
-    # the head, which eats the system prompt silently.
+    # The window the call will ACTUALLY get. For a local model that is what
+    # local_context sized it to, not the weights' maximum — ollama truncates
+    # from the head, which eats the system prompt silently. There is no
+    # server-wide pin to compare against any more; the sizer is the only
+    # answer, and before it has run for this model there is no answer at all.
     window = facts.get("context_length")
     if facts["local"]:
-        configured = int(settings_store.get("inference.ollama_num_ctx") or 0)
-        if configured:
-            if window and window > configured:
+        from app import local_context
+        sized = local_context.cached(model)
+        if sized:
+            if window and window > sized:
                 findings.append({
                     "severity": ADVISORY, "check": "context_underused",
-                    "detail": f"{model} supports {window:,} tokens but the "
-                              f"server is pinned to {configured:,} "
-                              f"(inference.ollama_num_ctx), so most of the "
-                              f"model's window is unavailable."})
-            window = configured
+                    "detail": f"{model} supports {window:,} tokens but only "
+                              f"{sized:,} fit in VRAM alongside its weights, "
+                              f"so most of the model's window is unavailable. "
+                              f"Free VRAM to raise it — it is measured, not "
+                              f"configured."})
+            window = sized
     if needs_tokens and window and needs_tokens > window:
         findings.append({
             "severity": BLOCKING, "check": "context",

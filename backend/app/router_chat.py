@@ -121,12 +121,14 @@ async def chat_stream(request: ChatRequest):
             main_agent = {**main_agent, "thinking": voice_thinking}
 
     model_eff = effective_model(main_agent["model"])
-    total_budget = settings_store.get(
-        "context.budget_ollama" if model_eff.startswith("ollama:")
-        else "context.budget_openrouter")
-    # Reserve for system prompt + memory + skills + summary + response headroom.
-    overhead = (settings.memory_context_max_chars // 4) + 2500
-    history_budget = max(1500, total_budget - overhead)
+    # A share of the window this call will ACTUALLY get, which for a local
+    # model is measured per model. The two `context.budget_*` settings this
+    # replaces were absolute token counts split by provider, and both went
+    # stale the moment a window changed. The reserve for system prompt,
+    # memory, skills and summary is the remaining fraction now, rather than a
+    # second hand-tuned number subtracted from the first.
+    from app.agents import context_trim
+    history_budget = context_trim.history_budget_for(model_eff)
 
     # user/assistant only: tool rows are an audit trail the LLM never replays
     # (to_llm_history drops them anyway), and letting them occupy the row cap

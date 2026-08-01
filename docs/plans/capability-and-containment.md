@@ -209,9 +209,11 @@ It needs nothing new architecturally: dispatch exists, per-agent models
 exist, and dispatch depth is already capped at 1.
 
 **The routing decision must be mechanical.** `llm/router.py`
-`_refuse_local_overflow` already computes whether a prompt fits
-`inference.ollama_num_ctx`. The backend decides whether to read directly or
-delegate; the model is not asked to judge whether something will fit.
+`_refuse_local_overflow` already computes whether a prompt fits the window the
+call will actually get — `local_context.effective_window()`, which is measured
+per model, not the flat setting that used to live here (deleted 2026-07-31).
+The backend decides whether to read directly or delegate; the model is not
+asked to judge whether something will fit.
 
 **Why it is deferred.** Cheap traversal may make whole-file reads rare
 enough that it never earns its place. Build the catalogue tools first and

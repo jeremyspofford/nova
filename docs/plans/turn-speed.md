@@ -157,7 +157,11 @@ specialists. Rules:
   agents.intraturn_budget)` with the new setting defaulted WELL above
   observed peaks (e.g. 60k tokens for cloud). Trimming engages only
   where the alternative is provider-side overflow — strictly better,
-  never worse.
+  never worse. **SUPERSEDED 2026-07-31:** `agents.intraturn_budget` is
+  deleted. The ceiling is the model's real window less the headroom, full
+  stop — a typed number could only ever pull it BELOW the truth, which
+  trims a turn that would have fitted. What needed bounding was the
+  history replayed, not the ceiling; see `context_trim._HISTORY_MAX`.
 - Trim by in-place content replacement ONLY on messages with
   `role=="tool"` AND string content; never remove/reorder messages
   (orphaned tool_calls pairing = provider 400); oldest first, down to
@@ -193,8 +197,13 @@ evidence rather than assumption.
   measurement below made the point moot.
 - **Context sizing: the deciding variable.** At the server default (32768 on
   ollama 0.31.2) the 14b costs 5.1GB of KV and EVICTS the voice model; at
-  16384 it costs 2.5GB and they co-reside. Now pinned via
-  OLLAMA_CONTEXT_LENGTH in compose + a matching `inference.ollama_num_ctx`.
+  16384 it costs 2.5GB and they co-reside. Was pinned via
+  OLLAMA_CONTEXT_LENGTH in compose + a matching `inference.ollama_num_ctx`;
+  **SUPERSEDED 2026-07-31** — both are deleted. `local_context.resolve()`
+  computes the window per model from the attention shape the model publishes
+  and the VRAM actually free, which is what "one number cannot serve a 3B and
+  a 262,144-token model" always meant. Co-residence is protected by a 2GB
+  reserve rather than by a pin everyone had to keep in sync.
 - **num_ctx per call is NOT available on this path** (new fact): a probe
   showed ollama's OpenAI-compatible /v1 endpoint IGNORES `options.num_ctx`
   (n_ctx stayed at the server default). Per-call sizing would need the

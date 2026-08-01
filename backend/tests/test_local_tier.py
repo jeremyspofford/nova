@@ -209,63 +209,50 @@ async def test_fallback_decision():
 
 async def test_local_overflow_refusal():
     print("3. an oversized local prompt is refused, not silently truncated")
-    # The refusal must measure against the window the call will ACTUALLY get.
-    # With dynamic sizing that is per-model and measured; this block pins the
-    # FLAT path, and the block after it pins the dynamic one.
-    settings_store._cache["inference.dynamic_context"] = False
-    settings_store._cache["inference.ollama_num_ctx"] = 8192
+    # The refusal measures against the window the call will ACTUALLY get, and
+    # there is exactly one thing that knows it. The flat setting this used to
+    # pin was deleted 2026-07-31 — a typed number and a measurement are two
+    # sources of truth for one value, and the stale one won silently. Stub the
+    # window so this asserts the wiring, not the GPU.
+    from app import local_context
+    saved_window = local_context.effective_window
     big = [{"role": "system", "content": "S" * 60_000},
            {"role": "user", "content": "go"}]
-    refusal = await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
-    check("an over-window prompt is refused", refusal is not None)
-    check("classified so callers never retry it elsewhere",
-          (refusal or {}).get("error_class") == "prompt_too_long")
-    check("the message names the setting and the fix",
-          "ollama_num_ctx" in (refusal or {}).get("error", ""),
-          (refusal or {}).get("error", "")[:60])
-
     small = [{"role": "user", "content": "hello"}]
-    check("a normal prompt passes through",
-          await llm_router._refuse_local_overflow("ollama:qwen3:14b", small) is None)
-
-    settings_store._cache["inference.ollama_num_ctx"] = 32768
-    check("and it is sized by the setting, not a constant",
-          await llm_router._refuse_local_overflow("ollama:qwen3:14b", big) is None)
-
-    # DYNAMIC SIZING. The threshold has to follow the per-model window, or a
-    # prompt gets refused by bookkeeping: a stale flat 8,192 rejecting a call
-    # that was about to be handed 40,960 is a refusal nobody's hardware asked
-    # for. Stub the resolver so this asserts the wiring, not the GPU.
-    from app import local_context
-    saved_resolve = local_context.resolve
-    settings_store._cache["inference.dynamic_context"] = True
-    settings_store._cache["inference.ollama_num_ctx"] = 8192
     try:
+        async def _narrow(model):
+            return 8192
+        local_context.effective_window = _narrow
+        refusal = await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
+        check("an over-window prompt is refused", refusal is not None)
+        check("classified so callers never retry it elsewhere",
+              (refusal or {}).get("error_class") == "prompt_too_long")
+        check("the message says the window was MEASURED, so nobody goes "
+              "looking for the setting that used to be here",
+              "measured, not configured" in (refusal or {}).get("error", ""),
+              (refusal or {}).get("error", "")[:80])
+        check("a normal prompt passes through",
+              await llm_router._refuse_local_overflow("ollama:qwen3:14b", small)
+              is None)
+
         async def _wide(model):
             return 262144
-        local_context.resolve = _wide
-        check("a prompt inside the MEASURED window passes, even though the "
-              "flat setting is far smaller",
+        local_context.effective_window = _wide
+        check("...and the threshold follows the per-model window, so a call "
+              "about to be handed 262,144 is not refused by bookkeeping",
               await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
               is None)
 
-        async def _narrow(model):
-            return 8192
-        local_context.resolve = _narrow
-        check("...and one outside it is still refused",
-              await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
-              is not None)
-
         async def _unknown(model):
             return None
-        local_context.resolve = _unknown
-        check("when nothing can be measured it falls back to the setting, so "
-              "the old behaviour survives a dead sidecar",
+        local_context.effective_window = _unknown
+        check("when NOTHING knows the window — nothing sized, nothing "
+              "resident — the call goes through rather than being refused on "
+              "a number nobody has",
               await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
-              is not None)
+              is None)
     finally:
-        local_context.resolve = saved_resolve
-        settings_store._cache["inference.dynamic_context"] = False
+        local_context.effective_window = saved_window
 
 
 # ── 4. the dispatch budget, in a real turn ───────────────────────────────

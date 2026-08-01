@@ -123,6 +123,14 @@ async def run() -> None:
                             tags=["media", "transcript", "src-big-channel"],
                             source_url="https://example.com/huge")
 
+            # Give the local model a measured window. `local_context` is the
+            # only thing that knows one since `inference.ollama_num_ctx` was
+            # deleted (2026-07-31); before it has sized a model there is no
+            # window to be small, and "small" vs "large" below is the whole
+            # point of the section.
+            from app import local_context
+            local_context._cache["qwen3:14b"] = (float("inf"), 16384)
+
             small = {"model": "ollama:qwen3:14b", "granted": set(),
                      "untrusted_context": False}
             large = {"model": "", "granted": set(), "untrusted_context": False}

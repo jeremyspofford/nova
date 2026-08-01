@@ -22,14 +22,13 @@ _NOTIFY_PROVIDERS = ["ntfy", "webpush", "webhook"]
 
 SETTING_DEFS: list[dict] = [
     # ── Context ──────────────────────────────────────────────────────────
-    {"key": "context.budget_openrouter", "type": "number", "default": 24000,
-     "min": 2000, "max": 200000, "section": "Context",
-     "label": "Context budget — OpenRouter (tokens)",
-     "description": "Total prompt budget when the active model is on OpenRouter."},
-    {"key": "context.budget_ollama", "type": "number", "default": 6000,
-     "min": 1000, "max": 131072, "section": "Context",
-     "label": "Context budget — Ollama (tokens)",
-     "description": "Total prompt budget for local models (effective limit is num_ctx)."},
+    # No prompt-budget settings here either. They were absolute token counts
+    # split by provider (24,000 cloud / 6,000 local) and both went stale the
+    # moment a window changed: the local one was tuned against a 16,384 pin
+    # and was still 6,000 the day ornith:9b measured 65,536. How much of a
+    # window past conversation may claim is now a FRACTION of that window
+    # (`context_trim._HISTORY_FRACTION`), so it follows the hardware instead
+    # of being re-typed after it.
     {"key": "compaction.min_aged", "type": "number", "default": 10,
      "min": 4, "max": 100, "section": "Context",
      "label": "Compaction threshold (messages)",
@@ -71,19 +70,12 @@ SETTING_DEFS: list[dict] = [
                      "halfway may already have run tools, and retrying it "
                      "would double-bill and repeat those actions. Off = the "
                      "turn fails with the error visible.")},
-    {"key": "agents.intraturn_budget", "type": "number", "default": 60000,
-     "min": 8000, "max": 400000, "section": "Agents",
-     "label": "Prompt ceiling within one turn (tokens)",
-     "description": ("Safety net for long research turns, which grow their "
-                     "own prompt: every tool result is replayed to the model "
-                     "on the next round. At this ceiling the oldest raw "
-                     "search and page results get shortened in place so the "
-                     "turn can finish instead of overflowing the model's "
-                     "context. A specialist's report is never shortened. Set "
-                     "well ABOVE normal turns (a long research turn peaks "
-                     "around 32k) — this is overflow protection, not "
-                     "trimming; the model's own context window lowers it "
-                     "automatically when that is smaller.")},
+    # The intra-turn prompt ceiling was here. It is now the model's own
+    # window less room to answer in (`context_trim.ceiling_for`) — which is
+    # what the setting's own description already said it was lowered to
+    # whenever the window was smaller. The setting could only ever make the
+    # ceiling tighter than the truth, and being wrong that way trims a turn
+    # that would have fitted.
     {"key": "agents.tool_concurrency", "type": "number", "default": 3,
      "min": 1, "max": 8, "section": "Agents",
      "label": "Parallel tool calls per round",
@@ -102,37 +94,15 @@ SETTING_DEFS: list[dict] = [
      "description": ("Local inference endpoint. Default is the bundled service "
                      "(docker compose --profile inference); for host-run Ollama use "
                      "http://host.docker.internal:11434. Applies to the next request.")},
-    {"key": "inference.ollama_num_ctx", "type": "number", "default": 16384,
-     "min": 2048, "max": 262144, "section": "Inference",
-     "label": "Local context window (tokens)",
-     "description": ("A CEILING, not the value, while the setting below is "
-                     "on: each local model is given the largest window it "
-                     "supports that also fits in VRAM, and this caps that — "
-                     "but only once you have actually set it, since an "
-                     "untouched default is not a decision. Turn automatic "
-                     "sizing off and this becomes the single window every "
-                     "local model gets. Either way Nova refuses a local call "
-                     "whose prompt would exceed the window it will really "
-                     "get, instead of sending it: the server drops the FRONT "
-                     "of an oversized prompt, which is where the system "
-                     "prompt lives, and answers anyway with no error. Bigger "
-                     "costs VRAM — the KV cache grows with it.")},
-    {"key": "inference.dynamic_context", "type": "boolean", "default": True,
-     "section": "Inference",
-     "label": "Size the local context window automatically",
-     "description": ("Pick each local model's context window from what it "
-                     "actually supports and what actually fits in VRAM, "
-                     "instead of applying one number to all of them. One "
-                     "number cannot be right for both a 3B and a model with "
-                     "a 262,144-token window, and getting it wrong is "
-                     "invisible: ollama does not fail when the KV cache will "
-                     "not fit, it moves part of the model into system RAM "
-                     "and runs slowly. Nova measures the model's real "
-                     "ceiling, the free VRAM and what the cache costs per "
-                     "token, then checks afterwards whether it spilled and "
-                     "lowers that model next time. With this on, the setting "
-                     "above becomes a CEILING rather than the value. Turn it "
-                     "off to go back to one fixed window.")},
+    # There is deliberately NO local context-window setting here. A number an
+    # operator types cannot be right for both a 3B and a 262,144-token model,
+    # and being wrong is invisible — ollama does not fail when the KV cache
+    # will not fit, it moves part of the model into system RAM and answers
+    # slowly. `local_context.resolve()` computes it per model from the
+    # attention shape the model publishes and the VRAM actually free, and it
+    # is the only thing that decides. A ceiling setting beside it would be a
+    # second source of truth for one number, which is how the two ended up
+    # disagreeing in the first place.
     {"key": "inference.ollama_timeout_s", "type": "number", "default": 300,
      "min": 30, "max": 900, "section": "Inference",
      "label": "Local request timeout (seconds)",

@@ -3,16 +3,24 @@
 This is OVERFLOW protection, not aggressive trimming, and the distinction is
 the whole design. A long research turn grows its own prompt: every tool
 result is replayed to the model on the next round, and the measured baseline
-turn walked 17k → 32k tokens across fifteen rounds. Nothing bounds that
-today — `context.budget_openrouter` (24k) only picks how much conversation
-HISTORY to replay, and it is applied once, before the turn starts.
+turn walked 17k → 32k tokens across fifteen rounds. Nothing else bounds that:
+`history_budget_for` only picks how much conversation HISTORY to replay, and
+it is applied once, before the turn starts.
 
 So the ceiling here sits WELL above observed peaks. Trimming engages only
 where the alternative is a provider-side overflow (or, on ollama, a silent
 truncation of the prompt HEAD — which eats the system prompt). Under the
 ceiling this module does nothing at all, which is why the v1 idea of reusing
-the 24k history budget was wrong: it would have trimmed the very turn it was
-meant to protect.
+the history budget as the ceiling was wrong: it would have trimmed the very
+turn it was meant to protect. The two are still separate numbers here for
+that reason, both now derived from the same window.
+
+WINDOWS ARE MEASURED, NEVER TYPED (2026-07-31). `inference.ollama_num_ctx`,
+`inference.dynamic_context`, `context.budget_ollama`,
+`context.budget_openrouter` and `agents.intraturn_budget` are all deleted,
+along with the `OLLAMA_CONTEXT_LENGTH` pin in compose. A window comes from
+`local_context` (measured per local model) or the models catalog (cloud);
+everything else here is a fraction of it.
 
 Rails, each from the review:
 
@@ -47,6 +55,24 @@ _IMAGE_TOKENS = 1000
 
 # room left for the model's own reply under a real context window
 _COMPLETION_HEADROOM = 4000
+
+# The window to assume when NOTHING knows the model's real one — no catalog
+# entry, no measurement. The last absolute token count in this file, and it
+# never competes with a real window: it applies only where there isn't one.
+_UNKNOWN_WINDOW = 60000
+
+# How much of the window past conversation may claim, the rest carrying the
+# system prompt, retrieved memory, the skills block and the reply. See
+# history_budget_for for why this is a fraction and not a token count.
+_HISTORY_FRACTION = 0.35
+
+# ...and the point past which MORE history stops being worth its price. This
+# one is deliberately not derived, because no measurement of the hardware
+# answers it: it is a statement about conversations, not about windows. A
+# frontier model with a 1,000,000-token window would otherwise replay ~348k
+# tokens of history on every turn of a long thread, which is dollars per turn
+# to re-read what compaction has already summarised.
+_HISTORY_MAX = 24000
 
 # stop trimming a message here — below this a result stops meaning anything
 # and the model just re-runs the tool, which costs more than it saved
@@ -105,18 +131,15 @@ def model_context(model: str) -> Optional[int]:
     # happily build a 40k prompt for a 16k local model, which the router
     # then refuses — trimming has to aim at the window the call must fit.
     if model.split(":", 1)[0] == "ollama":
-        from app import local_context, settings_store
-        # The window this model will ACTUALLY be given, when that has been
-        # worked out. Dynamic sizing hands qwen3:14b 40,960 while the flat
-        # setting says 16,384, and a trimmer aiming at the wrong one of those
-        # either wastes most of the window or builds a prompt the server
-        # truncates from the head. None before the first resolve, which lands
-        # on the setting — the smaller, safer number.
-        resolved = local_context.cached(model)
-        if resolved:
-            return resolved
-        configured = int(settings_store.get("inference.ollama_num_ctx") or 0)
-        return configured or None
+        from app import local_context
+        # The window this model will ACTUALLY be given, once that has been
+        # worked out — `local_context` is the only thing that decides it, so
+        # there is nothing else to fall back to. None before the first
+        # resolve, which lands the caller on the operator's token budget:
+        # unknown is the honest answer, and a made-up window would have the
+        # trimmer either waste most of it or build a prompt the server
+        # truncates from the head, taking the system prompt with it.
+        return local_context.cached(model)
     try:
         from app import models_catalog
         for entry in models_catalog._cache.get("models") or []:
@@ -145,13 +168,32 @@ def ceiling_for(model: str) -> int:
     summary chunking — inherits that lie, because they all size against this
     number precisely so it agrees with the refusal.
     """
-    from app import settings_store
     from app.llm import router as llm_router
-    budget = int(settings_store.get("agents.intraturn_budget") or 60000)
-    real = model_context(llm_router.effective_model(model))
-    if real:
-        return max(2000, min(budget, real - _COMPLETION_HEADROOM))
-    return budget
+    real = model_context(llm_router.effective_model(model)) or _UNKNOWN_WINDOW
+    return max(2000, real - _COMPLETION_HEADROOM)
+
+
+def history_budget_for(model: str) -> int:
+    """How many tokens of PAST conversation to replay into a turn.
+
+    Derived, like everything else about a window. `context.budget_ollama` and
+    `context.budget_openrouter` were absolute token counts an operator typed
+    once, and a token count goes stale the moment the model or the hardware
+    changes: the local one was tuned when the window was pinned at 16,384 and
+    was still 6,000 the day ornith:9b measured 65,536 — replaying 6k of
+    history into a 65k window and leaving the rest unused.
+
+    A fraction cannot go stale that way. The remainder is not spare: it
+    carries the system prompt, retrieved memory and the skills block, which
+    is why history gets a minority share rather than what is left over.
+
+    The fraction is what fixes SMALL windows — an 8,192-token model was being
+    handed a 6,000-token history budget, which is most of its window before
+    the system prompt arrives. `_HISTORY_MAX` is what bounds large ones, and
+    it is the one number here a window cannot supply.
+    """
+    return max(1500, min(int(ceiling_for(model) * _HISTORY_FRACTION),
+                         _HISTORY_MAX))
 
 
 def paginate(body: str, cap: int) -> list[str]:

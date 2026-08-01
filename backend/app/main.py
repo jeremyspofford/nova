@@ -72,6 +72,11 @@ async def lifespan(app: FastAPI):
     # kills it; without this its row stays 'running' and reads as in-flight
     from app import eval_runs
     await eval_runs.reconcile_orphans()
+    # Size the local models' context windows before anything trims against
+    # them. Backgrounded: it is metadata probes against ollama, which may be
+    # absent or slow, and a boot must not wait on it.
+    from app import bg, local_context
+    bg.spawn(local_context.warm(), name="local-context-warm")
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())

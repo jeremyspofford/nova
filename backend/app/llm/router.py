@@ -85,19 +85,19 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
 
     Measured 2026-07-24 on ollama 0.31.2: `options.num_ctx` sent to the
     OpenAI-compatible /v1 endpoint is IGNORED (probe showed n_ctx stayed at
-    the server default), so per-call context sizing is not available on this
-    path. The server-wide OLLAMA_CONTEXT_LENGTH is the real knob; this
-    setting mirrors it so the client can refuse loudly rather than guess.
+    the server default). Re-measured 2026-07-31: on the NATIVE /api/chat
+    endpoint — the path chat actually takes — it is honoured verbatim, and
+    it is what `local_context` sends. So the window is per call, and this
+    refuses against that window rather than a server-wide number.
     """
-    from app import local_context, settings_store
+    from app import local_context
     from app.agents import context_trim
-    # Refuse against the window this call will ACTUALLY get, not the flat
-    # setting. With dynamic sizing on they differ by design — refusing a
-    # 30k-token prompt because a stale 16,384 said so, on a model that was
-    # about to be given 40,960, would be a refusal invented by bookkeeping.
-    limit = await local_context.resolve(model) or 0
-    if limit <= 0:
-        limit = int(settings_store.get("inference.ollama_num_ctx") or 0)
+    # Refuse against the window this call will ACTUALLY get — what we sized
+    # it to, or failing that what ollama reports it already loaded.
+    # `local_context` owns both answers, so there is no second number to
+    # drift from. Nothing resident and nothing measurable means nobody knows
+    # the window, and a refusal invented on a guess is worse than the call.
+    limit = await local_context.effective_window(model) or 0
     if limit <= 0:
         return None
     # leave the same completion headroom the trimmer reserves
@@ -109,13 +109,13 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
               estimate, limit, model)
     return {
         "type": "error",
-        "error": (f"This prompt is about {estimate:,} tokens, but the local "
-                  f"server is configured for {limit:,} (inference."
-                  f"ollama_num_ctx). Sending it would silently truncate the "
-                  f"system prompt, so the call was refused. Raise "
-                  f"OLLAMA_CONTEXT_LENGTH on the ollama service and the "
-                  f"matching setting, lower agents.intraturn_budget, or move "
-                  f"this agent to a cloud model."),
+        "error": (f"This prompt is about {estimate:,} tokens, but {model} was "
+                  f"sized to {limit:,} — the largest window whose KV cache "
+                  f"fits in free VRAM beside its weights. Sending it would "
+                  f"silently truncate the system prompt, so the call was "
+                  f"refused. Free VRAM to raise the window (it is measured, "
+                  f"not configured), shorten the turn, or move this agent to "
+                  f"a cloud model."),
         "error_class": "prompt_too_long", "status_code": None}
 
 
