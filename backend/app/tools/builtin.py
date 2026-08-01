@@ -999,6 +999,10 @@ async def _list_stale_topics(args, ctx):
 async def _manage_automations(args, ctx):
     from app import automations as auto
     action = (args.get("action") or "").lower()
+    # From ctx, which the runner writes from the DB agent row — never from
+    # args, where a model could put "operator" and sign somebody else's name
+    # to its own change.
+    who = ctx.get("agent_name") or "an agent"
 
     if action == "list":
         rows = await auto.list_automations()
@@ -1026,7 +1030,8 @@ async def _manage_automations(args, ctx):
                 interval_minutes=int(args.get("interval_minutes", 0)),
                 description=args.get("description", ""),
                 timeout_seconds=(int(args["timeout_seconds"])
-                                 if args.get("timeout_seconds") else None))
+                                 if args.get("timeout_seconds") else None),
+                actor=who)
         except Exception as e:
             return f"Error creating automation: {e}"
         return _j({"status": "created", "name": row["name"],
@@ -1043,14 +1048,17 @@ async def _manage_automations(args, ctx):
             updates["enabled"] = True
         elif action == "disable":
             updates["enabled"] = False
-        ok = await auto.update(row["id"], **updates)
+        try:
+            ok = await auto.update(row["id"], actor=who, **updates)
+        except ValueError as e:
+            return f"Error updating automation: {e}"
         return _j({"status": "updated" if ok else "failed", "name": row["name"]})
 
     if action == "delete":
         row = await auto.get_by_name(args.get("name", ""))
         if not row:
             return f"Error: automation '{args.get('name')}' not found"
-        result = await auto.delete(row["id"])
+        result = await auto.delete(row["id"], actor=who)
         if result == "is_system":
             return f"Error: '{row['name']}' is a system automation — it can be disabled but not deleted"
         return _j({"status": result, "name": row["name"]})

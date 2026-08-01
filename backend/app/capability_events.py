@@ -39,6 +39,15 @@ PERSON = "person"
 # reaches her at all. Before it existed, "approve" was a status column nobody
 # read — he clicked, the card left the banner, and she never found out.
 RECOMMENDATION = "recommendation"
+# A standing claim on her own time. Enabling one starts a recurring turn that
+# runs an agent with real tools and nobody in the room — which is exactly why
+# manage_automations is an ACTOR tool — and the scheduler switches one off by
+# itself after five failures. Both directions are changes she has to be able
+# to explain, and neither left a trace: `enabled` was a bare UPDATE with no
+# log line at all, and `updated_at` is stamped again by every run, so it says
+# "changed" for an automation that merely ran. "Who enabled review-memory-usage"
+# was unanswerable, which is what this kind is here to fix.
+AUTOMATION = "automation"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.
@@ -101,6 +110,13 @@ async def recent(limit: int = 50, hours: Optional[int] = None) -> list[dict]:
             for r in rows]
 
 
+# Keys with bespoke phrasing, because a grant delta reads badly as key=value.
+_PHRASED = ("granted", "revoked", "model")
+# detail is a delta, never a body (see the module docstring). Clamped anyway,
+# so an emitter that forgets that costs a truncated line and not a prompt.
+_DETAIL_MAX = 80
+
+
 def _phrase(e: dict) -> str:
     """One line, in the order a person would say it."""
     d = e.get("detail") or {}
@@ -111,6 +127,16 @@ def _phrase(e: dict) -> str:
         bits += f" (-{', '.join(d['revoked'])})"
     if d.get("model"):
         bits += f" (model {d['model']})"
+    # Everything else the emitter thought worth recording. The three names
+    # above used to be the whole renderer, so a detail key it did not know
+    # reached the table and then vanished from the one channel that reaches
+    # her — a maintained list, silently lossy in the usual direction. Found
+    # by the auto-disable reason: "5 consecutive failures" is the entire
+    # answer to "why did this stop running", and it rendered as nothing.
+    rest = [f"{k} {str(v)[:_DETAIL_MAX]}" for k, v in sorted(d.items())
+            if k not in _PHRASED and v not in (None, "", [], {})]
+    if rest:
+        bits += f" ({'; '.join(rest)})"
     by = e.get("actor") or "operator"
     return f"- {bits} — by {by}"
 

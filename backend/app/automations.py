@@ -1,5 +1,16 @@
 """Automations store — CRUD shared by the API endpoints, the
-manage_automations tool, and the scheduler."""
+manage_automations tool, and the scheduler.
+
+Config changes are recorded in `capability_events`, and the emits live HERE
+rather than in the two callers, because this is where the operator's browser
+and the model's tool call already converge — an emit per caller is a list
+someone maintains, and the caller anyone forgets is the one that mattered.
+
+Stated boundary: a migration that edits a row with raw SQL (026 rewrites
+tech-news-digest's instruction) is invisible to this. Instrumenting SQL would
+mean a hand-written INSERT in every future migration, and the migration file
+in git is already the record. That is a choice, not an oversight.
+"""
 
 import logging
 import uuid
@@ -53,8 +64,13 @@ _FIELDS = ("id", "name", "description", "instruction", "agent_name",
            "consecutive_failures", "last_run_at", "next_run_at", "last_status",
            "last_summary", "created_at")
 
-_UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes",
-              "timeout_seconds", "enabled"}
+# Public because the HTTP route filters an incoming body against it before
+# calling update(). A second copy in the router would be the scopes.py lesson
+# again — that list was duplicated by hand and the duplicate drifted within
+# an hour — and here the drift would be silent: a field the router let
+# through and this set did not would simply not be written.
+UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes",
+             "timeout_seconds", "enabled"}
 
 
 def _row(r) -> dict:
@@ -79,7 +95,8 @@ async def get_by_name(name: str) -> Optional[dict]:
 
 async def create(name: str, instruction: str, agent_name: str,
                  interval_minutes: int, description: str = "",
-                 timeout_seconds: Optional[int] = None) -> dict:
+                 timeout_seconds: Optional[int] = None,
+                 actor: Optional[str] = None) -> dict:
     if interval_minutes < 5:
         raise ValueError("interval_minutes must be at least 5")
     if timeout_seconds is not None and timeout_seconds < 30:
@@ -101,13 +118,37 @@ async def create(name: str, instruction: str, agent_name: str,
             timeout_seconds)
     log.info("Automation created: %s (every %dm, agent=%s)",
              name, interval_minutes, agent_name)
+    from app import capability_events as ce
+    ce.record(ce.AUTOMATION, name, "created", actor=actor or "operator",
+              detail={"agent": agent_name, "every": f"{interval_minutes}m"})
     return _row(r)
 
 
-async def update(automation_id: str, **updates) -> bool:
-    updates = {k: v for k, v in updates.items() if k in _UPDATABLE}
+async def update(automation_id: str, *, operator: bool = False,
+                 actor: Optional[str] = None, **updates) -> bool:
+    """`operator=True` is the human at the Settings UI, reached only through
+    the authenticated HTTP route. Everything else is a model, and says so."""
+    updates = {k: v for k, v in updates.items() if k in UPDATABLE}
     if not updates:
         return False
+    # The same checks create() makes. They were missing here, and the failure
+    # is silent and delayed rather than loud: an automation repointed at an
+    # agent that does not exist keeps its row, runs on schedule, fails, and is
+    # auto-disabled five runs later — so the operator learns a week after the
+    # typo, from an automation that simply stopped. Found by pointing
+    # review-memory-usage at "operator" while testing this file's own events.
+    if "interval_minutes" in updates and updates["interval_minutes"] < 5:
+        raise ValueError("interval_minutes must be at least 5")
+    if updates.get("timeout_seconds") is not None and updates["timeout_seconds"] < 30:
+        raise ValueError("timeout_seconds must be at least 30 (or omitted "
+                         "for the global default)")
+    if "agent_name" in updates:
+        async with db.acquire() as conn:
+            if not await conn.fetchrow(
+                    "SELECT 1 FROM agents WHERE name = $1 AND enabled",
+                    updates["agent_name"]):
+                raise ValueError(
+                    f"agent '{updates['agent_name']}' not found or disabled")
     clauses, params = [], [uuid.UUID(automation_id)]
     for i, (k, v) in enumerate(updates.items(), start=2):
         clauses.append(f"{k} = ${i}")
@@ -115,13 +156,56 @@ async def update(automation_id: str, **updates) -> bool:
     # re-enable clears the failure streak so it gets a fresh chance
     extra = ", consecutive_failures = 0" if updates.get("enabled") is True else ""
     async with db.acquire() as conn:
+        # read BEFORE the write: an enable is only a change against what was
+        # there before, and afterwards the previous value is gone. This is
+        # also the only way to tell a real flip from a UI save that posted
+        # the toggle unchanged.
+        prev = await conn.fetchrow(
+            "SELECT name, description, instruction, agent_name, interval_minutes, "
+            "timeout_seconds, enabled FROM automations WHERE id = $1",
+            uuid.UUID(automation_id))
         result = await conn.execute(
             f"UPDATE automations SET {', '.join(clauses)}{extra}, updated_at = now() "
             f"WHERE id = $1", *params)
-    return result.endswith("1")
+    ok = result.endswith("1")
+    if ok and prev:
+        _record_update(dict(prev), updates, operator, actor)
+    return ok
 
 
-async def delete(automation_id: str) -> str:
+def _record_update(prev: dict, updates: dict, operator: bool,
+                   actor: Optional[str]) -> None:
+    """Turn an UPDATE into the smallest true statement about it."""
+    from app import capability_events as ce
+    who = actor or ("operator" if operator else "an agent")
+    changed = {k for k, v in updates.items() if v != prev.get(k)}
+    detail = {}
+    # Which agent runs it is a capability fact, not a cosmetic one: it decides
+    # which tools the unattended turn holds.
+    if "agent_name" in changed:
+        detail["agent"] = updates["agent_name"]
+    if "interval_minutes" in changed:
+        detail["every"] = f"{updates['interval_minutes']}m"
+    # The names only, never the values. instruction IS prompt text, and this
+    # block is read back into a prompt (capability_events docstring).
+    rest = sorted(changed - {"agent_name", "interval_minutes", "enabled"})
+    if rest:
+        detail["changed"] = ", ".join(rest)
+    # enabled is its own verb, because "who turned this on" is the question
+    # being asked and "updated" would bury it
+    if "enabled" in changed:
+        ce.record(ce.AUTOMATION, prev["name"],
+                  "enabled" if updates["enabled"] else "disabled",
+                  actor=who, detail=detail)
+        return
+    # A change record that records no change is noise in the one place noise
+    # is most expensive. Every UI save posts the whole form, so without this
+    # an operator opening a card and closing it mints an event.
+    if detail:
+        ce.record(ce.AUTOMATION, prev["name"], "updated", actor=who, detail=detail)
+
+
+async def delete(automation_id: str, *, actor: Optional[str] = None) -> str:
     """Delete a non-system automation. Returns 'deleted' | 'not_found' | 'is_system'."""
     async with db.acquire() as conn:
         row = await conn.fetchrow(
@@ -134,6 +218,8 @@ async def delete(automation_id: str) -> str:
         await conn.execute("DELETE FROM automations WHERE id = $1",
                            uuid.UUID(automation_id))
     log.info("Automation deleted: %s", row["name"])
+    from app import capability_events as ce
+    ce.record(ce.AUTOMATION, row["name"], "deleted", actor=actor or "operator")
     return "deleted"
 
 
@@ -154,6 +240,9 @@ async def record_run(automation_id: str, status: str, summary: str,
     next_run = now + timedelta(minutes=interval_minutes)
     started = started_at or now
     aid = uuid.UUID(automation_id)
+    # Set when the streak trips the kill switch below, so the event is emitted
+    # after the connection block like every other one in this file.
+    self_disabled: Optional[tuple[str, int]] = None
     async with db.acquire() as conn:
         await conn.execute(
             """INSERT INTO automation_runs (automation_id, status, summary,
@@ -179,9 +268,7 @@ async def record_run(automation_id: str, status: str, summary: str,
                 await conn.execute(
                     "UPDATE automations SET enabled = false WHERE id = $1",
                     uuid.UUID(automation_id))
-                log.warning("Automation '%s' auto-disabled after %d consecutive failures",
-                            row["name"], row["consecutive_failures"])
-                return "auto_disabled"
+                self_disabled = (row["name"], row["consecutive_failures"])
         else:
             await conn.execute(
                 """UPDATE automations
@@ -189,6 +276,20 @@ async def record_run(automation_id: str, status: str, summary: str,
                        last_summary = $4, consecutive_failures = 0, updated_at = now()
                    WHERE id = $1""",
                 uuid.UUID(automation_id), next_run, status, summary[:1000])
+    if self_disabled:
+        name, failures = self_disabled
+        log.warning("Automation '%s' auto-disabled after %d consecutive failures",
+                    name, failures)
+        # The one event here with no human behind it, so the actor says so.
+        # Everything else in record_run is bookkeeping — last_run_at moving is
+        # the automation working — but `enabled` going false is a capability
+        # she lost without anybody choosing it, and "why did this stop running"
+        # is unanswerable if the only record is a log line and a journal entry
+        # she never reads back.
+        from app import capability_events as ce
+        ce.record(ce.AUTOMATION, name, "disabled", actor="the scheduler",
+                  detail={"reason": f"{failures} consecutive failures"})
+        return "auto_disabled"
     return None
 
 

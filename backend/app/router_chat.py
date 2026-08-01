@@ -1518,7 +1518,18 @@ async def create_automation_endpoint(body: dict):
 
 @router.patch("/api/v1/automations/{automation_id}")
 async def patch_automation_endpoint(automation_id: str, body: dict):
-    ok = await automations.update(automation_id, **body)
+    # Filtered against the store's own set, never spread raw: `operator` and
+    # `actor` are now parameters, and an incoming body key of either name
+    # would bind to them — the attribution deciding who did this cannot come
+    # from the request that is being attributed.
+    allowed = {k: v for k, v in body.items() if k in automations.UPDATABLE}
+    # operator=True: this route is the human at Settings, already past the
+    # auth middleware.
+    try:
+        ok = await automations.update(automation_id, operator=True, **allowed)
+    except ValueError as e:
+        # 422 like the create route, not the 500 a bare DB CHECK gives.
+        raise HTTPException(status_code=422, detail=str(e))
     if not ok:
         raise HTTPException(status_code=404, detail="automation not found or no valid fields")
     return {"status": "updated"}

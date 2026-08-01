@@ -130,6 +130,90 @@ async def run() -> None:
     still = await ce.recent(limit=1)
     check("...and the log is still readable", isinstance(still, list))
 
+    print("7. an automation flip names WHO flipped it")
+    # The motivating case: review-memory-usage was seeded disabled and found
+    # enabled, and nothing in the system could say who did it. `updated_at`
+    # could not answer either — the scheduler stamps it again on every run.
+    from app import automations
+    await agent_registry.create_agent(
+        name="probe-auto-agent", description="d", system_prompt="s",
+        model="openrouter:test")
+    auto = await automations.create(
+        name="probe-auto", instruction="do a thing", agent_name="probe-auto-agent",
+        interval_minutes=60, description="d")
+    await automations.update(auto["id"], operator=True, enabled=False)
+    await automations.update(auto["id"], actor="main", enabled=True)
+    await _settle()
+
+    evs = await ce.recent(limit=4)
+    seen = [(e["action"], e["actor"]) for e in evs]
+    check("creation is recorded", ("created", "operator") in seen, str(seen))
+    check("the operator's disable is attributed to the operator",
+          ("disabled", "operator") in seen, str(seen))
+    check("an agent's enable is attributed to the agent, not the operator",
+          ("enabled", "main") in seen, str(seen))
+    check("ENABLED is its own verb, not buried in 'updated'",
+          all(a != "updated" for a, _ in seen), str(seen))
+
+    print("8. a save that changes nothing records nothing")
+    before = len(await ce.recent(limit=50))
+    await automations.update(auto["id"], operator=True, enabled=True)  # already true
+    await _settle()
+    check("re-posting an unchanged toggle mints no event",
+          len(await ce.recent(limit=50)) == before, str(before))
+    await automations.update(auto["id"], operator=True, interval_minutes=120)
+    await _settle()
+    ev = (await ce.recent(limit=1))[0]
+    check("a real edit is 'updated', carrying the new value",
+          (ev["action"], ev["detail"].get("every")) == ("updated", "120m"), str(ev))
+
+    print("8b. update refuses what create refuses")
+    # An automation pointed at an agent that does not exist keeps running on
+    # schedule, fails, and is auto-disabled five runs later — so the operator
+    # finds out a week after the typo. create() has always checked this;
+    # update() did not, which is how review-memory-usage ended up pointed at
+    # "operator" during the live verification of this very change.
+    for bad, label in (({"agent_name": "no-such-agent"}, "a nonexistent agent"),
+                       ({"interval_minutes": 1}, "an interval under the floor"),
+                       ({"timeout_seconds": 5}, "a timeout under the floor")):
+        try:
+            await automations.update(auto["id"], operator=True, **bad)
+            check(f"{label} is refused", False, "it was accepted")
+        except ValueError:
+            check(f"{label} is refused", True)
+    check("the agent it already had survived the refusals",
+          (await automations.get_by_name("probe-auto"))["agent_name"]
+          == "probe-auto-agent")
+
+    print("9. the scheduler's own kill switch is a change she can explain")
+    before = len(await ce.recent(limit=50))
+    outcome = None
+    for _ in range(5):
+        outcome = await automations.record_run(
+            auto["id"], "error", "boom", 120, failed=True)
+    await _settle()
+    check("five failures trip it", outcome == "auto_disabled", str(outcome))
+    after = await ce.recent(limit=50)
+    # The whole reason record_run is not instrumented wholesale: five runs
+    # every tick would push the toggle you are looking for off a block that
+    # holds eight lines.
+    check("five runs produced exactly ONE event — bookkeeping is not a change",
+          len(after) == before + 1, f"{before} -> {len(after)}")
+    ev = after[0]
+    check("the disable is recorded", ev["action"] == "disabled", str(ev))
+    check("...attributed to nobody human", ev["actor"] == "the scheduler", ev["actor"])
+    check("...carrying WHY, which is the whole answer",
+          ev["detail"].get("reason") == "5 consecutive failures", str(ev["detail"]))
+
+    print("10. a detail key the renderer has never seen still reaches her")
+    block = await ce.prompt_block()
+    check("the reason survives into the prompt block",
+          "5 consecutive failures" in block, block[:200])
+    ce.record(ce.AUTOMATION, "probe-auto", "updated", detail={"invented": "kept"})
+    await _settle()
+    check("...and so does a key nobody added to the renderer",
+          "invented kept" in await ce.prompt_block(), (await ce.prompt_block())[:200])
+
     await db.close_pool()
 
 
