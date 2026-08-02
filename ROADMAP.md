@@ -1615,6 +1615,73 @@ See README for what works. This file is the ordered backlog.
     drill. **Wave 1 — start immediately**, parallel with #32 / the #20
     spike / #34's ideator half.
 
+    **PHASE 1 BUILT AND SHIPPED 2026-08-02** (b94f2b1..ced70b8 on main, plus
+    branch `feat/data-backups`). Working modules, endpoints, Settings →
+    Backups, and a scheduled snapshot. Live-verified: a 167 MB bundle over
+    ten tiers, restored into a throwaway database (34 tables, 15,704 rows, no
+    tables missing vs live) and dropped. 45/45 suites.
+    **The spec's state inventory was wrong in SIX ways** and that finding is
+    the shape of the whole lane: it predates `data/attachments`,
+    `data/workspace`, `data/runtime`, `/state/instance_id` and `.env`, and it
+    names `./data/secret.key` — a path that does not exist and never will
+    (`/app/data` is the container's overlay; `secret_store.py` documents the
+    correction). Three places in the repo carried a hand-maintained list of
+    Nova's state and all three were stale, differently. So coverage is
+    **DERIVED**: the compose file is READ (the backend has no docker CLI and
+    must not have the socket), binds are classified by git tracked-vs-ignored,
+    and named volumes are the one maintained table where an unknown entry
+    REFUSES rather than defaulting to skip. Proven in flight — the parallel
+    session added `data/workspace` mid-build and it landed in the backup set
+    with no code change.
+    Modules: `backup_coverage` (decision table, no I/O), `backup_inventory`
+    (adapters), `backup_snapshot` (bundle + self-verify), `backup_restore`
+    (list + verify-restore into `nova_verify_<8hex>`), `backup_apply`
+    (destructive restore behind four gates), `backup_service` (app wiring).
+    Guards worth not regressing: the scratch DB name is asserted before
+    CREATE, RESTORE and DROP separately; `pg_restore --exit-on-error` because
+    its default is to CONTINUE past errors; the DB swap is a RENAME so a
+    failure cannot half-replace live; files replace directory CONTENTS
+    because bind mounts cannot be renamed (EBUSY).
+    Bugs found by running it, all fixed and pinned: a truncated bundle raised
+    `EOFError` instead of reporting corruption; a failed verify left the
+    `.part` behind; `tarfile.extractfile` RAISES for a missing member;
+    splitting a compose volume on `:` before expanding mangled
+    `${NOVA_MEMORY_DIR:-...}` and dropped the MEMORY TREE from every bundle;
+    the output dir backed itself up; `/var/run/docker.sock` resolves to
+    `/run/docker.sock`; the manifest sorted after 167 MB so merely LISTING a
+    bundle decompressed it; and **the pre-restore safety snapshot overwrote
+    the bundle it was protecting** (same second, same directory) so the
+    restore "succeeded" and rolled nothing back.
+
+    **NEXT — and the goal was restated by Jeremy 2026-08-02, which reverses a
+    default:** he wants "a 100% backup and restore process ... if a computer
+    crashes, spin Nova up on a different machine and keep configurations,
+    secrets, conversation and memories, so it's like we only lost what
+    happened since the last backup." That is DISASTER RECOVERY. A bundle that
+    cannot bring up a working system does not satisfy it, so the
+    credential-exclusion default in `ced70b8` must FLIP BACK to complete —
+    with encryption as the thing that makes a complete bundle safe to copy.
+    Three decisions, asked and answered:
+    (a) **complete bundle, encrypted** — AES-GCM + scrypt; `cryptography` 50
+    is already in the backend image, no new dependency;
+    (b) **Nova stores the passphrase for now, behind a RESOLVER SEAM** —
+    his words: "eventually it'll get it from a secrets manager ... the one
+    that is shipped, an mcp server, 1password, or aws secrets manager", so
+    `passphrase_source` is an interface from day one, not a settings read
+    with providers bolted on later — plus a standing nag until he confirms he
+    has recorded it off-machine, because if this machine dies Nova's copy
+    dies with it;
+    (c) **a weekly restore drill** — restore the newest bundle into a scratch
+    database, check, drop, notify on failure.
+    **The bootstrap trap that shapes the restore tooling:** `.env` lives
+    INSIDE the bundle and the stack cannot start without it, so restore on a
+    fresh machine cannot go through Nova. It needs a standalone script
+    runnable with nothing but python3, the bundle and the passphrase —
+    committed, and copied INSIDE every bundle so it travels with what it
+    restores.
+    Build order: encryption format + passphrase resolver → standalone restore
+    script → the drill.
+
 32. **Secrets management (promoted from the discussion backlog 2026-07-24;
     spec → `docs/plans/secrets-management.md`; architecture LOCKED: built-in
     encrypted store first)** — encrypted `secrets` table (AES-GCM,
