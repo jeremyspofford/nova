@@ -1,0 +1,271 @@
+"""Producing a bundle, and proving it is one (roadmap #31, phase 1, inc. 2).
+
+`backup_coverage` decides WHAT goes in. This puts it in a file, and then
+reads that file back to check it is really there.
+
+Three properties, each a reaction to how backup systems fail rather than to
+how they work:
+
+1. **A refused coverage report produces NO bundle.** Not a partial one, not
+   one with a warning attached. The refusals exist because something on this
+   stack is unaccounted for, and a bundle written anyway is a bundle that
+   will be trusted.
+
+2. **Nothing is visible until it is complete.** The bundle is built under a
+   `.part` name and renamed only after it verifies. A half-written archive
+   that appears in a listing is worse than a missing one — it is the thing
+   the operator reaches for after a disk dies.
+
+3. **Verification reads the artifact, not the intention.** Checksums
+   computed while writing prove nothing about the file on disk; they prove
+   the bytes we thought we wrote. So `verify()` opens the finished archive,
+   walks its members, and re-hashes them. A backup that has never been read
+   back is a hope.
+
+The database is dumped with `pg_dump -Fc` and never copied as files: PGDATA
+under a running server is torn, and a torn PGDATA restores as a corrupt
+cluster rather than as an error.
+"""
+
+import hashlib
+import json
+import logging
+import os
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+log = logging.getLogger(__name__)
+
+MANIFEST = "manifest.json"
+DB_MEMBER = "db.sql"
+
+# Bundle format. Bumped when the LAYOUT changes in a way a reader must know
+# about; restore refuses a bundle whose version it does not understand,
+# rather than half-reading it.
+BUNDLE_VERSION = 1
+
+
+class SnapshotRefused(Exception):
+    """Coverage is incomplete, or a source could not be read. No bundle."""
+
+
+@dataclass
+class Member:
+    """One archived thing, and the hash of what actually went in."""
+    path: str          # path INSIDE the bundle
+    origin: str        # where it came from on this machine
+    kind: str          # "tree" | "file" | "db"
+    bytes: int
+    sha256: str
+
+    def as_dict(self) -> dict:
+        return {"path": self.path, "origin": self.origin, "kind": self.kind,
+                "bytes": self.bytes, "sha256": self.sha256}
+
+
+def _sha256_file(path: Path, chunk: int = 1 << 20) -> tuple[str, int]:
+    h, n = hashlib.sha256(), 0
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk)
+            if not b:
+                break
+            h.update(b)
+            n += len(b)
+    return h.hexdigest(), n
+
+
+def _sha256_tree(root: Path) -> tuple[str, int]:
+    """A stable hash of a directory: every file's relative path and content,
+    in sorted order. Sorted because filesystem order is not stable across
+    machines, and an unstable hash makes verification meaningless."""
+    h, total = hashlib.sha256(), 0
+    for p in sorted(root.rglob("*")):
+        if not p.is_file() or p.is_symlink():
+            continue
+        rel = str(p.relative_to(root))
+        h.update(rel.encode())
+        digest, n = _sha256_file(p)
+        h.update(digest.encode())
+        total += n
+    return h.hexdigest(), total
+
+
+def dump_database(dsn: str, out: Path, pg_dump: str = "pg_dump") -> None:
+    """`pg_dump -Fc`. Custom format, because it restores selectively and
+    compresses; plain SQL would restore all-or-nothing through psql."""
+    proc = subprocess.run([pg_dump, "-Fc", "--no-owner", "--no-acl",
+                           "-f", str(out), dsn],
+                          capture_output=True, text=True, timeout=1800)
+    if proc.returncode != 0:
+        raise SnapshotRefused(
+            f"pg_dump failed, so there is no database in this bundle and it "
+            f"must not be written: {proc.stderr.strip()[:400]}")
+    if not out.exists() or out.stat().st_size == 0:
+        raise SnapshotRefused("pg_dump reported success and produced no file")
+
+
+def create(coverage: dict, *, out_dir: Path, dsn: str,
+           volume_paths: Optional[dict[str, str]] = None,
+           now: Optional[Callable[[], float]] = None,
+           pg_dump: str = "pg_dump") -> dict:
+    """Build one bundle. Returns the manifest.
+
+    `volume_paths` maps a named volume to a path where the runner can read
+    its contents. A volume classified for inclusion with no path here is a
+    REFUSAL, not a silent omission — that is the whole reason the mapping is
+    passed in rather than guessed.
+    """
+    if not coverage.get("may_snapshot"):
+        raise SnapshotRefused(
+            "coverage is incomplete, so no bundle is produced: "
+            + "; ".join(f"[{r['code']}] {r['subject']}"
+                        for r in coverage.get("refusals", [])))
+
+    volume_paths = volume_paths or {}
+    stamp = time.strftime("%Y%m%dT%H%M%SZ",
+                          time.gmtime((now or time.time)()))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final = out_dir / f"nova-backup-{stamp}.tar.gz"
+    partial = out_dir / f"nova-backup-{stamp}.tar.gz.part"
+
+    members: list[Member] = []
+    with tempfile.TemporaryDirectory(prefix="nova-snapshot-") as tmp:
+        staging = Path(tmp)
+
+        # 1. the database FIRST. pg_dump is a consistent snapshot, and doing
+        #    it first means the files copied after are never older than it —
+        #    an attachment blob written between the two shows up as a file
+        #    with no row, which is recoverable. The reverse (a row with no
+        #    blob) is not.
+        db_path = staging / DB_MEMBER
+        dump_database(dsn, db_path, pg_dump=pg_dump)
+        digest, size = _sha256_file(db_path)
+        members.append(Member(DB_MEMBER, dsn.split("@")[-1], "db", size, digest))
+
+        # 2. everything coverage says to include
+        for entry in coverage["entries"]:
+            if not entry["included"] or entry["disposition"] == "include_via_pg_dump":
+                continue
+            name, kind = entry["name"], entry["kind"]
+            if kind == "volume":
+                src = volume_paths.get(name)
+                if not src:
+                    raise SnapshotRefused(
+                        f"volume '{name}' is classified for inclusion but the "
+                        f"runner was given no path to read it from. Mount it "
+                        f"read-only and pass it in volume_paths — a bundle "
+                        f"that quietly skips it is the failure this whole "
+                        f"lane exists to prevent.")
+                origin, member_dir = src, f"volumes/{name}"
+            else:
+                origin, member_dir = name, "files/" + name.lstrip("/")
+
+            srcp = Path(origin)
+            if not srcp.exists():
+                raise SnapshotRefused(
+                    f"'{origin}' is classified for inclusion and does not "
+                    f"exist or is not readable from here")
+            dest = staging / member_dir
+            if srcp.is_dir():
+                shutil.copytree(srcp, dest, symlinks=True,
+                                ignore_dangling_symlinks=True)
+                digest, size = _sha256_tree(dest)
+                members.append(Member(member_dir, origin, "tree", size, digest))
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(srcp, dest)
+                digest, size = _sha256_file(dest)
+                members.append(Member(member_dir, origin, "file", size, digest))
+
+        manifest = {
+            "bundle_version": BUNDLE_VERSION,
+            "created_at": stamp,
+            "members": [m.as_dict() for m in members],
+            # What the bundle DOES NOT hold, carried in the bundle itself.
+            # A restore that cannot say what it is missing invites the
+            # operator to assume it is missing nothing.
+            "excluded": [{"name": e["name"], "disposition": e["disposition"],
+                          "reason": e["reason"]}
+                         for e in coverage["entries"] if not e["included"]],
+        }
+        (staging / MANIFEST).write_text(json.dumps(manifest, indent=2))
+
+        # 3. archive under .part, so nothing incomplete is ever listable
+        with tarfile.open(partial, "w:gz") as tar:
+            for item in sorted(staging.iterdir()):
+                tar.add(item, arcname=item.name)
+
+    # 4. verify the ARTIFACT before it gets its real name
+    try:
+        problems = verify(partial)
+    except Exception as e:  # noqa: BLE001 — see verify(); belt and braces
+        problems = [f"verification itself failed: {type(e).__name__}: {e}"]
+    if problems:
+        # the .part goes FIRST. If verification failed, this file is the
+        # thing we must not leave lying around — an unverified archive with
+        # a plausible name is what someone reaches for after a disk dies.
+        partial.unlink(missing_ok=True)
+        raise SnapshotRefused(
+            "the bundle failed its own verification and was discarded: "
+            + "; ".join(problems))
+    os.replace(partial, final)      # atomic: it appears complete or not at all
+    manifest["path"] = str(final)
+    manifest["bytes"] = final.stat().st_size
+    log.info("backup written: %s (%.1f MB, %d members)",
+             final, manifest["bytes"] / 1e6, len(members))
+    return manifest
+
+
+def verify(bundle: Path) -> list[str]:
+    """Read the finished archive back and re-hash every member.
+
+    Returns the problems found, empty if sound. Deliberately re-derives the
+    hashes from the extracted bytes rather than trusting the manifest's own
+    numbers: the manifest records what the writer believed, and the question
+    here is what the file actually contains.
+    """
+    problems: list[str] = []
+    try:
+        with tarfile.open(bundle, "r:*") as tar:
+            names = tar.getnames()
+            if MANIFEST not in names:
+                return [f"no {MANIFEST} in the bundle — it cannot be read"]
+            fh = tar.extractfile(MANIFEST)
+            manifest = json.loads(fh.read().decode())
+            if manifest.get("bundle_version") != BUNDLE_VERSION:
+                problems.append(
+                    f"bundle_version {manifest.get('bundle_version')} is not "
+                    f"{BUNDLE_VERSION}; this reader would misread it")
+            with tempfile.TemporaryDirectory(prefix="nova-verify-") as tmp:
+                root = Path(tmp)
+                tar.extractall(root, filter="data")
+                for m in manifest.get("members", []):
+                    p = root / m["path"]
+                    if not p.exists():
+                        problems.append(f"{m['path']}: named in the manifest "
+                                        f"and absent from the archive")
+                        continue
+                    if m["kind"] == "tree":
+                        digest, size = _sha256_tree(p)
+                    else:
+                        digest, size = _sha256_file(p)
+                    if digest != m["sha256"]:
+                        problems.append(
+                            f"{m['path']}: content does not match its "
+                            f"recorded hash ({size} bytes vs {m['bytes']})")
+    except Exception as e:  # noqa: BLE001
+        # DELIBERATELY broad. This reads an artifact that may be truncated,
+        # bit-rotted or half-uploaded, and every one of those is a REASON TO
+        # REJECT rather than an exception to propagate. Found by testing: a
+        # bundle truncated mid-stream raises EOFError from gzip, which is
+        # neither TarError nor OSError, so a narrower catch turned "this
+        # backup is corrupt" into a crash — and a crash is not a verdict.
+        problems.append(f"the bundle could not be read: {type(e).__name__}: {e}")
+    return problems
