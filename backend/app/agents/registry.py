@@ -16,10 +16,22 @@ from app import db
 log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "name", "description", "system_prompt", "model", "allowed_tools",
-           "routing_keywords", "enabled", "is_system", "created_at", "thinking")
+           "routing_keywords", "enabled", "is_system", "created_at", "thinking",
+           "fallback_model")
 
 _UPDATABLE = {"name", "description", "system_prompt", "model",
-              "allowed_tools", "routing_keywords", "enabled", "thinking"}
+              "allowed_tools", "routing_keywords", "enabled", "thinking",
+              "fallback_model"}
+
+# Fields NO model may set, on ANY agent — not just system ones.
+#
+# _SYSTEM_PROTECTED below is about which agents a tool call may rewrite;
+# this is about which FIELDS, and it holds even for an agent the model
+# legitimately created. A model that picks its own standby can route itself
+# onto one with no tool support and then answer confidently having called
+# nothing — the failure capability_claims.py exists to catch, arranged by
+# the model rather than by an outage. The standby is the operator's choice.
+_OPERATOR_ONLY = {"fallback_model"}
 
 # What a system agent IS and what it CAN DO. Changing any of these on main,
 # guardian or a manager rewrites the security model itself, so the tool layer
@@ -104,6 +116,14 @@ async def update_agent(agent_id: str, *, operator: bool = False,
     the authenticated HTTP route. Everything else — every tool call, every
     dispatch — is a model and gets the _SYSTEM_PROTECTED guard."""
     updates = {k: v for k, v in updates.items() if k in _UPDATABLE}
+    if not operator:
+        # dropped silently on purpose: the tool layer's contract is "update
+        # what you may", and refusing the whole call would let a model learn
+        # the field exists by probing for the error.
+        for field in _OPERATOR_ONLY & set(updates):
+            log.warning("refusing to set %s from a non-operator caller (%s)",
+                        field, actor or "an agent")
+            updates.pop(field)
     if not updates:
         return False
     if not operator:

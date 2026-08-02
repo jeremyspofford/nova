@@ -115,6 +115,35 @@ SETTING_DEFS: list[dict] = [
      "default": "qwen2.5:3b", "section": "Inference",
      "label": "Local fallback model",
      "description": "Ollama model used when no OpenRouter key is configured."},
+    # ── attachments: how a document with no text layer gets read (#22) ──
+    #
+    # Two mechanisms, deliberately separate settings, because they differ in
+    # the one way the operator cares about: OCR runs on this machine and a
+    # cloud vision model does not. Bundling them behind one "read my
+    # documents" toggle would make consenting to the local one consent to
+    # shipping a photographed payslip to a third party.
+    {"key": "attachments.ocr_enabled", "type": "boolean", "default": True,
+     "section": "Attachments", "label": "Read scans and photos with OCR",
+     "description": ("When an attached PDF has no text layer — a scan — read "
+                     "it with tesseract instead of refusing. Runs entirely on "
+                     "this machine; nothing is sent anywhere. Costs a few "
+                     "seconds of CPU per page.")},
+    {"key": "attachments.vision_model", "type": "model",
+     "model_scope": "any", "allow_empty": True, "default": "",
+     "section": "Attachments", "label": "Vision model for images",
+     "description": ("Model used to read a photographed document when OCR "
+                     "cannot. Local (ollama) or cloud — your choice. Empty "
+                     "means images are described by whatever model answers "
+                     "the turn, and refused if it cannot see. A cloud model "
+                     "here also needs the setting below.")},
+    {"key": "attachments.allow_cloud_vision", "type": "boolean", "default": False,
+     "section": "Attachments", "label": "Allow cloud vision models",
+     "description": ("Off by default, and the backend REFUSES rather than "
+                     "warns: a photographed letter or payslip is the most "
+                     "sensitive thing you will ever attach, and sending it to "
+                     "a third-party provider should be a decision you made, "
+                     "not a default you inherited. Turn this on to use a "
+                     "cloud vision model.")},
     {"key": "inference.keep_chat_model_warm", "type": "boolean", "default": False,
      "section": "Models", "label": "Keep chat model loaded",
      "description": ("Pin main's local model in Ollama memory so chat answers "

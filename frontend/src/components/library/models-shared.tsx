@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  AgentInfo, ModelBudget, ModelRecommendation, ProbeResult, RecommendationsResponse, getAgents, getModelBudget, getRecommendations, patchAgent, patchSettings, testModel, StackMode,
+  AgentInfo, ModelBudget, ModelRecommendation, ProbeResult, RecommendationsResponse, RoleFitness, getAgents, getModelBudget, getModelFitness, getRecommendations, patchAgent, patchSettings, testModel, StackMode,
 } from '../../api';
 import { agentDisplayName } from '../../names';
 import { fmtTime } from '../../time';
@@ -141,6 +141,7 @@ export function DetectSuggest() {
   const [probes, setProbes] = useState<Record<string, ProbeResult | 'running'>>({});
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<StackMode>('hybrid');
+  const [roleFitness, setRoleFitness] = useState<RoleFitness[]>([]);
 
   async function detect(m: StackMode = mode) {
     setRunning(true);
@@ -151,6 +152,11 @@ export function DetectSuggest() {
       setRecs(r);
       setAgents(a);
     } catch (e) { setStatus(String(e)); }
+    // separate from the block above on purpose: fitness is advisory, and
+    // losing it must never cost the operator the recommendations themselves
+    try {
+      setRoleFitness((await getModelFitness()).roles ?? []);
+    } catch { setRoleFitness([]); }
     setRunning(false);
   }
 
@@ -320,11 +326,26 @@ export function DetectSuggest() {
               </div>
               <div className="mt-1 text-xs font-mono text-stone-400 truncate">
                 {r.current_model}
+                {r.current_inherited && (
+                  <span className="text-stone-600"> (inherited)</span>
+                )}
                 {r.status === 'switch' && r.suggested_model && (
                   <> <span className="text-stone-600">→</span> <span className="text-teal-300">{r.suggested_model}</span></>
                 )}
               </div>
               <div className="mt-0.5 text-xs text-stone-500">{r.reason}</div>
+              {/* The role advisories the backend has always computed and
+                  nobody rendered. Matched on the settings KEY the row
+                  writes, not on its display label. */}
+              {roleFitness
+                .filter(f => r.setting && f.setting === r.setting)
+                .flatMap(f => f.findings)
+                .map((f, i) => (
+                  <div key={`${f.check}-${i}`}
+                    className="mt-1 text-[11px] text-amber-400/90">
+                    {f.detail}
+                  </div>
+                ))}
               {r.alternates.length > 0 && (
                 <div className="mt-0.5 text-[11px] text-stone-600">
                   alternates: {r.alternates.map(a => `${a.model} (${a.note})`).join(' · ')}

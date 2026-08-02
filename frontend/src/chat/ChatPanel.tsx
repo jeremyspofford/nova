@@ -19,6 +19,7 @@ import {
   patchAgent,
   runCommand,
   streamChat,
+  uploadAttachment,
 } from '../api';
 import { Markdown } from '../components/Markdown';
 import { TurnInspector } from './TurnInspector';
@@ -35,7 +36,7 @@ import { groupModels } from '../models';
 
 /** An attachment as the message list shows it — preview only exists for
  *  images picked this session (history rows come back name-only). */
-interface UiAttachment { kind: 'image' | 'text'; name: string; mime: string; preview?: string }
+interface UiAttachment { kind: 'image' | 'text' | 'doc'; name: string; mime: string; preview?: string }
 /** A picked-but-not-yet-sent attachment; data = base64 (image) or file text. */
 interface PendingAttachment extends UiAttachment { data: string }
 
@@ -100,6 +101,27 @@ async function downscaleImage(f: File): Promise<{ data: string; mime: string; pr
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Formats the browser cannot read but the server can (roadmap #22a).
+ *  Checked on the extension as well as the mime: a .docx dragged from some
+ *  file managers arrives with an empty type. */
+function isDocument(f: File): boolean {
+  const n = f.name.toLowerCase();
+  return f.type === 'application/pdf' || n.endsWith('.pdf') ||
+    n.endsWith('.docx') ||
+    f.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+}
+
+/** Raw bytes as base64, chunked — String.fromCharCode(...bytes) on a 10 MB
+ *  file blows the argument limit and throws where a size error is expected. */
+async function toBase64(f: File): Promise<string> {
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
 }
 
 // presence bridge for the mic: the orb (canvas + voice overlay) draws
@@ -453,20 +475,48 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const [voiceOpen, setVoiceOpen] = useState(false);
   const voiceOpenRef = useRef(false);
 
+  /** Keep the ORIGINAL, before the turn runs and independently of whether it
+   *  succeeds. This is the whole point of roadmap #22b: a letter photographed
+   *  on a phone exists in exactly one place, the composer's File object dies
+   *  with the send, and until now a refused turn destroyed it. Note it is `f`
+   *  that goes up, never the downscaled copy the model sees — a 1568px JPEG
+   *  is fine for a vision model and useless as an archive of a document.
+   *
+   *  Failure here is reported and never blocks: not keeping a copy is worse
+   *  than the status quo only if it also stops the answer. */
+  async function captureOriginal(f: File) {
+    try {
+      await uploadAttachment(f);
+    } catch (err) {
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `${f.name} was sent to Nova, but keeping a copy failed: ${errText(err)}. `
+               + `It will not be in Library → Documents.` }]);
+    }
+  }
+
   async function addFiles(list: FileList | File[] | null) {
     if (!list) return;
     for (const f of Array.from(list)) {
+      void captureOriginal(f);
       try {
         if (f.type.startsWith('image/')) {
           const { data, mime, preview } = await downscaleImage(f);
           setPending(p => [...p, { kind: 'image', name: f.name || 'photo.jpg', mime, data, preview }]);
+        } else if (isDocument(f)) {
+          // PDFs and .docx go up as raw bytes and are extracted server-side.
+          // The browser cannot read either format, so this branch used to
+          // fall through to f.text() and be refused for the replacement
+          // characters it produced — a PDF simply could not be attached.
+          if (f.size > 10 * 1024 * 1024) throw new Error('too large (10 MB limit for documents)');
+          const b64 = await toBase64(f);
+          setPending(p => [...p, { kind: 'doc', name: f.name, mime: f.type, data: b64 }]);
         } else if (f.size <= 512 * 1024) {
           const body = await f.text();
           // real binaries decode to replacement chars — refuse them honestly
           if (/�/.test(body.slice(0, 2000))) throw new Error('not a text file');
           setPending(p => [...p, { kind: 'text', name: f.name, mime: f.type || 'text/plain', data: body }]);
         } else {
-          throw new Error('too large (512 KB limit for files)');
+          throw new Error('too large (512 KB limit for text files)');
         }
       } catch (err) {
         setItems(prev => [...prev, { id: uid(), kind: 'error',
@@ -1632,7 +1682,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       // an intentional interject cancels the fetch — keep the partial reply,
       // no error card (the interjected message is already queued to send next)
       if (!ac.signal.aborted) {
-        setItems(prev => [...prev, { id: uid(), kind: 'error', content: String(err) }]);
+        setItems(prev => [...prev, { id: uid(), kind: 'error', content: errText(err) }]);
+        // Hand the attachments BACK. They were cleared optimistically when
+        // the turn started, and for a phone photo that is the only copy in
+        // existence — the file picker's File object is long gone, so a
+        // refused turn used to destroy the document outright and leave the
+        // operator a status code. Text is restored the same way, and only
+        // when the composer is still empty, so a follow-up already typed
+        // during the turn is never overwritten.
+        if (atts.length) setPending(prev => (prev.length ? prev : atts));
+        setInput(prev => (prev ? prev : message));
       }
     } finally {
       if (abortRef.current === ac) abortRef.current = null;

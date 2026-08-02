@@ -12,8 +12,14 @@ class ChatAttachment(BaseModel):
     kind "text": data is the file's decoded text — inlined into the message
     for this turn only; what's persisted is a "[Attached file: name]" marker,
     so the full text doesn't resurface in later turns' replayed history.
+    kind "doc": data is base64 of the RAW file (PDF, .docx). The server
+    extracts the text (`doc_extract`) and then treats it exactly like
+    "text". Extraction is server-side because the browser cannot read these
+    formats — the composer used to call File.text() on them and refuse the
+    replacement characters that came back, which meant a PDF could not be
+    attached at all (roadmap #22a).
     """
-    kind: Literal["image", "text"]
+    kind: Literal["image", "text", "doc"]
     name: str
     mime: str = ""
     data: str

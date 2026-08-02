@@ -267,7 +267,12 @@ async def check_roles() -> list[dict]:
                           f"installed, and {consequence}. Larger options: "
                           + ", ".join(f"{m['model']} ({m['parameter_size']})"
                                       for m in bigger)
-                          + f". Clearing {key} would {blank_means}."})
+                          # `blank_means` is a verb phrase in the third
+                          # person ("inherits …") because the unset branch
+                          # above reads "unset — inherits …"; "would
+                          # inherits" was ungrammatical on the one screen
+                          # this advisory finally reaches
+                          + f". Clearing {key} {blank_means} instead."})
         out.append({"setting": key, "role": label, "model": model,
                     "findings": findings})
     return out

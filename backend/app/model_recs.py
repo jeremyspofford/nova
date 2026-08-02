@@ -339,13 +339,31 @@ async def recommendations(mode: str = "hybrid") -> dict:
         })
 
     # the compaction model is a setting, not an agent — surface it the same way
-    compaction_current = settings_store.get("compaction.model") or "(main agent's model)"
+    #
+    # An UNSET setting means "whatever answered the turn", which is the main
+    # agent's model (compaction.py) — so resolve it to that id. This used to
+    # carry the display string "(main agent's model)", which was then compared
+    # against a model id: never equal, so status was pinned to "switch"
+    # forever and the no-churn tie rule in _pick_for could never fire. The
+    # card nagged in one direction and could not say "keep" even immediately
+    # after the operator applied it, which reads as a frozen recommendation.
+    from app.agents.runner import MAIN_AGENT
+    comp_setting = str(settings_store.get("compaction.model") or "")
+    main_model = next((a["model"] for a in agents
+                       if a["name"] == MAIN_AGENT), "")
+    compaction_current = comp_setting or effective_model(main_model)
     comp_cands = per_profile["compaction"]
-    if comp_cands:
+    if comp_cands and compaction_current:
         pick = _pick_for(compaction_current, comp_cands)
         out.append({
             "agent": "compaction (setting)", "is_system": True,
+            # the settings key this row writes, so a client can line the row
+            # up with the fitness advisory for the SAME key instead of
+            # matching on a display label
+            "setting": "compaction.model",
             "profile": "compaction", "current_model": compaction_current,
+            # so the UI can say the model is inherited rather than chosen
+            "current_inherited": not comp_setting,
             "current_valid": None,
             "status": "keep" if pick["model"] == compaction_current else "switch",
             "suggested_model": pick["model"],

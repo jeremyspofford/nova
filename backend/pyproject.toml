@@ -15,8 +15,28 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "python-multipart>=0.0.6",
-    "mcp>=1.0.0",
+    # UPPER BOUND ADDED 2026-08-01, and it is load-bearing. This read
+    # `mcp>=1.0.0`, so the first image rebuild after mcp 2.0.0 shipped
+    # pulled a MAJOR bump and broke the MCP client on import:
+    # `streamablehttp_client` is `streamable_http_client` in 2.x, and the
+    # rename is the small half — 2.x also drops the `headers` and `timeout`
+    # arguments in favour of an injected httpx client, which is where this
+    # code puts its auth and its bounds. Nothing in the repo changed; a
+    # rebuild did. Porting to 2.x is real work on a security-sensitive
+    # client and belongs in its own change.
+    "mcp>=1.0.0,<2",
     "pywebpush>=2.0.0",
+    # attachment text extraction (roadmap #22a). Both are pure python and
+    # small — deliberately NOT the media service, whose isolation exists for
+    # heavy binaries and outbound network, neither of which applies to
+    # parsing bytes the operator already handed us.
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
+    # the OCR half (roadmap #22): pytesseract shells out to the tesseract
+    # binary installed in the Dockerfile, Pillow opens what the operator
+    # photographed. Both are local — nothing here leaves the machine.
+    "pytesseract>=0.3.10",
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]

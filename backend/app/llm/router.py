@@ -28,7 +28,20 @@ def effective_model(model: str) -> str:
         return model
     if not providers.is_configured(slug):
         from app import settings_store
-        fallback = f"ollama:{settings_store.get('inference.local_fallback_model')}"
+        name = str(settings_store.get("inference.local_fallback_model") or "").strip()
+        if not name:
+            # Interpolating an empty setting produced the model id "ollama:",
+            # which no provider can serve — the call then failed on a name the
+            # operator never chose and cannot find in any binding. Returning
+            # the model UNCHANGED makes the failure name their real setting.
+            log.warning("provider %r is not configured and no local fallback "
+                        "is set; leaving %s unchanged", slug, model)
+            return model
+        # A local name carries its own colon ("qwen3:8b" — a TAG separator,
+        # not a provider prefix), so the prefix is added by name, never by
+        # testing for ":". The setting is ollama-scoped by definition; a value
+        # that already carries the prefix is used as-is rather than doubled.
+        fallback = name if name.startswith("ollama:") else f"ollama:{name}"
         log.info("provider '%s' not configured; %s -> %s", slug, model, fallback)
         return fallback
     return model

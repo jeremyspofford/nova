@@ -29,6 +29,26 @@ async function apiFetch(input: string, init: RequestInit = {}): Promise<Response
   return r;
 }
 
+/** FastAPI's `detail` off a failed response, or null if there isn't one.
+ *
+ *  Never throws and never rejects: this runs on the error path, and an
+ *  error handler that fails replaces a useful message with a confusing one.
+ *  A 413 from nginx is HTML, not JSON, so the parse failure is expected
+ *  rather than exceptional — that case gets its own sentence, because
+ *  "Unprocessable Entity" tells the operator nothing about a size limit. */
+async function errorDetail(r: Response): Promise<string | null> {
+  if (r.status === 413) {
+    return 'That file is too large for the server to accept (the limit is 32 MB per message).';
+  }
+  try {
+    const body = await r.json();
+    const d = body?.detail;
+    if (typeof d === 'string' && d.trim()) return d;
+    if (Array.isArray(d) && d.length) return d.map((e: { msg?: string }) => e.msg ?? String(e)).join('; ');
+  } catch { /* not JSON — fall through to the caller's status-line default */ }
+  return null;
+}
+
 /** Synthesize one sentence of speech; resolves to WAV bytes.
  *  `voice` overrides the saved setting (used to preview a candidate). */
 export async function synthesizeSpeech(text: string, voice?: string): Promise<ArrayBuffer> {
@@ -318,7 +338,13 @@ export async function* streamChat(message: string, conversationId?: string,
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
+    // The BODY is where the reason lives. This used to throw on the status
+    // line alone, so every carefully-worded server refusal — "the PDF has 3
+    // page(s) but no extractable text, it is most likely a scan" — reached
+    // the operator as "422 Unprocessable Entity" and they had no way to
+    // learn what to do differently.
+    throw new Error(await errorDetail(response) ??
+      `Chat request failed: ${response.status} ${response.statusText}`);
   }
 
   const reader = response.body.getReader();
@@ -391,10 +417,88 @@ export interface TraceSummary {
   dispatches: number;
 }
 
-/** An attachment on a chat turn. Outgoing: data = base64 (image) or the
- *  file's text. History rows carry only {kind, name, mime} — no binary. */
+// ── attachments: documents that outlive the turn (roadmap #22b) ──────────
+
+/** A document the operator handed over, kept. `display_name` is a LABEL —
+ *  nothing resolves by it, because two documents routinely share a name.
+ *  `text_source` says HOW the text was read and they are not equivalent:
+ *  'mechanical' is the document's own text layer, 'ocr' is tesseract on
+ *  pixels (wrong in specific ways), 'vision' is a model describing an image. */
+export interface StoredAttachment {
+  id: string;
+  sha256: string;
+  display_name: string;
+  mime: string;
+  bytes: number;
+  kind: 'doc' | 'image' | 'text';
+  text_source: 'mechanical' | 'ocr' | 'vision' | null;
+  text_error: string | null;
+  text_content?: string | null;
+  has_text?: boolean;
+  text_chars?: number | null;
+  present?: boolean;
+  message_id: string | null;
+  created_at: string | null;
+}
+
+export interface AttachmentUsage {
+  documents: number; bytes: number; missing: number;
+  /** bytes on disk no row points at — measured by walking the store, because
+   *  "no orphans" is only an invariant if something checks it */
+  orphans: number; orphan_bytes: number;
+  store_ok: boolean; store_error: string;
+}
+
+/** Keep the ORIGINAL bytes. Raw multipart, not base64 in the chat body:
+ *  base64 inflates by 4/3 against the body limit, and more importantly this
+ *  runs BEFORE the turn, so a turn that fails cannot destroy the only copy
+ *  of a photographed document. */
+export async function uploadAttachment(file: File, conversationId?: string):
+    Promise<StoredAttachment> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (conversationId) form.append('conversation_id', conversationId);
+  const r = await apiFetch(`${API_URL}/api/v1/attachments`, { method: 'POST', body: form });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? `Upload failed: ${r.status}`);
+  return r.json();
+}
+
+export async function listAttachments():
+    Promise<{ attachments: StoredAttachment[]; usage: AttachmentUsage }> {
+  const r = await apiFetch(`${API_URL}/api/v1/attachments`);
+  if (!r.ok) throw new Error('Failed to load documents');
+  return r.json();
+}
+
+export async function getAttachment(id: string): Promise<StoredAttachment> {
+  const r = await apiFetch(`${API_URL}/api/v1/attachments/${id}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load document');
+  return r.json();
+}
+
+export async function deleteAttachment(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/attachments/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Delete failed');
+}
+
+/** Downloading needs the auth header, so it cannot be a plain href — fetch
+ *  the bytes and hand the browser a blob URL. */
+export async function downloadAttachment(a: StoredAttachment): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/attachments/${a.id}/raw`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Download failed');
+  const url = URL.createObjectURL(await r.blob());
+  const el = document.createElement('a');
+  el.href = url; el.download = a.display_name;
+  el.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** An attachment on a chat turn. Outgoing: data = base64 for 'image' and
+ *  'doc' (a PDF/.docx the SERVER extracts — the browser can't read those),
+ *  or the file's text for 'text'. History rows carry only
+ *  {kind, name, mime} — no binary. */
 export interface ChatAttachment {
-  kind: 'image' | 'text';
+  kind: 'image' | 'text' | 'doc';
   name: string;
   mime: string;
   data?: string;
@@ -1143,6 +1247,10 @@ export interface AgentInfo {
   /** auto = whatever the model does on its own; on/off force it, and only
    *  apply to models the inference server reports as thinking-capable. */
   thinking?: 'auto' | 'on' | 'off';
+  /** Operator-chosen standby when this agent's own model fails before the
+   *  first byte. null = fall through to the install-wide local fallback,
+   *  then the main agent's model. Never settable from a chat turn. */
+  fallback_model?: string | null;
 }
 
 /** Capabilities the LOCAL inference server reports for a model, e.g.
@@ -1321,10 +1429,33 @@ export interface ModelRecommendation {
   current_valid: boolean | null;
   /** the model is inherited (compaction with no override), not chosen */
   current_inherited?: boolean;
+  /** present when this row writes a SETTINGS key rather than an agent row;
+   *  lines the row up with the fitness advisory for the same key */
+  setting?: string;
   status: 'keep' | 'switch' | 'no_fit';
   suggested_model: string | null;
   reason: string;
   alternates: { model: string; note: string }[];
+}
+
+/** A fact with a stated basis about a model bound to a ROLE (a settings key,
+ *  not an agent row) — never a score. `smallest_installed` is the one that
+ *  matters here: compaction seeds every later turn in a conversation, and
+ *  nothing on screen said it was running on the least capable model in the
+ *  house. The advisory existed on the backend with no consumer, so "apply
+ *  all" could quietly patch compaction.model onto the 3B. */
+export interface RoleFitness {
+  setting: string;
+  role: string;
+  model: string | null;
+  note?: string;
+  findings: { severity: string; check: string; detail: string }[];
+}
+
+export async function getModelFitness(): Promise<{ roles: RoleFitness[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/models/fitness`);
+  if (!r.ok) throw new Error('Failed to load model fitness');
+  return r.json();
 }
 
 export interface BudgetItem {

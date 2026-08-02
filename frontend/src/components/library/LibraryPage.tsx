@@ -6,13 +6,20 @@ import { RulesTab } from './RulesTab';
 import { ToolsTab } from './ToolsTab';
 import { SkillsTab } from './SkillsTab';
 import { CodingTab } from './CodingTab';
+import { DocumentsTab } from './DocumentsTab';
 import { OverlayScrim } from '../ui';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
- *  skills. Entity management pulled out of Settings so Settings can be
- *  settings. */
+ *  skills, documents. Entity management pulled out of Settings so Settings
+ *  can be settings.
+ *
+ *  `documents` is a TAB rather than a page because of the project rule that
+ *  a surface reachable only by typing a URL does not exist: the answer to
+ *  "what have I given her?" has to be one click from the things she is made
+ *  of. */
 
-const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills', 'coding'] as const;
+const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills',
+               'documents', 'coding'] as const;
 type Kind = typeof KINDS[number];
 
 export function LibraryPage({ onClose }: { onClose: () => void }) {
@@ -52,6 +59,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
             : active === 'automations' ? <AutomationsTab />
             : active === 'rules' ? <RulesTab />
             : active === 'tools' ? <ToolsTab />
+            : active === 'documents' ? <DocumentsTab />
             : active === 'coding' ? <CodingTab />
             : <SkillsTab />}
         </div>

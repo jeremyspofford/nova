@@ -81,6 +81,12 @@ services:
       # out; the index rescans on startup and reindexes on write.
       - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
       - ./data/wake-training:/app/data/wake-training
+      # documents the operator handed over (roadmap #22b). Its OWN mount, not
+      # a corner of the memory tree: that tree is relocatable to an Obsidian
+      # vault and is hand-editable markdown, and binaries do not belong in it.
+      # If this mount is missing the backend REFUSES uploads rather than
+      # writing the only copy of a photographed letter into a container layer.
+      - ./data/attachments:/app/data/attachments
       # the ServiceAccount credential for her runtime, written by
       # workloads/setup.sh. Read-only and gitignored: it is a bearer token
       # scoped to one namespace, and nothing in the backend should rewrite it.

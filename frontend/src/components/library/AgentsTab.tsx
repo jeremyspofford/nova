@@ -71,6 +71,17 @@ export function AgentsTab() {
     } catch (e) { setStatus(String(e)); }
   }
 
+  /** The standby. Choosing this agent's own model is the same as choosing
+   *  none — the backend blanks it — so the row reflects what was stored,
+   *  never what was clicked. */
+  async function setFallback(a: AgentInfo, fallback_model: string) {
+    try {
+      await patchAgent(a.id, { fallback_model });
+      const stored = fallback_model === a.model ? null : (fallback_model || null);
+      setAgents(prev => prev.map(x => x.id === a.id ? { ...x, fallback_model: stored } : x));
+    } catch (e) { setStatus(String(e)); }
+  }
+
   async function setAll() {
     if (!allModel) return;
     try {
@@ -275,6 +286,22 @@ export function AgentsTab() {
                       title="Inactive agents leave the dispatch index and can't run." />
                   )}
                 </div>
+              </div>
+              {/* The standby, on its own line: the header row is already
+                  four controls wide, and this one needs its inheritance
+                  explained rather than guessed at from a blank select. */}
+              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] uppercase tracking-wide text-stone-500"
+                  title="Used only when this agent's model fails before producing any output — a dead local server, an unpulled model, a cloud provider refusing. A model that can't do this agent's job (no tool support, too small a window) is refused rather than quietly used.">
+                  Standby
+                </span>
+                {modelSelect(a.fallback_model || '', v => setFallback(a, v),
+                  'inherit the install default…')}
+                {!a.fallback_model && (
+                  <span className="text-[11px] text-stone-500">
+                    inherited — Settings → Inference, then the main agent&apos;s model
+                  </span>
+                )}
               </div>
               {a.description && (
                 <div className="mt-1">

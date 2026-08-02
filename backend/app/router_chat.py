@@ -13,8 +13,8 @@ import logging
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
 from app import automations, bg, commands, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
 from app.agents import registry as agent_registry
@@ -73,6 +73,221 @@ async def run_command(name: str, body: dict | None = None):
     return await cmd.run((body or {}).get("arg", ""))
 
 
+# ── attachments: documents the operator handed over (roadmap #22b) ───────
+#
+# Uploaded on their own, BEFORE the turn, as raw multipart rather than
+# base64 inside the chat body. Two reasons, both measured: base64 inflates
+# by 4/3 against a body limit, and — the real one — a turn that fails must
+# not be able to destroy the document that prompted it. The composer used to
+# clear itself optimistically, so a refused turn ate a phone photograph that
+# existed nowhere else.
+
+
+@router.post("/api/v1/attachments")
+async def upload_attachment(file: UploadFile = File(...),
+                            conversation_id: str | None = Form(None)):
+    """Keep a document. Returns the row, including whatever text was read.
+
+    Extraction happens here rather than at turn time so the operator learns
+    NOW that their scan is unreadable, while the file is still in their hand
+    — not three messages later when the answer looks confidently wrong.
+    """
+    from app import attachments, doc_extract
+    ok, why = attachments.store_available()
+    if not ok:
+        raise HTTPException(status_code=503, detail=why)
+    data = await file.read()
+    name = file.filename or "attachment"
+    mime = file.content_type or ""
+    kind = "image" if mime.startswith("image/") else "doc"
+
+    # Text is best-effort and its ABSENCE is recorded with a reason. An
+    # unreadable document is still worth keeping — it is the only copy — so
+    # a failed read must never fail the upload.
+    text = source = err = None
+    try:
+        if kind == "image":
+            text, source = await doc_extract.extract_image(data, name)
+        else:
+            text, source = await doc_extract.extract_best(
+                data, name, mime,
+                allow_ocr=bool(settings_store.get("attachments.ocr_enabled")))
+    except (doc_extract.Unsupported, doc_extract.Unextractable) as e:
+        err = str(e)
+    except Exception as e:            # noqa: BLE001 — never lose the bytes
+        log.exception("extraction failed for %s", name)
+        err = f"extraction failed: {e}"
+
+    try:
+        row = await attachments.store(
+            data, name=name, mime=mime, kind=kind,
+            conversation_id=conversation_id,
+            text=text, text_source=source, text_error=err)
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    except attachments.StoreUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    row.pop("text_content", None)     # the list view never wants it inline
+    return row
+
+
+@router.get("/api/v1/attachments")
+async def list_attachments(limit: int = 200):
+    from app import attachments
+    return {"attachments": await attachments.listing(min(limit, 500)),
+            "usage": await attachments.usage()}
+
+
+@router.get("/api/v1/attachments/{attachment_id}")
+async def get_attachment(attachment_id: str):
+    from app import attachments
+    row = await attachments.get(attachment_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    return row
+
+
+@router.get("/api/v1/attachments/{attachment_id}/raw")
+async def get_attachment_raw(attachment_id: str):
+    """The original bytes, exactly as they arrived.
+
+    `attachment` rather than `inline`: this endpoint hands back
+    operator-supplied bytes, and rendering an arbitrary uploaded file inline
+    on the app's own origin is how a stored SVG or HTML becomes script in
+    Nova's context.
+    """
+    from app import attachments
+    got = await attachments.read_bytes(attachment_id)
+    if not got:
+        raise HTTPException(
+            status_code=404,
+            detail="attachment not found, or its bytes are missing from the store")
+    data, row = got
+    safe = row["display_name"].replace('"', "").replace("\n", " ")
+    return Response(
+        content=data,
+        media_type=row["mime"] or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe}"',
+                 "X-Content-Type-Options": "nosniff"})
+
+
+@router.delete("/api/v1/attachments/{attachment_id}")
+async def delete_attachment(attachment_id: str):
+    from app import attachments
+    if not await attachments.delete(attachment_id):
+        raise HTTPException(status_code=404, detail="attachment not found")
+    return {"deleted": True}
+
+
+async def _model_can_see(model: str) -> bool:
+    """Whether this model can accept an image, on POSITIVE evidence.
+
+    Deliberately not `model_fitness.assess(needs_vision=True)`: that blocks
+    only when capabilities are KNOWN and lack vision, so an uncatalogued
+    model sails through. That is right for an advisory and wrong here, where
+    failing open costs the whole turn — an image part to a text-only cloud
+    model returns `404 No endpoints found that support image input` and takes
+    the OCR text down with it. So this asks for `vision` to be PRESENT.
+    """
+    try:
+        from app import model_fitness
+        desc = await model_fitness.describe(effective_model(model))
+        return "vision" in ((desc or {}).get("capabilities") or [])
+    except Exception:
+        log.exception("vision capability probe failed for %s", model)
+        return False
+
+
+async def _image_text(a, model: str) -> tuple[str, str]:
+    """Whatever text an attached image yields, plus a note for the operator.
+
+    Two mechanisms, and the important part is what happens when BOTH fail.
+    Until now nothing checked whether the answering model could see: attach a
+    photo to a text-only local model and the pixels went out as an
+    `images` array to something that ignores them, and she answered anyway —
+    confidently, about a letter she never received. `model_fitness.assess`
+    has carried a `needs_vision` BLOCKING finding the whole time and it had
+    ZERO callers (`grep -rn "needs_vision="` → nothing). A control nobody
+    calls is not a control; this is the caller.
+
+    The refusal is stated IN THE TURN TEXT rather than only logged, for the
+    same reason truncation is: a model cannot flag a gap it was never shown,
+    and "I couldn't see it" has to reach the operator in the reply, not in
+    a container log they will never read.
+    """
+    import base64
+    from app import doc_extract, model_fitness
+
+    # 1. OCR, locally. Best case for a photographed document — it is the
+    #    document's own words rather than a model's description of them.
+    if settings_store.get("attachments.ocr_enabled"):
+        try:
+            raw = base64.b64decode(a.data, validate=True)
+            text, _src = await doc_extract.extract_image(raw, a.name)
+            return _attached_block(a.name, text, "ocr"), ""
+        except (doc_extract.Unsupported, doc_extract.Unextractable) as e:
+            # not fatal: a photo of a dog has no text and does not need any
+            log.info("no OCR text from %s: %s", a.name, e)
+        except Exception:
+            log.exception("OCR failed on %s", a.name)
+
+    # 2. A vision model, if the operator configured one. Local or cloud —
+    #    their choice — but a cloud one is REFUSED unless they turned cloud
+    #    vision on, because this is the path that can put a photograph of a
+    #    letter on someone else's server (vision._refuse_cloud).
+    from app import vision
+    if str(settings_store.get("attachments.vision_model") or "").strip():
+        try:
+            text = await vision.read_image(a.data, a.mime, name=a.name)
+            return _attached_block(a.name, text, "vision"), ""
+        except vision.VisionEmpty as e:
+            log.info("%s", e)
+        except vision.VisionUnavailable as e:
+            # the operator's own configuration is refusing — say which, in
+            # the reply, not only in a log they will never open
+            log.warning("vision unavailable for %s: %s", a.name, e)
+            return (f"\n\n--- attached image: {a.name} ---\n"
+                    f"[YOU DID NOT RECEIVE THIS IMAGE and no text was read "
+                    f"from it: {e}. Do not describe or interpret it. Say you "
+                    f"could not see it and state that reason.]"), str(e)
+        except Exception:
+            log.exception("vision read failed for %s", a.name)
+
+    # 3. Otherwise the answering model has to look. Ask whether it CAN.
+    if not await _model_can_see(model):
+        vision_model = str(settings_store.get("attachments.vision_model") or "").strip()
+        hint = (f"Set a vision model in Settings → Attachments"
+                if not vision_model else
+                f"'{vision_model}' is configured but is not answering this turn")
+        note = (f"{a.name} was NOT read: {model} cannot see images. {hint}.")
+        log.warning("image attachment unread: %s", note)
+        # stated to the model, so it cannot answer from the filename alone
+        return (f"\n\n--- attached image: {a.name} ---\n"
+                f"[YOU DID NOT RECEIVE THIS IMAGE. The model running this "
+                f"turn ({model}) has no vision capability, and OCR found no "
+                f"text in it. Do not describe or interpret it. Say that you "
+                f"could not see it.]"), note
+    return "", ""
+
+
+def _attached_block(name: str, text: str, source: str) -> str:
+    """One attachment's text, labelled with HOW it was read.
+
+    The label is not decoration. `mechanical` text is the document's own text
+    layer; `ocr` text is tesseract's reading of pixels, which is usually right
+    and is wrong in specific ways — a misread digit in an account number, a
+    two-column page linearised into nonsense, a signature rendered as noise.
+    A model told only "here is the document" will quote an OCR'd figure with
+    the same confidence as a typed one. Telling it which it has is the only
+    thing that lets it hedge where hedging is correct, and it costs one line.
+    """
+    note = ("" if source == "mechanical" else
+            " (read by OCR from a scan or photograph — the text may contain "
+            "recognition errors, so quote exact figures and identifiers with "
+            "that caveat)")
+    return f"\n\n--- attached file: {name}{note} ---\n{text}"
+
+
 @router.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
     if not request.message.strip() and not request.attachments:
@@ -120,7 +335,7 @@ async def chat_stream(request: ChatRequest):
         if voice_thinking != "auto":
             main_agent = {**main_agent, "thinking": voice_thinking}
 
-    model_eff = effective_model(main_agent["model"])
+    model_eff = agent_runner.resolve_agent_model(main_agent)
     # A share of the window this call will ACTUALLY get, which for a local
     # model is measured per model. The two `context.budget_*` settings this
     # replaces were absolute token counts split by provider, and both went
@@ -155,11 +370,55 @@ async def chat_stream(request: ChatRequest):
         for a in request.attachments:
             attach_meta.append({"kind": a.kind, "name": a.name, "mime": a.mime})
             if a.kind == "image":
-                mime = a.mime or "image/jpeg"
-                image_parts.append({"type": "image_url",
-                                    "image_url": {"url": f"data:{mime};base64,{a.data}"}})
+                # A photographed DOCUMENT is text the model may not be able
+                # to read. Three things can supply it and they fail
+                # differently — OCR locally, a configured vision model, or
+                # the answering model's own eyes — so none is assumed. See
+                # _image_text.
+                extra, note = await _image_text(a, model_eff)
+                if extra:
+                    turn_extra_text += extra
+                if note:
+                    attach_meta[-1]["note"] = note
+                # The pixels ride along ONLY if the answering model can
+                # actually see them. Sending them unconditionally is not a
+                # harmless extra: measured 2026-08-01, an image part to
+                # glm-5.2 returns `404 No endpoints found that support image
+                # input` and kills the whole turn — including the OCR text
+                # that had already been read successfully and would have
+                # answered the question. A capability we cannot confirm is
+                # not one we spend the turn on.
+                if await _model_can_see(model_eff):
+                    mime = a.mime or "image/jpeg"
+                    image_parts.append(
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:{mime};base64,{a.data}"}})
+            elif a.kind == "doc":
+                # A failure here is TOLD, not swallowed. An unreadable PDF
+                # that silently contributes nothing leaves the model
+                # answering about a document it never saw — and sounding
+                # certain, because the turn text gives it no way to know a
+                # file was dropped.
+                import base64
+                from app import doc_extract
+                try:
+                    raw = base64.b64decode(a.data, validate=True)
+                except Exception:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{a.name}: the attachment was not valid base64")
+                try:
+                    text, src = await doc_extract.extract_best(
+                        raw, a.name, a.mime,
+                        allow_ocr=bool(settings_store.get("attachments.ocr_enabled")))
+                except (doc_extract.Unsupported, doc_extract.Unextractable) as e:
+                    raise HTTPException(status_code=422,
+                                        detail=f"{a.name}: {e}")
+                attach_meta[-1]["text_source"] = src
+                turn_extra_text += _attached_block(a.name, text, src)
             else:
-                turn_extra_text += f"\n\n--- attached file: {a.name} ---\n{a.data[:60_000]}"
+                turn_extra_text += _attached_block(
+                    a.name, a.data[:60_000], "mechanical")
     if not user_text.strip() and image_parts:
         user_text = "(see attached image)"
     persist_text = user_text + "".join(
@@ -184,6 +443,9 @@ async def chat_stream(request: ChatRequest):
 
     async def generate():
         final_text = ""
+        # what ACTUALLY generated, which the binding only predicts — a
+        # fallback mid-turn moves it (runner yields a `model` event)
+        ran_model = model_eff
         # one ledger trace per chat turn — spans land from run_agent's
         # instrumentation; the assistant message is stamped with the trace id,
         # and meta carries it so the live turn's inspector chip needs no lookup
@@ -227,6 +489,14 @@ async def chat_stream(request: ChatRequest):
                             tool_calls={"kind": event.get("kind"),
                                         "name": event.get("name"),
                                         "agent": event.get("agent")}))
+                    elif etype == "model":
+                        # the turn moved to another model before its first
+                        # byte. Restamp the trace and tell the client, so the
+                        # ledger and the header agree with the reroute note
+                        # the operator can already read in the reply.
+                        ran_model = event["model"]
+                        turn.model = ran_model
+                        yield _sse({"meta": {"model": ran_model}})
                     elif etype == "final":
                         final_text = event["text"]
                     elif etype == "error":
@@ -249,8 +519,7 @@ async def chat_stream(request: ChatRequest):
         if final_text.strip():
             try:
                 await conversations.append_message(
-                    conversation_id, "assistant", final_text,
-                    effective_model(main_agent["model"]),
+                    conversation_id, "assistant", final_text, ran_model,
                     metadata={"trace_id": str(turn.id)})
                 # non-operator speakers journal under their own name — what
                 # the kid says must never file as the operator's words
@@ -433,7 +702,8 @@ async def list_agents_endpoint():
 
 
 _AGENT_EDITABLE_FIELDS = {"model", "enabled", "description", "system_prompt",
-                          "allowed_tools", "routing_keywords", "thinking"}
+                          "allowed_tools", "routing_keywords", "thinking",
+                          "fallback_model"}
 
 
 @router.patch("/api/v1/agents/{agent_id}")
@@ -455,6 +725,13 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
     if "model" in allowed and ":" not in str(allowed["model"]):
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    if allowed.get("fallback_model"):
+        # "" and null both mean "no standby of my own, use the chain" and are
+        # normalised to NULL by the trigger; anything else must be addressable
+        if ":" not in str(allowed["fallback_model"]):
+            raise HTTPException(
+                status_code=422,
+                detail="fallback_model must be 'openrouter:<id>' or 'ollama:<name>'")
     for k in ("allowed_tools", "routing_keywords"):
         if k in allowed and allowed[k] is not None and not isinstance(allowed[k], list):
             raise HTTPException(status_code=422, detail=f"{k} must be a list or null")

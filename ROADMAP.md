@@ -442,6 +442,19 @@ See README for what works. This file is the ordered backlog.
 > **Priority note (2026-07-17):** items **#25–#28 are the CRITICAL front
 > of the queue** — do them first. Numbering stays append-only so the
 > cross-references between items (#5, #8, #21, #23, …) stay stable.
+>
+> **Spent (2026-08-01):** all four of #25–#28 are shipped, so that note no
+> longer orders anything. Audited the same day: #17 and #23 were also
+> already shipped and simply never marked, and #22 is HALF built (see its
+> entry). What is genuinely open and unblocked is #22's extraction and
+> ingestion half; the rest of the open list is the big spec'd lanes
+> (#31 backups, #33 coding team, #34 ideation, #35 Home Assistant), which
+> are Jeremy's to sequence.
+>
+> **Amended 2026-07-28:** **#37 jumps the queue** — it is a shipped
+> regression, not new work: 8 real documents are wrongly rogue, fresh
+> installs cluster into nothing, and `test_identity.py::test_tag_edges` is
+> red on a clean checkout.
 
 1. **Voice — talking to and hearing Nova (decided 2026-07-14; CORE ARC
    SHIPPED — status corrected 2026-07-17)** — full spec + phase status in
@@ -924,6 +937,14 @@ See README for what works. This file is the ordered backlog.
    renders it. Group picker options by provider (Local / OpenRouter) or
    badge each row; applies to the chat-header picker and every model
    select in Settings (agents, voice override, "set all"). Small.
+   **ALREADY SHIPPED — verified 2026-08-01, never marked.** The provider
+   registry lane delivered it: `groupModels` (`models.ts`) buckets by
+   provider with local first, and all four surfaces named above call it
+   (`ChatPanel.tsx` ×2, `AgentsTab.tsx`, `SettingsTab.tsx`). Verified in
+   the live DOM rather than from the source: the chat-header picker
+   carries `<optgroup>` labels "On this machine — Ollama" and "Cloud —
+   OpenRouter". A native select still shows the bare name when collapsed,
+   which is inherent to the control, not a gap.
 
 18. **Executable skill payloads — RESEARCH FIRST (requested 2026-07-17)** —
    Jeremy: shipping executable payloads with skills is critical to Nova
@@ -1100,6 +1121,161 @@ See README for what works. This file is the ordered backlog.
    in-place refresh semantics. Images route to #23's vision path instead
    of extraction. Design questions: keep originals (a `data/uploads/`
    store) vs. distill-and-discard; per-file size caps.
+   **HALF BUILT — audited 2026-08-01.** The attach half is live: a `+`
+   menu with camera / photo / file pickers, drag-drop, and a 20 MB
+   per-message cap. The ingestion half does not exist, and two concrete
+   things are missing:
+   (a) **PDFs and docx cannot be attached at all.** `addFiles`
+   (`ChatPanel.tsx`) calls `f.text()` on every non-image and refuses
+   anything whose first 2 KB decodes with replacement characters — which
+   is exactly what a PDF does. The honest refusal is working as written;
+   there is simply no extractor. The `media` service is the stated home
+   for heavy extraction binaries but today it is yt-dlp only, so this
+   needs either a document endpoint there or a light pure-python
+   extractor in the backend.
+   (b) **Nothing an attachment says reaches memory.** Attachments ride
+   THIS turn only — the model sees the text, the transcript keeps a
+   `[Attached …: name]` marker, and the content is gone next turn. No
+   distilled topic file, no `source: upload:<filename>`, no in-place
+   refresh. So "hand Nova a document and she knows it" is still false.
+   Jeremy's two design questions (keep originals in `data/uploads/` vs
+   distill-and-discard; per-file caps) are still open and gate (b).
+   **(a) BUILT 2026-08-01.** `doc_extract.py` (pypdf + python-docx, both
+   pure python — deliberately NOT the media service, whose isolation is
+   for heavy binaries and outbound network, neither of which applies to
+   parsing bytes the operator already handed us), a `doc` attachment kind
+   carrying raw base64, and server-side extraction in the chat path.
+   Two properties are mechanical, not advisory: an extraction that yields
+   nothing REFUSES with the reason (422) instead of inlining an empty
+   string — a scanned PDF would otherwise read to the model as "the
+   document said nothing", and it would answer confidently about a file it
+   never saw — and a document over 60k chars is cut with a marker that
+   says so. Verified live: a real PDF extracted, a scanned one refused
+   with "most likely a scan, which needs OCR this server does not have",
+   a zip refused, bad base64 refused, and — the part that cannot be
+   argued with — prompt tokens for the same turn went 8,254 → 13,319 with
+   a 19k-character PDF attached, so the extracted text demonstrably
+   reaches the model. (b) is still unbuilt and still gated on those
+   questions.
+   **INCREMENT 0 + OCR/VISION BUILT 2026-08-01 (Jeremy: "I would like the
+   option to use cloud and/or local vision models and ocr").**
+   *Increment 0 — three changes, and #22a was broken on the phone without
+   them.* `client_max_body_size 32m` in `frontend/nginx.conf`: there was no
+   such directive anywhere, so nginx's **1 MiB default silently governed the
+   entire phone path** while the client allowed 10 MB and the backend 20 MB.
+   Measured before: 1,048,600 bytes → 413 on :8080, 404 (i.e. reached the
+   backend) on :8000; base64's 4/3 inflation made the real ceiling ~786 KB
+   of file. Measured after: 8 MB reaches the backend, and a 1.87 MB PDF
+   completes a real turn through :8080. Plus `api.ts` now READS the response
+   body for FastAPI's `detail` (every refusal sentence used to arrive as
+   "422 Unprocessable Entity"), and a failed turn hands the attachments back
+   to the composer instead of eating them — the composer was cleared
+   optimistically at the top of `send()`, and for a phone photo that is the
+   only copy in existence.
+   *The text chain.* Three sources, ordered by trust, each naming itself:
+   `mechanical` (the document's own text layer) → `ocr` (tesseract on the
+   pixels, local) → `vision` (a model reading an image, local or cloud).
+   `doc_extract.extract_best` returns `(text, source)` and the source rides
+   into the turn as a caveat — an OCR'd figure is quoted with a hedge, a
+   typed one is not. This is not decoration: the live test read `2026` as
+   `2028` and `$1,284.50` as `$1,28450`, and the caveat is the only reason
+   that lands as "per the OCR, so figures may carry recognition errors"
+   rather than as fact.
+   *OCR.* `ocr.py` — tesseract + poppler in the backend image, capped at 20
+   pages / 200 DPI / 30s per page, run in a worker thread (the memory link
+   pass blocks the loop for 631 ms; OCR is 20x that). Availability is
+   DERIVED by looking for the binaries, never from a flag. A scanned PDF and
+   a photographed letter both work now, and both were refused this morning.
+   *Vision.* `vision.py` with `attachments.vision_model` (local or cloud —
+   the operator's choice) and `attachments.allow_cloud_vision`, which
+   **refuses** rather than warns and is off by default: a photographed
+   payslip leaving this machine should be a decision, not an inherited
+   default. The check is derived from `llm_router.is_local`, so a new
+   provider cannot slip past a name match.
+   *And the dead gate is now called.* `model_fitness.assess(needs_vision=)`
+   had ZERO callers; `_model_can_see` in `router_chat.py` is the caller, and
+   it asks for `vision` to be PRESENT rather than for it not to be absent,
+   because failing open costs the whole turn. Measured live: an image part
+   sent to glm-5.2 returns `404 No endpoints found that support image
+   input`, which killed the turn *including OCR text that had already
+   answered the question*. Pixels now ride along only if the model can see
+   them; otherwise the turn text states plainly that the image was not
+   received. `backend/tests/test_doc_extract.py` covers the chain and every
+   refusal. Suite 36/37 (the one failure is the pre-existing stale
+   `maintainer` grant snapshot).
+   **INCREMENT 1 BUILT 2026-08-01 — attachments are first-class objects.**
+   Migration 083 (`attachments`), `attachments.py`, four endpoints, the
+   `./data/attachments` mount, the client uploading the ORIGINAL alongside
+   the inline copy, and Library → Documents. Purely additive: `router_chat`'s
+   turn path is untouched, so answers behave exactly as before while the only
+   copy is captured in parallel.
+   *Identity is a UUID plus sha256, never the filename.* This is the whole
+   design and it is a reaction to the defect four critics independently rated
+   fatal against three earlier sketches: keying on the name means March's
+   `invoice.pdf` and July's collapse onto one record and the second destroys
+   the first. `Scan.pdf`, `IMG_0042.jpg`, `statement.pdf` are what phones
+   produce — the collision is the normal case. Verified: two files sharing a
+   name are two rows, the first byte-identical after the second lands.
+   *The bytes are content-addressed on disk*, not in Postgres (measured:
+   TOAST compression is a no-op on PDFs/JPEGs, and `pg_dump` is not streamed
+   here, so blobs would inflate the backup that does not exist yet, #31).
+   The same document twice is two rows over one blob, and the blob is
+   unlinked only by the LAST row referencing it — derived by query, never a
+   refcount column that can drift. Verified both directions.
+   *Three rails are mechanical.* A missing mount REFUSES (503) rather than
+   writing the only copy of a photographed letter into a container layer,
+   and the check asks the filesystem rather than trusting a setting.
+   Delete puts the ROW LAST, because it is the only handle on the bytes — a
+   crash leaves a findable row with `present: false` rather than orphaned
+   bytes plus a deletion receipt. And `text_source` is a DB CHECK, so an
+   invented provenance is refused by the database rather than by convention.
+   *Upload happens BEFORE the turn*, which is the point: a turn that fails,
+   is refused, or is abandoned can no longer destroy the document that
+   prompted it. Extraction runs at upload time too, so the operator learns
+   their scan is unreadable while the file is still in their hand.
+   *Its own test suite caught a real leak.* Bytes are written before the row
+   by design, so a rejected INSERT (a CHECK violation) stranded them.
+   `store` now rolls back exactly its OWN write — never a pre-existing blob,
+   which another row may own — and `usage()` COUNTS orphans by walking the
+   store and subtracting the index, because "no orphans" is only an
+   invariant if something checks it. Both are surfaced in the Documents tab.
+   Verified in the live UI: attached through the real composer, listed with
+   its OCR source label, dedupe visible as two rows over one blob.
+   *Still unbuilt (increment 2):* the memory note, so a document is
+   auto-recalled in November rather than found by browsing. That one is NOT
+   mechanical yet — a `third_party` note is structurally excluded from
+   `main`'s retrieved context while the journal paraphrase of the same turn
+   IS injected, so the trust tier is a real decision, not a detail.
+   **Found while verifying, and worth its own item: she is handed a rule's
+   NAME with no scope, and invents the scope.** Asking about an attached
+   file got "the `no-secret-in-requests-expanded` guardrail blocks this" —
+   with both secret rules at `hit_count = 0`, so nothing blocked anything.
+   *First diagnosis (journal recall of a past refusal) was WRONG*, and the
+   real cause is mechanical and fixable: the entities block renders rules as
+   `name [action, system]` (`runner.py:264`) and omits `target_tools` and
+   `pattern` entirely. She was shown the literal string
+   `no-secret-in-requests-expanded [warn]` — a name with no scope — and
+   guessed a scope, landing on attachments. The live row is `action=warn`,
+   `target_tools={fetch_url, web_search}`: it cannot touch a chat
+   attachment. **Decisive test:** disabling that one rule and re-sending the
+   identical PDF produced an immediate correct answer.
+   **FIXED 2026-08-01.** `_rule_summary` in `runner.py` renders what each
+   rule GUARDS — `no-secret-in-requests-expanded [warn, guards
+   fetch_url/web_search]` — derived from the row (action, target_tools,
+   target_agents), so a rule the operator retargets tomorrow describes itself
+   correctly with no edit here. Empty `target_tools` renders "any tool",
+   because blank read as narrow when it means broader. The block now also
+   carries the general fact no per-rule label can: a rule is evaluated ONLY
+   against a tool call, `warn` refuses nothing, and if she is about to say a
+   rule is stopping her then a tool call must have been refused THIS turn.
+   Verified with the before/after that diagnosed it: the identical request
+   that produced "I can't surface the contents of attached files" now answers
+   "The attached file states that the answer is ARTICHOKE" with the rule
+   still ENABLED, and both secret rules still at `hit_count = 0`.
+   `backend/tests/test_rule_scope.py` pins it, including a check that the
+   exact string which caused the failure can no longer be produced.
+   Still open, and cheaper than it sounds: a claim that a NAMED rule blocked
+   a turn is checkable against `rules.hit_count` mechanically.
 
 23. **Vision input (2026-07-17)** — paste or attach a screenshot/image
    into chat and Nova sees it. The gateway already fronts VL-capable
@@ -1110,6 +1286,28 @@ See README for what works. This file is the ordered backlog.
    active model is text-only ("switch to a vision model or let me
    dispatch one"). Feeds #22 (image uploads) and is a PREREQUISITE for
    the Later device-control item (screenshot → reason → act loop).
+   **PARTLY SHIPPED — corrected 2026-08-01.** Two of the three parts are
+   live: `router_chat.py` builds multimodal content arrays (image parts as
+   `image_url` data URIs, 20 MB per message) and `models_catalog.py`
+   records `vision` per curated row from the provider's input modalities.
+   The composer has camera and photo pickers.
+   **The third part is DEAD CODE, and this entry claimed otherwise earlier
+   today.** `model_fitness.assess(needs_vision=)` can raise a BLOCKING
+   finding — and `grep -rn "needs_vision=" backend/ frontend/` returns
+   ZERO callers. Both live `assess()` call sites pass only
+   `needs_tools`/`needs_tokens`, and neither `router_chat.py` nor
+   `runner.py` mentions vision at all. So the "fallback answer when the
+   active model is text-only" this item asked for does not exist: attach a
+   photo to a text-only model and she answers having seen nothing, with no
+   refusal and no warning. A control nobody calls is not a control — the
+   same lesson as the prompt-vs-backend rule, one layer in.
+   **And there is no vision model installed.** `main` runs
+   `ollama:ornith:9b`, whose `/api/show` reports
+   `['completion','tools','thinking']`; measured 2026-08-01, none of the
+   four installed local models reports `vision`. There is also no OCR
+   anywhere in the repo (the only two hits are `doc_extract.py`'s refusal
+   sentence and this file quoting it). So a photographed document
+   currently yields no text by any path.
 
 24. **Daily briefing (2026-07-17)** — pure composition on existing
    infra, cheap Jarvis points: a seeded automation (default-disabled)
@@ -1441,6 +1639,113 @@ See README for what works. This file is the ordered backlog.
     checklist (restore drill passed, cost caps live, ledger UI live, kill
     switch tested, 2-week supervised trial). Containment invariants LOCKED
     in the spec. **Waves 3–5.**
+
+37. **CRITICAL — memory clustering: links anchor, tags may only merge the
+    unanchored (2026-07-28; fixes a defect in `ede5286`)** — the shipped
+    membership rule is **dead code and a live regression**. `ede5286` split
+    tag edges into `tag` (membership) and `subject` (affinity) with
+    `kind = "tag" if tiers.is_entity(tag) else "subject"`, but
+    `_TAG_CLIQUE_MAX = 5` from `58ffa84` runs *first* and discards every tag
+    with more than 5 members. A source's tag is stamped on every document it
+    produces, so it passes 5 the moment a channel has five videos: **there
+    are zero `tag` edges in the graph, and clustering over `link+tag` is
+    byte-identical to `link` alone** (`[67,33,32,25,…]` either way). The
+    partition is held together entirely by the summariser's
+    `Source: [[Channel]]` wikilinks — exactly the "passes only because
+    another lane happened to run" failure the module's own docstring
+    rejects. Measured cost: **8 real documents demoted to rogues** (the
+    CMP-rates/operator-profile pair and the MCP pair that `58ffa84`
+    verified as genuine, plus 4 channel notes bridged by `followed-sources`)
+    and a **fresh install now clusters into nothing** — 12 hand-written
+    notes in 3 coherent tag groups became 12 singletons.
+    `test_identity.py::test_tag_edges` asserts `kind == "tag"` and is
+    therefore **red on a clean checkout**; it currently passes only because
+    an uncommitted working-tree edit widened it to `("tag", "subject")`.
+    **The fix (Jeremy chose Option B, 2026-07-28): two-stage clustering.**
+    Links anchor first; a tag may create *membership* only between documents
+    not already claimed by different link-anchored components, and becomes
+    `subject` (affinity) when it spans them. One derived rule, no entity
+    criterion, no clique cap: hand-written corpora have no links so tags
+    cluster normally, while `claude-code` spanning two anchored channels is
+    correctly demoted to affinity. Also in this item: **draw the 82 `subject`
+    edges** — 42 of them cross clusters and none is rendered today, which is
+    why the universe shows 156 arcs all *inside* clusters plus one lone
+    `writes` edge (`maintained_by: tech-news-digest`) reading as a random
+    line across the void. Drawing them is *not* the milky-way tier the
+    permutation null refused (#see `docs/plans/universe-view.md`): a
+    per-document "these two share a subject" line is literally true edge by
+    edge, unlike a cluster-level arm. Finally, `subjects.py` recomputes
+    entity/tag_docs inline instead of calling `TagTiers`, so its null
+    measures a different tag population than the graph draws (it counts
+    `media`, `transcript`, `claude-code`, none of which emit an edge) —
+    point it at the same source. Two stale deny-list comments are inverted
+    against their code at `universe.ts:684` and `Brain.tsx:465`.
+
+38. **Per-agent fallback model (requested 2026-07-28; BOTH PASSES BUILT
+    2026-08-01, live-verified, uncommitted)** — an agent cannot say which model carries it
+    when its own binding fails. There is exactly one knob, the install-wide
+    `inference.local_fallback_model` (`settings_store.py`), and the local
+    failure path does not read it at all: it hardcodes "retry on the main
+    agent's model" (`runner.py` `_fallback_target`). **Pass 1 landed four
+    defects found while designing this**, and is worth reading before
+    building pass 2 because it changes the premise: (a) `model_recs.py`
+    compared the display string `"(main agent's model)"` against a model
+    id, so the compaction card's status was pinned to `switch` forever and
+    could never say `keep`; (b) `_fallback_target` refused *every* local
+    target whenever the failed model was local, but `_FALLBACK_CLASSES` is
+    `{connect_failed, http_status}` and an Ollama 404 for an unpulled model
+    is a healthy server answering — so the whole feature was inert for the
+    keyless local-first install it exists for, and the refusal is now
+    narrowed to `connect_failed`; (c) `effective_model` interpolated the
+    setting blind, so an empty value produced the unservable model id
+    `"ollama:"`; (d) the `## Model (live)` block is rendered once per turn
+    while a round can be retried on another model, so the prompt kept
+    instructing her to name the dead model, she obeyed, and `model_claims`
+    appended a correction accusing her of the claim the system had just
+    told her to make — in the reply text, and read aloud on voice turns.
+    **Pass 2 (built 2026-08-01):** an `agents.fallback_model` column with a
+    `BEFORE INSERT OR UPDATE` trigger that blanks a self-referential value
+    (a CHECK would fire on the bulk "set all models" path, the in-chat
+    model picker, recommendation Apply, `manage_agents`, and any future
+    model-repointing migration — and `patch_agent_endpoint` has no
+    exception path, so that surfaces as a plain-text 500 the frontend
+    cannot parse); `_local_standby` and `_fallback_target` collapsed into
+    ONE ordered chain (the agent's own fallback → the install-wide setting
+    → the main agent's model) with `model_fitness.assess` gating **both**
+    directions, since today only the cloud-refused direction is gated; a
+    `tried` set to bound the retry loop, whose `# at most twice` comment
+    has been false since the cloud→local branch landed and which permits an
+    unbounded cloud↔local alternation of real billed calls; a second
+    dropdown beside the model dropdown in Library → Agents; and
+    `resolve_agent_model` threaded through `router_chat.py` so the SSE meta
+    frame, `messages.model_used` and the turn trace all name what actually
+    ran. Note the fallback must NOT be settable by `manage_agents` — a
+    model that can choose its own standby can route itself onto one with no
+    tool support. **Not in scope:** the compaction suggestion stays
+    `ollama:qwen2.5:3b`; that is the sort key working as designed
+    (`model_recs.py` holds no model literal, and only two enabled curated
+    rows carry the `compaction` role, both `is_system`). Leaving
+    `compaction.model` blank is correct on both cloud and all-local
+    installs. Two loose ends: the reroute note is concatenated without a
+    separator so replies read `...instead.]I'm running on X.`, and
+    `model_fitness.check_roles` raises a `smallest_installed` advisory that
+    has no frontend consumer, so Library → Agents → "apply all" can patch
+    `compaction.model` to the 3B with no warning.
+    **Both loose ends are closed too**, and the advisory turned out to read
+    "Clearing compaction.model would inherits …" — ungrammatical since it
+    was written, unnoticed because nothing rendered it.
+    **Live-verified 2026-08-01** through a real chat turn on :5173 with
+    `main` deliberately bound to an unpulled `ollama:notpulled:1b`: the SSE
+    meta frame opened on the binding, the reroute note landed with a blank
+    line on both sides, a second meta frame named
+    `openrouter:z-ai/glm-5.2`, and `messages.model_used` + `turn_traces.model`
+    both recorded the model that actually generated rather than the one that
+    404'd. Before pass 2 that same turn had NO fallback at all — `main`'s
+    own model *is* the last link, so the old chain compared it against
+    itself and gave up. The trigger was exercised on all three paths
+    (self-reference blanked, whitespace trimmed, and repointing `model`
+    onto its own standby blanking rather than raising — the case a CHECK
+    would have surfaced as an unparseable 500).
 
 **Wave ordering for the 2026-07-24 "Nova starts doing things" arc**
 (#31–#36 plus #20; the plan specs are authoritative): Wave 1, parallel —
@@ -1823,6 +2128,15 @@ did) — never code wholesale.
   Nothing else worth keeping.
 
 ## Operational notes
+
+- **Unpinned major versions are a live outage waiting for a rebuild
+  (2026-08-01).** `backend/pyproject.toml` carried `mcp>=1.0.0`; a routine
+  `docker compose build backend` — for an unrelated dependency — pulled
+  `mcp` 2.0.0, which renamed `streamablehttp_client` and dropped the
+  `headers`/`timeout` arguments the MCP client puts its auth and bounds
+  in. Two suites went red and the shipped MCP feature failed on import,
+  with no repo change to blame it on. Now pinned `<2`; porting to 2.x is
+  its own change. Worth a sweep of the other floors.
 
 - `docker compose restart backend` does **not** re-read `.env` — use
   `docker compose up -d backend` after env changes.

@@ -133,6 +133,9 @@ async def test_error_classes():
 async def test_fallback_decision():
     print("2. fallback: only for unreachable LOCAL models, never in circles")
     settings_store._cache["agents.local_fallback_enabled"] = True
+    # pinned, not inherited: the chain's MIDDLE link is this setting, and a
+    # test that reads whatever the install happens to hold asserts nothing
+    settings_store._cache["inference.local_fallback_model"] = "qwen2.5:3b"
     saved_effective = llm_router.effective_model
     llm_router.effective_model = lambda m: m
 
@@ -193,6 +196,63 @@ async def test_fallback_decision():
             AGENT, "ollama:qwen3:14b", {"error_class": "connect_failed"})
         check("no fallback onto the same local server (fail fast)",
               target is None, str(target))
+
+        # ...but "same server" only makes a local target pointless when the
+        # SERVER is what died. _FALLBACK_CLASSES also carries http_status, and
+        # an Ollama 404 for a model that was never pulled is a healthy server
+        # answering — the very case the setting advertises ("server down,
+        # model not pulled"). Refusing every local target on that error made
+        # the whole feature inert on a keyless local-first install, which is
+        # the install this system says it exists for.
+        target = await runner._fallback_target(
+            AGENT, "ollama:qwen3:14b", {"error_class": "http_status"})
+        check("a model that is not pulled DOES reach another local model on "
+              "the same healthy server", target == "ollama:qwen2.5:3b", str(target))
+
+        # ── the ordered chain (pass 2) ───────────────────────────────────
+        #
+        agent_registry.get_agent_by_name = await main_on("openrouter:z-ai/glm-5.2")
+        # The agent's OWN standby first. Before this there was no such thing:
+        # the whole install shared one answer, so a specialist holding
+        # fourteen tools and the voice agent holding two fell back onto the
+        # same model.
+        target = await runner._fallback_target(
+            {**AGENT, "fallback_model": "ollama:qwen3:8b"},
+            "ollama:qwen3:14b", {"error_class": "http_status"})
+        check("the agent's own standby wins over the install-wide setting",
+              target == "ollama:qwen3:8b", str(target))
+
+        # ...and each link is only skipped when it cannot serve, never
+        # because of which provider failed. `tried` is what bounds the loop:
+        # the comment claiming "at most twice" stopped being true when the
+        # cloud->local branch landed, and a cloud<->local alternation is real
+        # billed calls, not a spin.
+        target = await runner._fallback_target(
+            {**AGENT, "fallback_model": "ollama:qwen3:8b"},
+            "ollama:qwen3:14b", {"error_class": "http_status"},
+            {"ollama:qwen3:8b", "ollama:qwen2.5:3b"})
+        check("models already tried this turn are never asked twice — it "
+              "falls through to the main agent's model",
+              target == "openrouter:z-ai/glm-5.2", str(target))
+
+        target = await runner._fallback_target(
+            {**AGENT, "fallback_model": "ollama:qwen3:8b"},
+            "ollama:qwen3:14b", {"error_class": "http_status"},
+            {"ollama:qwen3:8b", "ollama:qwen2.5:3b", "openrouter:z-ai/glm-5.2"})
+        check("an exhausted chain surfaces the failure instead of looping",
+              target is None, str(target))
+
+        # the fitness gate now covers BOTH directions; it used to apply only
+        # when a cloud provider had refused
+        mf.assess = _no_tools
+        try:
+            target = await runner._fallback_target(
+                {**AGENT, "fallback_model": "ollama:qwen3:8b"},
+                "ollama:qwen3:14b", {"error_class": "http_status"})
+            check("a local->local reroute is fitness-gated too",
+                  target is None, str(target))
+        finally:
+            mf.assess = real_assess
 
         agent_registry.get_agent_by_name = await main_on("openrouter:z-ai/glm-5.2")
         settings_store._cache["agents.local_fallback_enabled"] = False

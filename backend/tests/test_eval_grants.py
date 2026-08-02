@@ -59,8 +59,51 @@ async def live_grants() -> dict[str, list[str]]:
     return out
 
 
+async def unreachable_mcp() -> list[str]:
+    """MCP servers that are granted but not answering right now.
+
+    Their tools — and the `find_mcp_tools` meta-tool, which `get_agent_tools`
+    only offers when a granted server has lazily-loaded tools — vanish from
+    the RESOLVED toolset when the server is down. That is connectivity, not a
+    revoked grant, and the two must not read the same.
+
+    This matters because `mcp-runner` sits behind a compose profile: a stack
+    started without it puts every MCP server in `error`, and before this
+    distinction existed the suite went red claiming `maintainer` had lost
+    `find_mcp_tools`. A drift detector that cries wolf when an OPTIONAL
+    sidecar is stopped teaches you to ignore it, which costs you the real
+    drift it exists to catch.
+    """
+    # its own pool lifecycle: live_grants() closes the pool when it is done,
+    # and this runs before it
+    from app import db
+    await db.init_pool()
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT name, status FROM mcp_servers WHERE enabled = true")
+    finally:
+        await db.close_pool()
+    return sorted(r["name"] for r in rows if r["status"] != "ok")
+
+
+def _explained_by_mcp(tool: str, down: list[str]) -> bool:
+    """Is this tool's absence attributable to a server being unreachable?"""
+    if not down:
+        return False
+    if tool == "find_mcp_tools":
+        return True                      # offered only when a server answers
+    return tool.startswith("mcp:") and any(
+        tool.startswith(f"mcp:{name}/") for name in down)
+
+
 async def run() -> None:
+    down = await unreachable_mcp()
     live = await live_grants()
+    if down:
+        print(f"  NOTE  MCP server(s) not answering: {', '.join(down)} — their "
+              f"tools are absent from the resolved toolset for that reason, "
+              f"and are reported separately below rather than as revocations.")
 
     print("1. the snapshot exists and parses")
     check("granted.json is present — without it the validator silently skips "
@@ -79,13 +122,24 @@ async def run() -> None:
           not extra, str(extra))
 
     print("3. every agent's toolset matches exactly")
+    offline_only: list[str] = []
     for name in sorted(set(live) & set(stored)):
         added = sorted(set(live[name]) - set(stored[name]))
         removed = sorted(set(stored[name]) - set(live[name]))
+        # split the absences: a REVOKED grant is drift and must fail; a tool
+        # missing because its server is stopped is a fact about this stack
+        # right now and is reported without failing.
+        offline = [t for t in removed if _explained_by_mcp(t, down)]
+        removed = [t for t in removed if t not in offline]
+        if offline:
+            offline_only.append(f"{name}: {offline}")
         check(f"{name}: {len(live[name])} tools, unchanged",
               not added and not removed,
               (f"granted since: {added} " if added else "")
               + (f"revoked since: {removed}" if removed else ""))
+    if offline_only:
+        print("  NOTE  absent only because an MCP server is unreachable, NOT "
+              "revoked: " + "; ".join(offline_only))
 
     if FAILURES:
         print("\nThe snapshot is stale. Regenerate it from the live database "

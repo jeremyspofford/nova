@@ -2,7 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app/backend
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# tesseract-ocr + poppler-utils are the LOCAL half of reading a document that
+# has no text layer: a scanned PDF or a photographed letter. They stay in the
+# image rather than in a sidecar because they take bytes the operator already
+# handed us and make no network call of their own — the property that decides
+# where extraction lives (see doc_extract.py). eng only; more languages are
+# `tesseract-ocr-<lang>` and a settings change away.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl tesseract-ocr poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e .

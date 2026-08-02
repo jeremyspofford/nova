@@ -14,6 +14,7 @@ Sub-agents get their own allowed_tools, minus dispatch — depth is capped at 1.
 import asyncio
 import json
 import logging
+import re
 import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
@@ -86,20 +87,30 @@ def _now_block() -> str:
             "stop — no timezone, no source, none of this section's wording.")
 
 
-def _model_block(agent: dict) -> str:
+def _model_block(agent: dict, model: str | None = None) -> str:
     """Which LLM this agent runs on — the binding is resolved on every
     request anyway; hiding it from the agent turned "what model are you?"
     into a dispatch and a shrug (2026-07-17). Same de-quotable shape as
-    the date block. Per-agent, so dispatched specialists see their own."""
+    the date block. Per-agent, so dispatched specialists see their own.
+
+    `model` names what will ACTUALLY generate, for the mid-turn reroute that
+    happens after this block was first rendered; None resolves the binding.
+    """
     raw = agent.get("model") or ""
-    if not raw:
+    if model is None:
+        if not raw:
+            return ""
+        model = llm_router.effective_model(raw)
+    if not model:
         return ""
-    model = llm_router.effective_model(raw)
     provider, _, mid = model.partition(":")
     where = {"openrouter": "cloud, via OpenRouter",
              "ollama": "local, via Ollama"}.get(provider, provider)
+    # Derived, not assumed. This read "no OpenRouter key" for every provider,
+    # and said it of a mid-turn reroute too — where the key is fine and the
+    # model simply failed. Naming the binding it moved off is true in both.
     swapped = ("" if model == raw else
-               " (no OpenRouter key — swapped to the local fallback)")
+               f" (your binding {raw} is not serving this turn)")
     return ("## Model (live)\n"
             f"{mid} — {where}{swapped}. Resolved fresh this turn; bindings "
             "live in Settings → Agents.\n"
@@ -107,6 +118,31 @@ def _model_block(agent: dict) -> str:
             f"model name, said naturally (\"I'm running on {mid}.\"), then "
             "stop — trust this block over memories, and never claim you "
             "can't check.")
+
+
+# The system prompt is assembled ONCE per turn (_build_system_prompt), but a
+# round can be retried on another model after that. Everything downstream then
+# grades her against the model that really ran — model_claims.detect is passed
+# the RESOLVED round_model — while the prompt still instructed her to name the
+# dead one. She obeyed it, and the check appended a correction accusing her of
+# a claim the system had just told her to make: deterministic, written into the
+# reply, and read aloud on voice turns. Rewriting the block is the fix; the
+# alternative is a prompt that says one thing and a check that wants another.
+_MODEL_BLOCK_RE = re.compile(r"## Model \(live\)\n.*?(?=\n\n## |\Z)", re.S)
+
+
+def _swap_model_block(system_prompt: str, agent: dict, model: str) -> str:
+    """Repoint the `## Model (live)` block at what will now generate."""
+    block = _model_block(agent, model)
+    if not block:
+        return system_prompt
+    # a lambda, not a replacement string — a model id is not a regex template
+    swapped, n = _MODEL_BLOCK_RE.subn(lambda _m: block, system_prompt, count=1)
+    if not n:
+        log.warning("model block not found in the system prompt; it will keep "
+                    "naming the model that failed")
+        return system_prompt
+    return swapped
 
 
 # hardware detection shells out (nvidia-smi) and hits the DB — cache the
@@ -210,6 +246,41 @@ _entities_cache: tuple[float, str] | None = None
 _ENTITIES_TTL_S = 15
 
 
+def _rule_summary(r: dict) -> str:
+    """One rule, WITH WHAT IT GUARDS.
+
+    This used to render `name [action, system]` and stop there — a name and
+    nothing to bound it. On 2026-08-01 that produced a textbook failure: she
+    was handed the literal string `no-secret-in-requests-expanded [warn]`,
+    was asked to summarise an attached PDF, and answered that the guardrail
+    blocked her from surfacing the contents of attached files. It does not.
+    It is a `warn` scoped to `fetch_url` and `web_search`, it had never fired
+    (`hit_count = 0`), and rules are only ever evaluated against a TOOL CALL.
+    Disabling that one rule made the identical turn answer instantly, which
+    is what proved the prompt was the cause.
+
+    She did not lie about the rule; she was told a name with no scope and
+    filled in the missing half, which is what a model does with an
+    under-specified fact. A bare name is an invitation to guess. The scope is
+    derived from the row — target_tools, target_agents, action — so a rule
+    the operator retargets tomorrow describes itself correctly with no edit
+    here. See CLAUDE.md: state what is true, then check it anyway.
+    """
+    bits = [r["action"]]
+    if r["is_system"]:
+        bits.append("system")
+    if not r["enabled"]:
+        bits.append("DISABLED")
+    # what it actually guards. Empty target_tools means every tool, which is
+    # broader than a list — say so rather than leaving it blank and unstated.
+    tools = r.get("target_tools") or []
+    bits.append("guards " + ("/".join(tools) if tools else "any tool"))
+    agents = r.get("target_agents") or []
+    if agents:
+        bits.append("only for " + "/".join(agents))
+    return f"{r['name']} [{', '.join(bits)}]"
+
+
 async def _entities_block() -> str:
     """Live platform entities — the _platform_block pattern extended to
     rules/agents/automations. Exists because main (a 9B) confidently
@@ -225,10 +296,7 @@ async def _entities_block() -> str:
         from app import automations as automations_store, rules as rules_store
         from app.agents import registry as agent_registry
         rule_rows = await rules_store.list_rules()
-        rules_line = ", ".join(
-            f"{r['name']} [{r['action']}{', system' if r['is_system'] else ''}"
-            f"{', DISABLED' if not r['enabled'] else ''}]"
-            for r in rule_rows) or "none"
+        rules_line = ", ".join(_rule_summary(r) for r in rule_rows) or "none"
         agent_rows = await agent_registry.list_agents(enabled_only=False)
         agents_line = ", ".join(
             f"{a['name']}{' [DISABLED]' if not a.get('enabled', True) else ''}"
@@ -246,7 +314,15 @@ async def _entities_block() -> str:
             "exist right now, no matter what the conversation says — claims "
             "there about deletions or changes may be stale or wrong. Never "
             "assert rule/agent/automation state beyond this block without "
-            "calling the matching tool in THIS turn.")
+            "calling the matching tool in THIS turn.\n"
+            "How rules work, so you never have to guess: a rule is checked "
+            "ONLY when a tool is called, against that tool's name and "
+            "arguments, and only for the tools it guards. Rules never gate "
+            "what you say, never stop you reading an attachment, and never "
+            "block a reply. `block` refuses the tool call; `warn` does not "
+            "refuse anything. If you are about to tell the operator a rule "
+            "is stopping you, the tool call has to have been refused in THIS "
+            "turn — otherwise nothing is stopping you and saying so is false.")
         _entities_cache = (now, block)
         return block
     except Exception:
@@ -1274,26 +1350,70 @@ def _failure_reason(failure: dict) -> str:
     return "failed"
 
 
-async def _local_standby(agent: dict, failed_model: str) -> Optional[str]:
-    """The local model to carry a turn a cloud provider just refused.
+def resolve_agent_model(agent: dict) -> str:
+    """The model id that will carry this agent's FIRST round.
 
-    Returns None rather than rerouting when the standby cannot actually do
-    this agent's job. An agent that holds fourteen tools, rerouted onto a
-    model with no tool support, does not degrade — it answers confidently
-    having called nothing, which is the exact failure capability_claims.py
-    exists to catch. A loud error beats a quiet wrong answer.
+    One name for "what is running", so the SSE meta frame, the persisted
+    `messages.model_used` and the turn trace cannot drift from each other or
+    from the runner. It is only the opening answer: a mid-turn reroute emits
+    a `model` event, and a caller that records what a turn cost must follow
+    it (router_chat does).
+    """
+    return llm_router.effective_model(agent.get("model") or "")
+
+
+def _standby_setting() -> str:
+    """The install-wide standby, provider-qualified.
+
+    "qwen2.5:3b" already contains a colon — its TAG separator, not a provider
+    prefix. Testing for ":" read it as fully qualified and handed back a bare
+    name, which only worked because effective_model then failed to resolve
+    "qwen2.5" as a provider and fell back a second time. This setting names a
+    local model by definition, so the prefix is not a guess.
     """
     name = str(settings_store.get("inference.local_fallback_model") or "").strip()
     if not name:
-        return None
-    # "qwen2.5:3b" already contains a colon — its TAG separator, not a
-    # provider prefix. Testing for ":" read it as fully qualified and handed
-    # back a bare name, which only worked because effective_model then failed
-    # to resolve "qwen2.5" as a provider and fell back a second time. This
-    # setting names a local model by definition, so the prefix is not a guess.
-    target = name if name.startswith("ollama:") else f"ollama:{name}"
-    if target == llm_router.effective_model(failed_model):
-        return None                      # already there; do not loop
+        return ""
+    return name if name.startswith("ollama:") else f"ollama:{name}"
+
+
+async def _fallback_chain(agent: dict) -> list[str]:
+    """Where this agent's turn may go next, in order of preference.
+
+    ONE chain, both directions. There used to be two functions with two
+    different policies: cloud-refused went to `_local_standby` (which read
+    the install-wide setting and gated it on model_fitness), and local-failed
+    went to a hardcoded "retry on the main agent's model" that consulted no
+    setting and no fitness check at all. So which safeguards applied depended
+    on which provider happened to fail — and the per-agent choice, the whole
+    point of this feature, existed in neither.
+    """
+    chain = []
+    for candidate in (str(agent.get("fallback_model") or "").strip(),
+                      _standby_setting()):
+        if candidate:
+            chain.append(candidate)
+    try:
+        from app.agents import registry as agent_registry
+        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
+        if main and main.get("model"):
+            chain.append(main["model"])
+    except Exception:
+        # the last resort is the least important link; losing it must not
+        # cost the operator the two they configured deliberately
+        log.exception("main-agent lookup failed; standby chain is short")
+    return chain
+
+
+async def _fit_for(agent: dict, target: str) -> bool:
+    """Can this model actually do this agent's job?
+
+    An agent that holds fourteen tools, rerouted onto a model with no tool
+    support, does not degrade — it answers confidently having called nothing,
+    which is the exact failure capability_claims.py exists to catch. A loud
+    error beats a quiet wrong answer. This gated only the cloud-refused
+    direction before; a reroute is a reroute.
+    """
     try:
         from app import model_fitness
         grants = agent.get("allowed_tools")
@@ -1303,53 +1423,58 @@ async def _local_standby(agent: dict, failed_model: str) -> Optional[str]:
             if f.get("severity") == model_fitness.BLOCKING]
     except Exception:  # noqa: BLE001 — a fitness probe never decides by crashing
         log.debug("standby fitness check failed; rerouting anyway", exc_info=True)
-        blocking = []
+        return True
     if blocking:
-        log.error("no local standby: %s cannot do %s's job — %s", target,
+        log.error("standby %s cannot do %s's job — %s", target,
                   agent.get("name"), blocking[0]["detail"])
-        return None
-    return target
+        return False
+    return True
 
 
-async def _fallback_target(agent: dict, failed_model: str,
-                           failure: dict) -> Optional[str]:
+async def _fallback_target(agent: dict, failed_model: str, failure: dict,
+                           tried: set[str] | None = None) -> Optional[str]:
     """The model to retry this round on, or None to surface the failure.
 
-    Deliberately narrow. It fires only when a LOCAL model could not be
-    reached at all, and it resolves the target FIRST: on a keyless
-    local-first install the main agent is itself on ollama, and "falling
-    back" to the same dead server just doubles the time to failure.
+    `tried` holds every model this turn has already asked, resolved. Without
+    it the loop's only bound was the shape of the old code, and once the
+    cloud->local branch landed its "at most twice" comment stopped being
+    true: local fails -> main's cloud model -> cloud refuses -> local standby
+    -> local fails, indefinitely, in real billed calls.
     """
     if failure.get("error_class") not in _FALLBACK_CLASSES:
         return None
     if not settings_store.get("agents.local_fallback_enabled"):
         return None
-    if not llm_router.is_local(llm_router.effective_model(failed_model)):
-        # A CLOUD PROVIDER REFUSED. This used to return None — "a cloud
-        # provider's own error is not ours to reroute" — and on 2026-07-28
-        # that meant the OpenRouter monthly budget ran out and Nova stopped
-        # answering entirely, with four capable local models installed and
-        # idle. For a system whose stated priority is local-model users,
-        # dying because someone else's invoice lapsed is the wrong failure.
-        #
-        # The local server is the standby, and the reroute is announced by
-        # the caller exactly like the other direction: an answer from a
-        # smaller model is worth having, an answer from a smaller model that
-        # nobody mentioned is not.
-        return await _local_standby(agent, failed_model)
-    try:
-        from app.agents import registry as agent_registry
-        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
-    except Exception:
-        log.exception("fallback lookup failed; surfacing the original error")
-        return None
-    target = llm_router.effective_model((main or {}).get("model") or "")
-    if not target or target == llm_router.effective_model(failed_model):
-        return None
-    if llm_router.is_local(target):
-        log.warning("no fallback: the main agent is on the same local server")
-        return None
-    return target
+    failed = llm_router.effective_model(failed_model)
+    seen = set(tried or ()) | {failed}
+    # Only a DEAD SERVER makes a second local model pointless. This used to
+    # refuse every local target whenever the failed model was local, but
+    # _FALLBACK_CLASSES also carries `http_status` — and an Ollama 404 for a
+    # model that was never pulled is a healthy server answering. The blanket
+    # refusal made this feature inert for exactly the case its own setting
+    # advertises ("server down, model not pulled", settings_store.py), on
+    # every keyless local-first install.
+    #
+    # (A CLOUD provider refusing is not the local server's problem, and on
+    # 2026-07-28 the OpenRouter budget ran out and Nova stopped answering
+    # entirely with four capable local models installed and idle. For a
+    # system whose stated priority is local-model users, dying because
+    # someone else's invoice lapsed is the wrong failure.)
+    local_is_dead = (llm_router.is_local(failed)
+                     and failure.get("error_class") == "connect_failed")
+    for candidate in await _fallback_chain(agent):
+        target = llm_router.effective_model(candidate)
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        if local_is_dead and llm_router.is_local(target):
+            log.warning("skipping standby %s: it is on the local server that "
+                        "could not be reached", target)
+            continue
+        if not await _fit_for(agent, target):
+            continue
+        return target
+    return None
 
 
 def _notify_fallback(agent: dict, failed_model: str, target: str,
@@ -1525,12 +1650,18 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
     round_model = agent["model"]      # may switch to the fallback mid-turn
+    # Every model this TURN has already asked, resolved. The loop below had
+    # no bound of its own — see _fallback_target — and a cloud<->local
+    # alternation is real billed calls, so the set spans rounds, not just
+    # the inner retry.
+    tried: set[str] = set()
     for round_no in range(max_rounds):
         round_text = ""
         tool_calls: list[dict] = []
         failure: dict | None = None
 
-        while True:   # at most twice: the agent's model, then the fallback
+        while True:   # bounded by `tried`: each model is asked at most once
+            tried.add(llm_router.effective_model(round_model))
             round_text = ""
             tool_calls = []
             failure = None
@@ -1607,7 +1738,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
             if failure is None:
                 break
-            target = await _fallback_target(agent, round_model, failure)
+            target = await _fallback_target(agent, round_model, failure, tried)
             if not target:
                 yield {"type": "error", "error": failure["error"]}
                 return
@@ -1621,14 +1752,30 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             # network for something an invoice would have explained, and a
             # note that misnames the cause is worse than no note.
             reason = _failure_reason(failure)
+            # trailing break included: the retried round's text is appended
+            # straight onto this, and without it replies read
+            # "...instead.]I'm running on X."
             note = (f"\n\n[Note: {agent.get('name')}'s model "
                     f"({llm_router.effective_model(round_model)}) {reason}, "
-                    f"so this ran on {target} instead.]")
+                    f"so this ran on {target} instead.]\n\n")
             final_text += note
             if dispatch_depth == 0:
                 yield {"type": "text", "text": note}
             _notify_fallback(agent, round_model, target, failure)
             round_model = target
+            # what actually generates this turn, said once, upward. The SSE
+            # meta frame, messages.model_used and the turn trace were all
+            # stamped with the BINDING before the first token — true only
+            # until the first reroute, and then quietly wrong in the one
+            # record an operator consults to ask what a turn cost.
+            yield {"type": "model", "model": llm_router.effective_model(target),
+                   "agent": agent.get("name")}
+            # the prompt named the model that just failed, and the honesty
+            # check grades against this one — leave them disagreeing and the
+            # system accuses her of obeying it (see _swap_model_block)
+            messages[0]["content"] = _swap_model_block(
+                messages[0]["content"], agent,
+                llm_router.effective_model(target))
             # the fallback may have a very different window; tools that size
             # themselves against it must not keep quoting the dead model's
             ctx["model"] = target
