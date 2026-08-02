@@ -216,6 +216,30 @@ PATH_POLICY: dict[str, tuple[str, str]] = {
         "the compiled twin of the tracked vite.config.ts"),
 }
 
+# ── the secret tier ──────────────────────────────────────────────────────
+#
+# These hold CREDENTIALS, not data: the Postgres password and the API keys
+# (.env), the master key every encrypted secret is sealed with
+# (/state/secret.key, inside nova_state), and the tailnet node's private key.
+#
+# A bundle containing them is exactly as sensitive as the secrets themselves
+# — and a backup's whole purpose is to be COPIED somewhere else, which is the
+# one thing you would never do with a file full of API keys. So they are OUT
+# by default, and the bundle records that they are out so a restore can say
+# what it cannot do rather than failing mysteriously.
+#
+# The cost is real and must be stated rather than buried: a secrets-free
+# bundle cannot bring up a working system on its own. It restores the data;
+# the operator supplies the credentials. That is the correct default for a
+# file whose reason to exist is to live somewhere other than this machine.
+SECRET_TIER = {"bind:.env", "volume:nova_state", "volume:tailscale_state"}
+
+
+def is_secret(entry: "Entry", project_dir: str = "") -> bool:
+    key = f"{entry.kind}:{_rel_to(entry.name, project_dir)}"
+    return key in SECRET_TIER
+
+
 # Not filesystem state at all. A socket has no bytes to archive, and a
 # device node restored onto another machine is meaningless.
 NON_STATE_BINDS = {"/var/run/docker.sock", "/dev", "/proc", "/sys"}
@@ -511,13 +535,25 @@ def prune_nested(entries: list[Entry]) -> list[Entry]:
 
 def report(inventory: Iterable[dict], *, git_status, ignored_paths=(),
            readable=None, self_service="backup-runner",
-           project_dir: str = "") -> dict:
+           project_dir: str = "", include_secrets: bool = False) -> dict:
     """The whole coverage answer, including whether a snapshot may proceed."""
     entries, refusals = classify(inventory, git_status=git_status,
                                  self_service=self_service,
                                  project_dir=project_dir)
     entries = entries + host_state_entries(ignored_paths, project_dir)
     entries = prune_nested(entries)
+    if not include_secrets:
+        for e in entries:
+            if e.included and is_secret(e, project_dir):
+                e.disposition = EXCLUDE_DECLINED
+                e.reason = (
+                    "CREDENTIALS, held out so this bundle is safe to copy off "
+                    "the machine. The cost: a restore from it cannot open the "
+                    "database or decrypt any stored secret on its own — keep "
+                    "your .env and the master key somewhere separate, and "
+                    "supply them at restore time. Turn on Settings → Backups "
+                    "→ 'include credentials' to embed them, which makes every "
+                    "copy of this bundle as sensitive as the keys themselves.")
     if readable is not None:
         refusals += check_reachable(entries, readable)
     refusals += check_uncovered_host_state(ignored_paths, entries, project_dir)

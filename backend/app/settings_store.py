@@ -135,6 +135,15 @@ SETTING_DEFS: list[dict] = [
                      "only after it has been read back and verified, and a "
                      "run that cannot account for every store refuses "
                      "rather than producing a partial one.")},
+    {"key": "backups.include_secrets", "type": "boolean", "default": False,
+     "section": "Backups", "label": "Include credentials in backups",
+     "description": ("OFF by default. A backup exists to be copied somewhere "
+                     "else, and a bundle carrying .env and the secrets master "
+                     "key is as sensitive as those keys — anywhere you put it "
+                     "inherits that. Left off, the bundle restores your data "
+                     "but cannot open the database or decrypt stored secrets "
+                     "without you supplying the credentials, so keep a copy "
+                     "of .env and the master key somewhere safe and separate.")},
     {"key": "backups.keep", "type": "number", "default": 7,
      "min": 1, "max": 365, "section": "Backups",
      "label": "Keep this many backups",

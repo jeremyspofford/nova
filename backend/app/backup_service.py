@@ -118,7 +118,8 @@ async def coverage(*, fresh: bool = False) -> dict:
         inventory, project_dir=CONTAINER_ROOT,
         git_status=bi.git_status_fn(CONTAINER_ROOT),
         ignored_paths=bi.ignored_top_level(CONTAINER_ROOT),
-        readable=lambda p: Path(p).exists())
+        readable=lambda p: Path(p).exists(),
+        include_secrets=bool(settings_store.get("backups.include_secrets")))
     _cov_cache = (_time.monotonic(), report)
     return report
 
