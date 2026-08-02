@@ -236,8 +236,20 @@ SECRET_TIER = {"bind:.env", "volume:nova_state", "volume:tailscale_state"}
 
 
 def is_secret(entry: "Entry", project_dir: str = "") -> bool:
-    key = f"{entry.kind}:{_rel_to(entry.name, project_dir)}"
-    return key in SECRET_TIER
+    """Whether this entry holds credentials.
+
+    Volume names arrive with or without the compose project prefix depending
+    on which inventory source saw them, so the match tolerates it the same
+    way `_volume_key` does — an exact-string test here silently let the
+    master key into a bundle when the name came through as
+    `nova_nova_state`.
+    """
+    name = _rel_to(entry.name, project_dir)
+    if entry.kind == "volume":
+        return any(name == v or name.endswith("_" + v) or name.endswith("-" + v)
+                   for v in (s.split(":", 1)[1] for s in SECRET_TIER
+                             if s.startswith("volume:")))
+    return f"{entry.kind}:{name}" in SECRET_TIER
 
 
 # Not filesystem state at all. A socket has no bytes to archive, and a

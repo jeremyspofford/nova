@@ -70,8 +70,12 @@ check("the attachments blob store is in — the tier the 12-day-old spec "
       f"{PROJECT}/data/attachments" in inc)
 check("the database is in, via pg_dump rather than a file copy",
       "nova_postgres_data" in inc)
-check("the control volume (secret.key, instance_id) is in",
-      "nova_nova_state" in inc)
+check("the control volume (secret.key, instance_id) is a CREDENTIAL and is "
+      "held out by default", "nova_nova_state" not in inc)
+with_secrets = set(bc.report(LIVE, git_status=git_status,
+                             include_secrets=True)["included"])
+check("...and is in when credentials are turned on",
+      any(n.endswith("nova_state") for n in with_secrets), str(with_secrets))
 check("source code is NOT in — it restores from the repo",
       f"{PROJECT}/backend" not in inc)
 check("model weights are NOT in — re-downloadable",
@@ -156,8 +160,19 @@ check("...and says to key it by service and destination, because the "
 print("\n10. host state the policy includes becomes a real entry, not a refusal")
 env = bc.report(LIVE, git_status=git_status, project_dir=PROJECT,
                 ignored_paths=[f"{PROJECT}/.env", f"{PROJECT}/.ruff_cache"])
-check(".env is IN the bundle — it holds the password to Nova's own database",
-      f"{PROJECT}/.env" in set(env["included"]))
+# CHANGED 2026-08-02: .env is a CREDENTIAL, and a backup exists to be copied
+# somewhere else — which is the one thing you would never do with a file of
+# API keys. It is held out unless backups.include_secrets is on.
+check(".env is held OUT by default, so a bundle is safe to copy",
+      f"{PROJECT}/.env" not in set(env["included"]))
+env_in = bc.report(LIVE, git_status=git_status, project_dir=PROJECT,
+                   ignored_paths=[f"{PROJECT}/.env"], include_secrets=True)
+check("...and IN when the operator turns credentials on",
+      f"{PROJECT}/.env" in set(env_in["included"]))
+secret_reason = next((e["reason"] for e in env["entries"]
+                      if e["name"].endswith("/.env")), "")
+check("...with the cost stated, not buried",
+      "cannot open the database" in secret_reason, secret_reason[:60])
 check("a linter cache is neither included nor refused", env["may_snapshot"],
       str(env["refusals"])[:80])
 
@@ -171,6 +186,11 @@ print("\n12. compose and container views of one volume are ONE entry")
 dup = bc.report([inv("volume", "nova_state", source="compose", project="nova"),
                  inv("volume", "nova_nova_state", source="container", project="nova")],
                 git_status=git_status)
+# nova_state is a secret tier, so ask with credentials ON — the point of
+# this check is DEDUPE, not the secret policy
+dup = bc.report([inv("volume", "nova_state", source="compose", project="nova"),
+                 inv("volume", "nova_nova_state", source="container", project="nova")],
+                git_status=git_status, include_secrets=True)
 check("the same volume is not listed twice",
       dup["included"] == ["nova_state"], str(dup["included"]))
 
