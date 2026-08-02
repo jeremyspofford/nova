@@ -132,8 +132,19 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
     stamp = time.strftime("%Y%m%dT%H%M%SZ",
                           time.gmtime((now or time.time)()))
     out_dir.mkdir(parents=True, exist_ok=True)
+    # NEVER overwrite an existing bundle. The name is second-resolution, and
+    # two snapshots in the same second is not hypothetical: the pre-restore
+    # safety snapshot is taken moments before a restore reads a bundle from
+    # the same directory. Measured — os.replace clobbered the bundle being
+    # restored WITH THE STATE IT WAS ABOUT TO REPLACE, the restore then
+    # "succeeded", and the rollback silently did nothing. A backup system
+    # that can destroy a backup is worse than none.
     final = out_dir / f"nova-backup-{stamp}.tar.gz"
-    partial = out_dir / f"nova-backup-{stamp}.tar.gz.part"
+    n = 1
+    while final.exists():
+        final = out_dir / f"nova-backup-{stamp}-{n}.tar.gz"
+        n += 1
+    partial = final.with_suffix(final.suffix + ".part")
 
     members: list[Member] = []
     with tempfile.TemporaryDirectory(prefix="nova-snapshot-") as tmp:

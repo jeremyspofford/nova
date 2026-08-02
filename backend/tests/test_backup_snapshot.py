@@ -88,6 +88,25 @@ try:
           "say what it does not have", len(man["excluded"]) == 1,
           str(man["excluded"]))
 
+    print("\n1b. a second bundle in the same second NEVER overwrites the first")
+    # Found by the restore drill: the pre-restore safety snapshot landed on
+    # the very bundle being restored (same second, same directory, os.replace
+    # clobbers). The restore then "succeeded" and rolled nothing back,
+    # because it replayed the state it was meant to discard. A backup system
+    # that can destroy a backup is worse than none.
+    before = bundle.read_bytes()
+    man2 = bs.create(coverage_for(src), out_dir=out, dsn="postgresql://x@h/db",
+                     volume_paths={"nova_state": str(vol)}, pg_dump=pg,
+                     now=lambda: 0)
+    man3 = bs.create(coverage_for(src), out_dir=out, dsn="postgresql://x@h/db",
+                     volume_paths={"nova_state": str(vol)}, pg_dump=pg,
+                     now=lambda: 0)
+    check("two snapshots at the same timestamp get different names",
+          man2["path"] != man3["path"], Path(man3["path"]).name)
+    check("both exist", Path(man2["path"]).exists() and Path(man3["path"]).exists())
+    check("the earlier bundle is byte-for-byte untouched",
+          bundle.read_bytes() == before)
+
     print("\n2. verification re-hashes the ARTIFACT, not the manifest")
     bad = work / "altered.tar.gz"
     with tarfile.open(bundle, "r:gz") as t, tarfile.open(bad, "w:gz") as o:
