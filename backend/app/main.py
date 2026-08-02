@@ -15,6 +15,7 @@ from app.llm import providers
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
 from app.router_coder import router as coder_router
+from app.router_files import router as files_router
 from app.router_system import router as system_router
 from app.router_voice import router as voice_router
 
@@ -256,6 +257,7 @@ app.include_router(chat_router)
 app.include_router(voice_router)
 app.include_router(system_router)
 app.include_router(coder_router)
+app.include_router(files_router)
 
 
 @app.get("/health")

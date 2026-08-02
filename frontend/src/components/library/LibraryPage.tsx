@@ -7,7 +7,9 @@ import { ToolsTab } from './ToolsTab';
 import { SkillsTab } from './SkillsTab';
 import { CodingTab } from './CodingTab';
 import { DocumentsTab } from './DocumentsTab';
+import { FilesTab } from './FilesTab';
 import { OverlayScrim } from '../ui';
+import { confirmDiscardFiles } from './files/dirty';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
  *  skills, documents. Entity management pulled out of Settings so Settings
@@ -19,19 +21,24 @@ import { OverlayScrim } from '../ui';
  *  of. */
 
 const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills',
-               'documents', 'coding'] as const;
+               'documents', 'coding', 'files'] as const;
 type Kind = typeof KINDS[number];
 
 export function LibraryPage({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const { kind } = useParams();
+  // Every way OUT of the Files tab passes through here — a tab button, the
+  // scrim, the × — and none of them knew the editor had unsaved work.
+  const leave = (go: () => void) => { if (confirmDiscardFiles()) go(); };
   const active: Kind =
     (KINDS as readonly string[]).includes(kind ?? '') ? (kind as Kind) : 'agents';
 
   return (
-    <OverlayScrim onClose={onClose}>
+    <OverlayScrim onClose={() => leave(onClose)}>
       <div
-        className="w-[46rem] max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        /* Files is a two-pane explorer: a tree beside an editor does not fit
+           the card width the other tabs were sized for. */
+        className={`${active === 'files' ? 'w-[64rem]' : 'w-[46rem]'} max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl`}
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
@@ -43,7 +50,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
             {KINDS.map(k => (
               <button
                 key={k}
-                onClick={() => navigate(`/library/${k}`)}
+                onClick={() => leave(() => navigate(`/library/${k}`))}
                 className={`px-3 py-1.5 rounded capitalize shrink-0 ${
                   active === k ? 'bg-teal-700/50 text-teal-200' : 'text-stone-400 hover:text-stone-200'}`}
               >
@@ -51,7 +58,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
+          <button onClick={() => leave(onClose)} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
         </header>
         <div className="flex-1 overflow-y-auto nice-scroll p-4">
           {active === 'agents' ? <AgentsTab />
@@ -61,6 +68,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
             : active === 'tools' ? <ToolsTab />
             : active === 'documents' ? <DocumentsTab />
             : active === 'coding' ? <CodingTab />
+            : active === 'files' ? <FilesTab />
             : <SkillsTab />}
         </div>
       </div>

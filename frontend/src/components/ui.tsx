@@ -65,3 +65,21 @@ export function CardsSkeleton({ n = 4 }: { n?: number }) {
     </div>
   );
 }
+
+
+/** A byte count as the operator reads it. Shared because the Documents tab
+ *  and the Files tab describe the same rows and had drifted into two
+ *  byte-identical copies. */
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** How the text of a stored document was obtained — the difference between a
+ *  document and a READING of one, which the operator has to be able to see. */
+export const SOURCE_NOTE: Record<string, string> = {
+  mechanical: "read from the document's own text layer — exact",
+  ocr: 'read by OCR from a scan or photo — may contain recognition errors',
+  vision: 'described by a vision model — a reading, not the document itself',
+};

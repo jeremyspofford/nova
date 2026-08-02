@@ -3,7 +3,7 @@ import {
   AttachmentUsage, StoredAttachment, deleteAttachment, downloadAttachment,
   getAttachment, listAttachments,
 } from '../../api';
-import { CardsSkeleton } from '../ui';
+import { CardsSkeleton, SOURCE_NOTE, fmtBytes } from '../ui';
 import { fmtTime } from '../../time';
 
 /** Documents the operator handed Nova, kept (roadmap #22b).
@@ -13,18 +13,6 @@ import { fmtTime } from '../../time';
  *  bytes are reachable — a photographed letter exists nowhere else, so a
  *  store with no way to get the original back is not a store.
  */
-
-const SOURCE_NOTE: Record<string, string> = {
-  mechanical: "read from the document's own text layer — exact",
-  ocr: 'read by OCR from a scan or photo — may contain recognition errors',
-  vision: 'described by a vision model — a reading, not the document itself',
-};
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function DocumentsTab() {
   const [rows, setRows] = useState<StoredAttachment[]>([]);

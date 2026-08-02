@@ -208,6 +208,44 @@ startup and reindexes on write, and edits made outside Nova are picked up
 on the next restart. Cloud sync is deliberately not built in yet — see the
 roadmap for the local-first sync pipeline design.
 
+## Files (Library → Files)
+
+A tree over the three places Nova keeps things. Folders expand in place —
+they are never entered, so the path you are reading is always the whole
+path — and double-clicking a **file** opens it in the editor beside the
+tree. `Ctrl`/`Cmd`-`S` saves; the arrow keys walk the tree.
+
+On a phone the two panes take turns instead of sharing the width, and a
+single **tap** opens a file, because touch has no double-click.
+
+| Root | Path | What you can do |
+|---|---|---|
+| **Memory** | `./data/memory` | Read and edit notes, create and delete them in `topics/`, `skills/`, `sources/` |
+| **Documents** | `./data/attachments` | Read what you have handed her, grouped by kind; delete |
+| **Workspace** | `./data/workspace` | Anything: nested folders, any file type. Scratch space she can write into and you can drop files in |
+
+Three things are refused on purpose, and each says so in a sentence rather
+than greying out a button:
+
+- **A save writes exactly the bytes you typed.** Editing does *not* go
+  through the memory write path, whose link pass adopts corpus tags into
+  frontmatter, appends a `Related:` line and restamps `timestamp` —
+  measured at 203 of 214 topics changed by a save with *no* edits. The
+  index is updated separately, so search stays consistent.
+- **Memory has no subfolders.** The store globs `<type-dir>/*.md` exactly
+  one level deep, so a folder made there would hold notes she could never
+  find. `journals/` is append-only (it is the record of what happened) and
+  `soul.md` is edited in Settings, where it is kept in sync with the
+  persona.
+- **Nova's own source code is not a root.** A file manager over the
+  checkout would be a second, unreviewed way to rewrite `consents.py` and
+  `rules.py`; source changes go through the coder sidecar and its review.
+  `.env`, the k8s ServiceAccount token in `data/runtime`, and the
+  voiceprint clips in `data/wake-training` are excluded for the same kind
+  of reason. A path is reachable only if it resolves inside a declared
+  root, so exposing a new place is a deliberate edit, never a forgotten
+  exclusion.
+
 ## MCP servers (connect Nova to the tool ecosystem)
 
 Nova is an MCP (Model Context Protocol) client — Settings → Tools → **MCP
@@ -265,6 +303,7 @@ an agent. See `docs/plans/mcp-client.md` for the full design.
 | **Hot-swappable bundled inference** | Settings → Inference toggle starts/stops the bundled Ollama container via the `inference-control` sidecar — the only holder of the docker socket, exposing a fixed-verb start/stop/status API on the compose network only |
 | **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
 | **MCP client** (HTTP + stdio) | Settings → Tools → MCP servers; operator-registered, hash-approved tool descriptions, lazy loading (`find_mcp_tools`) for grants not marked always-on; stdio servers run via the `mcp-runner` sidecar |
+| **Files explorer** | Library → Files; expand-in-place tree over memory, documents and workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.

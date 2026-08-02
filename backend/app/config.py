@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     # gitignored like ./data/memory. See app/wake_training.py.
     wake_training_dir: str = "./data/wake-training"
 
+    # Where files she makes (and you hand-drop) live — the Workspace root of
+    # the Files tab. Gitignored under ./data like the rest, and deliberately
+    # NOT nested inside the memory dir: nothing here is a memory note, and
+    # OkfStore.iter_files would never see it anyway.
+    workspace_dir: str = "./data/workspace"
+
     # Memory
     okf_memory_dir: str = "./data/memory"
     memory_context_max_chars: int = 4000
