@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { deleteMemoryItem, getBrainGraph, getMemoryItem, getSettings, GraphEdge, GraphNode, MemoryItem } from '../api';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Markdown } from '../components/Markdown';
+import { JournalEntries } from '../components/JournalEntries';
 import { OverlayScrim } from '../components/ui';
 import { GUTTER, setShellInsets } from '../shell/insets';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
@@ -423,6 +424,10 @@ export function Brain() {
 
   const fm = detail?.frontmatter ?? {};
   const badge = TYPE_BADGE[fm.type] ?? TYPE_BADGE.topic;
+  // The date a journal's entries live under. Taken from the FILENAME rather
+  // than from frontmatter `date`: the id is what the entries endpoint is
+  // keyed on, and the oldest journals on disk have no date key at all.
+  const journalDate = detail?.id.match(/^journals\/(\d{4}-\d{2}-\d{2})\.md$/)?.[1] ?? null;
 
   // two-step delete resets whenever the card changes
   useEffect(() => { setConfirmingDelete(false); setDeleteErr(null); }, [detail?.id]);
@@ -539,7 +544,14 @@ export function Brain() {
         {fm.description && (
           <p className="text-stone-400 italic mb-3">{fm.description}</p>
         )}
-        <Markdown>{detail.content}</Markdown>
+        {/* A journal is a day of separate turns, and each is independently
+            forgettable — so it renders as entries rather than as one wall of
+            markdown. Everything else is a single document and reads as one. */}
+        {(fm.type ?? 'topic') === 'journal' && journalDate ? (
+          <JournalEntries date={journalDate} onChanged={() => openDetail(detail.id)} />
+        ) : (
+          <Markdown>{detail.content}</Markdown>
+        )}
         {connections.length > 0 && (
           <div className="mt-4 pt-3 border-t border-stone-800">
             <div className="text-[10px] uppercase tracking-wide text-stone-500 mb-1.5">

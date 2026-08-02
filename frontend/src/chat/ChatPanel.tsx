@@ -38,7 +38,12 @@ import { groupModels } from '../models';
  *  images picked this session (history rows come back name-only). */
 interface UiAttachment { kind: 'image' | 'text' | 'doc'; name: string; mime: string; preview?: string }
 /** A picked-but-not-yet-sent attachment; data = base64 (image) or file text. */
-interface PendingAttachment extends UiAttachment { data: string }
+interface PendingAttachment extends UiAttachment {
+  data: string;
+  /** id from POST /api/v1/attachments once the ORIGINAL is kept. Sent with
+   *  the turn so the stored document knows which conversation carried it. */
+  storedId?: string;
+}
 
 type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
@@ -484,9 +489,13 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
    *
    *  Failure here is reported and never blocks: not keeping a copy is worse
    *  than the status quo only if it also stops the answer. */
-  async function captureOriginal(f: File) {
+  async function captureOriginal(f: File, name: string) {
     try {
-      await uploadAttachment(f);
+      const stored = await uploadAttachment(f);
+      // tag the pending entry so the send can name it. Matched on the chip's
+      // own name because the upload resolves after addFiles has moved on.
+      setPending(prev => prev.map(p =>
+        p.name === name && !p.storedId ? { ...p, storedId: stored.id } : p));
     } catch (err) {
       setItems(prev => [...prev, { id: uid(), kind: 'error',
         content: `${f.name} was sent to Nova, but keeping a copy failed: ${errText(err)}. `
@@ -497,7 +506,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   async function addFiles(list: FileList | File[] | null) {
     if (!list) return;
     for (const f of Array.from(list)) {
-      void captureOriginal(f);
+      void captureOriginal(f, f.name || 'photo.jpg');
       try {
         if (f.type.startsWith('image/')) {
           const { data, mime, preview } = await downscaleImage(f);
@@ -1624,7 +1633,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     try {
       for await (const event of streamChat(message, conversationId ?? undefined, opts?.source, ac.signal,
                                            atts.map(({ kind, name, mime, data }) => ({ kind, name, mime, data })),
-                                           opts?.speakerId)) {
+                                           opts?.speakerId,
+                                           atts.map(a => a.storedId).filter((x): x is string => !!x))) {
         if (event.type === 'meta') {
           liveTraceId = event.traceId ?? null;
         } else if (event.type === 'text') {

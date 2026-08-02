@@ -666,6 +666,46 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                            (("kind", want_kind), ("tag", want_tag),
                             ("contains", needle)) if v}}
 
+    async def journal_entries(self, doc_id: str) -> list[dict]:
+        """Entries in a journal, newest last, each with a content address."""
+        return self.store.journal_entries(doc_id)
+
+    async def forget_journal_entry(self, doc_id: str, sha256: str,
+                                   reason: str = "") -> Optional[dict]:
+        """Remove ONE journal entry and everything that serves it.
+
+        This is what makes "forget that" true. Before it, a turn where Nova
+        quoted a document was permanent: journals are append-only one file
+        per day, the delete tool refuses them, and the only affordance
+        destroyed a whole day. Measured on the live ledger, journals appear
+        in 122 of 695 retrieval spans, so "it stays in the prompt" is not
+        theoretical.
+
+        Two things must both happen or the removal is theatre:
+          * the FILE loses the text, and
+          * the INDEX is rebuilt from the shortened file — BM25 scores a
+            whole file as one document, so leaving the postings alone means
+            the entry still ranks and `_snippets` still re-reads from disk.
+
+        Held under the same lock as `write`, because the day's next turn
+        appends to this very file and a read-modify-write racing an append
+        loses the append.
+
+        Returns the removed entry, or None if nothing matched that hash —
+        which is what a stale view looks like, and must never be reported as
+        success.
+        """
+        async with self._lock:
+            when = timefmt.now_local().strftime("%Y-%m-%d %H:%M")
+            note = f"[removed by the operator on {when}"
+            note += f" — {reason.strip()}]" if reason.strip() else "]"
+            entry = self.store.excise_journal_entry(doc_id, sha256, note)
+            if not entry:
+                return None
+            self._index_file(doc_id)
+            log.info("journal entry excised from %s (%s)", doc_id, sha256[:12])
+            return entry
+
     async def delete_item(self, doc_id: str) -> bool:
         async with self._lock:
             parsed = self.store.read_file(doc_id)

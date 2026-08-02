@@ -327,13 +327,18 @@ export async function* streamChat(message: string, conversationId?: string,
                                   source?: string, signal?: AbortSignal,
                                   attachments?: { kind: string; name: string; mime: string; data: string }[],
                                   speakerId?: string,
+                                  /** ids of documents already kept by POST /attachments — records
+                                   *  which turn carried them, so a stored document can be traced
+                                   *  back to its conversation */
+                                  attachmentIds?: string[],
                                   ): AsyncGenerator<ChatEvent> {
   const response = await apiFetch(`${API_URL}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, conversation_id: conversationId, source,
                            ...(speakerId ? { speaker: speakerId } : {}),
-                           ...(attachments?.length ? { attachments } : {}) }),
+                           ...(attachments?.length ? { attachments } : {}),
+                           ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}) }),
     signal,
   });
 
@@ -1391,6 +1396,41 @@ export interface MemoryItem {
   id: string;
   frontmatter: Record<string, string>;
   content: string;
+}
+
+// ── forgetting one journal entry (roadmap #22) ───────────────────────────
+//
+// Operator-only by construction: `delete_memory_item` refuses journals so a
+// model can never erase its own history, which means this UI is the ONLY
+// path that exists. An API with no surface would leave "forget that" true
+// in principle and false in practice.
+
+/** One entry in a day's journal. Addressed by `sha256`, NEVER by `stamp` —
+ *  a single day routinely carries 43 entries under 15 distinct timestamps,
+ *  so a removal keyed on the stamp would take unrelated turns with it. */
+export interface JournalEntry {
+  ordinal: number;
+  stamp: string;
+  text: string;
+  sha256: string;
+}
+
+export async function getJournalEntries(date: string):
+    Promise<{ doc_id: string; entries: JournalEntry[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/memory/journal/${date}/entries`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load journal entries');
+  return r.json();
+}
+
+export async function forgetJournalEntry(date: string, sha256: string, reason: string):
+    Promise<{ forgotten: boolean; stamp: string; chars: number }> {
+  const r = await apiFetch(`${API_URL}/api/v1/memory/journal/${date}/forget`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sha256, reason }),
+  });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Forget failed');
+  return r.json();
 }
 
 export async function getMemoryItem(id: string): Promise<MemoryItem> {

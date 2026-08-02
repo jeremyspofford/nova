@@ -73,6 +73,74 @@ async def run_command(name: str, body: dict | None = None):
     return await cmd.run((body or {}).get("arg", ""))
 
 
+# ── forgetting one journal entry (roadmap #22) ───────────────────────────
+#
+# OPERATOR ONLY, and that is the whole design. `delete_memory_item` refuses
+# journals for a good reason — "journals are the audit trail" — and a model
+# that can erase its own history is a model that can cover a mistake. That
+# refusal at builtin.py is untouched; this is a different door, behind the
+# auth middleware, reached from the operator's own UI. Same shape as
+# `agent_registry.update_agent(operator=True)`.
+#
+# It exists because "forget that document" was false. A turn where Nova
+# quoted a payslip was permanent, retrieved into later prompts (measured:
+# journals appear in 122 of 695 retrieval spans), and removable only by
+# destroying an entire day of the operator's life.
+
+
+@router.get("/api/v1/memory/journal/{date}/entries")
+async def journal_entries(date: str):
+    """The day's entries, each with the content hash used to address one.
+
+    Addressed by hash rather than by the `## <stamp>` heading because a
+    stamp is not unique: 2026-08-01 has 42 headings and 14 distinct ones, so
+    a deletion keyed on the heading would take unrelated turns with it.
+    """
+    doc_id = f"journals/{date}.md"
+    entries = await memory.journal_entries(doc_id)
+    if not entries:
+        raise HTTPException(status_code=404,
+                            detail=f"no journal for {date}, or it has no entries")
+    return {"doc_id": doc_id, "entries": entries}
+
+
+@router.post("/api/v1/memory/journal/{date}/forget")
+async def forget_journal_entry(date: str, body: dict):
+    """Remove one entry and reindex. The hash is required and is the guard.
+
+    A stale hash means the operator is acting on a view that has moved on —
+    the day's next turn appended, or someone already removed it — and that
+    returns 409 rather than removing whatever is now in that position.
+    """
+    sha = str((body or {}).get("sha256") or "").strip()
+    if len(sha) != 64:
+        raise HTTPException(
+            status_code=422,
+            detail="sha256 of the entry to forget is required (see the "
+                   "entries endpoint) — entries are addressed by content, "
+                   "not by their timestamp, which is not unique")
+    entry = await memory.forget_journal_entry(
+        f"journals/{date}.md", sha, str((body or {}).get("reason") or ""))
+    if not entry:
+        raise HTTPException(
+            status_code=409,
+            detail="no entry with that hash is in this journal any more — "
+                   "it may already be gone, or the day has changed since you "
+                   "loaded it. Reload and try again.")
+    # Recorded AFTER the fact, never before: an event row written first and
+    # then a failed write is a receipt for something that did not happen,
+    # which is the one outcome worse than not having the feature.
+    try:
+        from app import capability_events as ce
+        ce.record(ce.MEMORY, f"journals/{date}.md",
+                  "entry_forgotten", actor="operator",
+                  detail={"stamp": entry["stamp"], "chars": len(entry["text"])})
+    except Exception:
+        log.exception("journal excision succeeded but was not recorded")
+    return {"forgotten": True, "stamp": entry["stamp"],
+            "chars": len(entry["text"])}
+
+
 # ── attachments: documents the operator handed over (roadmap #22b) ───────
 #
 # Uploaded on their own, BEFORE the turn, as raw multipart rather than
@@ -437,9 +505,18 @@ async def chat_stream(request: ChatRequest):
     if speaker:
         user_meta["speaker"] = {"id": speaker["id"], "name": speaker["name"],
                                 "role": speaker["role"]}
-    await conversations.append_message(
+    user_message_id = await conversations.append_message(
         conversation_id, "user", persist_text,
         metadata=user_meta or None)
+    # Bind the kept originals to the turn that carried them. Provenance only —
+    # the bytes were already safe before this request started, which is the
+    # point of uploading separately — but without it `attachments.message_id`
+    # is never written by anything, and "which conversation was that letter
+    # from?" has no answer at all.
+    if request.attachment_ids:
+        from app import attachments as attachment_store
+        await attachment_store.attach_to_message(
+            request.attachment_ids, user_message_id)
 
     async def generate():
         final_text = ""

@@ -1,5 +1,6 @@
 """OKF-style markdown file store. Every memory item is a real file on disk."""
 
+import hashlib
 import logging
 import os
 import re
@@ -170,6 +171,98 @@ class OkfStore:
             with path.open("a") as f:
                 f.write(f"\n{entry}")
         return str(path.relative_to(self.base_dir))
+
+    # ── journal entries: reading and forgetting one (roadmap #22) ────────
+    #
+    # A journal is one file per day grown by raw append, so an entry has no
+    # storage object of its own and no id. These two methods are the first
+    # and only parser of that shape, and they exist because "forget that
+    # document" was false: a turn where Nova quoted a payslip was permanent,
+    # retrieved into later prompts, and removable only by destroying the
+    # whole day.
+    #
+    # ADDRESSING IS BY CONTENT HASH, never by the `## <stamp>` heading.
+    # Measured on the live corpus: 2026-08-01 has 42 headings and 14 distinct
+    # ones, 2026-07-17 has 90 and 48. A stamp identifies between one and
+    # eight entries, so a deletion keyed on it would silently take unrelated
+    # turns with it. The hash also survives the operator flipping
+    # `nova.time_format`, which has already changed the heading format on
+    # disk twice (files before 2026-07-18 use 24h, later ones 12h, and
+    # 2026-07-13 has no heading at all).
+
+    _ENTRY_RE = re.compile(r"^## (.+?)$", re.M)
+
+    def _journal_path(self, doc_id: str) -> Optional[Path]:
+        """A journal path, or None. Same traversal guard as read_file — ids
+        arrive from the API — plus a hard restriction to journals/, so this
+        splicing path can never be aimed at a topic, a skill or soul.md."""
+        path = (self.base_dir / doc_id).resolve()
+        journals = (self.base_dir / TYPE_DIRS["journal"]).resolve()
+        if (not path.is_relative_to(journals) or path.suffix != ".md"
+                or not path.is_file()):
+            return None
+        return path
+
+    def journal_entries(self, doc_id: str) -> list[dict]:
+        """Every entry in a journal, with a stable content address.
+
+        The `ordinal` is positional and only meaningful against the file as
+        it is RIGHT NOW; `sha256` is what a caller should hold on to.
+        """
+        path = self._journal_path(doc_id)
+        if not path:
+            return []
+        fm, body = self.parse_frontmatter(path.read_text())
+        out = []
+        marks = list(self._ENTRY_RE.finditer(body))
+        for i, m in enumerate(marks):
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(body)
+            text = body[m.start():end].rstrip()
+            out.append({
+                "ordinal": i,
+                "stamp": m.group(1).strip(),
+                "text": text,
+                "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            })
+        # A file whose first block predates the heading convention (2026-07-13)
+        # has body text before any `## ` — surface it rather than pretending
+        # the file starts at the first heading, or it can never be forgotten.
+        head = body[:marks[0].start()].strip() if marks else body.strip()
+        if head:
+            out.insert(0, {"ordinal": -1, "stamp": "(no heading)", "text": head,
+                           "sha256": hashlib.sha256(head.encode()).hexdigest()})
+        return out
+
+    def excise_journal_entry(self, doc_id: str, sha256: str,
+                             tombstone: str) -> Optional[dict]:
+        """Remove ONE entry from a journal, leaving a tombstone in its place.
+
+        Returns the removed entry, or None if no entry has that hash — which
+        is also what happens when the operator is acting on a stale view,
+        and is why the caller must treat None as "nothing was removed"
+        rather than as success.
+
+        A tombstone rather than a silent splice: a hole in a transcript is
+        its own kind of lie, and an operator scrolling last Tuesday should
+        be able to see that something was taken out and when.
+        """
+        path = self._journal_path(doc_id)
+        if not path:
+            return None
+        raw = path.read_text()
+        fm, body = self.parse_frontmatter(raw)
+        for entry in self.journal_entries(doc_id):
+            if entry["sha256"] != sha256:
+                continue
+            replacement = f"## {entry['stamp']}\n\n> {tombstone}\n"
+            new_body = body.replace(entry["text"], replacement.rstrip(), 1)
+            if new_body == body:                     # nothing matched; refuse
+                return None
+            tmp = path.with_suffix(".part")
+            tmp.write_text(f"{self.render_frontmatter(fm)}\n\n{new_body.strip()}\n")
+            os.replace(tmp, path)                    # atomic: never a half file
+            return entry
+        return None
 
     # ── reads ────────────────────────────────────────────────────────────
 

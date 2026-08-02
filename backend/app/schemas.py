@@ -38,6 +38,11 @@ class ChatRequest(BaseModel):
     # NARROW privileges — never authentication.
     speaker: Optional[str] = None
     attachments: Optional[list[ChatAttachment]] = None
+    # ids returned by POST /api/v1/attachments for the documents riding this
+    # turn. The bytes were already kept — this only records WHICH turn
+    # carried them, which is what makes "forget that document" able to find
+    # the conversation it belongs to later.
+    attachment_ids: Optional[list[str]] = None
 
 
 class ConversationInfo(BaseModel):

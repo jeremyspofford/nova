@@ -48,6 +48,15 @@ RECOMMENDATION = "recommendation"
 # "changed" for an automation that merely ran. "Who enabled review-memory-usage"
 # was unanswerable, which is what this kind is here to fix.
 AUTOMATION = "automation"
+# The operator removing something from her memory. Not a capability change
+# either, and here for the same reason RECOMMENDATION is: it is the only
+# channel by which the fact reaches her. A journal entry can be excised now
+# (roadmap #22) because "forget that document" was otherwise false, and a
+# removal she cannot see is one she will contradict — she would keep
+# answering from a summary of text that is gone. The detail carries the
+# entry's stamp and length and NEVER its content: a log that quotes what was
+# forgotten has not forgotten it.
+MEMORY = "memory"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.

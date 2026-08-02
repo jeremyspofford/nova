@@ -1246,6 +1246,47 @@ See README for what works. This file is the ordered backlog.
    mechanical yet — a `third_party` note is structurally excluded from
    `main`'s retrieved context while the journal paraphrase of the same turn
    IS injected, so the trust tier is a real decision, not a detail.
+   **"Forget that document" is TRUE now (built 2026-08-01).** It was false:
+   every turn journals `User: … Nova: …` (`router_chat.py`), journals are
+   append-only one file per day, `delete_memory_item` refuses them
+   ("journals are the audit trail" — a good reason, and it is untouched),
+   and the only affordance destroyed a WHOLE DAY. Measured on the live
+   ledger: journals appear in **122 of 695** retrieval spans, so the quoted
+   document really does keep coming back.
+   `store.journal_entries` / `excise_journal_entry`, `memory.forget_journal_entry`
+   under the same lock as the writer, two operator-only endpoints, and a
+   Journal entries view in the memory detail card (Brain → Journals → a day).
+   Three things make it real rather than theatre:
+   **(1) addressed by CONTENT HASH, never the `## <stamp>` heading** —
+   measured live, 2026-08-01 carries 43 entries under 15 distinct stamps, so
+   a stamp identifies 1–8 entries and a deletion keyed on it would take
+   unrelated turns with it. The hash also survives `nova.time_format`
+   flipping, which has already changed the heading format on disk twice.
+   **(2) the INDEX is rebuilt from the shortened file** — BM25 scores a
+   whole file as one document, so leaving the postings alone deletes nothing
+   that matters. Verified: `ARTICHOKE` matched `journals/2026-08-01.md`
+   before and matches nothing after.
+   **(3) a tombstone, not a silent splice** — `> [removed by the operator on
+   … — <reason>]`. A hole in a transcript is its own kind of lie. The
+   capability event is recorded AFTER the write (a row first, then a failed
+   write, is a receipt for something that did not happen) and carries the
+   stamp and character count but NEVER the text: a log that quotes what was
+   forgotten has not forgotten it.
+   Operator-only by construction — `builtin.py:206` is unchanged byte for
+   byte — which is exactly why the UI is not optional: the model cannot do
+   this, so the operator's own surface is the only path that exists. A stale
+   hash returns 409 instead of removing whatever now sits in that position,
+   and `_journal_path` confines the splice to `journals/`, so it can never
+   be aimed at a topic, a skill or `soul.md`.
+   `backend/tests/test_journal_forget.py` covers all of it.
+   **Still open:** the same reply text also sits in the `messages` row.
+   The journal was the retrieval problem, but "forget" is not complete
+   until both go.
+   **Also fixed here:** `attachments.attach_to_message` had ZERO callers —
+   shipped that morning and never wired — so `message_id` was never written
+   and a stored document could not be traced to its conversation. Now
+   threaded from the composer through `attachment_ids`, with
+   `conversation_id` derived from the message rather than left NULL.
    **Found while verifying, and worth its own item: she is handed a rule's
    NAME with no scope, and invents the scope.** Asking about an attached
    file got "the `no-secret-in-requests-expanded` guardrail blocks this" —

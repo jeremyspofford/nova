@@ -232,8 +232,15 @@ async def attach_to_message(ids: list[str], message_id: str) -> None:
         return
     try:
         async with db.acquire() as conn:
+            # conversation_id comes from the message rather than the caller:
+            # the upload happens before the turn and the client does not
+            # reliably know the conversation yet, and a column that is
+            # derivable but left NULL reads as a missing feature.
             await conn.execute(
-                "UPDATE attachments SET message_id = $1 WHERE id = ANY($2::uuid[])",
+                """UPDATE attachments a
+                      SET message_id = m.id, conversation_id = m.conversation_id
+                     FROM messages m
+                    WHERE m.id = $1 AND a.id = ANY($2::uuid[])""",
                 uuid.UUID(message_id), [uuid.UUID(i) for i in ids])
     except Exception:
         log.exception("could not bind attachments %s to message %s", ids, message_id)
