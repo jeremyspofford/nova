@@ -37,9 +37,17 @@ services:
       NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
       NOVA_TRUST_LOCALHOST: ${NOVA_TRUST_LOCALHOST:-true}
       OKF_MEMORY_DIR: /app/data/memory
+      NOVA_BACKUP_DIR: /app/data/backups
+      NOVA_PROJECT_DIR: /app/project
+      NOVA_PROJECT_DIR_HOST: ${PWD:-/home/jeremy/workspace/nova}
+
       # labelled wake-word clips (voice.wake_learning, off by default) — plain
       # files next to memory, so tools/wake-training reads them directly
       WAKE_TRAINING_DIR: /app/data/wake-training
+      # absolute for the same reason OKF_MEMORY_DIR is: uvicorn runs from
+      # /app/backend, so a relative default would resolve INSIDE the source
+      # mount and quietly scatter the operator's files through the checkout
+      WORKSPACE_DIR: /app/data/workspace
       # shown read-only in Settings → Storage — the mount itself is fixed at
       # container-create time and can't be changed from inside the container
       NOVA_MEMORY_DIR_HOST: ${NOVA_MEMORY_DIR:-./data/memory}
@@ -87,14 +95,32 @@ services:
       # If this mount is missing the backend REFUSES uploads rather than
       # writing the only copy of a photographed letter into a container layer.
       - ./data/attachments:/app/data/attachments
+      # scratch space she can write into and the operator can browse in
+      # Library → Files. Its own mount for the same reason attachments has
+      # one: nothing in it is a memory note, and OkfStore.iter_files would
+      # never see it if it were nested there.
+      - ./data/workspace:/app/data/workspace
       # the ServiceAccount credential for her runtime, written by
       # workloads/setup.sh. Read-only and gitignored: it is a bearer token
       # scoped to one namespace, and nothing in the backend should rewrite it.
+      # backup bundles (roadmap #31). A BIND, not a volume: a backup that
+      # only exists inside the thing it is backing up is not a backup, and
+      # the operator has to be able to copy one off this machine.
+      - ./data/backups:/app/data/backups
+      # read-only view of the project for the backup coverage scan — it
+      # derives what to archive from the compose file and git, both of which
+      # live on the host side.
+      - .:/app/project:ro
       - ./data/runtime:/app/data/runtime:ro
       - ./backend:/app/backend:cached
       # tiny shared control channel to the inference-control sidecar: the
       # backend writes the operator-chosen model-store path here, the sidecar
       # reads it when (re)creating ollama. Not a data path — one text file.
+      # read-only, for the backup snapshot only. The tailnet node identity
+      # and private key: TS_AUTHKEY is consumed once, so losing this means
+      # re-authenticating the node by hand. Without the mount the snapshot
+      # REFUSES rather than shipping a bundle that quietly lacks it.
+      - tailscale_state:/vol/tailscale_state:ro
       - nova_state:/state
     develop:
       watch:

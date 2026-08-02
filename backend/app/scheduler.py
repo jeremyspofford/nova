@@ -7,6 +7,8 @@ live `automations.enabled` setting — togglable from the UI, no restart.
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 from app import automations, instances, retention, settings_store, sysmon, trace
@@ -19,6 +21,67 @@ log = logging.getLogger(__name__)
 
 TICK_SECONDS = 60
 _running = asyncio.Lock()
+
+
+_last_backup: float = 0.0
+
+
+async def _maybe_backup() -> None:
+    """A scheduled snapshot, run by code rather than requested of a model.
+
+    Deliberately NOT an automation. An automation hands an instruction to an
+    agent, and an agent that declines, forgets, or narrates leaves the
+    operator with a cheerful summary and no backup — the exact shape this
+    codebase refuses everywhere else. Nothing here consults a model.
+
+    Retention deletes old bundles only AFTER a new one has been written and
+    verified, so a failing backup can never reduce how many you have.
+    """
+    global _last_backup
+    hours = float(settings_store.get("backups.every_hours") or 0)
+    if hours <= 0:
+        return
+    now = time.monotonic()
+    if _last_backup and now - _last_backup < hours * 3600:
+        return
+    from app import backup_service, backup_snapshot
+    ok, why = backup_service.store_available()
+    if not ok:
+        log.warning("scheduled backup skipped: %s", why)
+        return
+    _last_backup = now
+    try:
+        man = await backup_service.snapshot()
+        log.info("scheduled backup: %s (%.1f MB)",
+                 man["path"], man["bytes"] / 1e6)
+    except backup_snapshot.SnapshotRefused as e:
+        # A refusal is news: something on this stack is unaccounted for and
+        # the operator is the only one who can classify it.
+        log.error("scheduled backup REFUSED: %s", e)
+        try:
+            from app import notify
+            await notify.send(f"Nova could not back up: {e}",
+                              title="Backup refused", tags=["warning"])
+        except Exception:
+            log.exception("could not notify about the refused backup")
+        return
+    except Exception:
+        log.exception("scheduled backup failed")
+        return
+    _prune_bundles()
+
+
+def _prune_bundles() -> None:
+    """Keep the newest N, delete the rest. Runs only after a good backup."""
+    from app import backup_service
+    keep = int(settings_store.get("backups.keep") or 7)
+    bundles = backup_service.bundles()          # newest first
+    for old in bundles[keep:]:
+        try:
+            Path(old["path"]).unlink()
+            log.info("pruned old backup %s", old["path"])
+        except OSError:
+            log.exception("could not prune %s", old["path"])
 
 
 async def run_one(automation: dict) -> tuple[bool, str]:
@@ -84,6 +147,7 @@ async def tick():
     from app import secret_store
     await secret_store.maybe_nudge_rotation()  # self-limits to daily
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
+    await _maybe_backup()                # self-limits to backups.every_hours
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

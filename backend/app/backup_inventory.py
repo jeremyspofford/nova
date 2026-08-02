@@ -28,10 +28,23 @@ reports success, which is the exact failure mode this lane exists to remove.
 import json
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _git(root: str, *args: str) -> list[str]:
+    """A git invocation that works on a repo the container does not own.
+
+    The project is bind-mounted from the host user's checkout while this
+    process runs as root, so git's dubious-ownership guard refuses. Scoped to
+    this one directory per call rather than set globally in the image: the
+    guard exists for a reason, and disabling it everywhere to satisfy one
+    read is how it stops protecting anything.
+    """
+    return ["git", "-c", f"safe.directory={root}", *args]
 
 
 def _run(args: list[str], cwd: str) -> str:
@@ -63,6 +76,75 @@ def from_compose(project_dir: str, profiles: list[str]) -> list[dict]:
                         "name": src, "source": "compose",
                         "service": svc_name, "mounted_at": vol.get("target"),
                         "project": cfg.get("name", "")})
+    return out
+
+
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand(value: str) -> str:
+    """Expand ${VAR} / ${VAR:-default} from THIS process's environment.
+
+    The default is used only when the variable is genuinely absent from the
+    environment — which for the memory store means the operator never set
+    NOVA_MEMORY_DIR and ./data/memory really is where it lives. When the
+    variable IS set, its value wins, so pointing memory at a NAS does not
+    silently snapshot the local default instead. Anything still unexpanded
+    after this reaches backup_coverage and refuses there.
+    """
+    def sub(m):
+        name, default = m.group(1), m.group(2)
+        return os.environ.get(name, default if default is not None else m.group(0))
+    return _VAR.sub(sub, value)
+
+
+def from_compose_file(project_dir: str) -> list[dict]:
+    """The same inventory, by READING docker-compose.yml instead of asking
+    docker for it.
+
+    The backend has no docker CLI and must never hold the socket — only
+    `inference-control` does, deliberately, because the socket is
+    root-equivalent on the host. So inside the container the compose file is
+    parsed directly.
+
+    This is weaker than `docker compose config` in one way and stronger in
+    another. Weaker: no profile merging, no variable expansion, no override
+    files. Stronger: an unexpanded ${VAR} survives into the entry and
+    `backup_coverage` REFUSES on it, where the CLI would silently apply the
+    compose default and snapshot the wrong directory.
+    """
+    import yaml
+    root = Path(project_dir)
+    cfg = yaml.safe_load((root / "docker-compose.yml").read_text()) or {}
+    project = cfg.get("name", "")
+    out: list[dict] = []
+    for svc_name, svc in (cfg.get("services") or {}).items():
+        for vol in svc.get("volumes") or []:
+            if isinstance(vol, str):
+                # EXPAND BEFORE SPLITTING. `${NOVA_MEMORY_DIR:-./data/memory}`
+                # contains a colon, so splitting first mangles the source into
+                # `${NOVA_MEMORY_DIR` — which then reads as an unclassifiable
+                # path and refuses, taking the memory tree out of every
+                # bundle. Measured: it did exactly that.
+                parts = _expand(vol).split(":")
+                src, target = parts[0], (parts[1] if len(parts) > 1 else "")
+            elif isinstance(vol, dict):
+                src, target = vol.get("source", ""), vol.get("target", "")
+            else:
+                continue
+            if not src:
+                continue
+            is_bind = src.startswith((".", "/", "$")) or "${" in src
+            name = str((root / src).resolve()) if is_bind and not src.startswith("$") else src
+            out.append({"kind": "bind" if is_bind else "volume",
+                        "name": name, "source": "compose-file",
+                        "service": svc_name, "mounted_at": target,
+                        "project": project})
+    # named volumes declared but attached to no service still hold data
+    for vol_name in (cfg.get("volumes") or {}):
+        out.append({"kind": "volume", "name": vol_name,
+                    "source": "compose-file", "service": None,
+                    "mounted_at": None, "project": project})
     return out
 
 
@@ -109,17 +191,17 @@ def git_status_fn(project_dir: str):
         except ValueError:
             return "unknown"       # outside the repo; git has no opinion
         rel = str(p.relative_to(root))
-        chk = subprocess.run(["git", "check-ignore", "-q", rel],
+        chk = subprocess.run(_git(str(root), "check-ignore", "-q", rel),
                              cwd=str(root), capture_output=True)
         if chk.returncode == 0:
             return "ignored"
-        ls = subprocess.run(["git", "ls-files", "--error-unmatch", rel],
+        ls = subprocess.run(_git(str(root), "ls-files", "--error-unmatch", rel),
                             cwd=str(root), capture_output=True)
         if ls.returncode == 0:
             return "tracked"
         # a directory is never "tracked" by ls-files; ask whether it holds
         # tracked files instead
-        any_tracked = subprocess.run(["git", "ls-files", rel],
+        any_tracked = subprocess.run(_git(str(root), "ls-files", rel),
                                      cwd=str(root), capture_output=True, text=True)
         return "tracked" if any_tracked.stdout.strip() else "unknown"
 
@@ -135,7 +217,7 @@ def ignored_top_level(project_dir: str) -> list[str]:
     """
     root = Path(project_dir).resolve()
     out = []
-    raw = _run(["git", "status", "--porcelain", "--ignored=matching", "-z"],
+    raw = _run(_git(str(root), "status", "--porcelain", "--ignored=matching", "-z"),
                str(root))
     for item in raw.split("\0"):
         if not item.startswith("!! "):

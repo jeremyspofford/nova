@@ -9,6 +9,7 @@ import { SecretsCard } from './secrets';
 import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
 import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices, WakeLearning } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
+import { BackupsCard } from './BackupsCard';
 import { BundledInference, ModelStorage } from './inference';
 import { groupModels } from '../../models';
 
@@ -220,6 +221,7 @@ export function SettingsTab({ only, exclude, types }:
               <BundledInference onChanged={() => getModels().then(setModels)} />
             )}
             {section === 'Inference' && <ModelStorage />}
+            {section === 'Backups' && <BackupsCard />}
             {section === 'Voice' && <HouseholdVoices />}
             {section === 'Voice' && <WakeLearning />}
             {section === 'Observability' && (

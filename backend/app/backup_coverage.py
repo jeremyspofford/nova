@@ -184,6 +184,14 @@ PATH_POLICY: dict[str, tuple[str, str]] = {
              "classified on its own. Listed here so the PARENT does not "
              "refuse while its children are already covered — and so a NEW "
              "child still refuses, because it is matched on its own path."),
+    "data/backups": (
+        EXCLUDE_DECLINED,
+        "the bundles themselves. Archiving the output directory into its own "
+        "output makes every bundle contain all the previous ones — growth is "
+        "geometric and the second backup is already twice the size it should "
+        "be. Copy bundles off this machine instead; that is what they are "
+        "for, and a backup that only lives inside the thing it backs up is "
+        "not one."),
     "tools/wake-training/data": (
         INCLUDE,
         "54 MB of wake-word training corpus — positive, negative, "
@@ -284,9 +292,17 @@ def _volume_key(name: str) -> str:
     return ""
 
 
+def _rel_to(path: str, project_dir: str) -> str:
+    p = path.rstrip("/")
+    if project_dir and p.startswith(project_dir):
+        return p[len(project_dir):].lstrip("/")
+    return p
+
+
 def classify(inventory: Iterable[dict], *,
              git_status: Callable[[str], str],
-             self_service: str = "backup-runner") -> tuple[list[Entry], list[Refusal]]:
+             self_service: str = "backup-runner",
+             project_dir: str = "") -> tuple[list[Entry], list[Refusal]]:
     """Inventory -> (entries, refusals).
 
     `git_status(path)` returns "tracked", "ignored" or "unknown" for a host
@@ -352,7 +368,8 @@ def classify(inventory: Iterable[dict], *,
             continue
 
         # binds
-        if entry.name in NON_STATE_BINDS or entry.name.startswith("/dev/"):
+        if (entry.name in NON_STATE_BINDS or entry.name.startswith("/dev/")
+                or entry.name.endswith(".sock")):
             entry.disposition = EXCLUDE_DECLINED
             entry.reason = ("a socket or device node, not stored bytes — "
                             "there is nothing here to archive or restore")
@@ -366,6 +383,15 @@ def classify(inventory: Iterable[dict], *,
                 f"than applying the compose default, because the default "
                 f"would silently snapshot a different directory than the "
                 f"one in use.")
+            continue
+        # An EXPLICIT decision beats the git heuristic. Without this, a
+        # bind that is gitignored — which the output directory necessarily
+        # is — gets included by the general rule no matter what the policy
+        # says about it, and the bundle ends up containing every previous
+        # bundle.
+        decided = _path_policy(_rel_to(entry.name, project_dir))
+        if decided:
+            entry.disposition, entry.reason = decided
             continue
         status = git_status(entry.name)
         if status == "ignored":
@@ -488,7 +514,8 @@ def report(inventory: Iterable[dict], *, git_status, ignored_paths=(),
            project_dir: str = "") -> dict:
     """The whole coverage answer, including whether a snapshot may proceed."""
     entries, refusals = classify(inventory, git_status=git_status,
-                                 self_service=self_service)
+                                 self_service=self_service,
+                                 project_dir=project_dir)
     entries = entries + host_state_entries(ignored_paths, project_dir)
     entries = prune_nested(entries)
     if readable is not None:

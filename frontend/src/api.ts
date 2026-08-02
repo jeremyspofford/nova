@@ -1433,6 +1433,57 @@ export async function forgetJournalEntry(date: string, sha256: string, reason: s
   return r.json();
 }
 
+// ── backups (roadmap #31) ────────────────────────────────────────────────
+
+export interface BackupBundle {
+  path: string; bytes: number; created_at: string; bundle_version: number;
+  members: number; included: string[]; excluded: string[];
+  readable: boolean; problem?: string | null;
+}
+
+/** One persistent location and whether it is in the bundle. `reason` is
+ *  always populated — a decision you cannot see is one you cannot argue
+ *  with, and the point of this surface is that nobody reads "backup
+ *  complete" as "everything is safe". */
+export interface CoverageEntry {
+  kind: string; name: string; disposition: string; reason: string;
+  included: boolean;
+}
+
+export interface BackupsResponse {
+  bundles: BackupBundle[];
+  store_ok: boolean;
+  store_error: string;
+  coverage: {
+    entries: CoverageEntry[];
+    refusals: { code: string; subject: string; detail: string }[];
+    may_snapshot: boolean;
+    included: string[];
+  };
+}
+
+export async function getBackups(): Promise<BackupsResponse> {
+  const r = await apiFetch(`${API_URL}/api/v1/backups`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load backups');
+  return r.json();
+}
+
+export async function createBackup():
+    Promise<{ path: string; bytes: number; members: { path: string; bytes: number }[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/backups`, { method: 'POST' });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Backup failed');
+  return r.json();
+}
+
+export async function verifyBackup(name: string):
+    Promise<{ scratch: string; tables: number; rows: number;
+              missing_tables: string[]; restored_ok: boolean }> {
+  const r = await apiFetch(`${API_URL}/api/v1/backups/${encodeURIComponent(name)}/verify`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Verify failed');
+  return r.json();
+}
+
 export async function getMemoryItem(id: string): Promise<MemoryItem> {
   const r = await apiFetch(`${API_URL}/api/v1/memory/item/${id}`);
   if (!r.ok) throw new Error('Memory item not found');

@@ -73,6 +73,56 @@ async def run_command(name: str, body: dict | None = None):
     return await cmd.run((body or {}).get("arg", ""))
 
 
+# ── backups (roadmap #31) ────────────────────────────────────────────────
+#
+# Read-only except for `snapshot`, which writes a bundle and touches nothing
+# else. Restore-in-place is deliberately NOT exposed here: it replaces the
+# database and overwrites files, and it belongs behind a typed confirmation
+# in a considered flow rather than one POST away from the rest of the API.
+
+
+@router.get("/api/v1/backups")
+async def list_backups():
+    """Bundles on disk, plus what a new one WOULD contain and whether it can
+    be made at all. Coverage rides along because "can I back up?" and "what
+    would it hold?" are the same question to the operator."""
+    from app import backup_service as bsvc
+    ok, why = bsvc.store_available()
+    out = {"bundles": bsvc.bundles(), "store_ok": ok, "store_error": why}
+    try:
+        out["coverage"] = await bsvc.coverage()
+    except Exception as e:  # noqa: BLE001
+        log.exception("backup coverage scan failed")
+        out["coverage"] = {"may_snapshot": False, "entries": [],
+                           "refusals": [{"code": "SCAN_FAILED",
+                                         "subject": "coverage",
+                                         "detail": str(e)}]}
+    return out
+
+
+@router.post("/api/v1/backups")
+async def create_backup():
+    from app import backup_service as bsvc, backup_snapshot as bs
+    try:
+        return await bsvc.snapshot()
+    except bs.SnapshotRefused as e:
+        # 409, not 500: nothing is broken. Something is unaccounted for, and
+        # the operator is the one who can classify it.
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/api/v1/backups/{name}/verify")
+async def verify_backup(name: str):
+    """Restore a bundle into a throwaway database and drop it. Proves the
+    bundle is restorable without touching anything live."""
+    from app import backup_service as bsvc
+    from app.backup_restore import RestoreRefused
+    try:
+        return await bsvc.verify_restore(name)
+    except RestoreRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 # ── forgetting one journal entry (roadmap #22) ───────────────────────────
 #
 # OPERATOR ONLY, and that is the whole design. `delete_memory_item` refuses

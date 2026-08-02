@@ -35,6 +35,10 @@ dependencies = [
     # the OCR half (roadmap #22): pytesseract shells out to the tesseract
     # binary installed in the Dockerfile, Pillow opens what the operator
     # photographed. Both are local — nothing here leaves the machine.
+    # the backup coverage scan parses docker-compose.yml directly: the
+    # backend has no docker CLI and must not have the socket (only
+    # inference-control holds it), so the compose file is READ, not queried.
+    "PyYAML>=6.0",
     "pytesseract>=0.3.10",
     "Pillow>=10.0.0",
 ]

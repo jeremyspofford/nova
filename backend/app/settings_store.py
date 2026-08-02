@@ -122,6 +122,25 @@ SETTING_DEFS: list[dict] = [
     # cloud vision model does not. Bundling them behind one "read my
     # documents" toggle would make consenting to the local one consent to
     # shipping a photographed payslip to a third party.
+    # ── backups (roadmap #31) ──────────────────────────────────────────
+    #
+    # MECHANICAL, not an automation: an automation asks an agent to do
+    # something, and a model that declines or forgets leaves you with no
+    # backup and a cheerful summary. This runs in the scheduler loop, so the
+    # backup happens because code ran it.
+    {"key": "backups.every_hours", "type": "number", "default": 24,
+     "min": 0, "max": 720, "section": "Backups",
+     "label": "Automatic backup every (hours)",
+     "description": ("0 turns automatic backups off. A bundle is written "
+                     "only after it has been read back and verified, and a "
+                     "run that cannot account for every store refuses "
+                     "rather than producing a partial one.")},
+    {"key": "backups.keep", "type": "number", "default": 7,
+     "min": 1, "max": 365, "section": "Backups",
+     "label": "Keep this many backups",
+     "description": ("Older bundles are deleted after a NEW one has been "
+                     "written and verified — never before, so a failed "
+                     "backup can never leave you with fewer than you had.")},
     {"key": "attachments.ocr_enabled", "type": "boolean", "default": True,
      "section": "Attachments", "label": "Read scans and photos with OCR",
      "description": ("When an attached PDF has no text layer — a scan — read "

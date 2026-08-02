@@ -13,6 +13,7 @@ import { CardsSkeleton, OverlayScrim } from '../ui';
 const EXCLUDED = ['Automations', 'Models'];
 // preferred ordering; sections the list doesn't know append in backend order
 const ORDER = ['Operator', 'Appearance', 'Voice', 'Context', 'Inference',
+               'Backups',
                'Agents', 'MCP', 'Notifications', 'Observability'];
 const SYSTEM = 'Storage & phone';  // static cards, not backend defs
 

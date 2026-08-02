@@ -210,8 +210,16 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
 
         # 3. archive under .part, so nothing incomplete is ever listable
         with tarfile.open(partial, "w:gz") as tar:
+            # THE MANIFEST GOES FIRST, and the order is load-bearing rather
+            # than tidy. A gzip stream cannot be seeked: reading a member
+            # means decompressing everything before it. Sorted alphabetically
+            # `manifest.json` lands after `db.sql` and `files/`, so simply
+            # LISTING a 167 MB bundle decompressed almost all of it —
+            # measured at 3.4s per bundle, on a screen that lists several.
+            tar.add(staging / MANIFEST, arcname=MANIFEST)
             for item in sorted(staging.iterdir()):
-                tar.add(item, arcname=item.name)
+                if item.name != MANIFEST:
+                    tar.add(item, arcname=item.name)
 
     # 4. verify the ARTIFACT before it gets its real name
     try:

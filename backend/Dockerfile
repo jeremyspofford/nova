@@ -9,7 +9,7 @@ WORKDIR /app/backend
 # where extraction lives (see doc_extract.py). eng only; more languages are
 # `tesseract-ocr-<lang>` and a settings change away.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl tesseract-ocr poppler-utils postgresql-client \
+        curl git tesseract-ocr poppler-utils postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
