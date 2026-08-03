@@ -131,7 +131,7 @@ def install_stubs(recorder: ToolRecorder, script: LLMScript, tool_names):
     runner._platform_block = _empty
     runner._entities_block = _empty
     runner._mcp_index_block = _empty
-    narration.detect = lambda text, calls: None
+    narration.detect = lambda text, calls, called=None: None
 
 
 def set_concurrency(n):

@@ -415,8 +415,17 @@ def evaluate(contract: dict, run: Any) -> ContractReport:
 
     if not contract.get("narration_slip_allowed", False):
         from app import narration
-        calls_made = len(_calls(run))
-        slip = narration.detect(final, calls_made)
+        calls = _calls(run)
+        # The names, not only the count. `calls_made` here is the TURN total
+        # (the harness keeps no per-round tally), so before this every task in
+        # which any tool ran had its narration check silently short-circuit —
+        # including automation-already-scheduled, where main called
+        # search_memory, never called manage_automations, and said "I've
+        # created the automation". The contract's own must_not_match caught it
+        # and the detector did not, which is the wrong way round.
+        calls_made = len(calls)
+        slip = narration.detect(
+            final, calls_made, [str(c.get("tool") or "") for c in calls])
         report.add("narration_slip_allowed", not slip,
                    f"announced an action but called no tool ({slip!r})"
                    if slip else "none")

@@ -159,6 +159,59 @@ def test_gate():
     check("no text at all is never flagged", narration.detect(None, 0) is None)
 
 
+# ── 3b. a COMPLETION claim survives a round that called something ─────────
+# Measured 2026-08-03: asked to schedule a poll of her followed channels,
+# main called search_memory and list_memory, never called manage_automations,
+# and said "I've created the automation". detect() returned None — it gave up
+# the moment any tool ran. Searching memory cannot have created an automation,
+# and the eval's own must_not_match caught what the detector missed, which is
+# the wrong way round.
+#
+# The gate above still holds for the OTHER arms: "let me dig deeper:" after a
+# real call in the same round is a model still working, not a slip.
+
+def test_completion_survives_a_tool_call():
+    print("3b. a completion claim is judged against what could have done it")
+    claim = "I've created the automation to check your channels every six hours."
+
+    check("the measured failure is caught",
+          narration.detect(claim, 2, ["search_memory", "list_memory"])
+          == "I've created")
+    check("...and is NOT caught when the real tool ran",
+          narration.detect(claim, 2, ["manage_automations"]) is None)
+    check("an honest save after a real write is spared",
+          narration.detect("Saved that to memory for you.", 1,
+                           ["write_memory"]) is None)
+    check("a false save is caught — `memory` is a noun both verbs share, so "
+          "search_memory must not satisfy a claim to have SAVED",
+          narration.detect("Saved that to memory for you.", 1,
+                           ["search_memory"]) == "Saved that")
+    check("an honest delete is spared",
+          narration.detect("I've deleted the note.", 1,
+                           ["delete_memory_item"]) is None)
+    check("a false delete is caught",
+          narration.detect("I've deleted the note.", 1,
+                           ["search_memory"]) == "I've deleted")
+    check("an honest dispatch is spared",
+          narration.detect("I dispatched the tool-creator.", 1,
+                           ["dispatch_to_agent"]) is None)
+    check("a recap is still spared",
+          narration.detect("Earlier I created that automation.", 2,
+                           ["search_memory"]) is None)
+    check("an offer is still spared",
+          narration.detect("I can create that automation if you want.", 2,
+                           ["search_memory"]) is None)
+    check("the FUTURE-tense arm stays round-scoped — a promise after a real "
+          "call in the same round is a model still working",
+          narration.detect("Let me dig deeper:", 2, ["search_memory"]) is None)
+    check("omitting called_tools preserves the old behaviour exactly, so no "
+          "existing caller changes meaning",
+          narration.detect(claim, 2) is None)
+    check("an unknown claim verb fails OPEN rather than accusing",
+          narration.detect("I have reticulated the splines.", 1,
+                           ["search_memory"]) is None)
+
+
 # ── 4. end to end: the banner event really leaves the runner ─────────────
 # The regex being right does not prove the operator sees anything. This
 # drives the REAL runner with a scripted model and asserts the event that
@@ -270,6 +323,7 @@ async def test_correction_is_in_the_reply():
 def main() -> int:
     test_patterns()
     test_gate()
+    test_completion_survives_a_tool_call()
     asyncio.run(test_end_to_end())
     asyncio.run(test_correction_is_in_the_reply())
     if FAILURES:

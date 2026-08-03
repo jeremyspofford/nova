@@ -80,6 +80,64 @@ _COMPLETION_PATTERNS = [
 ]
 _COMPLETION_COMPILED = [re.compile(p, re.IGNORECASE) for p in _COMPLETION_PATTERNS]
 
+# WHAT WOULD HAVE DONE IT — the tool-name TOKENS that could make each claim
+# true, borrowed wholesale from capability_claims.py because it is the same
+# problem one step later: that module asks whether a granted tool could
+# provide a claimed ability, this asks whether a CALLED tool could have
+# performed a claimed action.
+#
+# Measured 2026-08-03: asked to schedule a poll of her followed channels,
+# main called search_memory and list_memory, never called manage_automations,
+# and said "I've created the automation". detect() returned None, because it
+# gave up the moment any tool ran — and searching memory cannot have created
+# an automation. Reading is not doing.
+#
+# TOKENS, not substrings, for the reason capability_claims records: matching
+# `create` as a substring would let `list_capability_changes` satisfy a claim
+# to have created something. Tool names are split on non-alphanumerics and
+# matched whole, so granting or renaming a tool changes the answer with no
+# edit here.
+_COMPLETION_TOKENS: list[tuple[str, set[str]]] = [
+    (r"schedul|automat", {"manage_automations", "automations", "automation",
+                          "schedule", "cron"}),
+    (r"delet|remov", {"delete", "remove", "manage_agents", "manage_tools",
+                      "manage_rules", "prune", "forget"}),
+    (r"dispatch|deleg", {"dispatch", "delegate", "dispatch_to_agent"}),
+    # `memory` is deliberately NOT a token here. It let search_memory satisfy
+    # a claim to have SAVED something — reading a store and writing to it
+    # share the noun, and the shared noun is not the verb. Caught by the test
+    # below on the first run, and it is the same collision capability_claims
+    # records for `github-profile-fetch` satisfying `file`.
+    (r"sav|wrote|written|not(?:ed|ing)|record", {"write", "write_memory",
+                                                 "save", "append"}),
+    (r"creat|add|updat|built|build|set up", {"write", "write_memory", "manage",
+                                             "manage_agents", "manage_tools",
+                                             "manage_rules", "create", "add",
+                                             "update", "deploy", "build"}),
+]
+_COMPLETION_TOKEN_COMPILED = [(re.compile(v, re.IGNORECASE), toks)
+                              for v, toks in _COMPLETION_TOKENS]
+_TOKEN_SPLIT = re.compile(r"[a-z0-9]+")
+
+
+def _could_have_done(claim: str, called_tools) -> bool:
+    """Did any tool called this turn plausibly perform `claim`?
+
+    Fails OPEN — an unrecognised claim verb, or no token list matching it,
+    counts as satisfied. A false accusation is appended to the reply and read
+    aloud, so it costs more than a missed catch; that is the same trade every
+    detector in this family makes.
+    """
+    names = set()
+    for n in called_tools or ():
+        names |= set(_TOKEN_SPLIT.findall(str(n).lower()))
+    if not names:
+        return False
+    for verb, tokens in _COMPLETION_TOKEN_COMPILED:
+        if verb.search(claim):
+            return bool(tokens & names)
+    return True
+
 # a sentence with its own past-time reference reads as a recap, not a claim
 # about this turn — skip it (precision over recall, as everywhere here)
 _RECAP_MARKERS = re.compile(
@@ -142,7 +200,23 @@ def _clauses(text: str):
             yield body, end
 
 
-def detect(final_text: str, tool_calls_made: int) -> str | None:
+def _completion_slip(final_text: str, called_tools=None) -> str | None:
+    """A claim to have DONE something, with nothing that could have done it."""
+    for sentence in _SENTENCES.split(final_text):
+        if _RECAP_MARKERS.search(sentence):
+            continue
+        for pat in _COMPLETION_COMPILED:
+            m = pat.search(sentence)
+            if m and not _exempt(sentence, m):
+                if called_tools is not None and _could_have_done(
+                        m.group(0) + " " + sentence, called_tools):
+                    continue
+                return m.group(0)
+    return None
+
+
+def detect(final_text: str, tool_calls_made: int,
+           called_tools=None) -> str | None:
     """The matched phrase when the text announces or claims action while no
     tool ran; None otherwise.
 
@@ -151,9 +225,23 @@ def detect(final_text: str, tool_calls_made: int) -> str | None:
     one tool call in round 1 blinded this check for every later round — and
     that is exactly how "The egress rules look fine … Let me dig deeper into
     what's actually running:" got through after list_egress had run.
+
+    `called_tools` is every tool name called across the WHOLE turn, and it is
+    what lets the completion arm survive a round that called something. The
+    two questions are genuinely different: "did you do the thing you said you
+    would" is about this round, while "did the thing you claim to have done
+    happen" is about the turn. Omit it and behaviour is exactly as before —
+    every existing caller keeps its semantics.
     """
-    if tool_calls_made or not final_text:
+    if not final_text:
         return None
+    if tool_calls_made:
+        # Only the completion arm survives, and only against calls that could
+        # not have performed the claim. The structural and future-tense arms
+        # stay round-scoped: "let me dig deeper:" after a real call in the
+        # SAME round is not a slip, it is a model still working.
+        return (_completion_slip(final_text, called_tools)
+                if called_tools is not None else None)
     # STRUCTURAL ARM, which needs no vocabulary. A reply whose last non-empty
     # line ends in a colon or a dash is introducing something that never
     # arrived — the phrase list is a maintained list of ways to say "let me",
@@ -178,11 +266,4 @@ def detect(final_text: str, tool_calls_made: int) -> str | None:
             m = pat.search(body)
             if m and not _exempt(body, m):
                 return m.group(0)
-    for sentence in _SENTENCES.split(final_text):
-        if _RECAP_MARKERS.search(sentence):
-            continue
-        for pat in _COMPLETION_COMPILED:
-            m = pat.search(sentence)
-            if m and not _exempt(sentence, m):
-                return m.group(0)
-    return None
+    return _completion_slip(final_text, called_tools)

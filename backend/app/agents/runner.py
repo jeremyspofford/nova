@@ -1782,7 +1782,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             if name:
                 called_names.append(str(name))
         if not tool_calls:
-            slip = narration.detect(round_text, 0)
+            slip = narration.detect(round_text, 0, called_names)
             if slip and not narration_retried and round_no + 1 < max_rounds:
                 # Not a banner after the fact — the loop is still alive here,
                 # so say so where the model can still act on it. Capped at one
@@ -2130,7 +2130,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # last_round_calls, not calls_made: one call in round 1 used to blind
     # this for every later round, which is exactly how 'The egress rules
     # look fine … Let me dig deeper:' got through after list_egress ran.
-    snippet = narration.detect(final_text, last_round_calls)
+    snippet = narration.detect(final_text, last_round_calls, called_names)
     if snippet:
         yield {"type": "activity", "kind": "narration",
                "name": agent.get("name", ""), "agent": agent.get("name"),
