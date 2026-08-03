@@ -123,7 +123,7 @@ Both recorded 2026-08-03 through `POST /api/v1/evals/run`, one run each.
 | stale-price-attributed | FAIL | FAIL |
 | automation-already-scheduled | FAIL | FAIL |
 | **service-outage-named** | **PASS** | **PASS** |
-| | **2/7** | **3/7** |
+| | **2/7** (a later run: 3/7) | **3/7** |
 
 **What this does and does not say.** It does not say move `main` to the cloud:
 one task apart, one run each, is not a result. The old framing — ornith at
@@ -150,10 +150,17 @@ mount. The 2026-08-03 incident was not a model that could not do this.
   the evidence in its finding text as a stopgap; storing `suite_version` on
   the row is the real fix, and it should be done before anyone treats a stored
   score as current.
-- **Repeat counts.** One run per model is a sample, not a measurement — the
-  same task swung PASS/FAIL between runs earlier in the day. The API path
-  takes no `--repeat`; the CLI has one and persists nothing. Until they meet,
-  a recorded score is one draw.
+- **Repeat counts, and there is now a clean demonstration of why.** Two
+  `ornith:9b` runs of the same seven tasks, hours apart, scored **2/7** then
+  **3/7** — and the task that flipped was `agent-grants-not-invented`, which
+  nothing between the runs touched. A single recorded run is a draw, and
+  `assess()` currently reports it as though it were a measurement. The API
+  path takes no `--repeat`; the CLI has one and persists nothing. Until they
+  meet, treat a stored score as one sample.
+
+  (The narration change between those runs is *not* the explanation. It can
+  only ever turn a pass into a fail — it catches more — and the task it could
+  affect, `automation-already-scheduled`, failed both times.)
 - **Decision 1 of `nova-actually-working.md` (main's model)** stays open, but
   on better ground: the number that framed it was wrong, the gap is one task,
   and the shared failures point at the suite's subject rather than at the
