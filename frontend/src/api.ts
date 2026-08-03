@@ -1273,6 +1273,23 @@ export async function getAgents(): Promise<AgentInfo[]> {
   return r.json();
 }
 
+/** One link in an agent's standby order.
+ *  `source` says where the link came from: the operator's per-agent choice,
+ *  the install-wide setting, the main agent's model, or derived from the
+ *  other tier. `why` is the backend's own sentence — never restate it here,
+ *  because a copy in TypeScript starts lying the day the chain changes. */
+export interface ChainLink {
+  model: string;
+  source: 'agent' | 'install' | 'main' | 'cross_tier';
+  why: string;
+}
+
+export async function getAgentModelChains(): Promise<Record<string, ChainLink[]>> {
+  const r = await apiFetch(`${API_URL}/api/v1/agents/model-chains`);
+  if (!r.ok) throw new Error('Failed to load model chains');
+  return r.json();
+}
+
 export async function patchAgent(id: string, body: Record<string, unknown>): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/agents/${id}`, {
     method: 'PATCH',

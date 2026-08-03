@@ -851,6 +851,31 @@ async def list_agents_endpoint():
     return await agent_registry.list_agents(enabled_only=False)
 
 
+@router.get("/api/v1/agents/model-chains")
+async def agent_model_chains_endpoint():
+    """Each agent's standby order, derived — so the UI never restates it.
+
+    The order used to be a sentence typed into AgentsTab.tsx. A hand-copied
+    restatement of runner's chain in another language starts lying the day the
+    chain changes, and nothing fails when it does.
+
+    Both lookups are hoisted: model_fitness.rank_local() issues one /api/tags
+    plus a POST /api/show PER INSTALLED MODEL with no caching, so leaving them
+    to each agent turns one page load into twelve probe rounds.
+    """
+    from app import curated_models, model_chain, model_fitness
+    agents = await agent_registry.list_agents(enabled_only=False)
+    curated = await curated_models.list_all(enabled_only=True)
+    try:
+        local_rank = await model_fitness.rank_local()
+    except Exception:  # noqa: BLE001 — ollama being down must not blank the page
+        log.debug("rank_local failed while building chains", exc_info=True)
+        local_rank = []
+    return {a["id"]: await model_chain.chain(a, curated=curated,
+                                             local_rank=local_rank)
+            for a in agents}
+
+
 _AGENT_EDITABLE_FIELDS = {"model", "enabled", "description", "system_prompt",
                           "allowed_tools", "routing_keywords", "thinking",
                           "fallback_model"}
@@ -918,11 +943,19 @@ async def create_agent_endpoint(body: dict):
     if ":" not in model:
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    fallback_model = str(body.get("fallback_model") or "").strip() or None
+    if fallback_model and ":" not in fallback_model:
+        raise HTTPException(
+            status_code=422,
+            detail="fallback_model must be 'openrouter:<id>' or 'ollama:<name>'")
     try:
+        # operator=True for the same reason the PATCH route says so: this is
+        # the human at Settings, already past the auth middleware.
         agent_id = await agent_registry.create_agent(
             name=name, description=description, system_prompt=system_prompt,
             model=model, allowed_tools=body.get("allowed_tools"),
-            routing_keywords=body.get("routing_keywords"))
+            routing_keywords=body.get("routing_keywords"),
+            operator=True, fallback_model=fallback_model)
     except Exception as e:  # duplicate name etc.
         raise HTTPException(status_code=422, detail=str(e))
     return {"id": agent_id, "name": name}

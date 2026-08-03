@@ -285,17 +285,18 @@ async def check_fallback() -> dict:
     others', because any agent can land on it without warning. That is what
     made a 3B model a system-wide exposure rather than one agent's problem.
     """
-    from app import settings_store
+    from app import model_chain
     from app.agents import registry as agent_registry
 
-    name = str(settings_store.get("inference.local_fallback_model") or "")
-    if not name:
+    # Both rules live in model_chain: the ollama-prefix qualification (a local
+    # tag carries its own colon) and what "needs tools" means. They were
+    # written out longhand in three places, which is two places to forget.
+    model = model_chain.standby_setting()
+    if not model:
         return {"model": None, "findings": [], "alternatives": []}
-    model = name if name.startswith("ollama:") else f"ollama:{name}"
 
     agents = await agent_registry.list_agents(enabled_only=True)
-    needs_tools = any(a.get("allowed_tools") is None or a.get("allowed_tools")
-                      for a in agents)
+    needs_tools = any(model_chain.needs_tools(a) for a in agents)
     findings = await assess(
         model, needs_tools=needs_tools,
         needs_tokens=await measured_prompt_tokens(),

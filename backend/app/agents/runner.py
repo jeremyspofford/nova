@@ -1362,21 +1362,6 @@ def resolve_agent_model(agent: dict) -> str:
     return llm_router.effective_model(agent.get("model") or "")
 
 
-def _standby_setting() -> str:
-    """The install-wide standby, provider-qualified.
-
-    "qwen2.5:3b" already contains a colon — its TAG separator, not a provider
-    prefix. Testing for ":" read it as fully qualified and handed back a bare
-    name, which only worked because effective_model then failed to resolve
-    "qwen2.5" as a provider and fell back a second time. This setting names a
-    local model by definition, so the prefix is not a guess.
-    """
-    name = str(settings_store.get("inference.local_fallback_model") or "").strip()
-    if not name:
-        return ""
-    return name if name.startswith("ollama:") else f"ollama:{name}"
-
-
 async def _fallback_chain(agent: dict) -> list[str]:
     """Where this agent's turn may go next, in order of preference.
 
@@ -1387,22 +1372,12 @@ async def _fallback_chain(agent: dict) -> list[str]:
     setting and no fitness check at all. So which safeguards applied depended
     on which provider happened to fail — and the per-agent choice, the whole
     point of this feature, existed in neither.
+
+    The order itself now lives in model_chain, because the UI has to render
+    it and a second copy in TypeScript would start lying the day this moves.
     """
-    chain = []
-    for candidate in (str(agent.get("fallback_model") or "").strip(),
-                      _standby_setting()):
-        if candidate:
-            chain.append(candidate)
-    try:
-        from app.agents import registry as agent_registry
-        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
-        if main and main.get("model"):
-            chain.append(main["model"])
-    except Exception:
-        # the last resort is the least important link; losing it must not
-        # cost the operator the two they configured deliberately
-        log.exception("main-agent lookup failed; standby chain is short")
-    return chain
+    from app import model_chain
+    return [link["model"] for link in await model_chain.chain(agent)]
 
 
 async def _fit_for(agent: dict, target: str) -> bool:

@@ -1,12 +1,21 @@
 import { useState, useEffect } from 'react';
 import {
-  AgentInfo, ModelInfo, createAgent, deleteAgent, getAgents, getModelCapabilities,
-  getModels, patchAgent,
+  AgentInfo, ChainLink, ModelInfo, createAgent, deleteAgent,
+  getAgentModelChains, getAgents, getModelCapabilities, getModels, patchAgent,
 } from '../../api';
 import { agentDisplayName } from '../../names';
 import { Toggle, CardsSkeleton } from '../ui';
 import { ConcurrentLoad, DetectSuggest } from './models-shared';
 import { groupModels } from '../../models';
+
+/** Where each link came from. Labels only — the ORDER and the reasoning are
+ *  the backend's (GET /api/v1/agents/model-chains). */
+const CHAIN_SOURCE: Record<ChainLink['source'], string> = {
+  agent: 'yours',
+  install: 'install default',
+  main: 'main agent',
+  cross_tier: 'derived',
+};
 
 /** Per-agent model + status — every agent has its OWN model. */
 export function AgentsTab() {
@@ -27,8 +36,20 @@ export function AgentsTab() {
   };
   const [form, setForm] = useState(emptyForm);
 
+  // The standby order, derived by the backend — never restated here.
+  //
+  // null is NOT an empty chain. This started as `useState({})` with a swallowed
+  // catch, so one failed request rendered "dies with its model" in amber on
+  // every agent at once — a fleet-wide alarm produced by a dropped fetch. An
+  // absent answer and an answer of "nothing" have to be different values, or
+  // the UI states the more alarming one whenever it knows the least.
+  const [chains, setChains] = useState<Record<string, ChainLink[]> | null>(null);
+  const [chainsError, setChainsError] = useState('');
+  const loadChains = () => getAgentModelChains()
+    .then(c => { setChains(c); setChainsError(''); })
+    .catch(e => { setChains(null); setChainsError(String(e)); });
   const load = () => getAgents().then(setAgents).catch(e => setStatus(String(e)))
-    .finally(() => setLoaded(true));
+    .finally(() => { setLoaded(true); loadChains(); });
   useEffect(() => {
     load();
   }, []);
@@ -68,6 +89,7 @@ export function AgentsTab() {
     try {
       await patchAgent(a.id, { model });
       setAgents(prev => prev.map(x => x.id === a.id ? { ...x, model } : x));
+      loadChains();   // the derived link depends on which tier this model is on
     } catch (e) { setStatus(String(e)); }
   }
 
@@ -79,15 +101,24 @@ export function AgentsTab() {
       await patchAgent(a.id, { fallback_model });
       const stored = fallback_model === a.model ? null : (fallback_model || null);
       setAgents(prev => prev.map(x => x.id === a.id ? { ...x, fallback_model: stored } : x));
+      loadChains();
     } catch (e) { setStatus(String(e)); }
   }
 
   async function setAll() {
     if (!allModel) return;
     try {
+      // Migration 082's trigger blanks any standby that now equals the new
+      // model, so a bulk set can silently drop a standby the operator chose.
+      // Say which ones rather than letting the row quietly change under them.
+      const cleared = agents
+        .filter(a => a.fallback_model && a.fallback_model === allModel)
+        .map(a => agentDisplayName(a.name));
       await Promise.all(agents.map(a => patchAgent(a.id, { model: allModel })));
-      setStatus(`All agents set to ${allModel}`);
-      setTimeout(() => setStatus(''), 2000);
+      setStatus(cleared.length
+        ? `All agents set to ${allModel} — standby cleared on ${cleared.join(', ')} (it matched the new model)`
+        : `All agents set to ${allModel}`);
+      setTimeout(() => setStatus(''), cleared.length ? 6000 : 2000);
       load();
     } catch (e) { setStatus(String(e)); }
   }
@@ -297,10 +328,35 @@ export function AgentsTab() {
                 </span>
                 {modelSelect(a.fallback_model || '', v => setFallback(a, v),
                   'inherit the install default…')}
-                {!a.fallback_model && (
-                  <span className="text-[11px] text-stone-500">
-                    inherited — Settings → Inference, then the main agent&apos;s model
+              </div>
+              {/* The order itself, DERIVED. This used to be a sentence typed
+                  here naming two links; the chain has four and the sentence
+                  had no way to notice. */}
+              <div className="mt-1 flex items-center gap-1 flex-wrap text-[11px]">
+                {chains?.[a.id] === undefined ? (
+                  // Not loaded, or this agent was created after the last fetch.
+                  // Say nothing rather than guess — the guess would be alarming.
+                  chainsError ? (
+                    <span className="text-stone-500"
+                      title={chainsError}>standby order unavailable</span>
+                  ) : null
+                ) : chains[a.id].length === 0 ? (
+                  <span className="text-amber-400/90"
+                    title="Every link in this agent's chain is on the same tier as its own model, or there are none. If that tier goes down the turn fails with no answer.">
+                    no standby — this agent dies with its model
                   </span>
+                ) : (
+                  <>
+                    <span className="text-stone-500">order</span>
+                    <span className="text-stone-400 font-mono">{a.model}</span>
+                    {chains[a.id].map(l => (
+                      <span key={l.model} className="flex items-center gap-1">
+                        <span className="text-stone-600">→</span>
+                        <span className="text-stone-400 font-mono" title={l.why}>{l.model}</span>
+                        <span className="text-stone-600">{CHAIN_SOURCE[l.source] ?? l.source}</span>
+                      </span>
+                    ))}
+                  </>
                 )}
               </div>
               {a.description && (

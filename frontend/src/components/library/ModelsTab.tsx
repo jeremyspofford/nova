@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  AgentInfo, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
+  AgentInfo, ChainLink, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgentModelChains, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
 } from '../../api';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
@@ -434,8 +434,19 @@ export function ModelsTab() {
  *  one tab over, and two write paths onto the same column drift. */
 function RolesPanel() {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+  // The standby order, DERIVED. Rendering a.fallback_model instead shows
+  // "inherited" on every row while a real chain exists behind it — which is
+  // how this panel came to look like the feature was missing.
+  //
+  // null means "not answered", which is not the same as "no standby" — see the
+  // note in AgentsTab. A swallowed failure here painted the amber warning onto
+  // every row at once.
+  const [chains, setChains] = useState<Record<string, ChainLink[]> | null>(null);
 
   useEffect(() => { getAgents().then(setAgents).catch(() => setAgents([])); }, []);
+  useEffect(() => {
+    getAgentModelChains().then(setChains).catch(() => setChains(null));
+  }, []);
 
   return (
     <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3 space-y-4">
@@ -461,18 +472,36 @@ function RolesPanel() {
         ) : (
           <div className="space-y-1.5">
             {agents.map(a => (
-              <div key={a.id} className="flex items-baseline justify-between gap-3 text-sm">
-                <span className={a.enabled ? 'text-stone-200' : 'text-stone-500'}>
-                  {a.name}
-                  {!a.enabled && <span className="text-xs text-stone-600"> (disabled)</span>}
-                </span>
-                <span className="text-xs text-stone-400 font-mono truncate">{a.model}</span>
+              <div key={a.id} className="text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className={a.enabled ? 'text-stone-200' : 'text-stone-500'}>
+                    {a.name}
+                    {!a.enabled && <span className="text-xs text-stone-600"> (disabled)</span>}
+                  </span>
+                  <span className="text-xs text-stone-400 font-mono truncate">{a.model}</span>
+                </div>
+                <div className="text-[11px] text-stone-500 pl-2">
+                  {chains?.[a.id] === undefined ? null
+                    : chains[a.id].length === 0 ? (
+                      <span className="text-amber-400/90">no standby — dies with its model</span>
+                    ) : (
+                      <>then {chains[a.id].map((l, i) => (
+                        <span key={l.model} title={l.why}>
+                          {i > 0 && ', '}
+                          <span className="font-mono text-stone-400">{l.model}</span>
+                        </span>
+                      ))}</>
+                    )}
+                </div>
               </div>
             ))}
             <p className="text-xs text-stone-500 pt-1">
               Change these in the Agents tab — they are each an agent's own
               binding, and having two places to write the same field is how
-              they end up disagreeing.
+              they end up disagreeing. The standby order shown is derived: your
+              own choice first, then the install default, then the main agent's
+              model, then a model on the other tier so an agent survives its
+              whole tier going down.
             </p>
           </div>
         )}
