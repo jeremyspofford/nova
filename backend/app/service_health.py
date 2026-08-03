@@ -42,6 +42,13 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+# The tools whose RESULT carries a real reading of service state. Declared
+# here, beside the function that produces it, so `service_claims` never holds
+# a second list that can drift: a third tool that starts returning this is
+# added on the line below the code that made it true, and the detector goes
+# quiet for it by itself.
+EVIDENCE_TOOLS = frozenset({"service_status", "diagnose"})
+
 
 def _is_one_off(name: str, service: Optional[str], project: str) -> bool:
     """A container that is not THE service, despite carrying its label.

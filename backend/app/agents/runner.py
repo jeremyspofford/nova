@@ -20,7 +20,7 @@ from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
 from app import (bg, capability_claims, model_claims, narration, redact,
-                 settings_store, timefmt, trace)
+                 service_claims, settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory import provenance
@@ -1620,6 +1620,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # rounds left every time it happened on 2026-08-03.
     narration_retried = False
     last_round_calls = 0
+    # every tool name called this turn, across all rounds
+    called_names: list[str] = []
     # phase 2 bookkeeping: which tool results may never be trimmed (a
     # specialist's report IS the turn's product) and which go first (raw web
     # output the model can always re-fetch)
@@ -1763,6 +1765,22 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         final_text += round_text
 
         last_round_calls = len(tool_calls)
+        # Names, not just a count: service_claims asks WHICH tools ran, since
+        # "she holds it and did not use it" is the whole failure it checks.
+        #
+        # tool_calls is the FLAT form here — {id, name, arguments} — not the
+        # OpenAI wire shape nested under "function", which is built further
+        # down for the assistant message. Reading the nested key would have
+        # yielded a list of empty strings, and an empty list means "checked
+        # nothing", so the detector would have contradicted her on exactly the
+        # turns where she DID look. Both shapes are accepted so a future
+        # refactor of either one cannot silently reintroduce that.
+        for c in tool_calls:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name") or (c.get("function") or {}).get("name")
+            if name:
+                called_names.append(str(name))
         if not tool_calls:
             slip = narration.detect(round_text, 0)
             if slip and not narration_retried and round_no + 1 < max_rounds:
@@ -2074,6 +2092,35 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         # the verdict replayed on none. A check whose output nobody reads is
         # telemetry, not a control.
         note = capability_claims.correction(claimed)
+        final_text += note
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
+
+    # service-claim check: text that asserts a service is up or down when no
+    # tool this turn read service state. Third sibling — narration is work
+    # announced and not done, capability_claims is work that could never have
+    # been done, this is a FACT ABOUT THE STACK that nothing established.
+    # Gated on tools CALLED, not granted: holding service_status and reaching
+    # for search_memory instead is the measured behaviour it exists for.
+    service_claim = service_claims.detect(final_text, called_names)
+    if service_claim:
+        svc, matched = service_claim
+        yield {"type": "activity", "kind": "service_claim",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": (f"stated {svc} was up or down ({matched!r}) without "
+                          f"calling any tool that reads service state")}
+        log.warning("Service claim: agent=%s model=%s service=%s matched=%r",
+                    agent.get("name"), agent.get("model"), svc, matched)
+        bg.spawn(memory.write(
+            f"Service claim: agent '{agent.get('name')}' on model "
+            f"{agent.get('model')} stated {svc} was up or down (matched "
+            f"{matched!r}) without calling service_status or diagnose. The "
+            f"claim rested on nothing.", type="journal", source_type="system"))
+        # In the reply text for the same reason as its two siblings: an
+        # activity event persists as a role='tool' row that the history loader
+        # drops, so the claim replays on every later turn and the correction
+        # replays on none — and on voice only text is spoken at all.
+        note = service_claims.correction(svc)
         final_text += note
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
