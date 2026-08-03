@@ -19,7 +19,7 @@ from typing import Optional
 
 from app import timefmt
 from app.config import settings
-from app.memory import provenance
+from app.memory import links, provenance
 from app.memory.index import BM25Index
 from app.memory.store import OkfStore
 from app.memory.tagtiers import SEED_FLOOR, TagTiers
@@ -775,7 +775,14 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             if learned:
                 node["learned"] = learned
             nodes.append(node)
-            by_title[title.lower()] = doc_id
+            # Through the shared resolver, and only for a REAL title. `title`
+            # above falls back to the doc_id so a node always has a label —
+            # but letting that fallback into the title namespace puts the
+            # literal string 'journals/2026-07-13.md' (the one untitled note
+            # in the corpus) where a link could resolve to it, and where a
+            # retarget would go looking for it.
+            if fm.get("title") and links.key(fm["title"]):
+                by_title[links.key(fm["title"])] = doc_id
             for tag in self.store.extract_tags(fm):
                 # Category/format tags label a note's KIND, not its subject —
                 # they must not bridge unrelated notes into a shared cluster
@@ -785,7 +792,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     continue
                 tag_map.setdefault(tag, []).append(doc_id)
             for link in self.store.extract_links(body):
-                edges.append({"source": doc_id, "target_title": link.lower()})
+                edges.append({"source": doc_id, "target_title": links.key(link)})
 
         resolved = []
         seen = set()

@@ -16,9 +16,10 @@ import { CardsSkeleton } from '../ui';
 import { confirmDiscardFiles, setFilesDirty } from './files/dirty';
 import { Row, Tree, nodeKey } from './files/Tree';
 import {
-  Entry, FileRead, Root, deleteEntry, listDir, listRoots, newFile, newFolder,
-  readFile, renameEntry, writeFile,
+  Entry, FileRead, FilesRefusal, LinkPlan, LinkReceipt, Root, deleteEntry,
+  listDir, listRoots, newFile, newFolder, readFile, renameEntry, writeFile,
 } from './files/api';
+import { LinkPlanDialog } from './files/LinkPlanDialog';
 import { Viewer } from './files/Viewer';
 
 const parentOf = (p: string) => p.split('/').slice(0, -1).join('/');
@@ -50,6 +51,11 @@ export function FilesTab() {
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [status, setStatus] = useState('');
+  // A receipt is not an error, and `status` is red-only and cleared on every
+  // successful save — so a "moved 60 links" result rendered there would be
+  // both the wrong colour and immediately erased.
+  const [receipt, setReceipt] = useState<LinkReceipt | null>(null);
+  const [plan, setPlan] = useState<LinkPlan | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   // A phone cannot show a tree beside an editor: at 390px the two-pane
   // layout left the editor a 102px slit. Below the breakpoint the panes
@@ -143,6 +149,8 @@ export function FilesTab() {
       setDirty(false);
       setOpenRef({ root: r.root, path: r.path });
       setMode(d.editable ? 'edit' : 'preview');
+      setReceipt(null);
+      setPlan(null);
     } catch (e) { setStatus(msg(e)); }
   }
 
@@ -153,22 +161,36 @@ export function FilesTab() {
 
   async function refresh(root: string, dir: string) {
     await loadKids(root, dir);
-    // the documents root carries a per-kind count on the folder row, so a
-    // delete has to recompute the level above it too
-    if (root === 'documents') await loadKids(root, '');
   }
 
-  async function save() {
+  /** The only writer. Ctrl/Cmd-S and the Save button both land here, so the
+   *  link question cannot be bypassed by the keyboard — and it is asked by
+   *  the BACKEND, which refuses regardless of what this does. */
+  async function save(opts?: { links: 'retarget' | 'unlink'; confirm_plan: string }) {
     if (!openRef || !doc) return;
     setSaving(true);
     try {
-      const res = await writeFile(openRef.root, openRef.path, draft);
+      const res = await writeFile(openRef.root, openRef.path, draft, opts);
       setDirty(false);
       setDoc({ ...doc, bytes: res.bytes, mtime: res.mtime });
       setStatus('');
+      setPlan(null);
+      setReceipt(res.links ?? null);
       await refresh(openRef.root, parentOf(openRef.path));
-    } catch (e) { setStatus(msg(e)); }
-    finally { setSaving(false); }
+      // the note's own inbound count is stale the moment its title moves
+      const fresh = await readFile(openRef.root, openRef.path);
+      setDoc(d => (d ? { ...d, inbound_links: fresh.inbound_links, dangling: fresh.dangling } : d));
+    } catch (e) {
+      if (e instanceof FilesRefusal) {
+        // A fresh plan replaces a stale one, so the second ask is honest
+        // about a corpus that moved while the dialog was open.
+        setPlan(e.detail);
+        setStatus('');
+      } else {
+        setPlan(null);
+        setStatus(msg(e));
+      }
+    } finally { setSaving(false); }
   }
 
   async function create(kind: 'file' | 'folder') {
@@ -273,8 +295,17 @@ export function FilesTab() {
     + 'hover:bg-stone-800 disabled:opacity-40 disabled:hover:bg-transparent';
 
   return (
-    <div className="flex flex-col h-[62vh] min-h-0 gap-2">
+    <div className="relative flex flex-col h-[62vh] min-h-0 gap-2">
       {status && <div className="text-xs text-red-400 shrink-0">{status}</div>}
+      {receipt && (
+        <div className={`text-xs shrink-0 ${receipt.failed.length ? 'text-red-400' : 'text-teal-300'}`}>
+          {receipt.action === 'retarget'
+            ? `Moved ${receipt.occurrences} link${receipt.occurrences === 1 ? '' : 's'} in ${receipt.notes} note${receipt.notes === 1 ? '' : 's'} to “${receipt.to}”.`
+            : `Turned ${receipt.occurrences} link${receipt.occurrences === 1 ? '' : 's'} in ${receipt.notes} note${receipt.notes === 1 ? '' : 's'} into plain text.`}
+          {receipt.failed.length > 0 &&
+            ` ${receipt.failed.length} could not be written: ${receipt.failed.join(', ')}.`}
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
         <button className={btn} onClick={() => create('file')}
@@ -284,7 +315,7 @@ export function FilesTab() {
         <button className={btn} onClick={rename}
           disabled={!sel?.path || !canWrite}>Rename</button>
         <button className={btn} onClick={remove}
-          disabled={!sel?.path || (!canWrite && selRoot?.key !== 'documents')}>Delete</button>
+          disabled={!sel?.path || !canWrite}>Delete</button>
         {!narrow && (
           <span className="text-[11px] text-stone-500 truncate ml-1">
             {selRoot?.note}
@@ -313,7 +344,7 @@ export function FilesTab() {
                 dirty={dirty} saving={saving} mode={mode}
                 onBack={narrow ? closeDoc : undefined}
                 onDraft={s => { setDraft(s); setDirty(true); }}
-                onMode={setMode} onSave={save}
+                onMode={setMode} onSave={() => save()}
               />
             ) : (
               <div className="h-full flex items-center justify-center text-xs text-stone-500 px-6 text-center">
@@ -323,6 +354,15 @@ export function FilesTab() {
           </div>
         )}
       </div>
+
+      {plan && (
+        <LinkPlanDialog
+          plan={plan}
+          busy={saving}
+          onCancel={() => setPlan(null)}
+          onChoose={mode => save({ links: mode, confirm_plan: plan.plan })}
+        />
+      )}
     </div>
   );
 }

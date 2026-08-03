@@ -23,16 +23,19 @@ accident:
     rules.py and migrations/, and nothing at this layer can tell the
     operator's browser from an agent holding the same bearer token.
 
-The three roots differ in what they even CAN support, so their rules are not
+Documents are NOT a root. Attachments are content-addressed blobs — the
+directory is the first two hex characters of a sha and no filename is ever
+stored — so there is no address space to navigate, and a tree faked from the
+`kind` column showed strictly less than Library -> Documents already does.
+A second, worse view of the same rows is not a feature.
+
+The two roots differ in what they even CAN support, so their rules are not
 a policy table that could be edited to say something the storage cannot do:
 
   memory     real markdown tree, but only two levels deep — OkfStore.
              iter_files() globs `<type-dir>/*.md` and nothing else, so a
              subfolder here is a folder she structurally cannot read. New
              folders are refused for that reason, not as a preference.
-  documents  content-addressed blobs (`sha[:2]/sha`, no name on disk, ever).
-             There is no address space to navigate, so the tree is derived
-             from the `kind` column and the structure is read-only.
   workspace  an ordinary directory with no index and no references. Full
              CRUD, arbitrary nesting, because nothing downstream cares.
 """
@@ -45,21 +48,22 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app import attachments, db
+from app import db
 from app.config import settings
+from app.memory import links
 from app.memory.memory import memory
 from app.memory.store import TYPE_DIRS, _PINNABLE_DIRS
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
-MEMORY, DOCUMENTS, WORKSPACE = "memory", "documents", "workspace"
+MEMORY, WORKSPACE = "memory", "workspace"
 
 # Read/write ceiling for the text editor. The point is not the disk cost —
 # it is that a 12 MB line-less blob wedges the browser tab, and "the editor
@@ -90,11 +94,6 @@ def _roots() -> dict[str, _Root]:
             "Her notes, as markdown. Editing here writes exactly what you "
             "type and then reindexes.",
             Path(settings.okf_memory_dir).resolve(), True, False),
-        DOCUMENTS: _Root(
-            DOCUMENTS, "Documents",
-            "What you have handed her. Grouped by kind — on disk these are "
-            "content-addressed blobs with no filenames.",
-            None, False, False),
         WORKSPACE: _Root(
             WORKSPACE, "Workspace",
             "Scratch space. Anything she makes, and anything you drop in.",
@@ -281,23 +280,6 @@ async def _reindex(doc_id: str, path: Optional[Path]) -> None:
         memory._index_file(doc_id, mtime)
 
 
-def _document_id(path: str) -> str:
-    """The attachment id in `<kind>/<uuid>`, or a refusal.
-
-    attachments.get() parses its argument with uuid.UUID(), so a kind folder
-    (the only other thing this tree contains) reached it as a bare word and
-    came back a 500. A grouping is not a thing you can open or delete.
-    """
-    seg = path.split("/")[-1]
-    try:
-        uuid.UUID(seg)
-    except (ValueError, AttributeError, TypeError):
-        raise HTTPException(
-            400, "Documents are addressed by id — a kind is a grouping, not "
-                 "a document.") from None
-    return seg
-
-
 # ── listing ──────────────────────────────────────────────────────────────
 
 def _entry(p: Path, base: Path, root: _Root) -> Optional[dict]:
@@ -335,26 +317,6 @@ def _list_fs(root: _Root, rel: str) -> list[dict]:
     return out
 
 
-async def _list_documents(rel: str) -> list[dict]:
-    """A tree derived from the `kind` column — the only grouping the rows
-    actually carry. Disk cannot be walked here: a directory is the first two
-    hex chars of a sha and 5 of the 6 that exist are delete residue."""
-    rows = await attachments.listing(limit=1000)
-    if not rel:
-        kinds: dict[str, int] = {}
-        for r in rows:
-            kinds[r["kind"] or "other"] = kinds.get(r["kind"] or "other", 0) + 1
-        return [{"name": k, "path": k, "dir": True, "bytes": 0, "mtime": 0,
-                 "count": n} for k, n in sorted(kinds.items())]
-    kind = rel.split("/")[0]
-    if "/" in rel:
-        raise HTTPException(404, "Documents are grouped one level deep.")
-    return [{"name": r["display_name"], "path": f"{kind}/{r['id']}", "dir": False,
-             "bytes": r["bytes"], "mtime": 0, "id": r["id"], "mime": r["mime"],
-             "present": r["present"], "text_source": r["text_source"]}
-            for r in rows if (r["kind"] or "other") == kind]
-
-
 @router.get("/api/v1/files/roots")
 async def list_roots():
     return {"roots": [
@@ -366,9 +328,6 @@ async def list_roots():
 
 @router.get("/api/v1/files/list")
 async def list_dir(root: str, path: str = ""):
-    r = _root(root)
-    if r.key == DOCUMENTS:
-        return {"entries": await _list_documents(path.strip("/"))}
     return {"entries": _list_fs(_fs_root(root), path)}
 
 
@@ -376,18 +335,7 @@ async def list_dir(root: str, path: str = ""):
 
 @router.get("/api/v1/files/read")
 async def read_file(root: str, path: str):
-    r = _root(root)
-    if r.key == DOCUMENTS:
-        doc = await attachments.get(_document_id(path))
-        if not doc:
-            raise HTTPException(404, "That document is not in the store.")
-        return {"kind": "document", "name": doc["display_name"],
-                "mime": doc["mime"], "bytes": doc["bytes"],
-                "text": doc.get("text_content") or "",
-                "text_source": doc.get("text_source"),
-                "text_error": doc.get("text_error"), "id": doc["id"],
-                "editable": False}
-
+    r = _fs_root(root)
     p = _confine(r.base, path)
     if not p.is_file():
         raise HTTPException(404, "That file is not there.")
@@ -420,7 +368,8 @@ async def read_file(root: str, path: str):
             editable, why = False, str(e.detail)
     return {"kind": "text", "name": p.name, "bytes": size, "text": text,
             "mtime": p.stat().st_mtime, "editable": editable, "reason": why,
-            "indexed": _index_flag(rel) if r.key == MEMORY else None}
+            "indexed": _index_flag(rel) if r.key == MEMORY else None,
+            **(_link_facts(rel, text) if r.key == MEMORY else {})}
 
 
 @router.get("/api/v1/files/raw")
@@ -431,7 +380,13 @@ async def raw_file(root: str, path: str):
     p = _confine(r.base, path)
     if not p.is_file():
         raise HTTPException(404, "That file is not there.")
-    return FileResponse(p, filename=p.name)
+    # Never a renderable content type. FileResponse guesses from the
+    # extension, so a .html or .svg dropped in Workspace came back as
+    # text/html — and the client fetches it as a blob (to carry the bearer
+    # token), which strips Content-Disposition and inherits THIS origin, so
+    # opening it would run its script against the tab that holds the token.
+    return FileResponse(p, filename=p.name, media_type="application/octet-stream",
+                        headers={"X-Content-Type-Options": "nosniff"})
 
 
 # ── mutation ─────────────────────────────────────────────────────────────
@@ -440,6 +395,17 @@ class WriteBody(BaseModel):
     root: str
     path: str
     content: str
+    # What to do with inbound [[links]] when this save changes the note's
+    # title. Absent means "I have not been asked yet" and the save refuses
+    # with the count; a value means the operator answered.
+    links: Optional[Literal["retarget", "unlink"]] = None
+    # The fingerprint of the plan the operator was actually shown. Not a
+    # boolean: backup_apply already wrote down why — "a boolean is one
+    # careless default away from being true" — and a flag cannot hold the
+    # property the dialog claims, because the corpus can gain a referrer
+    # while the dialog is open (the summariser and ingest worker emit links
+    # unattended). Recomputed under the lock and compared before any write.
+    confirm_plan: Optional[str] = None
 
 
 class PathBody(BaseModel):
@@ -461,6 +427,102 @@ def _writable_target(root_key: str, rel: str) -> tuple[_Root, Path]:
     if r.key == MEMORY:
         _memory_writable(_rel(r.base, p))
     return r, p
+
+
+def _link_facts(rel: str, text: str) -> dict:
+    """What opening this note should tell you before you touch it.
+
+    `inbound_links` is the blast radius of a title change, and it belongs in
+    the header rather than in the dialog: a warning that arrives only after
+    you have typed a new title is a warning that arrives too late.
+
+    One `scan` rather than title_map + find_references, which walked the
+    corpus twice per open.
+    """
+    titles, inbound = links.scan(memory.store)
+    parsed = memory.store.read_file(rel)
+    title = str((parsed[0].get("title") if parsed else "") or "")
+    n = sum(c for _, _, c in inbound.get(links.key(title), [])) if title else 0
+    return {"inbound_links": n,
+            "dangling": links.dangling_in(memory.store, text, titles)}
+
+
+def _titles_around(rel: str, content: str) -> tuple[str, str]:
+    """The note's title before this save and after it.
+
+    Both sides go through the store's own parser, which already strips and
+    de-quotes scalars, so no second normalisation is invented here — the
+    thing being compared is exactly what the rest of the store would read.
+    """
+    before = memory.store.read_file(rel)
+    old = str((before[0].get("title") or "") if before else "")
+    try:
+        fm, _ = memory.store.parse_frontmatter(content)
+    except Exception:
+        fm = {}
+    return old, str(fm.get("title") or "")
+
+
+# A title is spliced verbatim into `[[...]]` across the corpus, so a title
+# carrying brackets or a newline would let a retitle write arbitrary prose
+# into notes the operator never opened — including journals, which this
+# editor otherwise refuses to write at all. Refused independently of that:
+# a title containing `]]` also makes its own inbound links unresolvable.
+_TITLE_BANNED = set("[]\r\n\t")
+
+
+def _refuse_bad_title(new_title: str) -> None:
+    if _TITLE_BANNED & set(new_title or ""):
+        raise HTTPException(
+            422, "A title cannot contain square brackets or line breaks — "
+                 "links are written as [[title]], so those characters would "
+                 "break every link pointing at this note.")
+
+
+def _refuse_title_collision(rel: str, new_title: str) -> None:
+    """Two notes cannot share a title, and there is no confirm for it.
+
+    Resolution is a dict keyed by title, so a duplicate hands every inbound
+    link to whichever note the scan reaches last and makes the other
+    unreachable by link — silently. No operator intent is served by that, so
+    there is nothing to confirm; this is a refusal with no override.
+    """
+    if not links.key(new_title):
+        return
+    holders = [d for d in links.title_map(memory.store).get(links.key(new_title), [])
+               if d != rel]
+    if holders:
+        raise HTTPException(409, f"'{holders[0]}' is already titled "
+                                 f"“{new_title}”. Two notes with one title means "
+                                 f"links to it can only reach one of them, so this "
+                                 f"one needs a different title.")
+
+
+def _title_change_refusal(old: str, new: str, refs: list, plan: str,
+                          stale: bool) -> HTTPException:
+    """The 409 that carries the whole plan, so the dialog can be honest.
+
+    A structured detail rather than a bare sentence, because the count is the
+    entire point — but `message` stays a full sentence so a string-only
+    client still gets something true, which is the contract the rest of this
+    module keeps.
+    """
+    notes, occurrences = len(refs), sum(n for _, _, n in refs)
+    lead = ("The corpus changed while you were deciding, so here is the "
+            "current picture. " if stale else "")
+    return HTTPException(409, {
+        "code": "title_change_breaks_links",
+        "message": (f"{lead}Renaming the title from “{old}” to “{new}” "
+                    f"leaves {occurrences} link{'s' if occurrences != 1 else ''} "
+                    f"in {notes} other note{'s' if notes != 1 else ''} pointing at a "
+                    f"title that will no longer exist. Move them to the new title, "
+                    f"or turn them into plain text."),
+        "old_title": old, "new_title": new,
+        "notes": notes, "occurrences": occurrences,
+        "referrers": [{"doc_id": d, "count": n} for d, _, n in refs[:50]],
+        "options": ["retarget", "unlink"],
+        "plan": plan,
+    })
 
 
 def _os_refusal(e: OSError, p: Path) -> HTTPException:
@@ -553,10 +615,57 @@ async def write_content(body: WriteBody):
         raise HTTPException(404, "That folder is not there.")
     if p.exists() and p.is_dir():
         raise HTTPException(400, "That is a folder.")
-    _atomic_write(p, data)
-    if r.key == MEMORY:
-        await _reindex(_rel(r.base, p), p)
-    return {"ok": True, "bytes": len(data), "mtime": p.stat().st_mtime}
+
+    if r.key != MEMORY:
+        _atomic_write(p, data)
+        return {"ok": True, "bytes": len(data), "mtime": p.stat().st_mtime}
+
+    rel = _rel(r.base, p)
+    old_title, new_title = _titles_around(rel, body.content)
+    receipt: Optional[dict] = None
+
+    # Everything below happens under ONE lock, because the plan the operator
+    # approved and the corpus the rewrite lands on have to be the same corpus.
+    async with memory._lock:
+        if links.key(old_title) != links.key(new_title):
+            _refuse_bad_title(new_title)
+            _refuse_title_collision(rel, new_title)
+            refs = links.find_references(memory.store, old_title)
+            if refs:
+                plan = links.plan_hash(old_title, new_title, refs)
+                if not body.links or body.confirm_plan != plan:
+                    raise _title_change_refusal(old_title, new_title, refs, plan,
+                                                stale=bool(body.confirm_plan))
+        # The operator's own bytes land FIRST. Referrers-first would mean a
+        # failure here leaves 60 notes pointing at a title that never arrived
+        # — strictly worse than the hazard being fixed.
+        _atomic_write(p, data)
+        memory._index_file(rel, p.stat().st_mtime)
+
+        if links.key(old_title) != links.key(new_title) and body.links:
+            changed = links.apply(memory.store, old_title,
+                                  new_title if body.links == "retarget" else None)
+            for doc_id, mtime, _n, ok in changed:
+                if ok:
+                    memory._index_file(doc_id, mtime)
+            receipt = {
+                "action": body.links,
+                "from": old_title,
+                "to": new_title if body.links == "retarget" else None,
+                # Only what was VERIFIED, never the intent — the ntfy receipt
+                # convention. A partial rewrite is not self-healing: the next
+                # save sees old == new and does nothing, so this list is the
+                # only record that a file was missed.
+                "notes": sum(1 for _, _, _, ok in changed if ok),
+                "occurrences": sum(n for _, _, n, ok in changed if ok),
+                "docs": [d for d, _, _, ok in changed if ok],
+                "failed": [d for d, _, _, ok in changed if not ok],
+            }
+
+    out = {"ok": True, "bytes": len(data), "mtime": p.stat().st_mtime}
+    if receipt:
+        out["links"] = receipt
+    return out
 
 
 @router.post("/api/v1/files/new-file")
@@ -622,8 +731,8 @@ async def rename(body: RenameBody):
             raise HTTPException(
                 409, f"'{src.name}' is referenced by {' and '.join(held)}, "
                      f"which point at it by path and would be orphaned. "
-                     f"Rename the title inside the note instead — wiki-links "
-                     f"resolve by title, so they will follow.")
+                     f"Change the note's title instead — the editor moves "
+                     f"inbound links with it, once you confirm.")
     try:
         os.replace(src, dst)
     except OSError as e:
@@ -636,13 +745,7 @@ async def rename(body: RenameBody):
 
 @router.delete("/api/v1/files/item")
 async def delete_item(root: str, path: str, recursive: bool = False):
-    r = _root(root)
-
-    if r.key == DOCUMENTS:
-        if not await attachments.delete(_document_id(path)):
-            raise HTTPException(404, "That document is not in the store.")
-        return {"ok": True}
-
+    r = _fs_root(root)
     if not r.writable:
         raise HTTPException(403, f"{r.label} is read-only.")
     p = _mutation_target(r.base, path)

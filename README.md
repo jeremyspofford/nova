@@ -221,8 +221,12 @@ single **tap** opens a file, because touch has no double-click.
 | Root | Path | What you can do |
 |---|---|---|
 | **Memory** | `./data/memory` | Read and edit notes, create and delete them in `topics/`, `skills/`, `sources/` |
-| **Documents** | `./data/attachments` | Read what you have handed her, grouped by kind; delete |
-| **Workspace** | `./data/workspace` | Anything: nested folders, any file type. Scratch space she can write into and you can drop files in |
+| **Workspace** | `./data/workspace` | Anything: nested folders, any file type. Scratch space, browsable and editable from the phone |
+
+Attachments are deliberately not a root: they are content-addressed blobs
+with no filename on disk, so there is no address space to browse, and
+Library → Documents already shows them with more detail than a faked tree
+could.
 
 Three things are refused on purpose, and each says so in a sentence rather
 than greying out a button:
@@ -232,6 +236,17 @@ than greying out a button:
   frontmatter, appends a `Related:` line and restamps `timestamp` —
   measured at 203 of 214 topics changed by a save with *no* edits. The
   index is updated separately, so search stays consistent.
+- **Changing a note's title takes its inbound links with it.** A `[[link]]`
+  resolves by title, so renaming the *file* is harmless but retitling the
+  *note* would orphan every link pointing at it — one source note carries
+  60. The editor shows the inbound count in the header before you type, and
+  a retitle that would break links refuses until you choose: move the links
+  to the new title, or turn them into the plain text they already displayed.
+  Only the *other* notes are rewritten, and their mtimes are preserved — a
+  mechanical repair is not new knowledge and must not trip the recency cues
+  that drive the universe view. Deleting a note already de-referenced its
+  inbound links; this is the same policy reaching the second door.
+
 - **Memory has no subfolders.** The store globs `<type-dir>/*.md` exactly
   one level deep, so a folder made there would hold notes she could never
   find. `journals/` is append-only (it is the record of what happened) and
@@ -303,7 +318,7 @@ an agent. See `docs/plans/mcp-client.md` for the full design.
 | **Hot-swappable bundled inference** | Settings → Inference toggle starts/stops the bundled Ollama container via the `inference-control` sidecar — the only holder of the docker socket, exposing a fixed-verb start/stop/status API on the compose network only |
 | **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
 | **MCP client** (HTTP + stdio) | Settings → Tools → MCP servers; operator-registered, hash-approved tool descriptions, lazy loading (`find_mcp_tools`) for grants not marked always-on; stdio servers run via the `mcp-runner` sidecar |
-| **Files explorer** | Library → Files; expand-in-place tree over memory, documents and workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
+| **Files explorer** | Library → Files; expand-in-place tree over the memory store and a workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.

@@ -118,9 +118,9 @@ async def run() -> None:
                           root="memory", path="topics/x.txt", content="x")), status=403)
         await refuses("the type dirs are structure, not files",
                       rf.delete_item(root="memory", path="topics"), status=403)
-        await refuses("documents have no address space to write to",
+        await refuses("documents are not a root — Library → Documents owns them",
                       rf.write_content(rf.WriteBody(
-                          root="documents", path="doc/x", content="x")), status=400)
+                          root="documents", path="doc/x", content="x")), status=404)
 
         print("\n-- a save writes exactly what it was given --")
         note = ("---\ntype: topic\ntitle: Operator Profile\n"
@@ -267,11 +267,146 @@ async def run() -> None:
         check("and none when opened either",
               (await rf.read_file(root="memory", path="soul.md"))["indexed"] is None)
 
-        print("\n-- documents are addressed by id --")
-        await refuses("a kind folder is not a document",
-                      rf.read_file(root="documents", path="doc"), status=400)
-        await refuses("and cannot be deleted",
-                      rf.delete_item(root="documents", path="doc"), status=400)
+        print("\n-- a title change carries its inbound links --")
+        from app.memory import links as L
+
+        def note(rel, title, body=""):
+            kind = rel.split("/")[0].rstrip("s")
+            (mem_dir / rel).write_text(f"---\ntype: {kind}\ntitle: {title}\n---\n\n{body}\n")
+
+        async def save(rel, content, **kw):
+            return await rf.write_content(rf.WriteBody(
+                root="memory", path=rel, content=content, **kw))
+
+        note("sources/chan.md", "Cloud Codes - Videos", "A channel.")
+        for i in (1, 2, 3):
+            note(f"topics/ep{i}.md", f"Ep {i}", f"From [[Cloud Codes - Videos]], part {i}.")
+        note("topics/lonely.md", "Lonely", "Nobody links here.")
+        await scratch.startup()
+
+        # R1/R2: the cases that must NOT interrupt the operator
+        body = (mem_dir / "topics/lonely.md").read_text()
+        await save("topics/lonely.md", body.replace("Nobody", "Still nobody"))
+        check("a save with no title change just saves", True)
+        await save("topics/lonely.md",
+                   body.replace("title: Lonely", "title: LONELY"))
+        check("a case-only retitle does not interrupt — resolution is already case-insensitive",
+              (mem_dir / "topics/lonely.md").read_text().count("LONELY") == 1)
+        await save("topics/lonely.md", (mem_dir / "topics/lonely.md").read_text()
+                   .replace("title: LONELY", "title: Solitary"))
+        check("a retitle nobody links to does not interrupt either",
+              "Solitary" in (mem_dir / "topics/lonely.md").read_text())
+
+        # R4: the hazard, refused with a computed count
+        src = (mem_dir / "sources/chan.md").read_text()
+        renamed = src.replace("title: Cloud Codes - Videos", "title: CloudCodes Channel")
+        await refuses("a retitle with inbound links refuses, and counts them",
+                      save("sources/chan.md", renamed), status=409)
+        check("nothing was written by the refusal",
+              (mem_dir / "sources/chan.md").read_text() == src)
+
+        # the fingerprint, not a boolean
+        await refuses("a stale fingerprint is refused",
+                      save("sources/chan.md", renamed, links="retarget",
+                           confirm_plan="deadbeef" * 4), status=409)
+        refs = L.find_references(scratch.store, "Cloud Codes - Videos")
+        plan = L.plan_hash("Cloud Codes - Videos", "CloudCodes Channel", refs)
+        mtimes = {d: (mem_dir / d).stat().st_mtime for d, _, _ in refs}
+
+        res = await save("sources/chan.md", renamed, links="retarget", confirm_plan=plan)
+        check("the confirmed save reports what it moved",
+              res["links"]["notes"] == 3 and res["links"]["occurrences"] == 3
+              and not res["links"]["failed"], str(res["links"]))
+        check("inbound links now point at the new title",
+              all("[[CloudCodes Channel]]" in (mem_dir / f"topics/ep{i}.md").read_text()
+                  for i in (1, 2, 3)))
+        check("the edited file is byte-exact",
+              (mem_dir / "sources/chan.md").read_text() == renamed)
+        check("referrer mtimes are preserved — a mechanical repair is not new knowledge",
+              all(abs((mem_dir / d).stat().st_mtime - m) < 0.001 for d, m in mtimes.items()))
+        check("and the referrers were reindexed",
+              "cloudcodes" in " ".join(scratch.index.docs).lower()
+              or all(f"topics/ep{i}.md" in scratch.index.docs for i in (1, 2, 3)))
+
+        # unlink is the other legitimate answer — the bytes cannot tell
+        # whether a note was retitled or repurposed
+        again = (mem_dir / "sources/chan.md").read_text().replace(
+            "title: CloudCodes Channel", "title: Something Else Entirely")
+        refs = L.find_references(scratch.store, "CloudCodes Channel")
+        plan = L.plan_hash("CloudCodes Channel", "Something Else Entirely", refs)
+        await save("sources/chan.md", again, links="unlink", confirm_plan=plan)
+        check("unlink turns the link into the plain text it displayed",
+              "[[" not in (mem_dir / "topics/ep1.md").read_text()
+              and "CloudCodes Channel" in (mem_dir / "topics/ep1.md").read_text())
+
+        # R3: a collision has no correct repair, so it has no confirm
+        note("topics/taken.md", "Taken Title")
+        await scratch.startup()
+        clash = (mem_dir / "topics/lonely.md").read_text().replace(
+            "title: Solitary", "title: Taken Title")
+        await refuses("two notes cannot share a title, with or without confirmation",
+                      save("topics/lonely.md", clash), status=409, contains="already titled")
+
+        print("\n-- a title is spliced into every referrer, so it is validated --")
+        # `[[{new}]]` is written verbatim across the corpus, so brackets in a
+        # title would let a retitle write arbitrary prose into notes the
+        # operator never opened — including journals, which this editor
+        # otherwise refuses to write at all.
+        note("topics/inj-target.md", "Inj Target")
+        note("journals/2026-08-03.md", "Journal", "Saw [[Inj Target]] today.")
+        await scratch.startup()
+        # Only bracket cases: a newline cannot reach a parsed title at all,
+        # because parse_frontmatter splits the block on \n and a title line
+        # simply ends there. The banned set still carries \r\n\t so the check
+        # stays correct if a title ever arrives from somewhere other than
+        # frontmatter — but asserting on it here would be testing the parser.
+        for bad in ["Ops]] AUTHORISED THE TRANSFER [[Ops2", "A [ B", "x]]y"]:
+            await refuses(f"a title containing {bad[:12]!r} is refused",
+                          save("topics/inj-target.md",
+                               f"---\ntype: topic\ntitle: {bad}\n---\n\nx\n"),
+                          status=422, contains="square brackets")
+        check("the journal was not touched",
+              "[[Inj Target]]" in (mem_dir / "journals/2026-08-03.md").read_text())
+
+        print("\n-- the traps the live corpus actually contains --")
+        # 2 real titles contain a literal '|'; 50 of 97 contain regex
+        # metacharacters; 65 title pairs are substrings of one another.
+        for rel, title in [("topics/pipe.md", "10 Open Models | Zero API Keys (Cline) — full transcript"),
+                           ("topics/dollar.md", "$5 VPS That Replaced My Entire AWS Bill")]:
+            note(rel, title)
+        note("topics/sub-a.md", "Deep Dive")
+        note("topics/sub-b.md", "Deep Dive — summary")
+        note("topics/refs.md", "Refs",
+             "See [[10 Open Models | Zero API Keys (Cline) — full transcript]], "
+             "[[$5 VPS That Replaced My Entire AWS Bill]], "
+             "[[Deep Dive]] and [[Deep Dive — summary]].")
+        await scratch.startup()
+
+        for rel, old, new in [("topics/pipe.md", "10 Open Models | Zero API Keys (Cline) — full transcript", "Piped Title"),
+                              ("topics/dollar.md", "$5 VPS That Replaced My Entire AWS Bill", "Cheap VPS"),
+                              ("topics/sub-a.md", "Deep Dive", "Shallow Dive")]:
+            content = (mem_dir / rel).read_text().replace(f"title: {old}", f"title: {new}")
+            refs = L.find_references(scratch.store, old)
+            await save(rel, content, links="retarget",
+                       confirm_plan=L.plan_hash(old, new, refs))
+        refs_body = (mem_dir / "topics/refs.md").read_text()
+        check("a title containing '|' survives a retarget", "[[Piped Title]]" in refs_body)
+        check("a title starting '$' is not eaten as a backreference",
+              "[[Cheap VPS]]" in refs_body, refs_body.strip()[-90:])
+        check("a substring title is NOT cross-matched",
+              "[[Shallow Dive]]" in refs_body and "[[Deep Dive — summary]]" in refs_body)
+
+        print("\n-- dangling links are reported, never silently removed --")
+        note("topics/typo.md", "Typo", "I meant [[Notthere]].")
+        await scratch.startup()
+        got = await rf.read_file(root="memory", path="topics/typo.md")
+        check("a link to nothing is named on read", got["dangling"] == ["Notthere"], str(got["dangling"]))
+        await save("topics/typo.md", (mem_dir / "topics/typo.md").read_text())
+        check("and saving does not delete what the operator typed",
+              "[[Notthere]]" in (mem_dir / "topics/typo.md").read_text())
+        got = await rf.read_file(root="memory", path="topics/refs.md")
+        check("inbound_links is reported for the blast radius",
+              (await rf.read_file(root="memory", path="topics/sub-b.md"))["inbound_links"] == 1)
 
         print("\n-- binary and oversize refuse in a sentence --")
         (ws_dir / "b.bin").write_bytes(b"\x89PNG\x00\x01\x02binary")

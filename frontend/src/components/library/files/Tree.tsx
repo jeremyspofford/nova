@@ -102,14 +102,6 @@ export function Tree({
               {r.name}
             </span>
             {busy.has(k) && <span className="text-[10px] text-stone-500 shrink-0">…</span>}
-            {r.entry?.count !== undefined && (
-              <span className="text-[10px] text-stone-500 shrink-0">{r.entry.count}</span>
-            )}
-            {r.entry?.present === false && (
-              <span className="text-[10px] text-red-400 shrink-0" title="the bytes are gone">
-                missing
-              </span>
-            )}
           </div>
         );
       })}

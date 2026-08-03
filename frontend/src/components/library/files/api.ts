@@ -20,18 +20,49 @@ export type Entry = {
   name: string; path: string; dir: boolean; bytes: number; mtime: number;
   /** memory only — false when the file sits where iter_files cannot see it */
   indexed?: boolean;
-  /** documents only */
-  count?: number; id?: string; mime?: string; present?: boolean;
-  text_source?: string;
 };
 
 export type FileRead = {
-  kind: 'text' | 'binary' | 'document';
+  kind: 'text' | 'binary';
   name: string; bytes: number; text: string;
   mtime?: number; editable: boolean; reason?: string;
   indexed?: boolean | null;
-  mime?: string; text_source?: string; text_error?: string; id?: string;
+  /** memory only — how many [[links]] elsewhere point at this note's title */
+  inbound_links?: number;
+  /** memory only — links in THIS body that resolve to nothing */
+  dangling?: string[];
 };
+
+/** What the save was told about the links it would break. */
+export type LinkPlan = {
+  code: 'title_change_breaks_links';
+  message: string;
+  old_title: string; new_title: string;
+  notes: number; occurrences: number;
+  referrers: { doc_id: string; count: number }[];
+  options: ('retarget' | 'unlink')[];
+  plan: string;
+};
+
+export type LinkReceipt = {
+  action: 'retarget' | 'unlink';
+  from: string; to: string | null;
+  notes: number; occurrences: number;
+  docs: string[]; failed: string[];
+};
+
+/** A refusal that carries structure, not just a sentence.
+ *
+ *  The generic path keeps only a string `detail`, so a dict body degraded to
+ *  "409 Conflict" and every count, referrer and fingerprint died in the
+ *  client. The message is still a full sentence, so anything that only reads
+ *  `.message` stays correct. */
+export class FilesRefusal extends Error {
+  constructor(message: string, readonly detail: LinkPlan) {
+    super(message);
+    this.name = 'FilesRefusal';
+  }
+}
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
@@ -51,8 +82,17 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = `${r.status} ${r.statusText}`;
     try {
       const body = await r.json();
-      if (typeof body?.detail === 'string' && body.detail.trim()) detail = body.detail;
-    } catch { /* not JSON — keep the status line */ }
+      const d = body?.detail;
+      if (typeof d === 'string' && d.trim()) detail = d;
+      // A structured refusal keeps its structure. `message` is still a full
+      // sentence, so a caller that only reads .message loses nothing.
+      else if (d && typeof d === 'object' && d.code) {
+        throw new FilesRefusal(d.message ?? detail, d as LinkPlan);
+      }
+    } catch (e) {
+      if (e instanceof FilesRefusal) throw e;
+      /* not JSON — keep the status line */
+    }
     throw new Error(detail);
   }
   return r.json() as Promise<T>;
@@ -70,13 +110,19 @@ export const listDir = (root: string, path: string) =>
 export const readFile = (root: string, path: string) =>
   call<FileRead>(`/api/v1/files/read?${q({ root, path })}`);
 
-/** The bytes, fetched WITH the token and handed to the browser as a blob.
+/** The bytes, fetched WITH the token and DOWNLOADED — never rendered.
  *
  *  `/api/v1/files/raw` sits behind the same bearer-token middleware as every
  *  other route, and an `<a href>` cannot carry an Authorization header — so
  *  the obvious plain link 401s for anyone the backend does not already trust
- *  by socket, which is every path except a browser on this host.
- *  `downloadAttachment` in src/api.ts documents the same trap. */
+ *  by socket. `downloadAttachment` in src/api.ts documents the same trap.
+ *
+ *  It downloads rather than opens, and rebuilds the blob with an inert type,
+ *  because a blob URL inherits THIS page's origin: an .html dropped in
+ *  Workspace, opened in a tab, would run its script against the origin
+ *  holding `nova.token` in localStorage. The server pins
+ *  application/octet-stream too — this is the second of the two, since the
+ *  blob path never sees Content-Disposition. */
 export async function openRaw(root: string, path: string): Promise<void> {
   const token = getAuthToken();
   const r = await fetch(`${API_URL}/api/v1/files/raw?${q({ root, path })}`, {
@@ -84,15 +130,23 @@ export async function openRaw(root: string, path: string): Promise<void> {
   });
   if (r.status === 401) window.dispatchEvent(new Event('nova:unauthorized'));
   if (!r.ok) throw new Error(`Could not fetch that file (${r.status}).`);
-  const url = URL.createObjectURL(await r.blob());
-  window.open(url, '_blank', 'noopener');
+  const blob = new Blob([await r.blob()], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = path.split('/').pop() || 'download';
+  a.click();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-export const writeFile = (root: string, path: string, content: string) =>
-  call<{ ok: true; bytes: number; mtime: number }>('/api/v1/files/content', {
-    method: 'PUT', body: JSON.stringify({ root, path, content }),
-  });
+export const writeFile = (
+  root: string, path: string, content: string,
+  opts?: { links: 'retarget' | 'unlink'; confirm_plan: string },
+) =>
+  call<{ ok: true; bytes: number; mtime: number; links?: LinkReceipt }>(
+    '/api/v1/files/content', {
+      method: 'PUT', body: JSON.stringify({ root, path, content, ...opts }),
+    });
 
 export const newFile = (root: string, path: string) =>
   call<{ ok: true; path: string }>('/api/v1/files/new-file', {

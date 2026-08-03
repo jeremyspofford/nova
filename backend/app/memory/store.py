@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,27 @@ TYPE_DIRS = {"topic": "topics", "skill": "skills", "journal": "journals", "sourc
 _PINNABLE_DIRS = {TYPE_DIRS[t] for t in ("topic", "skill", "source")}
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write `text` to `path` without following a link and without a torn read.
+
+    The same contract the Files editor's save uses, in one place so the two
+    cannot drift: a random temp name so it cannot be pre-placed, O_EXCL so an
+    existing name is an error rather than a target, O_NOFOLLOW so a symlink
+    is refused rather than followed, and os.replace so a reader never sees a
+    half-written note.
+    """
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        try:
+            os.write(fd, text.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _slugify(title: str) -> str:
@@ -286,27 +308,18 @@ class OkfStore:
     def unlink_references(self, title: str) -> list[tuple[str, float]]:
         """Rewrite [[wiki-links]] pointing at `title` into plain text in every
         file. Called after a delete so no surviving memory links to a document
-        that no longer exists. Matching mirrors graph resolution (title,
-        case-insensitive). File mtimes are preserved — a mechanical unlink is
-        not new knowledge and must not trip recency cues (fresh flares,
-        planet sizing). Returns (doc_id, mtime) for each changed file."""
-        target = title.lower().strip()
-        changed: list[tuple[str, float]] = []
-        for doc_id, _mtime in self.iter_files():
-            path = self.base_dir / doc_id
-            text = path.read_text()
-            new = _WIKILINK_RE.sub(
-                lambda m: m.group(1) if m.group(1).lower().strip() == target
-                else m.group(0),
-                text)
-            if new == text:
-                continue
-            stat = path.stat()
-            path.write_text(new)
-            os.utime(path, (stat.st_atime, stat.st_mtime))
-            changed.append((doc_id, stat.st_mtime))
-            log.info("Memory unlink: removed [[%s]] from %s", title, doc_id)
-        return changed
+        that no longer exists.
+
+        One line, because deleting a note and retitling one are the same
+        rewrite aimed at different outcomes, and two implementations of it
+        would eventually disagree about what counts as the same title. The
+        matcher, the mtime preservation and the reason for it now live in
+        app.memory.links; the (doc_id, mtime) shape is kept so delete_item is
+        untouched.
+        """
+        from app.memory import links
+        return [(doc_id, mtime)
+                for doc_id, mtime, _n, ok in links.apply(self, title, None) if ok]
 
     def normalize_source_transcript(self, doc_id: str, tags: list[str],
                                     link_title: str) -> Optional[float]:

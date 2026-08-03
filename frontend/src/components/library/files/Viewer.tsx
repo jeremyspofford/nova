@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Markdown } from '../../Markdown';
-import { SOURCE_NOTE, fmtBytes } from '../../ui';
+import { fmtBytes } from '../../ui';
 import { FileRead, openRaw } from './api';
 
 /** Frontmatter is data, not prose. Left in, react-markdown renders the whole
@@ -72,6 +72,10 @@ export function Viewer({
         <div className="text-sm text-stone-100 truncate">{doc.name}</div>
         <div className="text-[11px] font-mono text-stone-500 truncate">
           {path || doc.name} · {fmtBytes(doc.bytes)}
+          {/* The blast radius of a title change, before the title is
+              changed. A warning that only arrives at the save dialog is a
+              warning that arrives after the typing. */}
+          {!!doc.inbound_links && ` · ${doc.inbound_links} inbound link${doc.inbound_links === 1 ? '' : 's'}`}
           {doc.indexed === false && ' · not indexed'}
           {dirty && ' · unsaved'}
         </div>
@@ -111,22 +115,9 @@ export function Viewer({
         <button
           onClick={() => { setRawError(''); openRaw(root, path).catch(e => setRawError(String(e.message ?? e))); }}
           className="text-teal-400 hover:text-teal-300 underline text-xs">
-          Open it in a new tab
+          Download it
         </button>
         {rawError && <div className="text-xs text-red-400">{rawError}</div>}
-      </div>
-    );
-  } else if (doc.kind === 'document') {
-    body = (
-      <div className="pt-3 space-y-2 min-h-0 flex-1 flex flex-col">
-        <div className="text-[11px] text-stone-500">
-          {doc.mime}
-          {doc.text_source && ` · ${SOURCE_NOTE[doc.text_source] ?? doc.text_source}`}
-        </div>
-        {doc.text_error && <div className="text-xs text-red-400">{doc.text_error}</div>}
-        <div className="flex-1 overflow-auto nice-scroll text-sm text-stone-300 whitespace-pre-wrap">
-          {doc.text || <span className="text-stone-500">No text was read from this document.</span>}
-        </div>
       </div>
     );
   } else if (mode === 'preview' && isMd) {
@@ -145,6 +136,13 @@ export function Viewer({
   } else {
     body = (
       <>
+        {!!doc.dangling?.length && (
+          <div className="mt-2 rounded border border-amber-900/60 bg-amber-950/30 px-2 py-1.5
+                          text-[11px] text-amber-300/90">
+            {doc.dangling.length === 1 ? 'This link points at no note: ' : 'These links point at no note: '}
+            {doc.dangling.map(d => `[[${d}]]`).join(', ')}
+          </div>
+        )}
         {!doc.editable && doc.reason && (
           <div className="mt-2 rounded border border-stone-700 bg-stone-800/50 px-2 py-1.5
                           text-[11px] text-stone-400">
