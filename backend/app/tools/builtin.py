@@ -360,6 +360,11 @@ async def _manage_agents(args, ctx):
             model=model,
             allowed_tools=tools,
             routing_keywords=args.get("routing_keywords"),
+            # WHO, not "operator". create_agent records `actor or "operator"`,
+            # and this path never passed one — so an agent creating an agent was
+            # written into the capability trail as Jeremy. The update and delete
+            # branches below have always passed it; only create was silent.
+            actor=ctx.get("agent_name") or "an agent",
         )
         return _j({"status": "created", "agent_id": agent_id, "name": name})
 
@@ -970,9 +975,26 @@ async def _get_weather(args, ctx):
 async def _list_stale_topics(args, ctx):
     from datetime import datetime, timedelta, timezone
     from app import settings_store
+    from app.memory import immutable
+    from app.tools import fixtures
     max_age_days = int(args.get("max_age_days")
                        or settings_store.get("automations.staleness_max_age_days"))
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    # A date alone cannot tell a page that changed from a recording that never
+    # can. It put 202 of 220 topics on this queue and burned 50 unattended runs
+    # re-fetching the same three 2026-07-22 videos, none of which succeeded —
+    # and a failed refresh never bumps the timestamp, so they stayed the oldest
+    # thing in the list forever. The exclusions are MECHANICAL, derived from
+    # the ingest ledger and the subscription table, because the agent that ran
+    # it 50 times was following an instruction that told it to write a note
+    # saying the source was dead. A note is prose in the body; this selector
+    # reads frontmatter. The instruction was a request, so it changed nothing.
+    #
+    # In an eval replay the harness binds a scratch store and LIVE_OK promises
+    # this tool touches nothing else, so it gets no signals and no exclusions.
+    sig = (immutable.empty_signals() if fixtures.active()
+           else await immutable.signals())
+    skipped: dict[str, int] = {}
     stale = []
     for doc_id, _mtime in memory.store.iter_files():
         parsed = memory.store.read_file(doc_id)
@@ -986,12 +1008,23 @@ async def _list_stale_topics(args, ctx):
             learned = datetime.fromisoformat(ts)
         except ValueError:
             continue
-        if learned < cutoff:
-            stale.append({"id": doc_id, "title": fm.get("title", doc_id),
-                          "learned": ts[:10], "source_url": fm["source_url"]})
+        if learned >= cutoff:
+            continue
+        why = immutable.why_skip(doc_id, fm, sig)
+        if why:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
+        stale.append({"id": doc_id, "title": fm.get("title", doc_id),
+                      "learned": ts[:10], "source_url": fm["source_url"]})
     stale.sort(key=lambda s: s["learned"])
     return _j({"stale_count": len(stale), "topics": stale[:10],
-               "threshold_days": max_age_days})
+               "threshold_days": max_age_days, "skipped": skipped,
+               "note": "skipped counts are documents that cannot go stale and "
+                       "were excluded before you saw them: 'recording' is an "
+                       "ingested transcript (immutable), 'followed_source' is "
+                       "a channel poll-followed-sources already owns, "
+                       "'summary' is regenerated from its source rather than "
+                       "re-fetched. There is nothing to do about them."})
 
 
 # ── automations CRUD (Nova schedules its own behaviors) ─────────────────
@@ -2084,7 +2117,11 @@ BUILTIN_TOOLS: dict[str, dict] = {
     "list_stale_topics": {
         "name": "list_stale_topics",
         "description": ("List sourced memory topics whose knowledge has aged past the "
-                        "staleness threshold — candidates for a REFRESH. Oldest first."),
+                        "staleness threshold — candidates for a REFRESH. Oldest first. "
+                        "Documents that cannot go stale (ingested recordings, pages "
+                        "belonging to a followed source, and summaries) are excluded "
+                        "mechanically before you see the list; the `skipped` counts "
+                        "report them and there is nothing to do about them."),
         "parameters": {"type": "object", "properties": {
             "max_age_days": {"type": "integer",
                              "description": "Override the configured threshold"},
