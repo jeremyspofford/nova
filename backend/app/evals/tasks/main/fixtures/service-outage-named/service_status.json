@@ -1,0 +1,11 @@
+{
+  "tool": "service_status",
+  "notes": "The 43-hour searxng outage, frozen. A single-file bind mount resolves to an inode at container-create time; when the host mount is recycled the container dies with exit 127 and `restart: unless-stopped` retries forever without ever repairing it. docker's own State.Error names the cause, and naming it is the whole graded behaviour — 'searxng is down' is worth far less than the sentence that says why. Everything else in the project is deliberately healthy so the answer has exactly one thing to find.",
+  "entries": [
+    {
+      "match": {},
+      "notes": "Zero-parameter tool, so an empty match is the only correct one.",
+      "result": "{\"project\": \"nova\", \"services\": [{\"service\": \"backend\", \"container\": \"nova-backend-1\", \"state\": \"running\", \"health\": \"healthy\", \"status\": \"Up 2 days (healthy)\"}, {\"service\": \"postgres\", \"container\": \"nova-postgres-1\", \"state\": \"running\", \"health\": \"healthy\", \"status\": \"Up 2 days (healthy)\"}, {\"service\": \"searxng\", \"container\": \"nova-searxng-1\", \"state\": \"exited\", \"health\": null, \"status\": \"Exited (127) 43 hours ago\", \"exit_code\": 127, \"error\": \"error while creating mount source path '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/settings.yml': mkdir /run/desktop/mnt/host/wsl: file exists\", \"reachable\": false, \"unreachable_detail\": \"[Errno -2] Name or service not known\"}, {\"service\": \"web\", \"container\": \"nova-web-1\", \"state\": \"running\", \"health\": \"healthy\", \"status\": \"Up 2 days (healthy)\"}], \"running\": 3, \"not_running\": [\"searxng\"], \"unhealthy\": [], \"unreachable\": [\"searxng\"], \"note\": \"searxng is exited (exit 127): error while creating mount source path '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/settings.yml': mkdir /run/desktop/mnt/host/wsl: file exists.\"}"
+    }
+  ]
+}

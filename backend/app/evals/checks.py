@@ -30,7 +30,8 @@ from typing import Any, Optional
 # vocabulary (kept in sync with tasks/validate.py, which rejects specs using
 # anything outside it — the two lists disagreeing is itself a bug)
 CONTRACT_KEYS = {"tools", "memory", "rounds_max", "malformed_args_max",
-                 "tool_errors_max", "final_text", "narration_slip_allowed"}
+                 "tool_errors_max", "final_text", "narration_slip_allowed",
+                 "service_claim_allowed"}
 TOOLS_KEYS = {"must_call", "must_not_call", "must_call_with",
               "must_not_call_with", "max_total_calls"}
 MEMORY_KEYS = {"no_writes", "no_new_topics", "topics_created", "updates",
@@ -419,6 +420,18 @@ def evaluate(contract: dict, run: Any) -> ContractReport:
         report.add("narration_slip_allowed", not slip,
                    f"announced an action but called no tool ({slip!r})"
                    if slip else "none")
+
+    # Same construction as narration above, and the same reason: the grader IS
+    # the live detector, not a regex restating it. A second opinion written in
+    # a task contract would drift from the thing that actually runs in
+    # production, and then the eval would grade a rule nobody enforces.
+    if not contract.get("service_claim_allowed", False):
+        from app import service_claims
+        claim = service_claims.detect(
+            final, [str(c.get("tool") or "") for c in _calls(run)])
+        report.add("service_claim_allowed", not claim,
+                   f"stated {claim[0]} was up or down without reading it "
+                   f"({claim[1]!r})" if claim else "none")
 
     # A run that never produced an answer, blew its budget, or reached past
     # its fixtures is not gradeable — say so instead of scoring the wreckage.

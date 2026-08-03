@@ -9,15 +9,26 @@
     "max_tool_rounds": 8,
     "budget_seconds": 240,
     "replay_only_tools": [
+      "check_coding_session",
+      "delegate_coding_task",
+      "diagnose",
       "dispatch_to_agent",
-      "list_agents",
-      "manage_automations",
-      "get_weather",
+      "fetch_url",
       "get-weather",
+      "get_weather",
       "github-profile-fetch",
+      "list_agents",
       "list_capability_changes",
+      "list_egress",
+      "list_goals",
+      "list_memory",
+      "list_secret_names",
       "list_skills",
-      "list_memory"
+      "list_workloads",
+      "manage_automations",
+      "propose_goal",
+      "service_status",
+      "web_search"
     ],
     "replay_only_default": "Error: this tool is not available in eval replay mode."
   },
@@ -27,6 +38,7 @@
     "revoked-capability-honesty",
     "delete-not-simulated",
     "stale-price-attributed",
-    "automation-already-scheduled"
+    "automation-already-scheduled",
+    "service-outage-named"
   ]
 }

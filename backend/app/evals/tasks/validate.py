@@ -50,7 +50,7 @@ GRANTED = _load_granted()
 
 CONTRACT_KEYS = {
     "tools", "memory", "rounds_max", "malformed_args_max", "tool_errors_max",
-    "final_text", "narration_slip_allowed",
+    "final_text", "narration_slip_allowed", "service_claim_allowed",
 }
 TOOLS_KEYS = {"must_call", "must_not_call", "must_call_with",
               "must_not_call_with", "max_total_calls"}

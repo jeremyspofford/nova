@@ -31,6 +31,7 @@ eats good summaries gets switched off.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -126,10 +127,58 @@ async def measured_prompt_tokens(agent_name: Optional[str] = None) -> Optional[i
     return int(chars) // context_trim._CHARS_PER_TOKEN
 
 
+def _when(ev: dict) -> str:
+    """Date the evidence. `eval_runs` records no suite version, so a score can
+    outlive the suite that produced it — the July 2026 rows were graded before
+    ten of main's tools were even servable in replay, which made every model
+    look worse than it was. Until the version is stored, the honest thing is to
+    show WHEN and let the operator judge whether it still describes anything."""
+    at = ev.get("finished_at")
+    return f" on {at:%Y-%m-%d}" if hasattr(at, "year") else ""
+
+
+async def eval_evidence(model: str,
+                        agent_name: Optional[str] = None) -> Optional[dict]:
+    """The most recent recorded eval run for this model, or None.
+
+    `agent_name=None` asks "measured on anything?", which is the right
+    question for the install-wide standby: it stands in for every agent, so
+    any suite it has been graded on is evidence about it.
+    """
+    from app import db
+    sql = ("SELECT suite, agent_name, tasks_passed, tasks_total, finished_at, "
+           "detail FROM eval_runs WHERE model = $1 AND finished_at IS NOT NULL")
+    args: list = [model]
+    if agent_name:
+        sql += " AND agent_name = $2"
+        args.append(agent_name)
+    sql += " ORDER BY finished_at DESC LIMIT 1"
+    try:
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(sql, *args)
+    except Exception:  # noqa: BLE001 — evidence missing is not a crash
+        log.debug("eval lookup failed for %s", model, exc_info=True)
+        return None
+    if not row:
+        return None
+    out = dict(row)
+    detail = out.get("detail")
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except ValueError:
+            detail = None
+    tasks = (detail or {}).get("tasks") or []
+    out["failed_tasks"] = [str(t.get("task") or "") for t in tasks
+                           if isinstance(t, dict) and t.get("passed") is False]
+    return out
+
+
 async def assess(model: str, *, needs_tools: bool = False,
                  needs_vision: bool = False,
                  needs_tokens: Optional[int] = None,
-                 role: str = "this role") -> list[dict]:
+                 role: str = "this role",
+                 measured_for: Optional[str] = None) -> list[dict]:
     """Findings for one model against one role's actual requirements."""
     facts = await describe(model)
     caps = facts.get("capabilities")
@@ -173,6 +222,48 @@ async def assess(model: str, *, needs_tools: bool = False,
                       f"but {model} gets {window:,}. Oversized prompts are "
                       f"refused outright on the local path rather than "
                       f"silently truncated."})
+
+    # BEHAVIOUR, not a declared capability. Every check above this line reads
+    # something the model SAYS about itself — /api/show's capability list is a
+    # manifest, and "tools" in it means the runtime can format a tool call, not
+    # that this model ever makes one. ornith:9b declares tools, passes that
+    # check, and is recorded at 0/6 on its own agent's suite: the exact model
+    # the narration, capability-claim and service-claim detectors were built
+    # for was being waved through as fit.
+    #
+    # So the last word goes to what was measured. Nothing here is a threshold
+    # someone maintains — it reads the recorded run and reports it.
+    if needs_tools:
+        ev = await eval_evidence(model, measured_for)
+        if not ev:
+            # HONEST ABSENCE, the rule diagnose learned the same day. Silence
+            # here would read as "fit", which is how an unmeasured model got
+            # the front door in the first place.
+            findings.append({
+                "severity": ADVISORY, "check": "unmeasured",
+                "detail": f"{model} has never been graded on a behavioural "
+                          f"suite"
+                          + (f" for {role}" if measured_for else "")
+                          + ". Its tool support is a capability it DECLARES, "
+                            "not behaviour anyone has observed. Run "
+                            "`python -m app.evals run <suite> --champion "
+                            f"{model} --record` before trusting it with a "
+                            "tool-calling job."})
+        elif ev["tasks_total"] and not ev["tasks_passed"]:
+            findings.append({
+                "severity": BLOCKING, "check": "measured",
+                "detail": f"{model} scored 0/{ev['tasks_total']} on the "
+                          f"'{ev['suite']}' suite{_when(ev)}. It supports tool "
+                          f"calling as a format and fails the behaviour: "
+                          f"{', '.join(ev['failed_tasks'][:3]) or 'every task'}"
+                          f". This is measured, not inferred from /api/show."})
+        elif ev["tasks_passed"] < ev["tasks_total"]:
+            findings.append({
+                "severity": ADVISORY, "check": "measured",
+                "detail": f"{model} scored {ev['tasks_passed']}/"
+                          f"{ev['tasks_total']} on the '{ev['suite']}' suite"
+                          f"{_when(ev)}. Failing: "
+                          f"{', '.join(ev['failed_tasks'][:3])}."})
     return findings
 
 
@@ -195,7 +286,11 @@ async def assess_for_agent(agent_id: str) -> list[dict]:
         # None means "every builtin", which certainly includes tools
         needs_tools=grants is None or bool(grants),
         needs_tokens=await measured_prompt_tokens(agent.get("name")),
-        role=f"'{agent.get('name')}'")
+        role=f"'{agent.get('name')}'",
+        # Graded as THIS agent, not on whatever suite the model last happened
+        # to run: a model that passes the ingestion suite says nothing about
+        # whether it can hold the front door.
+        measured_for=agent.get("name"))
 
 
 async def rank_local() -> list[dict]:
