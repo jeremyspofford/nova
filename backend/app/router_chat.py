@@ -546,7 +546,14 @@ async def chat_stream(request: ChatRequest):
     turn_text = user_text + turn_extra_text
     turn_content = ([{"type": "text", "text": turn_text}] + image_parts
                     if image_parts else turn_text)
-    turn_messages = conversations.to_llm_history(window) + [
+    # Replay what actually RAN in each past turn alongside what was said.
+    # Without it she sees only her own prose across turns, which is how she
+    # promised to "dig deeper" four times after list_egress had already
+    # returned, and how a read_memory_item result she never called got
+    # reported as fact.
+    _first = next((m["created_at"] for m in window if m.get("created_at")), None)
+    _activity = await conversations.load_tool_activity(conversation_id, _first)
+    turn_messages = conversations.to_llm_history(window, _activity) + [
         {"role": "user", "content": turn_content}]
 
     user_meta: dict = {}

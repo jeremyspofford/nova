@@ -98,11 +98,107 @@ async def load_history(conversation_id: str, limit: int = 200,
     } for r in rows]
 
 
-def to_llm_history(history: list[dict]) -> list[dict]:
-    """Text-only user/assistant turns for the LLM (tool rows are audit records)."""
-    return [{"role": m["role"], "content": m["content"]}
-            for m in history
-            if m["role"] in ("user", "assistant") and m["content"]]
+async def load_tool_activity(conversation_id: str, since: Optional[str],
+                             limit: int = 300) -> list[dict]:
+    """The role='tool' rows since `since` — the mechanical record of what ran.
+
+    Its own query on purpose: load_history's row cap is spent on the
+    user/assistant transcript and has to stay that way.
+    """
+    if not since:
+        return []
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT content, tool_calls, created_at FROM messages
+                 WHERE conversation_id = $1 AND role = 'tool'
+                   -- only rows that record a CALL. 'narration_retry' and
+                   -- friends are activity notes about the turn, and letting
+                   -- one in produced "main -> ok", which names no tool.
+                   AND tool_calls->>'kind' IN
+                       ('tool_start', 'tool_result', 'dispatch', 'capability')
+                   AND created_at >= $2::text::timestamptz
+                 ORDER BY created_at ASC LIMIT $3""",
+            uuid.UUID(conversation_id), since, limit)
+    out = []
+    for r in rows:
+        tc = r["tool_calls"]
+        if isinstance(tc, str):
+            try:
+                tc = json.loads(tc or "{}")
+            except ValueError:
+                tc = {}
+        out.append({"name": (tc or {}).get("name"), "kind": (tc or {}).get("kind"),
+                    "content": r["content"] or "", "created_at": str(r["created_at"])})
+    return out
+
+
+def _outcome(content: str) -> str:
+    head = (content or "").lstrip()[:80].lower()
+    return "error" if head.startswith("error") or '"error"' in head else "ok"
+
+
+def tool_activity_notes(history: list[dict], activity: list[dict]) -> dict[str, str]:
+    """One derived line per past turn: what actually ran, and how it ended.
+
+    Keyed by the user message that opened the turn, because tool rows are
+    written fire-and-forget and can land after the assistant row — bucketing
+    by "the previous assistant row" would misfile them.
+
+    Mechanical, never the model's word for it: every entry is read from a row
+    the runner wrote at execution time. This is the fix for a turn replaying
+    as prose only — she said "let me dig deeper" four times because the
+    history she was handed contained no evidence that list_egress had already
+    run, and when she could not see her own tool history she invented one.
+    """
+    users = [m["created_at"] for m in history
+             if m["role"] == "user" and m.get("created_at")]
+    if not users or not activity:
+        return {}
+    notes: dict[str, list[str]] = {}
+    for a in activity:
+        if not a.get("name"):
+            continue
+        bucket = None
+        for u in users:
+            if u <= a["created_at"]:
+                bucket = u
+            else:
+                break
+        if bucket is None:
+            continue
+        label = f"{a['name']} -> {_outcome(a['content'])}"
+        seen = notes.setdefault(bucket, [])
+        if label not in seen:
+            seen.append(label)
+    return {b: "[tools that ran in this turn: " + "; ".join(v[:8]) + "]"
+            for b, v in notes.items()}
+
+
+def to_llm_history(history: list[dict],
+                   activity: Optional[list[dict]] = None) -> list[dict]:
+    """Text-only user/assistant turns, each assistant turn followed by the
+    mechanical record of what ran in it.
+
+    NOT reconstructed assistant(tool_calls)+tool pairs: no assistant row has
+    ever carried tool_calls (0 of 549 live rows) and tool_call_id is NULL on
+    all 1651 tool rows, so a pair would have to be invented — and the stored
+    content is a 200-char UI stub, so it would pair a fabricated call with a
+    fabricated result. That is the failure being fixed, not a way to fix it.
+    """
+    notes = tool_activity_notes(history, activity or [])
+    out: list[dict] = []
+    pending: Optional[str] = None
+    for m in history:
+        if m["role"] not in ("user", "assistant") or not m["content"]:
+            continue
+        content = m["content"]
+        if m["role"] == "user":
+            pending = notes.get(m.get("created_at"))
+        elif pending:
+            content = f"{content}\n\n{pending}"
+            pending = None
+        out.append({"role": m["role"], "content": content})
+    return out
 
 
 def estimate_tokens(text: str) -> int:

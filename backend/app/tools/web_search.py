@@ -123,4 +123,21 @@ async def search(query: str, max_results: int = 6) -> str:
             lines.append("")
         return "\n".join(lines)
 
-    return "Error: all search providers failed — " + "; ".join(errors)
+    # THE FALLBACK IS MECHANICAL, not a suggestion the model may ignore.
+    # On 2026-08-03 search was down and the answer was already on disk — she
+    # had ingested and summarised that exact video 18 hours earlier — and the
+    # turn ended with "I can't pull up that article for you". Recall runs
+    # here, in the tool, because "then search your memory" in a prompt is a
+    # request; this is the code that does it.
+    detail = "; ".join(errors)
+    try:
+        from app.memory.memory import memory
+        mem = await memory.context(query)
+        if mem.get("context"):
+            return ("Web search is unavailable (" + detail + "), so this is "
+                    "from Nova's own memory instead — say so when you use it, "
+                    "and note it may be out of date:\n\n" + mem["context"])
+    except Exception:  # noqa: BLE001 — a failed fallback must not mask the real error
+        log.exception("memory fallback after search failure also failed")
+    return ("Error: all search providers failed — " + detail
+            + ". Nothing in memory matched this query either.")
