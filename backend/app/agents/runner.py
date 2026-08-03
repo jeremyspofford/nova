@@ -1640,6 +1640,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     final_text = ""
     calls_made = 0
+    # One forced continuation per turn. A turn that announces work and
+    # calls nothing is not a finished answer, and the loop had 9 of 10
+    # rounds left every time it happened on 2026-08-03.
+    narration_retried = False
+    last_round_calls = 0
     # phase 2 bookkeeping: which tool results may never be trimmed (a
     # specialist's report IS the turn's product) and which go first (raw web
     # output the model can always re-fetch)
@@ -1782,7 +1787,28 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
         final_text += round_text
 
+        last_round_calls = len(tool_calls)
         if not tool_calls:
+            slip = narration.detect(round_text, 0)
+            if slip and not narration_retried and round_no + 1 < max_rounds:
+                # Not a banner after the fact — the loop is still alive here,
+                # so say so where the model can still act on it. Capped at one
+                # retry so a model that simply will not call a tool still ends.
+                narration_retried = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"You wrote {slip!r} and then called no tool, so the "
+                        f"action you described did not happen and the operator "
+                        f"cannot see it. Either make the call now, or say "
+                        f"plainly that you are not going to and why."),
+                })
+                log.info("Narration retry: agent=%s matched=%r round=%d",
+                         agent.get("name"), slip, round_no)
+                yield {"type": "activity", "kind": "narration_retry",
+                       "name": agent.get("name", ""), "agent": agent.get("name"),
+                       "detail": f"announced {slip!r} and called nothing — asked again"}
+                continue
             break  # final answer reached
 
         # Record the assistant turn that requested the tools
@@ -1847,7 +1873,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                             bulk_result_ids.add(bt["id"])
                         messages.append(
                             {"role": "tool", "tool_call_id": bt["id"],
-                             "content": results.get(bt["id"], _NO_RESULT)[:8000]})
+                             "content": _cap_result(
+                                 results.get(bt["id"], _NO_RESULT), round_model)})
                     i = j
                     continue
 
@@ -1922,7 +1949,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 for gt, _ga in group:
                     messages.append(
                         {"role": "tool", "tool_call_id": gt["id"],
-                         "content": results.get(gt["id"], _NO_RESULT)[:8000]})
+                         "content": _cap_result(
+                             results.get(gt["id"], _NO_RESULT), round_model)})
                 i = j
                 continue
 
@@ -2077,7 +2105,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
 
     # narration detector: text that announces actions + zero tool calls =
     # the described work silently never happened. Make it loud.
-    snippet = narration.detect(final_text, calls_made)
+    # last_round_calls, not calls_made: one call in round 1 used to blind
+    # this for every later round, which is exactly how 'The egress rules
+    # look fine … Let me dig deeper:' got through after list_egress ran.
+    snippet = narration.detect(final_text, last_round_calls)
     if snippet:
         yield {"type": "activity", "kind": "narration",
                "name": agent.get("name", ""), "agent": agent.get("name"),

@@ -144,10 +144,25 @@ def _clauses(text: str):
 
 def detect(final_text: str, tool_calls_made: int) -> str | None:
     """The matched phrase when the text announces or claims action while no
-    tool ran this turn; None otherwise. tool_calls_made is the runner's
-    ground truth — with any real call this turn, nothing is flagged."""
+    tool ran; None otherwise.
+
+    `tool_calls_made` is the runner's ground truth for the ROUND that ended
+    the turn, not the whole turn. It used to be the turn total, which meant
+    one tool call in round 1 blinded this check for every later round — and
+    that is exactly how "The egress rules look fine … Let me dig deeper into
+    what's actually running:" got through after list_egress had run.
+    """
     if tool_calls_made or not final_text:
         return None
+    # STRUCTURAL ARM, which needs no vocabulary. A reply whose last non-empty
+    # line ends in a colon or a dash is introducing something that never
+    # arrived — the phrase list is a maintained list of ways to say "let me",
+    # which is the hardcoding CLAUDE.md warns about, and it caught 1 of the
+    # 10 real slips in the 2026-08-03 incident. Three of those replies ended
+    # in a colon with zero tool calls.
+    lines = [ln.rstrip() for ln in final_text.strip().splitlines() if ln.strip()]
+    if lines and lines[-1].endswith((":", "—", "-")) and "?" not in lines[-1]:
+        return lines[-1][-60:]
     # The future-tense arm is per-sentence for the same reason the completion
     # arm always was. It used to scan the WHOLE reply, so one offer to help
     # anywhere in it — "would you rather I dispatch to agent-creator now with a

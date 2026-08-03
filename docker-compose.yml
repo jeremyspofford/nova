@@ -425,8 +425,23 @@ services:
     ports:
       - "127.0.0.1:8380:8080"
     volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      # The DIRECTORY, not the single file. A single-file bind resolves to an
+      # inode at container-create time, so when Docker Desktop recycled its
+      # WSL mount the container died with exit 127 and `restart:
+      # unless-stopped` retried it forever without ever being able to repair
+      # it. Web search was down for 43 hours (2026-08-01 19:52 → 08-03) and
+      # the operator found out by asking a question that failed.
+      - ./searxng:/etc/searxng:ro
     restart: unless-stopped
+    # It had no healthcheck while postgres, media, ntfy, kokoro and whisper
+    # all had one — so `docker compose ps` reported it Up right up until it
+    # wasn't, and nothing downstream could tell the difference.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build:

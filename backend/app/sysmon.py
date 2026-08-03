@@ -364,6 +364,7 @@ async def maybe_evaluate_alerts():
             "vram_pct": float(settings_store.get("monitor.alert_vram_pct")),
             "gpu_temp_c": float(settings_store.get("monitor.alert_gpu_temp_c")),
         }
+        local_id = await instances.ensure_id()
         async with db.acquire() as conn:
             insts = await conn.fetch(
                 """SELECT id, label,
@@ -392,6 +393,36 @@ async def maybe_evaluate_alerts():
                            WHERE instance_id = $1 AND kind = 'unreachable'
                              AND cleared_at IS NULL""", iid)
                     log.info("ALERT cleared [unreachable] %s", label)
+
+                # A CORE SERVICE BEING DOWN IS AN ALERT, not a colour in a
+                # panel nobody has open. `services()` has probed these every
+                # cycle since the board shipped and the result was
+                # display-only, so searxng sat Exited(127) for 43 hours
+                # (2026-08-01 19:52 → 08-03) and the operator found out by
+                # asking a question that failed. Only for THIS instance —
+                # the probes are local, and a leader must not report its own
+                # searxng as a peer's.
+                if iid == local_id:
+                    for svc in (await health())["services"]:
+                        if svc.get("optional"):
+                            continue
+                        kind = f"service_down:{svc['name']}"
+                        down = not svc.get("ok")
+                        if down and (iid, kind) not in open_alerts:
+                            detail = str(svc.get("detail") or "").strip()
+                            await _raise_alert(
+                                conn, iid, label, kind,
+                                f"{svc['name']} is not responding on '{label}'"
+                                + (f" — {detail[:160]}" if detail else "")
+                                + ". Anything that depends on it will fail until "
+                                  "it is back.",
+                                None, None)
+                        elif not down and (iid, kind) in open_alerts:
+                            await conn.execute(
+                                """UPDATE monitor_alerts SET cleared_at = now()
+                                   WHERE instance_id = $1 AND kind = $2
+                                     AND cleared_at IS NULL""", iid, kind)
+                            log.info("ALERT cleared [%s] %s", kind, label)
 
                 # metric thresholds want the last few samples (debounce)
                 samples = await conn.fetch(

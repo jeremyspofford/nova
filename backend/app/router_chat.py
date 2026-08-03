@@ -570,6 +570,11 @@ async def chat_stream(request: ChatRequest):
 
     async def generate():
         final_text = ""
+        # A turn that dies used to persist NOTHING: the SSE error card is
+        # live-only, so after a reload the user's message sat alone with no
+        # reply and no reason. That is the literal shape of "it just quits
+        # without telling us" — the telling did happen, it just wasn't kept.
+        turn_error = ""
         # what ACTUALLY generated, which the binding only predicts — a
         # fallback mid-turn moves it (runner yields a `model` event)
         ran_model = model_eff
@@ -627,10 +632,12 @@ async def chat_stream(request: ChatRequest):
                     elif etype == "final":
                         final_text = event["text"]
                     elif etype == "error":
+                        turn_error = str(event["error"])
                         turn.set_error(event["error"])
                         yield _sse({"error": event["error"]})
             except Exception as e:
                 log.exception("chat stream failed")
+                turn_error = str(e)
                 turn.set_error(str(e))
                 yield _sse({"error": str(e)})
             finally:
@@ -642,6 +649,15 @@ async def chat_stream(request: ChatRequest):
                 # the runner's cancellation contract (cancel-and-AWAIT the
                 # round's tool tasks, stamp their spans cancelled) first.
                 await events.aclose()
+
+        # Say what happened, in the transcript, where the question is.
+        # Phrased as a record of this turn rather than an instruction,
+        # because to_llm_history replays assistant rows to the model next
+        # turn and a bare error string reads as something to act on.
+        if turn_error:
+            stopped = f"[This turn stopped before finishing: {turn_error.strip()}]"
+            final_text = f"{final_text.rstrip()}\n\n{stopped}" if final_text.strip() else stopped
+            yield _sse({"t": ("\n\n" + stopped) if final_text != stopped else stopped})
 
         if final_text.strip():
             try:
