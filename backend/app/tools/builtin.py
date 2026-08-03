@@ -270,6 +270,19 @@ async def _diagnose(args, ctx):
     return _j(await diagnostics.report(args.get("area")))
 
 
+async def _service_status(args, ctx):
+    """Is each service actually running — the instrument she did not have.
+
+    Asked on 2026-08-03 to check whether searxng was healthy, she answered
+    "completely unreachable" while it was serving 200s, because the only
+    service list she could see held two entries (postgres and the memory dir)
+    and searxng was not one of them. Absence read as failure. Nothing in her
+    toolset could see a container at all, let alone one that had exited.
+    """
+    from app import service_health
+    return _j(await service_health.status())
+
+
 async def _list_skills(args, ctx):
     """Every skill, by name. Skills used to be reachable ONLY through a
     fuzzy search over their bodies, so Nova could not say what she knew how
@@ -2019,6 +2032,19 @@ BUILTIN_TOOLS: dict[str, dict] = {
                      "description": "Settings area to inspect. Omit to list "
                                     "the available areas."}}},
         "execute": _diagnose,
+    },
+    "service_status": {
+        "name": "service_status",
+        "description": (
+            "Whether the services this install is made of are actually "
+            "running: container state, healthcheck verdict, exit code and "
+            "docker's own error text for anything that died, plus whether "
+            "each endpoint answers. Call this BEFORE saying a service is up "
+            "or down — it is the only tool that can see a container that has "
+            "stopped. If it reports the container view as UNAVAILABLE, say "
+            "so; it does not mean the services are down. Read-only."),
+        "parameters": {"type": "object", "properties": {}},
+        "execute": _service_status,
     },
     "list_memory": {
         "name": "list_memory",

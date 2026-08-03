@@ -154,9 +154,25 @@ async def report(area: Optional[str] = None) -> dict:
         f"without ever raising, which is how the push-notification outage "
         f"went unnoticed.")
 
+    # `services` used to be `sysmon._reaches()` — postgres and the memory
+    # directory, two entries. Asked whether searxng was healthy, she read that
+    # list, correctly observed searxng was not in it, and reported the service
+    # as unreachable while it was serving 200s. A list that names two of
+    # fifteen services is read as the set of services, so the honest fix is to
+    # name all of them rather than to hope the reader infers the scope.
+    try:
+        from app import service_health
+        out["services"] = await service_health.status()
+    except Exception:  # noqa: BLE001 — never let this blank the whole report
+        log.debug("service health failed", exc_info=True)
+        out["services"] = {
+            "container_view": "UNAVAILABLE",
+            "note": "Service health could not be read at all. This says "
+                    "nothing about whether the services are up — do not "
+                    "report them as down on the strength of it."}
     try:
         from app import sysmon
-        out["services"] = await sysmon._reaches()
+        out["shared_backends"] = await sysmon._reaches()
     except Exception:  # noqa: BLE001 — reachability is a bonus, never a blocker
         log.debug("reachability probe failed", exc_info=True)
     return out

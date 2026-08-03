@@ -245,6 +245,43 @@ def _health(status: str) -> str | None:
     return None
 
 
+def _stopped_detail(names: list[str]) -> dict[str, dict]:
+    """Exit code and docker's own error string, for containers that are down.
+
+    `docker ps` cannot give either: `{{.Status}}` carries "Exited (127) 2 days
+    ago" at best, and `.State.Error` — the sentence that says WHY, verbatim —
+    appears nowhere in ps output at all. It is the whole diagnosis for the
+    class of failure that cost this install 43 hours: a single-file bind mount
+    whose inode was recycled dies with exit 127 and an error naming the mount,
+    and every layer above it could only report that the service was missing.
+
+    Inspect is only run for containers that are NOT running, which is normally
+    none, so the common path pays one `docker ps` exactly as before.
+    """
+    if not names:
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        r = subprocess.run(
+            ["docker", "inspect", "--format",
+             "{{.Name}}\t{{.State.ExitCode}}\t{{.State.Error}}", *names],
+            capture_output=True, text=True, timeout=15)
+        for line in r.stdout.splitlines():
+            cols = line.split("\t")
+            if len(cols) != 3:
+                continue
+            name, code, err = cols
+            name = name.lstrip("/")
+            try:
+                exit_code = int(code)
+            except ValueError:
+                exit_code = None
+            out[name] = {"exit_code": exit_code, "error": err.strip() or None}
+    except Exception:
+        pass          # a missing detail must not cost the caller the whole list
+    return out
+
+
 def _containers() -> dict:
     """Per-service state + live CPU/mem for this instance's compose project.
     `docker ps -a` gives every service (incl. stopped); `docker stats` adds
@@ -262,8 +299,13 @@ def _containers() -> dict:
             continue
         name, service, state, status = cols
         rows[name] = {"name": name, "service": service, "state": state,
-                      "health": _health(status),
+                      "status": status, "health": _health(status),
+                      "exit_code": None, "error": None,
                       "cpu_pct": None, "mem_used_gb": None, "mem_total_gb": None}
+    for name, detail in _stopped_detail(
+            [n for n, r in rows.items() if r["state"] != "running"]).items():
+        if name in rows:
+            rows[name].update(detail)
     stats = subprocess.run(
         ["docker", "stats", "--no-stream", "--format",
          "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"],
