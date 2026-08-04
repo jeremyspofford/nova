@@ -128,13 +128,32 @@ async def measured_prompt_tokens(agent_name: Optional[str] = None) -> Optional[i
 
 
 def _when(ev: dict) -> str:
-    """Date the evidence. `eval_runs` records no suite version, so a score can
-    outlive the suite that produced it — the July 2026 rows were graded before
-    ten of main's tools were even servable in replay, which made every model
-    look worse than it was. Until the version is stored, the honest thing is to
-    show WHEN and let the operator judge whether it still describes anything."""
+    """Date the evidence, say how many draws it is, and flag a stale suite.
+
+    Three things decide whether a stored score still means anything, and none
+    of them were on the row until migration 086:
+
+    * WHEN — the July 2026 rows were graded before ten of main's tools were
+      servable in replay, so every model scored worse than it was.
+    * HOW MANY DRAWS — two runs of the same seven tasks scored 2/7 and 3/7,
+      and the task that flipped was one nothing had touched. A single run
+      reported as a measurement is the error this exists to stop.
+    * WHICH SUITE — a score against suite_version 2 does not describe
+      version 3. NULL means recorded before the column existed: unknown, and
+      said as unknown rather than assumed current.
+    """
     at = ev.get("finished_at")
-    return f" on {at:%Y-%m-%d}" if hasattr(at, "year") else ""
+    bits = [f" on {at:%Y-%m-%d}"] if hasattr(at, "year") else []
+    runs = ev.get("repeat_count") or 1
+    bits.append(f" over {runs} run{'s' if runs != 1 else ''}"
+                + (" (one draw, not a measurement)" if runs == 1 else ""))
+    was, now = ev.get("suite_version"), ev.get("current_suite_version")
+    if was is None:
+        bits.append(", against an unrecorded suite version")
+    elif now is not None and was != now:
+        bits.append(f", against suite v{was} — the suite is now v{now}, so "
+                    f"this score describes a different set of tasks")
+    return "".join(bits)
 
 
 async def eval_evidence(model: str,
@@ -147,7 +166,8 @@ async def eval_evidence(model: str,
     """
     from app import db
     sql = ("SELECT suite, agent_name, tasks_passed, tasks_total, finished_at, "
-           "detail FROM eval_runs WHERE model = $1 AND finished_at IS NOT NULL")
+           "suite_version, repeat_count, detail "
+           "FROM eval_runs WHERE model = $1 AND finished_at IS NOT NULL")
     args: list = [model]
     if agent_name:
         sql += " AND agent_name = $2"
@@ -171,6 +191,14 @@ async def eval_evidence(model: str,
     tasks = (detail or {}).get("tasks") or []
     out["failed_tasks"] = [str(t.get("task") or "") for t in tasks
                            if isinstance(t, dict) and t.get("passed") is False]
+    # What the suite is NOW, so a score against an older one can say so. Read
+    # from disk rather than stored twice: the suite file is the only truth
+    # about its own version, and a second copy is a second thing to be wrong.
+    try:
+        from app.evals import suites as suite_mod
+        out["current_suite_version"] = suite_mod.load_suite(out["suite"]).version
+    except Exception:  # noqa: BLE001 — a missing suite is not a crash
+        out["current_suite_version"] = None
     return out
 
 

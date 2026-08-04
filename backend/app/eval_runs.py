@@ -121,8 +121,16 @@ async def latest_verdicts() -> list[dict]:
             " ORDER BY agent_name, model, started_at DESC")]
 
 
-async def _execute(run_id: str, suite_name: str, model: str) -> None:
-    """Run every task in a suite against one model and record the verdict."""
+async def _execute(run_id: str, suite_name: str, model: str,
+                   repeat: int = 1) -> None:
+    """Run every task in a suite against one model and record the verdict.
+
+    `repeat` runs each task N times. A task counts as passed only if it passed
+    EVERY repeat, which is the honest reading when the thing being measured is
+    stochastic: two runs of this suite scored 2/7 and 3/7 hours apart, and the
+    task that flipped was one nothing had touched. Strictness is the point —
+    "passed once out of three" is not a property you can route work on.
+    """
     global _running
     from app.evals import checks, runner as eval_runner, suites as suite_mod
 
@@ -136,20 +144,42 @@ async def _execute(run_id: str, suite_name: str, model: str) -> None:
         suite = suite_mod.load_suite(suite_name)
         for task in suite_mod.load_tasks(suite):
             total += 1
-            result = await eval_runner.run_task(
-                task, model, label="candidate", scratch_root=scratch)
-            report = checks.evaluate(task.contract, result)
-            usage = result.usage or {}
-            tin += int(usage.get("prompt_tokens") or 0)
-            tout += int(usage.get("completion_tokens") or 0)
-            ok = bool(report.passed) and result.gradeable
+            runs_passed = 0
+            failures: list[str] = []
+            errors: list[str] = []
+            gradeable_any = False
+            duration = 0.0
+            for attempt in range(repeat):
+                result = await eval_runner.run_task(
+                    task, model, label="candidate", scratch_root=scratch)
+                report = checks.evaluate(task.contract, result)
+                usage = result.usage or {}
+                tin += int(usage.get("prompt_tokens") or 0)
+                tout += int(usage.get("completion_tokens") or 0)
+                duration += result.duration_s
+                gradeable_any = gradeable_any or result.gradeable
+                if bool(report.passed) and result.gradeable:
+                    runs_passed += 1
+                else:
+                    # Keep the FIRST failure of each kind rather than the last:
+                    # a flaky task's interesting run is the one that failed,
+                    # and a later clean run must not erase why.
+                    failures.extend(str(f) for f in report.failures)
+                    errors.extend(result.errors)
+            ok = runs_passed == repeat and gradeable_any
             passed += 1 if ok else 0
-            details.append({
+            entry = {
                 "task": task.ref, "passed": ok,
-                "gradeable": result.gradeable,
-                "contract_failures": [str(f) for f in report.failures][:8],
-                "errors": result.errors[:3],
-                "duration_s": round(result.duration_s, 1)})
+                "gradeable": gradeable_any,
+                "contract_failures": failures[:8],
+                "errors": errors[:3],
+                "duration_s": round(duration, 1)}
+            if repeat > 1:
+                # The flaky middle ground is invisible in a pass/fail column,
+                # and it is the most useful thing a repeated run learns.
+                entry["runs_passed"] = runs_passed
+                entry["runs"] = repeat
+            details.append(entry)
         status = "passed" if passed == total and total else "failed"
     except Exception as exc:  # noqa: BLE001 — a harness failure is not a verdict
         log.exception("eval run %s failed", run_id)
@@ -168,7 +198,10 @@ async def _execute(run_id: str, suite_name: str, model: str) -> None:
         log.info("eval run %s: %s (%d/%d)", run_id, status, passed, total)
 
 
-async def start(suite_name: str, model: str) -> dict:
+MAX_REPEAT = 10
+
+
+async def start(suite_name: str, model: str, repeat: int = 1) -> dict:
     """Begin a run. Returns immediately with the row id."""
     global _running
     from app.evals import suites as suite_mod
@@ -176,6 +209,12 @@ async def start(suite_name: str, model: str) -> dict:
 
     if _running:
         raise ValueError(f"an eval is already running ({_running})")
+    # `repeat or 1` would turn an explicit 0 into 1 — a caller asking for zero
+    # runs gets one and is told nothing. Missing means default; provided means
+    # meant, including when it is nonsense.
+    repeat = 1 if repeat is None else int(repeat)
+    if not 1 <= repeat <= MAX_REPEAT:
+        raise ValueError(f"repeat must be between 1 and {MAX_REPEAT}")
     # The harness refuses this too, but failing here means the operator is
     # told before a row exists rather than finding an 'error' verdict later.
     effective = llm_router.effective_model(model)
@@ -186,10 +225,13 @@ async def start(suite_name: str, model: str) -> dict:
     suite = suite_mod.load_suite(suite_name)
     async with db.acquire() as conn:
         row = await conn.fetchrow(
-            "INSERT INTO eval_runs (suite, agent_name, model) "
-            "VALUES ($1,$2,$3) RETURNING id", suite_name, suite.agent, model)
+            "INSERT INTO eval_runs (suite, agent_name, model, suite_version, "
+            "                       repeat_count) "
+            "VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            suite_name, suite.agent, model, suite.version, repeat)
     run_id = str(row["id"])
     _running = run_id
-    asyncio.create_task(_execute(run_id, suite_name, model))
+    asyncio.create_task(_execute(run_id, suite_name, model, repeat))
     return {"id": run_id, "suite": suite_name, "agent": suite.agent,
-            "model": model, "status": "running"}
+            "model": model, "suite_version": suite.version,
+            "repeat": repeat, "status": "running"}

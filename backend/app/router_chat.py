@@ -1740,8 +1740,26 @@ async def evals_run(body: dict):
     model = str(body.get("model") or "").strip()
     if not suite or not model:
         raise HTTPException(status_code=422, detail="suite and model are required")
+    # repeat is the whole reason a stored score can be trusted: the CLI has had
+    # --repeat all along and persists nothing, while this path persists and had
+    # no repeat, so every recorded number was one draw.
+    #
+    # Parsed and bounded HERE so a bad parameter is 422, and start()'s own
+    # ValueErrors keep their 409 — folding both into one except made "an eval
+    # is already running" report as a malformed request. The bound itself
+    # lives in eval_runs, so there is one number and two places that enforce it.
     try:
-        return await eval_runs.start(suite, model)
+        raw = body.get("repeat")
+        repeat = 1 if raw is None else int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422,
+                            detail="repeat must be an integer") from None
+    if not 1 <= repeat <= eval_runs.MAX_REPEAT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"repeat must be between 1 and {eval_runs.MAX_REPEAT}")
+    try:
+        return await eval_runs.start(suite, model, repeat)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError:

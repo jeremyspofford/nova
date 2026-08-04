@@ -118,6 +118,48 @@ def main() -> int:
     check("no unmeasured finding for a tool-less role",
           by_check(fs, "unmeasured") is None, str([f["check"] for f in fs]))
 
+    print("6b. the finding states how much the evidence is worth")
+    # Migration 086. Three things decide whether a stored score still means
+    # anything, and a finding that omits them invites the reader to assume the
+    # best of all three.
+    import datetime as _dt
+    day = _dt.datetime(2026, 8, 3, 12, 0)
+
+    def detail_of(**ev):
+        base = {"suite": "main", "tasks_passed": 2, "tasks_total": 7,
+                "failed_tasks": ["main/x"], "finished_at": day,
+                "repeat_count": 1, "suite_version": 3,
+                "current_suite_version": 3}
+        base.update(ev)
+        return by_check(run(evidence=base), "measured")["detail"]
+
+    d = detail_of()
+    check("a single run is named as a draw, not a measurement",
+          "over 1 run" in d and "one draw" in d, d[-90:])
+    d = detail_of(repeat_count=3)
+    check("three runs are named as three, with no draw caveat",
+          "over 3 runs" in d and "one draw" not in d, d[-70:])
+    d = detail_of(suite_version=2)
+    check("a score against an older suite says so, with both versions",
+          "suite v2" in d and "now v3" in d, d[-110:])
+    d = detail_of(suite_version=None)
+    check("a pre-086 row is 'unrecorded', never assumed current",
+          "unrecorded suite version" in d, d[-70:])
+    d = detail_of(current_suite_version=None)
+    check("an unreadable suite does not invent a mismatch",
+          "suite v" not in d, d[-70:])
+
+    print("6c. repeat is bounded at the mechanical layer, not just the route")
+    from app import eval_runs as er
+    for bad in (0, -1, er.MAX_REPEAT + 1):
+        try:
+            asyncio.run(er.start("main", "ollama:x", bad))
+            check(f"repeat={bad} refused", False, "no raise")
+        except ValueError as e:
+            check(f"repeat={bad} refused", "repeat must be" in str(e), str(e)[:50])
+        except Exception as e:  # noqa: BLE001
+            check(f"repeat={bad} refused", False, f"{type(e).__name__}")
+
     print("7. eval_evidence survives detail arriving as a JSON STRING")
     # asyncpg hands jsonb back as str unless a codec is registered, and the
     # column is read straight off the row — a dict-only reader would silently
