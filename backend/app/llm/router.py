@@ -51,6 +51,40 @@ def is_local(model: str) -> bool:
     return model.split(":", 1)[0] == "ollama"
 
 
+# Model families whose prompt cache must be asked for. Everyone else on this
+# list of providers — OpenAI, Grok, Groq, DeepSeek, Moonshot, Z.AI — caches
+# common prefixes automatically and charges nothing to mark one, so sending a
+# breakpoint to them is dead weight in the payload. MEASURED on this install,
+# last 5 days: ingestion on z-ai/glm cached 61.7% of its prompt tokens and
+# main 60.1%, with no breakpoint ever sent. claude-haiku over the same period
+# reported 0% — it reports the field faithfully and there was nothing to
+# report, because Anthropic caches only what an explicit `cache_control` marks.
+_ASKS_FOR_CACHE = ("anthropic/", "google/", "qwen/")
+# ...and the same families reached as their own provider row rather than
+# through OpenRouter. Matched on the API HOST, not on the slug: the slug is
+# whatever the operator typed when they added the provider.
+_ASKS_FOR_CACHE_HOSTS = ("api.anthropic.com", "generativelanguage.googleapis.com")
+
+
+def supports_cache_control(model: str) -> bool:
+    """Whether this model needs to be TOLD where its reusable prefix ends.
+
+    False is the safe answer everywhere: a provider that caches
+    automatically loses nothing, and ollama — which has no server-side
+    prompt cache to address at all, only a resident KV cache belonging to
+    one loaded runner — must keep receiving a flat string, because that is
+    what `ollama_native.to_ollama_messages` translates byte-for-byte.
+    """
+    slug, _, name = model.partition(":")
+    if slug == "ollama" or not name:
+        return False
+    if slug == "openrouter":
+        return name.startswith(_ASKS_FOR_CACHE)
+    row = providers.get(slug) or {}
+    host = str(row.get("base_url") or "")
+    return any(h in host for h in _ASKS_FOR_CACHE_HOSTS)
+
+
 def _resolve_local(model_name: str) -> tuple["OllamaNativeClient", str]:
     """Local models go through ollama's OWN api, not its OpenAI shim.
 
@@ -87,7 +121,29 @@ def _resolve(model: str) -> tuple[OpenAICompatClient, str]:
             name)
 
 
-async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
+async def window_for(model: str) -> Optional[int]:
+    """The window this model's next call gets — local or cloud, one answer.
+
+    THE SECOND SOURCE OF TRUTH THIS REPLACES was not hypothetical: the
+    trimmer sized against `local_context.cached()` while the refusal sized
+    against `local_context.effective_window()`, and the two disagreed
+    whenever the cached value was stale. Resolving once per call and passing
+    the number down means the transcript the trimmer declares safe is the
+    transcript the refusal measures.
+    """
+    if is_local(model):
+        return await local_window(model)
+    from app.agents import context_trim
+    return context_trim.model_context(model)
+
+
+async def local_window(model: str) -> Optional[int]:
+    from app import local_context
+    return await local_context.effective_window(model)
+
+
+async def _refuse_local_overflow(model: str, messages: list,
+                                 window: Optional[int] = None) -> Optional[dict]:
     """Refuse a local call whose prompt cannot fit, instead of letting the
     server silently drop the front of it.
 
@@ -103,18 +159,19 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
     it is what `local_context` sends. So the window is per call, and this
     refuses against that window rather than a server-wide number.
     """
-    from app import local_context
     from app.agents import context_trim
     # Refuse against the window this call will ACTUALLY get — what we sized
-    # it to, or failing that what ollama reports it already loaded.
-    # `local_context` owns both answers, so there is no second number to
-    # drift from. Nothing resident and nothing measurable means nobody knows
-    # the window, and a refusal invented on a guess is worse than the call.
-    limit = await local_context.effective_window(model) or 0
+    # it to, or failing that what ollama reports it already loaded. Resolved
+    # by the caller and passed in, so the trimmer and this refusal are two
+    # readings of ONE number rather than two probes minutes apart. Nothing
+    # resident and nothing measurable means nobody knows the window, and a
+    # refusal invented on a guess is worse than the call.
+    limit = (window if window is not None else await local_window(model)) or 0
     if limit <= 0:
         return None
-    # leave the same completion headroom the trimmer reserves
-    usable = limit - context_trim._COMPLETION_HEADROOM
+    # leave the same completion headroom the trimmer reserves — with the same
+    # floor it applies, or the two disagree on every window under 6,000
+    usable = max(2000, limit - context_trim._COMPLETION_HEADROOM)
     estimate = context_trim.estimate_tokens(messages)
     if estimate <= usable:
         return None
@@ -184,19 +241,32 @@ async def stream_chat(messages: list, model: str,
                  target, len(tools))
         think = None
     if is_local(target):
-        refusal = await _refuse_local_overflow(target, messages)
+        from app import local_context
+        from app.agents import context_trim
+        # ONE resolution for this call: the refusal below and the trimmer
+        # upstream both measure against this number.
+        window = await local_window(target)
+        refusal = await _refuse_local_overflow(target, messages, window)
         if refusal:
             yield refusal
             return
-    if is_local(target):
-        from app import local_context
         client, model_name = _resolve_local(target.split(":", 1)[1])
         # Per model, from what it supports and what fits — see local_context.
-        # Falls back to the flat setting whenever anything cannot be measured.
+        # DELIBERATELY `resolve`, not `window`: `effective_window` falls back
+        # to the RESIDENT model's context_length when nothing could be
+        # measured, and feeding that back as num_ctx turns "we could not
+        # measure it, so ollama decides" into "pin it to whatever happens to
+        # be loaded" — which on this box means an outside call leaves a model
+        # at 262,144 and Nova then forces 262,144. Guaranteed spill.
         num_ctx = await local_context.resolve(target)
-        async for event in client.stream(messages, model_name, tools,
-                                         include_usage=True, think=think,
-                                         num_ctx=num_ctx or None):
+        async for event in client.stream(
+                messages, model_name, tools, include_usage=True, think=think,
+                num_ctx=num_ctx or None,
+                # the second control: the refusal above is the primary one,
+                # and it cannot fire on the paths where nobody knows the
+                # window. This is how a cut that happened anyway becomes a
+                # fact rather than a worse answer.
+                expect_prompt_tokens=context_trim.estimate_tokens(messages)):
             yield event
         # Did that window actually fit? ollama does not fail when the KV
         # cache overflows — it moves part of the model into system RAM and

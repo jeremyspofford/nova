@@ -239,7 +239,12 @@ def test_image_turn_not_trimmed():
 
 
 def test_dispatch_results_exempt():
-    print("6. a specialist's report is never the thing that gets trimmed")
+    print("6. a specialist's report is never the FIRST thing that gets trimmed")
+    # Shortening the two raw web results gets this under the CEILING without
+    # reaching the 70% target, and that is the case the exemption is about:
+    # while anything else can give, the turn's product does not. Chasing the
+    # target here would have hard-trimmed the report for no reason.
+    # Section 8 covers what happens when nothing else can give.
     set_budget(8000)
     msgs = [{"role": "system", "content": "S" * 1000},
             {"role": "user", "content": "research this"},
@@ -256,6 +261,13 @@ def test_dispatch_results_exempt():
           str(len(by_id["d1"])))
     check("the raw web results absorbed the trim",
           len(by_id["w1"]) < 20000 or len(by_id["w2"]) < 20000, str(report))
+    check("...and the last resort never ran, because it did not have to",
+          not report.get("hard_trimmed"), str(report))
+    check("the transcript is under the ceiling even though it never reached "
+          "the 70% target — the target is hysteresis, not a requirement",
+          report["after"] <= report["ceiling"]
+          and report["after"] > report["ceiling"] * 0.7,
+          f"{report['after']} of {report['ceiling']}")
 
 
 def test_bulk_first_then_oldest():
@@ -275,8 +287,15 @@ def test_bulk_first_then_oldest():
           f"web {len(by_id['w1'])} vs memory {len(by_id['m1'])}")
 
 
-def test_nothing_left_to_trim_is_reported():
-    print("8. an untrimmable overflow is reported, not hidden")
+def test_hard_trim_saves_the_turn():
+    print("8. when nothing else can give, the exemption yields — the turn "
+          "answers instead of dying")
+    # The rail this reverses is documented in the module and was absolute
+    # until 2026-08-04. It cost a real turn: trace 075ee7cb, round ONE of a
+    # fresh conversation, `error_class: prompt_too_long`, 10,303 tokens
+    # against a 4,192 ceiling — with nothing of role=="tool" in the
+    # transcript at all, so the ordinary pass had no candidates and the
+    # router refused a turn that had not started.
     set_budget(8000)
     msgs = [{"role": "system", "content": "S" * 200},
             {"role": "user", "content": "go"},
@@ -285,7 +304,57 @@ def test_nothing_left_to_trim_is_reported():
     detail = {}
     report = context_trim.trim_transcript(
         msgs, model="openrouter:test", exempt_ids={"d1"}, detail=detail)
+    check("the ordinary pass still refuses to touch it",
+          report["trimmed_messages"] == 0, str(report))
+    check("...but the hard trim does, rather than leaving the turn to be "
+          "refused", report.get("hard_trimmed", 0) > 0, str(report))
+    check("the transcript is back under the ceiling",
+          context_trim.estimate_tokens(msgs) <= report["ceiling"],
+          f"{context_trim.estimate_tokens(msgs)} vs {report['ceiling']}")
+    check("...so nothing tells the router to refuse it",
+          detail.get("context_over_ceiling") is None, str(detail))
+    check("the system prompt is byte-identical — it is the one thing head "
+          "truncation would have eaten", msgs[0]["content"] == "S" * 200)
+    check("what was cut SAYS it was cut",
+          "characters cut" in msgs[3]["content"], msgs[3]["content"][-90:])
+    check("...and does NOT tell the model to call a tool again, which is "
+          "false for a report nobody can re-request",
+          "Call the tool again" not in msgs[3]["content"])
+
+
+def test_round_one_paste_survives():
+    print("8b. round one, no tool results, one huge paste — the measured death")
+    set_budget(8000)
+    msgs = [{"role": "system", "content": "S" * 2000},
+            {"role": "user", "content": "summarise this: " + "z" * 60000}]
+    detail = {}
+    report = context_trim.trim_transcript(msgs, model="openrouter:test",
+                                          detail=detail)
+    check("there was nothing of role=='tool' to shorten",
+          report["trimmed_messages"] == 0)
+    check("the paste itself gives, because it is the overflow",
+          report.get("hard_trimmed", 0) == 1, str(report))
+    check("the turn now fits", context_trim.estimate_tokens(msgs)
+          <= report["ceiling"], str(context_trim.estimate_tokens(msgs)))
+    check("the system prompt survived intact", msgs[0]["content"] == "S" * 2000)
+    check("and the question still opens with what was asked",
+          msgs[1]["content"].startswith("summarise this: "))
+
+
+def test_nothing_left_to_trim_is_reported():
+    print("8c. an overflow with genuinely nothing to give is still reported")
+    # Index 0 is the one absolute exemption, so a system prompt that alone
+    # exceeds the window cannot be fixed here — and saying so is what makes
+    # the router refuse instead of letting ollama cut the head off.
+    set_budget(8000)
+    msgs = [{"role": "system", "content": "S" * 60000},
+            {"role": "user", "content": "go"}]
+    detail = {}
+    report = context_trim.trim_transcript(msgs, model="openrouter:test",
+                                          detail=detail)
     check("nothing was trimmed", report["trimmed_messages"] == 0)
+    check("...and nothing could be hard-trimmed either",
+          not report.get("hard_trimmed"), str(report))
     check("the trace says it is still over the ceiling",
           detail.get("context_over_ceiling") is True, str(detail))
 
@@ -315,6 +384,7 @@ def main():
     for t in (test_estimator, test_ceiling, test_no_trim_under_ceiling,
               test_trim_preserves_pairing, test_image_turn_not_trimmed,
               test_dispatch_results_exempt, test_bulk_first_then_oldest,
+              test_hard_trim_saves_the_turn, test_round_one_paste_survives,
               test_nothing_left_to_trim_is_reported, test_trace_fields):
         t()
         print()
