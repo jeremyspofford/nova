@@ -206,7 +206,7 @@ async def _execute(run_id: str, suite_name: str, model: str,
     # still distinguishable from one that never reported at all.
     beat = asyncio.create_task(_heartbeat(run_id))
     scratch = Path(tempfile.mkdtemp(prefix="nova-eval-"))
-    total = passed = 0
+    total = passed = graded = 0
     tin = tout = 0
     details: list[dict] = []
     status, error = "passed", None
@@ -251,7 +251,21 @@ async def _execute(run_id: str, suite_name: str, model: str,
                 entry["runs_passed"] = runs_passed
                 entry["runs"] = repeat
             details.append(entry)
-        status = "passed" if passed == total and total else "failed"
+        # Tasks the model was actually ASKED. A call refused before it reaches
+        # the model — a prompt over the VRAM-sized window, an unservable tool
+        # — is not a wrong answer, and counting it as one turns a fact about
+        # the machine into a verdict about the model.
+        graded = sum(1 for e in details if e.get("gradeable"))
+        if total and not graded:
+            # Nothing was measured, so there is nothing to report as a score.
+            # `failed 0/7` here is the lie: it reads identically to a model
+            # that answered every question wrongly.
+            why = next((e for d in details for e in (d.get("errors") or [])),
+                       "no reason recorded")
+            status = "error"
+            error = f"no task could be graded — the model was never reached. {why}"[:500]
+        else:
+            status = "passed" if passed == total and total else "failed"
     except Exception as exc:  # noqa: BLE001 — a harness failure is not a verdict
         log.exception("eval run %s failed", run_id)
         status, error = "error", f"{type(exc).__name__}: {exc}"[:500]
@@ -262,10 +276,11 @@ async def _execute(run_id: str, suite_name: str, model: str,
             await conn.execute(
                 "UPDATE eval_runs SET status=$2, finished_at=now(), "
                 "tasks_total=$3, tasks_passed=$4, tokens_in=$5, tokens_out=$6, "
-                "duration_s=$7, detail=$8::jsonb, error=$9 WHERE id=$1::uuid",
+                "duration_s=$7, detail=$8::jsonb, error=$9, "
+                "tasks_gradeable=$10 WHERE id=$1::uuid",
                 run_id, status, total, passed, tin, tout,
                 round(asyncio.get_event_loop().time() - started, 1),
-                json.dumps({"tasks": details}), error)
+                json.dumps({"tasks": details}), error, graded)
         _running = None
         log.info("eval run %s: %s (%d/%d)", run_id, status, passed, total)
 

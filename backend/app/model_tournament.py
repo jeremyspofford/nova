@@ -109,10 +109,16 @@ async def next_pairing() -> Optional[tuple[str, list[str]]]:
             except Exception:  # noqa: BLE001 — one broken suite is not the fleet
                 log.warning("tournament: suite %s will not load", name)
                 continue
+            # 'error' counts as an ATTEMPT here, though never as a score.
+            # A suite nothing can currently grade — every model refused on a
+            # prompt over its window — would otherwise never gain coverage,
+            # and the rotation would park on it forever while the other seven
+            # went unmeasured. Trying and failing is still a turn taken.
             row = await conn.fetchrow(
                 "SELECT max(started_at) AS newest FROM eval_runs "
                 " WHERE suite = $1 AND suite_version = $2 "
-                "   AND status IN ('passed','failed')", name, suite.version)
+                "   AND status IN ('passed','failed','error')",
+                name, suite.version)
             newest = row["newest"] if row else None
             # never measured at this version sorts first, and stays first
             age = -1.0 if newest is None else -newest.timestamp()
@@ -181,6 +187,15 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
             "  FROM eval_runs "
             " WHERE status IN ('passed','failed') AND model = ANY($1::text[]) "
             "   AND repeat_count >= $2 "
+            # Only a run the model actually SAT. A task refused before it
+            # reached the model still counts in tasks_total, so a partially
+            # asked run is not the same test as a complete one — measured
+            # 2026-08-04, when six models were ranked on denominators of 0,
+            # 2, 6 and 7 questions and the two that were never asked anything
+            # came last at 0%. NULL is pre-migration-087 and unknowable, so
+            # it is excluded rather than assumed complete.
+            "   AND tasks_gradeable IS NOT NULL "
+            "   AND tasks_gradeable = tasks_total AND tasks_total > 0 "
             " ORDER BY started_at DESC", installed, min_repeat)
 
     # Newest row per (suite, model) that is actually comparable. The version
@@ -319,6 +334,9 @@ async def maybe_run() -> Optional[dict]:
             continue
         await _await_run(run["id"])
         done.append(model)
+        # Before the next model loads, not after the night ends — the point
+        # is that the NEXT one is sized against a free card.
+        await _evict(model)
 
     summary = {"suite": suite, "repeat": repeat, "ran": done, "skipped": skipped}
     log.info("tournament: finished %s — ran %d, skipped %d",
@@ -344,6 +362,45 @@ async def maybe_run() -> Optional[dict]:
     except Exception:  # noqa: BLE001 — a summary never fails the night's work
         log.exception("tournament: standings failed")
     return summary
+
+
+async def _evict(model: str) -> None:
+    """Drop a model from VRAM so the NEXT one is sized against a free card.
+
+    This is the night's real cost, and it was invisible until the field
+    widened. Ollama keeps a model resident for minutes after its last call,
+    and the tournament runs six back to back at about that interval — so
+    every model after the first loaded into a GPU still holding its
+    predecessor. `local_context` then sized the window to whatever was left.
+
+    Measured 2026-08-04, mid-night: 19.7 GB of a 24 GB card held by three
+    models at once, two of them finished. Windows collapsed to 8,192 against
+    models whose real limits are 32k-262k, and `main`'s 4,211-token prompt
+    was refused by NINETEEN tokens — so four of six models were never asked
+    anything, and the ranking that came out of it put two of them last on no
+    evidence.
+
+    Best effort by design: a model that will not evict is a slower night, not
+    a failed one, and the window guard still refuses honestly if the next one
+    ends up cramped.
+    """
+    import httpx
+
+    from app import settings_store
+    base = str(settings_store.get("inference.ollama_url") or "").rstrip("/")
+    if not base or not model.startswith("ollama:"):
+        return
+    name = model.split(":", 1)[1]
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # keep_alive=0 unloads immediately; an empty prompt does no work
+            resp = await client.post(f"{base}/api/generate",
+                                     json={"model": name, "keep_alive": 0})
+            resp.raise_for_status()
+        log.info("tournament: evicted %s from VRAM", model)
+    except Exception:  # noqa: BLE001 — eviction is an optimisation, not a gate
+        log.warning("tournament: could not evict %s; the next model will be "
+                    "sized against whatever is left", model, exc_info=True)
 
 
 async def _await_slot(poll_s: float = 2.0,
