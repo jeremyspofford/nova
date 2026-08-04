@@ -18,6 +18,7 @@ import {
   listCommands,
   patchAgent,
   preflightRecCard,
+  rerunRecAction,
   runCommand,
   streamChat,
   uploadAttachment,
@@ -151,8 +152,9 @@ const approveLabel = (r: RecCard) =>
  *  parsed document an executor would receive — never from `body`, which is
  *  prose the model wrote. Same reasoning as the consent card's rule block:
  *  the agent cannot word its way around this. */
-function RecPlan({ rec, onTest, testing }: {
-  rec: RecCard; onTest: () => void; testing: boolean;
+function RecPlan({ rec, onTest, onRerun, testing, error }: {
+  rec: RecCard; onTest: () => void; onRerun: () => void;
+  testing: boolean; error?: string;
 }) {
   if (!rec.action_plan) {
     return (
@@ -161,40 +163,107 @@ function RecPlan({ rec, onTest, testing }: {
       </div>
     );
   }
+  const run = rec.run;
+  const live = run?.status === 'queued' || run?.status === 'running';
   const blocked = rec.action_state === 'blocked';
   const ready = rec.action_state === 'ready';
+  const tone = run
+    ? (run.status === 'failed' ? 'border-red-900/60 bg-red-950/20'
+      : run.status === 'succeeded' ? 'border-teal-900/50 bg-teal-950/20'
+        : 'border-amber-900/50 bg-amber-950/20')
+    : blocked ? 'border-red-900/60 bg-red-950/20'
+      : ready ? 'border-teal-900/50 bg-teal-950/20'
+        : 'border-stone-700 bg-stone-900/60';
   return (
-    <div className={`mt-1.5 rounded border px-2 py-1.5 space-y-1 ${
-      blocked ? 'border-red-900/60 bg-red-950/20'
-        : ready ? 'border-teal-900/50 bg-teal-950/20'
-          : 'border-stone-700 bg-stone-900/60'}`}>
+    <div className={`mt-1.5 rounded border px-2 py-1.5 space-y-1 ${tone}`}>
       <div className="text-[10px] uppercase tracking-wide text-stone-500">
-        {rec.action_executable ? 'What Approve will do' : 'Proposed action'}
+        {run ? 'Action' : rec.action_executable ? 'What Approve will do' : 'Proposed action'}
       </div>
       <pre className="text-[11px] text-stone-300 font-mono whitespace-pre-wrap break-all leading-snug">
         {rec.action_plan}
       </pre>
-      {rec.action_state === 'none' ? (
+
+      {/* The tool descriptions, BEFORE the click. One click grants these into
+          an agent's prompt, so the operator reads them here or nowhere. */}
+      {!run && rec.action_tools && rec.action_tools.length > 0 && (
+        <details className="text-[11px]">
+          <summary className="cursor-pointer text-stone-400 hover:text-stone-200">
+            {rec.action_tools.length} tools — read their descriptions
+            {rec.action?.grant_to && (rec.action.grant_to as string[]).length > 0
+              ? ', which become part of that agent’s prompt' : ''}
+          </summary>
+          <div className="mt-1 space-y-1 max-h-52 overflow-y-auto nice-scroll pr-1">
+            {rec.action_tools.map(t => (
+              <div key={t.name} className="border-l border-stone-700 pl-2">
+                <div className="font-mono text-stone-300">{t.name}</div>
+                <div className="text-stone-500">{t.description || 'no description'}</div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {!run && (rec.action_state === 'none' ? (
         <div className="text-[11px] text-stone-500">Checking the endpoint…</div>
       ) : (
         <div className={`text-[11px] ${blocked ? 'text-red-300' : 'text-teal-300'}`}>
           {blocked ? 'This cannot run. ' : 'Endpoint answered. '}
           {rec.action_detail}
         </div>
-      )}
+      ))}
+
       {/* Until an executor exists, say plainly that approving executes
           nothing. This sentence disappears by itself when it stops being
           true, because action_executable is derived. */}
-      {!rec.action_executable && (
+      {!run && !rec.action_executable && (
         <div className="text-[11px] text-amber-400/90">
           No executor is installed for this plan yet — approving records your
           decision and nothing is registered.
         </div>
       )}
-      <button onClick={onTest} disabled={testing}
-        className="text-[10px] px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-100 disabled:opacity-50">
-        {testing ? 'Testing…' : 'Test again'}
-      </button>
+
+      {run && (
+        <div className="space-y-0.5 text-[11px]">
+          {run.steps.map((s, i) => (
+            <div key={i} className="flex gap-1.5">
+              <span className={s.status === 'ok' ? 'text-teal-400' : 'text-red-400'}>
+                {s.status === 'ok' ? '✓' : '✗'}
+              </span>
+              <span className="text-stone-400">{s.step}</span>
+              <span className="text-stone-500 truncate">{s.detail}</span>
+            </div>
+          ))}
+          {live && <div className="text-amber-300">
+            {run.status === 'queued' ? 'Queued…' : 'Working…'}
+          </div>}
+          {run.status === 'failed' && (
+            <div className="text-red-300">{run.error}</div>
+          )}
+          {run.status === 'succeeded' && (
+            <div className="text-teal-300">
+              Done{run.result?.granted && Object.keys(run.result.granted).length > 0
+                ? ` — granted to ${Object.keys(run.result.granted).join(', ')}` : ''}.
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && <div className="text-[11px] text-red-300">{error}</div>}
+
+      <div className="flex gap-2">
+        {!run && (
+          <button onClick={onTest} disabled={testing}
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-100 disabled:opacity-50">
+            {testing ? 'Testing…' : 'Test again'}
+          </button>
+        )}
+        {run?.status === 'failed' && (
+          <button onClick={onRerun}
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-600 text-stone-300 hover:text-stone-100">
+            Run again
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1566,20 +1635,58 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // An approved card whose action is RUNNING has left status='new', so the
+  // banner query would drop it exactly when there is something to watch.
+  // These ids keep it on screen until the operator closes it — a failure that
+  // vanishes is the silent no-op this whole surface exists to remove.
+  // a ref, not state: every mutation is followed by a setRecs that re-renders
+  const watchRef = useRef<string[]>([]);
+  const [recError, setRecError] = useState<Record<string, string>>({});
+
   const loadRecs = async () => {
-    try { setRecs(await getRecCards('new')); } catch { /* best-effort */ }
+    try {
+      const cards = await getRecCards(watchRef.current.length ? 'all' : 'new');
+      setRecs(cards.filter(c => ['new', 'seen'].includes(c.status)
+                                || watchRef.current.includes(c.id)));
+    } catch { /* best-effort */ }
   };
+  const liveRun = (r: RecCard) =>
+    r.run?.status === 'queued' || r.run?.status === 'running';
+  const anyLive = recs.some(liveRun) || (inbox ?? []).some(liveRun);
   useEffect(() => {
     loadRecs();
-    const iv = setInterval(loadRecs, 60000);
+    // 3s while something is actually running, 60s otherwise
+    const iv = setInterval(() => {
+      void loadRecs();
+      if (inboxOpen) void loadInbox();
+    }, anyLive ? 3000 : 60000);
     return () => clearInterval(iv);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyLive, inboxOpen]);
+
+  const watch = (id: string) => {
+    if (!watchRef.current.includes(id)) watchRef.current = [...watchRef.current, id];
+  };
+  const unwatch = (id: string) => {
+    watchRef.current = watchRef.current.filter(x => x !== id);
+    setRecs(prev => prev.filter(r => r.id !== id));
+  };
+
   async function decideRec(rec: RecCard, choice: 'approve' | 'later' | 'dismiss') {
-    setRecs(prev => prev.filter(r => r.id !== rec.id));   // optimistic
+    const willRun = choice === 'approve' && rec.action_executable
+                    && rec.action_state === 'ready';
+    if (!willRun) setRecs(prev => prev.filter(r => r.id !== rec.id));   // optimistic
+    setRecError(e => ({ ...e, [rec.id]: '' }));
     try {
-      const updated = await decideRecCard(rec.id, choice);
+      // the digest the UI rendered — a plan rewritten since is a 409
+      const updated = await decideRecCard(rec.id, choice, rec.action_digest);
       setInbox(prev => prev && prev.map(r => r.id === rec.id ? updated : r));
-    } catch {
+      if (willRun) {
+        watch(rec.id);
+        setRecs(prev => prev.map(r => r.id === rec.id ? updated : r));
+      }
+    } catch (e) {
+      setRecError(err => ({ ...err, [rec.id]: (e as Error).message }));
       void loadRecs();                                    // reconcile on failure
       if (inboxOpen) void loadInbox();
     }
@@ -1600,6 +1707,18 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       if (inboxOpen) void loadInbox();
     } finally {
       setTestingRec(null);
+      void loadRecs();     // action_tools may have changed with the tool list
+    }
+  }
+
+  async function rerunRec(rec: RecCard) {
+    try {
+      const updated = await rerunRecAction(rec.id);
+      watch(rec.id);
+      setRecs(prev => prev.map(r => r.id === rec.id ? updated : r));
+      setInbox(prev => prev && prev.map(r => r.id === rec.id ? updated : r));
+    } catch (e) {
+      setRecError(err => ({ ...err, [rec.id]: (e as Error).message }));
     }
   }
 
@@ -2266,8 +2385,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                 <div className="text-xs text-stone-400 [&_p]:my-0.5 [&_a]:text-teal-400">
                   <Markdown>{r.body}</Markdown>
                 </div>
-                {open(r) && (
-                  <RecPlan rec={r} onTest={() => testRec(r)} testing={testingRec === r.id} />
+                {(open(r) || r.run) && (
+                  <RecPlan rec={r} onTest={() => testRec(r)}
+                    onRerun={() => rerunRec(r)}
+                    testing={testingRec === r.id} error={recError[r.id]} />
                 )}
                 {open(r) && (
                   <div className="flex gap-2 mt-1.5">
@@ -2333,14 +2454,29 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               <Markdown>{recs[0].body}</Markdown>
             </div>
             <RecPlan rec={recs[0]} onTest={() => testRec(recs[0])}
-              testing={testingRec === recs[0].id} />
+              onRerun={() => rerunRec(recs[0])}
+              testing={testingRec === recs[0].id}
+              error={recError[recs[0].id]} />
             <div className="flex gap-2 mt-1.5">
-              <button onClick={() => decideRec(recs[0], 'approve')}
-                className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">{approveLabel(recs[0])}</button>
-              <button onClick={() => decideRec(recs[0], 'later')}
-                className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
-              <button onClick={() => decideRec(recs[0], 'dismiss')}
-                className="text-xs px-2.5 py-1 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800">Dismiss</button>
+              {['new', 'seen'].includes(recs[0].status) ? (
+                <>
+                  <button onClick={() => decideRec(recs[0], 'approve')}
+                    className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">{approveLabel(recs[0])}</button>
+                  <button onClick={() => decideRec(recs[0], 'later')}
+                    className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
+                  <button onClick={() => decideRec(recs[0], 'dismiss')}
+                    className="text-xs px-2.5 py-1 rounded border border-stone-700 text-stone-500 hover:text-red-400 hover:border-red-800">Dismiss</button>
+                </>
+              ) : (
+                // decided and being watched: the only thing left is to close
+                // it, and closing is the OPERATOR's move — a finished run
+                // (especially a failed one) never disappears on its own
+                <button onClick={() => unwatch(recs[0].id)}
+                  disabled={liveRun(recs[0])}
+                  className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100 disabled:opacity-40">
+                  {liveRun(recs[0]) ? 'Working…' : 'Close'}
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -2,26 +2,43 @@
 
 Phase 3 of `docs/plans/recommendation-surface.md`, scoped for real.
 
-Status, 2026-08-04, branch `rec-actions` (uncommitted):
+Status, 2026-08-04, branch `rec-actions`:
 
 - **Phase 0 BUILT** — the card states what Approve does, or says plainly that
   it only records a decision.
 - **Phase 1 BUILT** — typed plans, the boot gate, the shared outbound guard,
-  and automatic preflight. Verified live: the OSSInsight endpoint comes back
+  automatic preflight. Verified live: the OSSInsight endpoint comes back
   `blocked` with `405 Method Not Allowed` on the card, before anyone reads it.
-- **Phases 2-5 NOT BUILT.** Nothing executes yet, and the UI derives that
-  admission from `Spec.execute is None` rather than being told to say it.
+- **Phase 2 BUILT, with phase 3 folded in** — ONE CLICK. `action_runs`, a
+  durable leader-gated worker, the executor, digest binding, atomic rollback.
+  Verified end to end against a real public MCP server: register, connect,
+  grant, verify, all on one click, with the receipt on the card.
+- **Phases 4-5 NOT BUILT.** `raise_recommendation` still has no `action`
+  property, so SHE cannot fill in the form yet — every plan today is written
+  by hand or by SQL. That is the remaining half and it is phase 4.
 
-Decisions Jeremy has made (2026-08-04): automatic preflight at raise time,
-YES (built, phase 1). Grant on Approve, ONE CLICK — phase 3 folds into phase
-2, and phase 2 is not built. Decisions 3 and 4 at the bottom still stand.
+Decisions Jeremy made 2026-08-04: automatic preflight at raise time YES; grant
+on Approve in ONE CLICK. Decisions 3 and 4 at the bottom still stand.
 
-One change to phase 4's ordering fell out of building this: phase 1's
-verification wants `raise_recommendation` to accept an `action`, and it does
-not until phase 4. Phase 1 was therefore verified through `create()` and the
-API rather than through a chat turn, which exercises the same `actions.parse`
-call but not the model's ability to fill the form in. That half is still
-unproven and phase 4 is where it gets proven.
+Three things the build changed from the written plan, all of them found by
+running it rather than reading it:
+
+1. **`always_inject` defaults to false**, so a newly registered server's tools
+   are LAZY — they reach the model through the index plus `find_mcp_tools`,
+   not as eager defs. The planned `verify()` asked `get_agent_tools()` for
+   them and would have reported every granted tool missing, failing every
+   run. It now asserts the registry's own predicates: the tool loads, and
+   `_mcp_granted` covers it.
+2. **An agent with `allowed_tools = None` cannot be granted to.** `None` means
+   "every builtin implicitly"; writing a list would replace that with only
+   the MCP names and strip the agent of everything else. Enumerating the
+   builtins instead would freeze its toolset at today's list. Neither belongs
+   behind one click, so the executor refuses and says which.
+3. **Rollback covers the whole run, not just the connect step.** As written,
+   a grant failure left a registered server behind while the card said
+   failed. `_undo` now revokes the grants this run added — only those — and
+   deletes the server, and says so on the receipt if any part could not be
+   undone.
 
 ---
 

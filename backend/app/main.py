@@ -78,6 +78,10 @@ async def lifespan(app: FastAPI):
     # kills it; without this its row stays 'running' and reads as in-flight
     from app import eval_runs
     await eval_runs.reconcile_orphans()
+    # same reasoning for an action run: the process dying mid-register leaves
+    # a row that reads as in-flight forever
+    from app import action_worker
+    await action_worker.reset_orphans()
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.
@@ -86,11 +90,13 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())
+    action_task = asyncio.create_task(action_worker.loop())
     provider_health_task = asyncio.create_task(providers.health_loop())
     log.info("Backend ready")
     yield
     log.info("Shutting down...")
-    for task in (scheduler_task, warmer_task, ingest_task, provider_health_task):
+    for task in (scheduler_task, warmer_task, ingest_task, action_task,
+                 provider_health_task):
         task.cancel()
         try:
             await task

@@ -943,6 +943,25 @@ export interface RecCard {
   action_state: 'none' | 'ready' | 'blocked';
   action_detail: string | null;
   action_checked_at: string | null;
+  /** The tool list the preflight fetched — the descriptions that will land in
+   *  the granted agent's prompt. Shown on the card BEFORE the click, because
+   *  one-click grant is only honest if you saw them. */
+  action_tools: { name: string; description: string }[] | null;
+  /** The latest run of this card's action, once approved. */
+  run: ActionRun | null;
+}
+
+export interface ActionRun {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  steps: { step: string; status: string; detail: string }[];
+  result: {
+    server_id?: string; name?: string; tools?: string[];
+    granted?: Record<string, string[]>;
+  } | null;
+  error: string | null;
+  created_at: string | null;
+  finished_at: string | null;
 }
 
 /** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
@@ -952,14 +971,27 @@ export async function getRecCards(status: 'new' | 'all' = 'new'): Promise<RecCar
   return r.json();
 }
 
+/** `digest` is the plan the UI actually rendered. The backend compares it
+ *  against the live row inside the same transaction that flips the status, so
+ *  a plan rewritten between render and click is a 409 rather than a surprise
+ *  execution. Omitting it on a card that has a plan fails closed. */
 export async function decideRecCard(
-  id: string, choice: 'approve' | 'later' | 'dismiss'): Promise<RecCard> {
+  id: string, choice: 'approve' | 'later' | 'dismiss',
+  digest?: string | null): Promise<RecCard> {
   const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/decide`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify({ choice, action_digest: digest ?? null }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'decide failed');
+  return r.json();
+}
+
+/** Re-queue a failed run. The card's `Run again` button. */
+export async function rerunRecAction(id: string): Promise<RecCard> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/run`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'run failed');
   return r.json();
 }
 

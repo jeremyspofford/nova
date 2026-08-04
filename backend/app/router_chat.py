@@ -2271,7 +2271,26 @@ async def decide_recommendation_endpoint(rec_id: str, body: dict):
     if choice not in ("approve", "later", "dismiss"):
         raise HTTPException(status_code=422,
                             detail="choice must be 'approve', 'later', or 'dismiss'")
-    row = await recommendations.decide(rec_id, choice)
+    try:
+        row = await recommendations.decide(
+            rec_id, choice, body.get("action_digest"))
+    except recommendations.PlanChanged as e:
+        # 409, not 422: the request was well-formed, the world moved.
+        raise HTTPException(status_code=409, detail=str(e))
+    if not row:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return row
+
+
+@router.post("/api/v1/recommendations/{rec_id}/run")
+async def rerun_recommendation_action_endpoint(rec_id: str):
+    """Re-queue a failed action run. The card's `Run again` button.
+
+    Only a `failed` run is re-queued, and the worker's claim JOIN still
+    requires the recommendation to be approved by the operator — so this
+    cannot resurrect work on a card that was since dismissed.
+    """
+    row = await recommendations.requeue(rec_id)
     if not row:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return row

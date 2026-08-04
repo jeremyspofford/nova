@@ -28,8 +28,10 @@ _FIELDS = ("id", "name", "transport", "url", "command", "args", "headers",
 _EDIT_FIELDS = {"url", "command", "args", "headers", "read_only"}
 # Settable at creation only, and deliberately NOT in _EDIT_FIELDS: a server
 # cannot be laundered from 'action' to 'operator' by a later PATCH, which is
-# what would silence mcp_client's outbound guard.
-_CREATE_ONLY_FIELDS = {"created_by"}
+# what would silence mcp_client's outbound guard. `tools_hash` is here so an
+# action can register a server with the hash of the tool list the operator
+# actually reviewed on the card — see refresh() below.
+_CREATE_ONLY_FIELDS = {"created_by", "tools_hash"}
 _TRANSPORTS = ("http", "stdio")
 
 # A stdio server's `command` is EXECUTED, verbatim, in the mcp-runner
@@ -163,7 +165,20 @@ async def refresh(server_id: str, *, approve: bool = False) -> dict:
     """Connect, list tools, hash them. On first-ever connect (no stored
     hash) or an explicit approve=True, accept the new hash as the approved
     baseline and sync the cache. Otherwise a hash mismatch flips status to
-    'error' without touching the cache."""
+    'error' without touching the cache.
+
+    THE FIRST LIST IS ONLY FREE FOR THE OPERATOR. `stored_hash is None` means
+    nobody has ever approved this server's tools, and accepting whatever
+    turns up puts a stranger's tool DESCRIPTIONS into every granted agent's
+    prompt unread. That is a defensible default when the operator typed the
+    URL into Library -> Tools himself — he chose the host and can read the
+    list right there. It is not defensible for a server that arrived through
+    an approved recommendation, where the whole point is that one click did
+    the work. Those must be registered with `tools_hash` already set to the
+    hash of the list shown on the card (actions/mcp_server.execute), so this
+    function has a baseline to check rather than a blank to fill in. A
+    hash-less action-created server is a code path that skipped the review,
+    and it is refused rather than trusted."""
     async with db.acquire() as conn:
         raw = await conn.fetchrow("SELECT * FROM mcp_servers WHERE id = $1::uuid", server_id)
     if not raw:
@@ -180,7 +195,18 @@ async def refresh(server_id: str, *, approve: bool = False) -> dict:
 
         new_hash = mcp_client.tool_list_hash(tools)
         stored_hash = server["tools_hash"]
-        if stored_hash is None or approve or new_hash == stored_hash:
+        unreviewed = (stored_hash is None
+                      and server.get("created_by") not in (None, "operator"))
+        if unreviewed and not approve:
+            log.warning("MCP server '%s' was created by %s with no reviewed "
+                        "tool list — refusing to adopt one", server["name"],
+                        server.get("created_by"))
+            await conn.execute(
+                "UPDATE mcp_servers SET status = 'error', status_detail = "
+                "'registered without an approved tool list — no one has read "
+                "these tool descriptions', last_seen = now(), updated_at = now() "
+                "WHERE id = $1::uuid", server_id)
+        elif stored_hash is None or approve or new_hash == stored_hash:
             await conn.execute("DELETE FROM mcp_tools_cache WHERE server_id = $1::uuid", server_id)
             for t in tools:
                 await conn.execute(

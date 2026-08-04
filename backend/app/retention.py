@@ -47,9 +47,14 @@ _SWEEPS = [
     # and 'later' is the operator asking the banner to stop showing a card he
     # still means to answer. The old predicate here was `status <> 'new'`,
     # which made clicking Later schedule the card for deletion.
+    # ...and never one whose action is still queued or running: the cascade
+    # would take the live work item with it.
     ("decided recommendations",
      "DELETE FROM recommendations WHERE status NOT IN ('new', 'seen', 'later') "
-     "  AND created_at < now() - ($1 || ' days')::interval"),
+     "  AND created_at < now() - ($1 || ' days')::interval "
+     "  AND NOT EXISTS (SELECT 1 FROM action_runs ar "
+     "                  WHERE ar.recommendation_id = recommendations.id "
+     "                    AND ar.status IN ('queued', 'running'))"),
 ]
 
 

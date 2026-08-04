@@ -309,6 +309,20 @@ SETTING_DEFS: list[dict] = [
                      "it is met. Research and memory are never gated. Turn "
                      "this OFF and those actions become entirely ungated, "
                      "which is what they were before this shipped.")},
+    {"key": "actions.enabled", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Approving a recommendation may run its plan",
+     "description": ("A recommendation card can carry a typed plan — register "
+                     "this MCP server, grant its tools to this agent. With "
+                     "this on, Approve carries the plan out; the plan and the "
+                     "tool descriptions are shown on the card first, and only "
+                     "a plan that already connected can run. Turn this OFF and "
+                     "Approve records your decision and nothing else, which is "
+                     "what it did before this shipped.")},
+    {"key": "actions.timeout_s", "type": "number", "default": 120,
+     "section": "Agents", "label": "Give up on a recommendation action after (s)",
+     "description": ("A run that hangs past this is failed and shown on the "
+                     "card. It does not undo work already committed — the "
+                     "executor rolls back its own half-registered server.")},
     {"key": "monitor.retire_after_days", "type": "number", "default": 7,
      "section": "Observability", "label": "Retire a silent instance after (days)",
      "description": ("An instance that has not reported for this long is "

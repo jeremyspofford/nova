@@ -28,7 +28,14 @@ _CHOICE = {"approve": "approved", "later": "later",
 
 _FIELDS = ("id", "kind", "title", "body", "source", "status", "action",
            "priority", "dedupe_key", "created_at", "decided_at", "decided_by",
-           "action_state", "action_detail", "action_checked_at")
+           "action_state", "action_detail", "action_checked_at", "action_tools")
+
+_RUN_FIELDS = ("id", "status", "steps", "result", "error",
+               "created_at", "finished_at")
+
+
+class PlanChanged(Exception):
+    """The card's plan is not the one the operator was looking at."""
 
 
 def action_digest(action: Optional[dict]) -> Optional[str]:
@@ -51,10 +58,15 @@ def action_digest(action: Optional[dict]) -> Optional[str]:
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def _row(r) -> dict:
+def _json(v):
+    return json.loads(v) if isinstance(v, str) else v
+
+
+def _row(r, run=None) -> dict:
     d = {k: r[k] for k in _FIELDS if k in r}
     d["id"] = str(d["id"])
-    d["action"] = json.loads(d["action"]) if isinstance(d["action"], str) else d["action"]
+    d["action"] = _json(d["action"])
+    d["action_tools"] = _json(d.get("action_tools"))
     for k in ("created_at", "decided_at", "action_checked_at"):
         d[k] = str(d[k]) if d.get(k) else None
     d["action_digest"] = action_digest(d["action"])
@@ -64,6 +76,17 @@ def _row(r) -> dict:
     from app import actions
     d["action_plan"] = actions.describe(d["action"])
     d["action_executable"] = actions.is_executable(d["action"])
+    d["run"] = _run_row(run) if run else None
+    return d
+
+
+def _run_row(r) -> dict:
+    d = {k: r[k] for k in _RUN_FIELDS if k in r}
+    d["id"] = str(d["id"])
+    d["steps"] = _json(d.get("steps")) or []
+    d["result"] = _json(d.get("result"))
+    for k in ("created_at", "finished_at"):
+        d[k] = str(d[k]) if d.get(k) else None
     return d
 
 
@@ -146,10 +169,33 @@ async def list_all(status: str = "new") -> list[dict]:
             rows = await conn.fetch(
                 "SELECT * FROM recommendations WHERE status IN ('new','seen') "
                 "ORDER BY priority DESC, created_at DESC")
-    return [_row(r) for r in rows]
+        # Latest run per card, joined on rather than duplicated into a status
+        # column: run state lives in exactly one table.
+        runs = await conn.fetch(
+            "SELECT DISTINCT ON (recommendation_id) * FROM action_runs "
+            "WHERE recommendation_id = ANY($1::uuid[]) "
+            "ORDER BY recommendation_id, created_at DESC",
+            [r["id"] for r in rows])
+    by_rec = {str(r["recommendation_id"]): r for r in runs}
+    return [_row(r, by_rec.get(str(r["id"]))) for r in rows]
 
 
-async def decide(rec_id: str, choice: str) -> Optional[dict]:
+async def decide(rec_id: str, choice: str,
+                 expected_digest: Optional[str] = None) -> Optional[dict]:
+    """The operator's decision, and — for an approved card with a runnable
+    plan — the enqueue of the run that carries it out.
+
+    The digest compare, the status flip and the run insert happen in ONE
+    transaction under `SELECT ... FOR UPDATE`, because `create()`'s ON
+    CONFLICT branch can rewrite a live card's action between the moment the
+    frontend rendered it and the moment this is called. Without the compare,
+    the weekly discovery automation could change a plan under the operator
+    and this function would execute one he never read.
+
+    A caller that omits the digest for a card that HAS an action is refused
+    (None != digest), so an old client fails closed rather than silently
+    skipping the check.
+    """
     new_status = _CHOICE.get(choice)
     if not new_status:
         raise ValueError(f"choice must be one of {list(_CHOICE)}")
@@ -157,13 +203,96 @@ async def decide(rec_id: str, choice: str) -> Optional[dict]:
         rid = uuid_mod.UUID(str(rec_id))
     except ValueError:
         return None
+
+    from app import actions, settings_store
     async with db.acquire() as conn:
-        r = await conn.fetchrow(
-            "UPDATE recommendations SET status=$2, decided_at=now(), "
-            "decided_by='operator' WHERE id=$1 RETURNING *", rid, new_status)
+        async with conn.transaction():
+            cur = await conn.fetchrow(
+                "SELECT action, action_state FROM recommendations "
+                "WHERE id = $1 FOR UPDATE", rid)
+            if cur is None:
+                return None
+            action = _json(cur["action"])
+            if action is not None and expected_digest != action_digest(action):
+                raise PlanChanged(
+                    "this card's plan changed since you looked at it — "
+                    "reload the inbox and read it again")
+            r = await conn.fetchrow(
+                "UPDATE recommendations SET status=$2, decided_at=now(), "
+                "decided_by='operator' WHERE id=$1 RETURNING *", rid, new_status)
+            runnable = (new_status == "approved" and action is not None
+                        and cur["action_state"] == "ready"
+                        and actions.is_executable(action)
+                        and settings_store.get("actions.enabled") is not False)
+            if runnable:
+                # ON CONFLICT DO NOTHING pairs with the partial unique index:
+                # a double-click cannot start two runs.
+                await conn.execute(
+                    "INSERT INTO action_runs (recommendation_id, action, action_type) "
+                    "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                    rid, json.dumps(action), action["type"])
     if r:
         await _receipt(_row(r), new_status)
-    return _row(r) if r else None
+    return (await get(str(rid))) if r else None
+
+
+async def get(rec_id: str) -> Optional[dict]:
+    try:
+        rid = uuid_mod.UUID(str(rec_id))
+    except ValueError:
+        return None
+    async with db.acquire() as conn:
+        r = await conn.fetchrow("SELECT * FROM recommendations WHERE id = $1", rid)
+        if r is None:
+            return None
+        run = await conn.fetchrow(
+            "SELECT * FROM action_runs WHERE recommendation_id = $1 "
+            "ORDER BY created_at DESC LIMIT 1", rid)
+    return _row(r, run)
+
+
+async def requeue(rec_id: str) -> Optional[dict]:
+    """Re-run a failed action. Operator-only, via the card's Run again button."""
+    try:
+        rid = uuid_mod.UUID(str(rec_id))
+    except ValueError:
+        return None
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE action_runs SET status='queued', error=NULL, steps='[]', "
+            "started_at=NULL, finished_at=NULL, updated_at=now() "
+            "WHERE recommendation_id = $1 AND status = 'failed' "
+            "  AND id = (SELECT id FROM action_runs WHERE recommendation_id = $1 "
+            "            ORDER BY created_at DESC LIMIT 1)", rid)
+    return await get(str(rid))
+
+
+async def record_run_outcome(rec_id: str, summary: str) -> None:
+    """Tell HER what came of her own proposal.
+
+    `capability_events.prompt_block()` rides in every agent's FACTS slot, so
+    this is the channel by which the outcome reaches the model. Without it an
+    approved card produced a journal line saying the operator approved it and
+    she had no way to learn it then failed — which is exactly the shape of
+    the silent no-op this lane exists to remove.
+    """
+    from app import capability_events
+    async with db.acquire() as conn:
+        title = await conn.fetchval(
+            "SELECT title FROM recommendations WHERE id = $1::uuid", rec_id) or ""
+    try:
+        capability_events.record(
+            capability_events.RECOMMENDATION, title[:160], "acted on",
+            actor="operator (approved)", detail={"outcome": summary[:300]})
+    except Exception:
+        log.exception("capability event for action outcome failed")
+    try:
+        from app.memory.memory import memory
+        await memory.write(
+            f"The action on the approved recommendation \"{title}\" {summary}.",
+            type="journal", source_type="chat")
+    except Exception:
+        log.exception("journal write for action outcome failed")
 
 
 async def _receipt(rec: dict, status: str) -> None:
