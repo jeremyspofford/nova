@@ -547,16 +547,44 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     if name in GOAL_SCOPED_TOOLS and settings_store.get("autonomy.goal_scoped_actions"):
         goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
         if not goal:
+            # THE GATE RAISES THE CARD ITSELF. It used to return a string
+            # asking the model to call `propose_goal`, which is a prompt doing
+            # a control's job — and the measured outcome was that it did not
+            # get called, so a refusal left NO operator-visible artifact at
+            # all. Everything the card needs is already here: the verb, the
+            # agent, the conversation and the arguments that were refused.
+            #
+            # Never fatal. If the card cannot be raised the refusal still
+            # stands — the one thing that must not happen is the call
+            # succeeding because the paperwork failed.
+            card = ""
+            try:
+                _goal, created = await goals.card_for_refusal(
+                    name, agent_name=ctx.get("agent_name"),
+                    conversation_id=ctx.get("conversation_id"), args=args)
+                card = (
+                    "\n\nAn approval card for this is now in front of the "
+                    "operator. Nothing is approved yet."
+                    if created else
+                    "\n\nAn approval card for this is ALREADY in front of the "
+                    "operator, from an earlier attempt. Raising another would "
+                    "only bury it.")
+            except Exception:  # noqa: BLE001
+                log.exception("goal card not raised for refused %s", name)
+                card = ("\n\nThe approval card could not be raised, so say so "
+                        "plainly rather than implying someone was asked. You "
+                        "can call propose_goal with a clear title and finish "
+                        "line instead.")
             return (
                 f"Error: '{name}' changes what this system can do, so it runs "
                 f"only under a goal the operator has approved. No active goal "
                 f"currently pre-approves '{name}' (one may have expired or "
-                f"run out of its approved actions).\n\n"
-                f"Do this instead: call propose_goal with a clear title, a "
-                f"specific finish line the operator can check, and the verbs "
-                f"you need — including '{name}'. They get one card to approve, "
-                f"and then you can work without asking again until the goal "
-                f"is met. Do not retry this call before that approval.")
+                f"run out of its approved actions).{card}\n\n"
+                f"Stop here and tell the operator what you were trying to do "
+                f"and that it is waiting on them. Do NOT retry this call. If "
+                f"the work needs several of these verbs together, call "
+                f"propose_goal once with all of them and a checkable finish "
+                f"line — one card for the whole job beats one per refusal.")
         ctx.setdefault("goals_spent", []).append(
             {"id": goal["id"], "title": goal["title"], "verb": name})
 

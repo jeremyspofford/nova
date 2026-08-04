@@ -72,6 +72,83 @@ async def propose(title: str, target: str, verbs: list[str], *,
     return _row(r)
 
 
+async def pending_for(verb: str, agent_name: Optional[str]) -> Optional[dict]:
+    """A goal already awaiting the operator that would cover `verb`.
+
+    The idempotency the gate needs. Without it a model that retries a refused
+    call — and the refusal text used to ask it to do exactly that — raises a
+    fresh card every attempt, which is how an approval queue becomes noise the
+    operator stops reading.
+    """
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT * FROM goals WHERE status = 'proposed' "
+            "  AND $1 = ANY(approved_verbs) "
+            "  AND proposed_by IS NOT DISTINCT FROM $2 "
+            " ORDER BY created_at DESC LIMIT 1", verb, agent_name)
+    return _row(r) if r else None
+
+
+async def card_for_refusal(verb: str, *, agent_name: Optional[str],
+                           conversation_id: Optional[str] = None,
+                           args: Optional[dict] = None) -> tuple[dict, bool]:
+    """Raise the operator card the gate's refusal used to only ASK for.
+
+    Returns (goal, created). Until now a refusal returned a string telling the
+    model to call `propose_goal` — a prompt doing a control's job, and by the
+    plan's own evidence it did not get called: the refusal dead-ended and left
+    NO operator-visible artifact at all. The gate already knows the verb, the
+    agent, the conversation and the refused arguments, so it can raise the
+    card itself and the operator learns something was attempted.
+
+    The card is honest about where it came from. A goal proposed by the model
+    carries a title and a checkable target it chose; this one has neither, so
+    it says so rather than inventing a finish line. The refused ARGUMENTS are
+    the useful part — "what did it actually try to do" — and they are redacted
+    through the same helper the trace uses, because arguments are exactly
+    where a secret would be.
+    """
+    from app import consents, trace
+    from app.tools import scopes
+
+    existing = await pending_for(verb, agent_name)
+    if existing:
+        return existing, False
+
+    who = agent_name or "An agent"
+    goal = await propose(
+        f"{who} tried to {verb}", "",
+        [verb],
+        rationale=(f"Raised automatically: {who} called `{verb}` with no goal "
+                   f"covering it. It did not propose one itself, so this card "
+                   f"exists in place of a refusal nobody would have seen."),
+        proposed_by=agent_name)
+
+    shown = ""
+    try:
+        # redact_args returns a scrubbed JSON STRING, not a dict — arguments
+        # are exactly where a secret would be, so it goes through the same
+        # scrubber the trace uses rather than being formatted by hand.
+        redacted = trace.redact_args(args or {})
+        if redacted and redacted not in ("{}", ""):
+            shown = f"\n\nIt was called with:\n  {redacted[:400]}"
+    except Exception:  # noqa: BLE001 — the card matters more than its detail
+        log.debug("could not render refused args", exc_info=True)
+
+    effects = "\n".join(f"  • {c}" for c in scopes.consequences([verb]))
+    await consents.create(
+        "goal.activate", goal["id"],
+        (f"{who} tried to use `{verb}` and was refused — nothing has "
+         f"happened.{shown}\n\nApproving this lets it:\n{effects}\n\n"
+         f"Up to {goal['max_actions']} actions, for {DEFAULT_TTL_HOURS} "
+         f"hours. It did not propose a goal of its own, so there is no stated "
+         f"finish line here — approve only if the call above is what you "
+         f"wanted."),
+        requested_by=agent_name or "unknown",
+        conversation_id=conversation_id)
+    return goal, True
+
+
 async def activate(goal_id: str, *, ttl_hours: int = DEFAULT_TTL_HOURS,
                    verbs: Optional[list[str]] = None,
                    max_actions: Optional[int] = None) -> Optional[dict]:
