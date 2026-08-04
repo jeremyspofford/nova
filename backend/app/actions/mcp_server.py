@@ -37,7 +37,16 @@ def describe(doc: McpServerAdd) -> str:
     if doc.headers:
         lines.append("    Headers     " + ", ".join(
             f"{k}: {v}" for k, v in sorted(doc.headers.items())))
-    lines.append(f"    Read-only   {'yes' if doc.read_only else 'no'}")
+    # SAY WHAT READ-ONLY BUYS. It reads like a description of the server and
+    # it is a permission: read-only tools are the one MCP class allowed to run
+    # on a turn that already carries fetched text, so approving this is the
+    # decision that lets them. The operator was agreeing to a word.
+    lines.append(f"    Read-only   {'yes' if doc.read_only else 'no'}"
+                 + ("  — its tools may then run on turns that have already "
+                    "read a web page or a transcript"
+                    if doc.read_only else
+                    "  — its tools are refused on turns that have already "
+                    "read a web page or a transcript"))
     lines.append("    Grants      " + (
         "then grant its tools to " + ", ".join(doc.grant_to)
         if doc.grant_to else
@@ -161,7 +170,14 @@ async def execute(doc: McpServerAdd, rec: dict, *, step) -> dict:
     server = await mcp_servers.create(
         name=doc.name, transport="http", url=doc.url,
         headers=doc.headers, read_only=doc.read_only,
-        created_by="action", tools_hash=approved_hash)
+        created_by="action", tools_hash=approved_hash,
+        # The operator approved the card this is running from — the
+        # worker only claims a run while the recommendation is still
+        # `approved` by `operator`. That decision buys the read-only
+        # taint exemption (mcp_servers.read_only_slugs) and nothing
+        # else: `created_by` stays "action", so egress to private
+        # addresses remains refused.
+        operator_approved=True)
     server_id = server["id"]
     await step("register", "ok", f"server {doc.name} created")
 

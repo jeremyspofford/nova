@@ -24,14 +24,18 @@ log = logging.getLogger(__name__)
 _FIELDS = ("id", "name", "transport", "url", "command", "args", "headers",
            "enabled", "always_inject", "read_only", "tools_hash", "status",
            "status_detail", "last_seen", "created_at", "updated_at",
-           "created_by")
+           "created_by", "operator_approved")
 _EDIT_FIELDS = {"url", "command", "args", "headers", "read_only"}
 # Settable at creation only, and deliberately NOT in _EDIT_FIELDS: a server
 # cannot be laundered from 'action' to 'operator' by a later PATCH, which is
 # what would silence mcp_client's outbound guard. `tools_hash` is here so an
 # action can register a server with the hash of the tool list the operator
 # actually reviewed on the card — see refresh() below.
-_CREATE_ONLY_FIELDS = {"created_by", "tools_hash"}
+# `operator_approved` is here for the same reason `created_by` is: it must
+# not be reachable by PATCH. It records that a human approved the card
+# this server came from, and it buys the read-only taint exemption — so a
+# later edit setting it true would be a server voting itself trusted.
+_CREATE_ONLY_FIELDS = {"created_by", "tools_hash", "operator_approved"}
 _TRANSPORTS = ("http", "stdio")
 
 # A stdio server's `command` is EXECUTED, verbatim, in the mcp-runner
@@ -253,22 +257,28 @@ async def read_only_slugs() -> set[str]:
     effect on the next tool call, not at the next restart. It is one indexed
     lookup on a table with single-digit rows.
 
-    `created_by = 'operator'` is load-bearing, and the docstring said
-    "operator" before the query did. This set is the one class of MCP tool
-    `tools.registry.is_actor()` treats as safe on a TAINTED turn — a turn
-    already carrying fetched text. That was sound while only a person could
-    tick the box. It stopped being sound the moment a model could fill in an
-    `mcp_server.add` plan, because `read_only` is a plain boolean on that
-    form: propose a server with `read_only: true`, and its tools would be
-    exempted from the untrusted-context fence by the model's own say-so.
+    This set is the one class of MCP tool `tools.registry.is_actor()` treats
+    as safe on a TAINTED turn — one already carrying fetched text. A MODEL
+    must not be able to put its own server in it: `read_only` is a plain
+    boolean on the `mcp_server.add` form, so proposing `read_only: true`
+    would otherwise exempt its own tools by its own say-so.
 
-    So the exemption follows WHO DECLARED IT, which is the same provenance
-    test `mcp_client._guard_url` already applies to where a server may dial.
-    An action-created server can still be read-only in every other sense;
-    it just cannot vouch for itself.
+    THE TEST IS THE OPERATOR'S DECISION, NOT WHO WROTE THE ROW. Requiring
+    `created_by = 'operator'` was the first cut and it was too narrow by
+    exactly one case: a server the operator APPROVED. Measured the same day —
+    he approved a card, `context7` installed cleanly, and Nova could not use
+    it, because she had searched the web first and the fence refused a server
+    he had personally said yes to. Approval is now recorded
+    (`operator_approved`, migration 090) and counts.
+
+    Deliberately NOT the same test `mcp_client._guard_url` applies. That one
+    asks whether the server may dial a PRIVATE address and keeps reading
+    `created_by`: approving "add this public server" is not a decision to let
+    it reach the router. One click, one permission.
     """
     async with db.acquire() as conn:
         rows = await conn.fetch(
             "SELECT name FROM mcp_servers "
-            " WHERE read_only AND enabled AND created_by = 'operator'")
+            " WHERE read_only AND enabled "
+            "   AND (created_by = 'operator' OR operator_approved)")
     return {r["name"] for r in rows}

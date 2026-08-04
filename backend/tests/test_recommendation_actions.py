@@ -146,6 +146,30 @@ def test_only_the_operator_can_vouch_for_read_only():
             check("...and one an ACTION created is not, however it declared "
                   "itself — a model cannot vouch for its own server",
                   "scratch-ro-action" not in slugs, str(sorted(slugs)))
+
+            # ...but the operator's APPROVAL does vouch for it. Requiring
+            # created_by='operator' was too narrow by exactly one case, and
+            # it was the case that matters: he approved a card, context7
+            # installed cleanly, and she could not use it on any turn that
+            # had touched the web. Approval is provenance.
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO mcp_servers (name, transport, url, read_only, "
+                    " enabled, created_by, operator_approved) VALUES "
+                    "($1,'http','https://example.com/mcp',true,true,'action',true)",
+                    "scratch-ro-approved")
+            slugs = await mcp_servers.read_only_slugs()
+            check("an action-created server the OPERATOR approved is exempt",
+                  "scratch-ro-approved" in slugs, str(sorted(slugs)))
+            check("...and approval cannot be granted by a later PATCH — it is "
+                  "create-only, or a server could vote itself trusted",
+                  "operator_approved" not in mcp_servers._EDIT_FIELDS
+                  and "operator_approved" in mcp_servers._CREATE_ONLY_FIELDS)
+            # the OTHER permission created_by carries must NOT come with it
+            row = await mcp_servers.get_by_name("scratch-ro-approved")
+            check("...and it still may not dial a private address: approval "
+                  "buys the taint exemption, not LAN egress",
+                  bool(await mcp_client._guard_url(row, "https://localtest.me/mcp")))
         finally:
             async with db.acquire() as conn:
                 await conn.execute(
