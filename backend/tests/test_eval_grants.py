@@ -29,6 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, "/app/backend")
 
+from app.evals import suites  # noqa: E402
+
 SNAPSHOT = Path("/app/backend/app/evals/tasks/granted.json")
 REGENERATE = (
     "docker compose exec -T backend python -c \"...\" "
@@ -124,8 +126,15 @@ async def run() -> None:
     print("3. every agent's toolset matches exactly")
     offline_only: list[str] = []
     for name in sorted(set(live) & set(stored)):
-        added = sorted(set(live[name]) - set(stored[name]))
-        removed = sorted(set(stored[name]) - set(live[name]))
+        # Grants that ARRIVED with an MCP server are not authoring drift.
+        # This snapshot exists to catch a suite author and the database
+        # disagreeing; an operator approving a server changes the live
+        # toolset the same minute and no file can be ahead of that. Excluded
+        # from BOTH sides, so a snapshot that still names a removed server's
+        # tools does not read as a revocation either.
+        dynamic = suites.dynamic_tools(set(live[name]) | set(stored[name]))
+        added = sorted(set(live[name]) - set(stored[name]) - dynamic)
+        removed = sorted(set(stored[name]) - set(live[name]) - dynamic)
         # split the absences: a REVOKED grant is drift and must fail; a tool
         # missing because its server is stopped is a fact about this stack
         # right now and is reported without failing.

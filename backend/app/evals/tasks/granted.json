@@ -48,7 +48,6 @@
     "diagnose",
     "dispatch_to_agent",
     "fetch_url",
-    "find_mcp_tools",
     "get-weather",
     "get_weather",
     "github-profile-fetch",

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app import settings_store, trace
+from app.evals import suites
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.evals.suites import Suite, Task
@@ -150,7 +151,12 @@ def unfixtured_grants(toolset: list[str], task: Task) -> list[str]:
     (which already carries a replay_only_default for exactly this).
     """
     fixtured = {fixtures.load_fixture_file(p).tool for p in task.fixtures}
+    # Dynamic grants (MCP servers approved after this suite was
+    # authored) are replay-only by construction — see
+    # suites.dynamic_tools. Without this, approving one server makes
+    # every run of every suite warn about tools no fixture can cover.
     replay_only = set(task.suite.replay_only_tools)
+    replay_only |= suites.dynamic_tools(toolset)
     loose = sorted(t for t in toolset
                    if t not in fixtured and t not in replay_only
                    and t not in _SANDBOX_SAFE_TOOLS and t != "db:*"

@@ -1016,6 +1016,23 @@ async def _build_system_prompt(agent: dict, query: str, *,
                     "to be agreeable, when the tool is not there, wastes the "
                     "operator's time on work that will never happen."]
             volatile.append("\n".join(block))
+            # ...AND WHAT IS BROKEN ABOUT THAT LIST RIGHT NOW.
+            #
+            # `degraded` was computed, yielded as an activity event and
+            # written to the trace span — so the operator learned that a
+            # grant resolves to nothing or that the model was swapped, and
+            # she never did. She is the one who has to answer for it. Placed
+            # immediately after the closed-world block because that is what
+            # it qualifies: a tool named in a COMPLETE list that cannot
+            # actually run is the one case that block gets wrong.
+            if degraded:
+                volatile.append(
+                    "## Not working right now\n"
+                    + "\n".join(f"- {d}" for d in degraded)
+                    + "\nThese are real and current. If one of them explains "
+                      "why you cannot do what was asked, say so plainly and "
+                      "name it — do not work around it silently, and do not "
+                      "claim the capability the list above implies you have.")
         # channel register: the caller's suffix (voice) or the typed default
         volatile.append(system_suffix or _TYPED_REGISTER)
     else:

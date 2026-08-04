@@ -15,7 +15,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,37 @@ class Task:
     @property
     def ref(self) -> str:
         return f"{self.suite.name}/{self.id}"
+
+
+def dynamic_tools(granted: "Iterable[str]") -> set[str]:
+    """Granted tools a suite FILE could never have anticipated.
+
+    A suite is authored once and its fixtures with it. MCP tools arrive
+    afterwards — the operator approves a recommendation, a server registers,
+    and its tools land in an agent's grants the same minute. No `fixtures/`
+    entry can exist for them, and the harness cannot execute them in replay,
+    so they are replay-only by construction rather than by somebody
+    remembering to list them.
+
+    `find_mcp_tools` is here for the same reason at one remove: the registry
+    offers it only when the agent has a lazily-granted MCP server, so it
+    appears and disappears with them.
+
+    THIS EXISTS BECAUSE THE ALTERNATIVE WAS A HUMAN. Approving one MCP
+    recommendation on 2026-08-04 reddened two guards — the grant snapshot no
+    longer matched live grants, and three tools were granted with no way to
+    answer them — and both were cleared by hand-editing granted.json and
+    suite.json. That is a maintenance debt the approve-a-recommendation loop
+    creates every time it succeeds and cannot discharge itself. Derived here,
+    it never accrues.
+    """
+    out = set()
+    for name in granted or ():
+        if name.startswith("mcp:") or name.startswith("mcp__"):
+            out.add(name)
+        elif name == "find_mcp_tools":
+            out.add(name)
+    return out
 
 
 def list_suites(root: Path = TASKS_ROOT) -> list[str]:

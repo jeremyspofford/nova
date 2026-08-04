@@ -63,7 +63,13 @@ async def audit() -> dict[str, list[str]]:
                 for d in await tool_registry.get_agent_tools(agent))
             # Three legitimate ways a call gets an answer.
             covered = (set(suite.replay_only_tools) | set(suite.exclude_tools)
-                       | set(fx.LIVE_OK))
+                       | set(fx.LIVE_OK)
+                       # ...and everything a suite file could not have known
+                       # about: MCP tools arrive when the operator approves a
+                       # server, long after the fixtures were written. Derived,
+                       # so an install never reds this guard and never needs a
+                       # human to edit a JSON file to clear it.
+                       | suite_mod.dynamic_tools(granted))
             for task in suite_mod.load_tasks(suite):
                 for path in task.fixtures:
                     try:
