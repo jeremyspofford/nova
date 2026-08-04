@@ -927,6 +927,41 @@ export interface RecCard {
   priority: number;
   created_at: string | null;
   decided_at: string | null;
+  /** The typed plan, if the card carries one. Rendered from `action_plan`,
+   *  never from these raw fields — the backend is the only thing allowed to
+   *  say what Approve does, so the card and the executor cannot disagree. */
+  action: Record<string, unknown> | null;
+  action_plan: string | null;
+  /** Whether an executor exists for this plan type yet. DERIVED from the
+   *  backend's Spec table, so the button never promises more than the code
+   *  can do. False until the phase-2 executors land. */
+  action_executable: boolean;
+  /** Echoed back on decide. A card whose plan changed since it was rendered
+   *  is a 409, not a surprise execution. */
+  action_digest: string | null;
+  /** The backend's verdict from actually dialling the plan's endpoint. */
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
+  /** The tool list the preflight fetched — the descriptions that will land in
+   *  the granted agent's prompt. Shown on the card BEFORE the click, because
+   *  one-click grant is only honest if you saw them. */
+  action_tools: { name: string; description: string }[] | null;
+  /** The latest run of this card's action, once approved. */
+  run: ActionRun | null;
+}
+
+export interface ActionRun {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  steps: { step: string; status: string; detail: string }[];
+  result: {
+    server_id?: string; name?: string; tools?: string[];
+    granted?: Record<string, string[]>;
+  } | null;
+  error: string | null;
+  created_at: string | null;
+  finished_at: string | null;
 }
 
 /** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
@@ -936,14 +971,41 @@ export async function getRecCards(status: 'new' | 'all' = 'new'): Promise<RecCar
   return r.json();
 }
 
+/** `digest` is the plan the UI actually rendered. The backend compares it
+ *  against the live row inside the same transaction that flips the status, so
+ *  a plan rewritten between render and click is a 409 rather than a surprise
+ *  execution. Omitting it on a card that has a plan fails closed. */
 export async function decideRecCard(
-  id: string, choice: 'approve' | 'later' | 'dismiss'): Promise<RecCard> {
+  id: string, choice: 'approve' | 'later' | 'dismiss',
+  digest?: string | null): Promise<RecCard> {
   const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/decide`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify({ choice, action_digest: digest ?? null }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'decide failed');
+  return r.json();
+}
+
+/** Re-queue a failed run. The card's `Run again` button. */
+export async function rerunRecAction(id: string): Promise<RecCard> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/run`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'run failed');
+  return r.json();
+}
+
+export interface PreflightResult {
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
+}
+
+/** Re-dial the card's endpoint. The only path that sends the plan's headers. */
+export async function preflightRecCard(id: string): Promise<PreflightResult> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/preflight`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'preflight failed');
   return r.json();
 }
 

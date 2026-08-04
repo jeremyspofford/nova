@@ -209,6 +209,18 @@ async def spend(verb: str, *, agent_name: Optional[str] = None) -> Optional[dict
 
     Oldest active goal first, so a long-running goal is not starved by a
     newer one that happens to share a verb.
+
+    BOUND TO THE ASKER. Until 2026-08-04 the match was on VERB ALONE —
+    `agent_name` was accepted and then used only in the log line below. So an
+    approval the operator granted to one agent in chat was spendable by every
+    other agent and by every scheduled automation, silently, for its whole
+    72-hour TTL. `pending_for` had always matched on `proposed_by`; `spend`,
+    the control, had not. A goal now charges only for the agent that proposed
+    it.
+
+    A goal with `proposed_by IS NULL` is one the operator created himself
+    rather than one an agent asked for, so it stays spendable by anyone —
+    that is a deliberate grant, not a leak.
     """
     async with db.acquire() as conn:
         r = await conn.fetchrow(
@@ -218,11 +230,13 @@ async def spend(verb: str, *, agent_name: Optional[str] = None) -> Optional[dict
                   SELECT id FROM goals
                    WHERE status = 'active'
                      AND $1 = ANY(approved_verbs)
+                     AND (proposed_by IS NULL
+                          OR proposed_by IS NOT DISTINCT FROM $2)
                      AND actions_used < max_actions
                      AND (expires_at IS NULL OR expires_at > now())
                    ORDER BY activated_at
                    LIMIT 1 FOR UPDATE SKIP LOCKED)
-            RETURNING *""", verb)
+            RETURNING *""", verb, agent_name)
     if r:
         log.info("Goal action spent: %s on '%s' by %s (%d/%d)", verb,
                  r["title"], agent_name, r["actions_used"], r["max_actions"])

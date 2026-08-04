@@ -59,6 +59,11 @@ def _refuse_split_state() -> None:
 async def lifespan(app: FastAPI):
     log.info("Starting Nova backend...")
     _refuse_split_state()
+    # An action type whose operator route has been renamed or deleted is a
+    # capability the model can reach and the operator cannot. Refuse to boot
+    # rather than let that rule rot into a comment.
+    from app import actions
+    actions.assert_routes_exist()
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()
@@ -78,6 +83,13 @@ async def lifespan(app: FastAPI):
     from app import bg, eval_runs
     bg.spawn(eval_runs.reconcile_orphans(delay_s=eval_runs.STALE_AFTER_S + 15),
              name="eval-orphan-reap")
+    # Same failure, different table: a process dying mid-register leaves an
+    # action run reading as in-flight forever. Eager and awaited, unlike the
+    # eval reaper above — an action run only ever executes on the leader, in
+    # THIS process, so a row still 'running' at boot cannot be alive
+    # elsewhere and there is no heartbeat window to wait out.
+    from app import action_worker
+    await action_worker.reset_orphans()
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.
@@ -86,11 +98,13 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())
+    action_task = asyncio.create_task(action_worker.loop())
     provider_health_task = asyncio.create_task(providers.health_loop())
     log.info("Backend ready")
     yield
     log.info("Shutting down...")
-    for task in (scheduler_task, warmer_task, ingest_task, provider_health_task):
+    for task in (scheduler_task, warmer_task, ingest_task, action_task,
+                 provider_health_task):
         task.cancel()
         try:
             await task
