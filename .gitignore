@@ -27,3 +27,10 @@ tools/wake-training/data/
 
 # ServiceAccount credential for Nova's runtime (workloads/setup.sh writes it)
 data/runtime/
+
+# uv's lockfile. Nothing builds from it — no Dockerfile, compose
+# service or Makefile target runs uv, and pyproject has no [tool.uv].
+# Committing a lockfile the build ignores is a second dependency
+# statement that drifts silently from the one pip actually reads.
+# Kept on disk, out of git, until something consumes it.
+backend/uv.lock

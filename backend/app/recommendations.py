@@ -117,14 +117,40 @@ async def create(kind: str, title: str, body: str, *, source: str,
                 "priority) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
                 kind, title, body, source, action_json, priority)
         else:
-            # refresh the live row; never resurrect a decided/dismissed one
+            # Refresh the live row; never resurrect a decided/dismissed one.
+            #
+            # A CHANGED PLAN LOSES ITS VERDICT. This used to rewrite `action`
+            # and leave `action_state`, `action_detail`, `action_tools` and
+            # `action_checked_at` describing the SUPERSEDED one — so between
+            # a re-raise and the re-spawned preflight finishing, the card
+            # showed plan B carrying plan A's `ready` and plan A's reviewed
+            # tool list. It fails closed if approved in that window (the
+            # executor's digest and tool-hash compares both refuse), so this
+            # is not a hole; it is the card stating something that is not
+            # true, which is the thing this lane exists to prevent.
+            #
+            # Only when the plan actually differs: an unchanged re-raise
+            # keeps its verdict rather than blanking a good one and making
+            # the operator wait out a preflight for no reason.
             r = await conn.fetchrow(
                 "INSERT INTO recommendations (kind, title, body, source, action, "
                 "priority, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6,$7) "
                 "ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL "
                 "DO UPDATE SET title=EXCLUDED.title, body=EXCLUDED.body, "
                 "  source=EXCLUDED.source, action=EXCLUDED.action, "
-                "  priority=EXCLUDED.priority, status='new', created_at=now() "
+                "  priority=EXCLUDED.priority, status='new', created_at=now(), "
+                "  action_state = CASE WHEN recommendations.action "
+                "      IS DISTINCT FROM EXCLUDED.action THEN 'none' "
+                "      ELSE recommendations.action_state END, "
+                "  action_detail = CASE WHEN recommendations.action "
+                "      IS DISTINCT FROM EXCLUDED.action THEN NULL "
+                "      ELSE recommendations.action_detail END, "
+                "  action_tools = CASE WHEN recommendations.action "
+                "      IS DISTINCT FROM EXCLUDED.action THEN NULL "
+                "      ELSE recommendations.action_tools END, "
+                "  action_checked_at = CASE WHEN recommendations.action "
+                "      IS DISTINCT FROM EXCLUDED.action THEN NULL "
+                "      ELSE recommendations.action_checked_at END "
                 "WHERE recommendations.status = ANY($8) RETURNING *",
                 kind, title, body, source, action_json, priority, dedupe_key,
                 list(_ACTIONABLE))
