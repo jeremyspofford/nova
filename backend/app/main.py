@@ -59,6 +59,11 @@ def _refuse_split_state() -> None:
 async def lifespan(app: FastAPI):
     log.info("Starting Nova backend...")
     _refuse_split_state()
+    # An action type whose operator route has been renamed or deleted is a
+    # capability the model can reach and the operator cannot. Refuse to boot
+    # rather than let that rule rot into a comment.
+    from app import actions
+    actions.assert_routes_exist()
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()

@@ -3,80 +3,31 @@
 Security model (single-operator, localhost-bound v1):
 - http/https only, GET only, 20s budget, 200KB raw cap, 3 redirect hops max.
 - Before every request (including each redirect hop) the hostname is resolved
-  and ALL addresses must be globally routable (`is_public_address`). This is
-  an allow-list on purpose — the deny-list it replaced missed CGNAT
-  (100.64.0.0/10), i.e. the whole tailnet.
-- Residual risk, documented deliberately: we resolve-then-connect, so a
-  hostile DNS server flipping records between check and connect (DNS
-  rebinding) could theoretically bypass the guard. Acceptable at this trust
-  level; revisit with a pinned-IP transport if Nova is ever exposed.
+  and ALL addresses must be globally routable. That guard now lives in
+  `app.net_guard` — it acquired three more callers (media_client, the
+  recommendation-action preflight, the MCP client) and one copy is the
+  point. The names are re-exported here so this module reads as it did.
 """
 
 import asyncio
-import ipaddress
 import logging
 import re
-import socket
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.net_guard import is_public_address, validate_target as _validate_target
+
 log = logging.getLogger(__name__)
+
+__all__ = ["is_public_address", "_validate_target", "fetch_url", "TIMEOUT_S"]
 
 TIMEOUT_S = 20.0
 MAX_RAW_BYTES = 200_000
 MAX_TEXT_CHARS = 15_000
 MAX_REDIRECTS = 3
 USER_AGENT = "Nova/0.1 (+local knowledge ingestion)"
-
-
-async def _validate_target(url: str) -> str | None:
-    """Return an error string if the URL must not be fetched, else None."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return f"scheme '{parsed.scheme}' is not allowed (http/https only)"
-    host = parsed.hostname
-    if not host:
-        return "URL has no hostname"
-
-    try:
-        loop = asyncio.get_running_loop()
-        infos = await loop.run_in_executor(
-            None, lambda: socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP))
-    except socket.gaierror as e:
-        return f"cannot resolve host '{host}': {e}"
-
-    for info in infos:
-        if not is_public_address(info[4][0]):
-            log.warning("SSRF guard refused %s (resolves to %s)", url, info[4][0])
-            return (f"host '{host}' resolves to a non-public address "
-                    f"({info[4][0]}) — fetching internal/private targets is "
-                    f"not allowed")
-    return None
-
-
-def is_public_address(raw_ip: str) -> bool:
-    """Allow-list, not deny-list: only globally routable addresses pass.
-
-    The old deny-list (private/loopback/link-local/reserved/multicast/
-    unspecified) silently missed 100.64.0.0/10 — CGNAT, which is exactly
-    Tailscale's range — because CPython's ipaddress classifies it as none of
-    those, only as `not is_global`. With the tailscale profile running that
-    left every peer on the tailnet (phones, laptops, the pi) fetchable by the
-    model. `is_global` covers that block, everything the deny-list had, and
-    any future reserved range without another audit.
-
-    Two wrinkles it does not cover on its own: some multicast is is_global,
-    and an IPv4-mapped/NAT64 v6 address reports on the v6 wrapper rather
-    than the v4 target it reaches, so both are unwrapped first."""
-    ip = ipaddress.ip_address(raw_ip)
-    if getattr(ip, "ipv4_mapped", None):
-        ip = ip.ipv4_mapped
-    elif ip.version == 6 and ip in ipaddress.ip_network("64:ff9b::/96"):
-        # NAT64: the low 32 bits are the real IPv4 destination
-        ip = ipaddress.ip_address(int(ip) & 0xFFFFFFFF)
-    return ip.is_global and not ip.is_multicast
 
 
 class _TextExtractor(HTMLParser):

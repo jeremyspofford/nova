@@ -23,8 +23,13 @@ log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "name", "transport", "url", "command", "args", "headers",
            "enabled", "always_inject", "read_only", "tools_hash", "status",
-           "status_detail", "last_seen", "created_at", "updated_at")
+           "status_detail", "last_seen", "created_at", "updated_at",
+           "created_by")
 _EDIT_FIELDS = {"url", "command", "args", "headers", "read_only"}
+# Settable at creation only, and deliberately NOT in _EDIT_FIELDS: a server
+# cannot be laundered from 'action' to 'operator' by a later PATCH, which is
+# what would silence mcp_client's outbound guard.
+_CREATE_ONLY_FIELDS = {"created_by"}
 _TRANSPORTS = ("http", "stdio")
 
 # A stdio server's `command` is EXECUTED, verbatim, in the mcp-runner
@@ -108,7 +113,8 @@ async def create(name: str, transport: str, **fields) -> dict:
         if not str(fields.get("command") or "").strip():
             raise ValueError("command is required for stdio transport")
         _check_stdio_command(str(fields["command"]))
-    fields = {k: v for k, v in fields.items() if k in _EDIT_FIELDS}
+    fields = {k: v for k, v in fields.items()
+              if k in _EDIT_FIELDS or k in _CREATE_ONLY_FIELDS}
     if "headers" in fields:
         fields["headers"] = json.dumps(fields["headers"] or {})
     cols = ["name", "transport"] + list(fields)
@@ -121,7 +127,8 @@ async def create(name: str, transport: str, **fields) -> dict:
                 f"VALUES ({placeholders}) RETURNING *", *vals)
         except Exception as e:  # unique name violation etc.
             raise ValueError(f"could not create server: {e}")
-    log.info("MCP server registered by operator: %s (%s)", name, transport)
+    log.info("MCP server registered by %s: %s (%s)",
+             fields.get("created_by") or "operator", name, transport)
     return _row(r)
 
 

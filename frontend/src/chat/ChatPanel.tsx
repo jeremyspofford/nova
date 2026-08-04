@@ -17,6 +17,7 @@ import {
   getRecCards,
   listCommands,
   patchAgent,
+  preflightRecCard,
   runCommand,
   streamChat,
   uploadAttachment,
@@ -134,6 +135,69 @@ async function toBase64(f: File): Promise<string> {
 const emitListening = (on: boolean) =>
   window.dispatchEvent(new CustomEvent('nova:chat-activity',
     { detail: { active: on, kind: 'listening' } }));
+
+/** What the Approve button on a recommendation card is allowed to promise.
+ *
+ *  Derived from the card, never assumed. A card with no plan approves to a
+ *  recorded decision and says so; a card whose plan has no executor yet says
+ *  that too. The label upgrades itself when the backend's Spec gains an
+ *  execute function — no edit here. */
+const approveLabel = (r: RecCard) =>
+  r.action_executable && r.action_state === 'ready' ? 'Approve & install' : 'Approve';
+
+/** The plan block: the authoritative statement of what Approve does.
+ *
+ *  Rendered from `action_plan`, which the BACKEND builds from the same
+ *  parsed document an executor would receive — never from `body`, which is
+ *  prose the model wrote. Same reasoning as the consent card's rule block:
+ *  the agent cannot word its way around this. */
+function RecPlan({ rec, onTest, testing }: {
+  rec: RecCard; onTest: () => void; testing: boolean;
+}) {
+  if (!rec.action_plan) {
+    return (
+      <div className="mt-1.5 text-[11px] text-stone-500">
+        No action plan on this card. Approving records your decision only.
+      </div>
+    );
+  }
+  const blocked = rec.action_state === 'blocked';
+  const ready = rec.action_state === 'ready';
+  return (
+    <div className={`mt-1.5 rounded border px-2 py-1.5 space-y-1 ${
+      blocked ? 'border-red-900/60 bg-red-950/20'
+        : ready ? 'border-teal-900/50 bg-teal-950/20'
+          : 'border-stone-700 bg-stone-900/60'}`}>
+      <div className="text-[10px] uppercase tracking-wide text-stone-500">
+        {rec.action_executable ? 'What Approve will do' : 'Proposed action'}
+      </div>
+      <pre className="text-[11px] text-stone-300 font-mono whitespace-pre-wrap break-all leading-snug">
+        {rec.action_plan}
+      </pre>
+      {rec.action_state === 'none' ? (
+        <div className="text-[11px] text-stone-500">Checking the endpoint…</div>
+      ) : (
+        <div className={`text-[11px] ${blocked ? 'text-red-300' : 'text-teal-300'}`}>
+          {blocked ? 'This cannot run. ' : 'Endpoint answered. '}
+          {rec.action_detail}
+        </div>
+      )}
+      {/* Until an executor exists, say plainly that approving executes
+          nothing. This sentence disappears by itself when it stops being
+          true, because action_executable is derived. */}
+      {!rec.action_executable && (
+        <div className="text-[11px] text-amber-400/90">
+          No executor is installed for this plan yet — approving records your
+          decision and nothing is registered.
+        </div>
+      )}
+      <button onClick={onTest} disabled={testing}
+        className="text-[10px] px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-100 disabled:opacity-50">
+        {testing ? 'Testing…' : 'Test again'}
+      </button>
+    </div>
+  );
+}
 
 function renderItem(item: Item, onInspect?: (traceId: string) => void,
                     onConsent?: OnConsent, mobile?: boolean) {
@@ -1521,6 +1585,24 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     }
   }
 
+  // Re-dial the card's endpoint on demand. This is the path that sends the
+  // plan's headers; the automatic preflight at raise time does not.
+  const [testingRec, setTestingRec] = useState<string | null>(null);
+  async function testRec(rec: RecCard) {
+    setTestingRec(rec.id);
+    try {
+      const res = await preflightRecCard(rec.id);
+      const merge = (r: RecCard) => r.id === rec.id ? { ...r, ...res } : r;
+      setRecs(prev => prev.map(merge));
+      setInbox(prev => prev && prev.map(merge));
+    } catch {
+      void loadRecs();
+      if (inboxOpen) void loadInbox();
+    } finally {
+      setTestingRec(null);
+    }
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -2185,9 +2267,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                   <Markdown>{r.body}</Markdown>
                 </div>
                 {open(r) && (
+                  <RecPlan rec={r} onTest={() => testRec(r)} testing={testingRec === r.id} />
+                )}
+                {open(r) && (
                   <div className="flex gap-2 mt-1.5">
                     <button onClick={() => decideRec(r, 'approve')}
-                      className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">Approve</button>
+                      className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">{approveLabel(r)}</button>
                     {r.status !== 'later' && (
                       <button onClick={() => decideRec(r, 'later')}
                         className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
@@ -2247,9 +2332,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             <div className="text-xs text-stone-400 mt-0.5 [&_p]:my-0.5 [&_a]:text-teal-400">
               <Markdown>{recs[0].body}</Markdown>
             </div>
+            <RecPlan rec={recs[0]} onTest={() => testRec(recs[0])}
+              testing={testingRec === recs[0].id} />
             <div className="flex gap-2 mt-1.5">
               <button onClick={() => decideRec(recs[0], 'approve')}
-                className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">Approve</button>
+                className="text-xs px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-600 text-white">{approveLabel(recs[0])}</button>
               <button onClick={() => decideRec(recs[0], 'later')}
                 className="text-xs px-2.5 py-1 rounded border border-stone-600 text-stone-300 hover:text-stone-100">Later</button>
               <button onClick={() => decideRec(recs[0], 'dismiss')}

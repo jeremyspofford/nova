@@ -927,6 +927,22 @@ export interface RecCard {
   priority: number;
   created_at: string | null;
   decided_at: string | null;
+  /** The typed plan, if the card carries one. Rendered from `action_plan`,
+   *  never from these raw fields — the backend is the only thing allowed to
+   *  say what Approve does, so the card and the executor cannot disagree. */
+  action: Record<string, unknown> | null;
+  action_plan: string | null;
+  /** Whether an executor exists for this plan type yet. DERIVED from the
+   *  backend's Spec table, so the button never promises more than the code
+   *  can do. False until the phase-2 executors land. */
+  action_executable: boolean;
+  /** Echoed back on decide. A card whose plan changed since it was rendered
+   *  is a 409, not a surprise execution. */
+  action_digest: string | null;
+  /** The backend's verdict from actually dialling the plan's endpoint. */
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
 }
 
 /** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
@@ -944,6 +960,20 @@ export async function decideRecCard(
     body: JSON.stringify({ choice }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'decide failed');
+  return r.json();
+}
+
+export interface PreflightResult {
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
+}
+
+/** Re-dial the card's endpoint. The only path that sends the plan's headers. */
+export async function preflightRecCard(id: string): Promise<PreflightResult> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/preflight`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'preflight failed');
   return r.json();
 }
 

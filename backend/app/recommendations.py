@@ -11,6 +11,7 @@ duplicates — and never resurrects one the operator already dismissed
 (docs/plans/recommendation-surface.md).
 """
 
+import hashlib
 import json
 import logging
 import uuid as uuid_mod
@@ -26,15 +27,43 @@ _CHOICE = {"approve": "approved", "later": "later",
            "dismiss": "dismissed", "done": "done"}
 
 _FIELDS = ("id", "kind", "title", "body", "source", "status", "action",
-           "priority", "dedupe_key", "created_at", "decided_at", "decided_by")
+           "priority", "dedupe_key", "created_at", "decided_at", "decided_by",
+           "action_state", "action_detail", "action_checked_at")
+
+
+def action_digest(action: Optional[dict]) -> Optional[str]:
+    """Fingerprint of the plan, DERIVED on every read and never stored.
+
+    It exists so that what the operator approves is what runs. `create()`'s
+    ON CONFLICT branch rewrites a live card's action in place, so the weekly
+    discovery automation can change a plan between the moment the card was
+    rendered and the moment the button is clicked. The frontend echoes this
+    digest back with the decision and `decide()` compares; a mismatch is a
+    409, not an execution.
+
+    Never stored, because a stored copy is a second source of truth that can
+    drift from the column it describes. Never accepted from the client for
+    anything except comparison.
+    """
+    if action is None:
+        return None
+    material = json.dumps(action, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def _row(r) -> dict:
-    d = {k: r[k] for k in _FIELDS}
+    d = {k: r[k] for k in _FIELDS if k in r}
     d["id"] = str(d["id"])
     d["action"] = json.loads(d["action"]) if isinstance(d["action"], str) else d["action"]
-    for k in ("created_at", "decided_at"):
-        d[k] = str(d[k]) if d[k] else None
+    for k in ("created_at", "decided_at", "action_checked_at"):
+        d[k] = str(d[k]) if d.get(k) else None
+    d["action_digest"] = action_digest(d["action"])
+    # Rendered here, not in the frontend: the card and the executor must not
+    # be able to disagree about what Approve does, and they cannot disagree
+    # if only one of them is allowed to describe the plan.
+    from app import actions
+    d["action_plan"] = actions.describe(d["action"])
+    d["action_executable"] = actions.is_executable(d["action"])
     return d
 
 
@@ -42,6 +71,13 @@ async def create(kind: str, title: str, body: str, *, source: str,
                  action: Optional[dict] = None, priority: int = 0,
                  dedupe_key: Optional[str] = None) -> dict:
     dedupe_key = (dedupe_key or "").strip() or None
+    if action is not None:
+        # THE DOOR IN. A plan that does not typecheck never becomes a card,
+        # and the ValueError text names the field — so a model that got it
+        # wrong is told which field and why, in the same turn, and can
+        # re-raise against the same dedupe key.
+        from app import actions
+        actions.parse(action)
     action_json = json.dumps(action) if action is not None else None
     async with db.acquire() as conn:
         # fatigue guard: an agent hammering out cards is broken or being steered
@@ -83,6 +119,12 @@ async def create(kind: str, title: str, body: str, *, source: str,
             await notify.send(body[:140], title=f"Nova recommends: {title}"[:90],
                               tags=["bulb"], click="/chat?inbox=open")
         bg.spawn(_ping(), name="recommendation-ping")
+    # Check the plan against the network NOW, so a card whose endpoint does
+    # not answer arrives already marked blocked with the reason on it. The
+    # model's confidence about a URL is not evidence; this is.
+    if row["status"] == "new" and row["action"] is not None:
+        from app import actions
+        bg.spawn(actions.preflight(row["id"]), name="action-preflight")
     return row
 
 
