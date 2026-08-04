@@ -2140,7 +2140,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # been done, this is a FACT ABOUT THE STACK that nothing established.
     # Gated on tools CALLED, not granted: holding service_status and reaching
     # for search_memory instead is the measured behaviour it exists for.
-    service_claim = service_claims.detect(final_text, called_names)
+    service_claim = service_claims.detect(final_text, called_names, query)
     if service_claim:
         svc, matched = service_claim
         yield {"type": "activity", "kind": "service_claim",

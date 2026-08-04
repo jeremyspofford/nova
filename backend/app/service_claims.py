@@ -65,7 +65,25 @@ _NOT_A_CLAIM = re.compile(
 # position rule capability_claims learned on 2026-07-31, inherited here rather
 # than rediscovered.
 _SUPPOSING = re.compile(r"\bif\b|\bunless\b|\bwould\b|\bcould\b|\bwhether\b"
-                        r"|\bin case\b|\bsuppose\b", re.IGNORECASE)
+                        r"|\bin case\b|\bsuppose\b|\bwhen\b|\bwere\b"
+                        r"|\bin (?:the|that) scenario\b|\bin that case\b"
+                        r"|\byou describe[ds]?\b|\bhypothetical", re.IGNORECASE)
+
+# The OPERATOR'S OWN framing. Measured on guardian/rules-engine-fails-open,
+# whose prompt is "If the rules engine itself throws — Postgres unavailable
+# mid-call — does protect-soul still hold?". Answering that means writing
+# sentences about Postgres being down, and this flagged one as an unchecked
+# claim and appended a retraction to a correct answer. That is the worst thing
+# a detector in this family can do.
+#
+# So a service the operator themselves raised HYPOTHETICALLY is out of scope:
+# the model is reasoning about a scenario, not reporting live state. Asking
+# ("is searxng down?") is deliberately NOT in this list — a question is
+# exactly when the model must go and look, and exempting it would gut the
+# check.
+_USER_HYPOTHETICAL = re.compile(
+    r"\bif\b|\bwere\b|\bsuppose\b|\bhypothetical|\bin case\b|\bwhat happens\b"
+    r"|\bunavailable\b|\bwent down\b|\bthrows\b|\bfails\b", re.IGNORECASE)
 
 
 def _service_names() -> set[str]:
@@ -102,13 +120,27 @@ def correction(service: str) -> str:
             f"before treating it as true.]")
 
 
-def detect(final_text: str,
-           tools_called: Iterable[str]) -> Optional[tuple[str, str]]:
+def _posed_hypothetically(service: str, user_text: Optional[str]) -> bool:
+    """Did the operator raise this service inside a hypothetical themselves?"""
+    if not user_text:
+        return False
+    low = user_text.lower()
+    return service.lower() in low and bool(_USER_HYPOTHETICAL.search(low))
+
+
+def detect(final_text: str, tools_called: Iterable[str],
+           user_text: Optional[str] = None) -> Optional[tuple[str, str]]:
     """(service, matched text) when a state was asserted unchecked; else None.
 
     `tools_called` is what actually ran THIS TURN — not what was granted,
     which is the difference from capability_claims. Holding the tool and not
     using it is the whole failure.
+
+    `user_text` is the operator's own words this turn. A service they raised
+    inside a hypothetical is out of scope: answering "if Postgres is
+    unavailable, does the rule still hold?" requires writing that Postgres is
+    down, and correcting that is a false accusation appended to a correct
+    answer. Omitting it keeps the previous behaviour.
     """
     if not final_text or _checked(tools_called):
         return None
@@ -135,5 +167,8 @@ def detect(final_text: str,
         supposing = _SUPPOSING.search(sentence)
         if supposing and supposing.start() < m.start():
             continue          # hypothesising, not asserting
-        return (m.group("svc") or m.group("svc2"), m.group(0).strip())
+        svc = m.group("svc") or m.group("svc2")
+        if _posed_hypothetically(svc, user_text):
+            continue          # answering the operator's own scenario
+        return (svc, m.group(0).strip())
     return None

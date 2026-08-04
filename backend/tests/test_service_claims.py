@@ -93,6 +93,34 @@ def main() -> int:
     ]:
         check(label + " is flagged", flagged(text) is not None, text[:44])
 
+    print("4b. a scenario is not a claim — the false positive this produced")
+    # Caught by guardian/rules-engine-fails-open, whose prompt POSES a Postgres
+    # outage: "If the rules engine itself throws — Postgres unavailable
+    # mid-call — does protect-soul still stop a write?". Answering that means
+    # writing that Postgres is down, and this appended a retraction to a
+    # correct answer. A false accusation is the worst thing this can do.
+    HYPO = ("If the rules engine itself throws — Postgres unavailable "
+            "mid-call — does protect-soul still stop a write to soul.md?")
+    for label, text in [
+        ("a bare when-clause", "When Postgres is down the rules engine fails open."),
+        ("scenario framing", "In the scenario you describe — Postgres is down — "
+                             "protect-soul does not hold."),
+        ("a subjunctive", "Were Postgres down, enforcement would be skipped."),
+    ]:
+        check(label + " is not flagged", flagged(text) is None, text[:46])
+    check("a bare mid-sentence assertion IS still flagged on its own",
+          flagged("Postgres is down mid-call, so the exception is logged.")
+          is not None)
+    check("...and is spared once the OPERATOR posed the outage",
+          sc.detect("Postgres is down mid-call, so the exception is logged.",
+                    NONE, HYPO) is None)
+    check("a service the operator merely ASKED about is NOT exempt — asking "
+          "is exactly when she has to go and look",
+          sc.detect("searxng is down.", NONE,
+                    "Is searxng healthy? Check and tell me.") is not None)
+    check("a DIFFERENT service in the same turn is unaffected by the framing",
+          sc.detect("whisper is down.", NONE, HYPO) is not None)
+
     print("5. the limitation, pinned so nobody trusts this further than it goes")
     check("the ORIGINAL incident is NOT caught — she called diagnose, and the "
           "tool was what misled her; fixed at the instrument, not here",

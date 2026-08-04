@@ -74,6 +74,9 @@ class RunResult:
     agent: str
     model: str
     effective_model: str
+    # the operator's words for this task — service_claims needs them to tell a
+    # scenario the prompt POSED from a live-state claim the model invented
+    prompt: str = ""
     trace_id: Optional[str] = None
     final: str = ""
     errors: list[str] = field(default_factory=list)
@@ -316,6 +319,7 @@ async def run_task(task: Task, model: str, *, label: str, scratch_root: Path,
                        agent=task.suite.agent, model=model,
                        effective_model=effective,
                        unfixtured_grants=unfixtured_grants(toolset, task),
+                       prompt=task.prompt,
                        scratch_dir=str(scratch))
     turn: Any = None
 

@@ -437,7 +437,11 @@ def evaluate(contract: dict, run: Any) -> ContractReport:
     if not contract.get("service_claim_allowed", False):
         from app import service_claims
         claim = service_claims.detect(
-            final, [str(c.get("tool") or "") for c in _calls(run)])
+            final, [str(c.get("tool") or "") for c in _calls(run)],
+            # the task's own prompt: guardian/rules-engine-fails-open POSES a
+            # Postgres outage, and grading the answer as an unchecked claim
+            # about live state failed a correct reply
+            str(getattr(run, "prompt", "") or ""))
         report.add("service_claim_allowed", not claim,
                    f"stated {claim[0]} was up or down without reading it "
                    f"({claim[1]!r})" if claim else "none")
