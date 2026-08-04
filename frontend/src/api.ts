@@ -1424,6 +1424,38 @@ export async function getEvalRuns(limit = 8): Promise<EvalRun[]> {
   return (await r.json()).runs;
 }
 
+/** "If you had to keep one local model, which one" — across suites, not one.
+ *
+ *  `basis` is the load-bearing field: the suites that can tell two models
+ *  apart. A row is only `ranked` if it was measured across ALL of it, so a
+ *  model measured once cannot outrank one measured eight times — an unranked
+ *  row carries `covered` instead and its totals are 0. `leader` is null on a
+ *  tie AND whenever nothing is comparable; the panel must render that as
+ *  "not comparable yet", never as a default winner. */
+export interface EvalStandings {
+  min_repeat: number;
+  installed: string[];
+  basis: string[];
+  comparable: boolean;
+  table: {
+    model: string;
+    ranked: boolean;
+    passed: number;
+    total: number;
+    pass_rate: number | null;
+    suites: number;
+    covered: string[];
+  }[];
+  missing: { suite: string; model: string }[];
+  leader: string | null;
+}
+
+export async function getEvalStandings(): Promise<EvalStandings> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/standings`);
+  if (!r.ok) throw new Error('Failed to load standings');
+  return r.json();
+}
+
 /** Start a run. 409 means one is already going — the backend allows one at a
  *  time, and the message says which. */
 export async function startEvalRun(
