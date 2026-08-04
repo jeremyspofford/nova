@@ -158,20 +158,32 @@ async def run() -> None:
           r.returns_untrusted("something-nobody-registered"))
 
     print("7. the fence fires once a turn has been tainted mid-flight")
-    # manage_automations is BOTH actor and goal-scoped, so it is refused on a
-    # clean turn too — by the goal gate, with different wording. The point
-    # here is WHICH refusal fires, not that one does.
+    # manage_automations is BOTH actor and goal-scoped, so a MUTATING call is
+    # refused on a clean turn too — by the goal gate, with different wording.
+    # The point here is WHICH refusal fires, not that one does.
     _FENCE = "outside source"
     _GOAL = "goal the operator has approved"
     ctx = {"granted": ["manage_automations", "fetch_url"],
            "untrusted_context": False}
-    clean = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    # a name that does not exist, so if the gate ever stopped firing this
+    # probe still cannot change anything
+    write = {"action": "disable", "name": "__no-such-automation__"}
+    clean = await r.execute_tool("manage_automations", write, ctx)
     check("on a CLEAN turn the fence stays silent (the goal gate answers)",
           _FENCE not in clean and _GOAL in clean, clean[:70])
+    # ...and a READ is not capability creation, so NEITHER rail speaks. The
+    # gate matched on the tool name alone until 2026-08-04, which refused
+    # `list` exactly like `create` AND raised an approval card — so asking
+    # her what was scheduled put a decision in front of the operator.
+    read = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    check("a READ action passes both rails on a clean turn — answering "
+          "'what do I have scheduled?' is not a capability change",
+          _FENCE not in read and _GOAL not in read, read[:70])
     # exactly what _run_tool now does after fetch_url returns
     ctx["untrusted_context"] = True
     tainted = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
-    check("the SAME call is refused by the FENCE once the turn is tainted",
+    check("...but the fence refuses even that READ once the turn is tainted — "
+          "containment is about the actor tool, not about the action",
           _FENCE in tainted, tainted[:80])
     # Ordering is load-bearing: were the goal gate first, an operator-approved
     # goal would let a poisoned page spend it. The fence has to win.

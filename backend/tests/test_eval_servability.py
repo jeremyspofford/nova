@@ -78,6 +78,52 @@ async def audit() -> dict[str, list[str]]:
         await db.close_pool()
 
 
+async def audit_gated() -> list[str]:
+    """Tasks that REQUIRE a call the goal gate would refuse.
+
+    A second way for a suite to grade itself instead of the model, and one
+    the audit above cannot see: it asks whether a tool has an ANSWER, and
+    this asks whether the call is allowed to happen at all. The goal gate
+    fires ABOVE the fixture hook (`registry.execute_tool`), so a refused
+    call never reaches `Fixtures.calls` — the transcript `checks.py` reads —
+    and `must_call` scores it `called 0x`. The model does the right thing
+    and the grader records nothing.
+
+    That is not hypothetical. `main/automation-already-scheduled` required
+    `manage_automations{action: "list"}`, which was gated on the tool name
+    alone; no model could pass it, and glm-5.2's 3/7 on that suite was read
+    as a model verdict for a day. `propose_goal`, the escape the refusal
+    names, is replay-only and errors too, so there was no path out.
+
+    Derived from `scopes.needs_goal` — the same function the gate enforces.
+    Two copies of this question is how the disagreement started.
+    """
+    from app.evals import suites as suite_mod
+    from app.tools import scopes
+
+    offenders: list[str] = []
+    for name in suite_mod.list_suites():
+        suite = suite_mod.load_suite(name)
+        for task in suite_mod.load_tasks(suite):
+            tools = (task.contract or {}).get("tools") or {}
+            # the args a `must_call_with` pins down, so a read action is
+            # judged as the read it is rather than as its bare tool name
+            pinned: dict[str, dict] = {}
+            for entry in tools.get("must_call_with") or []:
+                if entry.get("name"):
+                    pinned.setdefault(entry["name"], {}).update(entry.get("args") or {})
+            for entry in tools.get("must_call") or []:
+                tool = entry.get("name") if isinstance(entry, dict) else entry
+                if not tool or int((entry or {}).get("min", 1) or 0) < 1:
+                    continue
+                if scopes.needs_goal(tool, pinned.get(tool)):
+                    offenders.append(
+                        f"{suite.name}/{task.id} must_call[{tool}"
+                        + (f" {pinned[tool]}" if tool in pinned else "")
+                        + "] — the goal gate refuses it, invisibly")
+    return offenders
+
+
 def main() -> int:
     print("every granted tool has an answer during replay")
     gaps = asyncio.run(audit())
@@ -88,11 +134,20 @@ def main() -> int:
         print("  PASS  every suite can answer every tool its agent holds")
 
     print()
+    print("...and no task requires a call the goal gate would refuse")
+    gated = asyncio.run(audit_gated())
+    for line in gated:
+        check(line, False)
+    if not gated:
+        print("  PASS  every required call is one the runtime will let happen")
+
+    print()
     if FAILURES:
-        print(f"{len(FAILURES)} FAILED — add each tool to that suite's "
-              f"`replay_only_tools`, or author a fixture, and bump "
-              f"`suite_version`. An unserved call makes the run about the "
-              f"suite instead of the model.")
+        print(f"{len(FAILURES)} FAILED — for an unserved tool, add it to that "
+              f"suite's `replay_only_tools` or author a fixture. For a gated "
+              f"one, the task must not REQUIRE it: grade the refusal instead, "
+              f"or pin a read action. Either way bump `suite_version`. Both "
+              f"failures make the run about the suite instead of the model.")
         return 1
     print("all checks passed")
     return 0
