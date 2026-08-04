@@ -156,6 +156,22 @@ services:
     # protections: its VRAM-tier default, and `reduceAutoNumCtxForLoadOOM`,
     # the backoff that retries a failed load at 32768 then 4096. Those are
     # the safety net under any call that arrives without a num_ctx.
+    environment:
+      # ONE MODEL RESIDENT AT A TIME. Ollama's default keeps each loaded for
+      # minutes after its last call, which is right for a chat box and wrong
+      # for anything that walks a fleet: the nightly tournament runs six
+      # models back to back at about that interval, and on 2026-08-04 three
+      # sat on the card at once — 19.7 GB of 24 — while two were already
+      # finished. `local_context` sizes a window against what is free, so the
+      # windows collapsed to 8,192 and the router refused prompts the models
+      # could easily have held.
+      #
+      # This is the blunt half; `model_tournament._evict()` is the precise
+      # half, because the SIZING happens before the next load and so cannot
+      # wait for ollama's own eviction. 1 rather than 2 because main runs a
+      # cloud model now — the only local consumers left are the standby and
+      # the nightly ranking, and neither wants a neighbour.
+      OLLAMA_MAX_LOADED_MODELS: "1"
     volumes:
       - ollama_models:/root/.ollama
     restart: unless-stopped

@@ -150,9 +150,14 @@ async def run() -> None:
         local_context._cache.clear()
         local_context._vram = vram(claimable=2_000_000_000)
         got = await local_context.resolve("ollama:big")
-        check("a card with less claimable VRAM than the weights need gets the "
-              "floor, not a window computed as though the weights were free",
-              got == local_context._FLOOR, str(got))
+        # Was `got == _FLOOR`. The property being defended is that the
+        # weights are NOT treated as free — a window computed as though they
+        # were is the overcommit that spills. Answering that with the floor
+        # was the bug: it states a capacity the card does not have. Nothing
+        # fitting is nothing.
+        check("a card with less claimable VRAM than the weights need is "
+              "reported as not sizeable, not as a window computed as though "
+              "the weights were free", got is None, str(got))
 
         local_context._cache.clear()
         local_context._vram = vram(claimable=20_000_000_000)
@@ -230,6 +235,83 @@ async def run() -> None:
         check("no model ceiling -> None again",
               await local_context.resolve("ollama:big") is None)
         model_fitness.local_capabilities = caps
+
+        print("3b. a cost we cannot compute is MEASURED, never invented")
+        # `_DEFAULT_KV_BYTES_PER_TOKEN = 200_000` stood in whenever a model
+        # published no attention shape. gemma4:12b publishes
+        # `attention.head_count_kv: null`, so it was priced at 200,000 while a
+        # live residency said ~17,900 — eleven times cheaper. At 5.7 GB free
+        # that was the whole difference between a usable window and
+        # `affordable 0`, the floor, and a model nothing could grade.
+        real_get, real_w = local_context._get, local_context._weights_bytes
+        local_context._kv_bytes_per_token = saved_kv        # the real one
+        try:
+            async def probes(path, payload=None):
+                if path == "/api/show":          # publishes no head_count_kv
+                    return {"model_info": {"general.architecture": "mystery",
+                                           "mystery.block_count": 48}}
+                if path == "/api/ps":            # ...but is resident right now
+                    return {"models": [{"name": "mystery:12b",
+                                        "size_vram": 8_390_747_094,
+                                        "context_length": 16384}]}
+                return None
+
+            async def w(_name):
+                return 7_560_000_000
+
+            local_context._get, local_context._weights_bytes = probes, w
+            local_context._kv_cost.clear()
+            per = await local_context._kv_bytes_per_token("mystery:12b")
+            # (8.39GB held - 7.56GB weights - 512MiB overhead) / 16,384
+            check("an unpublished attention shape is priced from a live "
+                  "residency", per is not None and 17_000 < per < 19_000,
+                  str(per))
+            check("...which is an order of magnitude off the constant it "
+                  "replaced, in the direction that disabled the model",
+                  per is not None and per < 200_000 / 5, str(per))
+
+            # nothing published AND never resident -> we say we do not know
+            async def blind(path, payload=None):
+                if path == "/api/show":
+                    return {"model_info": {"general.architecture": "mystery",
+                                           "mystery.block_count": 48}}
+                return {"models": []}
+
+            local_context._get = blind
+            local_context._kv_cost.clear()
+            check("no metadata and no observation is None, not a guess",
+                  await local_context._kv_bytes_per_token("mystery:12b") is None)
+
+            # an observation LOWER than the formula corrects it; the formula's
+            # only known failure mode is over-counting layers whose cache does
+            # not grow with the window (sliding-window, shared KV)
+            async def both(path, payload=None):
+                if path == "/api/show":
+                    return {"model_info": {
+                        "general.architecture": "gemma4",
+                        "gemma4.block_count": 35,
+                        "gemma4.attention.head_count_kv": 1,
+                        "gemma4.attention.key_length": 512,
+                        "gemma4.attention.value_length": 512}}
+                return {"models": [{"name": "gemma4:e2b",
+                                    "size_vram": 8_000_000_000,
+                                    "context_length": 131072}]}
+
+            async def w2(_name):
+                return 7_160_000_000
+
+            local_context._get, local_context._weights_bytes = both, w2
+            local_context._kv_cost.clear()
+            per = await local_context._kv_bytes_per_token("gemma4:e2b")
+            formula = 35 * 1 * (512 + 512) * 2          # 71,680
+            check("an observation cheaper than the formula wins — the formula "
+                  "assumes every block holds a full-window cache, and shared "
+                  "or sliding-window layers do not",
+                  per is not None and per < formula, f"{per} vs {formula}")
+        finally:
+            local_context._get, local_context._weights_bytes = real_get, real_w
+            local_context._kv_bytes_per_token = kv
+            local_context._kv_cost.clear()
 
         print("4. the refusal still gets a real number")
         # resolve() returning None is fine to SEND — ollama picks. It is not
@@ -309,15 +391,34 @@ async def run() -> None:
         finally:
             local_context._resident = saved_resident
 
-        print("6. the floor")
+        print("6. what happens when nothing fits")
         local_context._cache.clear()
         local_context._ceiling.clear()
         local_context._vram = vram(claimable=1_000_000)     # 10 tokens' worth
         got = await local_context.resolve("ollama:big")
-        check("a window too small to hold the system prompt is never chosen — "
-              "ollama truncates from the HEAD, so the agent would silently "
-              "lose its role and its tool contract",
-              got >= local_context._FLOOR, str(got))
+        # The intent is unchanged and still the point: a window too small to
+        # hold the system prompt must never be CHOSEN, because ollama
+        # truncates from the HEAD and the agent silently loses its role and
+        # its tool contract.
+        #
+        # What changed is that we no longer invent one either. This used to
+        # assert `got >= _FLOOR`, and returning the floor here is an
+        # assertion about capacity made out of a constant — on 2026-08-04 it
+        # handed 8,192 to two models that computed `affordable 0` against a
+        # busy card, after which the router refused every prompt over 4,192
+        # tokens and four of six models in that night's tournament were never
+        # asked a single question. None means "ollama decides", and with
+        # OLLAMA_CONTEXT_LENGTH unset it applies its own VRAM-tier default
+        # and `reduceAutoNumCtxForLoadOOM`, which is derived where 8,192 was
+        # a claim.
+        check("nothing fitting is reported as nothing, not as the floor",
+              got is None, str(got))
+        check("...and the floor is still what we refuse to go BELOW when we "
+              "do choose, rather than a value we fall back to",
+              local_context._quantise(1_000, 262_144) is None
+              and local_context._quantise(50_000, 262_144) == 32_768,
+              f"{local_context._quantise(1_000, 262_144)} / "
+              f"{local_context._quantise(50_000, 262_144)}")
 
         print("7. VRAM held by ANOTHER ollama model is claimable — 15:49")
         # The measured failure. ornith:9b was resident at a 262,144 window

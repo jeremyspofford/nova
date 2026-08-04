@@ -77,9 +77,20 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-# Never go below this: a window too small to hold the system prompt is worse
-# than a slow one, because ollama truncates from the HEAD and the agent
-# quietly loses its role and its tool contract.
+# The smallest window worth ASKING FOR — not a floor to fall back to. A
+# window too small to hold the system prompt is worse than a slow one,
+# because ollama truncates from the HEAD and the agent quietly loses its role
+# and its tool contract.
+#
+# It used to be returned as an answer when nothing fit, which inverted its
+# meaning: on 2026-08-04 gemma4:12b and ornith:9b both computed `affordable
+# 0` against a busy card and were handed 8,192 anyway — a window VRAM did not
+# support, asserted as though it did. The router then refused every prompt
+# over 4,192 tokens, and four of six models in that night's tournament were
+# never asked a single question. Nothing fitting is now reported as None, and
+# None already means "ollama decides": with OLLAMA_CONTEXT_LENGTH unset it
+# applies its own VRAM-tier default and `reduceAutoNumCtxForLoadOOM` backoff,
+# which is a derived answer where 8,192 was a claim.
 _FLOOR = 8192
 
 # nvidia-smi reports MiB. The sidecar divides by 1024 and calls the result
@@ -98,11 +109,19 @@ _GIB = 1024 ** 3
 # nvidia-smi reported a moment ago and what is free when llama-server asks.
 _RESERVE_GB = 2.0
 
-# Used only when a model does not publish enough metadata to compute the real
-# figure. Deliberately pessimistic — it is above every model measured here
-# (the largest, qwen3:14b, is 163,840) so an unknown architecture gets a small
-# window rather than a spill.
-_DEFAULT_KV_BYTES_PER_TOKEN = 200_000
+# DELETED, deliberately: `_DEFAULT_KV_BYTES_PER_TOKEN = 200_000`.
+#
+# It was the number used when a model did not publish its attention shape,
+# and it was invented rather than measured. gemma4:12b publishes
+# `attention.head_count_kv: null`, so it was priced at 200,000 B/token while
+# a live residency showed it costs about 17,900 — eleven times cheaper. At
+# 5.7 GB free that difference is the whole answer: `affordable 0`, the floor,
+# and a model that could not be graded at all.
+#
+# A cost we cannot compute is now MEASURED from an actual residency, and if
+# we can do neither we say so and let ollama decide. A pessimistic guess is
+# still a guess, and this one was wrong by an order of magnitude in the
+# direction that silently disables a model.
 
 # f16 K and V. ollama's KV quantisation (OLLAMA_KV_CACHE_TYPE) is server-wide
 # and unset here; if it were set to q8_0 this would over-state the cost, which
@@ -268,23 +287,83 @@ def _kv_bytes_from_info(info: dict) -> Optional[int]:
     return layers * kv_heads * (int(key_len) + int(value_len)) * _KV_BYTES_PER_ELEMENT
 
 
-async def _kv_bytes_per_token(model_name: str) -> float:
-    """Exact where the model says enough to compute it, pessimistic otherwise.
+async def _observed_kv_bytes(model_name: str) -> Optional[float]:
+    """What a LIVE residency says this model costs per token.
 
-    Cached without expiry, unlike the figure it replaced: this is a property
-    of the model file, not of the state it happened to be loaded in.
+    `/api/ps` reports `size_vram` and the `context_length` the runner was
+    actually loaded at, so the cost the allocator really paid is arithmetic:
+    (VRAM held - weights - runtime overhead) / window. That beats any formula
+    for two cases the formula gets wrong, and it gets them wrong in the
+    direction that disables a model:
+
+      * an architecture that publishes no `attention.head_count_kv` at all
+        (gemma4:12b) had no computable cost;
+      * an architecture whose cache is smaller than its block count implies —
+        gemma4 bounds most layers at `sliding_window`, and gemma4:e2b shares
+        KV across 20 of its 35 blocks — is over-priced by roughly 3x, because
+        `_kv_bytes_from_info` reads neither field.
+
+    Returns None unless the model is resident right now with a known window —
+    and a model still LOADING reports no `context_length` yet, which reads the
+    same as absent and is correct: an observation nobody has finished making
+    is not a number. It settles on the next probe.
+    """
+    for entry in await _resident():
+        if entry.get("name") != model_name and entry.get("model") != model_name:
+            continue
+        window = int(entry.get("context_length") or 0)
+        held = int(entry.get("size_vram") or 0)
+        if window <= 0 or held <= 0:
+            return None
+        weights = await _weights_bytes(model_name) or 0
+        # Subtract the same overhead `resolve` budgets separately, or it is
+        # counted twice — once inside the per-token figure and once beside it.
+        kv = held - weights - _RUNTIME_OVERHEAD_BYTES
+        if kv <= 0:
+            return None
+        return kv / window
+    return None
+
+
+async def _kv_bytes_per_token(model_name: str) -> Optional[float]:
+    """Computed from the model's own metadata, corrected by observation.
+
+    None means nobody knows — neither the file nor a residency has said — and
+    `resolve` turns that into "ollama decides" rather than into a guess.
+
+    Cached without expiry: this is a property of the model file and its
+    runtime, not of the state it happened to be loaded in.
     """
     if model_name in _kv_cost:
         return _kv_cost[model_name]
+
     shown = await _get("/api/show", {"model": model_name})
-    per = _kv_bytes_from_info((shown or {}).get("model_info") or {})
+    computed = _kv_bytes_from_info((shown or {}).get("model_info") or {})
+    observed = await _observed_kv_bytes(model_name)
+
+    if computed and observed and observed < computed:
+        # An observation LOWER than the formula is evidence the formula
+        # over-counted for this architecture, which is its only known failure
+        # mode — it assumes every block holds a full-window f16 cache, and
+        # sliding-window and shared-KV layers do not. An observation HIGHER
+        # is not trusted the same way: it may just be a fuller card, and
+        # over-claiming capacity is the direction that spills.
+        _kv_cost[model_name] = float(observed)
+        log.info("local_context: %s costs %d bytes/token (observed live; the "
+                 "metadata formula said %d, which over-counts layers whose "
+                 "cache does not grow with the window)",
+                 model_name, observed, computed)
+        return float(observed)
+
+    per = computed or observed
     if not per:
-        log.info("local_context: %s does not publish its attention shape; "
-                 "assuming %d bytes/token", model_name, _DEFAULT_KV_BYTES_PER_TOKEN)
-        return _DEFAULT_KV_BYTES_PER_TOKEN
+        log.warning("local_context: %s publishes no attention shape and has "
+                    "never been observed resident, so its per-token cost is "
+                    "unknown — leaving the window to ollama", model_name)
+        return None
     _kv_cost[model_name] = float(per)
-    log.info("local_context: %s costs %d bytes/token of KV (computed)",
-             model_name, per)
+    log.info("local_context: %s costs %d bytes/token of KV (%s)",
+             model_name, per, "computed" if computed else "observed live")
     return float(per)
 
 
@@ -377,15 +456,22 @@ def _spill_pin(name: str) -> Optional[int]:
     return None
 
 
-def _quantise(chosen: int, model_max: int) -> int:
+def _quantise(chosen: int, model_max: int) -> Optional[int]:
     """The largest rung that still fits, never a number in between.
 
     A close fit is worthless here: `chosen` moves whenever anything else on
     the GPU moves, and each distinct value is a llama-server restart. The
     rungs are far enough apart that ordinary VRAM drift does not cross one.
+
+    None when NOTHING fits — not `_FLOOR`. Returning the floor there answered
+    a question about capacity with a constant, and the constant was wrong
+    often enough to matter: it is what turned a busy card into four models
+    that could not be graded. The caller's contract already has a word for
+    "we cannot size this", and ollama's own backoff is better at it than a
+    number we made up.
     """
     rungs = [r for r in (*_LADDER, model_max) if _FLOOR <= r <= chosen]
-    return max(rungs) if rungs else _FLOOR
+    return max(rungs) if rungs else None
 
 
 def _next_lower_rung(window: int) -> int:
@@ -420,6 +506,8 @@ async def resolve(model: str) -> Optional[int]:
         if not model_max or not vram:
             return None                     # cannot measure: ollama decides
         per_token = await _kv_bytes_per_token(name)
+        if not per_token:
+            return None                     # cannot price it: ollama decides
         # The KV cache does not get the whole claimable pool: the weights sit
         # in the same VRAM, and so do the runtime buffers. Dividing free VRAM
         # by the per-token cost — as this did — overcommits by exactly the
@@ -439,7 +527,19 @@ async def resolve(model: str) -> Optional[int]:
         pin = _spill_pin(name)
         if pin:
             limits.append(pin)
-        cap_rung = _quantise(max(_FLOOR, min(limits)), model_max)
+        # No `max(_FLOOR, ...)`: raising a capacity of nothing up to 8,192 is
+        # the same assertion `_quantise` used to make, one line earlier.
+        cap_rung = _quantise(min(limits), model_max)
+        if cap_rung is None:
+            log.warning(
+                "local_context: %s does not fit at any window we would ask "
+                "for — %d tokens affordable (%d B/token, weights %.1fGB, "
+                "%.1fGB claimable, %.1fGB held outside ollama). Leaving the "
+                "window to ollama, which will back off on its own rather "
+                "than be told a size that does not fit.",
+                name, affordable, int(per_token), weights / 1e9,
+                _claimable(vram) / 1e9, vram["foreign"] / 1e9)
+            return None
 
         chosen = min(want_rung, cap_rung)
         # Only with a READING. With none, `_want_rung` returns the model's
