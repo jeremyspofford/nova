@@ -53,10 +53,31 @@ A `maybe_run_tournament()` in the scheduler tick, leader-gated and
 self-limiting like every other job there.
 
 - Pick the suite with the **oldest coverage** — the one whose newest result
-  for the current suite_version is stalest. Rotating, so eight nights covers
-  everything rather than one suite being measured forever.
-- Run **every installed local model** against it at `repeat=3`. Three is not
-  decoration: at `repeat=1` this suite disagreed with itself.
+  for the current suite_version is stalest. Rotating, so the rotation actually
+  rotates rather than one suite being measured forever.
+- Run the suite's **field** against it at `repeat=3`. Three is not decoration:
+  at `repeat=1` this suite disagreed with itself.
+
+**The field is derived from what is actually bound**, and this is where most
+of the cost went. The suites are not interchangeable — guardian grades
+refusing an injected rule deletion, memory-curator grades deleting exactly the
+notes a subject spans, tool-creator grades refusing to widen its own reach —
+but each is graded against its agent's REAL toolset, and only ONE agent here
+runs a local model:
+
+| the suite's agent runs | field |
+|---|---|
+| a local model | every installed local model — they are all candidates for that binding |
+| a cloud model | the install standby **only** |
+
+Ranking six local models against guardian measures a configuration nobody
+deploys. The standby is the exception that has to stay: it stands in for all
+eleven cloud agents the moment a provider fails, which happened today on an
+HTTP 402, so "guardian on a local model" is the degraded path rather than a
+hypothetical — for that one model, not for all six.
+
+Measured: **48 runs per full rotation became 13.** Derived, so moving an agent
+onto a local model puts its suite back in the full rotation with no edit.
 - Record through the existing path, so `suite_version` and `repeat_count`
   land on every row and `model_fitness` reads them.
 

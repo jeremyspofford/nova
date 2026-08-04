@@ -53,41 +53,81 @@ async def _installed_local() -> list[str]:
     return [f"ollama:{m['name']}" for m in await models_catalog._ollama_models()]
 
 
+async def field_for(suite_agent: str, installed: list[str],
+                    standby: str) -> list[str]:
+    """Which local models it is worth running THIS suite against.
+
+    The suites are not interchangeable — guardian grades refusing an injected
+    rule deletion, memory-curator grades deleting exactly the notes a subject
+    spans, tool-creator grades refusing to widen its own reach. But they are
+    each graded against their agent's REAL toolset, and only one agent on this
+    install runs a local model at all. Ranking six local models against
+    guardian measures a configuration nobody deploys, and that was most of the
+    night's work.
+
+    So the field is derived from what is actually bound:
+
+      the suite's agent runs local   every installed model, because they are
+                                     all candidates for that binding
+      the suite's agent runs cloud   the install standby ONLY — it is the one
+                                     local model that will ever run this
+                                     agent, and it really will: it stands in
+                                     for all eleven cloud agents the moment a
+                                     provider fails, which happened today on
+                                     an HTTP 402
+
+    Derived, so moving an agent onto a local model puts its suite back in the
+    full rotation with no edit here.
+    """
+    from app.agents import registry as agent_registry
+    from app.llm import router as llm_router
+
+    agent = await agent_registry.get_agent_by_name(suite_agent)
+    if agent and llm_router.is_local(
+            llm_router.effective_model(agent.get("model") or "")):
+        return installed
+    return [standby] if standby in installed else []
+
+
 async def next_pairing() -> Optional[tuple[str, list[str]]]:
     """(suite, models) for tonight — the suite whose coverage is stalest.
 
-    Rotating on staleness rather than a fixed order means eight nights covers
-    everything, and a suite that has never been run at its CURRENT version
-    sorts first. Comparing against the current version is the point: a score
-    recorded before the suite moved describes a different set of tasks, so it
-    is not coverage.
+    Rotating on staleness rather than a fixed order means the rotation
+    actually rotates, and a suite that has never been run at its CURRENT
+    version sorts first. Comparing against the current version is the point: a
+    score recorded before the suite moved describes a different set of tasks,
+    so it is not coverage.
     """
-    from app import db
+    from app import db, model_chain
     from app.evals import suites as suite_mod
 
-    models = await _installed_local()
-    if not models:
+    installed = await _installed_local()
+    if not installed:
         log.info("tournament: no local models installed, nothing to rank")
         return None
+    standby = model_chain.standby_setting()
 
-    best: Optional[tuple[float, str]] = None
+    best: Optional[tuple[float, str, list[str]]] = None
     async with db.acquire() as conn:
         for name in suite_mod.list_suites():
             try:
-                version = suite_mod.load_suite(name).version
+                suite = suite_mod.load_suite(name)
             except Exception:  # noqa: BLE001 — one broken suite is not the fleet
                 log.warning("tournament: suite %s will not load", name)
                 continue
+            field = await field_for(suite.agent, installed, standby)
+            if not field:
+                continue          # nothing local will ever run this agent
             row = await conn.fetchrow(
                 "SELECT max(started_at) AS newest FROM eval_runs "
                 " WHERE suite = $1 AND suite_version = $2 "
-                "   AND status IN ('passed','failed')", name, version)
+                "   AND status IN ('passed','failed')", name, suite.version)
             newest = row["newest"] if row else None
             # never measured at this version sorts first, and stays first
             age = -1.0 if newest is None else -newest.timestamp()
             if best is None or age > best[0]:
-                best = (age, name)
-    return (best[1], models) if best else None
+                best = (age, name, field)
+    return (best[1], best[2]) if best else None
 
 
 async def maybe_run() -> Optional[dict]:
