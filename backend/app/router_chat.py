@@ -851,6 +851,31 @@ async def list_agents_endpoint():
     return await agent_registry.list_agents(enabled_only=False)
 
 
+@router.get("/api/v1/agents/model-chains")
+async def agent_model_chains_endpoint():
+    """Each agent's standby order, derived — so the UI never restates it.
+
+    The order used to be a sentence typed into AgentsTab.tsx. A hand-copied
+    restatement of runner's chain in another language starts lying the day the
+    chain changes, and nothing fails when it does.
+
+    Both lookups are hoisted: model_fitness.rank_local() issues one /api/tags
+    plus a POST /api/show PER INSTALLED MODEL with no caching, so leaving them
+    to each agent turns one page load into twelve probe rounds.
+    """
+    from app import curated_models, model_chain, model_fitness
+    agents = await agent_registry.list_agents(enabled_only=False)
+    curated = await curated_models.list_all(enabled_only=True)
+    try:
+        local_rank = await model_fitness.rank_local()
+    except Exception:  # noqa: BLE001 — ollama being down must not blank the page
+        log.debug("rank_local failed while building chains", exc_info=True)
+        local_rank = []
+    return {a["id"]: await model_chain.chain(a, curated=curated,
+                                             local_rank=local_rank)
+            for a in agents}
+
+
 _AGENT_EDITABLE_FIELDS = {"model", "enabled", "description", "system_prompt",
                           "allowed_tools", "routing_keywords", "thinking",
                           "fallback_model"}
@@ -918,11 +943,19 @@ async def create_agent_endpoint(body: dict):
     if ":" not in model:
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    fallback_model = str(body.get("fallback_model") or "").strip() or None
+    if fallback_model and ":" not in fallback_model:
+        raise HTTPException(
+            status_code=422,
+            detail="fallback_model must be 'openrouter:<id>' or 'ollama:<name>'")
     try:
+        # operator=True for the same reason the PATCH route says so: this is
+        # the human at Settings, already past the auth middleware.
         agent_id = await agent_registry.create_agent(
             name=name, description=description, system_prompt=system_prompt,
             model=model, allowed_tools=body.get("allowed_tools"),
-            routing_keywords=body.get("routing_keywords"))
+            routing_keywords=body.get("routing_keywords"),
+            operator=True, fallback_model=fallback_model)
     except Exception as e:  # duplicate name etc.
         raise HTTPException(status_code=422, detail=str(e))
     return {"id": agent_id, "name": name}
@@ -1695,8 +1728,68 @@ async def evals_suites():
         out.append({"suite": name, "agent": suite.agent,
                     "description": suite.description,
                     "tasks": len(suite.task_ids),
+                    # so the UI can mark a verdict recorded against an older
+                    # version as describing a different set of tasks
+                    "version": suite.version,
                     "cost": await eval_runs.estimate(name)})
     return {"suites": out, "verdicts": await eval_runs.latest_verdicts()}
+
+
+def _grades(contract: dict) -> list[str]:
+    """What one task actually checks, in short phrases.
+
+    DERIVED from the contract, and derived HERE rather than in the panel: a
+    TypeScript restatement of a rule the harness enforces starts lying the day
+    the contract grows a key, and nothing fails when it does — the same
+    argument that moved the standby order out of AgentsTab.
+    """
+    out: list[str] = []
+    tools = contract.get("tools") or {}
+    must = [c["name"] if isinstance(c, dict) else c
+            for c in (tools.get("must_call") or [])]
+    if must:
+        out.append("must call " + ", ".join(must))
+    if tools.get("must_not_call"):
+        out.append("must not call " + ", ".join(tools["must_not_call"][:3]))
+    if (contract.get("memory") or {}).get("no_writes"):
+        out.append("writes nothing")
+    ft = contract.get("final_text") or {}
+    if ft.get("must_match"):
+        out.append(f"{len(ft['must_match'])} required phrase(s)")
+    if ft.get("must_not_match"):
+        out.append(f"{len(ft['must_not_match'])} forbidden phrase(s)")
+    if not contract.get("narration_slip_allowed", False):
+        out.append("no narration slip")
+    if not contract.get("service_claim_allowed", False):
+        out.append("no unchecked service claim")
+    return out
+
+
+@router.get("/api/v1/evals/suites/{suite}/tasks")
+async def evals_suite_tasks(suite: str):
+    """What a suite actually grades, case by case.
+
+    The Run button shipped without this and the first thing asked of it was
+    "there's no indication of what the tests are at all". A score with no
+    visible rubric is a number the operator has to take on trust, which is the
+    opposite of what an eval is for.
+
+    `intent` is the prose on each task explaining the incident it came from.
+    It was the most useful writing in the repo and was invisible to anyone not
+    reading JSON on disk.
+    """
+    from app.evals import suites as suite_mod
+    try:
+        loaded = suite_mod.load_suite(suite)
+        tasks = suite_mod.load_tasks(loaded)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"no suite named {suite!r}") from None
+    except Exception as e:  # noqa: BLE001 — a broken task file is not a 500
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return {"suite": suite, "version": loaded.version, "tasks": [
+        {"id": t.id, "title": t.title, "intent": t.intent, "prompt": t.prompt,
+         "grades": _grades(t.contract)}
+        for t in tasks]}
 
 
 @router.post("/api/v1/evals/run")
@@ -1707,8 +1800,26 @@ async def evals_run(body: dict):
     model = str(body.get("model") or "").strip()
     if not suite or not model:
         raise HTTPException(status_code=422, detail="suite and model are required")
+    # repeat is the whole reason a stored score can be trusted: the CLI has had
+    # --repeat all along and persists nothing, while this path persists and had
+    # no repeat, so every recorded number was one draw.
+    #
+    # Parsed and bounded HERE so a bad parameter is 422, and start()'s own
+    # ValueErrors keep their 409 — folding both into one except made "an eval
+    # is already running" report as a malformed request. The bound itself
+    # lives in eval_runs, so there is one number and two places that enforce it.
     try:
-        return await eval_runs.start(suite, model)
+        raw = body.get("repeat")
+        repeat = 1 if raw is None else int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422,
+                            detail="repeat must be an integer") from None
+    if not 1 <= repeat <= eval_runs.MAX_REPEAT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"repeat must be between 1 and {eval_runs.MAX_REPEAT}")
+    try:
+        return await eval_runs.start(suite, model, repeat)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError:
@@ -2160,10 +2271,48 @@ async def decide_recommendation_endpoint(rec_id: str, body: dict):
     if choice not in ("approve", "later", "dismiss"):
         raise HTTPException(status_code=422,
                             detail="choice must be 'approve', 'later', or 'dismiss'")
-    row = await recommendations.decide(rec_id, choice)
+    try:
+        row = await recommendations.decide(
+            rec_id, choice, body.get("action_digest"))
+    except recommendations.PlanChanged as e:
+        # 409, not 422: the request was well-formed, the world moved.
+        raise HTTPException(status_code=409, detail=str(e))
     if not row:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return row
+
+
+@router.post("/api/v1/recommendations/{rec_id}/run")
+async def rerun_recommendation_action_endpoint(rec_id: str):
+    """Re-queue a failed action run. The card's `Run again` button.
+
+    Only a `failed` run is re-queued, and the worker's claim JOIN still
+    requires the recommendation to be approved by the operator — so this
+    cannot resurrect work on a card that was since dismissed.
+    """
+    row = await recommendations.requeue(rec_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return row
+
+
+@router.post("/api/v1/recommendations/{rec_id}/preflight")
+async def preflight_recommendation_endpoint(rec_id: str):
+    """Re-check a card's plan against the network. The `Test` button.
+
+    This is the ONLY path that probes with the plan's headers. The automatic
+    preflight that runs when a card is raised sends none: a model choosing
+    both a URL and the credentials sent to it is an exfiltration primitive,
+    and it does not get one by accident. Here the operator asked, so the
+    credential the operator stored is in scope.
+    """
+    from app import actions
+    result = await actions.preflight(rec_id, operator=True)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no such recommendation, or it carries no action plan")
+    return {k: (str(v) if v is not None else None) for k, v in result.items()}
 
 
 # ── secrets (docs/plans/secrets-management.md phase 1) — operator-only.

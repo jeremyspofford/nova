@@ -65,6 +65,7 @@
     "raise_recommendation",
     "read_memory_item",
     "search_memory",
+    "service_status",
     "web_search",
     "write_memory"
   ],

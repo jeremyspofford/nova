@@ -148,6 +148,15 @@ async def tick():
     await secret_store.maybe_nudge_rotation()  # self-limits to daily
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     await _maybe_backup()                # self-limits to backups.every_hours
+    # Ranks the local models against the stalest suite. Off by default, and it
+    # only ever RECORDS — no binding is swapped and no model is deleted, for
+    # the reason in model_tournament's docstring: the same model has scored
+    # 2/7 and 3/7 on consecutive runs of the same suite.
+    try:
+        from app import model_tournament
+        await model_tournament.maybe_run()
+    except Exception:  # noqa: BLE001 — a tournament never costs the tick
+        log.exception("model tournament failed")
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

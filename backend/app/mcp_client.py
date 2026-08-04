@@ -30,6 +30,58 @@ log = logging.getLogger(__name__)
 _CONNECT_TIMEOUT_S = 10.0  # list_tools should be fast; call_tool uses the caller's timeout
 
 
+def explain(exc: BaseException) -> str:
+    """Flatten anyio's TaskGroup wrapper down to what actually went wrong.
+
+    `streamablehttp_client` runs its transport inside an anyio task group, so
+    a plain HTTP 405 surfaces as `unhandled errors in a TaskGroup (1
+    sub-exception)` — and that string is what used to land in
+    `mcp_servers.status_detail`, on an operator's card, and in the log, in
+    place of the reason. The OSSInsight endpoint is exactly this case: it
+    answers 405 because it is a REST route, not an MCP server, and the
+    operator needs to READ that.
+    """
+    subs = getattr(exc, "exceptions", None)
+    if subs:
+        out: list[str] = []
+        for sub in subs:
+            text = explain(sub)
+            if text not in out:
+                out.append(text)
+        return "; ".join(out) or repr(exc)
+    text = str(exc).strip()
+    # httpx appends "For more information check: <mdn url>" to status errors.
+    # True, and noise on a card the operator is reading for one fact.
+    text = text.split("\nFor more information check:")[0].strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+async def _guard_url(server: dict, url: str) -> Optional[str]:
+    """Refuse a non-public target for any server the OPERATOR did not add.
+
+    Derived from `mcp_servers.created_by`, never from a host list. The
+    operator registering http://homeassistant.local is his LAN and his
+    decision; a server that arrived on an approved recommendation card does
+    not get to name a private address.
+
+    This lives here rather than only in the executor because registration is
+    not the only time a server is dialled: tools/registry refreshes every
+    enabled server on a 15-minute timer, forever. A hostname that resolved
+    public at registration and resolves internal tomorrow is caught on the
+    refresh, and on every tool call, because the check is at the socket and
+    not at the door.
+    """
+    if server.get("created_by") in (None, "operator"):
+        return None
+    from app import net_guard
+    err = await net_guard.validate_target(url)
+    if err:
+        log.warning("MCP outbound guard refused server '%s' (%s): %s",
+                    server.get("name"), url, err)
+        return f"refused by the outbound guard: {err}"
+    return None
+
+
 def tool_list_hash(tools: list[dict]) -> str:
     """Hash over name+description only — the prompt-injection-relevant
     surface. A schema-only change doesn't need re-approval; a description
@@ -66,6 +118,9 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
         url = await secret_store.resolve(url)
     except secret_store.SecretError as exc:
         return "error", [], str(exc)
+    guard = await _guard_url(server, url)      # on the RESOLVED url, not the template
+    if guard:
+        return "error", [], guard
     try:
         async with streamablehttp_client(url, headers=headers,
                                          timeout=_CONNECT_TIMEOUT_S) as (read, write, _):
@@ -78,9 +133,10 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
                  for t in result.tools]
         return "connected", tools, None
     except Exception as e:
+        detail = explain(e)
         log.warning("MCP connect failed for server '%s' (%s): %s",
-                    server.get("name"), url, e)
-        return "error", [], str(e)
+                    server.get("name"), url, detail)
+        return "error", [], detail
 
 
 def _runner_auth() -> dict:
@@ -151,6 +207,11 @@ async def _http_call_tool(server: dict, tool_name: str, args: dict,
     from app import secret_store
     url = await secret_store.resolve(server.get("url") or "")
     headers = await secret_store.resolve(server.get("headers") or {})
+    guard = await _guard_url(server, url)
+    if guard:
+        # call_tool's contract is to raise; the caller logs and returns the
+        # error as the tool result, which is where the model needs to see it.
+        raise ValueError(guard)
     async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()

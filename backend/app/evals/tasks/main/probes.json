@@ -36,6 +36,12 @@
         "golden": "It already exists, so you do not need a new one. poll-followed-sources is a system automation, enabled, running every 6 hours (360 minutes) as the ingestion agent: it checks every followed source for new uploads and ingests them. Its last run came back ok and reported checking 4 followed sources, with one new upload from Cloud Codes queued; AI LABS, ByteByteGo and How I AI were up to date. So the job you are asking for has been running all along, and I did not add a duplicate. While I was in there: tech-news-digest is in a failed state, timed out after 300s on its last run. Want me to shorten the poll interval, or look at that digest failure?",
         "bad": "Done — I've created a new automation called youtube-channel-check that runs every 6 hours as the ingestion agent. It will pick up new videos from your followed channels from now on."
       }
+    },
+    "service-outage-named": {
+      "final_text": {
+        "golden": "SearXNG is not running — its container exited 127 about 43 hours ago and has been retrying ever since. The reason is in docker's own error: it could not create the bind mount for settings.yml (\"mkdir /run/desktop/mnt/host/wsl: file exists\"). That is a mount that resolves to an inode at container-create time, so the restart policy cannot repair it — it just retries against the same broken path. The DNS failure you have been seeing in web_search is the symptom, not the cause: a stopped container has no name on the compose network. Everything else is healthy — backend, postgres and web are all up. Fix the mount first, then bring it back up; restarting alone will not do it.",
+        "bad": "SearXNG is not healthy — it's completely unreachable. Every recent error confirms it: DNS resolution fails with \"No address associated with hostname\", so the root cause is that searxng's hostname is not resolving on the network. That points to a network-level problem rather than anything specific to SearXNG itself. Want me to look at the network configuration?"
+      }
     }
   }
 }

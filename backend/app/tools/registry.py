@@ -207,6 +207,48 @@ def builtin_def(name: str) -> dict:
     return _to_llm_def(BUILTIN_TOOLS[name])
 
 
+async def degraded_grants(agent: dict) -> list[str]:
+    """Grants this agent HOLDS that currently resolve to nothing callable.
+
+    `maintainer`'s entire read surface is one MCP sidecar. Stop it and seven
+    granted tools vanish from her toolset with no signal anywhere: main
+    dispatches to her, she has nothing to work with, and the failure reads as
+    incompetence rather than as a service being down. The grant row still says
+    she can; only the resolution says she cannot, and nobody was comparing the
+    two.
+
+    So this compares them, per GRANT ENTRY rather than per resolved name — a
+    set difference would be wrong, because one `mcp:server:*` entry expands to
+    many tools and `db:*` to whatever exists. An entry counts as degraded when
+    nothing it names can currently be called.
+
+    Derived, and self-clearing: it re-resolves live, so starting the sidecar
+    makes the warning disappear on the next turn with no edit and no reset.
+
+    Never a wildcard over an empty set — `db:*` with no DB tools registered is
+    a grant that matches nothing, not a broken one, and flagging it would cry
+    wolf on an install that simply has none.
+    """
+    allowed = agent.get("allowed_tools")
+    if not allowed:               # None = unrestricted; [] = nothing to break
+        return []
+    db_tools = await _load_db_tools()
+    mcp_tools: dict = {}
+    if any(str(e).startswith("mcp:") for e in allowed):
+        mcp_tools = await _load_mcp_tools()
+    out: list[str] = []
+    for entry in allowed:
+        name = str(entry)
+        if name == "db:*" or name in BUILTIN_TOOLS or name in db_tools:
+            continue
+        if name.startswith("mcp:"):
+            _has, named, wild = _granted_mcp_tools({"allowed_tools": [name]})
+            if any(_mcp_granted(full, named, wild) for full in mcp_tools):
+                continue
+        out.append(name)
+    return out
+
+
 async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> list[dict]:
     """LLM tool definitions for an agent.
 
@@ -547,16 +589,44 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     if name in GOAL_SCOPED_TOOLS and settings_store.get("autonomy.goal_scoped_actions"):
         goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
         if not goal:
+            # THE GATE RAISES THE CARD ITSELF. It used to return a string
+            # asking the model to call `propose_goal`, which is a prompt doing
+            # a control's job — and the measured outcome was that it did not
+            # get called, so a refusal left NO operator-visible artifact at
+            # all. Everything the card needs is already here: the verb, the
+            # agent, the conversation and the arguments that were refused.
+            #
+            # Never fatal. If the card cannot be raised the refusal still
+            # stands — the one thing that must not happen is the call
+            # succeeding because the paperwork failed.
+            card = ""
+            try:
+                _goal, created = await goals.card_for_refusal(
+                    name, agent_name=ctx.get("agent_name"),
+                    conversation_id=ctx.get("conversation_id"), args=args)
+                card = (
+                    "\n\nAn approval card for this is now in front of the "
+                    "operator. Nothing is approved yet."
+                    if created else
+                    "\n\nAn approval card for this is ALREADY in front of the "
+                    "operator, from an earlier attempt. Raising another would "
+                    "only bury it.")
+            except Exception:  # noqa: BLE001
+                log.exception("goal card not raised for refused %s", name)
+                card = ("\n\nThe approval card could not be raised, so say so "
+                        "plainly rather than implying someone was asked. You "
+                        "can call propose_goal with a clear title and finish "
+                        "line instead.")
             return (
                 f"Error: '{name}' changes what this system can do, so it runs "
                 f"only under a goal the operator has approved. No active goal "
                 f"currently pre-approves '{name}' (one may have expired or "
-                f"run out of its approved actions).\n\n"
-                f"Do this instead: call propose_goal with a clear title, a "
-                f"specific finish line the operator can check, and the verbs "
-                f"you need — including '{name}'. They get one card to approve, "
-                f"and then you can work without asking again until the goal "
-                f"is met. Do not retry this call before that approval.")
+                f"run out of its approved actions).{card}\n\n"
+                f"Stop here and tell the operator what you were trying to do "
+                f"and that it is waiting on them. Do NOT retry this call. If "
+                f"the work needs several of these verbs together, call "
+                f"propose_goal once with all of them and a checkable finish "
+                f"line — one card for the whole job beats one per refusal.")
         ctx.setdefault("goals_spent", []).append(
             {"id": goal["id"], "title": goal["title"], "verb": name})
 

@@ -128,6 +128,28 @@ SETTING_DEFS: list[dict] = [
     # something, and a model that declines or forgets leaves you with no
     # backup and a cheerful summary. This runs in the scheduler loop, so the
     # backup happens because code ran it.
+    # A tournament ranks the installed local models against whichever suite
+    # has the stalest coverage. Off by default because it is minutes of the
+    # box per night, and because a score nobody asked for is worth less than
+    # one somebody wanted. It never promotes and never deletes — see
+    # docs/plans/model-tournament.md for why that is measured, not timid.
+    {"key": "evals.tournament_every_hours", "type": "number", "default": 0,
+     "min": 0, "max": 720, "section": "Models",
+     "label": "Rank local models every (hours)",
+     "description": ("0 is off. Runs every installed local model against one "
+                     "suite, rotating to whichever has gone longest without a "
+                     "result at its current version. It only RECORDS — no "
+                     "model is ever promoted, swapped or deleted. Local models "
+                     "cost no tokens, but a night is roughly 30-55 minutes of "
+                     "this machine.")},
+    {"key": "evals.tournament_repeat", "type": "number", "default": 3,
+     "min": 1, "max": 10, "section": "Models",
+     "label": "Repeats per task when ranking",
+     "description": ("A task counts as passed only if it passed every repeat. "
+                     "1 is a single draw and is not a measurement: the same "
+                     "model scored 2/7 and 3/7 on consecutive single runs of "
+                     "the same suite, and the task that flipped was a coin at "
+                     "1 in 3.")},
     {"key": "backups.every_hours", "type": "number", "default": 24,
      "min": 0, "max": 720, "section": "Backups",
      "label": "Automatic backup every (hours)",
@@ -287,6 +309,20 @@ SETTING_DEFS: list[dict] = [
                      "it is met. Research and memory are never gated. Turn "
                      "this OFF and those actions become entirely ungated, "
                      "which is what they were before this shipped.")},
+    {"key": "actions.enabled", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Approving a recommendation may run its plan",
+     "description": ("A recommendation card can carry a typed plan — register "
+                     "this MCP server, grant its tools to this agent. With "
+                     "this on, Approve carries the plan out; the plan and the "
+                     "tool descriptions are shown on the card first, and only "
+                     "a plan that already connected can run. Turn this OFF and "
+                     "Approve records your decision and nothing else, which is "
+                     "what it did before this shipped.")},
+    {"key": "actions.timeout_s", "type": "number", "default": 120,
+     "section": "Agents", "label": "Give up on a recommendation action after (s)",
+     "description": ("A run that hangs past this is failed and shown on the "
+                     "card. It does not undo work already committed — the "
+                     "executor rolls back its own half-registered server.")},
     {"key": "monitor.retire_after_days", "type": "number", "default": 7,
      "section": "Observability", "label": "Retire a silent instance after (days)",
      "description": ("An instance that has not reported for this long is "

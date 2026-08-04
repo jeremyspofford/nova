@@ -99,7 +99,7 @@ def install(script, concurrency=1):
     llm_router.effective_model = lambda m: m
     settings_store._cache["agents.tool_concurrency"] = concurrency
     settings_store._cache["agents.max_dispatches_per_turn"] = 3
-    narration.detect = lambda text, calls: None
+    narration.detect = lambda text, calls, called=None: None
     trace._flush = lambda t: asyncio.sleep(0)
 
     from app.agents import registry as agent_registry

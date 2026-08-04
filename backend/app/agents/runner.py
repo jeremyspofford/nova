@@ -20,7 +20,7 @@ from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
 from app import (bg, capability_claims, model_claims, narration, redact,
-                 settings_store, timefmt, trace)
+                 service_claims, settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory import provenance
@@ -723,9 +723,29 @@ async def _build_system_prompt(agent: dict, query: str, *,
                         tool_registry.canonical_name(d["function"]["name"])
                         for d in await tool_registry.get_agent_tools(a))
 
+                # A specialist whose grants do not resolve is worse than one
+                # with none: main dispatches confidently, the specialist has
+                # nothing, and the reply reads as incompetence. Told BEFORE
+                # the dispatch, because after it the work is already wasted.
+                broken: dict[str, list[str]] = {}
+                for a in others:
+                    try:
+                        got = await tool_registry.degraded_grants(a)
+                    except Exception:  # noqa: BLE001
+                        got = []
+                    if got:
+                        broken[a["name"]] = got
+
                 def _can_call(a: dict) -> str:
                     names = resolved.get(a["name"], [])
-                    return ", ".join(names) if names else "NOTHING — no tools granted"
+                    line = ", ".join(names) if names else "NOTHING — no tools granted"
+                    gone = broken.get(a["name"])
+                    if gone:
+                        line += (f"\n    DEGRADED — granted but not callable "
+                                 f"right now: {', '.join(gone)}. Whatever "
+                                 f"provides them is down. Do not dispatch work "
+                                 f"that needs them; say so instead.")
+                    return line
 
                 for a in others:
                     for t in resolved[a["name"]]:
@@ -1362,21 +1382,6 @@ def resolve_agent_model(agent: dict) -> str:
     return llm_router.effective_model(agent.get("model") or "")
 
 
-def _standby_setting() -> str:
-    """The install-wide standby, provider-qualified.
-
-    "qwen2.5:3b" already contains a colon — its TAG separator, not a provider
-    prefix. Testing for ":" read it as fully qualified and handed back a bare
-    name, which only worked because effective_model then failed to resolve
-    "qwen2.5" as a provider and fell back a second time. This setting names a
-    local model by definition, so the prefix is not a guess.
-    """
-    name = str(settings_store.get("inference.local_fallback_model") or "").strip()
-    if not name:
-        return ""
-    return name if name.startswith("ollama:") else f"ollama:{name}"
-
-
 async def _fallback_chain(agent: dict) -> list[str]:
     """Where this agent's turn may go next, in order of preference.
 
@@ -1387,22 +1392,12 @@ async def _fallback_chain(agent: dict) -> list[str]:
     setting and no fitness check at all. So which safeguards applied depended
     on which provider happened to fail — and the per-agent choice, the whole
     point of this feature, existed in neither.
+
+    The order itself now lives in model_chain, because the UI has to render
+    it and a second copy in TypeScript would start lying the day this moves.
     """
-    chain = []
-    for candidate in (str(agent.get("fallback_model") or "").strip(),
-                      _standby_setting()):
-        if candidate:
-            chain.append(candidate)
-    try:
-        from app.agents import registry as agent_registry
-        main = await agent_registry.get_agent_by_name(MAIN_AGENT)
-        if main and main.get("model"):
-            chain.append(main["model"])
-    except Exception:
-        # the last resort is the least important link; losing it must not
-        # cost the operator the two they configured deliberately
-        log.exception("main-agent lookup failed; standby chain is short")
-    return chain
+    from app import model_chain
+    return [link["model"] for link in await model_chain.chain(agent)]
 
 
 async def _fit_for(agent: dict, target: str) -> bool:
@@ -1586,6 +1581,24 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         log.warning("model downgrade: %s -> %s for agent %s",
                     agent["model"], swapped, agent.get("name"))
 
+    # A GRANT THAT RESOLVES TO NOTHING is the same class of degradation as the
+    # model swap above, and it had no signal at all. maintainer's whole read
+    # surface is one MCP sidecar: stop it and seven granted tools vanish, main
+    # dispatches to her anyway, and the failure reads as incompetence instead
+    # of as a service being down. The row still says she can; only the
+    # resolution says she cannot.
+    try:
+        missing = await tool_registry.degraded_grants(agent)
+        if missing:
+            degraded.append(
+                f"{len(missing)} granted tool(s) are not callable right now "
+                f"({', '.join(missing[:5])}) — whatever provides them is down "
+                f"or gone, so say so rather than working around it silently")
+            log.warning("degraded grants for %s: %s",
+                        agent.get("name"), ", ".join(missing))
+    except Exception:  # noqa: BLE001 — a missing warning never costs the turn
+        log.debug("degraded-grant check failed", exc_info=True)
+
     async with trace.span("stage", "build_prompt") as psp:
         prompt_signals: dict = {}
         system_prompt = await _build_system_prompt(
@@ -1645,6 +1658,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # rounds left every time it happened on 2026-08-03.
     narration_retried = False
     last_round_calls = 0
+    # every tool name called this turn, across all rounds
+    called_names: list[str] = []
     # phase 2 bookkeeping: which tool results may never be trimmed (a
     # specialist's report IS the turn's product) and which go first (raw web
     # output the model can always re-fetch)
@@ -1788,8 +1803,24 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         final_text += round_text
 
         last_round_calls = len(tool_calls)
+        # Names, not just a count: service_claims asks WHICH tools ran, since
+        # "she holds it and did not use it" is the whole failure it checks.
+        #
+        # tool_calls is the FLAT form here — {id, name, arguments} — not the
+        # OpenAI wire shape nested under "function", which is built further
+        # down for the assistant message. Reading the nested key would have
+        # yielded a list of empty strings, and an empty list means "checked
+        # nothing", so the detector would have contradicted her on exactly the
+        # turns where she DID look. Both shapes are accepted so a future
+        # refactor of either one cannot silently reintroduce that.
+        for c in tool_calls:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name") or (c.get("function") or {}).get("name")
+            if name:
+                called_names.append(str(name))
         if not tool_calls:
-            slip = narration.detect(round_text, 0)
+            slip = narration.detect(round_text, 0, called_names)
             if slip and not narration_retried and round_no + 1 < max_rounds:
                 # Not a banner after the fact — the loop is still alive here,
                 # so say so where the model can still act on it. Capped at one
@@ -2103,12 +2134,41 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}
 
+    # service-claim check: text that asserts a service is up or down when no
+    # tool this turn read service state. Third sibling — narration is work
+    # announced and not done, capability_claims is work that could never have
+    # been done, this is a FACT ABOUT THE STACK that nothing established.
+    # Gated on tools CALLED, not granted: holding service_status and reaching
+    # for search_memory instead is the measured behaviour it exists for.
+    service_claim = service_claims.detect(final_text, called_names, query)
+    if service_claim:
+        svc, matched = service_claim
+        yield {"type": "activity", "kind": "service_claim",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": (f"stated {svc} was up or down ({matched!r}) without "
+                          f"calling any tool that reads service state")}
+        log.warning("Service claim: agent=%s model=%s service=%s matched=%r",
+                    agent.get("name"), agent.get("model"), svc, matched)
+        bg.spawn(memory.write(
+            f"Service claim: agent '{agent.get('name')}' on model "
+            f"{agent.get('model')} stated {svc} was up or down (matched "
+            f"{matched!r}) without calling service_status or diagnose. The "
+            f"claim rested on nothing.", type="journal", source_type="system"))
+        # In the reply text for the same reason as its two siblings: an
+        # activity event persists as a role='tool' row that the history loader
+        # drops, so the claim replays on every later turn and the correction
+        # replays on none — and on voice only text is spoken at all.
+        note = service_claims.correction(svc)
+        final_text += note
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
+
     # narration detector: text that announces actions + zero tool calls =
     # the described work silently never happened. Make it loud.
     # last_round_calls, not calls_made: one call in round 1 used to blind
     # this for every later round, which is exactly how 'The egress rules
     # look fine … Let me dig deeper:' got through after list_egress ran.
-    snippet = narration.detect(final_text, last_round_calls)
+    snippet = narration.detect(final_text, last_round_calls, called_names)
     if snippet:
         yield {"type": "activity", "kind": "narration",
                "name": agent.get("name", ""), "agent": agent.get("name"),

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app import timefmt
+from app.memory import provenance
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +129,25 @@ class OkfStore:
             # must survive a REFRESH, not just an append.
             existing, _body = self.parse_frontmatter(path.read_text())
             fm = {**existing, **fm}
+            # ORIGIN IS MONOTONE — the same law append_concept states below.
+            # A caller-wins merge is right for hand-added keys and wrong for
+            # this one: OkfMemory.write supplies source_type on every call and
+            # _write_memory sends the literal "tool" for every caller, so a
+            # REFRESH of an ingested transcript rewrote its stamp from
+            # media_transcript (third_party) to tool (first_party). That is a
+            # silent trust RAISE, performed by a feature built to preserve
+            # frontmatter. One document on disk had already been laundered
+            # this way before this landed.
+            #
+            # Compare TIERS, not the raw stamps: lower_of ranks tiers, and
+            # handing it source_type strings collapses every one of them to
+            # third_party — which would also block a legitimate demotion.
+            prior_st, new_st = existing.get("source_type"), fm.get("source_type")
+            if prior_st and new_st and prior_st != new_st:
+                new_tier = provenance.tier(new_st)
+                if provenance.lower_of(provenance.tier(prior_st),
+                                       new_tier) != new_tier:
+                    fm["source_type"] = prior_st
         else:
             subdir = TYPE_DIRS.get(concept_type, "topics")
             path = self.base_dir / subdir / f"{_slugify(title)}.md"

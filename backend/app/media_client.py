@@ -29,8 +29,8 @@ async def _refuse_internal(url: str) -> dict | None:
     this door stood open — the asymmetry was the bug, not the policy.
 
     Returns the {"error": ...} both callers already return, or None."""
-    from app.tools.web_fetch import _validate_target
-    err = await _validate_target(url)
+    from app.net_guard import validate_target
+    err = await validate_target(url)
     if err:
         log.warning("media SSRF guard refused %s: %s", url, err)
         return {"error": err}

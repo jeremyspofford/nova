@@ -17,7 +17,8 @@ sys.path.insert(0, "/app/backend")
 
 from app import narration, settings_store, trace            # noqa: E402
 from app.agents import runner                               # noqa: E402
-from app.llm import openai_compat, router as llm_router     # noqa: E402
+from app.llm import openai_compat, providers                 # noqa: E402
+from app.llm import router as llm_router                     # noqa: E402
 from app.memory import memory as memory_mod                 # noqa: E402
 from app.tools import registry as tool_registry             # noqa: E402
 
@@ -139,6 +140,33 @@ async def test_fallback_decision():
     saved_effective = llm_router.effective_model
     llm_router.effective_model = lambda m: m
 
+    # The cross-tier link is DERIVED from the curated catalogue and provider
+    # health, both of which are live tables. Pinned here for the same reason
+    # the fallback setting is: a test that reads whatever the install happens
+    # to hold asserts nothing, and an unpinned derivation silently returns
+    # None when there is no pool — which passes a "fails fast" check for
+    # entirely the wrong reason.
+    from app import model_chain
+    saved_curated = model_chain._curated
+    saved_configured = providers.is_configured
+    saved_provider_get = providers.get
+
+    async def _fake_curated():
+        return [
+            {"model": "openrouter:anthropic/claude-haiku-4.5", "tool_tier": "A",
+             "roles": ["chat", "tools"], "is_system": True},
+            {"model": "openrouter:z-ai/glm-5.2", "tool_tier": "A",
+             "roles": ["chat", "tools"], "is_system": True},
+            # must never be chosen: no tool tier, no roles, operator pseudo-id
+            {"model": "openrouter:~anthropic/claude-opus-latest", "tool_tier": "C",
+             "roles": [], "is_system": False},
+            {"model": "ollama:qwen3:8b", "tool_tier": "B",
+             "roles": ["chat", "tools"], "is_system": True},
+        ]
+    model_chain._curated = _fake_curated
+    providers.is_configured = lambda slug: slug == "openrouter"
+    providers.get = lambda slug: {"last_ok": True}
+
     from app.agents import registry as agent_registry
     saved_get = agent_registry.get_agent_by_name
 
@@ -190,12 +218,38 @@ async def test_fallback_decision():
         finally:
             mf.assess = real_assess
 
-        # keyless local-first install: main is on the SAME dead server
+        # keyless local-first install: main is on the SAME dead server, so
+        # every CONFIGURED link is local and all of them are pointless.
+        #
+        # This asserted `target is None` — "fail fast" — and that was the
+        # 2026-08-03 hole: it is `main`'s exact live shape (ornith:9b, no
+        # per-agent standby, a local install default), so the agent every chat
+        # turn uses died whenever ollama did, with capable cloud models idle.
+        # The derived cross-tier link is the answer, and it is derived from the
+        # curated catalogue rather than named here.
         agent_registry.get_agent_by_name = await main_on("ollama:qwen3:8b")
         target = await runner._fallback_target(
             AGENT, "ollama:qwen3:14b", {"error_class": "connect_failed"})
-        check("no fallback onto the same local server (fail fast)",
-              target is None, str(target))
+        check("every local link is dead -> it crosses to the cloud rather than "
+              "giving up (main's live shape)",
+              target == "openrouter:anthropic/claude-haiku-4.5", str(target))
+
+        # ...and when there is genuinely nothing on the other tier, it still
+        # fails fast rather than inventing one. Injected empty, because the
+        # derivation reads live tables and a test that reads whatever the
+        # install happens to hold asserts nothing.
+        real_cross = model_chain.cross_tier_standby
+
+        async def _no_cross(agent, **kw):
+            return None
+        model_chain.cross_tier_standby = _no_cross
+        try:
+            target = await runner._fallback_target(
+                AGENT, "ollama:qwen3:14b", {"error_class": "connect_failed"})
+            check("no cross-tier model available -> still fails fast",
+                  target is None, str(target))
+        finally:
+            model_chain.cross_tier_standby = real_cross
 
         # ...but "same server" only makes a local target pointless when the
         # SERVER is what died. _FALLBACK_CLASSES also carries http_status, and
@@ -263,6 +317,9 @@ async def test_fallback_decision():
         settings_store._cache["agents.local_fallback_enabled"] = True
         agent_registry.get_agent_by_name = saved_get
         llm_router.effective_model = saved_effective
+        model_chain._curated = saved_curated
+        providers.is_configured = saved_configured
+        providers.get = saved_provider_get
 
 
 # ── 3. the local overflow refusal ────────────────────────────────────────
@@ -345,7 +402,7 @@ async def test_dispatch_budget():
     script = DispatchScript(4)
     llm_router.stream_chat = script.stream_chat
     llm_router.effective_model = lambda m: m
-    narration.detect = lambda text, calls: None
+    narration.detect = lambda text, calls, called=None: None
 
     async def get_agent_tools(agent, exclude=None):
         return [{"type": "function", "function": {

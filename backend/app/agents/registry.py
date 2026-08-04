@@ -94,19 +94,35 @@ async def get_agent_by_name(name: str) -> Optional[dict]:
 async def create_agent(name: str, description: str, system_prompt: str, model: str,
                        allowed_tools: Optional[list[str]] = None,
                        routing_keywords: Optional[list[str]] = None,
-                       actor: str | None = None) -> str:
+                       actor: str | None = None, *, operator: bool = False,
+                       fallback_model: Optional[str] = None) -> str:
+    """`operator=True` is the human at Settings, same meaning as update_agent.
+
+    fallback_model is in _OPERATOR_ONLY, so it is dropped here for exactly the
+    reason update_agent drops it: the standby is the operator's choice, and a
+    model that could name its own would have a route onto a tool-less model on
+    which it answers confidently having called nothing. Without this the guard
+    held on the update path and stood open on the create path — nothing but
+    the shape of _manage_agents' kwargs was stopping it.
+    """
+    if not operator and fallback_model is not None:
+        log.warning("refusing to set fallback_model from a non-operator "
+                    "caller (%s)", actor or "an agent")
+        fallback_model = None
     agent_id = uuid.uuid4()
     async with db.acquire() as conn:
         await conn.execute(
             """INSERT INTO agents (id, name, description, system_prompt, model,
-                                   allowed_tools, routing_keywords)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                                   allowed_tools, routing_keywords, fallback_model)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
             agent_id, name, description, system_prompt, model,
-            allowed_tools, routing_keywords)
+            allowed_tools, routing_keywords, fallback_model)
     log.info("Agent created: %s", name)
     from app import capability_events as ce
     ce.record(ce.AGENT, name, "created", actor=actor or "operator",
-              detail={"model": model, "granted": sorted(allowed_tools or [])})
+              detail={"model": model, "granted": sorted(allowed_tools or []),
+                      **({"fallback_model": fallback_model}
+                         if fallback_model else {})})
     return str(agent_id)
 
 
@@ -142,7 +158,8 @@ async def update_agent(agent_id: str, *, operator: bool = False,
         # read BEFORE the write: an allowed_tools change is only meaningful
         # as a delta, and afterwards the previous value is gone
         prev = await conn.fetchrow(
-            "SELECT name, enabled, model, allowed_tools FROM agents WHERE id = $1",
+            "SELECT name, enabled, model, allowed_tools, fallback_model "
+            "FROM agents WHERE id = $1",
             uuid.UUID(agent_id))
         result = await conn.execute(
             f"UPDATE agents SET {', '.join(set_clauses)}, updated_at = now() WHERE id = $1",
@@ -163,6 +180,14 @@ def _record_update(prev: dict, updates: dict, operator: bool, actor: str | None)
                                      updates["allowed_tools"]))
     if "model" in updates and updates["model"] != prev.get("model"):
         detail["model"] = updates["model"]
+    # The standby decides where a failing turn lands, so a change to it is a
+    # routing change and belongs in the trail. Without this it recorded as a
+    # bare "updated" with an empty detail — including the bulk set-all path,
+    # where migration 082's trigger silently blanks a standby that now matches
+    # the new model.
+    if ("fallback_model" in updates
+            and updates["fallback_model"] != prev.get("fallback_model")):
+        detail["fallback_model"] = updates["fallback_model"] or None
     # enabled is its own verb, because "disabled" is the change an operator
     # most needs Nova to notice and "updated" would bury it
     if "enabled" in updates and updates["enabled"] != prev.get("enabled"):

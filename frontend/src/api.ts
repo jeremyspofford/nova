@@ -927,6 +927,41 @@ export interface RecCard {
   priority: number;
   created_at: string | null;
   decided_at: string | null;
+  /** The typed plan, if the card carries one. Rendered from `action_plan`,
+   *  never from these raw fields — the backend is the only thing allowed to
+   *  say what Approve does, so the card and the executor cannot disagree. */
+  action: Record<string, unknown> | null;
+  action_plan: string | null;
+  /** Whether an executor exists for this plan type yet. DERIVED from the
+   *  backend's Spec table, so the button never promises more than the code
+   *  can do. False until the phase-2 executors land. */
+  action_executable: boolean;
+  /** Echoed back on decide. A card whose plan changed since it was rendered
+   *  is a 409, not a surprise execution. */
+  action_digest: string | null;
+  /** The backend's verdict from actually dialling the plan's endpoint. */
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
+  /** The tool list the preflight fetched — the descriptions that will land in
+   *  the granted agent's prompt. Shown on the card BEFORE the click, because
+   *  one-click grant is only honest if you saw them. */
+  action_tools: { name: string; description: string }[] | null;
+  /** The latest run of this card's action, once approved. */
+  run: ActionRun | null;
+}
+
+export interface ActionRun {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  steps: { step: string; status: string; detail: string }[];
+  result: {
+    server_id?: string; name?: string; tools?: string[];
+    granted?: Record<string, string[]>;
+  } | null;
+  error: string | null;
+  created_at: string | null;
+  finished_at: string | null;
 }
 
 /** Proactive cards Nova/automations raised. 'new' = the live banner queue. */
@@ -936,14 +971,41 @@ export async function getRecCards(status: 'new' | 'all' = 'new'): Promise<RecCar
   return r.json();
 }
 
+/** `digest` is the plan the UI actually rendered. The backend compares it
+ *  against the live row inside the same transaction that flips the status, so
+ *  a plan rewritten between render and click is a 409 rather than a surprise
+ *  execution. Omitting it on a card that has a plan fails closed. */
 export async function decideRecCard(
-  id: string, choice: 'approve' | 'later' | 'dismiss'): Promise<RecCard> {
+  id: string, choice: 'approve' | 'later' | 'dismiss',
+  digest?: string | null): Promise<RecCard> {
   const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/decide`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify({ choice, action_digest: digest ?? null }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'decide failed');
+  return r.json();
+}
+
+/** Re-queue a failed run. The card's `Run again` button. */
+export async function rerunRecAction(id: string): Promise<RecCard> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/run`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'run failed');
+  return r.json();
+}
+
+export interface PreflightResult {
+  action_state: 'none' | 'ready' | 'blocked';
+  action_detail: string | null;
+  action_checked_at: string | null;
+}
+
+/** Re-dial the card's endpoint. The only path that sends the plan's headers. */
+export async function preflightRecCard(id: string): Promise<PreflightResult> {
+  const r = await apiFetch(`${API_URL}/api/v1/recommendations/${id}/preflight`,
+                           { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'preflight failed');
   return r.json();
 }
 
@@ -1270,6 +1332,112 @@ export async function getModelCapabilities(): Promise<Record<string, string[]>> 
 export async function getAgents(): Promise<AgentInfo[]> {
   const r = await apiFetch(`${API_URL}/api/v1/agents`);
   if (!r.ok) throw new Error('Failed to load agents');
+  return r.json();
+}
+
+/** One link in an agent's standby order.
+ *  `source` says where the link came from: the operator's per-agent choice,
+ *  the install-wide setting, the main agent's model, or derived from the
+ *  other tier. `why` is the backend's own sentence — never restate it here,
+ *  because a copy in TypeScript starts lying the day the chain changes. */
+export interface ChainLink {
+  model: string;
+  source: 'agent' | 'install' | 'main' | 'cross_tier';
+  why: string;
+}
+
+export async function getAgentModelChains(): Promise<Record<string, ChainLink[]>> {
+  const r = await apiFetch(`${API_URL}/api/v1/agents/model-chains`);
+  if (!r.ok) throw new Error('Failed to load model chains');
+  return r.json();
+}
+
+/** ── evals: testing a model against a suite of recorded incidents ──────
+ *  Until now this existed only as an API and a CLI, so "how do I test a
+ *  model" had no answer you could click. */
+
+export interface EvalSuite {
+  suite: string;
+  agent: string;
+  description: string;
+  tasks: number;
+  version: number;
+  cost: { measured: boolean; note: string; median_seconds?: number };
+}
+
+export interface EvalVerdict {
+  agent_name: string;
+  model: string;
+  suite: string;
+  status: 'passed' | 'failed';
+  tasks_passed: number;
+  tasks_total: number;
+  started_at: string;
+  /** How many times each task ran. 1 is a draw, not a measurement. */
+  repeat_count: number;
+  /** null = recorded before the version was stored, so the suite is unknown. */
+  suite_version: number | null;
+}
+
+export interface EvalRun {
+  id: string;
+  suite: string;
+  agent_name: string;
+  model: string;
+  status: 'running' | 'passed' | 'failed' | 'error';
+  tasks_passed: number | null;
+  tasks_total: number | null;
+  duration_s: number | null;
+  error: string | null;
+  repeat_count: number;
+  suite_version: number | null;
+  started_at: string;
+}
+
+/** One graded case. `intent` is the incident it came from, in prose — the
+ *  most useful thing in the whole file and, until now, invisible outside the
+ *  repo. `grades` is derived by the backend from the contract, never restated
+ *  here. */
+export interface EvalTask {
+  id: string;
+  title: string;
+  intent: string;
+  prompt: string;
+  grades: string[];
+}
+
+export async function getEvalTasks(suite: string): Promise<EvalTask[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/suites/${encodeURIComponent(suite)}/tasks`);
+  if (!r.ok) throw new Error('Failed to load tasks');
+  return (await r.json()).tasks;
+}
+
+export async function getEvalSuites(): Promise<{ suites: EvalSuite[]; verdicts: EvalVerdict[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/suites`);
+  if (!r.ok) throw new Error('Failed to load eval suites');
+  return r.json();
+}
+
+export async function getEvalRuns(limit = 8): Promise<EvalRun[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/runs?limit=${limit}`);
+  if (!r.ok) throw new Error('Failed to load eval runs');
+  return (await r.json()).runs;
+}
+
+/** Start a run. 409 means one is already going — the backend allows one at a
+ *  time, and the message says which. */
+export async function startEvalRun(
+  suite: string, model: string, repeat: number,
+): Promise<EvalRun> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ suite, model, repeat }),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => null);
+    throw new Error(detail?.detail || `Failed to start (${r.status})`);
+  }
   return r.json();
 }
 
