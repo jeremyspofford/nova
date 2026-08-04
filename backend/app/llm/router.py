@@ -122,13 +122,19 @@ async def _refuse_local_overflow(model: str, messages: list) -> Optional[dict]:
               estimate, limit, model)
     return {
         "type": "error",
-        "error": (f"This prompt is about {estimate:,} tokens, but {model} was "
-                  f"sized to {limit:,} — the largest window whose KV cache "
-                  f"fits in free VRAM beside its weights. Sending it would "
-                  f"silently truncate the system prompt, so the call was "
-                  f"refused. Free VRAM to raise the window (it is measured, "
-                  f"not configured), shorten the turn, or move this agent to "
-                  f"a cloud model."),
+        # State the RESERVE. Without it this named two numbers that appear to
+        # permit the call — 4,212 against a window of 8,192 — and left the
+        # reader hunting a bug in the comparison. The usable figure is the
+        # one the refusal is actually about.
+        "error": (f"This prompt is about {estimate:,} tokens, and {model} has "
+                  f"{usable:,} usable — a window of {limit:,} less the "
+                  f"{context_trim._COMPLETION_HEADROOM:,} reserved for the "
+                  f"reply. The window is the largest whose KV cache fits in "
+                  f"free VRAM beside the weights, so it shrinks when other "
+                  f"models are resident. Sending this would silently truncate "
+                  f"the system prompt, so the call was refused. Free VRAM to "
+                  f"raise the window (it is measured, not configured), "
+                  f"shorten the turn, or move this agent to a cloud model."),
         "error_class": "prompt_too_long", "status_code": None}
 
 

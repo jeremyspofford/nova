@@ -98,17 +98,24 @@ class RowsConn:
 
     async def fetch(self, sql, models, min_repeat):
         out = [r for r in self.rows
-               if r["model"] in models and r["repeat_count"] >= min_repeat]
+               if r["model"] in models and r["repeat_count"] >= min_repeat
+               # mirrors the SQL: only a run the model actually sat
+               and r.get("tasks_gradeable") is not None
+               and r["tasks_gradeable"] == r["tasks_total"]
+               and r["tasks_total"] > 0]
         # production orders newest-first and standings() relies on that to
         # pick the newest COMPARABLE row per pair — so the fake must too
         out.sort(key=lambda r: r["started_at"], reverse=True)
         return out
 
 
-def run(suite, model, passed, total, ver, hours_ago, repeat=3):
+def run(suite, model, passed, total, ver, hours_ago, repeat=3, asked=None):
+    """One recorded run. `asked` defaults to the whole suite — a complete
+    sitting — because that is what a comparable run is."""
     return {"suite": suite, "model": model, "tasks_passed": passed,
             "tasks_total": total, "suite_version": ver,
-            "started_at": ts(hours_ago), "repeat_count": repeat}
+            "started_at": ts(hours_ago), "repeat_count": repeat,
+            "tasks_gradeable": total if asked is None else asked}
 
 
 def standings_of(suites: dict, rows: list, models, min_repeat=3):
@@ -275,6 +282,48 @@ def main() -> int:
     check("a single draw cannot enter the standings, let alone win them",
           got["comparable"] is False and got["leader"] is None,
           f"basis={got['basis']} leader={got['leader']}")
+
+    print("6b. a model that was never asked is not a model that scored zero")
+    # The real first night, 2026-08-04. Six models over `main`; ollama keeps
+    # each resident for minutes, so every model after the first loaded into a
+    # GPU still holding its predecessor, windows collapsed to 8,192, and
+    # main's 4,211-token prompt was refused by nineteen tokens. Recorded:
+    #
+    #   gemma4:12b  0/7 asked 0     ornith:9b  0/7 asked 0
+    #   gemma4:e2b  0/7 asked 2     qwen3:14b  2/7 asked 6
+    #   qwen3:8b    1/7 asked 7  <- the only complete sitting
+    #
+    # standings crowned qwen3:14b and put the two that answered NOTHING last
+    # at 0%. Version, repeat and basis were all satisfied; the denominators
+    # were not the same test.
+    got = standings_of(
+        {"main": 1},
+        [run("main", "ollama:gemma4:12b", 0, 7, 1, 2, asked=0),
+         run("main", "ollama:gemma4:e2b", 0, 7, 1, 2, asked=2),
+         run("main", "ollama:qwen3:14b", 2, 7, 1, 2, asked=6),
+         run("main", "ollama:qwen3:8b", 1, 7, 1, 2, asked=7)],
+        ("ollama:gemma4:12b", "ollama:gemma4:e2b",
+         "ollama:qwen3:14b", "ollama:qwen3:8b"))
+    ranked = [r["model"] for r in got["table"] if r["ranked"]]
+    check("a model asked NOTHING is not ranked at 0% — it has no score",
+          "ollama:gemma4:12b" not in ranked, str(ranked))
+    check("...nor one asked 2 of 7, which is a different test",
+          "ollama:gemma4:e2b" not in ranked and "ollama:qwen3:14b" not in ranked,
+          str(ranked))
+    check("one complete sitting is not a comparison, so no winner is named",
+          got["leader"] is None and not got["comparable"],
+          f"leader={got['leader']} comparable={got['comparable']}")
+    check("the incomplete pairings are reported as still owed",
+          len(got["missing"]) == 3, str(len(got["missing"])))
+
+    # ...and once two models have actually sat the whole thing, it ranks.
+    got = standings_of(
+        {"main": 1},
+        [run("main", "ollama:a", 4, 7, 1, 2),
+         run("main", "ollama:b", 1, 7, 1, 2)],
+        ("ollama:a", "ollama:b"))
+    check("two complete sittings do compare, and 4/7 beats 1/7",
+          got["comparable"] and got["leader"] == "ollama:a", str(got["leader"]))
 
     print("7. a tie is reported as a tie, and no evidence as no evidence")
     got = standings_of({"alpha": 1},
