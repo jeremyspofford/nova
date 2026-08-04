@@ -80,7 +80,7 @@ without re-measuring:
 
 ## Next, in order
 
-### 1. `service_status` — she has no instrument (S, mechanical)
+### 1. `service_status` — she has no instrument (S, mechanical) — DONE 271b076
 
 **Why first.** The retry fix made her call a tool, and she then reported
 *"SearXNG is not healthy — completely unreachable"* while it was healthy.
@@ -99,7 +99,7 @@ something wrong", which is worse.
   the only socket holder by design — go through it, fixed-verb, or read
   `/proc`-level signals. **Do not mount the socket into the backend.**
 
-### 2. The goal gate creates its own card (S, mechanical)
+### 2. The goal gate creates its own card (S, mechanical) — DONE 5f95ee2
 
 Today a refusal returns a string telling the model to call `propose_goal` —
 a prompt, not a control — and she demonstrably does not. `registry.py:546`
@@ -110,7 +110,7 @@ args.
 - Change the refusal text to *"a goal card is waiting for the operator"*.
 - Leaves **an operator-visible artifact** where today a refusal leaves none.
 
-### 3. Degraded grants are visible (S, mechanical)
+### 3. Degraded grants are visible (S, mechanical) — DONE 9c76343
 
 `maintainer`'s entire read surface is an MCP sidecar. When it is stopped,
 seven granted tools vanish with **no signal anywhere** — main dispatches to
