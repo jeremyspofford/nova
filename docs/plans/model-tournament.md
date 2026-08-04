@@ -90,6 +90,33 @@ min per pass and `guardian` ~2.9, so six models × 3 repeats is roughly 30–55
 minutes. The full 8-suite rotation is 48 runs spread over 48 nights of
 ordinary sleep, not 48 runs in one, and zero tokens billed — it is all local.
 
+### The night has to evict, or it starves itself
+
+Found on the first complete night, 2026-08-04, and only visible because the
+field had just widened: **one model a night never contends with itself.**
+
+Ollama keeps a model resident for minutes after its last call, and six models
+run back to back at about that interval — so every model after the first
+loaded into a card still holding its predecessor. Measured mid-night: **19.7
+GB of a 24 GB card held by three models at once, two already finished.**
+`local_context` sizes the window to what is left, which came out at 8,192
+against models whose real limits are 32k–262k. `main`'s 4,211-token prompt
+needs 4,192 usable (the window less the 4,000-token completion reserve), so it
+was **refused by nineteen tokens** — before the model saw anything.
+
+Four of six models were never asked a single question that night.
+
+So the tournament evicts each model (`keep_alive: 0`) before the next loads.
+Best effort: a model that will not evict is a slower night, not a failed one.
+Measured after: **17.9 GB free instead of 5.0**, and the first model went from
+0 of 7 asked to a complete sitting.
+
+**This is not only an eval concern.** `main` — the agent every chat turn uses
+— runs `ollama:qwen3:8b` against that same VRAM-sized window, and a real turn
+near 4,200 tokens is *refused*, not truncated. Raising that floor is an
+operator decision: pin a larger window, keep fewer models resident, or move
+`main` to cloud.
+
 Everything records through the existing path, so `suite_version` and
 `repeat_count` land on every row and `model_fitness` reads them.
 
@@ -109,6 +136,15 @@ Four rules, each stopping a specific over-reading:
   and proposing pulls is phase 4 of this same plan.
 - **Only at the suite's current version**, the same coverage rule the rotation
   uses.
+- **Only a run the model actually SAT** — `tasks_gradeable = tasks_total`
+  (migration 088). `tasks_total` is the suite's size, so a task refused before
+  it reaches the model still sat in the denominator, and the score read as a
+  verdict on the model when it was a fact about the machine. The first
+  complete night ranked six models on denominators of 0, 2, 6 and 7 questions
+  and put the two that answered *nothing* last at 0%. A run with no gradeable
+  task is now an `error`, never `failed 0/7` — those read identically and mean
+  opposite things. Rows predating the column are NULL and excluded rather than
+  assumed complete.
 - **Only runs of `repeat >= 3`.** A manual single draw must not be able to
   crown anything.
 - **A leader needs a margin, and a tie is reported as a tie.** `ornith:9b` and
