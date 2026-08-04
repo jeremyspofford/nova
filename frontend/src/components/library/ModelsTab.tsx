@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   AgentInfo, ChainLink, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgentModelChains, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
   EvalSuite, EvalVerdict, EvalRun, EvalTask, getEvalSuites, getEvalRuns,
-  getEvalTasks, startEvalRun,
+  getEvalTasks, startEvalRun, EvalStandings, getEvalStandings,
 } from '../../api';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
@@ -449,6 +449,11 @@ function EvalsPanel() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [tasks, setTasks] = useState<EvalTask[] | null>(null);
+  // null is "not answered" and never "no winner" — the same distinction the
+  // standby order got wrong, where a dropped fetch rendered as twelve agents
+  // with no fallback. An unreachable endpoint must not read as a verdict.
+  const [standings, setStandings] = useState<EvalStandings | null>(null);
+  const [standingsError, setStandingsError] = useState('');
 
   const active = runs.find(r => r.status === 'running') || null;
 
@@ -461,6 +466,12 @@ function EvalsPanel() {
       })
       .catch(e => { setSuites([]); setStatus(String(e)); });
     getEvalRuns(12).then(setRuns).catch(() => {});
+    getEvalStandings()
+      .then(s => { setStandings(s); setStandingsError(''); })
+      .catch(e => {
+        setStandings(null);
+        setStandingsError(String(e instanceof Error ? e.message : e));
+      });
   };
 
   useEffect(() => {
@@ -649,6 +660,90 @@ function EvalsPanel() {
               </p>
             </div>
           </details>
+
+          {/* THE QUESTION THE NIGHTLY ROTATION EXISTS TO SETTLE. There is one
+              `main` binding and one install-wide standby, and no way to bind a
+              different local model per agent — so "best at guardian" is a
+              question nobody can act on, and "best across everything a local
+              model may have to run" is the only one that is. The caveats are
+              on the face of it rather than in a tooltip because a bare winner
+              is exactly what gets over-read: the BASIS says which suites the
+              comparison rests on, and a tie says tie. */}
+          <div>
+            <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">
+              Best local model, across suites
+            </h4>
+            {standingsError ? (
+              <p className="text-xs text-stone-500" title={standingsError}>
+                standings unavailable
+              </p>
+            ) : standings === null ? (
+              <p className="text-xs text-stone-500">Loading…</p>
+            ) : !standings.comparable ? (
+              <p className="text-xs text-stone-500">
+                Not comparable yet — no suite has been graded against all{' '}
+                {standings.installed.length} installed local models at repeat{' '}
+                {standings.min_repeat} or more. {standings.missing.length}{' '}
+                pairing{standings.missing.length === 1 ? '' : 's'} still owed;
+                the nightly rotation is what pays them off.
+              </p>
+            ) : (
+              <>
+                <p className="text-[11px] text-stone-500 mb-1">
+                  Over {standings.basis.length} suite
+                  {standings.basis.length === 1 ? '' : 's'} at the current
+                  version ({standings.basis.join(', ')}), repeat ≥{' '}
+                  {standings.min_repeat}, comparing only the models graded on
+                  all of them.
+                  {standings.missing.length > 0 &&
+                    ` ${standings.missing.length} pairing${standings.missing.length === 1 ? '' : 's'} still owed.`}
+                </p>
+                {standings.table.map(r => (
+                  <div key={r.model}
+                    className="flex items-baseline justify-between gap-3 text-xs py-0.5">
+                    <span className="truncate">
+                      <span className={r.ranked
+                        ? 'font-mono text-stone-400' : 'font-mono text-stone-600'}>
+                        {r.model}
+                      </span>
+                      {standings.leader === r.model && (
+                        <span className="text-emerald-400 ml-2">ahead</span>
+                      )}
+                    </span>
+                    {/* An unranked model is not a zero. It has not been
+                        measured across the whole basis, so it has no score
+                        here at all — showing 0/0 would read as "lost". */}
+                    {r.ranked ? (
+                      <span className="flex items-baseline gap-2 shrink-0">
+                        <span className="text-stone-300">
+                          {r.passed}/{r.total}
+                        </span>
+                        <span className="text-stone-500">
+                          {r.pass_rate == null
+                            ? '—'
+                            : `${Math.round(r.pass_rate * 100)}%`}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-stone-600 shrink-0"
+                        title={r.covered.length
+                          ? `Measured on ${r.covered.join(', ')} — not across the whole basis.`
+                          : 'Never graded at the current suite version.'}>
+                        not yet measured across all {standings.basis.length}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {!standings.leader && (
+                  <p className="text-[11px] text-stone-500 pt-1">
+                    Nothing is ahead by a margin, so this names no winner. Two
+                    of these have tied at 2/7 over three repeats each, and a
+                    ranking that breaks a tie by sort order is an artifact.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
 
           <div>
             <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">

@@ -117,9 +117,9 @@ async def main() -> int:
         check("the derived link is LAST — below every operator choice",
               chain[-1]["source"] == mc.LINK_CROSS, str(chain[-1]))
         check("every link carries a reason the UI can show",
-              all(l.get("why") for l in chain))
+              all(link.get("why") for link in chain))
         check("an agent never stands by for itself",
-              all(l["model"] != TOOLED["model"] for l in chain), str(chain))
+              all(link["model"] != TOOLED["model"] for link in chain), str(chain))
 
         print("5. the short-circuit — the common case pays nothing")
         probed = False

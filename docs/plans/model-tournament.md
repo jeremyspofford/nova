@@ -58,33 +58,101 @@ self-limiting like every other job there.
 - Run the suite's **field** against it at `repeat=3`. Three is not decoration:
   at `repeat=1` this suite disagreed with itself.
 
-**The field is derived from what is actually bound**, and this is where most
-of the cost went. The suites are not interchangeable — guardian grades
-refusing an injected rule deletion, memory-curator grades deleting exactly the
-notes a subject spans, tool-creator grades refusing to widen its own reach —
-but each is graded against its agent's REAL toolset, and only ONE agent here
-runs a local model:
+**The field is every installed local model, for every suite.**
 
-| the suite's agent runs | field |
-|---|---|
-| a local model | every installed local model — they are all candidates for that binding |
-| a cloud model | the install standby **only** |
+This was narrowed once and the narrowing was reverted, which is worth keeping
+on the record because the argument for it sounded right. It ran a cloud-bound
+agent's suite against the install standby alone, reasoning that ranking six
+models against guardian measures a configuration nobody deploys. It was wrong
+twice:
 
-Ranking six local models against guardian measures a configuration nobody
-deploys. The standby is the exception that has to stay: it stands in for all
-eleven cloud agents the moment a provider fails, which happened today on an
-HTTP 402, so "guardian on a local model" is the degraded path rather than a
-hypothetical — for that one model, not for all six.
+- **It made the standby unimprovable.** Eleven of twelve agents are cloud, so
+  eleven of twelve suites entered exactly one model — the incumbent. A
+  challenger cannot out-score a model it is never run against, so the standby
+  would have been defended by never being tested: a declared choice wearing
+  measurement's clothes, which is the thing this feature exists to replace.
+- **It asked the deployment question about the wrong subject.** Not "does
+  anyone deploy THIS model on THIS agent" but "does anyone deploy A LOCAL
+  model here" — and that is yes everywhere, because the standby stands in for
+  all eleven cloud agents the moment a provider fails, which happened on an
+  HTTP 402 the day this was written.
 
-Measured: **48 runs per full rotation became 13.** Derived, so moving an agent
-onto a local model puts its suite back in the full rotation with no edit.
+And the decision it feeds is **one decision, not eight**. There is a single
+`main` binding and a single install-wide standby; nothing can bind a different
+local model per agent for the degraded path. Jeremy, 2026-08-04: *"we can find
+the best local model that, if we have to choose one local llm, would be the
+best across all."* That needs the same field everywhere — see **The
+standings** below.
+
+Cost is why the narrowing was tempting and why it was not needed: **one suite
+runs per night**, so a night costs `|field|` runs either way. `main` is ~1.5
+min per pass and `guardian` ~2.9, so six models × 3 repeats is roughly 30–55
+minutes. The full 8-suite rotation is 48 runs spread over 48 nights of
+ordinary sleep, not 48 runs in one, and zero tokens billed — it is all local.
+
+### The night has to evict, or it starves itself
+
+Found on the first complete night, 2026-08-04, and only visible because the
+field had just widened: **one model a night never contends with itself.**
+
+Ollama keeps a model resident for minutes after its last call, and six models
+run back to back at about that interval — so every model after the first
+loaded into a card still holding its predecessor. Measured mid-night: **19.7
+GB of a 24 GB card held by three models at once, two already finished.**
+`local_context` sizes the window to what is left, which came out at 8,192
+against models whose real limits are 32k–262k. `main`'s 4,211-token prompt
+needs 4,192 usable (the window less the 4,000-token completion reserve), so it
+was **refused by nineteen tokens** — before the model saw anything.
+
+Four of six models were never asked a single question that night.
+
+So the tournament evicts each model (`keep_alive: 0`) before the next loads.
+Best effort: a model that will not evict is a slower night, not a failed one.
+Measured after: **17.9 GB free instead of 5.0**, and the first model went from
+0 of 7 asked to a complete sitting.
+
+**This is not only an eval concern.** `main` — the agent every chat turn uses
+— runs `ollama:qwen3:8b` against that same VRAM-sized window, and a real turn
+near 4,200 tokens is *refused*, not truncated. Raising that floor is an
+operator decision: pin a larger window, keep fewer models resident, or move
+`main` to cloud.
 
 Everything records through the existing path, so `suite_version` and
 `repeat_count` land on every row and `model_fitness` reads them.
 
-Cost, measured: `main` is ~1.5 min per pass, `guardian` ~2.9 min. A `main`
-night is six models × 3 repeats, roughly 30 minutes; every other night is one
-model × 3, under ten. Zero tokens billed — it is all local.
+### The standings
+
+Per-suite scores are the evidence; `model_tournament.standings()` is the only
+place that adds them up, because adding up is where a ranking starts lying.
+Four rules, each stopping a specific over-reading:
+
+- **The basis is the suites that can tell two models apart, and a model is
+  ranked only if it was measured across all of it.** Nothing else is
+  apples-to-apples — averaging a model measured on one suite against one
+  measured on two ranks the least-tested model first about as often as not.
+  Pairings outside it are `missing`, never folded in. Requiring *every*
+  installed model instead reads stricter and is more fragile: pulling a
+  seventh model emptied the basis and discarded a clean six-way comparison,
+  and proposing pulls is phase 4 of this same plan.
+- **Only at the suite's current version**, the same coverage rule the rotation
+  uses.
+- **Only a run the model actually SAT** — `tasks_gradeable = tasks_total`
+  (migration 088). `tasks_total` is the suite's size, so a task refused before
+  it reaches the model still sat in the denominator, and the score read as a
+  verdict on the model when it was a fact about the machine. The first
+  complete night ranked six models on denominators of 0, 2, 6 and 7 questions
+  and put the two that answered *nothing* last at 0%. A run with no gradeable
+  task is now an `error`, never `failed 0/7` — those read identically and mean
+  opposite things. Rows predating the column are NULL and excluded rather than
+  assumed complete.
+- **Only runs of `repeat >= 3`.** A manual single draw must not be able to
+  crown anything.
+- **A leader needs a margin, and a tie is reported as a tie.** `ornith:9b` and
+  `qwen3:8b` are tied 2/7 over three repeats each; breaking that by sort order
+  would be an artifact.
+
+`comparable: false` with the pairings still owed is the normal state early in
+a rotation, and it is what the panel renders — never a default winner.
 
 ### Weekly — the cloud yardstick
 
@@ -140,8 +208,19 @@ findings that say *"never graded"* and findings that say a number.
 
 ## Open
 
-- **Which binding does a winner target?** An agent's model, or the install-wide
-  standby? A suite is named after one agent, so the honest default is that
-  agent's binding — but `main` is the one anybody cares about.
+- ~~**Which binding does a winner target?**~~ **Decided 2026-08-04 — the
+  suite's own agent.** Jeremy: *"I would say the suite."* It resolves cleanly
+  once you notice there are two bindings and therefore two cards, differing
+  only in the scope of the evidence behind them:
+
+  | evidence | targets |
+  |---|---|
+  | a winner on **one** suite | that suite's agent binding |
+  | a winner across **the basis** (see the standings) | the install-wide standby |
+
+  `main` is not special-cased. It gets a card because it is a suite's agent,
+  the same as everyone else — and it is the one anybody cares about only
+  because it is the one agent currently bound to a local model, which is a
+  fact about today's config rather than about the design.
 - **Uninstalling is still manual, on purpose.** If disk ever does get tight
   the loop should propose a deletion, never perform one.

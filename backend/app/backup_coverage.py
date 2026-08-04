@@ -474,10 +474,10 @@ def check_reachable(entries: Iterable[Entry],
         if not readable(entry.name):
             out.append(Refusal(
                 code="R2_UNREACHABLE", subject=f"{entry.kind}:{entry.name}",
-                detail=(f"classified for inclusion but the backup runner "
-                        f"cannot read it. Add it to the backup-runner "
-                        f"service's mounts (read-only) — a bundle that "
-                        f"silently omits a tier is worse than no bundle.")))
+                detail=("classified for inclusion but the backup runner "
+                        "cannot read it. Add it to the backup-runner "
+                        "service's mounts (read-only) — a bundle that "
+                        "silently omits a tier is worse than no bundle.")))
     return out
 
 
