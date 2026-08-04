@@ -100,7 +100,7 @@ async def estimate(suite: str) -> dict:
 async def recent(agent_name: Optional[str] = None, limit: int = 20) -> list[dict]:
     sql = ("SELECT id, suite, agent_name, model, status, started_at, "
            "       finished_at, tasks_total, tasks_passed, tokens_in, "
-           "       tokens_out, duration_s, error "
+           "       tokens_out, duration_s, error, repeat_count, suite_version "
            "  FROM eval_runs")
     args: list = []
     if agent_name:
@@ -112,11 +112,18 @@ async def recent(agent_name: Optional[str] = None, limit: int = 20) -> list[dict
 
 
 async def latest_verdicts() -> list[dict]:
-    """The newest finished verdict per (agent, model) — what a picker shows."""
+    """The newest finished verdict per (agent, model) — what a picker shows.
+
+    `repeat_count` and `suite_version` ride along because a bare "2/7" in a
+    picker is the exact over-reading migration 086 exists to stop: one draw
+    against a suite that has since moved looks identical to a repeated run
+    against the current one.
+    """
     async with db.acquire() as conn:
         return [dict(r) for r in await conn.fetch(
             "SELECT DISTINCT ON (agent_name, model) agent_name, model, status, "
-            "       tasks_passed, tasks_total, started_at "
+            "       tasks_passed, tasks_total, started_at, repeat_count, "
+            "       suite_version, suite "
             "  FROM eval_runs WHERE status IN ('passed','failed') "
             " ORDER BY agent_name, model, started_at DESC")]
 

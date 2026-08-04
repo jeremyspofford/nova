@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   AgentInfo, ChainLink, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgentModelChains, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
+  EvalSuite, EvalVerdict, EvalRun, getEvalSuites, getEvalRuns, startEvalRun,
 } from '../../api';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
@@ -406,10 +407,218 @@ export function ModelsTab() {
         <SettingsTab only={['Models']} />
       </div>
       <RolesPanel />
+      <EvalsPanel />
       <PullModel onPulled={() => {}} />
       <ProvidersPanel />
       <CuratedTable />
       <FullCatalog />
+    </div>
+  );
+}
+
+/** Test a model against a suite of recorded incidents.
+ *
+ *  This existed as an API route and a CLI for weeks and had no button, so the
+ *  answer to "how do I test a model" was a curl command — which is how the
+ *  operator came to ask. It sits under Models because that is where the
+ *  question is asked, one panel below the bindings it should inform.
+ *
+ *  Three things are deliberately on the face of it rather than behind a
+ *  tooltip, because each one is a way a score gets over-read:
+ *
+ *    the cost      a suite is minutes and real tokens. Measured from previous
+ *                  runs, never estimated — "unknown" beats a made-up number
+ *                  in the sentence someone reads before spending.
+ *    the repeats   1 is a draw, not a measurement. A suite that scored 2/7
+ *                  and 3/7 on consecutive runs of the SAME model is why.
+ *    the version   a verdict against an older suite grades a different set of
+ *                  tasks, and says so instead of showing a bare fraction.
+ *
+ *  One run at a time is the backend's rule (a single `_running` guard), so the
+ *  button disables itself while anything is going rather than collecting a
+ *  409 the operator has to interpret. */
+function EvalsPanel() {
+  const [suites, setSuites] = useState<EvalSuite[] | null>(null);
+  const [verdicts, setVerdicts] = useState<EvalVerdict[]>([]);
+  const [runs, setRuns] = useState<EvalRun[]>([]);
+  const [suite, setSuite] = useState('');
+  const [model, setModel] = useState('');
+  const [repeat, setRepeat] = useState(3);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const active = runs.find(r => r.status === 'running') || null;
+
+  const load = () => {
+    getEvalSuites()
+      .then(d => {
+        setSuites(d.suites);
+        setVerdicts(d.verdicts);
+        setSuite(s => s || d.suites[0]?.suite || '');
+      })
+      .catch(e => { setSuites([]); setStatus(String(e)); });
+    getEvalRuns(8).then(setRuns).catch(() => {});
+  };
+
+  useEffect(() => {
+    load();
+    getModels(false).then(setModels).catch(() => {});
+  }, []);
+
+  // Poll only while something is running. A finished board does not need a
+  // timer, and a 3-repeat suite is minutes — the operator should not have to
+  // sit on the tab to find out how it went.
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => {
+      getEvalRuns(8).then(rs => {
+        setRuns(rs);
+        if (!rs.some(r => r.status === 'running')) load();
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+  }, [active?.id]);
+
+  const chosen = suites?.find(s => s.suite === suite);
+
+  async function run() {
+    if (!suite || !model) return;
+    setBusy(true);
+    setStatus('');
+    try {
+      const r = await startEvalRun(suite, model, repeat);
+      setRuns(prev => [r, ...prev]);
+    } catch (e) {
+      setStatus(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** A verdict, with everything needed to not over-read it. */
+  function verdictLine(v: EvalVerdict) {
+    const s = suites?.find(x => x.suite === v.suite);
+    const stale = v.suite_version != null && s && v.suite_version !== s.version;
+    return (
+      <div key={`${v.agent_name}:${v.model}`}
+        className="flex items-baseline justify-between gap-3 text-xs py-0.5">
+        <span className="font-mono text-stone-400 truncate">{v.model}</span>
+        <span className="flex items-baseline gap-2 shrink-0">
+          <span className={v.tasks_passed === v.tasks_total
+            ? 'text-emerald-400' : 'text-stone-300'}>
+            {v.tasks_passed}/{v.tasks_total}
+          </span>
+          <span className="text-stone-500">
+            {v.repeat_count > 1
+              ? `over ${v.repeat_count} runs`
+              : 'one run — a draw'}
+          </span>
+          {v.suite_version == null && (
+            <span className="text-stone-600" title="Recorded before the suite version was stored, so which tasks it graded is unknown.">
+              unversioned
+            </span>
+          )}
+          {stale && (
+            <span className="text-amber-400/90"
+              title={`Graded against suite v${v.suite_version}; it is now v${s!.version}. This score describes a different set of tasks.`}>
+              v{v.suite_version} — suite moved
+            </span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-stone-700 bg-stone-800/30 p-3 space-y-3">
+      <div>
+        <h3 className="text-sm text-stone-200">Test a model</h3>
+        <p className="text-xs text-stone-500 mt-0.5">
+          Each suite is a set of recorded incidents from this repo, replayed
+          against frozen fixtures. A run is real agent turns with real tool
+          calls, so it costs minutes and tokens.
+        </p>
+      </div>
+
+      {suites === null ? (
+        <div className="text-xs text-stone-500">Loading…</div>
+      ) : !suites.length ? (
+        <div className="text-xs text-stone-500">No suites found.</div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={suite} onChange={e => setSuite(e.target.value)}
+              className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200">
+              {suites.map(s => (
+                <option key={s.suite} value={s.suite}>
+                  {s.suite} — {s.tasks} tasks (v{s.version})
+                </option>
+              ))}
+            </select>
+            <select value={model} onChange={e => setModel(e.target.value)}
+              className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 max-w-[16rem]">
+              <option value="">choose a model…</option>
+              {models.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+            </select>
+            <label className="text-xs text-stone-500 flex items-center gap-1">
+              repeat
+              <select value={repeat} onChange={e => setRepeat(Number(e.target.value))}
+                className="bg-stone-900 border border-stone-700 rounded px-1.5 py-1 text-xs text-stone-200"
+                title="Each task runs this many times, and counts as passed only if it passed every one. 1 is a single draw.">
+                {[1, 2, 3, 5].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <button onClick={run} disabled={busy || !!active || !model}
+              className="px-3 py-1 text-xs rounded bg-teal-700/80 hover:bg-teal-700 disabled:bg-stone-700 disabled:text-stone-500 text-white">
+              {active ? 'a run is going…' : busy ? 'starting…' : 'Run'}
+            </button>
+          </div>
+
+          {chosen && (
+            <p className="text-[11px] text-stone-500">
+              {chosen.cost.note}
+              {repeat > 1 && chosen.cost.measured &&
+                ` Running ${repeat}x multiplies that.`}
+            </p>
+          )}
+          {status && <p className="text-[11px] text-amber-400/90">{status}</p>}
+
+          {active && (
+            <div className="text-xs text-stone-300 border border-stone-700 rounded p-2">
+              <span className="font-mono">{active.model}</span> on{' '}
+              <span className="font-mono">{active.suite}</span> — running
+              {active.repeat_count > 1 && `, ${active.repeat_count} repeats`}.
+              This page updates on its own.
+            </div>
+          )}
+
+          <div>
+            <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">
+              Latest verdict per model
+            </h4>
+            {!verdicts.length ? (
+              <p className="text-xs text-stone-500">
+                Nothing has been graded yet. A model with no verdict is not
+                &ldquo;fine&rdquo; — it is unmeasured, and model fitness says so.
+              </p>
+            ) : (
+              verdicts.map(verdictLine)
+            )}
+          </div>
+
+          {/* Only the MOST RECENT run, and only if it errored. Scanning the
+              last eight for any error surfaced a failure from hours earlier
+              in amber as though it had just happened — which is the same
+              absence-read-as-now mistake this whole lane is about. */}
+          {runs[0]?.status === 'error' && (
+            <p className="text-[11px] text-amber-400/90">
+              Last run (<span className="font-mono">{runs[0].model}</span> on{' '}
+              {runs[0].suite}) did not finish: {runs[0].error}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

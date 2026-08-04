@@ -1290,6 +1290,77 @@ export async function getAgentModelChains(): Promise<Record<string, ChainLink[]>
   return r.json();
 }
 
+/** ── evals: testing a model against a suite of recorded incidents ──────
+ *  Until now this existed only as an API and a CLI, so "how do I test a
+ *  model" had no answer you could click. */
+
+export interface EvalSuite {
+  suite: string;
+  agent: string;
+  description: string;
+  tasks: number;
+  version: number;
+  cost: { measured: boolean; note: string; median_seconds?: number };
+}
+
+export interface EvalVerdict {
+  agent_name: string;
+  model: string;
+  suite: string;
+  status: 'passed' | 'failed';
+  tasks_passed: number;
+  tasks_total: number;
+  started_at: string;
+  /** How many times each task ran. 1 is a draw, not a measurement. */
+  repeat_count: number;
+  /** null = recorded before the version was stored, so the suite is unknown. */
+  suite_version: number | null;
+}
+
+export interface EvalRun {
+  id: string;
+  suite: string;
+  agent_name: string;
+  model: string;
+  status: 'running' | 'passed' | 'failed' | 'error';
+  tasks_passed: number | null;
+  tasks_total: number | null;
+  duration_s: number | null;
+  error: string | null;
+  repeat_count: number;
+  suite_version: number | null;
+  started_at: string;
+}
+
+export async function getEvalSuites(): Promise<{ suites: EvalSuite[]; verdicts: EvalVerdict[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/suites`);
+  if (!r.ok) throw new Error('Failed to load eval suites');
+  return r.json();
+}
+
+export async function getEvalRuns(limit = 8): Promise<EvalRun[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/runs?limit=${limit}`);
+  if (!r.ok) throw new Error('Failed to load eval runs');
+  return (await r.json()).runs;
+}
+
+/** Start a run. 409 means one is already going — the backend allows one at a
+ *  time, and the message says which. */
+export async function startEvalRun(
+  suite: string, model: string, repeat: number,
+): Promise<EvalRun> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ suite, model, repeat }),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => null);
+    throw new Error(detail?.detail || `Failed to start (${r.status})`);
+  }
+  return r.json();
+}
+
 export async function patchAgent(id: string, body: Record<string, unknown>): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/agents/${id}`, {
     method: 'PATCH',

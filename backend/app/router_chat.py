@@ -1728,6 +1728,9 @@ async def evals_suites():
         out.append({"suite": name, "agent": suite.agent,
                     "description": suite.description,
                     "tasks": len(suite.task_ids),
+                    # so the UI can mark a verdict recorded against an older
+                    # version as describing a different set of tasks
+                    "version": suite.version,
                     "cost": await eval_runs.estimate(name)})
     return {"suites": out, "verdicts": await eval_runs.latest_verdicts()}
 
