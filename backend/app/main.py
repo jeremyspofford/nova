@@ -70,9 +70,14 @@ async def lifespan(app: FastAPI):
     await leader.start()
     await ingest_backfill.run()   # one-time repair: anchor drifting source ingests
     # an eval runs in-process, so a restart (including any --reload edit)
-    # kills it; without this its row stays 'running' and reads as in-flight
-    from app import eval_runs
-    await eval_runs.reconcile_orphans()
+    # kills it; without this its row stays 'running' and reads as in-flight.
+    # BACKGROUNDED, and deliberately late: a run we did not kill may be alive
+    # in another process, and the only way to tell is to let the heartbeat
+    # window pass. Reaping eagerly at boot marked a live run "interrupted"
+    # mid-execution — see eval_runs.reconcile_orphans.
+    from app import bg, eval_runs
+    bg.spawn(eval_runs.reconcile_orphans(delay_s=eval_runs.STALE_AFTER_S + 15),
+             name="eval-orphan-reap")
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.
