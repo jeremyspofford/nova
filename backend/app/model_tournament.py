@@ -285,6 +285,25 @@ async def maybe_run() -> Optional[dict]:
              suite, len(models), repeat)
     done, skipped = [], []
     for model in models:
+        # Wait for the SLOT, not just the row. Measured 2026-08-04: another
+        # process booting the app reaped a LIVE run's row — it was executing
+        # the whole time and went on to record failed (2/6) — so `_await_run`
+        # saw a terminal row and returned while the in-process guard was
+        # still genuinely held. Every remaining model was then refused in one
+        # burst, because `continue` never yields. Ran 1, skipped 5.
+        #
+        # eval_runs.reconcile_orphans no longer lies like that, but the row
+        # and the guard remain two different facts, and this waits on the one
+        # `start` actually checks. A guard held by a task that died without
+        # cleanup would otherwise cost every night, not one.
+        held = await _await_slot()
+        if held:
+            log.warning("tournament: the eval slot is still held by %s — "
+                        "skipping the rest of tonight rather than burning "
+                        "through them", held)
+            skipped.extend(f"{m}: eval slot held by {held}"
+                           for m in models[models.index(model):])
+            break
         try:
             run = await eval_runs.start(suite, model, repeat)
         except ValueError as e:
@@ -325,6 +344,29 @@ async def maybe_run() -> Optional[dict]:
     except Exception:  # noqa: BLE001 — a summary never fails the night's work
         log.exception("tournament: standings failed")
     return summary
+
+
+async def _await_slot(poll_s: float = 2.0,
+                      limit_s: float = 120.0) -> Optional[str]:
+    """Wait for the eval slot to free. Returns None when it did, else the
+    holder — so the caller can say WHICH run is in the way rather than
+    reporting six identical refusals.
+
+    Bounded, because a slot held by a task that died without running its
+    cleanup never frees on its own, and a tournament that waits forever costs
+    every night after it rather than one.
+    """
+    import asyncio
+
+    from app import eval_runs
+    deadline = time.monotonic() + limit_s
+    while True:
+        held = eval_runs.busy()
+        if not held:
+            return None
+        if time.monotonic() >= deadline:
+            return held
+        await asyncio.sleep(poll_s)
 
 
 async def _await_run(run_id: str, poll_s: float = 10.0,

@@ -75,11 +75,19 @@ async def lifespan(app: FastAPI):
     await leader.start()
     await ingest_backfill.run()   # one-time repair: anchor drifting source ingests
     # an eval runs in-process, so a restart (including any --reload edit)
-    # kills it; without this its row stays 'running' and reads as in-flight
-    from app import eval_runs
-    await eval_runs.reconcile_orphans()
-    # same reasoning for an action run: the process dying mid-register leaves
-    # a row that reads as in-flight forever
+    # kills it; without this its row stays 'running' and reads as in-flight.
+    # BACKGROUNDED, and deliberately late: a run we did not kill may be alive
+    # in another process, and the only way to tell is to let the heartbeat
+    # window pass. Reaping eagerly at boot marked a live run "interrupted"
+    # mid-execution — see eval_runs.reconcile_orphans.
+    from app import bg, eval_runs
+    bg.spawn(eval_runs.reconcile_orphans(delay_s=eval_runs.STALE_AFTER_S + 15),
+             name="eval-orphan-reap")
+    # Same failure, different table: a process dying mid-register leaves an
+    # action run reading as in-flight forever. Eager and awaited, unlike the
+    # eval reaper above — an action run only ever executes on the leader, in
+    # THIS process, so a row still 'running' at boot cannot be alive
+    # elsewhere and there is no heartbeat window to wait out.
     from app import action_worker
     await action_worker.reset_orphans()
     # Size the local models' context windows before anything trims against

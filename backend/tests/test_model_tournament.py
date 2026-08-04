@@ -289,6 +289,53 @@ def main() -> int:
           got["comparable"] is False and got["leader"] is None
           and len(got["missing"]) == 2, str(got))
 
+    print("7b. a held eval slot stops the night, it does not consume it")
+    # Measured 2026-08-04. Another process booting the app reaped run 1's ROW
+    # while it was still executing — it later recorded failed (2/6), so it
+    # had never died — and _await_run, which watches the row, returned while
+    # the in-process guard start() actually checks was still held. `continue`
+    # never yields, so models 2-6 were refused in one scheduling window: ran
+    # 1, skipped 5. The row and the guard are two different facts, and the
+    # loop was watching the wrong one.
+    from app import eval_runs, settings_store
+
+    real_busy, real_start = eval_runs.busy, eval_runs.start
+    real_setting = settings_store.get
+    started: list = []
+
+    async def _start(suite, model, repeat):
+        started.append(model)
+        raise AssertionError("start() must not be reached while held")
+
+    eval_runs.busy = lambda: "run-that-never-let-go"
+    eval_runs.start = _start
+    settings_store.get = lambda k, *a, **kw: (
+        1 if k == "evals.tournament_every_hours"
+        else 3 if k == "evals.tournament_repeat" else real_setting(k, *a, **kw))
+    real_pairing, real_slot = mt.next_pairing, mt._await_slot
+    mt._last_run = 0.0
+
+    async def _pairing():
+        return ("alpha", ["ollama:a", "ollama:b", "ollama:c"])
+
+    async def _slot(*a, **kw):        # the real one, minus the 120s wait
+        return eval_runs.busy()
+
+    mt.next_pairing, mt._await_slot = _pairing, _slot
+    try:
+        summary = asyncio.run(mt.maybe_run())
+        check("start() is never called while the slot is held",
+              started == [], str(started))
+        check("...and all three are reported as skipped, naming the holder",
+              summary and len(summary["skipped"]) == 3
+              and "run-that-never-let-go" in summary["skipped"][0],
+              str(summary and summary["skipped"]))
+    finally:
+        eval_runs.busy, eval_runs.start = real_busy, real_start
+        mt.next_pairing, mt._await_slot = real_pairing, real_slot
+        settings_store.get = real_setting
+        mt._last_run = 0.0
+
     print("8. off is the default, and off means nothing happens")
     from app import settings_store
     real_get = settings_store.get

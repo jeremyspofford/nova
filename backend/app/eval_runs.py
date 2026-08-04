@@ -39,24 +39,85 @@ _lock = asyncio.Lock()
 _running: Optional[str] = None
 
 
-async def reconcile_orphans() -> int:
-    """Close out runs that a restart killed mid-flight.
+def busy() -> Optional[str]:
+    """The run holding the slot, or None — the SAME fact `start` gates on.
+
+    Callers that queue runs need this rather than the row's status. The two
+    are not interchangeable: `reconcile_orphans` can mark a row terminal from
+    a different process than the one whose `_execute` would clear this global,
+    so a row can read finished while the slot is still held. Watching the row
+    and then starting the next run is how the tournament came to skip five of
+    six models in a single burst on 2026-08-04.
+    """
+    return _running
+
+
+# A run says it is alive by touching detail->heartbeat. STALE_AFTER must be
+# several beats, so one slow database moment never reads as a dead run.
+HEARTBEAT_EVERY_S = 20.0
+STALE_AFTER_S = 90
+
+
+async def _heartbeat(run_id: str) -> None:
+    """Say this run is still alive, until cancelled.
+
+    Without it a run cannot be distinguished from its own corpse, and
+    `reconcile_orphans` has to guess — see the docstring there for what that
+    cost.
+    """
+    while True:
+        await asyncio.sleep(HEARTBEAT_EVERY_S)
+        try:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "UPDATE eval_runs "
+                    "   SET detail = jsonb_set(detail, '{heartbeat}', "
+                    "                          to_jsonb(now())) "
+                    " WHERE id = $1::uuid AND status = 'running'", run_id)
+        except Exception:  # noqa: BLE001 — a missed beat is not a dead run
+            log.debug("eval heartbeat failed for %s", run_id, exc_info=True)
+
+
+async def reconcile_orphans(delay_s: float = 0.0) -> int:
+    """Close out runs that really did die — and ONLY those.
 
     A run executes in-process (asyncio.create_task), and the dev server runs
     with --reload, so ANY source edit kills it. Without this the row stays
-    `running` forever and reads as "still going" — the same silent-limbo
-    shape the ingest queue already fixed by requeuing orphaned rows at
-    startup. Marked `error`, never `failed`: the harness died, which is not a
-    verdict on the model, and recording it as one would be a lie that later
-    shows up in a picker.
+    `running` forever and reads as "still going". Marked `error`, never
+    `failed`: the harness died, which is not a verdict on the model, and
+    recording it as one would be a lie that later shows up in a picker.
+
+    IT USED TO REAP EVERY `running` ROW, unconditionally, at startup. That is
+    wrong the moment a second process exists, and one always does — a test
+    run, `python -m app.evals`, another container. Measured 2026-08-04: a
+    live tournament run was marked "interrupted by a backend restart" while
+    it was still executing, by some other process booting the app. No restart
+    had happened. The row went terminal, the tournament's `_await_run` saw a
+    finished row and moved on while the in-process slot was still genuinely
+    held, and the night ended having measured one model of six. The run then
+    finished normally and recorded `failed (2/6)` — a verdict that, for three
+    minutes, sat underneath a row claiming it had been interrupted.
+
+    So death is now PROVEN rather than assumed: a live run touches
+    `detail->heartbeat` every 20s, and only a row that has missed several
+    beats is reaped. `delay_s` lets startup schedule this in the background
+    past the staleness window, so a run this process actually did kill is
+    still caught, without blocking the boot and without libelling anyone
+    else's.
     """
+    if delay_s:
+        await asyncio.sleep(delay_s)
     async with db.acquire() as conn:
         rows = await conn.fetch(
             "UPDATE eval_runs SET status='error', finished_at=now(), "
-            "       error='interrupted by a backend restart' "
-            " WHERE status='running' RETURNING id")
+            "       error='the run stopped reporting and was declared dead' "
+            " WHERE status='running' "
+            "   AND COALESCE((detail->>'heartbeat')::timestamptz, started_at) "
+            f"       < now() - interval '{STALE_AFTER_S} seconds' "
+            " RETURNING id")
     if rows:
-        log.warning("eval: %d run(s) were interrupted by a restart", len(rows))
+        log.warning("eval: %d run(s) stopped reporting and were closed out",
+                    len(rows))
     return len(rows)
 
 
@@ -141,6 +202,9 @@ async def _execute(run_id: str, suite_name: str, model: str,
     global _running
     from app.evals import checks, runner as eval_runner, suites as suite_mod
 
+    # Starts BEFORE any work, so a run that dies in its first seconds is
+    # still distinguishable from one that never reported at all.
+    beat = asyncio.create_task(_heartbeat(run_id))
     scratch = Path(tempfile.mkdtemp(prefix="nova-eval-"))
     total = passed = 0
     tin = tout = 0
@@ -192,6 +256,7 @@ async def _execute(run_id: str, suite_name: str, model: str,
         log.exception("eval run %s failed", run_id)
         status, error = "error", f"{type(exc).__name__}: {exc}"[:500]
     finally:
+        beat.cancel()
         shutil.rmtree(scratch, ignore_errors=True)
         async with db.acquire() as conn:
             await conn.execute(
