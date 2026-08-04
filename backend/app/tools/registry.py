@@ -207,6 +207,48 @@ def builtin_def(name: str) -> dict:
     return _to_llm_def(BUILTIN_TOOLS[name])
 
 
+async def degraded_grants(agent: dict) -> list[str]:
+    """Grants this agent HOLDS that currently resolve to nothing callable.
+
+    `maintainer`'s entire read surface is one MCP sidecar. Stop it and seven
+    granted tools vanish from her toolset with no signal anywhere: main
+    dispatches to her, she has nothing to work with, and the failure reads as
+    incompetence rather than as a service being down. The grant row still says
+    she can; only the resolution says she cannot, and nobody was comparing the
+    two.
+
+    So this compares them, per GRANT ENTRY rather than per resolved name — a
+    set difference would be wrong, because one `mcp:server:*` entry expands to
+    many tools and `db:*` to whatever exists. An entry counts as degraded when
+    nothing it names can currently be called.
+
+    Derived, and self-clearing: it re-resolves live, so starting the sidecar
+    makes the warning disappear on the next turn with no edit and no reset.
+
+    Never a wildcard over an empty set — `db:*` with no DB tools registered is
+    a grant that matches nothing, not a broken one, and flagging it would cry
+    wolf on an install that simply has none.
+    """
+    allowed = agent.get("allowed_tools")
+    if not allowed:               # None = unrestricted; [] = nothing to break
+        return []
+    db_tools = await _load_db_tools()
+    mcp_tools: dict = {}
+    if any(str(e).startswith("mcp:") for e in allowed):
+        mcp_tools = await _load_mcp_tools()
+    out: list[str] = []
+    for entry in allowed:
+        name = str(entry)
+        if name == "db:*" or name in BUILTIN_TOOLS or name in db_tools:
+            continue
+        if name.startswith("mcp:"):
+            _has, named, wild = _granted_mcp_tools({"allowed_tools": [name]})
+            if any(_mcp_granted(full, named, wild) for full in mcp_tools):
+                continue
+        out.append(name)
+    return out
+
+
 async def get_agent_tools(agent: dict, exclude: Optional[set[str]] = None) -> list[dict]:
     """LLM tool definitions for an agent.
 

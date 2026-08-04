@@ -170,6 +170,28 @@ async def report(area: Optional[str] = None) -> dict:
             "note": "Service health could not be read at all. This says "
                     "nothing about whether the services are up — do not "
                     "report them as down on the strength of it."}
+    # Grants that resolve to nothing. Same rule as services above: the row
+    # saying an agent CAN call something is not evidence that it can, and the
+    # gap between the two was invisible everywhere until now.
+    try:
+        from app.agents import registry as agent_registry
+        from app.tools import registry as tool_registry
+        broken = {}
+        for a in await agent_registry.list_agents(enabled_only=False):
+            gone = await tool_registry.degraded_grants(a)
+            if gone:
+                broken[a["name"]] = gone
+        out["degraded_grants"] = broken
+        out["degraded_grants_note"] = (
+            "Granted tools that cannot be called right now — whatever provides "
+            "them (an MCP server, a DB tool row) is down or gone. The agent "
+            "still holds the grant, so this is a service problem, not a "
+            "permissions one."
+            if broken else
+            "Every granted tool on every agent resolves to something callable.")
+    except Exception:  # noqa: BLE001 — never blank the report over this
+        log.debug("degraded-grant scan failed", exc_info=True)
+
     try:
         from app import sysmon
         out["shared_backends"] = await sysmon._reaches()

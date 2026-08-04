@@ -723,9 +723,29 @@ async def _build_system_prompt(agent: dict, query: str, *,
                         tool_registry.canonical_name(d["function"]["name"])
                         for d in await tool_registry.get_agent_tools(a))
 
+                # A specialist whose grants do not resolve is worse than one
+                # with none: main dispatches confidently, the specialist has
+                # nothing, and the reply reads as incompetence. Told BEFORE
+                # the dispatch, because after it the work is already wasted.
+                broken: dict[str, list[str]] = {}
+                for a in others:
+                    try:
+                        got = await tool_registry.degraded_grants(a)
+                    except Exception:  # noqa: BLE001
+                        got = []
+                    if got:
+                        broken[a["name"]] = got
+
                 def _can_call(a: dict) -> str:
                     names = resolved.get(a["name"], [])
-                    return ", ".join(names) if names else "NOTHING — no tools granted"
+                    line = ", ".join(names) if names else "NOTHING — no tools granted"
+                    gone = broken.get(a["name"])
+                    if gone:
+                        line += (f"\n    DEGRADED — granted but not callable "
+                                 f"right now: {', '.join(gone)}. Whatever "
+                                 f"provides them is down. Do not dispatch work "
+                                 f"that needs them; say so instead.")
+                    return line
 
                 for a in others:
                     for t in resolved[a["name"]]:
@@ -1560,6 +1580,24 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             f"configured), so this ran on {swapped} instead")
         log.warning("model downgrade: %s -> %s for agent %s",
                     agent["model"], swapped, agent.get("name"))
+
+    # A GRANT THAT RESOLVES TO NOTHING is the same class of degradation as the
+    # model swap above, and it had no signal at all. maintainer's whole read
+    # surface is one MCP sidecar: stop it and seven granted tools vanish, main
+    # dispatches to her anyway, and the failure reads as incompetence instead
+    # of as a service being down. The row still says she can; only the
+    # resolution says she cannot.
+    try:
+        missing = await tool_registry.degraded_grants(agent)
+        if missing:
+            degraded.append(
+                f"{len(missing)} granted tool(s) are not callable right now "
+                f"({', '.join(missing[:5])}) — whatever provides them is down "
+                f"or gone, so say so rather than working around it silently")
+            log.warning("degraded grants for %s: %s",
+                        agent.get("name"), ", ".join(missing))
+    except Exception:  # noqa: BLE001 — a missing warning never costs the turn
+        log.debug("degraded-grant check failed", exc_info=True)
 
     async with trace.span("stage", "build_prompt") as psp:
         prompt_signals: dict = {}
