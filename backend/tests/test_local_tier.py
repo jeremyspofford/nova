@@ -368,6 +368,38 @@ async def test_local_overflow_refusal():
               "a number nobody has",
               await llm_router._refuse_local_overflow("ollama:qwen3:14b", big)
               is None)
+
+        # ONE NUMBER PER CALL. The trimmer used to size against
+        # local_context.cached() while this refused against
+        # effective_window() — two answers to one question, and the stale one
+        # won silently. The caller resolves once and hands it down; a window
+        # passed in is never second-guessed by another probe.
+        local_context.effective_window = _wide       # would say "fine"
+        check("a window passed in WINS over anything the module could probe",
+              (await llm_router._refuse_local_overflow(
+                  "ollama:qwen3:14b", big, 8192) or {}).get("error_class")
+              == "prompt_too_long")
+        local_context.effective_window = _narrow     # would say "refuse"
+        check("...in both directions",
+              await llm_router._refuse_local_overflow(
+                  "ollama:qwen3:14b", big, 262144) is None)
+
+        # Below a 6,000-token window `ceiling_for` clamps at 2,000 and this
+        # did not, so the trimmer declared a transcript safe that the refusal
+        # then rejected — the same disagreement, one layer down.
+        from app.agents import context_trim
+        under = [{"role": "user", "content": "x" * 5_000}]     # ~1,667 tokens
+        over = [{"role": "user", "content": "x" * 9_000}]      # ~3,000 tokens
+        check("at a 4,096 window the refusal budgets 2,000 tokens, exactly "
+              "what ceiling_for clamps to — unclamped it would have been 96, "
+              "and every prompt the trimmer passed would have been refused",
+              context_trim.ceiling_for("openrouter:test") is not None
+              and await llm_router._refuse_local_overflow(
+                  "ollama:qwen3:14b", under, 4096) is None)
+        check("...and a prompt genuinely past that clamp is still refused",
+              (await llm_router._refuse_local_overflow(
+                  "ollama:qwen3:14b", over, 4096) or {}).get("error_class")
+              == "prompt_too_long")
     finally:
         local_context.effective_window = saved_window
 

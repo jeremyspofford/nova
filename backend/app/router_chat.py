@@ -553,8 +553,8 @@ async def chat_stream(request: ChatRequest):
     # reported as fact.
     _first = next((m["created_at"] for m in window if m.get("created_at")), None)
     _activity = await conversations.load_tool_activity(conversation_id, _first)
-    turn_messages = conversations.to_llm_history(window, _activity) + [
-        {"role": "user", "content": turn_content}]
+    replayed = conversations.to_llm_history(window, _activity)
+    turn_messages = replayed + [{"role": "user", "content": turn_content}]
 
     user_meta: dict = {}
     if attach_meta:
@@ -598,6 +598,7 @@ async def chat_stream(request: ChatRequest):
                 main_agent, turn_messages,
                 conversation_summary=conversation.get("summary"),
                 system_suffix=voice_suffix, speaker=speaker,
+                history_count=len(replayed),
                 conversation_id=conversation_id)
             try:
                 async for event in events:
