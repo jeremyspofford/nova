@@ -78,17 +78,25 @@ async def run() -> None:
         made.append(g["id"])
         check("proposing grants nothing on its own",
               (await goals.get(g["id"]))["status"] == "proposed"
-              and not await goals.spend("manage_tools"))
+              and not await goals.spend("manage_tools", agent_name="main"))
         await goals.activate(g["id"], max_actions=2)
-        check("an approved verb spends", bool(await goals.spend("manage_tools")))
+        # The goal was proposed BY main, so main is who may spend it. Until
+        # 2026-08-04 spend() matched on verb alone and `agent_name` reached
+        # only the log line, so this same call succeeded for every other agent
+        # and for every scheduled automation.
+        check("another agent cannot spend main's approval",
+              not await goals.spend("manage_tools", agent_name="ingestion"))
+        check("an approved verb spends",
+              bool(await goals.spend("manage_tools", agent_name="main")))
         check("a verb outside the goal does NOT, however related it sounds — "
               "'I need an agent to manage the router' is exactly the argument "
               "a model would make, and it is not a key",
-              not await goals.spend("manage_agents"))
+              not await goals.spend("manage_agents", agent_name="main"))
 
         print("4. the bounds are columns, not heuristics")
-        check("the action cap holds", bool(await goals.spend("manage_tool_hosts"))
-              and not await goals.spend("manage_tools"))
+        check("the action cap holds",
+              bool(await goals.spend("manage_tool_hosts", agent_name="main"))
+              and not await goals.spend("manage_tools", agent_name="main"))
         check("an exhausted goal leaves active()",
               all(x["id"] != g["id"] for x in await goals.active()))
 
@@ -96,7 +104,7 @@ async def run() -> None:
         made.append(g2["id"])
         await goals.activate(g2["id"], max_actions=1)
         winners = sum(1 for x in await asyncio.gather(
-            *[goals.spend("pull_model") for _ in range(5)]) if x)
+            *[goals.spend("pull_model", agent_name="t") for _ in range(5)]) if x)
         check("five turns racing for one action produce exactly one winner — "
               "select-and-charge is a single statement for this reason",
               winners == 1, f"{winners} winners")
@@ -110,7 +118,7 @@ async def run() -> None:
                 "WHERE id = $1::uuid", g3["id"])
         check("an expired goal cannot be spent even before any sweep runs — "
               "housekeeping that has not happened yet is not a control",
-              not await goals.spend("manage_agents"))
+              not await goals.spend("manage_agents", agent_name="t"))
 
         print("5. untrusted context still wins, goal or no goal")
         g4 = await goals.propose("poisoned", "t", ["manage_agents"], proposed_by="t")
