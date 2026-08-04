@@ -54,6 +54,51 @@ GOAL_SCOPED_TOOLS = frozenset({
 })
 
 
+# The actions on those verbs that only READ.
+#
+# The gate matched on the TOOL NAME alone, which was right while every
+# `manage_*` call mutated something and became wrong the moment they grew a
+# `list`. `manage_automations{action: "list"}` creates no capability — it is
+# how she answers "what do I have scheduled?" — and it was refused exactly
+# like a `create`, AND raised an approval card, so asking her a question put
+# a decision in front of the operator. MEASURED 2026-08-04: two such cards in
+# `goals`, both raised inside a nightly eval run, neither with a decision
+# behind it.
+#
+# DEFAULT-DENY, and that is the whole safety argument: a tool with no entry
+# here is gated in full, and an action absent from its set is gated. A new
+# verb, a renamed action or a typo all fail CLOSED. `pull_model`,
+# `deploy_workload`, `delete_workload`, the two egress verbs and
+# `delegate_coding_task` have no read action to exempt and no entry.
+READ_ACTIONS: dict[str, frozenset[str]] = {
+    "manage_agents": frozenset({"list", "get"}),
+    "manage_automations": frozenset({"list", "runs"}),
+    "manage_tools": frozenset({"list"}),
+    "manage_tool_hosts": frozenset({"list"}),
+}
+
+
+def needs_goal(name: str, args: dict | None = None) -> bool:
+    """Whether this exact call needs a standing approval.
+
+    ONE definition, called by the gate that enforces it and by the eval
+    guard that checks no suite requires a call it would refuse. Those two
+    asking the same question of different code is how a suite comes to
+    demand something the runtime forbids — which is precisely what
+    `main/automation-already-scheduled` did: it required
+    `manage_automations{action: "list"}`, the gate refused it above the
+    fixture hook so the call never reached the graded transcript, and the
+    contract scored it `called 0x`. No model could pass it.
+    """
+    if name not in GOAL_SCOPED_TOOLS:
+        return False
+    reads = READ_ACTIONS.get(name)
+    if not reads:
+        return True
+    action = str((args or {}).get("action") or "").strip().lower()
+    return action not in reads
+
+
 def verb_list() -> str:
     """The set as prose, for a tool description or an error message."""
     return ", ".join(sorted(GOAL_SCOPED_TOOLS))

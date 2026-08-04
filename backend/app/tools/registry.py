@@ -496,7 +496,7 @@ def returns_untrusted(name: str) -> bool:
 # The goal-scoped set lives in `scopes` so `builtin` can DESCRIBE it without
 # importing this module (registry imports builtin, not the other way).
 # It was duplicated by hand until the copies disagreed — see scopes.py.
-from app.tools.scopes import GOAL_SCOPED_TOOLS  # noqa: E402,F401
+from app.tools.scopes import GOAL_SCOPED_TOOLS, needs_goal  # noqa: E402,F401
 
 
 def is_actor(name: str, db_tools: Optional[dict] = None,
@@ -586,7 +586,12 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     # and it did not. She was describing guardrails she did not have, which
     # is the same class of error as claiming a capability she lacks, pointed
     # the other way and considerably worse.
-    if name in GOAL_SCOPED_TOOLS and settings_store.get("autonomy.goal_scoped_actions"):
+    # `needs_goal`, not `name in GOAL_SCOPED_TOOLS`: the ARGUMENTS decide.
+    # These verbs grew read actions, and refusing `{action: "list"}` gated
+    # her ability to answer "what do I have scheduled?" behind an operator
+    # decision — while raising a card asking for one. Default-deny lives in
+    # scopes.needs_goal, so anything unrecognised is still gated.
+    if needs_goal(name, args) and settings_store.get("autonomy.goal_scoped_actions"):
         goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
         if not goal:
             # THE GATE RAISES THE CARD ITSELF. It used to return a string
@@ -601,16 +606,29 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
             # succeeding because the paperwork failed.
             card = ""
             try:
-                _goal, created = await goals.card_for_refusal(
-                    name, agent_name=ctx.get("agent_name"),
-                    conversation_id=ctx.get("conversation_id"), args=args)
-                card = (
-                    "\n\nAn approval card for this is now in front of the "
-                    "operator. Nothing is approved yet."
-                    if created else
-                    "\n\nAn approval card for this is ALREADY in front of the "
-                    "operator, from an earlier attempt. Raising another would "
-                    "only bury it.")
+                if fixtures.active() is not None:
+                    # A GRADED RUN MUST NOT PUT A DECISION IN FRONT OF THE
+                    # OPERATOR. The refusal is real behaviour and the suite
+                    # should grade it, but the card is a side effect on live
+                    # state, and this gate fires ABOVE the fixture hook so
+                    # nothing else was stopping it. MEASURED 2026-08-04: a
+                    # card timestamped 16:16:32 landed inside the eval run
+                    # that started at 16:16:10, and a second pair at 00:42
+                    # came from the nightly tournament. Nobody asked for
+                    # either, and both sat in the inbox as real requests.
+                    card = ("\n\nNo approval card was raised: this is a "
+                            "graded run, not a real request.")
+                else:
+                    _goal, created = await goals.card_for_refusal(
+                        name, agent_name=ctx.get("agent_name"),
+                        conversation_id=ctx.get("conversation_id"), args=args)
+                    card = (
+                        "\n\nAn approval card for this is now in front of the "
+                        "operator. Nothing is approved yet."
+                        if created else
+                        "\n\nAn approval card for this is ALREADY in front of "
+                        "the operator, from an earlier attempt. Raising "
+                        "another would only bury it.")
             except Exception:  # noqa: BLE001
                 log.exception("goal card not raised for refused %s", name)
                 card = ("\n\nThe approval card could not be raised, so say so "

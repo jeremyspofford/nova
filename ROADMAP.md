@@ -1855,6 +1855,29 @@ See README for what works. This file is the ordered backlog.
     onto its own standby blanking rather than raising — the case a CHECK
     would have surfaced as an unparseable 500).
 
+40. **`tool-creator`'s suite is ungradeable — three tasks require a verb the
+    goal gate refuses (found 2026-08-04, S).** `create-from-given-spec`,
+    `unallowlisted-host-refusal` and `disable-not-delete` all `must_call`
+    `manage_tools` with `create` or `disable`. Those genuinely ARE capability
+    creation, so the gate correctly refuses them — and it fires ABOVE the
+    eval's fixture hook, so the refused call never reaches `Fixtures.calls`
+    and the contract scores it `called 0x`. No model can pass any of the
+    three, which is very likely why this agent has never had a real score.
+    `test_eval_servability.py` now names them and FAILS, so `run_all.py` is
+    54/55 until this is decided; do not silence the guard.
+    **The decision:** either rewrite the three contracts to grade the
+    refusal and the honest report that follows it (the precedent is
+    `memory-curator/refused-delete-reported-honestly`, whose notes work
+    through exactly this inversion), or let a suite declare the approved
+    verbs its graded runs operate under, so the fixture answers instead of
+    the gate — deterministic, versioned with `suite_version`, and no live
+    `goals` row. The second is more faithful to how the agent really runs
+    (dispatched under an approved goal) but relaxes a gate inside eval runs,
+    which is Jeremy's call, not mine. Either way bump `suite_version`.
+    The sibling defect in `main/automation-already-scheduled` is already
+    fixed on `feat/eval-goal-gate` — the gate reads its arguments now, so a
+    `list` is no longer treated as a capability change.
+
 **Wave ordering for the 2026-07-24 "Nova starts doing things" arc**
 (#31–#36 plus #20; the plan specs are authoritative): Wave 1, parallel —
 #31, #32, #20 phase-0 spike, #34 ideator. Wave 2 — #20 phases 1–3, #35,

@@ -136,11 +136,72 @@ def main() -> int:
         consents_mod.create = real_create
 
     print()
+    check_read_actions()
+
+    print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILED: " + "; ".join(FAILURES))
         return 1
     print("all checks passed")
     return 0
+
+
+def check_read_actions():
+    """4. The ARGUMENTS decide, and anything unrecognised stays gated.
+
+    The gate matched on the tool name alone, which was right while every
+    `manage_*` call mutated and wrong the moment they grew a `list`. Asking
+    "what do I have scheduled?" was refused exactly like a `create` AND
+    raised an approval card — MEASURED 2026-08-04, two such cards in `goals`,
+    both from nightly eval runs, neither with a decision behind it. It also
+    made `main/automation-already-scheduled` unpassable by any model: the
+    refusal fires above the eval's fixture hook, so the call never reached
+    the graded transcript and `must_call` scored it `called 0x`.
+
+    DEFAULT-DENY is the safety argument, so it is the part with the most
+    cases here: a missing action, an unknown action, and a tool with no read
+    set at all must every one of them stay gated.
+    """
+    from app.tools import scopes
+    print("4. a read action is not a capability change — but everything else is")
+    for name, args, want in (
+        ("manage_automations", {"action": "list"}, False),
+        ("manage_automations", {"action": "runs"}, False),
+        ("manage_automations", {"action": "LIST"}, False),   # case is not a gate
+        ("manage_agents", {"action": "list"}, False),
+        ("manage_agents", {"action": "get"}, False),
+        ("manage_tools", {"action": "list"}, False),
+        ("manage_tool_hosts", {"action": "list"}, False),
+        # ...and the mutating half of the same tools is untouched
+        ("manage_automations", {"action": "create"}, True),
+        ("manage_automations", {"action": "delete"}, True),
+        ("manage_automations", {"action": "disable"}, True),
+        ("manage_agents", {"action": "create"}, True),
+        ("manage_tools", {"action": "create"}, True),
+        ("manage_tool_hosts", {"action": "add"}, True),
+        # default-deny: no action, an unknown action, a typo
+        ("manage_automations", {}, True),
+        ("manage_automations", {"action": ""}, True),
+        ("manage_automations", {"action": "lst"}, True),
+        ("manage_automations", {"action": "purge"}, True),
+        # ...and every goal-scoped verb with no read action at all
+        ("pull_model", {"action": "list"}, True),
+        ("deploy_workload", {"action": "list"}, True),
+        ("delete_workload", {}, True),
+        ("allow_internet_egress", {"action": "list"}, True),
+        ("allow_host_egress", {"action": "list"}, True),
+        ("delegate_coding_task", {"action": "list"}, True),
+        # and a tool that was never goal-scoped is never gated
+        ("search_memory", {"action": "create"}, False),
+        ("manage_rules", {"action": "create"}, False),
+    ):
+        got = scopes.needs_goal(name, args)
+        check(f"{name} {args or '{}'} -> needs_goal={want}", got is want, str(got))
+
+    check("every tool named in READ_ACTIONS is actually goal-scoped — an "
+          "entry for anything else would be a rule with nothing to relax",
+          set(scopes.READ_ACTIONS) <= scopes.GOAL_SCOPED_TOOLS,
+          str(set(scopes.READ_ACTIONS) - scopes.GOAL_SCOPED_TOOLS))
 
 
 if __name__ == "__main__":
