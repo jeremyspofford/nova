@@ -181,7 +181,7 @@ async def chain(agent: dict, *, curated=None, local_rank=None) -> list[dict]:
     # agents already reach a local standby through the install setting, so this
     # costs them nothing.
     own_local = llm_router.is_local(own)
-    if not any(llm_router.is_local(l["model"]) != own_local for l in out):
+    if not any(llm_router.is_local(link["model"]) != own_local for link in out):
         derived = await cross_tier_standby(agent, curated=curated,
                                            local_rank=local_rank)
         if derived:

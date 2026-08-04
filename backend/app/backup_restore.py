@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app.backup_snapshot import BUNDLE_VERSION, DB_MEMBER, MANIFEST, verify
+from app.backup_snapshot import DB_MEMBER, MANIFEST, verify
 
 log = logging.getLogger(__name__)
 

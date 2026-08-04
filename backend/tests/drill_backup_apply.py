@@ -9,16 +9,23 @@ databases. It targets `nova_apply_drill`, never `nova`, and cleans up after
 itself. This is the drill that caught the safety snapshot overwriting the
 bundle it was protecting.
 """
-import sys, json, shutil, subprocess
+import shutil
+import sys
+from pathlib import Path
+
 from app import backup_snapshot as bs, backup_apply as ba
 from app.backup_restore import RestoreRefused, _psql, _dsn_for
 
 pw = sys.argv[1]
 admin = f"postgresql://nova:{pw}@postgres:5432/postgres"
 FAIL = []
-def chk(l, c, d=""):
-    print(f"  {'PASS' if c else 'FAIL'}  {l}" + (f"   [{d}]" if d else ""))
-    if not c: FAIL.append(l)
+
+
+def chk(label, ok, detail=""):
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}"
+          + (f"   [{detail}]" if detail else ""))
+    if not ok:
+        FAIL.append(label)
 
 # A throwaway stand-in for "live". nova is NEVER the target here.
 LIVE = "nova_apply_drill"
@@ -30,11 +37,14 @@ _psql(dsn, "INSERT INTO schema_migrations VALUES ('001_init.sql'),('002_more.sql
 _psql(dsn, "CREATE TABLE notes (body text)")
 _psql(dsn, "INSERT INTO notes VALUES ('ORIGINAL-STATE')")
 
-files = Path("/work/ap/files"); shutil.rmtree(files, ignore_errors=True)
+files = Path("/work/ap/files")
+shutil.rmtree(files, ignore_errors=True)
 (files / "memory").mkdir(parents=True)
 (files / "memory" / "a.md").write_text("ORIGINAL NOTE")
-mig = Path("/work/ap/migrations"); mig.mkdir(parents=True, exist_ok=True)
-for n in ("001_init.sql", "002_more.sql"): (mig / n).write_text("--")
+mig = Path("/work/ap/migrations")
+mig.mkdir(parents=True, exist_ok=True)
+for n in ("001_init.sql", "002_more.sql"):
+    (mig / n).write_text("--")
 
 cov = {"may_snapshot": True, "refusals": [], "entries": [
     {"kind": "bind", "name": str(files / "memory"), "included": True,
@@ -42,7 +52,8 @@ cov = {"may_snapshot": True, "refusals": [], "entries": [
     {"kind": "volume", "name": "postgres_data", "included": True,
      "disposition": "include_via_pg_dump", "reason": "db"}]}
 
-out = Path("/work/ap/bundles"); shutil.rmtree(out, ignore_errors=True)
+out = Path("/work/ap/bundles")
+shutil.rmtree(out, ignore_errors=True)
 man = bs.create(cov, out_dir=out, dsn=dsn)
 bundle = Path(man["path"])
 print("bundle of ORIGINAL state:", bundle.name)
@@ -60,7 +71,8 @@ print("\n1. gates that must refuse")
 for label, kw in [("no confirmation", dict(KW, confirm="yes")),
                   ("wrong phrase", dict(KW, confirm="restore and overwrite my data"))]:
     try:
-        ba.apply_bundle(bundle, **kw); chk(label, False, "it proceeded")
+        ba.apply_bundle(bundle, **kw)
+        chk(label, False, "it proceeded")
     except RestoreRefused as e:
         chk(label + " is refused", True, str(e)[:50])
 chk("the world is still CHANGED after the refusals",

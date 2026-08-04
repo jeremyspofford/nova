@@ -17,7 +17,6 @@ gap between "the model the operator bound" and "the model that generated":
     docker compose exec backend python tests/test_model_binding.py
 """
 
-import asyncio
 import sys
 
 sys.path.insert(0, "/app/backend")
