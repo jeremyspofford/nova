@@ -16,7 +16,6 @@ implementation gets it wrong:
 
 import asyncio
 import sys
-import uuid
 
 sys.path.insert(0, "/app/backend")
 
