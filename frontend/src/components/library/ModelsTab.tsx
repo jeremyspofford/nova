@@ -460,7 +460,7 @@ function EvalsPanel() {
         setSuite(s => s || d.suites[0]?.suite || '');
       })
       .catch(e => { setSuites([]); setStatus(String(e)); });
-    getEvalRuns(8).then(setRuns).catch(() => {});
+    getEvalRuns(12).then(setRuns).catch(() => {});
   };
 
   useEffect(() => {
@@ -513,7 +513,14 @@ function EvalsPanel() {
     return (
       <div key={`${v.agent_name}:${v.model}`}
         className="flex items-baseline justify-between gap-3 text-xs py-0.5">
-        <span className="font-mono text-stone-400 truncate">{v.model}</span>
+        <span className="truncate">
+          {/* WHICH SUITE. The row is keyed on (agent, model), so a model
+              tested against two suites produced two identical-looking lines
+              and there was no way to tell which score was which. */}
+          <span className="text-stone-500">{v.suite}</span>
+          <span className="text-stone-600 mx-1">·</span>
+          <span className="font-mono text-stone-400">{v.model}</span>
+        </span>
         <span className="flex items-baseline gap-2 shrink-0">
           <span className={v.tasks_passed === v.tasks_total
             ? 'text-emerald-400' : 'text-stone-300'}>
@@ -656,6 +663,57 @@ function EvalsPanel() {
               verdicts.map(verdictLine)
             )}
           </div>
+
+          {/* THE HISTORY, not just the standing. "Latest verdict per model"
+              collapses to one row per (agent, model), which hides that a
+              score moved — and a score moving is the most informative thing
+              here: the same model scored 2/7 and 3/7 on consecutive runs of
+              the same suite. A board showing only the newest number reads as
+              settled when it is not. */}
+          {runs.length > 0 && (
+            <details>
+              <summary className="text-xs uppercase tracking-wide text-stone-500 cursor-pointer hover:text-stone-400 list-none">
+                ▸ Run history ({runs.length})
+              </summary>
+              <div className="mt-1.5 space-y-0.5">
+                {runs.map(r => (
+                  <div key={r.id}
+                    className="flex items-baseline justify-between gap-3 text-[11px]">
+                    <span className="truncate">
+                      <span className="text-stone-500">{r.suite}</span>
+                      {r.suite_version != null && (
+                        <span className="text-stone-600"> v{r.suite_version}</span>
+                      )}
+                      <span className="text-stone-600 mx-1">·</span>
+                      <span className="font-mono text-stone-400">{r.model}</span>
+                    </span>
+                    <span className="flex items-baseline gap-2 shrink-0">
+                      {r.status === 'running' ? (
+                        <span className="text-teal-400">running…</span>
+                      ) : r.status === 'error' ? (
+                        <span className="text-amber-400/90" title={r.error || ''}>
+                          did not finish
+                        </span>
+                      ) : (
+                        <>
+                          <span className={r.tasks_passed === r.tasks_total
+                            ? 'text-emerald-400' : 'text-stone-300'}>
+                            {r.tasks_passed}/{r.tasks_total}
+                          </span>
+                          <span className="text-stone-600">
+                            ×{r.repeat_count}
+                          </span>
+                        </>
+                      )}
+                      <span className="text-stone-600 tabular-nums">
+                        {fmtDateTime(r.started_at)}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
 
           {/* Only the MOST RECENT run, and only if it errored. Scanning the
               last eight for any error surfaced a failure from hours earlier
