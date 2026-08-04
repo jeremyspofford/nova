@@ -59,6 +59,11 @@ def _refuse_split_state() -> None:
 async def lifespan(app: FastAPI):
     log.info("Starting Nova backend...")
     _refuse_split_state()
+    # An action type whose operator route has been renamed or deleted is a
+    # capability the model can reach and the operator cannot. Refuse to boot
+    # rather than let that rule rot into a comment.
+    from app import actions
+    actions.assert_routes_exist()
     await db.init_pool()
     await db.run_migrations()
     await settings_store.warm()
@@ -73,6 +78,10 @@ async def lifespan(app: FastAPI):
     # kills it; without this its row stays 'running' and reads as in-flight
     from app import eval_runs
     await eval_runs.reconcile_orphans()
+    # same reasoning for an action run: the process dying mid-register leaves
+    # a row that reads as in-flight forever
+    from app import action_worker
+    await action_worker.reset_orphans()
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.
@@ -89,12 +98,13 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())
+    action_task = asyncio.create_task(action_worker.loop())
     provider_health_task = asyncio.create_task(providers.health_loop())
     log.info("Backend ready")
     yield
     log.info("Shutting down...")
-    for task in (scheduler_task, warmer_task, ingest_task, provider_health_task,
-                 context_warm_task):
+    for task in (scheduler_task, warmer_task, ingest_task, action_task,
+                 provider_health_task, context_warm_task):
         task.cancel()
         try:
             await task
