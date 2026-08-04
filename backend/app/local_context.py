@@ -313,7 +313,20 @@ async def _observed_kv_bytes(model_name: str) -> Optional[float]:
             continue
         window = int(entry.get("context_length") or 0)
         held = int(entry.get("size_vram") or 0)
+        total = int(entry.get("size") or 0)
         if window <= 0 or held <= 0:
+            return None
+        # A SPILLED RESIDENCY IS NOT A CHEAP ONE. When part of the model sits
+        # in system RAM, `size_vram` is exactly the part that did NOT need
+        # VRAM, so dividing it by the window prices the model below its real
+        # cost — and this figure is only ever used to decide it can afford a
+        # BIGGER window. Under-pricing here is the one direction that spills
+        # again, harder, so a partial offload is no observation at all.
+        if total and held < total:
+            log.info("local_context: ignoring %s's residency as evidence — "
+                     "%.1fGB of %.1fGB is on the GPU, so what it holds there "
+                     "understates what it costs", model_name,
+                     held / 1e9, total / 1e9)
             return None
         weights = await _weights_bytes(model_name) or 0
         # Subtract the same overhead `resolve` budgets separately, or it is

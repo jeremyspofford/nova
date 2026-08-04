@@ -247,13 +247,28 @@ async def list_tools_for(server_id: str) -> list[dict]:
 
 
 async def read_only_slugs() -> set[str]:
-    """Names of servers the operator declared read-only.
+    """Names of servers THE OPERATOR declared read-only.
 
     Read fresh rather than cached: revoking the declaration has to take
     effect on the next tool call, not at the next restart. It is one indexed
     lookup on a table with single-digit rows.
+
+    `created_by = 'operator'` is load-bearing, and the docstring said
+    "operator" before the query did. This set is the one class of MCP tool
+    `tools.registry.is_actor()` treats as safe on a TAINTED turn — a turn
+    already carrying fetched text. That was sound while only a person could
+    tick the box. It stopped being sound the moment a model could fill in an
+    `mcp_server.add` plan, because `read_only` is a plain boolean on that
+    form: propose a server with `read_only: true`, and its tools would be
+    exempted from the untrusted-context fence by the model's own say-so.
+
+    So the exemption follows WHO DECLARED IT, which is the same provenance
+    test `mcp_client._guard_url` already applies to where a server may dial.
+    An action-created server can still be read-only in every other sense;
+    it just cannot vouch for itself.
     """
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT name FROM mcp_servers WHERE read_only AND enabled")
+            "SELECT name FROM mcp_servers "
+            " WHERE read_only AND enabled AND created_by = 'operator'")
     return {r["name"] for r in rows}

@@ -36,6 +36,11 @@ class _Action(BaseModel):
 # column, a trace, or a card the operator screenshots.
 _SECRET_REF = re.compile(r"^\{\{secret:[A-Za-z0-9_.-]+\}\}$")
 
+# ...and a reference ANYWHERE ELSE in the document. Used to refuse them in
+# the URL, where the same resolution that makes headers safe makes a URL a
+# way out of the building.
+_SECRET_ANYWHERE = re.compile(r"\{\{secret:[A-Za-z0-9_.-]+\}\}")
+
 
 class McpServerAdd(_Action):
     """Register a remote MCP server and connect to it.
@@ -57,6 +62,40 @@ class McpServerAdd(_Action):
     read_only: bool = False
     grant_to: list[str] = Field(default_factory=list)
     why: Annotated[str, StringConstraints(max_length=280)]
+
+    @field_validator("url")
+    @classmethod
+    def _no_secret_in_url(cls, v: str) -> str:
+        """A credential may ride in a HEADER. Never in the URL.
+
+        `mcp_client` resolves `{{secret:name}}` at the outbound call, and it
+        does so on the URL as well as the headers. That is right for a header
+        — the value lives from there to the end of the request — and it is a
+        way out of the building for a URL, because a URL is not private:
+
+          * `recommendations.create()` spawns `preflight()` the instant a card
+            row is written, so the request goes out BEFORE any operator sees
+            the card. Zero clicks, no approval, no `actions.enabled` gate.
+          * whatever the model put after the host is a request line to a host
+            the model chose, with the resolved secret in it;
+          * and it does not even need the target to answer. `mcp_client`
+            logs the resolved URL and `explain()` embeds it in the error, so
+            the plaintext lands in `recommendations.action_detail` — in
+            Postgres, and rendered on the operator's own card.
+
+        `preflight` already drops headers for a model-authored plan on
+        exactly this reasoning ("A model choosing both a URL and the
+        credentials sent to it is an exfiltration primitive"). The URL
+        carried the same primitive and nothing dropped it. So it is
+        unrepresentable now, which is what this file is for.
+        """
+        if _SECRET_ANYWHERE.search(v):
+            raise ValueError(
+                "a URL may not contain a {{secret:...}} reference — it would "
+                "be resolved and dialled before anyone reads this card, and "
+                "the resolved value would be written to the card and the log. "
+                "Put the credential in a header instead")
+        return v
 
     @field_validator("headers")
     @classmethod

