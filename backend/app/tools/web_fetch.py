@@ -9,11 +9,10 @@ Security model (single-operator, localhost-bound v1):
   point. The names are re-exported here so this module reads as it did.
 """
 
-import asyncio
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 

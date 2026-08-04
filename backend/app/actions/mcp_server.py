@@ -134,7 +134,6 @@ async def execute(doc: McpServerAdd, rec: dict, *, step) -> dict:
     await step("validate", "ok", doc.url)
 
     # 2. probe with the real headers before writing anything
-    from app import secret_store
     probe = {"name": doc.name, "transport": "http", "url": doc.url,
              "headers": doc.headers, "created_by": "action"}
     status, tools, detail = await mcp_client.connect_and_list(probe)
@@ -172,7 +171,6 @@ async def execute(doc: McpServerAdd, rec: dict, *, step) -> dict:
     # is the half-applied state that makes a receipt untrustworthy.
     added: dict[str, list[str]] = {}      # what THIS run introduced, per agent
     granted: dict[str, list[str]] = {}    # what each agent ends up holding
-    tool_names: list[str] = []
     try:
         # 4. enable and connect for real
         await mcp_servers.update(server_id, enabled=True)
@@ -187,8 +185,15 @@ async def execute(doc: McpServerAdd, rec: dict, *, step) -> dict:
         #    action cannot name a non-MCP tool or another server's tool. The
         #    union is additive, so an approved plan can never revoke a grant.
         from app.agents import registry as agent_registry
+        # ...and the tool registry, whose OWN predicates step 6 checks the
+        # grant against. It was referenced there and never imported, so every
+        # install that got as far as verifying raised NameError inside this
+        # try, rolled back, and deleted the server it had just made — the
+        # feature's whole point, failing on its last step. Thirteen tests
+        # covered this executor; both that reach execute() are failure paths
+        # that stop before step 6, so nothing ever evaluated the name.
+        from app.tools import registry as tool_registry
         cached = await mcp_servers.list_tools_for(server_id)
-        tool_names = sorted(t["name"] for t in cached)
         names = {f"mcp:{doc.name}/{t['name']}" for t in cached}
         for agent_name in doc.grant_to:
             agent = await agent_registry.get_agent_by_name(agent_name)

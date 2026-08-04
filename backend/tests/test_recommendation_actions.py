@@ -377,7 +377,7 @@ def test_a_failed_run_leaves_nothing_behind():
     print("\n13. the executor is all-or-nothing past registration")
 
     async def run():
-        from app import db, mcp_servers
+        from app import db
         from app.actions import mcp_server as ex
         from app.agents import registry as ar
         await db.init_pool()
@@ -447,6 +447,78 @@ def test_a_failed_run_leaves_nothing_behind():
     asyncio.run(run())
 
 
+def test_an_approved_install_actually_finishes():
+    """The success path, end to end — the one nothing covered.
+
+    Thirteen cases exercised this executor and both that called execute()
+    were failure paths: one stops at the tool-hash compare (step 2), the
+    other at granting to an unrestricted agent (step 5). Neither reached
+    step 6, where `tool_registry` was referenced and never imported. So the
+    merged code raised NameError on every install that got that far, rolled
+    back, deleted the server it had just created, and reported "failed" —
+    the feature failing on its last step, with a green suite.
+
+    A test that only proves things refuse cannot tell you the thing works.
+    """
+    import asyncio
+
+    print("\nan approved install actually finishes")
+
+    async def run():
+        from app import db, mcp_client
+        from app.actions import mcp_server as ex
+        from app.agents import registry as ar
+        await db.init_pool()
+
+        fake = [{"name": "ask", "description": "ask a thing",
+                 "parameters_schema": {"type": "object", "properties": {}}}]
+        reviewed = [{"name": "ask", "description": "ask a thing"}]
+        real = mcp_client.connect_and_list
+
+        async def fake_connect(server):
+            return "connected", fake, None
+
+        mcp_client.connect_and_list = fake_connect
+        steps: list[str] = []
+
+        async def step(n, s, d=""):
+            steps.append(f"{s}:{n}")
+
+        name = "scratch-t14-ok"
+        agent = "scratch-t14-agent"
+        try:
+            await ar.create_agent(agent, "t", "t", "openrouter:x/y",
+                                  allowed_tools=["recall_memory"], operator=True)
+            doc = actions.parse({**VALID, "name": name, "grant_to": [agent],
+                                 "url": "https://example.com/mcp"})
+            out = await ex.execute(doc, {"id": "x", "action_tools": reviewed},
+                                   step=step)
+
+            check("execute returns, rather than raising on its last step",
+                  isinstance(out, dict) and out.get("server_id"), str(out)[:90])
+            check("...having reached VERIFY, which is where the NameError was",
+                  "ok:verify" in steps, str(steps))
+            check("no rollback ran", "ok:rollback" not in steps, str(steps))
+
+            async with db.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT enabled, status FROM mcp_servers WHERE name = $1", name)
+                held = await conn.fetchval(
+                    "SELECT allowed_tools FROM agents WHERE name = $1", agent)
+            check("the server survives, enabled and connected",
+                  row and row["enabled"] and row["status"] == "connected", str(row))
+            check("the agent keeps what it had AND gains the mcp grant",
+                  held and "recall_memory" in held
+                  and f"mcp:{name}/ask" in held, str(held))
+        finally:
+            mcp_client.connect_and_list = real
+            async with db.acquire() as conn:
+                await conn.execute("DELETE FROM mcp_servers WHERE name = $1", name)
+                await conn.execute("DELETE FROM agents WHERE name = $1", agent)
+
+    asyncio.run(run())
+
+
 def main() -> int:
     for t in (test_the_form_has_no_field_for_the_dangerous_things,
               test_a_credential_can_only_be_a_reference,
@@ -460,7 +532,8 @@ def main() -> int:
               test_an_unreviewed_tool_list_is_not_adopted,
               test_he_executes_the_plan_he_was_shown,
               test_a_run_only_starts_while_the_operator_still_approves,
-              test_a_failed_run_leaves_nothing_behind):
+              test_a_failed_run_leaves_nothing_behind,
+              test_an_approved_install_actually_finishes):
         t()
     print()
     if FAILURES:

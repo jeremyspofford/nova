@@ -353,7 +353,6 @@ async def run() -> None:
         saved_settings_url = None
         try:
             import httpx
-            from app.config import settings as _settings
 
             class _Resp:
                 @staticmethod

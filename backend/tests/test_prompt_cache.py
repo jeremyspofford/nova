@@ -34,7 +34,6 @@ import asyncio
 import contextlib
 import json
 import sys
-import types
 
 sys.path.insert(0, "/app/backend")
 

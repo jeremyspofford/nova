@@ -48,3 +48,9 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
 ]
+
+[tool.ruff]
+# Ruff resolves requires-python only from the config it actually loads;
+# invoked as `ruff check backend/` from the repo root it did not, and
+# read BaseExceptionGroup — a 3.11 builtin — as an undefined name.
+target-version = "py312"
