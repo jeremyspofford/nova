@@ -43,8 +43,12 @@ _SWEEPS = [
     ("cleared alerts",
      "DELETE FROM monitor_alerts WHERE cleared_at IS NOT NULL "
      "  AND cleared_at < now() - ($1 || ' days')::interval"),
+    # 'seen' and 'later' are UNDECIDED — recommendations._ACTIONABLE says so,
+    # and 'later' is the operator asking the banner to stop showing a card he
+    # still means to answer. The old predicate here was `status <> 'new'`,
+    # which made clicking Later schedule the card for deletion.
     ("decided recommendations",
-     "DELETE FROM recommendations WHERE status <> 'new' "
+     "DELETE FROM recommendations WHERE status NOT IN ('new', 'seen', 'later') "
      "  AND created_at < now() - ($1 || ' days')::interval"),
 ]
 
