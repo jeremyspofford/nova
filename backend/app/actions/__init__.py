@@ -143,6 +143,54 @@ def is_executable(raw: Any) -> bool:
     return _TYPES[doc.type].execute is not None
 
 
+_ACTION_GUIDANCE = (
+    "OPTIONAL typed plan. Include it when the recommendation IS a concrete "
+    "final state this backend can reach on its own; omit it when the work "
+    "needs a person, and the card is then a note they read rather than a "
+    "button they press. A plan that does not typecheck is refused in this "
+    "same turn, naming the field and the reason, so you can correct it and "
+    "raise again under the same dedupe_key. You never execute it: the "
+    "operator's click does, and only after a preflight has dialled the "
+    "target and put what it actually found on the card — so propose the "
+    "plan you believe in and let the check disagree with you."
+)
+
+
+def tool_schema() -> Optional[dict]:
+    """The `action` parameter for `raise_recommendation`, from the registry.
+
+    DERIVED, because the alternative is a second description of what a model
+    may propose, living in the tool definition and drifting from the models
+    `parse()` validates against. It would drift silently, too — nothing fails
+    when a tool schema is merely wrong, the model just fills in fields the
+    door then rejects. Generating it here means the tool can only ever
+    advertise what the door accepts, and a new Spec updates the prompt by
+    existing.
+
+    Each variant carries its own model docstring, which is where the reasons
+    live — McpServerAdd explains why `transport` is `Literal["http"]` and not
+    a limitation waiting to be lifted. The model does better work told the
+    truth, and the truth is enforced regardless.
+
+    None when nothing is registered: a tool that offers a plan nobody can
+    parse is worse than one that offers none.
+    """
+    variants = []
+    for _name, spec in sorted(_TYPES.items()):
+        schema = spec.model.model_json_schema()
+        schema.pop("title", None)
+        variants.append(schema)
+    if not variants:
+        return None
+    if len(variants) == 1:
+        only = dict(variants[0])
+        # keep the model's own description; lead with the contract
+        only["description"] = _ACTION_GUIDANCE + "\n\n" + str(
+            only.get("description") or "").strip()
+        return only
+    return {"description": _ACTION_GUIDANCE, "anyOf": variants}
+
+
 async def preflight(rec_id: str, *, operator: bool = False) -> Optional[dict]:
     """Check a card's plan against reality and record the verdict on the row.
 

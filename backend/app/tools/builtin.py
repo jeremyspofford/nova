@@ -1719,17 +1719,45 @@ async def _raise_recommendation(args, ctx):
         priority = int(args.get("priority") or 0)
     except (TypeError, ValueError):
         priority = 0
+
+    # The typed plan, if she filled one in. A model that hands back a JSON
+    # STRING where an object was asked for is common enough to decode rather
+    # than lecture about — but only into a dict, and it still goes through
+    # `actions.parse()` like everything else. Nothing here decides whether a
+    # plan is acceptable; `create()` does, and it names the field.
+    action = args.get("action")
+    if isinstance(action, str) and action.strip():
+        try:
+            decoded = json.loads(action)
+        except ValueError:
+            return ("Error: action must be an object, not a string — send the "
+                    "plan as JSON fields, not as text")
+        action = decoded if isinstance(decoded, dict) else action
+    if action in ("", {}, []):
+        action = None
+
     try:
         row = await recommendations.create(
             kind, title, body,
             source=ctx.get("agent_name") or "unknown",
-            priority=priority, dedupe_key=dedupe_key)
+            action=action, priority=priority, dedupe_key=dedupe_key)
     except ValueError as e:
         return f"Error: {e}"
-    return _j({"status": row["status"], "recommendation_id": row["id"],
-               "note": ("The operator now has a recommendation card in their chat. "
-                        "Mention briefly that you flagged it; do not act on it "
-                        "yourself — they decide.")})
+
+    out = {"status": row["status"], "recommendation_id": row["id"],
+           "note": ("The operator now has a recommendation card in their chat. "
+                    "Mention briefly that you flagged it; do not act on it "
+                    "yourself — they decide.")}
+    if action is not None:
+        # Say what the plan's state actually is rather than implying it is
+        # live. Preflight runs in the background and may not have dialled the
+        # target yet, so 'none' here means "not checked yet", not "no plan".
+        out["action_state"] = row.get("action_state")
+        out["action_note"] = (
+            "The plan is attached and is being checked against the real "
+            "target now. If that check fails, the card says so and Approve "
+            "will not run it — do not tell the operator it is installed.")
+    return _j(out)
 
 
 async def _notify_operator(args, ctx):
@@ -1849,6 +1877,28 @@ async def _manage_rules(args, ctx):
 async def _dispatch_stub(args, ctx):
     return ("Error: dispatch_to_agent must be executed by the agent runner "
             "(and cannot be nested more than one level deep).")
+
+
+def _actions_tool_schema():
+    """The action registry's own schema for the plan a card may carry.
+
+    GUARDED. This module is imported early and `app.actions` pulls in the MCP
+    client stack; if that import order ever inverts, `raise_recommendation`
+    loses its optional `action` property rather than taking the process down.
+    Nothing unsafe follows from the schema being absent — `create()` still
+    refuses any plan that does not typecheck, so the door is unchanged; she
+    simply is not offered the field this boot, and the log says so.
+    """
+    try:
+        from app import actions
+        return actions.tool_schema()
+    except Exception:  # noqa: BLE001 — a missing schema is not a dead backend
+        log.warning("action schema unavailable; raise_recommendation will not "
+                    "offer a plan this boot", exc_info=True)
+        return None
+
+
+_ACTION_PARAM = _actions_tool_schema()
 
 
 BUILTIN_TOOLS: dict[str, dict] = {
@@ -2566,6 +2616,11 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                            "card instead of stacking duplicates (e.g. "
                                            "'mcp:github'). Omit for one-off notes.")},
             "priority": {"type": "integer", "description": "0 default; higher shows first"},
+            # DERIVED from the action registry, never written out here — see
+            # actions.tool_schema(). A hand-copied field list would be a
+            # second description of what she may propose, and it would rot
+            # silently the first time a Spec changed.
+            **({"action": _ACTION_PARAM} if _ACTION_PARAM else {}),
         }, "required": ["title", "body"]},
         "execute": _raise_recommendation,
     },

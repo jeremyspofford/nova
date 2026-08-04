@@ -18,6 +18,7 @@ dialling the thing catches it. That is what `preflight` is for, and why
 
 import ast
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -519,6 +520,106 @@ def test_an_approved_install_actually_finishes():
     asyncio.run(run())
 
 
+def test_she_can_fill_in_the_form_herself():
+    """Phase 4: `raise_recommendation` carries a typed plan.
+
+    Until now every plan had to be written by hand in SQL — the tool exposed
+    only kind/title/body/dedupe_key/priority, so the loop the whole lane
+    exists for ("she proposes, he approves, it happens") had no first step.
+    `create()` already accepted and typechecked an `action`; nothing gave her
+    a way to send one.
+
+    The schema she is shown is DERIVED from the same registry `parse()`
+    validates against, so the tool cannot advertise a field the door refuses.
+    """
+    import asyncio
+
+    from app.tools import builtin
+
+    print("\n14. she can fill in the form herself")
+
+    props = builtin.BUILTIN_TOOLS["raise_recommendation"]["parameters"]["properties"]
+    check("the tool offers an `action` at all", "action" in props)
+    check("...whose fields come from the registered model, not a copy here",
+          sorted((props["action"].get("properties") or {}).keys())
+          == sorted(McpServerAdd.model_fields.keys()),
+          str(sorted((props["action"].get("properties") or {}).keys())))
+    check("...and it forbids extras, so an invented field is refused up front",
+          props["action"].get("additionalProperties") is False)
+    check("a plan stays OPTIONAL — a card that needs a person is still a card",
+          "action" not in builtin.BUILTIN_TOOLS[
+              "raise_recommendation"]["parameters"]["required"])
+
+    # MECHANICAL: register a second type and the schema grows on its own.
+    # A hand-written copy would not, and nothing would fail to say so.
+    real = actions._TYPES["mcp_server.add"]
+    actions._TYPES["_probe.add"] = actions.Spec(
+        model=real.model, operator_route=real.operator_route,
+        describe=real.describe, preflight=real.preflight)
+    try:
+        grown = actions.tool_schema()
+        check("a second registered type changes the schema without an edit "
+              "here — that is what 'derived' has to mean",
+              "anyOf" in grown and len(grown["anyOf"]) == 2,
+              str(sorted(grown.keys())))
+    finally:
+        del actions._TYPES["_probe.add"]
+
+    async def run():
+        from app import db
+        await db.init_pool()
+        src = "scratch-t14-src"
+        ctx = {"agent_name": src}
+
+        async def raise_it(**kw):
+            return await builtin._raise_recommendation(
+                {"kind": "mcp_server", "title": "t", "body": "b", **kw}, ctx)
+
+        try:
+            # a valid plan lands on the card
+            out = await raise_it(dedupe_key="scratch-t14-ok",
+                                 action={**VALID, "name": "scratch-probe"})
+            check("a valid plan is accepted", '"recommendation_id"' in out, out[:80])
+            async with db.acquire() as conn:
+                stored = await conn.fetchval(
+                    "SELECT action FROM recommendations WHERE dedupe_key = $1",
+                    "scratch-t14-ok")
+            check("...and is actually stored on the row, not dropped",
+                  stored and "scratch-probe" in str(stored), str(stored)[:80])
+            check("...and the result does not imply it is installed",
+                  "do not tell the operator it is installed" in out)
+
+            # a bad plan is refused IN THIS TURN, naming the field
+            bad = await raise_it(dedupe_key="scratch-t14-bad",
+                                 action={**VALID, "url": "http://insecure.example/mcp"})
+            check("a plan that does not typecheck is refused in the same turn",
+                  bad.startswith("Error:"), bad[:90])
+            check("...naming the field, so she can correct it and re-raise",
+                  "url" in bad, bad[:90])
+            async with db.acquire() as conn:
+                n = await conn.fetchval(
+                    "SELECT count(*) FROM recommendations WHERE dedupe_key = $1",
+                    "scratch-t14-bad")
+            check("...and no card was created for it", n == 0, f"rows={n}")
+
+            # a model that stringifies the object is understood, not lectured
+            out = await raise_it(dedupe_key="scratch-t14-str",
+                                 action=json.dumps({**VALID, "name": "scratch-str"}))
+            check("a JSON string where an object was asked for still parses",
+                  '"recommendation_id"' in out, out[:80])
+
+            # and a plain note still works — this is additive
+            out = await raise_it(dedupe_key="scratch-t14-note")
+            check("a card with no plan is unchanged", '"recommendation_id"' in out
+                  and "action_state" not in out, out[:80])
+        finally:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM recommendations WHERE dedupe_key LIKE 'scratch-t14-%'")
+
+    asyncio.run(run())
+
+
 def main() -> int:
     for t in (test_the_form_has_no_field_for_the_dangerous_things,
               test_a_credential_can_only_be_a_reference,
@@ -533,7 +634,8 @@ def main() -> int:
               test_he_executes_the_plan_he_was_shown,
               test_a_run_only_starts_while_the_operator_still_approves,
               test_a_failed_run_leaves_nothing_behind,
-              test_an_approved_install_actually_finishes):
+              test_an_approved_install_actually_finishes,
+              test_she_can_fill_in_the_form_herself):
         t()
     print()
     if FAILURES:
