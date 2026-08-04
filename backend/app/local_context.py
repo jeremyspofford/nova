@@ -82,9 +82,20 @@ log = logging.getLogger(__name__)
 # quietly loses its role and its tool contract.
 _FLOOR = 8192
 
-# Leave this much VRAM unclaimed. Whisper, kokoro and a second model share
-# this GPU, and a fallback that evicts the speech stack to answer one
-# question has not helped anybody.
+# nvidia-smi reports MiB. The sidecar divides by 1024 and calls the result
+# `mem_total_gb`, so the field is GiB wearing a GB label — and every other
+# consumer of it is a dashboard, where 7.3% does not show. This module does
+# arithmetic against ollama's byte counts, where it does: the card reports
+# 24576 MiB, which is 25.77e9 bytes, and multiplying the "GB" by 1e9 gave
+# 24.0e9 — 1.77 GB of a 3090 that existed and was never offered to anybody.
+_GIB = 1024 ** 3
+
+# Leave this much VRAM unclaimed. NOT for whisper and kokoro — what they hold
+# is now measured directly as `foreign` and subtracted before this, and two
+# subtractions for one hazard is how a reserve gets deleted by whoever
+# notices the double count. This is headroom for the allocator itself:
+# fragmentation, the driver's own working set, and the gap between what
+# nvidia-smi reported a moment ago and what is free when llama-server asks.
 _RESERVE_GB = 2.0
 
 # Used only when a model does not publish enough metadata to compute the real
@@ -109,11 +120,30 @@ _RUNTIME_OVERHEAD_BYTES = 512 * 1024 * 1024
 # both a natural value and a stable one.
 _LADDER = (8192, 16384, 32768, 65536, 131072)
 
-_TTL_S = 300.0
+# Two TTLs, because the answer's shelf life depends on WHY it is what it is.
+# When VRAM was not the binding constraint the window is a property of the
+# model and this turn's demand, and neither moves in five minutes. When the
+# card IS the constraint the answer is a snapshot of somebody else's memory
+# and should be re-taken quickly — that is the case where a game exiting, or
+# another model being evicted, changes the right answer within a minute.
+_TTL_OK_S = 900.0
+_TTL_TIGHT_S = 60.0
+
+# How long a spill keeps a model pinned a rung low. It used to be forever:
+# `_ceiling` was written once and never cleared, so a single spill under
+# transient pressure held a model down until the backend restarted, and there
+# was no log line to say why the window never came back.
+_SPILL_TTL_S = 1800.0
+
+# How long a demand reading is reused. Long, because it is a 7-day maximum:
+# it moves when the conversation shape moves, not turn to turn.
+_DEMAND_TTL_S = 900.0
+
 _cache: dict[str, tuple[float, int]] = {}      # model -> (expires_at, num_ctx)
 _last_known: dict[str, int] = {}               # model -> the last window sized
 _kv_cost: dict[str, float] = {}                # model -> bytes per token
-_ceiling: dict[str, int] = {}                  # model -> known-good after a spill
+_ceiling: dict[str, tuple[float, int]] = {}    # model -> (expires_at, post-spill cap)
+_demand: dict[str, tuple[float, int]] = {}     # model -> (expires_at, tokens)
 
 
 def _base() -> str:
@@ -145,18 +175,27 @@ async def _resident() -> list[dict]:
     return ((await _get("/api/ps")) or {}).get("models") or []
 
 
-async def _free_vram_bytes(for_model: Optional[str] = None) -> Optional[int]:
-    """VRAM this model could actually claim, right now.
+async def _vram() -> Optional[dict]:
+    """What is on the card, split into what we can take back and what we cannot.
 
-    Read from the WHOLE GPU, not from what ollama holds. The first version
-    subtracted only ollama's own footprint and reported 22GB free on a card
-    where whisper and kokoro were holding several — sizing a KV cache against
-    memory that belongs to the speech stack is how you get the silent spill
-    this module exists to prevent.
+    WHO IS HOLDING IT IS THE WHOLE QUESTION, and the version this replaces
+    never asked. It subtracted every used byte and added back only the
+    model being sized, so VRAM held by ANOTHER ollama model counted as gone
+    forever — and ollama's scheduler evicts a resident runner to fit the next
+    one, which means that memory was always claimable.
 
-    If `for_model` is already resident its footprint is added back, because
-    changing a model's window makes ollama reload it: the memory it is using
-    now is memory the new window gets to reuse.
+    MEASURED, 2026-08-03 15:49. ornith:9b was resident at a 262,144 window
+    (5.63 GB weights + 8.59 GB KV ≈ 14.2 GB, keep_alive 5m) when qwen3:8b was
+    sized. Three re-derivations minutes apart all logged `affordable 0 ...
+    free 5.2GB`, so qwen3:8b was floored at 8,192 and the turn died —
+    `error_class: prompt_too_long`, 10,303 tokens against a 4,192 ceiling —
+    while the memory it needed belonged to a model ollama would have evicted
+    for free. ornith was holding 262,144 tokens of KV against a 30-day peak
+    demand of 11,971.
+
+    So: `foreign` (whisper, kokoro, a Windows game — anything that is not
+    ollama) is subtracted, and `ollama_held` is not. Every number is real
+    bytes; see `_GIB` for why that needed saying.
     """
     from app.config import settings
     try:
@@ -169,18 +208,21 @@ async def _free_vram_bytes(for_model: Optional[str] = None) -> Optional[int]:
         return None
     if not gpus:
         return None
-    total = sum(float(g.get("mem_total_gb") or 0) for g in gpus)
-    used = sum(float(g.get("mem_used_gb") or 0) for g in gpus)
+    total = int(sum(float(g.get("mem_total_gb") or 0) for g in gpus) * _GIB)
+    used = int(sum(float(g.get("mem_used_gb") or 0) for g in gpus) * _GIB)
     if not total:
         return None
-    reclaimable = 0
-    if for_model:
-        for m in await _resident():
-            if m.get("name") == for_model:
-                reclaimable = int(m.get("size_vram") or 0)
-                break
-    free = int((total - used) * 1e9) + reclaimable - int(_RESERVE_GB * 1e9)
-    return max(0, free)
+    # Clamped at `used`: /api/ps and nvidia-smi are two instruments read a
+    # moment apart, and a model that finished loading between them would
+    # otherwise produce a negative `foreign`.
+    held = min(sum(int(m.get("size_vram") or 0) for m in await _resident()), used)
+    return {"total": total, "used": used, "ollama_held": held,
+            "foreign": max(0, used - held)}
+
+
+def _claimable(vram: dict) -> int:
+    """Everything except what somebody outside ollama is using, less headroom."""
+    return max(0, vram["total"] - vram["foreign"] - int(_RESERVE_GB * _GIB))
 
 
 def _kv_bytes_from_info(info: dict) -> Optional[int]:
@@ -246,6 +288,95 @@ async def _kv_bytes_per_token(model_name: str) -> float:
     return float(per)
 
 
+async def _demand_tokens(model: str) -> int:
+    """The largest prompt this model has actually been asked to hold, in a week.
+
+    CAPACITY WAS THE ONLY INPUT until now, so a model took every token that
+    fit whether or not anything wanted them: ornith:9b ran at 262,144 against
+    a measured peak of 11,971, and the 250,000 tokens of KV cache it held for
+    nothing were exactly what starved the next model to load.
+
+    Read from `prompt_tokens_est_fixed`, NOT from `prompt_tokens_est`. The
+    difference is the feedback loop, and it is not theoretical:
+    `history_budget_for` is 35% of the window, so a bigger window replays
+    more history, which inflates `prompt_tokens_est`, which is what this
+    would max over — each rung buying the next one until `_HISTORY_MAX` or
+    the model's ceiling stopped it. The `_fixed` field excludes replayed
+    history for that reason, and the history budget is added back at resolve
+    time, where it is a function of the window rather than a memory of it.
+
+    Zero on any failure: no reading means no demand-side opinion, and the
+    capacity side still answers.
+    """
+    now = time.monotonic()
+    hit = _demand.get(model)
+    if hit and hit[0] > now:
+        return hit[1]
+    value = 0
+    try:
+        from app import db
+        async with db.acquire() as conn:
+            value = int(await conn.fetchval(
+                """SELECT max((detail->>'prompt_tokens_est_fixed')::int)
+                     FROM turn_spans
+                    WHERE kind = 'llm_call' AND name = $1
+                      AND detail ? 'prompt_tokens_est_fixed'
+                      AND started_at > now() - interval '7 days'""",
+                model) or 0)
+    except Exception:  # noqa: BLE001 — a missing reading is not a failed turn
+        log.debug("local_context: no demand history for %s", model, exc_info=True)
+    _demand[model] = (now + _DEMAND_TTL_S, value)
+    return value
+
+
+def _want_rung(demand: int, model_max: int) -> int:
+    """The smallest window that holds this model's measured demand.
+
+    Demand rounds UP where capacity rounds DOWN, and the asymmetry is the
+    point: rounding demand down sizes a model just under what it is known to
+    be asked for, which is the refusal this module exists to avoid.
+
+    A window has to hold more than the demand reading, because the reading
+    deliberately excludes replayed history (see `_demand_tokens`) and the
+    trimmer will replay some. How much is a fraction OF THE WINDOW — so the
+    test is applied to each candidate rung against the history THAT rung
+    would allow, and the first rung that passes wins. Deriving it from the
+    previous window instead would let each answer justify the next one:
+    with nothing cached, `history_budget_for` reads the 60,000-token
+    unknown-window default and hands back its 24,000 cap, which alone would
+    push a first sizing two rungs past anything measured.
+
+    Zero demand means no reading, which is not the same as a small one: it
+    returns the model's ceiling, so capacity decides alone and the behaviour
+    is exactly what it was before demand existed.
+    """
+    if demand <= 0:
+        return model_max
+    from app.agents import context_trim
+    for rung in sorted({*_LADDER, model_max}):
+        if rung < _FLOOR:
+            continue
+        # the trimmer's own arithmetic, applied to this candidate: what a
+        # prompt may occupy at `rung`, and what history it would replay there
+        usable = max(2000, rung - context_trim._COMPLETION_HEADROOM)
+        if usable >= demand + context_trim.history_budget_at(usable):
+            return rung
+    return model_max
+
+
+def _spill_pin(name: str) -> Optional[int]:
+    """The post-spill cap, if it has not expired — and drop it if it has."""
+    pin = _ceiling.get(name)
+    if not pin:
+        return None
+    if pin[0] > time.monotonic():
+        return pin[1]
+    _ceiling.pop(name, None)
+    log.info("local_context: %s's spill ceiling expired; re-deriving its window",
+             name)
+    return None
+
+
 def _quantise(chosen: int, model_max: int) -> int:
     """The largest rung that still fits, never a number in between.
 
@@ -285,40 +416,57 @@ async def resolve(model: str) -> Optional[int]:
         from app import model_fitness
         caps = await model_fitness.local_capabilities(name)
         model_max = int(caps.get("context_length") or 0)
-        free = await _free_vram_bytes(name)
-        if not model_max or not free:
+        vram = await _vram()
+        if not model_max or not vram:
             return None                     # cannot measure: ollama decides
         per_token = await _kv_bytes_per_token(name)
-        # The KV cache does not get the whole free pool: the weights sit in
-        # the same VRAM, and so do the runtime buffers. Dividing free VRAM by
-        # the per-token cost — as this did — overcommits by exactly the size
-        # of the model, which is several GB for every model here and shows up
-        # only as a silent spill. The disk size is the conservative proxy;
-        # some of it stays CPU-mapped and never reaches the card.
+        # The KV cache does not get the whole claimable pool: the weights sit
+        # in the same VRAM, and so do the runtime buffers. Dividing free VRAM
+        # by the per-token cost — as this did — overcommits by exactly the
+        # size of the model, which is several GB for every model here and
+        # shows up only as a silent spill. The disk size is the conservative
+        # proxy; some of it stays CPU-mapped and never reaches the card.
         weights = await _weights_bytes(name) or 0
-        kv_budget = free - weights - _RUNTIME_OVERHEAD_BYTES
+        kv_budget = _claimable(vram) - weights - _RUNTIME_OVERHEAD_BYTES
         affordable = int(max(kv_budget, 0) / max(per_token, 1.0))
+
+        # WHAT IS WANTED, rounded up...
+        demand = await _demand_tokens(model)
+        want_rung = _want_rung(demand, model_max)
+
+        # ...and what fits, rounded down.
         limits = [model_max, affordable]
-        if name in _ceiling:
-            limits.append(_ceiling[name])
-        chosen = _quantise(max(_FLOOR, min(limits)), model_max)
-        needed = chosen * per_token + weights + _RUNTIME_OVERHEAD_BYTES
-        if needed > free:
-            # The floor won: even the smallest window worth giving does not
-            # fit beside the weights. The floor is still right — a window too
-            # small to hold the system prompt loses the agent its role — so
-            # this says so rather than shrinking further. ollama will not
-            # error; it will spill and answer slowly, and this is the moment
-            # the reason is still known.
-            log.warning("local_context: %s does not fit — %.1fGB needed at a "
-                        "%d window, %.1fGB free. It will spill to system RAM "
-                        "and run slowly.", name, needed / 1e9, chosen, free / 1e9)
-        _cache[name] = (now + _TTL_S, chosen)
+        pin = _spill_pin(name)
+        if pin:
+            limits.append(pin)
+        cap_rung = _quantise(max(_FLOOR, min(limits)), model_max)
+
+        chosen = min(want_rung, cap_rung)
+        # Only with a READING. With none, `_want_rung` returns the model's
+        # ceiling to mean "no opinion", and comparing that against capacity
+        # calls every model starved on a fresh install — a warning that fires
+        # when nothing is wrong is one nobody reads when something is.
+        starved = bool(demand) and want_rung > cap_rung
+        if starved:
+            # Not "does not fit" — it fits, at a window smaller than this
+            # model is known to be asked for. Naming both sides is the
+            # difference between an operator quitting a game and an operator
+            # reading a log line about bytes. ollama will not error; it
+            # answers, and the router refuses the turns that overflow.
+            log.warning(
+                "local_context: %s is STARVED — a %d window would hold its "
+                "measured demand (%d tokens + headroom), but only %d fits: "
+                "%.1fGB claimable, %.1fGB held outside ollama, %.1fGB held by "
+                "ollama itself (evictable).",
+                name, want_rung, demand, cap_rung, _claimable(vram) / 1e9,
+                vram["foreign"] / 1e9, vram["ollama_held"] / 1e9)
+        _cache[name] = (now + (_TTL_TIGHT_S if starved else _TTL_OK_S), chosen)
         _last_known[name] = chosen
-        log.info("local_context: %s -> num_ctx=%d (model max %d, affordable "
-                 "%d at %d B/token, weights %.1fGB, free %.1fGB)",
-                 name, chosen, model_max, affordable, int(per_token),
-                 weights / 1e9, free / 1e9)
+        log.info("local_context: %s -> num_ctx=%d (model max %d, demand %d, "
+                 "affordable %d at %d B/token, weights %.1fGB, claimable "
+                 "%.1fGB, foreign %.1fGB)",
+                 name, chosen, model_max, demand, affordable, int(per_token),
+                 weights / 1e9, _claimable(vram) / 1e9, vram["foreign"] / 1e9)
         return chosen
     except Exception:  # noqa: BLE001 — never let sizing break a call
         log.debug("local_context: could not size %s; ollama decides", model,
@@ -399,6 +547,34 @@ async def warm() -> None:
         log.debug("local_context warm-up skipped", exc_info=True)
 
 
+_WARM_INTERVAL_S = 300.0
+
+
+async def warm_loop() -> None:
+    """Keep retrying `warm()` — the boot probe is allowed to fail.
+
+    `cached()` falls through to `_last_known`, which never expires, so it
+    returns None only when `resolve()` has NEVER succeeded in this process.
+    A single warm at startup therefore had one chance: if ollama was
+    restarting, every local model kept the 60,000-token unknown-window
+    default for the lifetime of the backend, and the trimmer built prompts
+    the router then refused. MEASURED at 34 spans over two days.
+
+    So the point is the RETRY, not the cadence. Five minutes is simply cheap:
+    metadata probes only, no model is loaded, and it is silent when ollama is
+    not running at all.
+    """
+    import asyncio
+    while True:
+        try:
+            await warm()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.debug("local_context warm loop tick failed", exc_info=True)
+        await asyncio.sleep(_WARM_INTERVAL_S)
+
+
 async def note_spill(model: str) -> None:
     """After a load, check whether it spilled — and remember if it did.
 
@@ -422,9 +598,15 @@ async def note_spill(model: str) -> None:
             # next resolve anyway, and the reload it costs should buy a
             # window we can actually keep.
             lowered = _next_lower_rung(current)
-            _ceiling[name] = lowered
+            # WITH AN EXPIRY. Written once and never cleared, one spill under
+            # transient pressure — a game, another model mid-load — pinned the
+            # model a rung low until the backend restarted, and nothing said
+            # why the window never came back. The pressure that caused a spill
+            # is exactly the kind of thing that goes away.
+            _ceiling[name] = (time.monotonic() + _SPILL_TTL_S, lowered)
             _cache.pop(name, None)
             log.warning("local_context: %s SPILLED to system RAM (%.1fGB of "
-                        "%.1fGB resident on GPU) — lowering its ceiling to "
-                        "%d tokens", name, vram / 1e9, total / 1e9, lowered)
+                        "%.1fGB resident on GPU) — capping it at %d tokens for "
+                        "the next %d minutes", name, vram / 1e9, total / 1e9,
+                        lowered, int(_SPILL_TTL_S // 60))
         return

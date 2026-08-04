@@ -93,8 +93,16 @@ async def lifespan(app: FastAPI):
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.
-    from app import bg, local_context
-    bg.spawn(local_context.warm(), name="local-context-warm")
+    # RETRIES, rather than running once. `cached()` falls through to
+    # `_last_known`, which never expires, so it returns None only when
+    # `resolve()` has NEVER succeeded in this process — and a boot probe that
+    # failed left it that way forever. MEASURED: ollama:ornith:9b sized at the
+    # 60,000-token unknown-window default for 34 spans across two days,
+    # 2026-08-01 19:59 to 2026-08-03 14:16. The cadence is not the fix; the
+    # retry is. create_task, not bg.spawn, because bg only logs on completion
+    # and a `while True` handed to it would still be pending at shutdown.
+    from app import local_context
+    context_warm_task = asyncio.create_task(local_context.warm_loop())
     scheduler_task = asyncio.create_task(scheduler.loop())
     warmer_task = asyncio.create_task(model_warmer.loop())
     ingest_task = asyncio.create_task(ingest_worker.loop())
@@ -104,7 +112,7 @@ async def lifespan(app: FastAPI):
     yield
     log.info("Shutting down...")
     for task in (scheduler_task, warmer_task, ingest_task, action_task,
-                 provider_health_task):
+                 provider_health_task, context_warm_task):
         task.cancel()
         try:
             await task

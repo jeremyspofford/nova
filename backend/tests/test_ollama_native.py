@@ -137,7 +137,9 @@ async def test_event_vocabulary():
             {"id": "c1", "function": {"name": "get_weather",
                                       "arguments": {"location": "Paris"}}}]},
             "done": False}),
-        json.dumps({"done": True, "prompt_eval_count": 120, "eval_count": 7}),
+        json.dumps({"done": True, "prompt_eval_count": 120, "eval_count": 7,
+                    "prompt_eval_duration": 1_400_000_000,
+                    "load_duration": 42_000_000, "total_duration": 3_100_000_000}),
     ]
     events, C = await collect(lines)
     kinds = [e["type"] for e in events]
@@ -160,6 +162,23 @@ async def test_event_vocabulary():
     check("token counts map to the ledger's names",
           usage["prompt_tokens"] == 120 and usage["completion_tokens"] == 7, str(usage))
 
+    # ollama publishes no cached-token count, so a reused prefix is only
+    # visible as the prefill time collapsing for an unchanged token count
+    check("the prefill/load/total durations are carried through",
+          usage["prompt_eval_ns"] == 1_400_000_000
+          and usage["load_ns"] == 42_000_000
+          and usage["total_ns"] == 3_100_000_000, str(usage))
+    check("cached_tokens is NOT synthesised from them",
+          "cached_tokens" not in usage, str(usage))
+
+    # a server that reports no durations must not invent zeros: absent and
+    # "measured as zero" are different answers in the ledger
+    plain = [json.dumps({"done": True, "prompt_eval_count": 5, "eval_count": 1})]
+    events2, _C2 = await collect(plain)
+    u2 = next(e for e in events2 if e["type"] == "usage")["usage"]
+    check("a chunk without durations reports them as None",
+          u2["prompt_eval_ns"] is None and u2["load_ns"] is None, str(u2))
+
     check("tool_calls are emitted AFTER the stream, once",
           kinds.count("tool_calls") == 1 and kinds.index("tool_calls") > kinds.index("text"))
 
@@ -176,6 +195,57 @@ async def test_params_reach_the_request():
     _events, C = await collect(lines)
     check("no think key when the caller sends none", "think" not in C.payload)
     check("no options when no num_ctx", "options" not in C.payload)
+
+
+async def test_silent_truncation_is_caught():
+    print("4b. a prompt ollama CUT is reported, because ollama does not")
+    # MEASURED on ollama 0.31.2 (`--context-shift --keep 4`): a ~9,050-token
+    # prompt at num_ctx 2048 came back with prompt_eval_count 1026,
+    # done_reason "stop", NO error field, and the system prompt gone — the
+    # model answered "I am a language model" instead of the SENTINEL it had
+    # been told to say. The survivor count is num_ctx//2 + 2 exactly.
+    for ctx, survivors in ((2048, 1026), (4096, 2050), (8192, 4098)):
+        check(f"num_ctx {ctx} -> {survivors} survivors is the context-shift "
+              f"signature",
+              native._truncation_signature(survivors, ctx, None) == "context_shift",
+              str(native._truncation_signature(survivors, ctx, None)))
+    check("an ordinary prompt count at the same window is NOT a signature",
+          native._truncation_signature(1500, 2048, 1900) is None)
+    check("...nor is a count one off it, because the arithmetic is exact",
+          native._truncation_signature(1027, 2048, None) is None)
+
+    # The second arm is mandatory: on every path where resolve() returned
+    # None the request carries no num_ctx, so the arithmetic above has no
+    # input — and that is exactly the case where the server runs at its own
+    # default and cuts.
+    check("with no num_ctx, a count far below what was sent still reports",
+          native._truncation_signature(900, None, 9000) == "far_below_estimate")
+    check("...but ordinary estimator error does not — the estimate runs high "
+          "by design (3 chars/token against a real ~4)",
+          native._truncation_signature(7000, None, 9000) is None)
+    check("a small prompt cannot trip the ratio at all",
+          native._truncation_signature(10, None, 100) is None)
+    check("and a server that reports nothing reports nothing",
+          native._truncation_signature(None, 2048, 9000) is None)
+
+    lines = [json.dumps({"message": {"content": "I am a language model"},
+                         "done": False}),
+             json.dumps({"done": True, "prompt_eval_count": 1026,
+                         "eval_count": 6})]
+    events, _C = await collect(lines, num_ctx=2048, expect_prompt_tokens=9050)
+    cut = next((e for e in events if e["type"] == "context_truncated"), None)
+    check("the stream emits it as its own event, after usage",
+          cut is not None and [e["type"] for e in events].index("context_truncated")
+          > [e["type"] for e in events].index("usage"), str(cut))
+    check("...carrying both numbers, so the ledger can say how much was lost",
+          cut and cut["prompt_tokens_real"] == 1026
+          and cut["prompt_tokens_expected"] == 9050, str(cut))
+
+    fine = [json.dumps({"done": True, "prompt_eval_count": 7000,
+                        "eval_count": 6})]
+    events, _C = await collect(fine, num_ctx=16384, expect_prompt_tokens=9050)
+    check("a prompt that fit says nothing",
+          not any(e["type"] == "context_truncated" for e in events))
 
 
 async def test_error_classification():
@@ -213,7 +283,7 @@ async def main():
     test_multimodal_translation()
     print()
     for t in (test_event_vocabulary, test_params_reach_the_request,
-              test_error_classification):
+              test_silent_truncation_is_caught, test_error_classification):
         await t()
         print()
     if FAILURES:

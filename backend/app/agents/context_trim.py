@@ -28,9 +28,16 @@ Rails, each from the review:
   and string content. Never remove a message, never reorder: an assistant
   tool_calls entry whose tool response is missing is a provider 400 that
   kills the turn outright.
-* Dispatch results are EXEMPT. The specialist's distilled report is usually
-  the oldest large tool message by synthesis time, and it is the product of
-  the entire turn — trimming it to make room starves the final answer.
+* Dispatch results are EXEMPT — until the alternative is a dead turn. The
+  specialist's distilled report is usually the oldest large tool message by
+  synthesis time, and it is the product of the entire turn, so ordinary
+  trimming never touches it. But the exemption used to be absolute, and a
+  transcript where everything left was exempt (or where there were no tool
+  messages at ALL — a first round, which is where the measured death
+  happened) simply logged and returned over the ceiling, and the router then
+  refused the turn. `_hard_trim` is the last resort: dispatch results first,
+  then user/assistant prose oldest-first, never index 0 and never the final
+  message. A shortened report beats no answer.
 * Raw web results go first, then everything else, oldest first.
 * One pass down to ~70% of the ceiling (hysteresis). Trimming to exactly the
   ceiling would re-trim every round, and each trim invalidates whatever
@@ -89,6 +96,12 @@ _WARN_FRACTION = 0.8
 _BULK_TOOLS = ("web_search", "fetch_url")
 
 _MARKER = "\n\n[… {n} characters trimmed to fit the context window. Call the tool again if you need the rest.]"
+
+# A separate marker for the hard trim, because _MARKER's second sentence is
+# FALSE on the messages this one touches: there is no tool to call again for a
+# user's own message or a specialist's report, and telling the model there is
+# invites a call that cannot exist.
+_HARD_MARKER = "\n\n[… {n} characters cut: this turn did not fit its context window, and there was nothing else left to shorten.]"
 
 
 def estimate_tokens(messages: Iterable[dict]) -> int:
@@ -192,8 +205,18 @@ def history_budget_for(model: str) -> int:
     the system prompt arrives. `_HISTORY_MAX` is what bounds large ones, and
     it is the one number here a window cannot supply.
     """
-    return max(1500, min(int(ceiling_for(model) * _HISTORY_FRACTION),
-                         _HISTORY_MAX))
+    return history_budget_at(ceiling_for(model))
+
+
+def history_budget_at(ceiling: int) -> int:
+    """The same fraction, applied to a ceiling the caller already has.
+
+    `local_context` needs to ask this of a window it is CONSIDERING, not of
+    the one a model currently has — asking about the current one lets each
+    window justify the next. One formula, two entry points, so the sizer and
+    the trimmer can never disagree about how much history a window carries.
+    """
+    return max(1500, min(int(ceiling * _HISTORY_FRACTION), _HISTORY_MAX))
 
 
 def paginate(body: str, cap: int) -> list[str]:
@@ -239,22 +262,42 @@ def _priority(message: dict, bulk_ids: set[str]) -> int:
 def trim_transcript(messages: list[dict], *, model: str,
                     exempt_ids: Optional[set[str]] = None,
                     bulk_ids: Optional[set[str]] = None,
+                    window: Optional[int] = None,
+                    history_count: int = 0,
                     detail: Optional[dict] = None) -> dict:
     """Trim `messages` IN PLACE if it exceeds the ceiling. Returns a report.
 
     exempt_ids: tool_call_ids whose results must never be trimmed (dispatch
     results — the turn's actual product).
     bulk_ids: tool_call_ids of raw web results, trimmed before anything else.
+    window: the window this call will ACTUALLY get, when the caller has
+    already resolved it. One resolution per call rather than two: this
+    function used to size against `local_context.cached()` while the router
+    refused against `local_context.effective_window()`, which are two answers
+    to one question, and the stale one won silently.
+    history_count: how many of the leading messages after the system message
+    are REPLAYED conversation, not this turn's own work. Used only to record
+    `prompt_tokens_est_fixed` — the demand signal `local_context` sizes
+    against, which must exclude the history a bigger window would itself
+    cause to be replayed.
     detail: a trace span detail dict to annotate.
     """
     exempt_ids = exempt_ids or set()
     bulk_ids = bulk_ids or set()
-    ceiling = ceiling_for(model)
+    ceiling = (max(2000, window - _COMPLETION_HEADROOM) if window
+               else ceiling_for(model))
     before = estimate_tokens(messages)
 
     if detail is not None:
         detail["prompt_tokens_est"] = before
         detail["context_ceiling"] = ceiling
+        # The same estimate with replayed history removed — what this turn
+        # would cost in a window of any size. See local_context._demand_tokens
+        # for why the total cannot be used: it is a function of the window,
+        # so sizing against it lets every window buy the next one up.
+        detail["prompt_tokens_est_fixed"] = (
+            estimate_tokens(messages[:1] + messages[1 + history_count:])
+            if history_count else before)
         if before >= ceiling * _WARN_FRACTION:
             # visible in the Turn Inspector BEFORE anything is trimmed, so a
             # turn that is quietly approaching the wall is legible
@@ -298,12 +341,94 @@ def trim_transcript(messages: list[dict], *, model: str,
             detail["context_trimmed"] = report["trimmed_messages"]
             detail["context_freed_chars"] = report["freed_chars"]
             detail["prompt_tokens_est_after"] = report["after"]
-    elif need > 0:
-        # everything left is exempt or already minimal — say so rather than
-        # pretending the transcript fits
+    if report["after"] > ceiling:
+        # Ordinary trimming could not get UNDER THE CEILING — everything left
+        # is exempt, already minimal, or there were no tool messages at all.
+        # That last case is not hypothetical: trace 075ee7cb died on ROUND ONE
+        # of a fresh conversation, where by construction there is nothing of
+        # role=="tool" to shorten, so this branch logged and the router
+        # refused a turn that had not started yet.
+        #
+        # The test is the CEILING, not the 70% target. Missing the target is
+        # ordinary — the target exists so the next round does not re-trim —
+        # and hard-trimming a dispatch result to chase it would break the
+        # exemption in exactly the common case it is written for.
+        freed, touched = _hard_trim(messages, report["after"] - target,
+                                    exempt_ids)
+        if freed:
+            report["hard_trimmed"] = touched
+            report["freed_chars"] += freed
+            report["after"] = estimate_tokens(messages)
+            log.warning("context trim: HARD trim freed %d characters from %d "
+                        "message(s) (%d tokens -> %d, ceiling %d) — the turn "
+                        "did not fit any other way",
+                        freed, touched, before, report["after"], ceiling)
+            if detail is not None:
+                detail["context_hard_trimmed"] = touched
+                detail["prompt_tokens_est_after"] = report["after"]
+    if report["after"] > ceiling:
+        # Still over. Say so rather than pretending the transcript fits — the
+        # router's refusal is what stops a silent head-truncation, and it
+        # reads this flag.
         log.warning("context trim: %d tokens still over the %d ceiling with "
-                    "nothing left to trim (dispatch results are exempt)",
-                    report["after"], ceiling)
+                    "nothing left to shorten at all", report["after"], ceiling)
         if detail is not None:
             detail["context_over_ceiling"] = True
     return report
+
+
+def _hard_trim(messages: list[dict], need: int,
+               exempt_ids: set[str]) -> tuple[int, int]:
+    """Last resort: shorten what the ordinary pass refuses to touch.
+
+    THIS REVERSES A DOCUMENTED RAIL, deliberately, and the module docstring
+    is updated with it. "Dispatch results are EXEMPT" is the right rule right
+    up to the point where the alternative is that the operator gets no answer
+    at all — a specialist's report cut in half is worth more than a refusal.
+
+    Order is by what is cheapest to lose: exempt tool results first (they are
+    at least a distillation of work that already happened and is recorded),
+    then user/assistant prose oldest-first, and the FINAL message dead last.
+    Content replacement only, never removal and never reordering — an
+    assistant `tool_calls` entry whose response has gone missing is a
+    provider 400 that kills the turn outright, which is the failure this
+    whole module exists downstream of.
+
+    INDEX 0 IS NEVER TOUCHED, and it is the only absolute exemption. The
+    system prompt is what head-truncation eats and the reason any of this
+    exists; a turn that keeps its history and loses its role has arrived
+    exactly where the module was written to prevent.
+
+    The final message is last but NOT exempt, and the difference matters:
+    on a fresh conversation there are no tool results and no history, so a
+    40,000-character paste is the entire overflow and the only thing that
+    can give. Refusing it outright is what trace 075ee7cb did.
+    """
+    if len(messages) < 2:
+        return 0, 0
+    body = list(enumerate(messages))[1:-1]
+    order = [(i, m) for i, m in body
+             if m.get("role") == "tool" and isinstance(m.get("content"), str)
+             and m.get("tool_call_id") in exempt_ids]
+    order += [(i, m) for i, m in body
+              if m.get("role") in ("user", "assistant")
+              and isinstance(m.get("content"), str)]
+    last = messages[-1]
+    if len(messages) > 1 and isinstance(last.get("content"), str):
+        order.append((len(messages) - 1, last))
+    freed = touched = 0
+    for _i, message in order:
+        if need <= 0:
+            break
+        content = message["content"]
+        if len(content) <= _MIN_KEPT_CHARS:
+            continue
+        droppable = len(content) - _MIN_KEPT_CHARS
+        wanted = min(droppable, need * _CHARS_PER_TOKEN)
+        keep = len(content) - wanted
+        dropped = len(content) - keep
+        message["content"] = content[:keep] + _HARD_MARKER.format(n=dropped)
+        freed += dropped
+        touched += 1
+        need -= dropped // _CHARS_PER_TOKEN
+    return freed, touched

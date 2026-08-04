@@ -22,7 +22,13 @@ here, in one direction:
     `images` array of raw base64 on ollama's. Converted, so a local vision
     model still sees the picture.
   * token counts arrive once, on the final chunk, as prompt_eval_count /
-    eval_count.
+    eval_count. The same chunk carries nanosecond durations, and those are
+    the ONLY visibility this system has into ollama's prefix cache: there
+    is no cached-token field anywhere in the API. A reused KV prefix shows
+    up as `prompt_eval_duration` collapsing 10-50x for the same
+    prompt_eval_count, so the durations are carried through verbatim and
+    `cached_tokens` is deliberately left unset — a number we derived would
+    be indistinguishable, in the ledger, from one a provider reported.
 """
 
 import json
@@ -92,6 +98,46 @@ def to_ollama_messages(messages: list) -> list[dict]:
     return out
 
 
+# A prompt that does not fit is not refused by ollama — it is CUT, from the
+# head, where the system prompt lives, and the response carries
+# `done_reason: "stop"` and no error field at all. MEASURED on ollama 0.31.2
+# (launched with `--context-shift --keep 4`) with a SENTINEL system prompt and
+# ~45,000 characters of filler: at num_ctx 2048 the server reported
+# prompt_eval_count 1026 and answered "I am a language model" instead of
+# "SENTINEL". The survivor count follows num_ctx//2 + 2 exactly — 2048 -> 1026,
+# 4096 -> 2050, 8192 -> 4098 — and the cut triggers at the FULL window (2,030
+# tokens passed untouched at 2048; 2,060 was cut).
+#
+# This signature belongs to that launch configuration and that version. If an
+# upgrade changes either, the test carrying all three measured points fails
+# loudly, which is the intended way to find out.
+_SHIFT_SURVIVORS = lambda ctx: int(ctx) // 2 + 2          # noqa: E731
+
+# When num_ctx was not sent, the window is ollama's own and the arithmetic
+# above has no input. What is left is the size we EXPECTED to send: the
+# estimate is conservative by design (3 chars/token against a real ~4), so it
+# runs high, and half of it is a wide enough margin that ordinary estimation
+# error cannot reach — while the measured truncation came in at 11%.
+_TRUNCATION_RATIO = 0.5
+_TRUNCATION_MIN_TOKENS = 500      # below this, the ratio is noise
+
+
+def _truncation_signature(fed, num_ctx, expected) -> Optional[str]:
+    """Name the evidence that the prompt was cut, or None."""
+    try:
+        fed = int(fed or 0)
+    except (TypeError, ValueError):
+        return None
+    if fed <= 0:
+        return None
+    if num_ctx and fed == _SHIFT_SURVIVORS(num_ctx):
+        return "context_shift"
+    if (expected and expected >= _TRUNCATION_MIN_TOKENS
+            and fed < expected * _TRUNCATION_RATIO):
+        return "far_below_estimate"
+    return None
+
+
 class OllamaNativeClient:
     def __init__(self, base_url: str, timeout: float = 300.0):
         self.base_url = base_url.rstrip("/")
@@ -101,7 +147,8 @@ class OllamaNativeClient:
                      tools: Optional[list] = None,
                      include_usage: bool = True,
                      think: Optional[bool] = None,
-                     num_ctx: Optional[int] = None) -> AsyncIterator[dict]:
+                     num_ctx: Optional[int] = None,
+                     expect_prompt_tokens: Optional[int] = None) -> AsyncIterator[dict]:
         payload: dict = {"model": model, "messages": to_ollama_messages(messages),
                          "stream": True}
         if tools:
@@ -167,11 +214,24 @@ class OllamaNativeClient:
                             })
 
                         if chunk.get("done"):
+                            fed = chunk.get("prompt_eval_count")
                             if include_usage:
                                 yield {"type": "usage", "usage": {
                                     "prompt_tokens": chunk.get("prompt_eval_count"),
                                     "completion_tokens": chunk.get("eval_count"),
+                                    # no cached_tokens: see the module docstring
+                                    "prompt_eval_ns": chunk.get("prompt_eval_duration"),
+                                    "load_ns": chunk.get("load_duration"),
+                                    "total_ns": chunk.get("total_duration"),
                                 }}
+                            cut = _truncation_signature(fed, num_ctx,
+                                                        expect_prompt_tokens)
+                            if cut:
+                                yield {"type": "context_truncated",
+                                       "num_ctx": num_ctx,
+                                       "prompt_tokens_real": int(fed or 0),
+                                       "prompt_tokens_expected": expect_prompt_tokens,
+                                       "signature": cut}
                             break
         except httpx.HTTPError as e:
             klass = "mid_stream" if produced_output else "connect_failed"
