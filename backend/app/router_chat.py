@@ -334,7 +334,7 @@ async def _image_text(a, model: str) -> tuple[str, str]:
     a container log they will never read.
     """
     import base64
-    from app import doc_extract, model_fitness
+    from app import doc_extract
 
     # 1. OCR, locally. Best case for a photographed document — it is the
     #    document's own words rather than a model's description of them.
@@ -374,7 +374,7 @@ async def _image_text(a, model: str) -> tuple[str, str]:
     # 3. Otherwise the answering model has to look. Ask whether it CAN.
     if not await _model_can_see(model):
         vision_model = str(settings_store.get("attachments.vision_model") or "").strip()
-        hint = (f"Set a vision model in Settings → Attachments"
+        hint = ("Set a vision model in Settings → Attachments"
                 if not vision_model else
                 f"'{vision_model}' is configured but is not answering this turn")
         note = (f"{a.name} was NOT read: {model} cannot see images. {hint}.")
@@ -1830,6 +1830,18 @@ async def evals_run(body: dict):
 async def evals_runs(agent: str | None = None, limit: int = 20):
     from app import eval_runs
     return {"runs": await eval_runs.recent(agent, min(limit, 100))}
+
+
+@router.get("/api/v1/evals/standings")
+async def evals_standings():
+    """If you had to keep one local model, which one — from recorded runs.
+
+    Reads only; it starts nothing and invokes no model. The shape carries its
+    own caveats (`basis`, `missing`, `min_repeat`) because the number on its
+    own is the thing that gets over-read — see model_tournament.standings.
+    """
+    from app import model_tournament
+    return await model_tournament.standings()
 
 
 @router.get("/api/v1/models/fitness")

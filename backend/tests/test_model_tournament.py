@@ -70,28 +70,75 @@ def pairing(suites: dict, newest: dict, models=("ollama:a",)):
             self.name, self.version, self.agent = name, v, name
 
     real = (db.acquire, suite_mod.list_suites, suite_mod.load_suite,
-            mt._installed_local, mt.field_for)
+            mt._installed_local)
 
     async def _installed():
         return list(models)
-
-    async def _field(agent, installed, standby):
-        return list(installed)          # field selection is tested separately
 
     db.acquire = lambda: Acquire(Conn(newest))
     suite_mod.list_suites = lambda *a, **k: list(suites)
     suite_mod.load_suite = lambda name, *a, **k: FakeSuite(name, suites[name])
     mt._installed_local = _installed
-    mt.field_for = _field
     try:
         return asyncio.run(mt.next_pairing())
     finally:
         (db.acquire, suite_mod.list_suites, suite_mod.load_suite,
-         mt._installed_local, mt.field_for) = real
+         mt._installed_local) = real
 
 
 def ts(hours_ago: float):
     return dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_ago)
+
+
+class RowsConn:
+    """Answers the standings query from a list of recorded runs."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def fetch(self, sql, models, min_repeat):
+        out = [r for r in self.rows
+               if r["model"] in models and r["repeat_count"] >= min_repeat]
+        # production orders newest-first and standings() relies on that to
+        # pick the newest COMPARABLE row per pair — so the fake must too
+        out.sort(key=lambda r: r["started_at"], reverse=True)
+        return out
+
+
+def run(suite, model, passed, total, ver, hours_ago, repeat=3):
+    return {"suite": suite, "model": model, "tasks_passed": passed,
+            "tasks_total": total, "suite_version": ver,
+            "started_at": ts(hours_ago), "repeat_count": repeat}
+
+
+def standings_of(suites: dict, rows: list, models, min_repeat=3):
+    """standings() with the suite table, the run history, the installed list
+    and the repeat setting all injected — no database, no ollama."""
+    from app import db, settings_store
+    from app.evals import suites as suite_mod
+
+    class FakeSuite:
+        def __init__(self, name, v):
+            self.name, self.version, self.agent = name, v, name
+
+    real = (db.acquire, suite_mod.list_suites, suite_mod.load_suite,
+            mt._installed_local, settings_store.get)
+    real_setting = settings_store.get
+
+    async def _installed():
+        return list(models)
+
+    db.acquire = lambda: Acquire(RowsConn(rows))
+    suite_mod.list_suites = lambda *a, **k: list(suites)
+    suite_mod.load_suite = lambda name, *a, **k: FakeSuite(name, suites[name])
+    mt._installed_local = _installed
+    settings_store.get = lambda k, *a, **kw: (
+        min_repeat if k == "evals.tournament_repeat" else real_setting(k, *a, **kw))
+    try:
+        return asyncio.run(mt.standings())
+    finally:
+        (db.acquire, suite_mod.list_suites, suite_mod.load_suite,
+         mt._installed_local, settings_store.get) = real
 
 
 def main() -> int:
@@ -123,57 +170,126 @@ def main() -> int:
     check("no local models at all means no tournament, not an empty run",
           pairing({"alpha": 1}, {}, models=()) is None)
 
-    print("4b. the field per suite is derived from what is actually BOUND")
-    # The suites are not interchangeable — guardian grades refusing an injected
-    # rule deletion, memory-curator grades deleting exactly the notes a subject
-    # spans. But each is graded against its agent's REAL toolset, and only one
-    # agent here runs a local model, so ranking six local models against
-    # guardian measures a configuration nobody deploys. Measured: 48 runs per
-    # full rotation became 13.
+    print("4b. the field does not narrow to whatever an agent happens to be bound to")
+    # It did once: a cloud-bound agent's suite entered the install standby
+    # ALONE, on the argument that ranking six models against guardian measures
+    # a configuration nobody deploys. That argument sounded right and was
+    # wrong twice over. It made the standby UNIMPROVABLE — eleven of twelve
+    # suites entered exactly one model, the incumbent, and a challenger cannot
+    # out-score a model it is never run against. And it asked the deployment
+    # question about the wrong subject: not "does anyone deploy THIS model on
+    # THIS agent" but "does anyone deploy A LOCAL model here", which is yes
+    # everywhere, because the standby stands in for every cloud agent the
+    # moment a provider fails.
+    #
+    # Proven by making the registry RAISE rather than by reading the field
+    # back: if a binding could influence the field at all, this explodes
+    # instead of returning three models.
     from app.agents import registry as agent_registry
-    from app.llm import router as llm_router
-
-    INSTALLED = ["ollama:a", "ollama:b", "ollama:standby"]
-    STANDBY = "ollama:standby"
-    bound = {"local-agent": "ollama:a", "cloud-agent": "openrouter:x/y"}
 
     real_get = agent_registry.get_agent_by_name
-    real_local, real_eff = llm_router.is_local, llm_router.effective_model
 
-    async def _get(name):
-        return {"name": name, "model": bound.get(name)} if name in bound else None
+    async def _explode(_name):
+        raise AssertionError("field selection consulted a binding")
 
-    agent_registry.get_agent_by_name = _get
-    llm_router.is_local = lambda m: str(m).startswith("ollama:")
-    # effective_model must be pinned too: it swaps an UNCONFIGURED cloud model
-    # for the local fallback, so without this a cloud-bound agent reads as
-    # local and the test grades the wrong branch. That is the same cold-cache
-    # trap that made a whole model A/B meaningless earlier today.
-    llm_router.effective_model = lambda m: m
+    agent_registry.get_agent_by_name = _explode
     try:
-        field = asyncio.run(mt.field_for("local-agent", INSTALLED, STANDBY))
-        check("an agent that RUNS local gets the whole field — they are all "
-              "candidates for that binding", field == INSTALLED, str(field))
-
-        field = asyncio.run(mt.field_for("cloud-agent", INSTALLED, STANDBY))
-        check("an agent on cloud gets the STANDBY only — the one local model "
-              "that will ever run it, and it will the moment a provider fails",
-              field == [STANDBY], str(field))
-
-        field = asyncio.run(mt.field_for("cloud-agent", ["ollama:a"], STANDBY))
-        check("...and nothing at all when the standby is not installed, "
-              "rather than substituting some other model",
-              field == [], str(field))
-
-        bound["cloud-agent"] = "ollama:b"      # the operator moves it local
-        field = asyncio.run(mt.field_for("cloud-agent", INSTALLED, STANDBY))
-        check("moving an agent onto a local model puts its suite back in the "
-              "full rotation, with no edit here", field == INSTALLED, str(field))
+        got = pairing({"cloud-suite": 1}, {},
+                      models=("ollama:a", "ollama:b", "ollama:standby"))
+        check("a suite whose agent runs cloud still enters the whole field — "
+              "every local model is a candidate for the standby role, and the "
+              "standby role runs every suite",
+              got and got[1] == ["ollama:a", "ollama:b", "ollama:standby"],
+              str(got and got[1]))
+    except AssertionError as exc:
+        check(f"the field must not depend on a binding — {exc}", False)
     finally:
         agent_registry.get_agent_by_name = real_get
-        llm_router.is_local, llm_router.effective_model = real_local, real_eff
 
-    print("5. off is the default, and off means nothing happens")
+    print("5. the basis is the suites that can tell two models apart")
+    # Anything else is not apples-to-apples. Averaging a model measured on one
+    # suite against one measured on two ranks the least-tested model first
+    # about as often as not, which is the failure this whole shape avoids.
+    got = standings_of(
+        {"alpha": 1, "beta": 1},
+        [run("alpha", "ollama:a", 5, 7, 1, 2),
+         run("alpha", "ollama:b", 3, 7, 1, 2),
+         run("beta", "ollama:a", 6, 6, 1, 2)],
+        ("ollama:a", "ollama:b"))
+    check("beta is excluded — only one model has ever been measured on it",
+          got["basis"] == ["alpha"], str(got["basis"]))
+    check("and the pairing still owed is NAMED, not silently folded in",
+          {"suite": "beta", "model": "ollama:b"} in got["missing"],
+          str(got["missing"]))
+    check("the winner is decided on the basis alone — 5/7 beats 3/7",
+          got["leader"] == "ollama:a", str(got["leader"]))
+    check("a's uncounted 6/6 on beta does not inflate its total",
+          got["table"][0]["total"] == 7, str(got["table"][0]))
+
+    print("5b. a newly pulled model does not erase a comparison it is not in")
+    # The first cut required EVERY installed model on a suite for it to count,
+    # which reads stricter and is more fragile: pulling a third model emptied
+    # the basis and threw away a clean two-way result until the rotation came
+    # round again. Proposing pulls is phase 4 of this same plan, so that is
+    # the normal case rather than an edge one.
+    got = standings_of(
+        {"alpha": 1, "beta": 1},
+        [run("alpha", "ollama:a", 5, 7, 1, 2),
+         run("alpha", "ollama:b", 3, 7, 1, 2),
+         run("beta", "ollama:a", 4, 6, 1, 2),
+         run("beta", "ollama:b", 2, 6, 1, 2)],
+        ("ollama:a", "ollama:b", "ollama:new"))
+    check("the measured models keep their comparison over BOTH suites",
+          got["basis"] == ["alpha", "beta"] and got["comparable"],
+          f"basis={got['basis']} comparable={got['comparable']}")
+    check("the newcomer is carried as unranked instead of emptying the basis",
+          any(r["model"] == "ollama:new" and not r["ranked"]
+              for r in got["table"]),
+          str([(r["model"], r["ranked"]) for r in got["table"]]))
+    check("...and it sorts last, below everything actually measured",
+          got["table"][-1]["model"] == "ollama:new",
+          str([r["model"] for r in got["table"]]))
+    check("the winner is still decided among the models that were measured "
+          "(9/13 against 5/13)", got["leader"] == "ollama:a", str(got["leader"]))
+
+    print("6. only the current suite version counts, and only a real repeat")
+    # alpha is now v2. a's NEWEST row is v1 — a different set of tasks — and
+    # its v2 row is older. The older comparable row has to win, which is why
+    # the version test cannot happen after de-duplication.
+    got = standings_of(
+        {"alpha": 2},
+        [run("alpha", "ollama:a", 7, 7, 1, 1),
+         run("alpha", "ollama:a", 2, 7, 2, 9),
+         run("alpha", "ollama:b", 3, 7, 2, 5)],
+        ("ollama:a", "ollama:b"))
+    a = next((r for r in got["table"] if r["model"] == "ollama:a"), None)
+    check("a newer row at a STALE version does not mask the older current one",
+          a and a["passed"] == 2, str(a))
+    check("...so b takes it on 3/7 against a's real 2/7",
+          got["leader"] == "ollama:b", str(got["leader"]))
+
+    got = standings_of({"alpha": 1},
+                       [run("alpha", "ollama:a", 7, 7, 1, 1, repeat=1),
+                        run("alpha", "ollama:b", 0, 7, 1, 1, repeat=3)],
+                       ("ollama:a", "ollama:b"))
+    check("a single draw cannot enter the standings, let alone win them",
+          got["comparable"] is False and got["leader"] is None,
+          f"basis={got['basis']} leader={got['leader']}")
+
+    print("7. a tie is reported as a tie, and no evidence as no evidence")
+    got = standings_of({"alpha": 1},
+                       [run("alpha", "ollama:a", 2, 7, 1, 2),
+                        run("alpha", "ollama:b", 2, 7, 1, 2)],
+                       ("ollama:a", "ollama:b"))
+    check("ornith and qwen3 really are tied at 2/7 — naming either would be "
+          "an artifact of sort order",
+          got["comparable"] and got["leader"] is None, str(got["leader"]))
+    got = standings_of({"alpha": 1}, [], ("ollama:a", "ollama:b"))
+    check("nothing measured is 'not comparable', never a default winner",
+          got["comparable"] is False and got["leader"] is None
+          and len(got["missing"]) == 2, str(got))
+
+    print("8. off is the default, and off means nothing happens")
     from app import settings_store
     real_get = settings_store.get
     settings_store.get = lambda k, *a, **kw: (
@@ -184,7 +300,7 @@ def main() -> int:
     finally:
         settings_store.get = real_get
 
-    print("6. it cannot promote or delete — there is no such code path")
+    print("9. it cannot promote or delete — there is no such code path")
     src = open("/app/backend/app/model_tournament.py").read()
     for forbidden in ("uninstall", "delete_model", "patchAgent", "update_agent",
                       "manage_agents"):
