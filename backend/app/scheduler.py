@@ -163,6 +163,8 @@ async def tick():
     await sysmon.maybe_retire_instances() # self-limits to daily
     from app import secret_store
     await secret_store.maybe_nudge_rotation()  # self-limits to daily
+    from app import failures
+    await failures.maybe_raise()         # self-limits to 6h, opt-in, deduped
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
     await _maybe_backup()                # self-limits to backups.every_hours
     # Ranks the local models against the stalest suite. Off by default, and it

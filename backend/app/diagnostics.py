@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from app import db, redact
+from app import db, failures, redact
 
 log = logging.getLogger(__name__)
 
@@ -134,25 +134,88 @@ async def _recent_errors(section: Optional[str]) -> list[dict]:
             for r in rows]
 
 
+def _match_store(area: Optional[str], stores: list[str]) -> Optional[str]:
+    """Resolve a caller's word to a failure store: 'ingestion' -> ingest_jobs.
+
+    Derived from the store names themselves, so a queue that lands next month
+    is addressable by its own name with no edit here. Matched on TOKENS
+    because the operator says "ingestion" and the table says "ingest_jobs" —
+    the word he uses is never the identifier.
+    """
+    if not area:
+        return None
+    wanted = "".join(ch for ch in area.strip().lower() if ch.isalnum())
+    if not wanted:
+        return None
+    for table in stores:
+        flat = table.replace("_", "")
+        if wanted == flat or wanted in flat or flat.startswith(wanted):
+            return table
+        # 'ingest' (a token of ingest_jobs) is a prefix of 'ingestion'
+        for token in table.split("_"):
+            if len(token) > 2 and wanted.startswith(token):
+                return table
+    return None
+
+
+async def _error_count(section: Optional[str]) -> Optional[int]:
+    """How many ledger errors there ACTUALLY are, sharing _recent_errors' filter.
+
+    `len(recent_errors)` is capped at _ERROR_LIMIT, so reporting it as the
+    count turns "at least 8" into a flat "8" — and on this install the real
+    72h number was 53. Returns None when the count could not be taken, which
+    is what stops `note` from saying "no errors in the ledger" on the strength
+    of a query that failed.
+    """
+    sql = ("SELECT count(*) FROM turn_spans "
+           " WHERE detail->>'error' IS NOT NULL "
+           "   AND started_at > now() - ($1 || ' hours')::interval ")
+    args: list = [str(_ERROR_HOURS)]
+    if section:
+        sql += "   AND (name ILIKE $2 OR detail->>'error' ILIKE $2) "
+        args.append(f"%{section.rstrip('s')}%")
+    try:
+        async with db.acquire() as conn:
+            return int(await conn.fetchval(sql, *args) or 0)
+    except Exception:  # noqa: BLE001
+        log.debug("error count failed", exc_info=True)
+        return None
+
+
 async def report(area: Optional[str] = None) -> dict:
     """Configuration, failures and reachability for one area, or a summary."""
-    section = _match(area)
-    if area and not section:
-        return {"error": f"no such area {area!r}", "areas": areas()}
+    # UNCONDITIONAL, and deliberately not filtered by `area`. The failure that
+    # started this could be reached by no spelling of `area` at all, so no
+    # invocation of diagnose — with an area, without one, or with a wrong one
+    # — may return without the live failure census. diagnose('Notifications')
+    # must not be able to imply health while ingestion is broken.
+    census = await failures.census()
+    stores = census.get("scanned", [])
+    known = areas() + stores
 
-    out: dict = {"area": section or "all", "areas": areas()}
+    section = _match(area)
+    store = _match_store(area, stores) if (area and not section) else None
+    if area and not section and not store:
+        # Still carries the census: an unrecognised word must not be a way to
+        # get an answer with no failures in it.
+        return {"error": f"no such area {area!r}", "areas": known,
+                "background_failures": census,
+                "errors_note": failures.note(census)}
+
+    out: dict = {"area": section or store or "all", "areas": known}
     out["settings"] = await _settings_for(section)
 
     errors = await _recent_errors(section)
+    total_errors = await _error_count(section)
     out["recent_errors"] = errors
-    # An empty list reads as "fine". Say which it is.
-    out["errors_note"] = (
-        f"{len(errors)} error(s) recorded in the last {_ERROR_HOURS}h"
-        if errors else
-        f"No errors recorded in the last {_ERROR_HOURS}h. That means none "
-        f"were LOGGED — a feature can be misconfigured and fail silently "
-        f"without ever raising, which is how the push-notification outage "
-        f"went unnoticed.")
+    if total_errors is not None and total_errors > len(errors):
+        out["recent_errors_note"] = (
+            f"showing the {len(errors)} most recent of {total_errors}")
+    out["background_failures"] = census
+    # The one sentence a model is most likely to quote back. Computed from the
+    # census, so the reassuring wording is unreachable while anything is
+    # failing or anything failed to be read. See failures.note.
+    out["errors_note"] = failures.note(census, total_errors, _ERROR_HOURS)
 
     # `services` used to be `sysmon._reaches()` — postgres and the memory
     # directory, two entries. Asked whether searxng was healthy, she read that

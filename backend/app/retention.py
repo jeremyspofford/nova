@@ -49,12 +49,18 @@ _SWEEPS = [
     # which made clicking Later schedule the card for deletion.
     # ...and never one whose action is still queued or running: the cascade
     # would take the live work item with it.
+    # Failure cards are exempt from the age sweep on purpose: their dedupe_key
+    # IS the record that this exact set of failures was already shown and
+    # dismissed. Deleting it re-arms the card, so two members-only videos that
+    # can never succeed would raise a fresh notification every retention
+    # period, forever. The row is tiny; the nag is not.
     ("decided recommendations",
      "DELETE FROM recommendations WHERE status NOT IN ('new', 'seen', 'later') "
      "  AND created_at < now() - ($1 || ' days')::interval "
      "  AND NOT EXISTS (SELECT 1 FROM action_runs ar "
      "                  WHERE ar.recommendation_id = recommendations.id "
-     "                    AND ar.status IN ('queued', 'running'))"),
+     "                    AND ar.status IN ('queued', 'running'))"
+     "  AND (dedupe_key IS NULL OR dedupe_key NOT LIKE 'failure:%')"),
 ]
 
 

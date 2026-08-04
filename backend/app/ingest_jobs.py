@@ -212,19 +212,90 @@ async def purge_superseded_siblings(media_key: str) -> int:
     return _rowcount(res)
 
 
-async def retry(job_id) -> Optional[dict]:
-    """Operator retry of a failed/skipped job: reset it to queued with a fresh
-    error AND interruption budget (attempts=0, orphans=0) so the worker picks it
-    up again. Returns the row, or None if it wasn't retryable."""
+async def retry(job_id, *, refill_agent_budget: bool = False) -> Optional[dict]:
+    """Retry of a failed/skipped job: reset it to queued with a fresh error AND
+    interruption budget (attempts=0, orphans=0) so the worker picks it up
+    again. Returns the row, or None if it wasn't retryable.
+
+    `refill_agent_budget` is the operator's alone, and it is OPT-IN because
+    this function has a second caller. `_enqueue_source_entries` revives
+    stuck jobs from the followed-source poll — an unattended, scheduled path a
+    model can also trigger with `poll_sources` — so a version of this that
+    always zeroed `agent_retries` would let the poll refill the model's retry
+    budget on a timer. The WHERE-clause control in `retry_by_agent` would then
+    be a control the system defeated by itself, on a schedule."""
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """UPDATE ingest_jobs
                  SET status = 'queued', error = NULL, attempts = 0, orphans = 0,
+                     agent_retries = CASE WHEN $2 THEN 0 ELSE agent_retries END,
                      started_at = NULL, finished_at = NULL, updated_at = now()
                WHERE id = $1 AND status IN ('failed', 'skipped')
                RETURNING *""",
-            job_id)
+            job_id, refill_agent_budget)
     return dict(row) if row else None
+
+
+# How many times a MODEL may re-queue one job. Separate from `max_attempts`
+# (the worker's own transient-error budget) because they defend against
+# different things: max_attempts against a flaky network, this against a model
+# that reads "it failed" and retries in a loop.
+AGENT_RETRY_BUDGET = 1
+
+
+async def retry_by_agent(job_id, *, agent_name: str = "") -> dict:
+    """Agent retry, refused in SQL rather than in a prompt.
+
+    The whole control is the WHERE clause: the row must still be failed or
+    skipped, and its agent budget must be unspent. Postgres returns zero rows
+    otherwise and there is nothing here for a model to talk around — it cannot
+    zero `agent_retries`, because the only UPDATE that does is `retry` above,
+    reachable solely from the operator's authenticated endpoint.
+
+    Returns {"status": "queued"|"not_retryable"|"budget_spent"|"not_found"}
+    plus the row when it worked. The refusals are distinguished with one extra
+    SELECT so she can tell the operator WHICH wall she hit — "I already
+    retried this once, use the Retry button on Activity" is actionable, and a
+    bare no is what sends a model round the loop again.
+    """
+    async with db.acquire() as conn:
+        # The CTE carries the OLD error out with the row. The UPDATE clears
+        # `error` (the job is queued again and has not failed yet), so
+        # RETURNING alone hands the caller a NULL — and the reason it failed
+        # is exactly what the audit event and the reply need to say.
+        row = await conn.fetchrow(
+            """WITH prev AS (
+                   SELECT id, error AS prev_error FROM ingest_jobs WHERE id = $1
+               )
+               UPDATE ingest_jobs j
+                  SET status = 'queued', error = NULL, attempts = 0, orphans = 0,
+                      agent_retries = j.agent_retries + 1,
+                      started_at = NULL, finished_at = NULL, updated_at = now()
+                 FROM prev
+                WHERE j.id = prev.id
+                  AND j.status IN ('failed', 'skipped')
+                  AND j.agent_retries < $2
+               RETURNING j.*, prev.prev_error""",
+            job_id, AGENT_RETRY_BUDGET)
+        if row:
+            log.info("agent %s re-queued ingest job %s", agent_name or "?", job_id)
+            return {"status": "queued", "job": dict(row)}
+        cur = await conn.fetchrow(
+            "SELECT status, agent_retries, url, title FROM ingest_jobs "
+            "WHERE id = $1", job_id)
+    if not cur:
+        return {"status": "not_found"}
+    # STATUS FIRST, and the order is load-bearing. A row that is no longer
+    # failed/skipped was not refused for budget, whatever the counter says —
+    # it may have been re-queued by this very tool and already SUCCEEDED, and
+    # answering "budget_spent" makes the tool say "it failed again" about a
+    # finished download. That is the same species of confidently-wrong this
+    # whole lane exists to remove, just pointing the other way.
+    if cur["status"] not in ("failed", "skipped"):
+        return {"status": "not_retryable", "job": dict(cur)}
+    if cur["agent_retries"] >= AGENT_RETRY_BUDGET:
+        return {"status": "budget_spent", "job": dict(cur)}
+    return {"status": "not_retryable", "job": dict(cur)}
 
 
 async def summary(recent: int = 60) -> dict:

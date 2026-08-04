@@ -319,6 +319,7 @@ an agent. See `docs/plans/mcp-client.md` for the full design.
 | **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
 | **MCP client** (HTTP + stdio) | Settings → Tools → MCP servers; operator-registered, hash-approved tool descriptions, lazy loading (`find_mcp_tools`) for grants not marked always-on; stdio servers run via the `mcp-runner` sidecar |
 | **Files explorer** | Library → Files; expand-in-place tree over the memory store and a workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
+| **She can see what is failing** | `diagnose` carries a failure census discovered from `information_schema` on every call — the background queues (ingestion, automations, evals, MCP servers, alerts, push endpoints) whose failures never reach the turn ledger. A failure-shaped table that the census does not understand makes the report `INCOMPLETE` and reddens `test_failure_census.py`, so a new queue cannot silently read as healthy. Counts ride in her prompt each turn; `retry_ingest_job` gives her one re-queue per job, budgeted in a `WHERE` clause |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.

@@ -64,6 +64,7 @@
     "propose_goal",
     "raise_recommendation",
     "read_memory_item",
+    "retry_ingest_job",
     "search_memory",
     "service_status",
     "web_search",

@@ -331,6 +331,16 @@ SETTING_DEFS: list[dict] = [
                      "a red 'unreachable' card forever, because nothing else "
                      "ever removes the row. It re-registers by itself if it "
                      "comes back. 0 disables retirement.")},
+    {"key": "failures.watch_enabled", "type": "boolean", "default": False,
+     "section": "Observability", "label": "Raise a card when background work fails",
+     "description": ("Puts an inbox card in front of you when the background "
+                     "queues (ingestion, automations, evals, MCP servers, "
+                     "alerts) have failures Nova can see but you have not "
+                     "looked at. One card per distinct set of failures, never "
+                     "a repeat for the same set. Off by default: she already "
+                     "carries the counts into every turn and will tell you "
+                     "when asked, so this is for when you would rather not "
+                     "have to ask.")},
     {"key": "monitor.retention_days", "type": "number", "default": 7,
      "min": 1, "max": 90, "section": "Observability",
      "label": "Resource history retention (days)",

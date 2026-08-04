@@ -10,6 +10,7 @@ the execute function below only fires if something calls it outside the runner.
 import json
 import logging
 import re
+import uuid
 from urllib.parse import urlparse
 
 from app import capability_events, db, durability, tagging
@@ -281,6 +282,62 @@ async def _service_status(args, ctx):
     """
     from app import service_health
     return _j(await service_health.status())
+
+
+async def _retry_ingest_job(args, ctx):
+    """Re-queue one failed ingest, with the budget enforced in the WHERE clause.
+
+    The operator asked for two things on 2026-08-02: that she could SEE the
+    failed items on the Activity page, and that she could fix them. `diagnose`
+    is the first half. This is the second, and it is deliberately the smallest
+    possible verb — it re-runs work that was already enqueued and cannot
+    introduce a URL, so it stays a READER under the containment fence.
+
+    Refusal lives in `ingest_jobs.retry_by_agent`, not here: a prompt telling
+    her to retry once is a request, and this is a control. What she gets back
+    on refusal names which wall she hit, because a bare "no" is what sends a
+    model round the loop again.
+    """
+    from app import ingest_jobs
+    raw = str(args.get("job_id") or "").strip()
+    try:
+        job_id = uuid.UUID(raw)
+    except (ValueError, AttributeError, TypeError):
+        return ("Error: job_id must be the id of a job from diagnose's "
+                "background_failures (ingest_jobs). Got: " + (raw[:60] or "nothing"))
+
+    res = await ingest_jobs.retry_by_agent(
+        job_id, agent_name=ctx.get("agent_name", ""))
+    job = res.get("job") or {}
+    what = job.get("title") or job.get("url") or raw
+
+    if res["status"] == "not_found":
+        return f"Error: no ingest job with id {raw}."
+    if res["status"] == "not_retryable":
+        return (f"Error: {what!r} is {job.get('status')!r}, not failed or "
+                f"skipped — there is nothing to retry.")
+    if res["status"] == "budget_spent":
+        return (f"Error: you have already retried {what!r} once, and it failed "
+                f"again. Retrying a third time is not going to work — say what "
+                f"the error actually was and let the operator decide. He can "
+                f"force another attempt with the Retry button on the Activity "
+                f"page, which is the only thing that refills this.")
+
+    # NO THIRD-PARTY TEXT IN THE EVENT. capability_events.prompt_block()
+    # renders recent events verbatim into the system prompt for 72h, with no
+    # scrubbing and no taint — so putting the video's title or yt-dlp's stderr
+    # here would smuggle exactly what failures.prompt_line deliberately keeps
+    # out, through the back door and for far longer. The id and the host are
+    # ours; she already has the title and the error in-turn from diagnose and
+    # from this tool's own return, where the taint applies.
+    capability_events.record(
+        capability_events.INGEST, str(job_id), "retried",
+        actor=ctx.get("agent_name") or "nova",
+        detail={"host": (urlparse(job.get("url") or "").hostname or "")[:60]})
+    return _j({"status": "queued", "what": what,
+               "note": "Re-queued. The worker picks it up within a minute; it "
+                       "is not done yet, so do not report it as fixed. This "
+                       "was your one retry for this job."})
 
 
 async def _list_skills(args, ctx):
@@ -2070,13 +2127,16 @@ BUILTIN_TOOLS: dict[str, dict] = {
     "diagnose": {
         "name": "diagnose",
         "description": (
-            "Read your own configuration, recent errors and service "
-            "reachability for one area — Notifications, Voice, Inference, "
-            "Agents, Memory, Observability and so on. Use it when the "
-            "operator reports something not working, BEFORE offering an "
-            "explanation: it shows what is actually set and what has "
-            "actually failed. Read-only; it changes nothing and sends "
-            "nothing. Call with no area for the list of areas."),
+            "Read your own configuration, service reachability, and "
+            "EVERYTHING CURRENTLY FAILING — including the background queues "
+            "(ingestion, automations, evals, MCP servers, alerts) whose "
+            "failures never appear in the turn ledger and which you cannot "
+            "see any other way. This is what the operator is looking at when "
+            "he says items on the Activity page failed. Use it when he "
+            "reports something not working, BEFORE offering an explanation, "
+            "and before saying anything is healthy. Read-only; it changes "
+            "nothing and sends nothing. Call with no area for the full "
+            "picture and the list of areas."),
         "parameters": {"type": "object", "properties": {
             "area": {"type": "string",
                      "description": "Settings area to inspect. Omit to list "
@@ -2095,6 +2155,23 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "so; it does not mean the services are down. Read-only."),
         "parameters": {"type": "object", "properties": {}},
         "execute": _service_status,
+    },
+    "retry_ingest_job": {
+        "name": "retry_ingest_job",
+        "description": (
+            "Re-queue ONE failed or skipped ingest job, by the id diagnose "
+            "gives you under background_failures.ingest_jobs. Use it only "
+            "when the error looks transient — a network blip, a sidecar that "
+            "was down, a timeout. Do NOT use it when the error is permanent "
+            "(members-only or private video, deleted, paywalled, 404): the "
+            "worker already tried three times, and a fourth changes nothing. "
+            "You get ONE retry per job; after that only the operator's Retry "
+            "button on the Activity page can force another."),
+        "parameters": {"type": "object", "properties": {
+            "job_id": {"type": "string",
+                       "description": "the job's id from diagnose"}},
+            "required": ["job_id"]},
+        "execute": _retry_ingest_job,
     },
     "list_memory": {
         "name": "list_memory",

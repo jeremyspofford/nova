@@ -744,6 +744,23 @@ async def _build_system_prompt(agent: dict, query: str, *,
     except Exception:
         log.exception("capability changes unavailable; continuing without them")
 
+    # ...and what is BROKEN, which neither of the two above can say. Counts
+    # only, never the third-party error text — that stays behind the diagnose
+    # call. VOLATILE, beside the capability changes, because main restructured
+    # this prompt into stable/volatile after the lane was written and the
+    # census belongs with the things that move.
+    #
+    # A nudge and not a control: the control is failures.note, which she
+    # cannot get a clean verdict out of while this line is non-empty. A reader
+    # she never opens would not have answered the operator on 2026-08-02.
+    try:
+        from app import failures
+        failing = await failures.prompt_line()
+        if failing:
+            volatile.append(failing)
+    except Exception:
+        log.exception("failure census unavailable; continuing without it")
+
     # CONTEXT — specialist index, memories, skills, rolling summary
     #
     # What dispatch can reach, derived from the live agents table: the same

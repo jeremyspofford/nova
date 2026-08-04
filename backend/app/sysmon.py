@@ -188,6 +188,13 @@ _HTTP_CHECKS = [
     ("sidecar", settings.inference_control_url, "/status", False),
     ("whisper", settings.whisper_url, "/health", True),
     ("kokoro", settings.kokoro_url, "/health", True),
+    # The yt-dlp/whisper worker behind every ingest. Absent from this list
+    # until 2026-08-02, which meant a wave of failed ingest jobs and a DOWN
+    # media worker were indistinguishable from the health strip — and the
+    # sidecar is exactly the first thing to rule out. Optional: it runs under
+    # the `media` compose profile, and a missing one makes every extract
+    # return a literal "run docker compose" string rather than raising.
+    ("media", settings.media_worker_url, "/health", True),
 ]
 
 
@@ -215,7 +222,16 @@ async def health() -> dict:
     except Exception as e:
         pg = {"name": "postgres", "ok": False, "optional": False,
               "detail": str(e)[:160]}
-    async with httpx.AsyncClient(timeout=4.0) as client:
+    # A SHORT CONNECT budget, a longer read one. These probes are concurrent,
+    # so the wall-clock cost of health() is its slowest single probe — and a
+    # host that no longer resolves burns the WHOLE timeout on DNS. With a flat
+    # 4s that made this ~3.9s on an install with searxng and the sidecar down,
+    # which stopped mattering the moment `diagnose` started calling health()
+    # and her own prompt started telling her to call diagnose. 1s is generous
+    # for a name lookup on the compose network; the 4s read budget is
+    # untouched, so a live-but-slow service still answers.
+    async with httpx.AsyncClient(
+            timeout=httpx.Timeout(4.0, connect=1.0)) as client:
         probes = await asyncio.gather(
             *(_probe(client, *c) for c in _HTTP_CHECKS))
     return {"services": [pg, *probes]}

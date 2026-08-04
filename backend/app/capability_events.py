@@ -57,6 +57,13 @@ AUTOMATION = "automation"
 # entry's stamp and length and NEVER its content: a log that quotes what was
 # forgotten has not forgotten it.
 MEMORY = "memory"
+# Her acting on her own background queue. Not a capability change either, and
+# here for the reason RECOMMENDATION and MEMORY are: it is the only channel by
+# which the fact reaches her next turn. `retry_ingest_job` re-queues work that
+# already failed, and a retry she cannot see is one she will repeat — she
+# would read "ingest_jobs 2" in the next turn's facts, take it for a fresh
+# failure, and spend the operator's budget again on the same two rows.
+INGEST = "ingest"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.

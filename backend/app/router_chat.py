@@ -2219,7 +2219,10 @@ async def ingest_retry_endpoint(job_id: str):
         jid = uuid.UUID(job_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="job not found")
-    row = await ingest_jobs.retry(jid)
+    # The one place the agent retry budget is refilled: a human clicked Retry
+    # on the Activity page, behind the auth middleware. Nothing a model can
+    # reach passes this flag.
+    row = await ingest_jobs.retry(jid, refill_agent_budget=True)
     if not row:
         raise HTTPException(status_code=409,
                             detail="job is not in a retryable state (failed/skipped)")

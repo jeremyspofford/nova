@@ -464,6 +464,13 @@ _UNTRUSTED_SOURCE_TOOLS = frozenset({
     # a larger pile of somebody else's words than a pod's stdout, and
     # workload_logs already taints for the weaker version of the same reason.
     "check_coding_session",
+    # Re-queues a failed ingest and names it back — and the name is a video
+    # title somebody else wrote, which is the same reason `follow_source` is
+    # on this list. The cost of tainting is that ACTOR verbs are disarmed for
+    # the rest of a turn in which she retried a job, and that is the correct
+    # trade: she has just re-run a download, and nothing about that turn also
+    # needs to rewrite the guardrails.
+    "retry_ingest_job",
 })
 
 

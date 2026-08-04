@@ -66,10 +66,34 @@ async def run() -> None:
         if saved is not None:
             settings_store._cache["notify.webhook.url"] = saved
 
-    print("4. absence is stated, not implied")
-    r = await diagnostics.report("Notifications")
-    check("an empty error list is explained rather than left to read as 'fine'",
-          "LOGGED" in r["errors_note"], r["errors_note"][:80])
+    print("4. absence is stated, not implied — and health cannot be IMPLIED")
+    from app import failures
+    base = {"scanned": ["ingest_jobs"], "sources": {}, "total": 0,
+            "recent_total": 0, "days": 7, "unreadable": [], "unclassified": []}
+    check("with nothing failing, absence is explained rather than left to "
+          "read as 'fine'", "RECORDED" in failures.note(base))
+
+    # The 2026-08-02 bug: diagnose said "8 error(s) in the last 72h" over two
+    # failed ingest jobs it structurally could not see. The reassuring wording
+    # must be unreachable while any failure row exists.
+    failing = {**base, "total": 2, "recent_total": 2,
+               "sources": {"ingest_jobs": {"failed": 2, "recent_failed": 2}}}
+    note = failures.note(failing)
+    check("a failed queue row makes the all-clear unreachable",
+          "RECORDED" not in note, note[:80])
+    check("...and the count comes from the census, not from prose",
+          "ingest_jobs 2" in note)
+
+    blind = {**base, "unclassified": ["some_new_queue"]}
+    check("a failure-shaped store nobody classified forces INCOMPLETE",
+          failures.note(blind).startswith("INCOMPLETE")
+          and "some_new_queue" in failures.note(blind))
+
+    print("4b. every report carries the census, whatever the area")
+    for area in (None, "Notifications", "nonsense-area"):
+        r = await diagnostics.report(area)
+        check(f"diagnose({area!r}) cannot answer without it",
+              "background_failures" in r, str(sorted(r))[:60])
 
     print("5. an unknown area is refused with the options")
     r = await diagnostics.report("nonsense-area")

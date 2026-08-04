@@ -54,7 +54,10 @@ async def run() -> None:
         check(f"{name} is an actor", r.is_actor(name))
     print("   ...and what deliberately is not")
     for name in ("search_memory", "read_memory_item", "get_weather",
-                 "list_agents", "list_skills"):
+                 "list_agents", "list_skills",
+                 # re-runs work already enqueued and cannot introduce a URL;
+                 # its budget lives in a WHERE clause, not in this fence
+                 "retry_ingest_job"):
         check(f"{name} is a reader", not r.is_actor(name))
     check("write_memory is NOT an actor — ingestion's whole job is turning "
           "fetched pages into topics, and it always holds untrusted context",
@@ -144,7 +147,9 @@ async def run() -> None:
     # through. Migration 075 gave main the web and made that reachable.
     print("6. which tools bring untrusted text IN")
     for name in ("web_search", "fetch_url", "ingest_media", "poll_sources",
-                 "follow_source", "workload_logs", "get_weather"):
+                 "follow_source", "workload_logs", "get_weather",
+                 # names a video title back at her, same as follow_source
+                 "retry_ingest_job"):
         check(f"{name} taints the turn", r.returns_untrusted(name))
     for name in ("search_memory", "read_memory_item", "list_agents",
                  "write_memory", "manage_agents", "propose_goal"):

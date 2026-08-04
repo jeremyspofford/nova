@@ -1855,6 +1855,72 @@ See README for what works. This file is the ordered backlog.
     onto its own standby blanking rather than raising — the case a CHECK
     would have surfaced as an unparseable 500).
 
+39. **Background failures are visible to her (reported 2026-08-02; ALL FIVE
+    PHASES BUILT + live-verified, uncommitted)** — the operator pointed at
+    two failed rows on the Activity page, asked Nova what happened, and she
+    said she could not read them. Verified by execution, the diagnosis was
+    worse than "no tool": `diagnose` — which `main` already holds —
+    answered `"8 error(s) recorded in the last 72h"` over eight unrelated
+    `fetch_url` errors, and `diagnose('ingestion')` / `('activity')` /
+    `('content')` all returned `no such area`. It reads `turn_spans`, and
+    `ingest_worker.py` declines to open a trace *on purpose* and correctly
+    ("the ingest_jobs row IS this job's durable, per-item record"). Every
+    other signal she could reach affirmed health: all 18 `ingest_media`
+    spans `ok`, all four sources `last_status='ok'`, the poll automation
+    `ok` — the poll DID succeed, it only enqueues, and the failure happens
+    minutes later in the worker. So she was not blind, she was **reassured**,
+    which is worse. The blind spot was never one table: `monitor_alerts`
+    (disk/VRAM/unreachable), `automation_runs` (12 failed), `eval_runs` (4),
+    `mcp_servers`, `llm_providers`, `push_subscriptions`,
+    `source_subscriptions` and a scheduled-backup failure were all invisible
+    to her too, and her service probe covered exactly Postgres and the
+    memory dir — so "the media sidecar is down" and "the video is
+    members-only" were the same answer. **Built:** `app/failures.py`
+    discovers failure stores from `information_schema` per call (no list of
+    tables — a queue that lands next month is censused the day its migration
+    runs, proven by planting one) with a per-shape predicate, because the
+    shapes genuinely differ: `ingest_jobs.mark_skipped` writes the SKIP
+    REASON into `error`, so `error IS NOT NULL` reports a successful dedupe
+    as a failure, while `eval_runs` has 4 failed rows with `error IS NULL`,
+    so a status-blind predicate reports zero. Four shapes: status-
+    authoritative, error-only, raise/clear alert (`monitor_alerts` — and the
+    RAISE column is required, because `conversations` also has a
+    `cleared_at`), and counter (`push_subscriptions.failures`, the exact
+    push outage `diagnostics.py` was written for). `note()` computes the
+    verdict so the reassuring branch is last and unreachable while anything
+    is failing, unreadable, or unclassified; `report()` calls the census
+    UNCONDITIONALLY so no spelling of `area` — including a wrong one — can
+    return without it. **The control has two halves at two times:** at
+    runtime an unclassified failure-shaped table forces `INCOMPLETE`, and in
+    CI `test_failure_census.py` computes `blind` against the live catalog
+    and goes red naming the table. Both were exercised by planting a table
+    with an `error_count` column. Also: counts and a 7-day recency are
+    reported separately (12 failed automation runs is a run LOG, not 12
+    broken things), each source carries `showing N of M` — added after the
+    first live turn, where she read 3 samples of 12 and reported all twelve
+    as having the one cause the newest example showed — a `retry_ingest_job`
+    verb whose budget is a WHERE clause (`agent_retries`, migration 084;
+    only the operator's Retry zeroes it), and an opt-in deduped inbox card
+    (`failures.watch_enabled`, default off). **Live-verified 2026-08-02**
+    through real chat turns: the same question that produced "I can't read
+    them" produced the two members-only URLs with their yt-dlp error and
+    attempts 3/3, the budget-limit automation failures, and the down
+    searxng/sidecar; asked to retry two permanently-dead videos she declined
+    and explained; forced, she retried each once and the second attempt was
+    refused by Postgres; and with a planted unclassified table she said "my
+    view is not complete" and named it. **Found while building:** searxng
+    and the inference-control sidecar are genuinely DOWN on this box (her
+    `web_search` has no provider), one `mcp_servers` row is in `error`, and
+    the retry's audit write threw because the UPDATE clears `error` before
+    the executor reads it — fixed with a CTE that carries the old value out,
+    and only a real turn surfaced it. **Open decision:** `diagnose` now
+    returns more third-party text (yt-dlp stderr, video titles, MCP
+    `status_detail`) and is still a clean READER. `retry_ingest_job` was put
+    in `_UNTRUSTED_SOURCE_TOOLS`; `diagnose` was not, because tainting it
+    disarms every ACTOR verb on any turn she investigated — which would
+    undercut the investigate-and-fix loop this exists for. Per-result taint
+    is the principled fix and is not built.
+
 40. **`tool-creator`'s suite is ungradeable — three tasks require a verb the
     goal gate refuses (found 2026-08-04, S).** `create-from-given-spec`,
     `unallowlisted-host-refusal` and `disable-not-delete` all `must_call`
