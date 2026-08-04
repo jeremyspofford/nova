@@ -291,13 +291,13 @@ function CuratedTable() {
               </form>
             ) : (
               <>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-mono text-stone-100 truncate">{m.model}</span>
-                    <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">tier {m.tool_tier}</span>
-                    {m.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">seed</span>}
+                    <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">tier {m.tool_tier}</span>
+                    {m.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">seed</span>}
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                     {m.provider === 'ollama' && (
                       installed.has(m.model) ? (
                         <>
@@ -1076,11 +1076,11 @@ function ProvidersPanel() {
               </form>
             ) : (
               <>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs text-stone-100 truncate">{p.label}</span>
                     <span className="text-[10px] font-mono px-1 rounded bg-stone-700 text-stone-400">{p.slug}</span>
-                    {p.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">seed</span>}
+                    {p.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">seed</span>}
                     {!p.configured ? (
                       <span className="text-[10px] px-1 rounded border border-amber-800 text-amber-400">no key</span>
                     ) : p.last_ok === false ? (
@@ -1099,7 +1099,7 @@ function ProvidersPanel() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                     <button onClick={() => test(p)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-teal-300">test</button>
                     <button onClick={() => startEdit(p)}

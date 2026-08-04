@@ -167,12 +167,12 @@ export function AutomationsTab() {
             </form>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-stone-100 truncate">{displayName(a.name)}</span>
-                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">system</span>}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {(
                     <button
                       onClick={() => startEdit(a)}

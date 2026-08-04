@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useIsMobile } from '../shell/useIsMobile';
 import type { GraphNode, GraphEdge } from '../api';
 import { computeSystems, tagColor } from '../brain/systems';
 
@@ -69,6 +70,7 @@ export function MemoryAtlas({ nodes, edges, width, onWidthChange, focus, onOpen,
     };
   }, [onWidthChange]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const mobile = useIsMobile();
   const listRef = useRef<HTMLDivElement>(null);
   // the section a chip last opened, so re-clicking that chip collapses it
   // (the Atlas itself stays open — only the × button closes the panel)
@@ -195,16 +197,25 @@ export function MemoryAtlas({ nodes, edges, width, onWidthChange, focus, onOpen,
 
   return (
     <aside
-      className="absolute top-16 left-4 bottom-4 z-20 max-w-[calc(100vw-2rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl"
-      style={{ width }}
+      /* phone: a page, like every other surface — a 304px panel floating on a
+         393px screen is a card that has nowhere to float to, and its resize
+         handle has no pointer to drag it with */
+      className={mobile
+        ? 'fixed inset-0 z-40 bg-stone-950 flex flex-col'
+        : 'absolute top-16 left-4 bottom-4 z-20 max-w-[calc(100vw-2rem)] flex flex-col rounded-xl bg-stone-900/90 backdrop-blur border border-stone-700 shadow-2xl'}
+      style={mobile
+        ? { paddingTop: 'var(--nova-safe-top)', paddingBottom: 'var(--nova-safe-bottom)' }
+        : { width }}
     >
-      {/* drag handle — widen the Atlas to read longer titles (double-click resets) */}
-      <div
-        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-700/50 transition-colors z-10"
-        onPointerDown={() => { resizing.current = true; document.body.style.cursor = 'col-resize'; }}
-        onDoubleClick={() => onWidthChange(DEFAULT_W)}
-        title="Drag to resize (double-click to reset)"
-      />
+      {!mobile && (
+        /* drag handle — widen the Atlas to read longer titles (double-click resets) */
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-700/50 transition-colors z-10"
+          onPointerDown={() => { resizing.current = true; document.body.style.cursor = 'col-resize'; }}
+          onDoubleClick={() => onWidthChange(DEFAULT_W)}
+          title="Drag to resize (double-click to reset)"
+        />
+      )}
       <header className="px-3 py-2.5 border-b border-stone-700 flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="uppercase tracking-wide text-xs text-stone-500">Atlas</span>

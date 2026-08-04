@@ -43,7 +43,10 @@ export function AppShell() {
   }, [navigate]);
 
   return (
-    <div className="flex w-full h-screen overflow-hidden bg-stone-950">
+    /* 100dvh, not 100vh: on the phone 100vh is the height the viewport would
+       have with the browser UI hidden, so the composer sat under Safari's
+       toolbar and the page had somewhere to scroll to. */
+    <div className="flex w-full h-[100dvh] overflow-hidden bg-stone-950">
       <Rail />
       <div className="relative flex-1 min-w-0 h-full">
         <Brain />

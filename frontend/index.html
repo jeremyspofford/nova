@@ -6,6 +6,25 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0c0a09" />
+    <!-- Nova is a dark app and has to SAY so. Without this the phone treats
+         the installed app as light-themed: iOS paints the status-bar band and
+         every overscroll with the light default (the bright white bar), and
+         native controls (selects, scrollbars, the caret) come back light on
+         dark cards. -->
+    <meta name="color-scheme" content="dark" />
+    <!-- Standalone, with the status bar translucent OVER the page. This is
+         also the switch that makes iOS report env(safe-area-inset-top): with
+         the default style it drew the page full-bleed and still reported 0,
+         which put the chat header underneath the clock. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Nova" />
+    <!-- Inline, so the very first frame is dark: the stylesheet arrives a
+         beat later and the gap is a full-screen white flash on launch. -->
+    <style>
+      html, body { margin: 0; background-color: #0c0a09; }
+    </style>
     <title>Nova</title>
   </head>
   <body>

@@ -294,8 +294,12 @@ export function FilesTab() {
   const btn = 'px-2 py-1 rounded text-[11px] border border-stone-700 text-stone-300 '
     + 'hover:bg-stone-800 disabled:opacity-40 disabled:hover:bg-transparent';
 
+  // The card sized this at 62vh; a phone page has the whole screen, and 62%
+  // of it leaves the tree floating over a third of dead space.
   return (
-    <div className="relative flex flex-col h-[62vh] min-h-0 gap-2">
+    <div className={`relative flex flex-col min-h-0 gap-2 ${narrow
+      ? 'h-[calc(100dvh-var(--nova-safe-top)-var(--nova-safe-bottom)-5.5rem)]'
+      : 'h-[62vh]'}`}>
       {status && <div className="text-xs text-red-400 shrink-0">{status}</div>}
       {receipt && (
         <div className={`text-xs shrink-0 ${receipt.failed.length ? 'text-red-400' : 'text-teal-300'}`}>

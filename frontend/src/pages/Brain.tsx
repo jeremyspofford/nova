@@ -6,6 +6,7 @@ import { Markdown } from '../components/Markdown';
 import { JournalEntries } from '../components/JournalEntries';
 import { OverlayScrim } from '../components/ui';
 import { GUTTER, setShellInsets } from '../shell/insets';
+import { useSheetHistory } from '../shell/useSheetHistory';
 import { MemoryAtlas, TYPE_COLOR } from '../components/MemoryAtlas';
 import { DEFAULT_THEME, THEMES, RendererHandle } from '../brain/theme';
 import { tagColor } from '../brain/systems';
@@ -109,6 +110,9 @@ export function Brain() {
   const [boxW, setBoxW] = useState(0);
   const mobileChat = pathname === '/chat';
   const mobileRef = useRef(isMobile);
+  // a memory opened on the phone is a page — back closes the card
+  useSheetHistory(isMobile && !!detail, () => setDetail(null));
+  useSheetHistory(isMobile && atlasOpen, () => setAtlasOpen(false));
 
   const [chatWidth, setChatWidth] = useState(() =>
     storedWidth('nova.chat.width', 384));
@@ -623,9 +627,14 @@ export function Brain() {
       {/* canvas chrome belongs to the canvas — on the phone chat tab it
           would bleed over the chat header. top inset keeps it out from
           under a notch/status bar (env() is 0 on desktop). */}
-      <div className={`absolute top-[calc(1rem_+_env(safe-area-inset-top))] left-4 z-10 items-center gap-2 ${
+      {/* right-4 + wrap: on a phone the chips, Legend and the view buttons
+          are wider than the screen, and with only a left anchor the last
+          button was cut off by the screen edge. The row is now as wide as
+          the canvas, so it must not eat drags: nothing here takes pointers
+          except the controls themselves. */}
+      <div className={`absolute top-[calc(1rem_+_var(--nova-safe-top))] left-4 right-4 z-10 items-start gap-2 flex-wrap pointer-events-none ${
         isMobile && mobileChat ? 'hidden' : 'flex'}`}>
-        <div className={`px-1 py-1 rounded-lg bg-stone-900/80 backdrop-blur border text-xs font-mono flex items-center ${atlasOpen ? 'border-teal-700' : 'border-stone-700'}`}>
+        <div className={`px-1 py-1 rounded-lg bg-stone-900/80 backdrop-blur border text-xs font-mono flex items-center flex-wrap pointer-events-auto ${atlasOpen ? 'border-teal-700' : 'border-stone-700'}`}>
           {MEMORY_CHIPS
             .filter(t => t === 'topic' || (typeCounts[t] ?? 0) > 0)
             .map(t => (
@@ -662,7 +671,7 @@ export function Brain() {
         </div>
         <button
           onClick={toggleLegend}
-          className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none ${legendOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
+          className={`px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border text-xs leading-none pointer-events-auto ${legendOpen ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-400 hover:text-teal-300'}`}
           title="What each shape means"
           aria-label="Legend"
         >
@@ -670,7 +679,7 @@ export function Brain() {
         </button>
         <button
           onClick={() => rendererRef.current?.recenter?.()}
-          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
+          className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none pointer-events-auto"
           title="Recenter the view"
           aria-label="Recenter"
         >
@@ -684,7 +693,7 @@ export function Brain() {
         {hasFitAll && (
           <button
             onClick={() => rendererRef.current?.fitAll?.()}
-            className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none"
+            className="px-2.5 py-2 rounded-lg bg-stone-900/80 backdrop-blur border border-stone-700 text-stone-400 hover:text-teal-300 leading-none pointer-events-auto"
             title="Pull back until every cluster is in frame"
             aria-label="Fit all"
           >
@@ -739,7 +748,20 @@ export function Brain() {
         />
       )}
 
-      {detail && prefs.detailStyle === 'modal' ? (
+      {/* A phone opens a memory as a PAGE — the modal/docked preference is a
+          desktop choice between two things a 393px screen does not have room
+          for either way. */}
+      {detail && isMobile ? (
+        <div
+          className="fixed inset-0 z-40 bg-stone-950 flex flex-col"
+          style={{
+            paddingTop: 'var(--nova-safe-top)',
+            paddingBottom: 'var(--nova-safe-bottom)',
+          }}
+        >
+          {renderDetail(false)}
+        </div>
+      ) : detail && prefs.detailStyle === 'modal' ? (
         <OverlayScrim variant="card" onClose={() => setDetail(null)}>
           <div
             className="w-[42rem] max-w-full max-h-[85vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
@@ -765,7 +787,7 @@ export function Brain() {
         <button
           onClick={() => navigate('/chat')}
           className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900/85 backdrop-blur border border-stone-700 text-sm text-stone-200 shadow-2xl"
-          style={{ bottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+          style={{ bottom: 'calc(1.25rem + var(--nova-safe-bottom))' }}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

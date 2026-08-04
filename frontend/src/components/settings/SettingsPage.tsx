@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getSettings, SettingDef } from '../../api';
 import { SettingsTab } from './SettingsTab';
 import { StorageCard, PhoneSetupCard } from './cards';
-import { CardsSkeleton, OverlayScrim } from '../ui';
+import { CardsSkeleton, NavList, NavRow, OverlayScrim, Surface } from '../ui';
+import { useIsMobile } from '../../shell/useIsMobile';
 
 /** True settings only — the entity managers live in the Library. A left
  *  section list replaces the old single scroll; sections come from the
@@ -24,6 +25,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const navigate = useNavigate();
   const { section } = useParams();
+  const mobile = useIsMobile();
 
   useEffect(() => {
     getSettings().then(setDefs).catch(() => {}).finally(() => setLoaded(true));
@@ -36,14 +38,51 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       return (ia === -1 ? ORDER.length : ia) - (ib === -1 ? ORDER.length : ib);
     });
   const nav = [...sections, SYSTEM];
-  const active = nav.find(s => slug(s) === section) ?? nav[0];
+  const found = nav.find(s => slug(s) === section);
+  const active = found ?? nav[0];
+
+  const body = (
+    !loaded ? <CardsSkeleton n={3} />
+      : active === SYSTEM ? (
+        <div className="space-y-5">
+          <StorageCard />
+          <PhoneSetupCard defs={defs} />
+        </div>
+      ) : active ? <SettingsTab only={[active]} untitled={mobile} /> : null
+  );
+
+  // The phone drills: twelve sections are a list you tap into, not a rail
+  // squeezed to 128px beside the content it is meant to explain.
+  if (mobile && !found) {
+    return (
+      <Surface title="Settings" onBack={onClose}
+        bodyClass="overflow-y-auto nice-scroll overscroll-contain">
+        {!loaded ? <div className="p-3"><CardsSkeleton n={6} /></div> : (
+          <NavList>
+            {nav.map(s => (
+              <NavRow key={s} label={s} onClick={() => navigate(`/settings/${slug(s)}`)} />
+            ))}
+          </NavList>
+        )}
+      </Surface>
+    );
+  }
+
+  if (mobile) {
+    return (
+      <Surface title={active} onBack={() => navigate('/settings')}
+        bodyClass="overflow-y-auto nice-scroll overscroll-contain p-3">
+        {body}
+      </Surface>
+    );
+  }
 
   return (
     <OverlayScrim onClose={onClose}>
       {/* grows on wide screens, then clamps to whatever band the side panels
           leave — `max-w-full` is 100% of the scrim's padded content box */}
       <div
-        className="w-[54rem] xl:w-[60rem] 2xl:w-[68rem] max-w-full h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
+        className="w-[54rem] xl:w-[60rem] 2xl:w-[68rem] max-w-full h-full flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
@@ -52,13 +91,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         </header>
         <div className="flex-1 min-h-0 flex">
           <nav className="w-32 md:w-44 shrink-0 border-r border-stone-800 overflow-y-auto nice-scroll py-2">
-            {/* phones have no Library rail item — reachable from here */}
-            <button
-              onClick={() => navigate('/library')}
-              className="md:hidden block w-full text-left px-4 py-2 text-sm text-stone-400 hover:text-stone-200 border-b border-stone-800 mb-1"
-            >
-              Library →
-            </button>
             {(loaded ? nav : []).map(s => (
               <button
                 key={s}
@@ -70,15 +102,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </nav>
-          <div className="flex-1 overflow-y-auto nice-scroll p-4">
-            {!loaded ? <CardsSkeleton n={3} />
-              : active === SYSTEM ? (
-                <div className="space-y-5">
-                  <StorageCard />
-                  <PhoneSetupCard defs={defs} />
-                </div>
-              ) : active ? <SettingsTab only={[active]} /> : null}
-          </div>
+          <div className="flex-1 overflow-y-auto nice-scroll p-4">{body}</div>
         </div>
       </div>
     </OverlayScrim>

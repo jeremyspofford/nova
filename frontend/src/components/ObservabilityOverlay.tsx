@@ -6,7 +6,7 @@ import {
   ResourceHistory, ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
-import { CardsSkeleton, OverlayScrim } from './ui';
+import { CardsSkeleton, Surface } from './ui';
 
 /** The Observability board (docs/plans/observability-board.md, phase 1) — a
  *  dedicated top-level panel: service health, live resource gauges for this
@@ -194,11 +194,12 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   const cores = res?.cpu.cores ?? null;
 
   return (
-    <OverlayScrim onClose={onClose}>
-      <div
-        className="w-[52rem] max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
+    <Surface
+      title="Observability"
+      width="w-[52rem]"
+      onBack={onClose}
+      bodyClass="overflow-y-auto nice-scroll overscroll-contain p-4 space-y-5"
+      header={
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm text-stone-200 font-medium">Observability</span>
@@ -214,8 +215,9 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
           </div>
           <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
         </header>
-
-        <div className="flex-1 overflow-y-auto nice-scroll p-4 space-y-5">
+      }
+    >
+      <>
           {err && (
             <div className="text-xs text-red-400 border border-red-900/60 bg-red-950/30 rounded px-3 py-2">
               {err}
@@ -277,8 +279,8 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
           {fleet && fleet.length > 0 && (
             <section>
               <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Fleet</h3>
-              <div className="rounded-lg border border-stone-700/70 overflow-hidden">
-                <table className="w-full text-[11px]">
+              <div className="rounded-lg border border-stone-700/70 overflow-x-auto nice-scroll">
+                <table className="w-full min-w-[26rem] text-[11px]">
                   <thead className="text-stone-500 bg-stone-800/40">
                     <tr>
                       <th className="text-left font-normal px-3 py-1.5">instance</th>
@@ -404,8 +406,8 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
           {res && res.containers.length > 0 && (
             <section>
               <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">Containers</h3>
-              <div className="rounded-lg border border-stone-700/70 overflow-hidden">
-                <table className="w-full text-[11px]">
+              <div className="rounded-lg border border-stone-700/70 overflow-x-auto nice-scroll">
+                <table className="w-full min-w-[26rem] text-[11px]">
                   <thead className="text-stone-500 bg-stone-800/40">
                     <tr>
                       <th className="text-left font-normal px-3 py-1.5">service</th>
@@ -487,8 +489,8 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
                   </span>
                 </div>
                 {summary.by_model.length > 0 && (
-                  <div className="rounded-lg border border-stone-700/70 overflow-hidden mb-3">
-                    <table className="w-full text-[11px]">
+                  <div className="rounded-lg border border-stone-700/70 overflow-x-auto nice-scroll mb-3">
+                    <table className="w-full min-w-[26rem] text-[11px]">
                       <thead className="text-stone-500 bg-stone-800/40">
                         <tr>
                           <th className="text-left font-normal px-3 py-1.5">model</th>
@@ -519,8 +521,7 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
             <RecentTurns />
           </section>
           </>}
-        </div>
-      </div>
-    </OverlayScrim>
+      </>
+    </Surface>
   );
 }

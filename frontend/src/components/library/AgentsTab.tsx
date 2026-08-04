@@ -226,7 +226,7 @@ export function AgentsTab() {
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="max-w-[14rem] bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-xs text-stone-300"
+      className="min-w-0 max-w-[14rem] bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-xs text-stone-300"
     >
       {placeholder && <option value="">{placeholder}</option>}
       {groupModels(models).map(g => (
@@ -244,9 +244,9 @@ export function AgentsTab() {
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="text-sm text-stone-300">Set <b>all</b> agents to</div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {modelSelect(allModel, setAllModel, 'choose a model…')}
             <button
               onClick={setAll}
@@ -283,12 +283,18 @@ export function AgentsTab() {
             </form>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
+              {/* Four controls and a name do not fit a phone. The row used to
+                  hold them on one line at any width: the name's box was
+                  squeezed to nothing while the controls kept their own width,
+                  so the name wrapped out over the model select and the last
+                  control ran off the right edge. Both sides wrap now, and the
+                  name truncates rather than overflowing its box. */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm text-stone-100">{agentDisplayName(a.name)}</span>
-                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                  <span className="text-sm text-stone-100 truncate">{agentDisplayName(a.name)}</span>
+                  {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">system</span>}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {modelSelect(a.model, v => setModel(a, v))}
                   {thinkingSelect(a)}
                   {(

@@ -1,3 +1,4 @@
+import { ComponentType } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AgentsTab } from './AgentsTab';
 import { ModelsTab } from './ModelsTab';
@@ -8,7 +9,8 @@ import { SkillsTab } from './SkillsTab';
 import { CodingTab } from './CodingTab';
 import { DocumentsTab } from './DocumentsTab';
 import { FilesTab } from './FilesTab';
-import { OverlayScrim } from '../ui';
+import { NavList, NavRow, Surface } from '../ui';
+import { useIsMobile } from '../../shell/useIsMobile';
 import { confirmDiscardFiles } from './files/dirty';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
@@ -24,23 +26,76 @@ const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills',
                'documents', 'coding', 'files'] as const;
 type Kind = typeof KINDS[number];
 
+/** What each section holds, said once. The phone index shows it under the
+ *  row — nine bare nouns is a quiz — and the desktop tab strip stays bare. */
+const BLURB: Record<Kind, string> = {
+  agents: 'Who does the work, and on which model',
+  models: 'The pool she can draw on, local and cloud',
+  automations: 'What runs on a schedule',
+  rules: 'Standing instructions she has to follow',
+  tools: 'What she can actually do',
+  skills: 'Procedures she has been taught',
+  documents: 'What you have given her to read',
+  coding: 'The coding workspace and its grants',
+  files: 'Her memory on disk, editable by hand',
+};
+
+const TAB: Record<Kind, ComponentType> = {
+  agents: AgentsTab,
+  models: ModelsTab,
+  automations: AutomationsTab,
+  rules: RulesTab,
+  tools: ToolsTab,
+  skills: SkillsTab,
+  documents: DocumentsTab,
+  coding: CodingTab,
+  files: FilesTab,
+};
+
+const label = (k: Kind) => k.charAt(0).toUpperCase() + k.slice(1);
+
 export function LibraryPage({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const { kind } = useParams();
+  const mobile = useIsMobile();
   // Every way OUT of the Files tab passes through here — a tab button, the
-  // scrim, the × — and none of them knew the editor had unsaved work.
+  // scrim, the ×, the back chevron — and none of them knew the editor had
+  // unsaved work.
   const leave = (go: () => void) => { if (confirmDiscardFiles()) go(); };
-  const active: Kind =
-    (KINDS as readonly string[]).includes(kind ?? '') ? (kind as Kind) : 'agents';
+  const known = (KINDS as readonly string[]).includes(kind ?? '');
+
+  // The phone drills: an index of sections, then one section filling the
+  // screen. A bare /library on the desktop still opens the first section,
+  // because a card with a tab strip shows every destination at once anyway.
+  if (mobile && !known) {
+    return (
+      <Surface
+        title="Library"
+        onBack={() => leave(onClose)}
+        bodyClass="overflow-y-auto nice-scroll overscroll-contain"
+      >
+        <NavList>
+          {KINDS.map(k => (
+            <NavRow key={k} label={label(k)} note={BLURB[k]}
+              onClick={() => navigate(`/library/${k}`)} />
+          ))}
+        </NavList>
+      </Surface>
+    );
+  }
+
+  const active: Kind = (known ? kind : 'agents') as Kind;
+  const Tab = TAB[active];
 
   return (
-    <OverlayScrim onClose={() => leave(onClose)}>
-      <div
-        /* Files is a two-pane explorer: a tree beside an editor does not fit
-           the card width the other tabs were sized for. */
-        className={`${active === 'files' ? 'w-[64rem]' : 'w-[46rem]'} max-w-full max-h-[82vh] flex flex-col rounded-xl bg-stone-900/95 backdrop-blur border border-stone-700 shadow-2xl`}
-        onClick={e => e.stopPropagation()}
-      >
+    <Surface
+      title={label(active)}
+      /* Files is a two-pane explorer: a tree beside an editor does not fit
+         the card width the other tabs were sized for. */
+      width={active === 'files' ? 'w-[64rem]' : 'w-[46rem]'}
+      onBack={() => leave(mobile ? () => navigate('/library') : onClose)}
+      bodyClass={`overflow-y-auto nice-scroll overscroll-contain ${mobile ? 'p-3' : 'p-4'}`}
+      header={
         <header className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
           {/* seven tabs want ~500px; a squeezed card is 360. min-w-0 releases
               the flex item's automatic minimum size so the row shrinks
@@ -60,18 +115,9 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
           </div>
           <button onClick={() => leave(onClose)} className="text-stone-500 hover:text-stone-200 text-lg px-1" aria-label="Close">×</button>
         </header>
-        <div className="flex-1 overflow-y-auto nice-scroll p-4">
-          {active === 'agents' ? <AgentsTab />
-            : active === 'models' ? <ModelsTab />
-            : active === 'automations' ? <AutomationsTab />
-            : active === 'rules' ? <RulesTab />
-            : active === 'tools' ? <ToolsTab />
-            : active === 'documents' ? <DocumentsTab />
-            : active === 'coding' ? <CodingTab />
-            : active === 'files' ? <FilesTab />
-            : <SkillsTab />}
-        </div>
-      </div>
-    </OverlayScrim>
+      }
+    >
+      <Tab />
+    </Surface>
   );
 }

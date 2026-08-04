@@ -91,7 +91,7 @@ export function DocumentsTab() {
 
       {rows.map(a => (
         <div key={a.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-sm text-stone-100 truncate">{a.display_name}</span>
               <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">{a.kind}</span>
@@ -102,7 +102,7 @@ export function DocumentsTab() {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
               {a.has_text && (
                 <button onClick={() => void show(a)}
                   className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">

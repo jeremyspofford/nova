@@ -35,6 +35,8 @@ import type { WakeWord } from '../voice/wake';
 import { wakeLabel, DEFAULT_WAKE } from '../voice/wakeCatalog';
 import { useAssistantName } from '../useAssistantName';
 import { groupModels } from '../models';
+import { BackButton, NavList, NavRow } from '../components/ui';
+import { useSheetHistory } from '../shell/useSheetHistory';
 
 /** An attachment as the message list shows it — preview only exists for
  *  images picked this session (history rows come back name-only). */
@@ -1611,6 +1613,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxExpanded, setInboxExpanded] = useState<string | null>(null);
 
+  // the phone's two sheets are pages: back closes them, it does not exit
+  useSheetHistory(!!mobile && drawerOpen, () => setDrawerOpen(false));
+  useSheetHistory(!!mobile && inboxOpen, () => setInboxOpen(false));
+
+
   const loadInbox = async () => {
     try { setInbox(await getRecCards('all')); } catch { /* best-effort */ }
   };
@@ -2130,8 +2137,10 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       className={`absolute top-0 right-0 bottom-0 flex flex-col ${
         mobile ? 'bg-stone-950'
                : 'bg-stone-900/95 backdrop-blur border-l border-stone-700 shadow-2xl'}`}
-      // full-bleed phones: keep the header out from under the status bar
-      style={{ width, paddingTop: mobile ? 'env(safe-area-inset-top)' : undefined }}
+      // full-bleed phones: keep the header out from under the status bar.
+      // --nova-safe-top, not env(): iOS reports env as 0 in the installed
+      // app and drew this header underneath the clock (shell/safeArea.ts).
+      style={{ width, paddingTop: mobile ? 'var(--nova-safe-top)' : undefined }}
     >
       {/* drag handle — widen/narrow the chat (desktop only) */}
       {!mobile && (
@@ -2258,73 +2267,75 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
       </header>
       )}
 
-      {/* phone nav drawer — the surfaces the tab bar used to hold, plus the
-          model picker and speech toggle the desktop header shows */}
+      {/* The phone's menu: a PAGE, not a slide-over. Everything the app can
+          reach is on it — the two places you GO at the top, the surfaces you
+          drill into below, and the two controls the desktop header carries
+          in its own chrome. It replaced a 288px drawer that could only ever
+          hold four links and left the Library unreachable from chat. */}
       {mobile && drawerOpen && (
-        <div className="fixed inset-0 z-50" onClick={() => setDrawerOpen(false)}>
-          <div className="absolute inset-0 bg-black/60" />
-          <nav
-            className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-stone-950 border-r border-stone-800 flex flex-col"
-            style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="px-4 pb-3 flex items-center justify-between">
-              <span className="text-teal-400 font-semibold">{assistantName}</span>
+        <div
+          className="fixed inset-0 z-50 bg-stone-950 flex flex-col"
+          style={{
+            paddingTop: 'var(--nova-safe-top)',
+            paddingBottom: 'var(--nova-safe-bottom)',
+          }}
+          role="region"
+          aria-label="Menu"
+        >
+          <header className="shrink-0 px-2 py-1 flex items-center gap-1 border-b border-stone-800">
+            <BackButton onClick={() => setDrawerOpen(false)} label="Back to chat" />
+            <h2 className="text-[15px] font-medium text-stone-100 truncate">{assistantName}</h2>
+          </header>
+
+          <div className="flex-1 min-h-0 overflow-y-auto nice-scroll overscroll-contain">
+            {/* the two places you go, not lists you browse */}
+            <div className="p-3 grid grid-cols-2 gap-3">
               <button
-                onClick={() => setDrawerOpen(false)}
-                aria-label="Close menu"
-                className="text-stone-500 hover:text-stone-200 text-lg leading-none px-1"
+                onClick={() => { setDrawerOpen(false); onShowBrain?.(); }}
+                className="rounded-xl border border-stone-800 bg-stone-900/60 px-3 py-4 flex flex-col items-start gap-2 active:border-teal-800"
               >
-                ×
+                <span className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-100 via-amber-300 to-teal-400" />
+                <span className="text-sm text-stone-100 text-left">{assistantName}&rsquo;s universe</span>
+                <span className="text-[11px] text-stone-500 text-left">Everything she knows, as a map</span>
+              </button>
+              <button
+                onClick={() => void openVoice()}
+                className="rounded-xl border border-stone-800 bg-stone-900/60 px-3 py-4 flex flex-col items-start gap-2 active:border-teal-800"
+              >
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+                  className="text-teal-300" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
+                  <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+                </svg>
+                <span className="text-sm text-stone-100 text-left">Hands-free</span>
+                <span className="text-[11px] text-stone-500 text-left">Talk to her, no typing</span>
               </button>
             </div>
-            <button
-              onClick={() => { setDrawerOpen(false); onShowBrain?.(); }}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
-            >
-              <span className="w-[18px] h-[18px] shrink-0 rounded-full bg-gradient-to-br from-amber-100 via-amber-300 to-teal-400" />
-              {assistantName}'s universe
-            </button>
-            <button
-              onClick={() => void openVoice()}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3" />
-                <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
-              </svg>
-              Hands-free mode
-            </button>
-            <button
-              onClick={() => { setDrawerOpen(false); navigate('/activity'); }}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-              </svg>
-              Activity
-            </button>
-            <button
-              onClick={() => { setDrawerOpen(false); navigate('/settings'); }}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-300 hover:bg-stone-900 text-left"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1" />
-              </svg>
-              Settings
-            </button>
-            <div className="mt-4 mx-4 pt-4 border-t border-stone-800 space-y-3">
+
+            {/* the surfaces you drill into */}
+            <div className="border-t border-stone-800/80">
+              <NavList>
+                <NavRow label="Library" note="Her agents, models, tools, rules and files"
+                  onClick={() => { setDrawerOpen(false); navigate('/library'); }} />
+                <NavRow label="Activity" note="What she is ingesting in the background"
+                  onClick={() => { setDrawerOpen(false); navigate('/activity'); }} />
+                <NavRow label="Observability" note="Turns, traces and the health of the stack"
+                  onClick={() => { setDrawerOpen(false); navigate('/observability'); }} />
+                <NavRow label="Settings" note="How she behaves, speaks and stores things"
+                  onClick={() => { setDrawerOpen(false); navigate('/settings'); }} />
+              </NavList>
+            </div>
+
+            {/* the two controls the desktop keeps in its header */}
+            <div className="border-t border-stone-800/80 px-4 py-4 space-y-4">
               {mainAgent && models.length > 0 && (
                 <label className="block text-xs text-stone-500">
                   Model
                   <select
                     value={mainAgent.model}
                     onChange={e => changeModel(e.target.value)}
-                    className="mt-1 w-full bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-300"
+                    className="mt-1 w-full bg-stone-800 border border-stone-700 rounded-lg px-2.5 py-2.5 text-sm text-stone-200"
                   >
                     {groupModels(models).map(g => (
                       <optgroup key={g.slug} label={g.label}>
@@ -2337,18 +2348,19 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                   </select>
                 </label>
               )}
-              <div className="flex items-center justify-between text-sm text-stone-300">
-                Speak replies
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-stone-300">Speak replies</span>
                 <button
                   onClick={toggleSpeech}
-                  className={`px-2.5 py-1 rounded-full border text-xs ${
+                  aria-pressed={speech}
+                  className={`px-3 py-1.5 rounded-full border text-xs ${
                     speech ? 'border-teal-700 text-teal-300' : 'border-stone-700 text-stone-500'}`}
                 >
                   {speech ? 'On' : 'Off'}
                 </button>
               </div>
             </div>
-          </nav>
+          </div>
         </div>
       )}
 
@@ -2407,12 +2419,30 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           </div>
         );
         return (
-          <div className="absolute right-2 z-40 w-80 max-w-[calc(100%-1rem)] max-h-[65vh] overflow-y-auto nice-scroll rounded-xl border border-stone-700 bg-stone-900/95 backdrop-blur shadow-2xl">
-            <div className="px-3 py-2 flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-wide text-stone-500">Recommendations</span>
-              <button onClick={() => setInboxOpen(false)} aria-label="Close inbox"
-                className="text-stone-500 hover:text-stone-200 leading-none px-1">×</button>
-            </div>
+          <div
+            /* phone: a page. A 320px card pinned to the corner of a 393px
+               screen is a modal pretending it has somewhere else to be. */
+            className={mobile
+              ? 'fixed inset-0 z-50 bg-stone-950 flex flex-col'
+              : 'absolute right-2 z-40 w-80 max-w-[calc(100%-1rem)] max-h-[65vh] overflow-y-auto nice-scroll rounded-xl border border-stone-700 bg-stone-900/95 backdrop-blur shadow-2xl'}
+            style={mobile ? {
+              paddingTop: 'var(--nova-safe-top)',
+              paddingBottom: 'var(--nova-safe-bottom)',
+            } : undefined}
+          >
+            {mobile ? (
+              <header className="shrink-0 px-2 py-1 flex items-center gap-1 border-b border-stone-800">
+                <BackButton onClick={() => setInboxOpen(false)} label="Back to chat" />
+                <h2 className="text-[15px] font-medium text-stone-100 truncate">Recommendations</h2>
+              </header>
+            ) : (
+              <div className="px-3 py-2 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wide text-stone-500">Recommendations</span>
+                <button onClick={() => setInboxOpen(false)} aria-label="Close inbox"
+                  className="text-stone-500 hover:text-stone-200 leading-none px-1">×</button>
+              </div>
+            )}
+            <div className={mobile ? 'flex-1 min-h-0 overflow-y-auto nice-scroll overscroll-contain' : 'contents'}>
             {inbox === null ? (
               <div className="px-3 py-4 pt-0 text-xs text-stone-500">Loading…</div>
             ) : inbox.length === 0 ? (
@@ -2431,6 +2461,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                 {decided.map(row)}
               </>
             )}
+            </div>
           </div>
         );
       })()}
@@ -2618,7 +2649,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         <form
           onSubmit={e => { e.preventDefault(); submitComposer(); }}
           className="relative px-3 pt-1.5"
-          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+          style={{ paddingBottom: 'calc(0.75rem + var(--nova-safe-bottom))' }}
         >
           {commandPalette}
           {attachOpen && (

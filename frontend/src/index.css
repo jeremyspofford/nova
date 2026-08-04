@@ -3,6 +3,19 @@
 @import 'tailwindcss/utilities';
 
 :root {
+  /* Dark, declared: form controls, scrollbars and the caret all pick their
+     colours from this, and on iOS so does the status-bar band. */
+  color-scheme: dark;
+
+  /* The phone's safe areas, as ONE source of truth. Seeded from the
+     browser's own values; shell/safeArea.ts overwrites them with what it
+     can actually measure (iOS reports a top inset of 0 in the installed
+     app while still drawing the page under the status bar). Everything
+     that dodges a notch, an island or a home indicator reads these two
+     variables — never env() directly. */
+  --nova-safe-top: env(safe-area-inset-top, 0px);
+  --nova-safe-bottom: env(safe-area-inset-bottom, 0px);
+
   /* Nova Teal */
   --teal-50: #ECFDF9;
   --teal-100: #CCFBF0;
@@ -48,4 +61,19 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* The document itself never scrolls — the app is exactly one viewport tall
+   and every scrollable region is inside it. Without this the phone let the
+   whole app be dragged down off its own top edge, which is how the bright
+   band above it (the page background, behind the app) became visible at
+   all. `background-color` covers the band iOS paints in the safe areas. */
+html, body {
+  height: 100%;
+  background-color: theme('colors.stone.950');
+  overscroll-behavior: none;
+}
+
+#root {
+  height: 100%;
 }

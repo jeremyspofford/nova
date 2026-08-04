@@ -79,7 +79,7 @@ export function VoiceOverlay({ assistantName, micState, busy,
 
       <div
         className="relative mt-auto flex items-center gap-2 px-4"
-        style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+        style={{ paddingBottom: 'calc(1.25rem + var(--nova-safe-bottom))' }}
       >
         <form
           onSubmit={e => { e.preventDefault(); submitText(); }}

@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import App from './App'
+import { trackSafeArea } from './shell/safeArea'
 import './index.css'
 
 // autoUpdate swaps in a new build and reloads once its worker takes over.
@@ -19,6 +20,10 @@ registerSW({
     })
   },
 })
+
+// Before the first render: the shell's top and bottom padding are laid out
+// from these, and measuring them after paint is a visible jump.
+trackSafeArea()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

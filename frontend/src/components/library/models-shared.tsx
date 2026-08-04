@@ -283,10 +283,10 @@ export function DetectSuggest() {
         <div className="space-y-2">
           {recs.recommendations.map(r => (
             <div key={r.agent} className="rounded border border-stone-700/60 bg-stone-900/40 px-2.5 py-2">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-xs text-stone-100">{agentDisplayName(r.agent)}</span>
-                  <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{r.profile}</span>
+                  <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">{r.profile}</span>
                   {r.current_valid === false && (
                     <span
                       className="text-[10px] px-1.5 py-0.5 rounded border bg-red-950/50 text-red-300 border-red-900"
@@ -296,7 +296,7 @@ export function DetectSuggest() {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {r.status === 'keep' ? (
                     <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-400">✓ keep current</span>
                   ) : r.status === 'switch' && r.suggested_model ? (

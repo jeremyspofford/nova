@@ -105,12 +105,12 @@ export function SkillsTab() {
             </form>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-stone-100 truncate">{s.title}</span>
-                  {s.category && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{s.category}</span>}
+                  {s.category && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">{s.category}</span>}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {(
                     <>
                       <button onClick={() => startEdit(s)}

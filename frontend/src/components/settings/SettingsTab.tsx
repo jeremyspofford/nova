@@ -21,8 +21,10 @@ import { groupModels } from '../../models';
  *  already knows about model_scope, allow_empty, grouping, saving and the
  *  live nova:setting-changed echo. A second copy of that dropdown would have
  *  drifted from this one within a week. */
-export function SettingsTab({ only, exclude, types }:
-  { only?: string[]; exclude?: string[]; types?: string[] }) {
+export function SettingsTab({ only, exclude, types, untitled }:
+  { only?: string[]; exclude?: string[]; types?: string[];
+    /** the surface already carries this section's name as its title */
+    untitled?: boolean }) {
   const [defs, setDefs] = useState<SettingDef[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState<string>('');
@@ -215,7 +217,11 @@ export function SettingsTab({ only, exclude, types }:
       {!only && <SecretsCard />}
       {sections.map(section => (
         <section key={section}>
-          <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>
+          {/* the phone's page title IS this section's name — printing it
+              again a line below is a stutter, not a heading */}
+          {!untitled && (
+            <h3 className="text-xs uppercase tracking-wide text-stone-500 mb-2">{section}</h3>
+          )}
           <div className="space-y-3">
             {section === 'Inference' && (
               <BundledInference onChanged={() => getModels().then(setModels)} />

@@ -110,7 +110,7 @@ export function RulesTab() {
             </form>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-stone-100 truncate">{displayName(r.name)}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
@@ -118,9 +118,9 @@ export function RulesTab() {
                       ? 'bg-red-950/50 text-red-300 border-red-900'
                       : 'bg-amber-950/50 text-amber-300 border-amber-900'
                   }`}>{r.action}</span>
-                  {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+                  {r.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">system</span>}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {(
                     <button onClick={() => startEdit(r)}
                       className="text-xs px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200">

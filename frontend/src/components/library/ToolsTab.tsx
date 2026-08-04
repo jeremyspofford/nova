@@ -49,13 +49,13 @@ export function ToolsTab() {
 
       {catalog.db_tools.map(t => (
         <div key={t.id} className="rounded-lg border border-stone-700 bg-stone-800/50 p-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-sm text-stone-100 truncate">{displayName(t.name)}</span>
-              <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{t.execution_type}</span>
-              {t.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">system</span>}
+              <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">{t.execution_type}</span>
+              {t.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">system</span>}
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
               {!t.is_system && (
                 <button
                   onClick={() => remove(t)}
@@ -303,13 +303,17 @@ function McpServersSection() {
                 </form>
               ) : (
                 <>
-                  <div className="flex items-center justify-between gap-2">
+                  {/* four controls and a name do not fit a phone: with the
+                      controls held at their own width the name's box was
+                      squeezed to nothing and its transport chip printed over
+                      the edit button. Both sides wrap now. */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} title={dotText} />
                       <span className="text-xs font-mono text-stone-100 truncate">{s.name}</span>
-                      <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400">{s.transport}</span>
+                      <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">{s.transport}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                       {s.status === 'error' && (
                         <button onClick={() => approve(s)} disabled={busy[s.id]}
                           title="Re-run the connection, accept whatever tool list comes back as the new approved baseline."
