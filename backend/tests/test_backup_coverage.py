@@ -218,6 +218,45 @@ check("every entry explains itself, so a decision can be argued with",
 check("the declined one admits it is a real gap",
       "gap" in bc.VOLUME_POLICY["coder_workspaces"][1])
 
+print("\n15. a compiled twin is classified by the TREE, not by a list")
+# THE FAILURE THIS COMES FROM. PATH_POLICY named frontend/vite.config.js and
+# both .tsbuildinfo files by exact path, and missed frontend/vite.config.d.ts
+# — which `tsc -b` writes beside the .js. On 2026-08-04 a build emitted it,
+# R5 refused an unclassified gitignored path, and every scheduled backup
+# stopped. Twenty-nine notifications, all naming that one filename. The rule
+# was right; the list under it was one entry short, which is what lists do.
+import os as _os                                              # noqa: E402
+import tempfile as _tempfile                                  # noqa: E402
+
+_tree = _tempfile.mkdtemp(prefix="nova-twin-")
+_os.makedirs(_os.path.join(_tree, "frontend"), exist_ok=True)
+open(_os.path.join(_tree, "frontend", "vite.config.ts"), "w").close()
+try:
+    for emit in ("frontend/vite.config.d.ts", "frontend/vite.config.js"):
+        got = bc._path_policy(emit, _tree)
+        check(f"{emit} is excluded because its source is right there",
+              got and got[0] == bc.EXCLUDE_EPHEMERAL, str(got))
+        check("...and the reason NAMES the source, so the decision is arguable",
+              got and "vite.config.ts" in got[1], str(got and got[1])[:70])
+
+    check("an emit with NO source in the tree still refuses — the twin rule "
+          "never hides a file nothing else would see",
+          bc._path_policy("frontend/orphan.d.ts", _tree) is None)
+    check("a build cache is classified by suffix, wherever it lives",
+          (bc._path_policy("anywhere/tsconfig.tsbuildinfo", _tree) or (None,))[0]
+          == bc.EXCLUDE_EPHEMERAL)
+    check("an exact judgement still wins over the generic rule",
+          bc._path_policy("frontend/public/mockups", _tree)
+          == bc.PATH_POLICY["frontend/public/mockups"])
+    check("real source is untouched by any of it",
+          bc._path_policy("frontend/src/api.ts", _tree) is None)
+    # the .ts source itself must never be swallowed by the .js twin rule
+    check("a tracked .ts is not mistaken for the twin of a .js",
+          bc._path_policy("frontend/vite.config.ts", _tree) is None)
+finally:
+    import shutil as _shutil
+    _shutil.rmtree(_tree, ignore_errors=True)
+
 print()
 if FAILURES:
     print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES))

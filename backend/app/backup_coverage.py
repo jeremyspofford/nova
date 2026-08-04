@@ -55,6 +55,7 @@ database and reports success.
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 log = logging.getLogger(__name__)
@@ -209,12 +210,63 @@ PATH_POLICY: dict[str, tuple[str, str]] = {
         "call rather than an obvious one — they are operator-authored but "
         "belong to the design lane, and losing them costs iterations of "
         "artwork rather than anything Nova needs to run."),
-    "frontend/tsconfig.tsbuildinfo": (EXCLUDE_EPHEMERAL, "a TypeScript build cache"),
-    "frontend/tsconfig.node.tsbuildinfo": (EXCLUDE_EPHEMERAL, "a TypeScript build cache"),
-    "frontend/vite.config.js": (
-        EXCLUDE_EPHEMERAL,
-        "the compiled twin of the tracked vite.config.ts"),
+    # NOTE: the three TypeScript emits that used to be listed here by exact
+    # path are gone. `tsc -b` writes vite.config.js and vite.config.d.ts
+    # together, and only the .js was ever listed — so the day a build emitted
+    # the declaration file, coverage refused on it and every scheduled backup
+    # stopped. See _EMIT_SUFFIXES and _compiled_twin below.
 }
+
+# Suffixes that ARE the answer, wherever they appear. A file named for a
+# build system's own cache format is not a judgement call.
+_EMIT_SUFFIXES: tuple[tuple[str, str], ...] = (
+    (".egg-info", "a Python build artifact"),
+    (".tsbuildinfo", "a TypeScript incremental build cache"),
+)
+
+# Emitted files and the source extensions that produce them. Checked against
+# the tree rather than assumed, so this answers "is there something here that
+# regenerates it" instead of "does the name look generated".
+_COMPILED_FROM: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (".d.ts.map", (".ts", ".tsx")),
+    (".d.ts", (".ts", ".tsx")),
+    (".js.map", (".ts", ".tsx", ".js")),
+    (".js", (".ts", ".tsx")),
+)
+
+
+def _compiled_twin(rel: str, project_dir: str) -> Optional[tuple[str, str]]:
+    """Is this the compiled twin of a source file that is still here?
+
+    THE LIST THIS REPLACES got it wrong in the way maintained lists do. It
+    named `frontend/vite.config.js` and both `.tsbuildinfo` files and missed
+    `frontend/vite.config.d.ts`, which `tsc -b` writes beside the `.js`. On
+    2026-08-04 a build emitted it, R5 refused an unclassified gitignored
+    path, and every scheduled backup stopped — correctly, by a rule that was
+    asking a question nobody had answered for that one filename.
+
+    So the question is asked of the TREE: if `x.d.ts` sits next to `x.ts`,
+    the emit is reproducible and the source is the thing worth keeping. If
+    the source is itself gitignored, it comes back through R5 on its own
+    merits, which is the composition we want — the twin rule never hides a
+    file that nothing else would see.
+    """
+    if not project_dir:
+        return None
+    for emit, sources in _COMPILED_FROM:
+        if not rel.endswith(emit):
+            continue
+        stem = rel[: -len(emit)]
+        for ext in sources:
+            twin = Path(project_dir) / (stem + ext)
+            try:
+                if twin.is_file():
+                    return (EXCLUDE_EPHEMERAL,
+                            f"generated from {stem + ext}, which is in the "
+                            f"tree — back up the source, not its output")
+            except OSError:
+                return None
+    return None
 
 # ── the secret tier ──────────────────────────────────────────────────────
 #
@@ -293,18 +345,26 @@ SEGMENT_POLICY: dict[str, tuple[str, str]] = {
 }
 
 
-def _path_policy(rel: str) -> Optional[tuple[str, str]]:
+def _path_policy(rel: str, project_dir: str = "") -> Optional[tuple[str, str]]:
     """Policy for a project-relative path.
 
-    EXACT match first, then the small set of segment names that are
-    unambiguous anywhere. Anything else returns None and therefore REFUSES —
-    which is the point: an unrecognised path is a decision waiting to be
-    made, not a thing to skip.
+    EXACT match first, then suffixes that name a build system's own output,
+    then the compiled-twin question asked of the tree, then the small set of
+    segment names that are unambiguous anywhere. Anything else returns None
+    and therefore REFUSES — which is the point: an unrecognised path is a
+    decision waiting to be made, not a thing to skip.
+
+    The ordering matters. Exact entries still win, so a deliberate judgement
+    (`frontend/public/mockups`) is never overridden by a generic rule.
     """
     if rel in PATH_POLICY:
         return PATH_POLICY[rel]
-    if rel.endswith(".egg-info"):
-        return (EXCLUDE_EPHEMERAL, "a build artifact")
+    for suffix, reason in _EMIT_SUFFIXES:
+        if rel.endswith(suffix):
+            return (EXCLUDE_EPHEMERAL, reason)
+    twin = _compiled_twin(rel, project_dir)
+    if twin:
+        return twin
     for seg in rel.split("/"):
         if seg in SEGMENT_POLICY:
             return SEGMENT_POLICY[seg]
@@ -425,7 +485,7 @@ def classify(inventory: Iterable[dict], *,
         # is — gets included by the general rule no matter what the policy
         # says about it, and the bundle ends up containing every previous
         # bundle.
-        decided = _path_policy(_rel_to(entry.name, project_dir))
+        decided = _path_policy(_rel_to(entry.name, project_dir), project_dir)
         if decided:
             entry.disposition, entry.reason = decided
             continue
@@ -492,7 +552,7 @@ def host_state_entries(ignored_paths: Iterable[str], project_dir: str) -> list[E
     for path in ignored_paths:
         p = path.rstrip("/")
         rel = p[len(project_dir):].lstrip("/") if project_dir and p.startswith(project_dir) else p
-        decided = _path_policy(rel)
+        decided = _path_policy(rel, project_dir)
         if decided and decided[0] == INCLUDE:
             out.append(Entry(kind="bind", name=p, disposition=INCLUDE,
                              reason=decided[1], sources={"host-state"}))
@@ -517,7 +577,7 @@ def check_uncovered_host_state(ignored_paths: Iterable[str],
         if any(p == c or p.startswith(c + "/") for c in covered):
             continue
         rel = p[len(project_dir):].lstrip("/") if project_dir and p.startswith(project_dir) else p
-        decided = _path_policy(rel)
+        decided = _path_policy(rel, project_dir)
         if decided:
             continue     # classified either way, with a reason on record
         out.append(Refusal(

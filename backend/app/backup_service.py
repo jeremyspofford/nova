@@ -142,6 +142,87 @@ def bundles() -> list[dict]:
     return br.list_bundles(BACKUP_DIR)
 
 
+def sweep_partials(older_than_s: float = 3600.0) -> int:
+    """Remove `.part` archives an interrupted run left behind.
+
+    A snapshot writes to `<name>.tar.gz.part` and renames only after it
+    verifies, so a half-written archive is never listable as a bundle. That
+    is the right design and it has no janitor: kill the process mid-write and
+    the partial stays forever. Found on 2026-08-04 — a 167 MB orphan from a
+    backend restart during a snapshot, invisible to `bundles()` and to
+    `_prune_bundles`, which only ever deletes things it can list.
+
+    Age-gated because a `.part` may belong to a snapshot running right now.
+    An hour is far longer than any snapshot here has taken and far shorter
+    than "never".
+    """
+    import time as _time
+    freed = 0
+    try:
+        for part in BACKUP_DIR.glob("*.part"):
+            try:
+                if _time.time() - part.stat().st_mtime < older_than_s:
+                    continue
+                size = part.stat().st_size
+                part.unlink()
+                freed += 1
+                log.warning("removed an interrupted backup archive: %s (%.0f MB)",
+                            part.name, size / 1e6)
+            except OSError:
+                log.exception("could not remove partial backup %s", part)
+    except OSError:
+        log.exception("could not scan the backup store for partials")
+    return freed
+
+
+async def last_attempt() -> Optional[dict]:
+    """The most recent scheduled attempt, or None if there has never been one.
+
+    Read from the database rather than a module global, because the global
+    measured UPTIME: every restart reset it and re-armed the interval. Under
+    `--reload` that meant a standing refusal notified on every source edit.
+    """
+    from app import db
+    try:
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT at, outcome, reason, bundle FROM backup_attempts "
+                " ORDER BY at DESC LIMIT 1")
+    except Exception:  # noqa: BLE001 — a missing history is not a failed backup
+        log.exception("could not read the backup attempt history")
+        return None
+    return dict(row) if row else None
+
+
+async def record_attempt(outcome: str, *, reason: Optional[str] = None,
+                         bundle: Optional[str] = None) -> bool:
+    """Write the attempt down. Returns whether this outcome is NEWS.
+
+    News means: the outcome or the reason differs from the previous attempt.
+    A refusal that says exactly what the last one said is the same fact
+    arriving again, and the caller uses this to decide whether the operator
+    needs telling. The first one is news; the twenty-ninth identical one is
+    how someone learns to swipe the alert away without reading it.
+
+    Recording is best-effort — a backup that ran is not undone by failing to
+    write a row about it — but a failure to record returns False so a
+    notification storm can never be CAUSED by the bookkeeping breaking.
+    """
+    from app import db
+    prev = await last_attempt()
+    news = not prev or prev.get("outcome") != outcome or \
+        (prev.get("reason") or "") != (reason or "")
+    try:
+        async with db.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO backup_attempts (outcome, reason, bundle) "
+                "VALUES ($1,$2,$3)", outcome, reason, bundle)
+    except Exception:  # noqa: BLE001
+        log.exception("could not record the backup attempt")
+        return False
+    return news
+
+
 async def verify_restore(name: str) -> dict:
     """Prove a bundle restores, into a throwaway database. Non-destructive."""
     from app import backup_restore as br

@@ -7,7 +7,7 @@ live `automations.enabled` setting — togglable from the UI, no restart.
 
 import asyncio
 import logging
-import time
+import datetime as dt
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -23,7 +23,8 @@ TICK_SECONDS = 60
 _running = asyncio.Lock()
 
 
-_last_backup: float = 0.0
+# NOTE: the backup interval used to live here as a module global and
+# measured uptime rather than time — see _maybe_backup and migration 089.
 
 
 async def _maybe_backup() -> None:
@@ -37,36 +38,52 @@ async def _maybe_backup() -> None:
     Retention deletes old bundles only AFTER a new one has been written and
     verified, so a failing backup can never reduce how many you have.
     """
-    global _last_backup
     hours = float(settings_store.get("backups.every_hours") or 0)
     if hours <= 0:
         return
-    now = time.monotonic()
-    if _last_backup and now - _last_backup < hours * 3600:
-        return
     from app import backup_service, backup_snapshot
+
+    # DUE? Asked of the attempt history, not of a module global. The global
+    # measured uptime: every restart reset it and re-armed the interval, and
+    # under `--reload` every source edit is a restart. Measured 2026-08-04:
+    # 76 backend starts in a day, 29 identical refusal notifications.
+    last = await backup_service.last_attempt()
+    if last and last.get("at"):
+        age = (dt.datetime.now(dt.timezone.utc) - last["at"]).total_seconds()
+        if age < hours * 3600:
+            return
+
     ok, why = backup_service.store_available()
     if not ok:
         log.warning("scheduled backup skipped: %s", why)
         return
-    _last_backup = now
+    # Before asking for room, give back what a killed run is still holding.
+    backup_service.sweep_partials()
     try:
         man = await backup_service.snapshot()
         log.info("scheduled backup: %s (%.1f MB)",
                  man["path"], man["bytes"] / 1e6)
+        await backup_service.record_attempt("ok", bundle=man["path"])
     except backup_snapshot.SnapshotRefused as e:
-        # A refusal is news: something on this stack is unaccounted for and
-        # the operator is the only one who can classify it.
+        # A refusal is news ONCE. Something on this stack is unaccounted for
+        # and only the operator can classify it — but telling him the same
+        # thing every interval is how he learns to dismiss the alert without
+        # reading it, which costs the next, different refusal.
         log.error("scheduled backup REFUSED: %s", e)
-        try:
-            from app import notify
-            await notify.send(f"Nova could not back up: {e}",
-                              title="Backup refused", tags=["warning"])
-        except Exception:
-            log.exception("could not notify about the refused backup")
+        news = await backup_service.record_attempt("refused", reason=str(e))
+        if news:
+            try:
+                from app import notify
+                await notify.send(f"Nova could not back up: {e}",
+                                  title="Backup refused", tags=["warning"])
+            except Exception:
+                log.exception("could not notify about the refused backup")
+        else:
+            log.info("...same refusal as last time; not notifying again")
         return
-    except Exception:
+    except Exception as e:  # noqa: BLE001 — recorded, then re-raised to the log
         log.exception("scheduled backup failed")
+        await backup_service.record_attempt("error", reason=str(e)[:500])
         return
     _prune_bundles()
 
