@@ -948,6 +948,29 @@ async def _build_system_prompt(agent: dict, query: str, *,
         # stale and neither is maintained by hand.
         if tool_names:
             own = sorted(tool_names)
+            # ...PLUS the lazily-granted MCP tools, by NAME only.
+            #
+            # Without them this block was false where it is strongest. It ends
+            # "Together those two lists are COMPLETE. If a capability is in
+            # neither, you cannot do it now" — and a lazy MCP tool is in
+            # neither, because `tool_names` is the LOADED toolset. The index
+            # line saying the server exists sits ~9,500 characters earlier, so
+            # the newest and most emphatic sentence in her prompt contradicted
+            # it. Measured 2026-08-04: `find_mcp_tools` had been called 8 times
+            # in the whole trace history, once by main, and that call was never
+            # followed by an MCP call.
+            #
+            # Names, never schemas — the schemas are exactly what lazy loading
+            # exists to keep out of the prompt. About 40 characters each, and
+            # it makes the COMPLETE claim true again.
+            try:
+                lazy = await tool_registry.lazy_tool_names(agent)
+            except Exception:
+                log.exception("lazy MCP names unavailable; the closed-world "
+                              "block will understate what she holds")
+                lazy = []
+            if lazy:
+                own = own + [f"{n} (call find_mcp_tools first)" for n in lazy]
             # Both sides canonical before the difference: `tool_names` carries
             # WIRE names (mcp__server__tool) while grants and `reach` are
             # canonical (mcp:server/tool), so a raw comparison would list a tool

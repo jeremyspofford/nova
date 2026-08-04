@@ -181,6 +181,23 @@ async def lazy_mcp_index(agent: dict) -> dict[str, int]:
     return counts
 
 
+async def lazy_tool_names(agent: dict) -> list[str]:
+    """Canonical names of this agent's granted-but-unloaded MCP tools.
+
+    Names only. The runner's closed-world block asserts that what it lists is
+    COMPLETE, and a lazy tool was in neither of its two lists — so the
+    strongest sentence in the prompt denied a capability the agent actually
+    held. Schemas stay out: carrying them is what lazy loading exists to
+    avoid, and a name plus "call find_mcp_tools first" is enough to route.
+    """
+    has_grants, named, wildcards = _granted_mcp_tools(agent)
+    if not has_grants:
+        return []
+    return sorted(
+        full_name for full_name, tool in (await _load_mcp_tools()).items()
+        if not tool["_always_inject"] and _mcp_granted(full_name, named, wildcards))
+
+
 async def search_lazy_mcp_tools(agent: dict, query: str) -> list[dict]:
     """LLM-shaped defs matching query among this agent's lazy (not
     always_inject) granted MCP servers — backs the find_mcp_tools
@@ -559,6 +576,26 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     name = canonical_name(name)
     granted = ctx.get("granted")
     if granted is not None and name not in granted:
+        # GRANTED BUT NOT LOADED IS NOT UNGRANTED. `granted` is built from the
+        # LOADED toolset, so a lazily-granted MCP tool she names correctly —
+        # having read it in the index, or remembered it from a previous turn —
+        # was refused with "not granted to this agent". That is false: she
+        # holds the grant, it is merely unloaded. The honest thing to do with
+        # that sentence is tell the operator she lacks a grant she has, and a
+        # genuinely wrong name produced the identical string, so the two were
+        # indistinguishable.
+        #
+        # Routing, not a dead end — the same argument the goal gate makes: a
+        # refusal that names the call which turns it into a yes gets used.
+        agent = ctx.get("agent") or {}
+        allowed = agent.get("allowed_tools")
+        if allowed and name in set(allowed):
+            server = name.split("/", 1)[0].split(":", 1)[-1]
+            return (f"Error: '{name}' IS granted to you but is not loaded this "
+                    f"turn — its server's tools are lazy. Call "
+                    f"find_mcp_tools(query='{server}') first; the match becomes "
+                    f"callable immediately, in this same turn, then re-issue "
+                    f"this call. Do not report this as a missing capability.")
         return f"Error: tool '{name}' is not granted to this agent"
 
     # THE CONTAINMENT INVARIANT (docs/plans/capability-and-containment.md):
