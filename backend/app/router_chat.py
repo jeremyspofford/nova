@@ -1735,6 +1735,63 @@ async def evals_suites():
     return {"suites": out, "verdicts": await eval_runs.latest_verdicts()}
 
 
+def _grades(contract: dict) -> list[str]:
+    """What one task actually checks, in short phrases.
+
+    DERIVED from the contract, and derived HERE rather than in the panel: a
+    TypeScript restatement of a rule the harness enforces starts lying the day
+    the contract grows a key, and nothing fails when it does — the same
+    argument that moved the standby order out of AgentsTab.
+    """
+    out: list[str] = []
+    tools = contract.get("tools") or {}
+    must = [c["name"] if isinstance(c, dict) else c
+            for c in (tools.get("must_call") or [])]
+    if must:
+        out.append("must call " + ", ".join(must))
+    if tools.get("must_not_call"):
+        out.append("must not call " + ", ".join(tools["must_not_call"][:3]))
+    if (contract.get("memory") or {}).get("no_writes"):
+        out.append("writes nothing")
+    ft = contract.get("final_text") or {}
+    if ft.get("must_match"):
+        out.append(f"{len(ft['must_match'])} required phrase(s)")
+    if ft.get("must_not_match"):
+        out.append(f"{len(ft['must_not_match'])} forbidden phrase(s)")
+    if not contract.get("narration_slip_allowed", False):
+        out.append("no narration slip")
+    if not contract.get("service_claim_allowed", False):
+        out.append("no unchecked service claim")
+    return out
+
+
+@router.get("/api/v1/evals/suites/{suite}/tasks")
+async def evals_suite_tasks(suite: str):
+    """What a suite actually grades, case by case.
+
+    The Run button shipped without this and the first thing asked of it was
+    "there's no indication of what the tests are at all". A score with no
+    visible rubric is a number the operator has to take on trust, which is the
+    opposite of what an eval is for.
+
+    `intent` is the prose on each task explaining the incident it came from.
+    It was the most useful writing in the repo and was invisible to anyone not
+    reading JSON on disk.
+    """
+    from app.evals import suites as suite_mod
+    try:
+        loaded = suite_mod.load_suite(suite)
+        tasks = suite_mod.load_tasks(loaded)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"no suite named {suite!r}") from None
+    except Exception as e:  # noqa: BLE001 — a broken task file is not a 500
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return {"suite": suite, "version": loaded.version, "tasks": [
+        {"id": t.id, "title": t.title, "intent": t.intent, "prompt": t.prompt,
+         "grades": _grades(t.contract)}
+        for t in tasks]}
+
+
 @router.post("/api/v1/evals/run")
 async def evals_run(body: dict):
     """Run one suite against one model. Explicit, never automatic."""

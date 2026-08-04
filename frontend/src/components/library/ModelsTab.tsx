@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import {
   AgentInfo, ChainLink, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgentModelChains, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
-  EvalSuite, EvalVerdict, EvalRun, getEvalSuites, getEvalRuns, startEvalRun,
+  EvalSuite, EvalVerdict, EvalRun, EvalTask, getEvalSuites, getEvalRuns,
+  getEvalTasks, startEvalRun,
 } from '../../api';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
@@ -447,6 +448,7 @@ function EvalsPanel() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tasks, setTasks] = useState<EvalTask[] | null>(null);
 
   const active = runs.find(r => r.status === 'running') || null;
 
@@ -465,6 +467,14 @@ function EvalsPanel() {
     load();
     getModels(false).then(setModels).catch(() => {});
   }, []);
+
+  // Re-read on every suite change: the rubric belongs to the suite, and a
+  // stale list under a new heading is worse than none.
+  useEffect(() => {
+    if (!suite) return;
+    setTasks(null);
+    getEvalTasks(suite).then(setTasks).catch(() => setTasks([]));
+  }, [suite]);
 
   // Poll only while something is running. A finished board does not need a
   // timer, and a 3-repeat suite is minutes — the operator should not have to
@@ -592,6 +602,46 @@ function EvalsPanel() {
               This page updates on its own.
             </div>
           )}
+
+          {/* WHAT IS ACTUALLY BEING TESTED. The panel shipped without this and
+              the first question asked of it was "there's no indication of what
+              the tests are at all" — a score with no visible rubric is a number
+              you have to trust. Every task carries an `intent` explaining the
+              incident it came from, which was the best prose in the repo and
+              invisible outside it. */}
+          <details className="group">
+            <summary className="text-xs uppercase tracking-wide text-stone-500 cursor-pointer hover:text-stone-400 list-none flex items-center gap-1">
+              <span className="group-open:rotate-90 transition-transform">▸</span>
+              What {suite} tests {tasks && `(${tasks.length})`}
+            </summary>
+            <div className="mt-2 space-y-2 pl-3 border-l border-stone-700">
+              {tasks === null ? (
+                <p className="text-xs text-stone-500">Loading…</p>
+              ) : !tasks.length ? (
+                <p className="text-xs text-stone-500">No tasks in this suite.</p>
+              ) : tasks.map(t => (
+                <details key={t.id} className="text-xs">
+                  <summary className="cursor-pointer text-stone-300 hover:text-stone-200">
+                    {t.title}
+                    {!!t.grades.length && (
+                      <span className="text-stone-600 ml-2">
+                        — {t.grades.join(', ')}
+                      </span>
+                    )}
+                  </summary>
+                  <div className="mt-1 mb-2 space-y-1 text-stone-500">
+                    <p className="italic text-stone-400">&ldquo;{t.prompt}&rdquo;</p>
+                    <p className="leading-relaxed">{t.intent}</p>
+                  </div>
+                </details>
+              ))}
+              <p className="text-[11px] text-stone-600 pt-1">
+                Tasks live in <span className="font-mono">backend/app/evals/tasks/{suite}/</span>.
+                Each is a recorded incident with a contract; adding or changing
+                one is a code change, so it is reviewed like one.
+              </p>
+            </div>
+          </details>
 
           <div>
             <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">

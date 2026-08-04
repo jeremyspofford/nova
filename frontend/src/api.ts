@@ -1332,6 +1332,24 @@ export interface EvalRun {
   started_at: string;
 }
 
+/** One graded case. `intent` is the incident it came from, in prose — the
+ *  most useful thing in the whole file and, until now, invisible outside the
+ *  repo. `grades` is derived by the backend from the contract, never restated
+ *  here. */
+export interface EvalTask {
+  id: string;
+  title: string;
+  intent: string;
+  prompt: string;
+  grades: string[];
+}
+
+export async function getEvalTasks(suite: string): Promise<EvalTask[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/suites/${encodeURIComponent(suite)}/tasks`);
+  if (!r.ok) throw new Error('Failed to load tasks');
+  return (await r.json()).tasks;
+}
+
 export async function getEvalSuites(): Promise<{ suites: EvalSuite[]; verdicts: EvalVerdict[] }> {
   const r = await apiFetch(`${API_URL}/api/v1/evals/suites`);
   if (!r.ok) throw new Error('Failed to load eval suites');
