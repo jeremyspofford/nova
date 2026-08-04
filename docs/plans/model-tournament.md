@@ -78,12 +78,13 @@ hypothetical — for that one model, not for all six.
 
 Measured: **48 runs per full rotation became 13.** Derived, so moving an agent
 onto a local model puts its suite back in the full rotation with no edit.
-- Record through the existing path, so `suite_version` and `repeat_count`
-  land on every row and `model_fitness` reads them.
 
-Cost, measured: `main` is ~1.5 min and ~100k tokens per pass, `guardian` ~2.9
-min. Six local models × 3 repeats is roughly 30–55 minutes overnight, and zero
-tokens billed — it is all local.
+Everything records through the existing path, so `suite_version` and
+`repeat_count` land on every row and `model_fitness` reads them.
+
+Cost, measured: `main` is ~1.5 min per pass, `guardian` ~2.9 min. A `main`
+night is six models × 3 repeats, roughly 30 minutes; every other night is one
+model × 3, under ten. Zero tokens billed — it is all local.
 
 ### Weekly — the cloud yardstick
 
