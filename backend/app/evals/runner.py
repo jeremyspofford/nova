@@ -6,7 +6,7 @@ budget. Evals never go through the HTTP chat route: that route journals to the
 memory singleton, appends conversation rows, fires compaction and pushes a
 notification (router_chat.py:196-227).
 
-Isolation comes from two contextvars bound around the drain:
+Isolation comes from three contextvars bound around the drain:
 
   * `memory.sandbox(...)` — a scratch OkfMemory. Because the module-level
     `memory` name is a proxy, this redirects the runner's prompt-assembly
@@ -14,6 +14,11 @@ Isolation comes from two contextvars bound around the drain:
     memory tool, without editing runner.py (which lane 1 owns).
   * `fixtures.using(...)` — the frozen mini-web, so both contestants research
     identical inputs.
+  * `EVAL_MAX_TOOL_ROUNDS` — the suite's tool-round cap. Unlike the other
+    two this one only binds if the turn path resolves the cap through
+    `effective_max_tool_rounds` instead of reading the setting directly;
+    test_eval_harness [11] is the check that refuses when it does not.
+    See `_pinned_rounds`.
 
 Phase 1 produces the material; it does not grade. Contract checkers, the
 pairwise judge, and the eval_runs/eval_results tables are phase 2, and the
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import logging
 import shutil
@@ -35,7 +41,6 @@ from typing import Any, Optional
 from app import settings_store, trace
 from app.evals import suites
 from app.agents import registry as agent_registry
-from app.agents import runner as agent_runner
 from app.evals.suites import Suite, Task
 from app.llm import router as llm_router
 from app.memory import memory as memory_mod
@@ -219,36 +224,68 @@ def _memory_report(mem: OkfMemory, before: dict[str, str]) -> dict:
             "items": items}
 
 
-# ── settings pin ─────────────────────────────────────────────────────────
+# ── the tool-round pin ───────────────────────────────────────────────────
+
+# The tool-round cap the eval task running in THIS context was authored to
+# get, or None anywhere else — which is everywhere the harness is not, so a
+# live chat turn always falls through to the operator's setting.
+#
+# This used to be a write into `settings_store._cache`, which is one
+# process-global dict: its own log line said "concurrent live chat turns see
+# it too". Evals run continuously on this box, so that was live. A chat turn
+# cleared for 10 rounds was cut off at 6 for the length of a tool-creator
+# task and at 8 for every other suite, with nothing on the chat path aware an
+# eval was running — and the narration and deferral retries, which spend the
+# last round by design, lost theirs. Worse, the pin snapshotted the cap on
+# entry and wrote it back on exit: an operator who changed "max tool rounds"
+# in Settings mid-run had `set_value` commit to Postgres and to the cache,
+# then had the cache silently reverted underneath. Nothing re-warms outside
+# startup (main.py:105), so the DB and the Settings UI — which renders from
+# the same cache — then disagreed until the next backend restart.
+#
+# A ContextVar rather than a `max_rounds=` argument on run_agent because
+# run_agent re-enters ITSELF for dispatched sub-agents (agents/runner.py,
+# `_run_dispatch`) and every re-entry re-reads the cap. An argument would have
+# to be threaded through _run_dispatch into each sub-turn or one graded turn
+# would measure two different caps; a ContextVar is inherited by the wait_for
+# task and every child task it spawns with no threading at all.
+EVAL_MAX_TOOL_ROUNDS: contextvars.ContextVar[Optional[int]] = \
+    contextvars.ContextVar("eval_max_tool_rounds", default=None)
+
+
+def effective_max_tool_rounds() -> Optional[int]:
+    """The tool-round cap in force for the caller's context.
+
+    The eval pin if one is bound here, otherwise the operator's live
+    setting. Deliberately does NOT apply run_agent's `or 10` floor — the
+    caller keeps its own default so this can be used to record what a run
+    actually ran under as well as to drive it.
+    """
+    pinned = EVAL_MAX_TOOL_ROUNDS.get()
+    if pinned is not None:
+        return pinned
+    return settings_store.get("agents.max_tool_rounds")
+
 
 @contextlib.contextmanager
 def _pinned_rounds(value: Optional[int]):
-    """Pin `agents.max_tool_rounds` for the run.
+    """Bind the suite's tool-round cap to this context, and nothing wider.
 
-    settings_store._cache is a process-global dict with no context scoping
-    (settings_store.py:345), and the runner reads it live every turn
-    (runner.py:490) — so this is genuinely global while it holds. It is a
-    no-op when the live value already matches, which is the common case.
-    A real per-run override belongs on run_agent: TODO(lane-1-merge).
+    Writes no shared state: `settings_store._cache` is untouched, so a
+    concurrent `set_value` from the Settings UI survives the pin's exit and
+    a concurrent chat turn keeps the operator's cap. Consumers must read it
+    through `effective_max_tool_rounds` (or the ContextVar directly) — a
+    `settings_store.get` still answers with the operator's value here, on
+    purpose: this pins one setting for one graded turn, not the store.
     """
-    key = "agents.max_tool_rounds"
-    if value is None or settings_store.get(key) == value:
+    if value is None:
         yield
         return
-    log.warning("eval: pinning %s=%s process-wide for this run (was %s) — "
-                "concurrent live chat turns see it too", key, value,
-                settings_store.get(key))
-    cache = settings_store._cache
-    had = key in cache
-    previous = cache.get(key)
-    cache[key] = value
+    token = EVAL_MAX_TOOL_ROUNDS.set(value)
     try:
         yield
     finally:
-        if had:
-            cache[key] = previous
-        else:
-            cache.pop(key, None)
+        EVAL_MAX_TOOL_ROUNDS.reset(token)
 
 
 async def _settle(before: set, timeout: float = 8.0) -> None:
@@ -274,6 +311,12 @@ async def _settle(before: set, timeout: float = 8.0) -> None:
 async def run_task(task: Task, model: str, *, label: str, scratch_root: Path,
                    record: bool = False) -> RunResult:
     """Run one task with one model against a fresh sandbox."""
+    # Imported here, not at module scope: agents/runner.py reads
+    # EVAL_MAX_TOOL_ROUNDS from this module, and a module-level import back
+    # into it would make that a cycle. Nothing else here reaches the runner,
+    # so this file stays importable from the turn path.
+    from app.agents import runner as agent_runner
+
     if ":" not in model:
         raise ValueError(
             f"model {model!r} needs a provider slug ('openrouter:…', "
@@ -361,9 +404,10 @@ async def run_task(task: Task, model: str, *, label: str, scratch_root: Path,
         # inside the sandbox on purpose — a late narration write must land in
         # the scratch store, and it must land before we read that store back
         await _settle(tasks_before)
-        # and inside the pin, or this records the operator's live setting
-        # instead of the cap the turn actually ran under
-        result.max_tool_rounds = settings_store.get("agents.max_tool_rounds")
+        # and inside the pin, reading it the same way the runner does, or the
+        # ledger records the operator's live setting instead of the cap the
+        # turn actually ran under
+        result.max_tool_rounds = effective_max_tool_rounds()
 
     result.duration_s = round(time.monotonic() - started, 2)
     result.memory = _memory_report(mem, before)

@@ -25,10 +25,19 @@ What it pins down (each maps to a rail in the plan):
      and the full untruncated result is captured for grading
   8. the suite loader reads the authored format (skipped when the suites
      lane has not landed yet)
+  9. valid vs gradeable: a run that died mid-stream is not scored as a bad
+     answer
+ 10. the suite's tool-round cap binds the graded turn and its dispatched
+     sub-turns and NOTHING else — a concurrent chat turn keeps the
+     operator's cap, and an operator's mid-run Settings write survives
+ 11. and something actually consumes that cap: the turn path resolves it
+     through the pin, and the eval ledger records it from inside the pin
 """
 
+import ast
 import asyncio
 import hashlib
+import inspect
 import json
 import shutil
 import sys
@@ -360,6 +369,148 @@ def test_result_gradeability():
     check("and therefore not gradeable", not missed.gradeable)
 
 
+# ── 10: the tool-round pin stays inside the run ──────────────────────────
+
+def test_pin_is_context_scoped():
+    """The pin used to be a write into settings_store._cache.
+
+    Two live consequences, one test each below. A chat turn cleared for 10
+    rounds ran at the suite's cap (6 for tool-creator, 8 for the rest) for as
+    long as an eval task held the pin, and evals run continuously here. And
+    an operator who saved "max tool rounds" mid-run had the cache half of
+    that write reverted by the pin's exit, leaving Postgres and the Settings
+    UI disagreeing until the next restart.
+    """
+    print("\n[10] the tool-round pin stays inside the run")
+    from app import settings_store
+    from app.evals import runner as eval_runner
+
+    key = "agents.max_tool_rounds"
+    operator = settings_store.get(key)
+    pinned = (operator or 10) + 3      # never equal to the live value
+    had = key in settings_store._cache
+    previous = settings_store._cache.get(key)
+
+    check("outside a run the pin is unbound (production path)",
+          eval_runner.EVAL_MAX_TOOL_ROUNDS.get() is None)
+    check("so the cap resolves to the operator's setting",
+          eval_runner.effective_max_tool_rounds() == operator)
+
+    async def go():
+        seen = {}
+
+        async def live_turn(gate):
+            # a chat turn already in flight when the eval starts: its context
+            # was copied at create_task, before the pin existed
+            await gate.wait()
+            seen["live_cap"] = eval_runner.effective_max_tool_rounds()
+            seen["live_store"] = settings_store.get(key)
+
+        async def sub_turn():
+            # what run_agent's re-entry from _run_dispatch sees
+            seen["sub_cap"] = eval_runner.effective_max_tool_rounds()
+
+        gate = asyncio.Event()
+        live = asyncio.create_task(live_turn(gate))     # created OUTSIDE the pin
+        with eval_runner._pinned_rounds(pinned):
+            gate.set()
+            await live
+            seen["eval_cap"] = eval_runner.effective_max_tool_rounds()
+            seen["eval_store"] = settings_store.get(key)
+            await asyncio.create_task(sub_turn())
+            # the operator saves a new value in Settings mid-run: set_value
+            # commits to Postgres and then to the cache. Mimic the cache half.
+            settings_store._cache[key] = 7
+        seen["after_exit"] = settings_store._cache.get(key)
+        seen["unbound"] = eval_runner.EVAL_MAX_TOOL_ROUNDS.get()
+        return seen
+
+    try:
+        seen = asyncio.run(go())
+    finally:
+        if had:
+            settings_store._cache[key] = previous
+        else:
+            settings_store._cache.pop(key, None)
+
+    check("the graded turn runs under the suite's cap",
+          seen["eval_cap"] == pinned, f"got {seen['eval_cap']}")
+    check("and a dispatched sub-turn measures the same cap",
+          seen["sub_cap"] == pinned, f"got {seen['sub_cap']}")
+    check("a concurrent live turn keeps the operator's cap",
+          seen["live_cap"] == operator, f"got {seen['live_cap']}")
+    check("because the store itself is never rewritten",
+          seen["eval_store"] == operator and seen["live_store"] == operator,
+          f"eval saw {seen['eval_store']}, live saw {seen['live_store']}")
+    check("an operator write during a run survives the run's exit",
+          seen["after_exit"] == 7, f"got {seen['after_exit']}")
+    check("and the pin unbinds itself on exit", seen["unbound"] is None)
+
+    with eval_runner._pinned_rounds(None):
+        check("a suite with no cap of its own pins nothing",
+              eval_runner.EVAL_MAX_TOOL_ROUNDS.get() is None
+              and eval_runner.effective_max_tool_rounds() == operator)
+
+
+# ── 11: the pin is worthless unless something reads it ───────────────────
+
+def _records_ledger_cap_inside_pin(func) -> bool:
+    """Does `func` assign `.max_tool_rounds` inside the `_pinned_rounds` with?
+
+    Parsed rather than grepped so that reformatting the block, renaming the
+    local or moving the assignment WITHIN the pin all still pass, and only
+    moving it out of the pin fails. Does not check anything about the value
+    assigned — that is what the [10] checks are for.
+    """
+    tree = ast.parse(inspect.getsource(func))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        pinned = any(isinstance(item.context_expr, ast.Call)
+                     and getattr(item.context_expr.func, "id", "")
+                     == "_pinned_rounds"
+                     for item in node.items)
+        if not pinned:
+            continue
+        for stmt in node.body:
+            for inner in ast.walk(stmt):
+                if isinstance(inner, ast.Assign) and any(
+                        isinstance(t, ast.Attribute)
+                        and t.attr == "max_tool_rounds"
+                        for t in inner.targets):
+                    return True
+    return False
+
+
+def test_pin_is_consumed():
+    """A ContextVar nobody reads is a comment, and this one is worse than
+    inert unread: run_task records `result.max_tool_rounds` from the same
+    expression the turn is supposed to run under, so an unwired turn path
+    writes the suite's cap into the eval ledger for a run that actually
+    executed at the operator's. The ledger would say 6 for a 10-round run.
+
+    Both checks are derived, not listed: the names come from whatever this
+    module currently exposes about the cap, and the ledger check parses
+    run_task rather than matching a line.
+    """
+    print("\n[11] something actually consumes the pin")
+    from app.agents import runner as agent_runner
+    from app.evals import runner as eval_runner
+
+    resolvers = sorted(n for n in vars(eval_runner)
+                       if "max_tool_rounds" in n.lower())
+    turn_path = Path(agent_runner.__file__).read_text()
+    check("the turn path resolves the cap through the pin",
+          any(name in turn_path for name in resolvers),
+          f"agents/runner.py mentions none of {resolvers} — it still reads "
+          f"settings_store directly, so the suite cap never reaches the turn "
+          f"while the ledger records it anyway")
+    check("and the ledger records the cap from inside the pin",
+          _records_ledger_cap_inside_pin(eval_runner.run_task),
+          "result.max_tool_rounds is assigned outside the _pinned_rounds "
+          "block, so it stores the operator's setting, not the run's cap")
+
+
 def test_suite_loader():
     print("\n[8] suite loader")
     from app.evals import suites
@@ -392,6 +543,8 @@ def main():
         test_execute_tool_end_to_end(tmp)
         test_result_gradeability()
         test_suite_loader()
+        test_pin_is_context_scoped()
+        test_pin_is_consumed()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
