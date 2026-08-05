@@ -9,8 +9,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Markdown } from '../../Markdown';
-import { fmtBytes } from '../../ui';
+import { Markdown } from '../components/Markdown';
+import { fmtBytes } from '../components/ui';
 import { FileRead, openRaw } from './api';
 
 /** Frontmatter is data, not prose. Left in, react-markdown renders the whole
@@ -27,6 +27,7 @@ function splitFrontmatter(text: string): [string, string] {
 
 export function Viewer({
   root, path, doc, draft, dirty, saving, mode, onBack, onDraft, onMode, onSave,
+  title, onWikilink, resolveWikilink,
 }: {
   root: string; path: string;
   doc: FileRead;
@@ -37,6 +38,14 @@ export function Viewer({
   onDraft: (s: string) => void;
   onMode: (m: 'edit' | 'preview') => void;
   onSave: () => void;
+  /** Vault only: the note's frontmatter title, which is what a `[[link]]`
+   *  resolves by — so it leads and the filename drops to the path line. The
+   *  Files tab passes nothing and keeps showing the filename it always did. */
+  title?: string;
+  /** Vault only. Absent ⇒ `[[Foo]]` stays literal text in the preview, which
+   *  is what it has always been here. */
+  onWikilink?: (title: string) => void;
+  resolveWikilink?: (title: string) => boolean;
 }) {
   const ta = useRef<HTMLTextAreaElement>(null);
   const [rawError, setRawError] = useState('');
@@ -69,7 +78,7 @@ export function Viewer({
           </button>
         )}
       <div className="min-w-0">
-        <div className="text-sm text-stone-100 truncate">{doc.name}</div>
+        <div className="text-sm text-stone-100 truncate">{title || doc.name}</div>
         <div className="text-[11px] font-mono text-stone-500 truncate">
           {path || doc.name} · {fmtBytes(doc.bytes)}
           {/* The blast radius of a title change, before the title is
@@ -130,7 +139,7 @@ export function Viewer({
             {fm}
           </pre>
         )}
-        <Markdown>{md}</Markdown>
+        <Markdown onWikilink={onWikilink} resolveWikilink={resolveWikilink}>{md}</Markdown>
       </div>
     );
   } else {

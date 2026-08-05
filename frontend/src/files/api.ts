@@ -1,13 +1,19 @@
-/** Client for the Files tab.
+/** Client for the file surfaces — Library → Files and the Vault.
  *
  *  Its own module rather than lines in `src/api.ts` on purpose: that file is
  *  the busiest shared surface in the frontend, and a feature that can keep
  *  its calls to itself should. Auth is the one thing it borrows — importing
  *  `getAuthToken` rather than re-reading localStorage means the token still
  *  has exactly one owner.
+ *
+ *  It sits at `src/files/` rather than under the Library because it has two
+ *  consumers now. That is also the rule: both surfaces call THIS module, so
+ *  there is one write path, one refusal vocabulary and one retarget dialog.
+ *  If a second copy ever seems necessary, the design is wrong — two editors
+ *  that can disagree about what a refusal means is the failure mode.
  */
 
-import { getAuthToken } from '../../../api';
+import { getAuthToken } from '../api';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 

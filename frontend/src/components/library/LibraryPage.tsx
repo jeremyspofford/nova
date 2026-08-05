@@ -11,7 +11,7 @@ import { DocumentsTab } from './DocumentsTab';
 import { FilesTab } from './FilesTab';
 import { NavList, NavRow, Surface } from '../ui';
 import { useIsMobile } from '../../shell/useIsMobile';
-import { confirmDiscardFiles } from './files/dirty';
+import { confirmDiscard } from '../../files/dirty';
 
 /** The Library: Nova's parts — agents, models, automations, rules, tools,
  *  skills, documents. Entity management pulled out of Settings so Settings
@@ -61,7 +61,7 @@ export function LibraryPage({ onClose }: { onClose: () => void }) {
   // Every way OUT of the Files tab passes through here — a tab button, the
   // scrim, the ×, the back chevron — and none of them knew the editor had
   // unsaved work.
-  const leave = (go: () => void) => { if (confirmDiscardFiles()) go(); };
+  const leave = (go: () => void) => { if (confirmDiscard('files')) go(); };
   const known = (KINDS as readonly string[]).includes(kind ?? '');
 
   // The phone drills: an index of sections, then one section filling the

@@ -17,6 +17,15 @@ const STROKE = {
 };
 
 export const ICONS = {
+  vault: (
+    // a note with a link through it — the two things the vault is for
+    <svg {...STROKE}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M9.5 14.5h2M12.5 14.5h2" />
+      <circle cx="9" cy="14.5" r="1.1" /><circle cx="15" cy="14.5" r="1.1" />
+    </svg>
+  ),
   library: (
     <svg {...STROKE}>
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
@@ -123,6 +132,8 @@ export function Rail() {
       </button>
 
       <nav className="flex-1 flex flex-col gap-1 mt-4">
+        <RailItem icon={ICONS.vault} label="Vault" expanded={expanded}
+          active={at('/vault')} onClick={() => go('/vault')} />
         <RailItem icon={ICONS.library} label="Library" expanded={expanded}
           active={at('/library')} onClick={() => go('/library')} />
         <RailItem icon={ICONS.activity} label="Activity" expanded={expanded}

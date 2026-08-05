@@ -11,16 +11,17 @@
  *  enabled are a convenience, and the server refuses regardless.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CardsSkeleton } from '../ui';
-import { confirmDiscardFiles, setFilesDirty } from './files/dirty';
-import { Row, Tree, nodeKey } from './files/Tree';
+import { confirmDiscard, setDirtyCount } from '../../files/dirty';
+import { Row, Tree, nodeKey } from '../../files/Tree';
+import { useFileTree } from '../../files/useFileTree';
 import {
-  Entry, FileRead, FilesRefusal, LinkPlan, LinkReceipt, Root, deleteEntry,
-  listDir, listRoots, newFile, newFolder, readFile, renameEntry, writeFile,
-} from './files/api';
-import { LinkPlanDialog } from './files/LinkPlanDialog';
-import { Viewer } from './files/Viewer';
+  FileRead, FilesRefusal, LinkPlan, LinkReceipt, deleteEntry,
+  newFile, newFolder, readFile, renameEntry, writeFile,
+} from '../../files/api';
+import { LinkPlanDialog } from '../../files/LinkPlanDialog';
+import { Viewer } from '../../files/Viewer';
 
 const parentOf = (p: string) => p.split('/').slice(0, -1).join('/');
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -39,24 +40,27 @@ const hits = (open: { root: string; path: string } | null,
   && (open.path === path || open.path.startsWith(path + '/'));
 
 export function FilesTab() {
-  const [roots, setRoots] = useState<Root[] | null>(null);
-  const [kids, setKids] = useState<Record<string, Entry[]>>({});
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<string | null>(null);
   const [openRef, setOpenRef] = useState<{ root: string; path: string } | null>(null);
   const [doc, setDoc] = useState<FileRead | null>(null);
   const [draft, setDraft] = useState('');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
-  const [status, setStatus] = useState('');
   // A receipt is not an error, and `status` is red-only and cleared on every
   // successful save — so a "moved 60 links" result rendered there would be
   // both the wrong colour and immediately erased.
   const [receipt, setReceipt] = useState<LinkReceipt | null>(null);
   const [plan, setPlan] = useState<LinkPlan | null>(null);
-  const treeRef = useRef<HTMLDivElement>(null);
+  // The tree half — roots, children, expansion, selection, arrow keys — is
+  // shared with the Vault. What OPENING does is what differs, so it stays here.
+  // The tree's `error` IS this tab's status line: one red sentence per
+  // surface, whether it came from a list call or from a save.
+  const tree = useFileTree(r => void open(r));
+  const {
+    roots, rows, expanded, busy, selected, sel, selRoot, targetDir,
+    setSelected, toggle, refresh, onKeyDown, treeRef,
+    error: status, setError: setStatus,
+  } = tree;
   // A phone cannot show a tree beside an editor: at 390px the two-pane
   // layout left the editor a 102px slit. Below the breakpoint the panes
   // take turns, and a tap opens a file because touch has no double-click.
@@ -70,73 +74,12 @@ export function FilesTab() {
 
   // Publish for LibraryPage's tab buttons and close control, and for a
   // reload; clear on unmount so a stale flag cannot block a later close.
-  useEffect(() => { setFilesDirty(dirty); }, [dirty]);
-  useEffect(() => () => setFilesDirty(false), []);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  // `beforeunload` lives in dirty.ts now — one editor open at a time, but two
+  // surfaces that can each be the one.
+  useEffect(() => { setDirtyCount('files', dirty ? 1 : 0); }, [dirty]);
+  useEffect(() => () => setDirtyCount('files', 0), []);
 
-  const loadKids = useCallback(async (root: string, path: string) => {
-    const k = nodeKey(root, path);
-    setBusy(s => new Set(s).add(k));
-    try {
-      const entries = await listDir(root, path);
-      setKids(m => ({ ...m, [k]: entries }));
-    } catch (e) {
-      setStatus(msg(e));
-    } finally {
-      setBusy(s => { const n = new Set(s); n.delete(k); return n; });
-    }
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const rs = await listRoots();
-        setRoots(rs);
-        if (rs.length) {                     // memory open on arrival
-          setExpanded(new Set([nodeKey(rs[0].key, '')]));
-          await loadKids(rs[0].key, '');
-        }
-      } catch (e) { setStatus(msg(e)); setRoots([]); }
-    })();
-  }, [loadKids]);
-
-  const rows = useMemo<Row[]>(() => {
-    if (!roots) return [];
-    const out: Row[] = [];
-    const walk = (root: string, path: string, depth: number) => {
-      for (const e of kids[nodeKey(root, path)] ?? []) {
-        out.push({ root, path: e.path, name: e.name, dir: e.dir, depth, entry: e });
-        if (e.dir && expanded.has(nodeKey(root, e.path))) walk(root, e.path, depth + 1);
-      }
-    };
-    for (const r of roots) {
-      out.push({ root: r.key, path: '', name: r.label, dir: true, depth: 0 });
-      if (expanded.has(nodeKey(r.key, ''))) walk(r.key, '', 1);
-    }
-    return out;
-  }, [roots, kids, expanded]);
-
-  const sel = useMemo(
-    () => rows.find(r => nodeKey(r.root, r.path) === selected) ?? null,
-    [rows, selected]);
-  const selRoot = useMemo(
-    () => roots?.find(r => r.key === sel?.root) ?? null, [roots, sel]);
-  const targetDir = sel ? (sel.dir ? sel.path : parentOf(sel.path)) : '';
-
-  const guard = () => confirmDiscardFiles();
-
-  async function toggle(r: Row) {
-    const k = nodeKey(r.root, r.path);
-    setSelected(k);
-    const isOpen = expanded.has(k);
-    setExpanded(s => { const n = new Set(s); isOpen ? n.delete(k) : n.add(k); return n; });
-    if (!isOpen) await loadKids(r.root, r.path);
-  }
+  const guard = () => confirmDiscard('files');
 
   async function open(r: Row) {
     if (!guard()) return;
@@ -157,10 +100,6 @@ export function FilesTab() {
   function closeDoc() {
     if (!guard()) return;
     setOpenRef(null); setDoc(null); setDraft(''); setDirty(false);
-  }
-
-  async function refresh(root: string, dir: string) {
-    await loadKids(root, dir);
   }
 
   /** The only writer. Ctrl/Cmd-S and the Save button both land here, so the
@@ -201,9 +140,7 @@ export function FilesTab() {
     try {
       if (kind === 'file') await newFile(sel.root, path);
       else await newFolder(sel.root, path);
-      setExpanded(s => new Set(s).add(nodeKey(sel.root, targetDir)));
-      await loadKids(sel.root, targetDir);
-      setSelected(nodeKey(sel.root, path));
+      await tree.reveal(sel.root, path);
       setStatus('');
       if (kind === 'file') {
         await open({ root: sel.root, path, name: name.trim(), dir: false, depth: 0 });
@@ -217,7 +154,7 @@ export function FilesTab() {
     if (!to?.trim() || to.trim() === sel.name) return;
     try {
       const res = await renameEntry(sel.root, sel.path, to.trim());
-      await loadKids(sel.root, parentOf(sel.path));
+      await refresh(sel.root, parentOf(sel.path));
       setSelected(nodeKey(sel.root, res.path));
       if (hits(openRef, sel.root, sel.path)) {
         // works for the file itself AND for a renamed folder above it
@@ -251,40 +188,6 @@ export function FilesTab() {
       }
       setSelected(null);
       setStatus('');
-    }
-  }
-
-  function onKeyDown(e: React.KeyboardEvent) {
-    if (!rows.length) return;
-    const i = rows.findIndex(r => nodeKey(r.root, r.path) === selected);
-    const go = (j: number) => {
-      const n = rows[Math.max(0, Math.min(rows.length - 1, j))];
-      if (!n) return;
-      setSelected(nodeKey(n.root, n.path));
-      treeRef.current
-        ?.querySelector<HTMLElement>(`[data-key="${CSS.escape(nodeKey(n.root, n.path))}"]`)
-        ?.scrollIntoView({ block: 'nearest' });
-    };
-    switch (e.key) {
-      case 'ArrowDown': e.preventDefault(); go(i + 1); break;
-      case 'ArrowUp': e.preventDefault(); go(i < 0 ? 0 : i - 1); break;
-      case 'ArrowRight':
-        e.preventDefault();
-        if (sel?.dir && !expanded.has(nodeKey(sel.root, sel.path))) void toggle(sel);
-        else go(i + 1);
-        break;
-      case 'ArrowLeft':
-        e.preventDefault();
-        if (sel?.dir && expanded.has(nodeKey(sel.root, sel.path))) void toggle(sel);
-        else if (sel) {
-          const p = nodeKey(sel.root, parentOf(sel.path));
-          if (rows.some(r => nodeKey(r.root, r.path) === p)) setSelected(p);
-        }
-        break;
-      case 'Enter':
-        e.preventDefault();
-        if (sel) void (sel.dir ? toggle(sel) : open(sel));
-        break;
     }
   }
 

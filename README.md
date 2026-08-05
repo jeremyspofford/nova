@@ -261,6 +261,47 @@ than greying out a button:
   root, so exposing a new place is a deliberate edit, never a forgotten
   exclusion.
 
+## The Vault
+
+Her notes are already a vault: `./data/memory` is markdown with frontmatter,
+`tags: [a, b, c]` and `[[wikilinks]]`, and `NOVA_MEMORY_DIR` can point at an
+Obsidian folder. **Vault** is where you read it that way — a top-level view
+beside the Library, over the same two roots.
+
+It answers the three questions a file manager cannot:
+
+- **`[[Links]] are links.`** Click one and it opens the note it names. A link
+  that resolves to nothing renders amber and says so rather than being a dead
+  click. The **Links** pane lists what points *here*, what this points at, and
+  what points nowhere.
+- **Tags are an index.** Every tag, ordered by how many notes carry it. Pick
+  one and the tree and the graph both narrow to its members.
+- **The corpus has a shape.** A 2D force graph, either the open note's
+  neighbourhood (one hop or two) or all 262 notes at once. Click a star to open
+  it.
+
+Three things it does deliberately, each because the alternative would lie:
+
+- **Links resolve by TITLE, never by filename** — the opposite of Obsidian's
+  default, and it is why the note pane, the graph and the backlinks all label
+  by title with the path underneath. The tree still shows filenames, because a
+  tree is a view of the disk.
+- **`[[a|b]]` and `[[a#h]]` are not parsed.** Two live titles contain a literal
+  `|`; teaching the renderer about aliases would show links that resolve
+  differently from the ones a retitle rewrites.
+- **A `[[link]]` in a Workspace file is not a link.** The rewriter only walks
+  the memory store, so a retitle would never carry it, and it would rot
+  silently. The Vault refuses to render what the rewriter cannot maintain, and
+  says so in the Links pane instead of showing an empty box.
+
+Editing goes through the same write path as Library → Files — the same
+byte-faithful save, the same `Ctrl`/`Cmd`-`S`, and the same dialog when a
+retitle would orphan inbound links. One write path, one refusal vocabulary.
+
+On a phone the panes take turns: the tree, then the note, with the graph and
+the links as sheets over it that the back gesture closes without leaving the
+note.
+
 ## MCP servers (connect Nova to the tool ecosystem)
 
 Nova is an MCP (Model Context Protocol) client — Settings → Tools → **MCP
@@ -319,6 +360,7 @@ an agent. See `docs/plans/mcp-client.md` for the full design.
 | **Operator edit mode** | `ui.edit_mode` toggle (default off) gates manual create/edit/delete of agents, automations, rules, and tools — enforced at the API layer; view + enable/disable always work; Nova's own manage_* tools are unaffected |
 | **MCP client** (HTTP + stdio) | Settings → Tools → MCP servers; operator-registered, hash-approved tool descriptions, lazy loading (`find_mcp_tools`) for grants not marked always-on; stdio servers run via the `mcp-runner` sidecar |
 | **Files explorer** | Library → Files; expand-in-place tree over the memory store and a workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
+| **The Vault** | A top-level view over the same two roots, but arranged around the questions a file manager cannot answer: `[[wikilinks]]` are clickable, a Links pane names what points here, a tag browser filters 465 tags by how many notes carry them, and a 2D force graph draws the corpus locally or whole. It shares one write path with Library → Files, so there is one retitle dialog and one refusal vocabulary |
 | **She can see what is failing** | `diagnose` carries a failure census discovered from `information_schema` on every call — the background queues (ingestion, automations, evals, MCP servers, alerts, push endpoints) whose failures never reach the turn ledger. A failure-shaped table that the census does not understand makes the report `INCOMPLETE` and reddens `test_failure_census.py`, so a new queue cannot silently read as healthy. Counts ride in her prompt each turn; `retry_ingest_job` gives her one re-queue per job, budgeted in a `WHERE` clause |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,

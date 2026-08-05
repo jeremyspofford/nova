@@ -5,6 +5,7 @@ import { SettingsPage } from '../components/settings/SettingsPage';
 import { LibraryPage } from '../components/library/LibraryPage';
 import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
 import { ActivityPage } from '../components/IngestionPanel';
+import { VaultPage } from '../vault/VaultPage';
 import { Rail } from './Rail';
 
 /** The app frame: utility rail (desktop) + the canvas. Brain (canvas +
@@ -55,6 +56,10 @@ export function AppShell() {
           <Route path="/chat" element={isMobile ? null : <Navigate to="/" replace />} />
           <Route path="/settings/:section?" element={<SettingsPage onClose={home} />} />
           <Route path="/library/:kind?" element={<LibraryPage onClose={home} />} />
+          {/* Two routes rather than `/vault/:root?/*`: RR 6.30 supports an
+              optional segment and a splat, but not reliably together. */}
+          <Route path="/vault" element={<VaultPage onClose={home} />} />
+          <Route path="/vault/:root/*" element={<VaultPage onClose={home} />} />
           <Route path="/observability" element={<ObservabilityOverlay onClose={home} />} />
           <Route path="/activity" element={<ActivityPage onClose={home} />} />
           <Route path="*" element={<Navigate to="/" replace />} />

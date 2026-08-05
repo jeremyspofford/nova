@@ -1953,3 +1953,63 @@ See README for what works. This file is the ordered backlog.
     scoped, short-TTL goal and removes it in a `finally` — a decision about
     live-state mutation during evals, not a contract change.
 
+
+41. **The Vault — an Obsidian-style view over the files she can reach
+    (built 2026-08-05, uncommitted; `docs/plans/vault-view.md`)** — her notes
+    already *were* a vault (263 markdown files with frontmatter, `tags:` and
+    `[[wikilinks]]` that 219 of them use, and `NOVA_MEMORY_DIR` documented as
+    pointing at an Obsidian folder) but the corpus was split across three
+    surfaces that each showed one facet and none of which connected: Library →
+    Files had the bytes and no links, the brain canvas had the graph *instead
+    of* the notes, and the Atlas had neither. Walking from a note to the notes
+    it links, filtering by tag, or seeing what points *here* was not possible
+    anywhere in the app.
+
+    `/vault` is a top-level view — rail item and phone drawer row — over the
+    same two roots. `[[Links]]` are clickable and resolve by **title**, a Links
+    pane names what points here (with the honest split between *notes* and
+    *occurrences*), a tag browser orders 465 tags by how many notes carry them,
+    and a 2D d3-force canvas draws either the open note's neighbourhood or all
+    262 notes.
+
+    **It needed no backend change.** A memory graph node's `id` is
+    `str(p.relative_to(base_dir))` from `iter_files()` — byte-identical to the
+    Files API's `{root:'memory', path}` — so the Vault is `getMemoryGraph()`
+    (which had zero callers) joined to the Files API the Library already used.
+    262 nodes / 279 edges / 186 KB / 40 ms is small enough to hold whole and
+    derive titles, backlinks and tags from. Zero new npm dependencies.
+
+    Three refusals, each because the alternative would lie: `[[a|b]]` and
+    `[[a#h]]` stay unparsed (two live titles contain a literal `|`); a
+    `[[link]]` in a Workspace file does **not** render as a link, because
+    `links.apply()` never walks that directory so a retitle could not carry it;
+    and the client-side title map drops `label === id`, reproducing
+    `links.py title_map()`'s exclusion of the one untitled note rather than
+    making it link-addressable.
+
+    Editing reuses `files/*` verbatim — one write path, one refusal vocabulary,
+    one retitle dialog. Verified live: a save is byte-identical (no restamp, no
+    adopted tags, no `Related:` line) and a retitle with inbound links raises
+    the LinkPlan dialog whose Cancel leaves the corpus untouched. The graph is
+    render-on-demand: 103 frames while a 262-node layout settles, **0** in a
+    quiet 2s, 1 for a wheel.
+
+    **Open, in `docs/plans/vault-view.md`:** search reaches titles/paths/tags
+    but not bodies (needs `/api/v1/memory/search` over the existing BM25 index,
+    called directly rather than through `memory.context()`, which taints and
+    collapses transcripts); per-referrer occurrence counts and context snippets
+    need `/api/v1/memory/backlinks`; tag tiers need `/api/v1/memory/tags` so the
+    pane can say that `transcript` (216 notes) labels a kind and earns no edge;
+    out-of-band edits still desync the BM25 index with no watcher and no
+    reindex route; and `Brain` keeps painting behind the opaque surface (the
+    occlusion machinery exists, wired only for the phone's chat — left alone
+    because a parallel session was editing `Brain.tsx`).
+
+    **What we owe: retire Library → Files into `/vault`.** The Vault is a
+    superset and is defensible only as a transition. At parity, `LibraryPage`
+    redirects `kind === 'files'` to `/vault` and `FilesTab.tsx` is deleted;
+    `router_files.py` stays, since it is the API both use. Parity checklist:
+    create, rename, delete, folder-create, binary download, the `indexed` flag,
+    the `can_mkdir: false` refusal, arrow-key tree navigation, narrow-screen
+    single-pane behaviour. The README must never carry two file-manager rows —
+    the row that retires Files is the row that amends the Vault's.
