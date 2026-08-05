@@ -342,6 +342,27 @@ SETTING_DEFS: list[dict] = [
                      "main's own prompt still says a read is answered by "
                      "calling it, so she will often act anyway. To undo that "
                      "half, edit main at Library → Agents.")},
+    {"key": "autonomy.act_on_writes", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Take notes without asking",
+     "description": ("The same forced round as above, for the small set of "
+                     "writes that are reversible and hers: taking a new note "
+                     "or appending to one (write_memory), recording what you "
+                     "just told her about yourself (remember_about_me), "
+                     "ingesting a media URL, and re-queueing ONE failed "
+                     "ingest job. Replacing an existing note, writing a "
+                     "skill, following a source, enrolling a voice, deleting "
+                     "anything, or notifying you are all still her asking "
+                     "first — those are irreversible or they reach outside. "
+                     "Turn this OFF and she offers and waits before saving.")},
+    {"key": "observability.measure_reply_shape", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Record how long her replies are",
+     "description": ("Writes one span per turn holding the reply's word "
+                     "count, the question's word count, how many tools ran "
+                     "and whether anything list-shaped was asked for. "
+                     "MEASUREMENT ONLY — nothing reads it back and no reply "
+                     "is changed. It exists so a brevity threshold can be set "
+                     "from real traffic instead of guessed at; see the Turn "
+                     "Inspector. Turn this OFF to stop recording it.")},
     {"key": "actions.enabled", "type": "boolean", "default": True,
      "section": "Agents", "label": "Approving a recommendation may run its plan",
      "description": ("A recommendation card can carry a typed plan — register "

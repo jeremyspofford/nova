@@ -174,6 +174,94 @@ def offer(round_text: str, tool_calls_made: int) -> Optional[str]:
     return window.strip()
 
 
+# ── the same fault, one class over: offering to REMEMBER ────────────────────
+#
+# 2026-08-05, Jeremy: "I would say some of her writes to go unasked." The
+# tools moved (`builtin._write_memory_unattended` and three `unattended: True`
+# declarations); this is the half that catches her still asking.
+#
+# A SEPARATE ENTRY POINT, not a loosened `_MUTATION`. That veto is the reason
+# every legitimate consent request stays out of `offer()`, and its docstring
+# is explicit that no derivation may override it. Widening it in place would
+# put "want me to delete that?" one regex slip away from a forced round.
+# Additive instead: `offer()` is untouched and cannot regress, and this
+# function carries its OWN veto — everything in `_MUTATION` that is not a
+# note-taking verb still kills the check dead.
+_MEMORY_WRITE = re.compile(
+    r"\b(?:remember|memoris\w*|memoriz\w*|sav\w*|not(?:e|ing)\s+(?:that|it|this|"
+    r"down)|make\s+a\s+note|writ\w*\s+(?:that|it|this)\s+down|jot\b|"
+    r"keep\s+(?:that|it|this)\b|add\s+(?:that|it|this)\s+to\s+(?:my\s+)?"
+    r"(?:memory|notes?)|log\s+(?:that|it|this))\b", re.IGNORECASE)
+
+# `_MUTATION` minus the note-taking verbs. Anything here in the window and the
+# offer is about something other than remembering, so it is a real consent
+# request and must survive.
+#
+# `ingest\w*`, `retry` and `re-queue` were in this list and are CUT, by the
+# same reasoning that cut `pull` and `follow` from `_MUTATION`: a veto costs
+# recall and must buy something. It bought nothing here. Both tools now carry
+# `unattended: True`, so neither is a decision to protect — and `ingest` is a
+# common NOUN in this operator's vocabulary ("you prefer the 14b for
+# ingestion"), which made the veto swallow a real offer to remember. A veto
+# that costs a legitimate catch and protects nothing is worse than no veto.
+_OTHER_MUTATION = re.compile(
+    r"\b(?:creat\w*|delet\w*|remov\w*|chang\w*|updat\w*|schedul\w*|install\w*|"
+    r"deploy\w*|register\w*|grant\w*|approv\w*|enabl\w*|disabl\w*|restart\w*|"
+    r"merge|dismiss\w*|unfollow\w*|notif\w*|"
+    r"email\w*|send|post|set\s+up|turn\s+(?:on|off))\b", re.IGNORECASE)
+
+# The tools a "want me to remember that?" offer is asking about. Narrow on
+# purpose: these two take a note and nothing else.
+_MEMORY_WRITE_TOOLS = frozenset({"write_memory", "remember_about_me"})
+
+
+def write_offer(round_text: str, tool_calls_made: int) -> Optional[str]:
+    """The tail window in which she offered to remember instead of remembering.
+
+    Same shape as `offer()` — tail-scoped, round-scoped on both sides, pure —
+    and deliberately the same `_WINDOW`/`_OFFER_TAIL` constants, because the
+    sentence split that made a clause-scoped detector miss the ossinsight
+    incident has nothing to do with which verb is being offered.
+    """
+    if tool_calls_made:
+        return None
+    if not round_text:
+        return None
+    cl = [body for body, _end in narration.clauses(round_text)]
+    if not cl:
+        return None
+    if not any(narration.is_offer(c) for c in cl[-_OFFER_TAIL:]):
+        return None
+    window = " ".join(cl[-_WINDOW:])
+    if _OTHER_MUTATION.search(window):
+        return None
+    if not _MEMORY_WRITE.search(window):
+        return None
+    return window.strip()
+
+
+def write_satisfied(window: str, unattended: dict[str, set[str]],
+                    already_called: Iterable[str] = ()) -> list[str]:
+    """Which note-taking tool she may run unasked would have settled it.
+
+    Reads the SAME derived `unattended` map as `satisfied`, so a rule that
+    blocks `write_memory` — `protect-soul`, or an operator BLOCK rule — takes
+    it out of here with no edit. Empty list = do not fire.
+
+    `already_called` subtracts AS A GROUP, which is where this differs from
+    `satisfied`. There the candidates are distinct capabilities and dropping
+    the one she used leaves a real alternative; here both names do the one
+    thing — take a note — so having called EITHER makes the trailing offer an
+    offer to save MORE, not an offer instead of saving. Subtracting per-name
+    left `remember_about_me` standing after a `write_memory` call and forced
+    a round at a turn that had already done the work.
+    """
+    done = {str(n) for n in already_called}
+    if done & _MEMORY_WRITE_TOOLS:
+        return []
+    return sorted(n for n in unattended if n in _MEMORY_WRITE_TOOLS)
+
+
 def satisfied(window: str, unattended: dict[str, set[str]],
               already_called: Iterable[str] = ()) -> list[str]:
     """Which tools she may run unasked would have settled that offer.

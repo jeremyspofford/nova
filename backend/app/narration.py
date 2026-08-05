@@ -77,6 +77,26 @@ _COMPLETION_PATTERNS = [
     r"deleted|scheduled)\b",
     r"\b(?:done|all set)\s*[—–-]\s*(?:saved|created|added|updated|deleted|"
     r"scheduled|built|wrote)\b",
+    # PAST-TENSE RETRIEVAL, 2026-08-05. The future-tense list above gained
+    # read verbs on 2026-07-31 ("I'll check", "I'm checking") because a read
+    # that never happened is the same silent failure as a write that never
+    # happened. It never gained the PAST tense, and the autonomy lane that
+    # landed today is what makes that gap load-bearing: main's prompt now
+    # pushes hard toward "call it and answer from what it returns", so the
+    # way she fails stopped being "want me to check?" and became "just
+    # checked it".
+    #
+    # MEASURED the hour this was written. Asked "Is ossinsight usable now",
+    # she answered "Just checked it again — yes, ossinsight.io is up and
+    # fully functional right now", with `tools_called: 0` in the trace and a
+    # verdict contradicting the fetch a real turn had made an hour earlier.
+    # No detector fired. Removing the friction of asking is worth nothing if
+    # what replaces it is a confident invention.
+    r"\b(?:I['’]ve|I have|I) (?:just )?(?:checked|fetched|searched|looked|"
+    r"verified|confirmed|queried|browsed|pulled up|tested|pinged)\b",
+    r"(?:^\s*|[—–:;-]\s*)(?:just )?(?:checked|fetched|searched|verified|"
+    r"confirmed|queried|tested|pinged)\s+(?:it|that|this|them|"
+    r"(?:the|his|your)\s+\w+)\b(?!['’])",
 ]
 _COMPLETION_COMPILED = [re.compile(p, re.IGNORECASE) for p in _COMPLETION_PATTERNS]
 
@@ -114,6 +134,19 @@ _COMPLETION_TOKENS: list[tuple[str, set[str]]] = [
                                              "manage_agents", "manage_tools",
                                              "manage_rules", "create", "add",
                                              "update", "deploy", "build"}),
+    # What makes a RETRIEVAL claim true. Same token discipline as the rest —
+    # and `memory` is absent here for the mirror of the reason it is absent
+    # from the save row: `write_memory` must not satisfy "I checked".
+    #
+    # Deliberately WIDE on the tool side. A claim to have looked is satisfied
+    # by any tool that reads anything, including an MCP one, because
+    # `_could_have_done` is the half that must never accuse her wrongly —
+    # the cost of a false "you did not check" is a correction stamped into a
+    # reply the operator reads and hears. Missing a catch is cheaper.
+    (r"check|fetch|search|look|verif|confirm|quer|brows|test|ping",
+     {"fetch", "url", "web", "search", "http", "diagnose", "service",
+      "status", "read", "query", "browse", "docs", "doc", "page", "list",
+      "get", "find", "mcp", "logs", "usage", "report"}),
 ]
 _COMPLETION_TOKEN_COMPILED = [(re.compile(v, re.IGNORECASE), toks)
                               for v, toks in _COMPLETION_TOKENS]
@@ -174,6 +207,14 @@ _CONDITIONAL_MARKERS = re.compile(
 _OFFER_MARKERS = re.compile(
     r"\bif you(?:'d| would)? (?:like|want|prefer)\b|\bif you want\b|"
     r"\bwant me to\b|\bwould you like\b|\bshall I\b|\blet me know if\b|"
+    # `should I` was missing and is the single most common way she phrases an
+    # offer — found 2026-08-05 by the write-deferral suite, where "Should I
+    # save that?" read as a plain statement and no detector fired. Widening
+    # this pattern widens THREE consumers at once and each one is correct:
+    # narration EXEMPTS offers (asking permission is right, so a "should I"
+    # that calls nothing must not be scored as an unkept promise), and both
+    # deferral halves need it to see the offer at all.
+    r"\bshould I\b|"
     r"\bif that (?:helps|works)\b", re.IGNORECASE)
 
 

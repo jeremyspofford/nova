@@ -391,6 +391,18 @@ _RESTRICTED_ROLES = {"kid", "guest", "unknown"}
 _FAMILY_HARD_EXCLUDE = {"dispatch_to_agent"}
 
 
+# For the `reply_shape` measurement span only — neither pattern gates
+# anything. `structure_asked` is the confound that has to be recorded or the
+# numbers lie: a reply is ALLOWED to be long when a list, a table or a
+# comparison is what was asked for, and counting those turns as bloat would
+# push a future threshold toward punishing correct answers.
+_STRUCTURE_ASKED = re.compile(
+    r"\b(?:list|table|compare|comparison|breakdown|break\s+down|steps?|"
+    r"options?|pros\s+and\s+cons|summar\w+|outline|walk\s+me\s+through|"
+    r"in\s+detail|explain|how\s+do(?:es)?)\b", re.IGNORECASE)
+_BULLET_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+", re.MULTILINE)
+
+
 def _render_unattended(free) -> str:
     """The unattended set as a sentence — with the qualification that earned
     each name still attached to it.
@@ -416,12 +428,28 @@ def _render_unattended(free) -> str:
     look — which is the whole point of the lane this block belongs to. The
     qualification is read from `READ_ACTIONS` itself, so a verb that grows a
     new read action says so here with no edit.
+
+    Since 2026-08-05 the set also carries WRITES the operator said he does
+    not want to be asked about, and those need the qualification even more
+    than the read actions did: `write_memory` is free to take a new note and
+    NOT free to overwrite one of his. The label is read from the tool's own
+    declaration for the same reason the read actions are read from
+    `READ_ACTIONS` — a control and its description that come from different
+    places will disagree.
     """
     from app.tools import scopes
+    from app.tools.builtin import BUILTIN_TOOLS
     out = []
     for n in sorted(free):
         reads = scopes.READ_ACTIONS.get(n)
-        out.append(f"{n} ({'/'.join(sorted(reads))} only)" if reads else n)
+        spec = BUILTIN_TOOLS.get(n)
+        label = (spec or {}).get("unattended_label") if isinstance(spec, dict) else None
+        if reads:
+            out.append(f"{n} ({'/'.join(sorted(reads))} only)")
+        elif label:
+            out.append(f"{n} ({label})")
+        else:
+            out.append(n)
     return ", ".join(out)
 
 
@@ -1083,9 +1111,9 @@ async def _build_system_prompt(agent: dict, query: str, *,
                         "question can be settled by one of them, call it in "
                         "this same turn and answer from what it returns. "
                         "Offering to call one is not an answer, and he does "
-                        "not have to say yes first. Everything NOT in that "
-                        "line — writing, deleting, creating, scheduling, "
-                        "notifying — you still ask about first.")
+                        "not have to say yes first. Anything else — and any "
+                        "use outside the qualification in brackets — you "
+                        "still ask about first.")
             except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
                 log.debug("unattended set unavailable", exc_info=True)
             # Gated on dispatch actually being granted: at the dispatch-depth
@@ -2140,6 +2168,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # budget shared between them would let a narration retry silently spend
     # the other's only chance.
     deferral_retried = False
+    # Its own budget again, and for the reason above: offering to LOOK and
+    # offering to REMEMBER are different faults, and one shared counter would
+    # let a read retry spend the write's only chance.
+    write_retried = False
     # THE FLOOR'S RAW MATERIAL. Both guards above discard a draft the operator
     # has already watched appear, on the promise that the forced round will
     # write a better one. Nothing made that promise good: a round that returns
@@ -2498,6 +2530,58 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                        "retract": len(retracted),
                        "detail": (f"offered to look instead of looking — "
                                   f"{covered[0]} needed no approval, asked again")}
+                continue
+
+            # SHE OFFERED TO REMEMBER SOMETHING INSTEAD OF REMEMBERING IT.
+            # Jeremy, 2026-08-05: some of her writes go unasked, and taking a
+            # note is the first of them. Same forced round, separate budget
+            # and separate detector — `deferral.write_offer` carries its own
+            # veto so the `_MUTATION` list that protects every real consent
+            # request is untouched.
+            #
+            # Placed LAST of the three so a read offer wins a tie: a reply
+            # that both defers a lookup and offers to save the result should
+            # be corrected toward doing the lookup, which is the round that
+            # produces the thing worth saving.
+            w_window = (deferral.write_offer(round_text, 0)
+                        if (not write_retried and round_no + 1 < max_rounds
+                            and settings_store.get("autonomy.act_on_writes"))
+                        else None)
+            w_covered: list[str] = []
+            if w_window:
+                try:
+                    w_covered = deferral.write_satisfied(
+                        w_window, await _unattended_for(ctx),
+                        already_called=called_names)
+                except Exception:
+                    log.exception("write-deferral check failed; letting the turn end")
+            if w_covered:
+                write_retried = True
+                retracted = final_text[round_started_at:]
+                final_text = final_text[:round_started_at]
+                last_retracted = retracted
+                if round_text:
+                    messages.append({"role": "assistant", "content": round_text})
+                messages.append({"role": "system", "content": (
+                    f"You ended that reply by offering to remember something "
+                    f"instead of remembering it. "
+                    f"{_render_unattended(w_covered)} — granted to you this "
+                    f"turn, and the operator has said he does not want to be "
+                    f"asked before you take a note. Save it now and say in "
+                    f"one short line what you saved. Note that the "
+                    f"qualification in brackets is real: replacing one of his "
+                    f"existing notes, or writing a skill, is still his "
+                    f"decision and you must still ask about those. Your "
+                    f"previous draft was discarded and NOT shown — write the "
+                    f"whole reply again, do not continue it.")})
+                log.info("Write-deferral retry: agent=%s covered=%s round=%d",
+                         agent.get("name"), w_covered, round_no)
+                yield {"type": "activity", "kind": "write_deferral_retry",
+                       "name": agent.get("name", ""), "agent": agent.get("name"),
+                       "retract": len(retracted),
+                       "detail": (f"offered to remember instead of remembering "
+                                  f"— {w_covered[0]} needed no approval, "
+                                  f"asked again")}
                 continue
             break  # final answer reached
 
@@ -2961,6 +3045,33 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         # persist a reply the operator never sees until he reloads.
         if dispatch_depth == 0:
             yield {"type": "text", "text": floor}
+
+    # HOW LONG WAS THAT, AGAINST WHAT WAS ASKED? Measurement only — nothing
+    # reads this back and no reply is changed by it.
+    #
+    # Jeremy, 2026-08-05: her replies read like essays. Both her soul file
+    # ("a simple question gets a simple answer... no preamble, no caveats")
+    # and main's own prompt ("concise, warm, direct") already say otherwise
+    # and she ignored both — "and QUIC?", three words, drew ~350 and five
+    # bolded bullets. That is this codebase's governing rule turned on its
+    # author, so the answer is not a sixth sentence about brevity.
+    #
+    # But a forced rewrite is a bigger lever than the rest of the guard
+    # family: those fire on FAULTS, and this one would fire on ordinary good
+    # answers. So it measures first and he sets the threshold from his own
+    # traffic — the "measured, not declared" trade he has asked for before.
+    # `structure_asked` is here because it is the obvious confound: a reply
+    # is allowed to be long when a list or a comparison is what was wanted.
+    if dispatch_depth == 0 and settings_store.get("observability.measure_reply_shape"):
+        try:
+            async with trace.span("stage", "reply_shape") as sh:
+                sh["reply_words"] = len(final_text.split())
+                sh["question_words"] = len(str(query or "").split())
+                sh["tools_called"] = len(called_names)
+                sh["structure_asked"] = bool(_STRUCTURE_ASKED.search(str(query or "")))
+                sh["bullets"] = len(_BULLET_LINE.findall(final_text))
+        except Exception:  # noqa: BLE001 — telemetry never breaks a turn
+            log.debug("reply_shape span failed", exc_info=True)
 
     yield {"type": "final", "text": final_text}
 

@@ -111,6 +111,33 @@ async def _search_memory(args, ctx):
     return _j(result)
 
 
+def _write_memory_unattended(args: dict) -> bool:
+    """Is THIS write one she may make without asking? (2026-08-05, Jeremy)
+
+    "Some of her writes should go unasked" — but not all of them, and the
+    shape decides, not the tool name. Two carve-outs, both because the
+    reversible-and-hers test fails:
+
+    - `item_id` WITHOUT append/prepend is a REPLACE. It overwrites a file
+      Jeremy may have hand-written (`data/memory/` is human-editable and he
+      edits it), and the previous text is gone. Appending to a running digest
+      is the shape this flag exists for; silently rewriting his note is not.
+      Sharper than it looks — see [files-explorer-lane]: `memory.write()` was
+      measured rewriting 94% of topics on what should have been a no-op.
+    - `type='skill'` is guidance OTHER AGENTS retrieve and follow, which is
+      nearer capability creation than note-taking. It stays a decision.
+
+    A predicate rather than a bool because the declaration has to live beside
+    the tool — registry.py must not learn what `item_id` means. `is_actor`
+    and `reads_only` both answer a name-shaped question; this one cannot.
+    """
+    if str(args.get("type") or "") == "skill":
+        return False
+    if args.get("item_id") and not (args.get("append") or args.get("prepend")):
+        return False
+    return True
+
+
 async def _write_memory(args, ctx):
     content = args.get("content", "")
     if not content:
@@ -2096,6 +2123,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                         "where the newest day should read first).")},
         }, "required": ["content"]},
         "execute": _write_memory,
+        # WRITES, and still needs no operator decision — see
+        # `_write_memory_unattended` for which shapes qualify and why the
+        # other two do not. Deliberately NOT `reads_only`: that flag also
+        # drives `runner._PARALLEL_TOOLS`, and concurrent memory writes race
+        # each other over the same index.
+        "unattended": _write_memory_unattended,
+        "unattended_label": "new notes and appends, not skills or replacements",
+        "unattended_probe": {"type": "topic"},
     },
     "web_search": {
         "name": "web_search",
@@ -2141,6 +2176,12 @@ BUILTIN_TOOLS: dict[str, dict] = {
                       "description": "Re-ingest even if this media_key is already stored"},
         }, "required": ["url"]},
         "execute": _ingest_media,
+        # Reversible and hers: it dedupes mechanically, the transcript lands
+        # as a memory item he can delete, and migration 091 gave the queue a
+        # dismissal path. `follow_source` is deliberately NOT here — that one
+        # creates a RECURRING commitment that keeps pulling, which is a
+        # standing decision rather than one fetch.
+        "unattended": True,
     },
     "follow_source": {
         "name": "follow_source",
@@ -2267,6 +2308,11 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "description": "the job's id from diagnose"}},
             "required": ["job_id"]},
         "execute": _retry_ingest_job,
+        # Bounded by construction — ONE retry per job, enforced in the
+        # executor — so the worst case is one wasted fetch of work he already
+        # asked for. Asking permission to re-run a job that failed on a
+        # network blip is the friction this lane exists to remove.
+        "unattended": True,
     },
     "list_memory": {
         "name": "list_memory",
@@ -2801,6 +2847,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
                          "description": "e.g. 'he/him', 'she/her', 'they/them'"},
         }, "required": []},
         "execute": _remember_about_me,
+        # Non-destructive BY CONSTRUCTION: the executor fills gaps only and
+        # refuses anything not present in the speaker's own message. Stopping
+        # to ask "may I remember your name?" a sentence after being told it
+        # is the least human thing in the toolset.
+        #
+        # `remember_speaker` is NOT here for contrast: a voiceprint is
+        # biometric enrolment of a person, and that stays a decision.
+        "unattended": True,
     },
     "raise_recommendation": {
         "name": "raise_recommendation",

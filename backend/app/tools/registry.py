@@ -671,12 +671,68 @@ def reads_only(name: str, args: Optional[dict] = None,
     return str(spec2.get("method", "GET")).upper() == "GET"
 
 
+# The safe arg shape for a tool whose freedom is CONDITIONAL on its args —
+# the `_READ_PROBE` idea, extended past reads. Declared beside the tool.
+_UNATTENDED_PROBE = {n: s["unattended_probe"]
+                     for n, s in BUILTIN_TOOLS.items()
+                     if isinstance(s, dict) and s.get("unattended_probe")}
+
+
+def _declared_unattended(name: str, args: Optional[dict]) -> bool:
+    """Does this exact call WRITE something that still needs no decision?
+
+    Jeremy, 2026-08-05: "some of her writes to go unasked". The line he and I
+    settled on is *reversible-and-hers vs irreversible-or-outward-facing* —
+    NOT read-vs-write, which is where `reads_only` stops.
+
+    Kept as a SEPARATE declaration from `reads_only` on purpose, and the
+    reason is mechanical rather than tidy: `reads_only` has three consumers
+    now (`unattended_tools`, `deferral`, `runner._PARALLEL_TOOLS`), and the
+    third one would read a write-flag as "safe to run concurrently with
+    anything". Two memory writes racing over one index is a different bug
+    than the one this lane is fixing.
+
+    Absent means False, exactly like `reads_only`, so a tool added tomorrow
+    never widens the set by itself. A callable declaration answers per-call,
+    for the tools where the ARGS decide (`write_memory` replacing vs
+    appending) — registry must never learn what `item_id` means.
+    """
+    spec = BUILTIN_TOOLS.get(name)
+    if not isinstance(spec, dict):
+        return False                     # MCP and DB tools: reads only
+    decl = spec.get("unattended")
+    if callable(decl):
+        try:
+            return bool(decl(args or {}))
+        except Exception:                # noqa: BLE001 — a reporter never throws
+            log.exception("unattended predicate failed for %s; treating as gated", name)
+            return False
+    return bool(decl)
+
+
+def needs_no_decision(name: str, args: Optional[dict] = None,
+                      db_tools: Optional[dict] = None,
+                      read_only_servers: Optional[set[str]] = None) -> bool:
+    """Reads, plus the writes the operator has said he does not want to see.
+
+    The union `unattended_tools` is built from. `reads_only` stays the
+    narrower, load-bearing question and is unchanged.
+    """
+    return (reads_only(name, args, db_tools, read_only_servers)
+            or _declared_unattended(name, args))
+
+
 async def unattended_tools(ctx: dict) -> dict[str, set[str]]:
     """Every call this turn may make with no operator decision:
     name -> its name tokens.
 
-    Read-only, granted AND LOADED, and refused by no gate as state stands
-    right now.
+    Read-only OR declared-unattended, granted AND LOADED, and refused by no
+    gate as state stands right now.
+
+    The gate walk still runs over the writes: `write_memory` is exactly what
+    the `protect-soul` rule blocks at `soul.md`, and an operator BLOCK rule
+    naming it has to win here too, or this set promises autonomy
+    `execute_tool` is about to refuse.
 
     No degraded filter: `ctx['granted']` is built from the LOADED toolset, so
     an unresolved grant is already absent. A loaded tool whose SERVICE is down
@@ -688,8 +744,8 @@ async def unattended_tools(ctx: dict) -> dict[str, set[str]]:
     ro = await _read_only_servers()
     out: dict[str, set[str]] = {}
     for name in sorted(ctx.get("granted") or ()):
-        args = _READ_PROBE.get(name)
-        if not reads_only(name, args, db_tools, ro):
+        args = _READ_PROBE.get(name) or _UNATTENDED_PROBE.get(name)
+        if not needs_no_decision(name, args, db_tools, ro):
             continue
         if await gate_refusing(name, args, ctx):
             continue
