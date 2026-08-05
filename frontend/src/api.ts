@@ -304,9 +304,14 @@ export async function getServerToken(): Promise<string> {
 export interface Activity {
   /** `degraded` = the turn ran, but something it needed was missing (memory
    *  unreadable, the reply not persisted). Pairs with the backend's
-   *  honest-receipts change; harmless if that half is not deployed. */
+   *  honest-receipts change; harmless if that half is not deployed.
+   *
+   *  This union is documentation, not a gate: streamChat casts the SSE
+   *  payload straight to this type, so a kind the backend adds tomorrow
+   *  reaches the renderer with no build error. What keeps the UI honest about
+   *  an unknown kind is activityLabel's default branch printing `detail`. */
   kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'capability' | 'agent_reply'
-      | 'degraded' | 'narration_retry';
+      | 'degraded' | 'narration_retry' | 'deferral_retry' | 'service_claim';
   name: string;
   agent?: string;
   detail?: string;
@@ -318,7 +323,12 @@ export interface Activity {
 }
 
 export type ChatEvent =
-  | { type: 'meta'; conversationId: string; model: string; traceId?: string }
+  /** Sent twice on a turn that reroutes: the opening frame carries all three
+   *  fields, and a mid-turn model fallback sends a second one carrying ONLY
+   *  the model it moved to. Every field is optional because that second frame
+   *  really does omit two of them — typing them as present is what made a
+   *  consumer overwrite the live trace id with undefined. */
+  | { type: 'meta'; conversationId?: string; model?: string; traceId?: string }
   | { type: 'text'; text: string }
   /** A dispatched specialist thinking out loud. Separate from 'text' on
    *  purpose: this is never spoken and never persisted — it exists so a
@@ -386,7 +396,8 @@ export async function* streamChat(message: string, conversationId?: string,
           continue;
         }
         if (parsed.meta) {
-          const meta = parsed.meta as { conversation_id: string; model: string; trace_id?: string };
+          const meta = parsed.meta as
+            { conversation_id?: string; model?: string; trace_id?: string };
           yield { type: 'meta', conversationId: meta.conversation_id, model: meta.model,
                   traceId: meta.trace_id };
         } else if (typeof parsed.t === 'string') {
@@ -582,10 +593,15 @@ export async function getTrace(id: string): Promise<TraceDetail> {
   return r.json();
 }
 
-/** Recent turns across all sources — chat, automations, compaction. */
+/** Recent turns across all sources — evals, chat, automations, compaction. */
 export interface TraceListItem {
   id: string;
-  source: 'chat' | 'automation' | 'compaction';
+  /** Hand-maintained against the CHECK constraint in migration 050, so it is
+   *  documentation and not a guarantee — the endpoint does not filter by
+   *  source, and a value missing from here reaches the UI as an unstyled
+   *  badge. Anything keyed by it needs a fallback. `eval` is the busiest of
+   *  the four by a wide margin (1625 rows against chat's 392). */
+  source: 'eval' | 'chat' | 'automation' | 'compaction';
   automation: string | null;
   model: string | null;
   status: string;
@@ -705,12 +721,6 @@ export async function getSystemAlerts(): Promise<{ active: MonitorAlert[]; recen
   return r.json();
 }
 
-export async function getMemoryStats(): Promise<Record<string, number>> {
-  const r = await apiFetch(`${API_URL}/api/v1/memory/stats`);
-  if (!r.ok) throw new Error('Failed to load memory stats');
-  return r.json();
-}
-
 export interface GraphNode {
   id: string;
   label: string;
@@ -764,6 +774,12 @@ export interface SettingDef {
   value: unknown;
   min?: number;
   max?: number;
+  /** Slider granularity, from the backend's own definition of the setting.
+   *  A count (max_dispatches_per_turn, tool_concurrency) declares step 1
+   *  there; without it the slider fell back to (max-min)/20 and offered 2.8
+   *  dispatches, which the backend int()s to 2 — and the stored default 3
+   *  was off the notch grid, so once dragged it could never be chosen again. */
+  step?: number;
   options?: string[];
   model_scope?: 'ollama' | 'any';
   allow_empty?: boolean;
@@ -2169,12 +2185,6 @@ export async function startCoderSession(body: {
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? 'Failed to start session');
-  return r.json();
-}
-
-export async function refreshCoderSession(id: string): Promise<CoderSession> {
-  const r = await apiFetch(`${API_URL}/api/v1/coder/sessions/${id}`);
-  if (!r.ok) throw new Error('Failed to load session');
   return r.json();
 }
 

@@ -158,16 +158,26 @@ export function SettingsTab({ only, exclude, types, untitled }:
       );
     }
     if (d.type === 'number' && d.min != null && d.max != null && d.max - d.min <= 20) {
+      // The backend declares the granularity for settings that have one — a
+      // count says step 1, and only then can the slider stop offering "2.8
+      // dispatches". Twenty notches stays the fallback and stays the ONLY
+      // one: inferring integrality from the range instead would hand step 1
+      // to voice.tts_speed (0.5–2.0), collapsing it to 0.5/1.5 and making the
+      // live value 1.025 unreachable. Same for the three voice thresholds.
+      const step = d.step ?? (d.max - d.min) / 20;
       return (
         <span className="shrink-0 flex items-center gap-2">
           <input
             type="range" min={d.min} max={d.max}
-            step={(d.max - d.min) / 20}
+            step={step}
             value={Number(d.value)}
             onChange={e => save(d.key, Number(e.target.value))}
             className="w-28 accent-teal-500"
           />
-          <span className="text-xs font-mono text-stone-400 w-8 text-right">{Number(d.value).toFixed(1)}</span>
+          {/* a whole-numbered step is a count: "3", not "3.0" */}
+          <span className="text-xs font-mono text-stone-400 w-8 text-right">
+            {Number(d.value).toFixed(Number.isInteger(step) ? 0 : 1)}
+          </span>
         </span>
       );
     }

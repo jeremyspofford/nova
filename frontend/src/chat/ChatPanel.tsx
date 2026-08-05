@@ -347,6 +347,38 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
         </div>
       );
     }
+    if (item.activity.kind === 'service_claim') {
+      // Third sibling of the two banners above: not work announced and never
+      // done, not an ability nothing provides — a FACT ABOUT THE STACK that
+      // no tool this turn established. Same amber weight, because the
+      // operator acts on "searxng is down" the same way whether or not
+      // anything was read.
+      //
+      // The tail says UNVERIFIED, not false — service_claims.correction()
+      // "retracts the BASIS, not the fact", and the detail already ends with
+      // "without calling any tool that reads service state", so repeating
+      // that here would spend the one line on nothing the operator can act
+      // on. The service may well be down; what is missing is a reading.
+      return (
+        <div key={item.id} className={`text-xs text-amber-300 bg-amber-950/40 border border-amber-800 rounded px-2.5 py-1.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
+          ⚠ {agentDisplayName(item.activity.name)} {item.activity.detail} — that
+          state is <b>unverified</b>, not disproved.
+        </div>
+      );
+    }
+    if (item.activity.kind === 'narration_retry' || item.activity.kind === 'deferral_retry') {
+      // The guard that made a paragraph of the answer disappear. `retract`
+      // unwinds the draft in send(), so without this line the operator
+      // watches text vanish and gets no reason for it — and the three
+      // retry/claim kinds used to fall through to displayName(name), which
+      // for a main-agent event renders the single word "Main".
+      return (
+        <div key={item.id} className={`text-xs text-stone-400 border-l-2 border-amber-800/70 pl-2 py-0.5 ${item.fromHistory ? 'opacity-75' : ''}`}>
+          ↺ {agentDisplayName(item.activity.name)} {item.activity.detail || 'was asked again'}.
+          The discarded draft is not part of the reply below.
+        </div>
+      );
+    }
     if (item.activity.kind === 'degraded') {
       // the turn ran, but without something it needed. Said out loud so a
       // confident answer written with no memory is distinguishable from a
@@ -489,9 +521,14 @@ const traceBlock = (group: ActivityItem[]) => (
   </details>
 );
 
+// service_claim joins its two siblings: a warning that an assertion about the
+// stack rested on nothing is worth exactly as much on a reloaded page as it
+// was live, and folding it into the collapsed "⚙ N agent actions" trail hides
+// it behind a click.
 const isTrail = (it: Item): it is ActivityItem =>
   it.kind === 'activity' && !!it.fromHistory
-  && it.activity.kind !== 'narration' && it.activity.kind !== 'capability';
+  && it.activity.kind !== 'narration' && it.activity.kind !== 'capability'
+  && it.activity.kind !== 'service_claim';
 
 function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
                        onConsent?: OnConsent, mobile?: boolean) {
@@ -549,7 +586,16 @@ const activityLabel = (a: Activity): string => {
     case 'dispatch': return `→ dispatching to ${agentDisplayName(a.name)}`;
     case 'tool_start': return `⚙ ${a.agent ? `${agentDisplayName(a.agent)}: ` : ''}${displayName(a.name)}…`;
     case 'tool_result': return `✓ ${displayName(a.name)}`;
-    default: return displayName(a.name);
+    // Every other kind — including ones this build has never heard of. The
+    // backend writes an explanatory sentence in `detail` for each of them
+    // (service_claim, narration_retry, deferral_retry all shipped with one);
+    // falling through to the agent's name rendered them as the bare word
+    // "Main". Deriving the line from `detail` means the next kind the backend
+    // adds explains itself here with nothing to update — and there is no
+    // compiler to catch it if it doesn't: streamChat casts untyped SSE JSON
+    // straight to Activity, so an unknown kind is a runtime value, never a
+    // build error.
+    default: return a.detail || displayName(a.name);
   }
 };
 
@@ -1958,7 +2004,15 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                                            opts?.speakerId,
                                            atts.map(a => a.storedId).filter((x): x is string => !!x))) {
         if (event.type === 'meta') {
-          liveTraceId = event.traceId ?? null;
+          // Keep the id we already have. A mid-turn model fallback sends a
+          // SECOND meta frame carrying only the model it rerouted to, and
+          // assigning `traceId ?? null` from that one wiped the live trace —
+          // so the finished bubble lost its duration chip and its way into
+          // the Turn Inspector on exactly the turn that had a model failure,
+          // the one most worth inspecting. Safe: the reroute restamps
+          // turn.model without changing turn.id, so there is never a second,
+          // different id to learn.
+          if (event.traceId) liveTraceId = event.traceId;
         } else if (event.type === 'text') {
           appendToAssistant(event.text);
           if (speakThisTurn) speaker.feed(event.text);
@@ -1998,7 +2052,12 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               it.id === assistantId && it.kind === 'msg'
                 ? { ...it, content: it.content.slice(0, Math.max(0, it.content.length - n)) }
                 : it));
-            speaker.cancel();   // don't finish speaking a retracted draft
+            // don't finish speaking a retracted draft — but discard(), never
+            // cancel(): the retry rewrites the whole answer on THIS stream,
+            // and cancel() is terminal until the next enable(), which only
+            // runs above the loop. Cancelling here left the rewritten answer
+            // — the honest one — with no audio at all.
+            speaker.discard();
           }
           if (event.activity.kind === 'tool_start') {
             liveTools++;

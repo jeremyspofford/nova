@@ -5,9 +5,10 @@
  * two fetches in flight) and play strictly in order through Web Audio.
  *
  * Controls: pause()/resume() (suspend the audio clock — step away mid-
- * reply), cancel() (interrupt, drop the rest), duck() (drop the volume
- * while someone talks over her). `onChange` reports {speaking, paused} so
- * the UI can show the right controls.
+ * reply), cancel() (interrupt, drop the rest — terminal), discard() (drop
+ * the current draft but stay armed for the rest of the turn), duck() (drop
+ * the volume while someone talks over her). `onChange` reports
+ * {speaking, paused} so the UI can show the right controls.
  *
  * `speaker.level()` exposes live output amplitude (0..1) — the energy
  * input the entity view will consume later (also on window.novaVoice).
@@ -330,7 +331,7 @@ class Speaker {
   /** Interrupt: stop speaking and drop everything queued or in flight.
    *  TERMINAL — feed() and flush() do nothing until the next enable(). */
   cancel() {
-    this.generation++;
+    this.drop();
     this.stopped = true;
     // leave the output at full volume for whatever speaks next: a barge-in
     // ducks first and cancels a moment later, and the duck must not outlive it
@@ -338,6 +339,41 @@ class Speaker {
       this.gain.gain.cancelScheduledValues(this.ctx.currentTime);
       this.gain.gain.setValueAtTime(1, this.ctx.currentTime);
     }
+    // a suspended clock would block the next turn's playback
+    if (this.ctx && this.paused) { void this.ctx.resume(); this.paused = false; }
+    this.emit();
+  }
+
+  /** Throw the draft she is speaking away, and keep speaking the same turn.
+   *
+   *  For the mid-turn guards that retract a draft — narration_retry and
+   *  deferral_retry make the model rewrite the WHOLE answer on the same
+   *  stream, so the deltas that follow still have to be spoken. Routing that
+   *  through cancel() cost the voice surface the entire answer: `stopped` is
+   *  cleared only by enable(), and the one enable() in ChatPanel's send()
+   *  runs before the stream loop, so every text event after a retry — and the
+   *  terminal flush() at the end of the turn — no-opped. A guard that exists
+   *  to make her more honest made her mute instead.
+   *
+   *  Deliberately NOT a gentler cancel(). `stopped` stays false, so this must
+   *  never serve an operator interrupt: the stop button cancels with no
+   *  abort, and a barge-in's abort propagates asynchronously, so either one
+   *  can be followed by more of the same stream. It also leaves `paused` and
+   *  the duck alone — those are decisions someone else made about this turn
+   *  (the transport buttons, the barge-in), and a retry is not consent to
+   *  undo them. */
+  discard() {
+    this.drop();
+    this.emit();
+  }
+
+  /** What both drops have in common: nothing buffered, queued, in flight or
+   *  decoded may survive, and the sequence counters restart with them. The
+   *  generation bump makes an in-flight decode land in the void, so leaving
+   *  seqToPlay pointing at one of those chunks would wedge playNext() on a
+   *  buffer that can no longer arrive. */
+  private drop() {
+    this.generation++;
     this.textBuffer = '';
     this.pending = [];
     this.leadGap = 0;
@@ -351,9 +387,6 @@ class Speaker {
       try { this.current.stop(); } catch { /* already ended */ }
       this.current = null;
     }
-    // a suspended clock would block the next turn's playback
-    if (this.ctx && this.paused) { void this.ctx.resume(); this.paused = false; }
-    this.emit();
   }
 
   /** Feed a streaming text delta; speaks as sentences complete. */
