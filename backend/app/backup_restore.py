@@ -169,12 +169,22 @@ def table_counts(dsn: str, *, psql: str = "psql") -> dict[str, int]:
 
 def verify_restore(bundle: Path, admin_dsn: str, *, live_dsn: str = "",
                    psql: str = "psql", pg_restore: str = "pg_restore",
-                   keep: bool = False) -> dict:
+                   keep: bool = False,
+                   migrations_dir: Optional[Path] = None) -> dict:
     """Restore a bundle into a THROWAWAY database and report what came back.
 
     `admin_dsn` connects to a maintenance database (postgres) so the scratch
     one can be created and dropped. The live database is never written to;
     `live_dsn`, if given, is only read for a row-count comparison.
+
+    `migrations_dir` runs `apply_bundle`'s migration gate against the same
+    staged ledger. It is optional only so a caller with no checkout to compare
+    against can still count rows; every real caller passes it, because a
+    pre-flight that can disagree with the thing it precedes is worse than
+    none. It disagreed: this function's docstring says it "proves the bundle
+    is restorable", it never asked the migration question at all, and on
+    2026-08-05 all 7 retained bundles passed here while `apply_bundle` refused
+    every one of them with "made by a NEWER version of Nova".
     """
     problems = verify(bundle)
     if problems:
@@ -213,6 +223,23 @@ def verify_restore(bundle: Path, admin_dsn: str, *, live_dsn: str = "",
                     f"pg_restore failed, so this bundle does NOT restore: "
                     f"{proc.stderr.strip()[:400]}")
 
+        # THE SAME QUESTION apply_bundle asks, of the same staged ledger.
+        # Reported rather than raised: this call is non-destructive and the
+        # row counts below are still worth having, so the operator gets both
+        # facts — "it restores" and "the real restore would refuse it" are
+        # different answers and he needs to see the second one here rather
+        # than discovering it with his database already gone.
+        if migrations_dir is not None:
+            from app import backup_apply
+            refusal, count = backup_apply.migration_gate(
+                scratch_dsn, migrations_dir, psql=psql)
+            result["migrations"] = count
+            result["migrations_ok"] = refusal is None
+            if refusal:
+                result["migration_refusal"] = refusal
+                log.warning("verify_restore: %s restores, but the migration "
+                            "gate would refuse it: %s", bundle.name, refusal)
+
         restored = table_counts(scratch_dsn, psql=psql)
         result["tables"] = len(restored)
         result["rows"] = sum(restored.values())
@@ -228,6 +255,14 @@ def verify_restore(bundle: Path, admin_dsn: str, *, live_dsn: str = "",
             result["restored_ok"] = not missing
         else:
             result["restored_ok"] = result["tables"] > 0
+        # AND the real restore has to be willing to run. `restored_ok` is the
+        # single boolean the Settings card renders as a green tick, and the
+        # operator reads that tick as "this bundle would get my data back". A
+        # bundle the migration gate refuses would not, so the tick has to go
+        # out with it — otherwise the pre-flight goes on reassuring him about
+        # exactly the bundles apply_bundle will not touch.
+        if result.get("migrations_ok") is False:
+            result["restored_ok"] = False
         return result
     finally:
         if not keep:

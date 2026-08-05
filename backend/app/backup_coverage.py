@@ -204,6 +204,16 @@ PATH_POLICY: dict[str, tuple[str, str]] = {
     # that matching them anywhere would repeat the `data` mistake above.
     "frontend/dist": (EXCLUDE_CODE,
                       "a build output; `npm run build` reproduces it"),
+    "backend/uv.lock": (
+        EXCLUDE_EPHEMERAL,
+        "a resolver lockfile. Gitignored here on purpose — the image installs "
+        "from pyproject.toml — so it is not EXCLUDE_CODE (nothing in git "
+        "restores it), and losing it costs a re-resolve rather than any state "
+        "the operator produced. Named because it REFUSED EVERY SCHEDULED "
+        "BACKUP from the day it was added to .gitignore (2026-08-04) until "
+        "2026-08-05: the coverage tripwire is working exactly as designed "
+        "when it does this, and the answer is to make the decision, not to "
+        "loosen the rule."),
     "frontend/public/mockups": (
         EXCLUDE_DECLINED,
         "design mockups served statically. Gitignored, and a real judgement "

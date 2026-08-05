@@ -27,7 +27,9 @@ warns:
    migrations this code has never seen, and letting it through means
    running against a schema from the future — refused. A bundle from an
    older app is fine: migrations run forward at startup, which is already
-   how this system works.
+   how this system works. A migration is matched by NAME OR BODY, because a
+   file that was renamed is not a file from the future — see
+   `check_migrations`, which had this install's entire backup set refused.
 
 THE MOUNT TRAP
 --------------
@@ -39,9 +41,9 @@ the previous contents are moved aside into a timestamped directory rather
 than deleted, so a half-finished restore is recoverable by hand.
 """
 
+import hashlib
 import json
 import logging
-import re
 import shutil
 import subprocess
 import tarfile
@@ -60,27 +62,83 @@ log = logging.getLogger(__name__)
 # has no undo beyond the snapshot taken in front of it.
 CONFIRM_PHRASE = "RESTORE AND OVERWRITE MY DATA"
 
-_MIGRATION_RE = re.compile(r"^(\d+)_")
+def _applied_migrations(dsn: str, *, psql: str = "psql"
+                        ) -> dict[str, Optional[str]]:
+    """The bundle's migration ledger: filename -> body checksum, or None.
+
+    None is not "missing", it is "unverified on purpose": db.py leaves the
+    checksum NULL on rows applied before the column existed, because hashing
+    them against their current text would bless whatever drift is already
+    there. Those rows can only ever be compared by name, which is why the
+    gate below keeps a filename path and does not require a hash.
+
+    Falls back to a name-only read for a bundle old enough to predate the
+    checksum column entirely — refusing to restore a bundle because its
+    ledger has fewer columns than today's would be the same class of bug this
+    whole function exists to close.
+    """
+    has_checksum = _psql(
+        dsn, "SELECT 1 FROM information_schema.columns "
+             " WHERE table_name = 'schema_migrations' "
+             "   AND column_name = 'checksum'", psql=psql).strip()
+    if not has_checksum:
+        out = _psql(dsn, "SELECT filename FROM schema_migrations", psql=psql)
+        return {line.strip(): None for line in out.splitlines() if line.strip()}
+    out = _psql(dsn, "SELECT filename, coalesce(checksum, '') "
+                     "  FROM schema_migrations", psql=psql)
+    rows: dict[str, Optional[str]] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        name, _, csum = line.partition("|")
+        rows[name.strip()] = csum.strip() or None
+    return rows
 
 
-def _applied_migrations(dsn: str, *, psql: str = "psql") -> set[str]:
-    out = _psql(dsn, "SELECT filename FROM schema_migrations", psql=psql)
-    return {line.strip() for line in out.splitlines() if line.strip()}
+def _known_migrations(migrations_dir: Path) -> dict[str, str]:
+    """Every migration file this checkout has: filename -> body checksum.
+
+    Hashed exactly as db.py hashes them when it writes the ledger, so the two
+    sides of the gate are comparing the same number.
+    """
+    return {p.name: hashlib.sha256(p.read_text().encode()).hexdigest()
+            for p in migrations_dir.glob("*.sql")}
 
 
-def _known_migrations(migrations_dir: Path) -> set[str]:
-    return {p.name for p in migrations_dir.glob("*.sql")}
-
-
-def check_migrations(bundle_migrations: set[str],
-                     known: set[str]) -> Optional[str]:
+def check_migrations(bundle_migrations, known) -> Optional[str]:
     """None if this checkout can safely carry the bundle's schema forward.
 
     Derived from the two live sets rather than from a version number written
     into the manifest, so it stays true when someone adds a migration and
     forgets to bump anything.
+
+    A bundle row is from the future only when NEITHER its filename NOR its
+    body checksum matches a file on disk. Filename alone was the whole test,
+    and it took disaster recovery out on this install: a migration renumbered
+    on 2026-08-04 left 087_eval_runs_gradeable.sql in the ledger with no file
+    of that name, so all 7 retained bundles were refused as "made by a NEWER
+    version of Nova" while the body they were worried about sat on disk under
+    the next number, byte for byte. Renaming a migration is not a version
+    bump, and the gate now says so.
+
+    Deliberately NOT compared on the numeric prefix: prefixes already collide
+    in this tree (two files are 088), so a prefix match would wave through a
+    genuinely newer migration that happened to reuse a number.
+
+    Both arguments accept either a mapping of filename -> checksum or a bare
+    set of filenames; a set reads as "no checksums known", which degrades to
+    the filename comparison rather than refusing.
     """
-    from_future = sorted(bundle_migrations - known)
+    bundle: dict[str, Optional[str]] = (
+        dict(bundle_migrations) if isinstance(bundle_migrations, dict)
+        else {name: None for name in bundle_migrations})
+    known_names = set(known)
+    known_hashes = (set(v for v in known.values() if v)
+                    if isinstance(known, dict) else set())
+    from_future = sorted(
+        name for name, checksum in bundle.items()
+        if name not in known_names
+        and not (checksum and checksum in known_hashes))
     if from_future:
         return (f"this bundle was made by a NEWER version of Nova: it "
                 f"contains {len(from_future)} migration(s) this checkout has "
@@ -89,6 +147,24 @@ def check_migrations(bundle_migrations: set[str],
                 f"put a schema from the future under older code. Update Nova "
                 f"first, then restore.")
     return None
+
+
+def migration_gate(staged_dsn: str, migrations_dir: Path, *,
+                   psql: str = "psql") -> tuple[Optional[str], int]:
+    """Run the migration gate against a bundle already staged in a database.
+
+    Returns the refusal (or None) and how many migrations the bundle's ledger
+    holds. Published as one call so the destructive restore and the
+    non-destructive proof-of-restore ask the same question of the same
+    ledger: `verify_restore` skipped this gate entirely, so an operator's
+    pre-flight passed on all 7 bundles that `apply_bundle` then refused. A
+    pre-flight that can disagree with the thing it precedes is worse than
+    none — it is where the confidence comes from.
+    """
+    bundle_migrations = _applied_migrations(staged_dsn, psql=psql)
+    return (check_migrations(bundle_migrations,
+                             _known_migrations(migrations_dir)),
+            len(bundle_migrations))
 
 
 def apply_bundle(bundle: Path, *, admin_dsn: str, target_db: str,
@@ -164,10 +240,8 @@ def apply_bundle(bundle: Path, *, admin_dsn: str, target_db: str,
                 raise RestoreRefused(
                     f"the bundle failed to restore into a staging database, "
                     f"so nothing was touched: {proc.stderr.strip()[:300]}")
-            bundle_migrations = _applied_migrations(
-                _dsn_for(admin_dsn, staging), psql=psql)
-            refusal = check_migrations(bundle_migrations,
-                                       _known_migrations(migrations_dir))
+            refusal, migration_count = migration_gate(
+                _dsn_for(admin_dsn, staging), migrations_dir, psql=psql)
             if refusal:
                 raise RestoreRefused(refusal)
 
@@ -181,7 +255,7 @@ def apply_bundle(bundle: Path, *, admin_dsn: str, target_db: str,
                     "safety_snapshot": safety["path"],
                     "files_replaced": sorted(file_targets),
                     "previous_files_kept_at": moved,
-                    "migrations_in_bundle": len(bundle_migrations)}
+                    "migrations_in_bundle": migration_count}
     except Exception:
         # staging is only dropped on the FAILURE path; on success it has been
         # renamed into place and no longer exists under this name

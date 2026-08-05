@@ -12,6 +12,7 @@ here would put a second opinion in front of controls that are supposed to be
 the only one.
 """
 
+import datetime as dt
 import logging
 import os
 from pathlib import Path
@@ -223,10 +224,131 @@ async def record_attempt(outcome: str, *, reason: Optional[str] = None,
     return news
 
 
+# ── is this still HAPPENING? ────────────────────────────────────────────────
+#
+# Every other backup control asks whether a bundle is good. None of them asks
+# whether one was made, and that is the failure nothing on this stack could
+# see: `failures.census` counts rows, and the three ways backups stop —
+# backups.every_hours at 0, an unmounted bundle store (the store_available
+# early return), a scheduler that is not ticking — all write ZERO rows. An
+# empty `backup_attempts` and a healthy one are the same answer to count(*).
+# So this asks max(at) against the interval instead.
+
+# How late a backup may be before "late" means "stopped". The scheduler ticks
+# every 60s and decides due-ness from the attempt history, so a backup becomes
+# due and is attempted inside a minute; an hour of slack is sixty ticks. Past
+# that it is not a backup running late, it is a loop that is not running.
+_STALE_GRACE_H = 1.0
+
+
+def _verdict(*, every_hours: float, age_hours: Optional[float],
+             outcome: Optional[str]) -> dict:
+    """Whether backups are still happening, from three numbers.
+
+    Pure, so the rule is testable without a backup history and without waiting
+    a day for one to go stale. Returns {stale, alarm, headline, note}:
+    `headline` is timings and outcome words only, because it is what
+    `failures._backup_clause` puts in a system prompt and a refusal quotes
+    paths; `note` is the fuller sentence for diagnose.
+
+    It answers ONE question and not the neighbouring ones. It does not say
+    whether the newest bundle restores — that is verify_restore's job and this
+    cannot know it — and it does not treat an interval of 0 as a failure: the
+    operator turning backups off is a decision, the same reason the census
+    does not count rows in a disabled MCP server. It is stated, not alarmed.
+    """
+    if every_hours <= 0:
+        return {"stale": False, "alarm": False, "headline": "",
+                "note": ("Automatic backups are OFF (backups.every_hours is "
+                         "0). Nothing is scheduled, so nothing will ever "
+                         "report a backup failure — an empty attempt history "
+                         "here means none was tried, never that all is "
+                         "well.")}
+    every = f"{every_hours:g}"
+    if age_hours is None:
+        return {"stale": True, "alarm": True,
+                "headline": (f"no backup has ever been attempted, though one "
+                             f"is scheduled every {every}h"),
+                "note": (f"No backup attempt has ever been recorded, and one "
+                         f"is scheduled every {every}h. Every path that ends "
+                         f"without a bundle still writes an attempt row — a "
+                         f"refusal, a crash, an unmounted store — so no rows "
+                         f"at all means the scheduler is not reaching the "
+                         f"backup step, or its history cannot be read. It "
+                         f"does not mean backups are fine.")}
+    ago = f"{age_hours:.0f}" if age_hours >= 1 else f"{age_hours:.1f}"
+    ended = outcome or "unknown"
+    if age_hours > every_hours + _STALE_GRACE_H:
+        return {"stale": True, "alarm": True,
+                "headline": (f"the last attempt was {ago}h ago and one is due "
+                             f"every {every}h"),
+                "note": (f"The last backup attempt was {ago}h ago and one is "
+                         f"due every {every}h, so attempts have stopped "
+                         f"rather than run late — the scheduler retries every "
+                         f"60s once a backup is due. That last attempt ended "
+                         f"'{ended}'.")}
+    if ended != "ok":
+        return {"stale": False, "alarm": True,
+                "headline": (f"the last attempt, {ago}h ago, ended '{ended}' "
+                             f"— no bundle was written"),
+                "note": (f"Backups are running on schedule but the last one, "
+                         f"{ago}h ago, ended '{ended}' and wrote no bundle. "
+                         f"The reason is in this report; retention never "
+                         f"deletes an old bundle for a run that did not "
+                         f"produce a new one, so nothing has been lost yet.")}
+    return {"stale": False, "alarm": False, "headline": "",
+            "note": (f"The last backup succeeded {ago}h ago and one is taken "
+                     f"every {every}h. That the bundle exists is not proof it "
+                     f"restores — verify_restore is what proves that.")}
+
+
+async def freshness() -> dict:
+    """The freshness verdict plus the facts it was computed from.
+
+    Reads the interval from live settings and the newest attempt from the
+    history, so it is right about a schedule that changed a minute ago.
+
+    Errs toward the alarm: `last_attempt` returns None both when nothing has
+    ever been attempted and when the history could not be read, and both
+    answers come back here as stale. A backup story that cannot be read is not
+    a backup story that is fine, which is the same rule failures.py applies to
+    a store it cannot scan.
+    """
+    from app import redact
+    hours = float(settings_store.get("backups.every_hours") or 0)
+    last = await last_attempt() or {}
+    age = None
+    if last.get("at"):
+        age = (dt.datetime.now(dt.timezone.utc)
+               - last["at"]).total_seconds() / 3600.0
+    out = _verdict(every_hours=hours, age_hours=age,
+                   outcome=last.get("outcome"))
+    reason = last.get("reason")
+    out.update({
+        "every_hours": hours,
+        "at": str(last["at"])[:19] if last.get("at") else None,
+        "age_hours": round(age, 1) if age is not None else None,
+        "outcome": last.get("outcome"),
+        "bundle": last.get("bundle"),
+        # A refusal quotes paths off this machine and a crash quotes a
+        # traceback line; both go to a model from here, so both go through
+        # redact first.
+        "reason": redact.scrub_text(reason)[:300] if reason else None,
+    })
+    return out
+
+
 async def verify_restore(name: str) -> dict:
     """Prove a bundle restores, into a throwaway database. Non-destructive."""
     from app import backup_restore as br
     target = BACKUP_DIR / name
     if not target.exists() or target.parent != BACKUP_DIR:
         raise br.RestoreRefused(f"no bundle named {name!r}")
-    return br.verify_restore(target, dsn("postgres"), live_dsn=dsn())
+    # The migrations THIS CHECKOUT has, so the proof asks the same question
+    # apply_bundle will ask. Derived from the package rather than configured:
+    # the directory the running backend migrates from is the only honest
+    # comparison, and a settable path could be pointed somewhere that made a
+    # doomed bundle look fine.
+    from app.db import MIGRATIONS_DIR
+    return br.verify_restore(target, dsn("postgres"), live_dsn=dsn(),
+                             migrations_dir=MIGRATIONS_DIR)

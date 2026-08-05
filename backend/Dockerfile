@@ -8,8 +8,38 @@ WORKDIR /app/backend
 # handed us and make no network call of their own — the property that decides
 # where extraction lives (see doc_extract.py). eng only; more languages are
 # `tesseract-ocr-<lang>` and a settings change away.
+# THE POSTGRES CLIENT MUST MATCH THE SERVER, and `postgresql-client` does not
+# mean that — it means "whatever Debian ships", which on trixie is 17 while
+# docker-compose.yml pins postgres:16-alpine. That mismatch broke disaster
+# recovery outright and silently: pg_dump 17 writes `SET transaction_timeout
+# = 0;` into every dump's header, PG16 has no such parameter, and pg_restore
+# stops on it. Measured 2026-08-05 against the newest bundle:
+#
+#   pg_restore: error: could not execute query: ERROR:  unrecognized
+#   configuration parameter "transaction_timeout"
+#
+# Every bundle on the install was unrestorable — a second, independent reason
+# on top of the migration-ledger one that migration 087's tombstone records.
+# Both were invisible because nothing ever restored a bundle: the backups were
+# green, verified their own checksums, and could not be put back.
+#
+# Debian trixie carries only 17, so the version comes from PGDG. It is a build
+# ARG rather than a literal so it has ONE source of truth with the compose
+# file, and tests/test_pg_client_version.py fails if the two ever disagree —
+# the day someone bumps the server image, the build that would have gone on
+# producing unrestorable dumps goes red instead.
+ARG PG_MAJOR=16
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl git tesseract-ocr poppler-utils postgresql-client \
+        curl git tesseract-ocr poppler-utils ca-certificates gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .

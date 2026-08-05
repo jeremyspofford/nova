@@ -1,0 +1,30 @@
+-- TOMBSTONE. This migration is deliberately empty; it has no body to run.
+--
+-- On 2026-08-04 this file was written as 087_eval_runs_gradeable.sql, applied
+-- at 16:22, then renumbered to 088_eval_runs_gradeable.sql to get out of the
+-- way of 087_action_preflight.sql — and applied again, unchanged, at 16:26.
+-- Migrations were identified by BARE FILENAME, so the rename read as a new
+-- migration: the body re-ran (harmlessly — it is ADD COLUMN IF NOT EXISTS)
+-- and the ledger kept BOTH rows, byte-identical at checksum 5fe4c904b8b8.
+--
+-- The orphan row was not harmless. `backup_apply.check_migrations` asks
+-- whether a bundle's ledger names a migration this checkout does not have,
+-- and a row with no file on disk answers yes forever. All 7 retained bundles
+-- were refused with "this bundle was made by a NEWER version of Nova …
+-- Update Nova first, then restore" — disaster recovery, off, silently, on an
+-- install whose backups were otherwise green. Deleting the row from the live
+-- database would not have helped: every bundle carries its own copy of the
+-- ledger inside its pg_dump, so the refusal is baked into the bundles.
+--
+-- Restoring the filename on disk is what un-refuses them. It stays empty
+-- because the schema change it once carried is already applied, under the
+-- other number, on every database that has this file — running it again
+-- would say the same thing twice. `db.has_statements` recognises a
+-- comments-only body: it is recorded in the ledger and never sent to the
+-- server (asyncpg raises AttributeError, not a SQL error, on a statement-free
+-- query), and its checksum differing from the row applied in 2026-08-04 is
+-- not reported as drift, because a body that executes nothing cannot have
+-- moved the schema.
+--
+-- The actual column lives in 088_eval_runs_gradeable.sql. Do not renumber
+-- either of them: renumbering an applied migration is what caused this.
