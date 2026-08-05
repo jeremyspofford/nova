@@ -2404,6 +2404,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             {/* the surfaces you drill into */}
             <div className="border-t border-stone-800/80">
               <NavList>
+                <NavRow label="Vault" note="Her notes, their links and their tags"
+                  onClick={() => { setDrawerOpen(false); navigate('/vault'); }} />
                 <NavRow label="Library" note="Her agents, models, tools, rules and files"
                   onClick={() => { setDrawerOpen(false); navigate('/library'); }} />
                 <NavRow label="Activity" note="What she is ingesting in the background"
