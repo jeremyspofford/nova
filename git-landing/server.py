@@ -53,6 +53,67 @@ _BRANCH_OK = re.compile(r"^nova/[a-z0-9][a-z0-9._-]{0,60}$")
 _lock = threading.Lock()
 
 
+def _serve_repo_readonly() -> None:
+    """Serve the operator's repo, read-only, on the compose network.
+
+    THE BLOCKER THIS FIXES, found by running phase 4 end to end. The coding
+    agent's workspace pointed at `https://github.com/jeremyspofford/nova.git`,
+    so it cloned GITHUB — while Jeremy's actual repository was three commits
+    ahead and unpushed. Asked to edit a file created that day, the agent got a
+    clone that did not contain it, changed nothing, and finished `done` with
+    no commit. That is the worst shape a failure can take: it looks like
+    success.
+
+    So she clones from HERE, and "her code is written against his real HEAD"
+    becomes true by construction rather than by remembering to push.
+
+    READ-ONLY, and not by convention. `git daemon` does not enable
+    `receive-pack` unless told to, and it is not told to — nothing can push
+    into his repository through this port. Landing still goes through `/land`,
+    which creates a branch and applies a patch under the refusals above.
+
+    Bound to the compose network only: the service publishes no ports, exactly
+    like `inference-control`. `--export-all` because the alternative is a
+    marker file inside his `.git`, and writing into `.git` to enable a
+    read-only feature is the wrong trade.
+    """
+    import socket
+    import time
+    try:
+        proc = subprocess.Popen(
+            # NO --base-path. With one, a client asking for `/repo` resolves
+            # to `//repo` and the daemon answers "no such repository" — and
+            # the doubled slash also defeats the `safe.directory` entry for
+            # the exact path. Without it the client path is used as given and
+            # matches the whitelist argument below, which is the only
+            # repository this daemon will ever serve.
+            ["git", "daemon", "--reuseaddr", "--export-all",
+             "--informative-errors", REPO],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except Exception as e:                       # noqa: BLE001
+        log.warning("could not start git daemon (non-fatal): %s", e)
+        return
+
+    # VERIFY IT IS LISTENING before saying so. Popen succeeds whenever the
+    # BINARY runs, and `git daemon` is a separate alpine package — without it
+    # git exits immediately with "not a git command" while this function
+    # logged "serving read-only on :9418". A startup line that reports success
+    # it did not check is the same defect this codebase keeps finding in the
+    # model, and it is no more acceptable here.
+    for _ in range(20):
+        if proc.poll() is not None:
+            err = (proc.stderr.read() or b"").decode()[-200:].strip()
+            log.warning("git daemon exited immediately (non-fatal): %s", err)
+            return
+        try:
+            with socket.create_connection(("127.0.0.1", 9418), timeout=0.5):
+                log.info("git daemon serving %s read-only on :9418", REPO)
+                return
+        except OSError:
+            time.sleep(0.25)
+    log.warning("git daemon did not start listening on :9418 (non-fatal)")
+
+
 def _trust_repo() -> None:
     """Tell git this bind-mounted repo is safe to operate on.
 
@@ -63,8 +124,20 @@ def _trust_repo() -> None:
     container relies on, because the boundary here is that only ONE directory
     is mounted and only three verbs exist.
     """
-    subprocess.run(["git", "config", "--global", "--add", "safe.directory", REPO],
-                   capture_output=True, text=True, timeout=30)
+    for path in (REPO, "*"):
+        # `*` as well as the exact path, because `git daemon` resolves the
+        # same repository under a different string (`--base-path=/` plus
+        # `/repo` gives `//repo/.git`) and refuses it again. Enumerating the
+        # spellings would be a list that breaks the next time a path is
+        # composed differently.
+        #
+        # Safe HERE and nowhere else: this container mounts exactly one
+        # directory and its whole API is three verbs over the compose network.
+        # The boundary is what is reachable, not which paths git will consent
+        # to read.
+        subprocess.run(["git", "config", "--global", "--add",
+                        "safe.directory", path],
+                       capture_output=True, text=True, timeout=30)
 
 
 def _git(*args, check=True, cwd=REPO) -> str:
@@ -187,5 +260,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     _trust_repo()
+    _serve_repo_readonly()
     log.info("git-landing on :%d for %s", PORT, REPO)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

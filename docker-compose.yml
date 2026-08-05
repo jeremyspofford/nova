@@ -260,6 +260,15 @@ services:
     volumes:
       # The ONLY read-write mount of the repo anywhere in this stack.
       - .:/repo
+    # :9412 is the landing API; :9418 is `git daemon` serving the SAME repo
+    # READ-ONLY so the coding agent clones the operator's real HEAD instead of
+    # GitHub. Neither is published to the host — compose network only.
+    #
+    # Measured 2026-08-05: with the workspace pointed at GitHub, his local main
+    # was three commits ahead and unpushed, so the agent cloned a tree without
+    # the file it was asked to edit, changed nothing, and reported `done`. A
+    # silent no-op is the worst failure shape there is.
+    expose: ["9912", "9418"]
     restart: unless-stopped
 
   # stdio MCP server bridge (docs/plans/mcp-client.md, phase 4). Spawns

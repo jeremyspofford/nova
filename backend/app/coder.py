@@ -177,6 +177,14 @@ async def refresh(session_id: str) -> dict:
                   diffstat=b.get("diffstat") or None, error=b.get("error"),
                   denials=json.dumps(b.get("denials") or []),
                   commands=json.dumps(b.get("commands") or []))
+    # CAPTURE THE PATCH THE MOMENT IT EXISTS, because the broker keeps its
+    # sessions in a process-local dict and a restart empties it. Three
+    # genuinely finished sessions were found unlandable that way — commit and
+    # diffstat recorded here, patch unreachable. A change she wrote on Tuesday
+    # has to still be landable on Thursday.
+    if b.get("state") in TERMINAL and b.get("commit") and not row["patch"]:
+        await _capture_patch(row["id"], row["broker_session_id"])
+
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM coding_sessions WHERE id = $1", row["id"])
@@ -257,6 +265,45 @@ async def _update(sid, **fields):
             sid, *fields.values())
 
 
+# A reviewable diff is kilobytes. Anything past this is not a change someone
+# is going to read on a card, and half a patch is not a patch — so an
+# oversized one is REFUSED at capture rather than truncated, which would fail
+# confusingly inside `git am` instead of clearly here.
+_PATCH_MAX = 2_000_000
+
+
+async def _capture_patch(row_id, broker_session_id: str) -> None:
+    """Store a finished session's patch on its row. Never raises.
+
+    Best-effort by design: a capture that fails leaves `patch` NULL and
+    `coder.patch()` falls back to asking the broker, which is exactly the
+    behaviour that existed before this column. It can only add durability,
+    never remove it.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            r = await client.get(
+                f"{settings.coder_url}/session/{broker_session_id}/patch",
+                headers=_auth())
+        if r.status_code != 200:
+            return
+        text = (r.json() or {}).get("patch") or ""
+        if not text.strip():
+            return
+        if len(text) > _PATCH_MAX:
+            log.warning("session %s patch is %d bytes; not captured",
+                        row_id, len(text))
+            return
+        async with db.acquire() as conn:
+            await conn.execute(
+                "UPDATE coding_sessions SET patch = $2, "
+                "patch_captured_at = now(), updated_at = now() WHERE id = $1",
+                row_id, text)
+        log.info("captured %d-byte patch for session %s", len(text), row_id)
+    except Exception:                                    # noqa: BLE001
+        log.exception("could not capture the patch for session %s", row_id)
+
+
 async def patch(session_id: str) -> dict:
     """The session's work as a patch, fetched from the broker.
 
@@ -270,10 +317,18 @@ async def patch(session_id: str) -> dict:
         return {"status": "error", "detail": "the coder sidecar is not configured"}
     async with db.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, broker_session_id, state, branch, commit_sha, task "
-            "FROM coding_sessions WHERE id = $1::uuid", session_id)
+            "SELECT id, broker_session_id, state, branch, commit_sha, task, "
+            "patch FROM coding_sessions WHERE id = $1::uuid", session_id)
     if row is None:
         return {"status": "error", "detail": f"no coding session {session_id}"}
+
+    # THE STORED COPY FIRST. It was captured when the session finished, so it
+    # survives the broker restart that made three real sessions unlandable.
+    if (row["patch"] or "").strip():
+        return {"status": "ok", "session_id": str(row["id"]),
+                "task": row["task"], "branch": row["branch"] or "",
+                "commit": row["commit_sha"] or "", "diffstat": "",
+                "patch": row["patch"], "source": "stored"}
     if not row["broker_session_id"]:
         return {"status": "error",
                 "detail": "that session never reached the broker"}
@@ -289,15 +344,35 @@ async def patch(session_id: str) -> dict:
     except httpx.HTTPError as e:
         return {"status": "error", "detail": f"the coder sidecar is unreachable: {e}"}
     if r.status_code == 404:
-        # The broker keeps sessions in memory; a restart forgets them. That is
-        # an outcome to report, not a gap to paper over — the branch still
-        # exists in the clone, so this is recoverable by re-running, and
-        # saying so beats a generic failure.
+        # TWO DIFFERENT 404s, and telling them apart matters. FastAPI answers
+        # an unknown ROUTE with 404 exactly as it answers an unknown session,
+        # so the first version of this message blamed "the broker restarted
+        # and forgot it" for a coder container that had simply never been
+        # rebuilt with the /patch endpoint — a confident, wrong diagnosis
+        # pointing at a restart that had not happened (uptime was four days).
+        #
+        # The session endpoint is the discriminator: if THAT resolves, the
+        # session is alive and it is the route that is missing.
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+                probe = await client.get(
+                    f"{settings.coder_url}/session/{row['broker_session_id']}",
+                    headers=_auth())
+            alive = probe.status_code == 200
+        except httpx.HTTPError:
+            alive = False
+        if alive:
+            return {"status": "error",
+                    "detail": ("the coder sidecar is running a build without "
+                               "the /patch endpoint — rebuild it: "
+                               "docker compose --profile coder build coder && "
+                               "docker compose --profile coder up -d coder")}
         return {"status": "error",
-                "detail": ("the broker no longer has that session (it restarts "
-                           "with an empty map). The work is not lost — the "
-                           "branch is still in the clone — but the patch has "
-                           "to come from a fresh run.")}
+                "detail": ("the broker no longer has that session (it keeps "
+                           "them in memory and restarts with an empty map). "
+                           "The work is not lost — the branch is still in the "
+                           "clone — but the patch has to come from a fresh "
+                           "run.")}
     if r.status_code != 200:
         return {"status": "error", "detail": _detail(r)}
     body = r.json()
