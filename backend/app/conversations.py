@@ -133,8 +133,8 @@ async def load_tool_activity(conversation_id: str, since: Optional[str],
         return []
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT content, tool_calls, created_at FROM (
-                 SELECT id, content, tool_calls, created_at FROM messages
+            """SELECT content, tool_calls, metadata, created_at FROM (
+                 SELECT id, content, tool_calls, metadata, created_at FROM messages
                  WHERE conversation_id = $1 AND role = 'tool'
                    -- only rows that record a CALL. 'narration_retry' and
                    -- friends are activity notes about the turn, and letting
@@ -164,8 +164,15 @@ async def load_tool_activity(conversation_id: str, since: Optional[str],
                 tc = json.loads(tc or "{}")
             except ValueError:
                 tc = {}
+        meta = r["metadata"]
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta or "{}")
+            except ValueError:
+                meta = {}
         out.append({"name": (tc or {}).get("name"), "kind": (tc or {}).get("kind"),
-                    "content": r["content"] or "", "created_at": str(r["created_at"])})
+                    "content": r["content"] or "", "created_at": str(r["created_at"]),
+                    "trace_id": (meta or {}).get("trace_id")})
     return out
 
 
@@ -189,7 +196,7 @@ def tool_activity_notes(history: list[dict], activity: list[dict]) -> dict[str, 
     """
     users = [m["created_at"] for m in history
              if m["role"] == "user" and m.get("created_at")]
-    if not users or not activity:
+    if not activity:
         return {}
     # AN OUTCOME COMES FROM A RESULT, NEVER FROM A CALL. `tool_start` rows
     # carry the ARGUMENTS as their content, and `{"action": "list"}` does not
@@ -209,13 +216,24 @@ def tool_activity_notes(history: list[dict], activity: list[dict]) -> dict[str, 
         name = a.get("name")
         if not name:
             continue
-        bucket = None
-        for u in users:
-            if u <= a["created_at"]:
-                bucket = u
-            else:
-                break
-        if bucket is None:
+        # BY TRACE WHEN THE ROW RECORDS ONE. Bucketing on "the last user
+        # message at or before this row" is a guess from clocks, and these
+        # rows are written fire-and-forget — so a tool row can still land
+        # after the next question even now that turns are serialized. It
+        # misfiled a whole turn live: the 18 tool rows from "You're supposed
+        # to configure it" were attributed to "Say ACK. One word.", which is
+        # what she would then be told that turn had run.
+        #
+        # Rows written before tool rows carried a trace_id keep the old
+        # behaviour — this is additive, and history cannot be restamped.
+        bucket = a.get("trace_id")
+        if not bucket:
+            for u in users:
+                if u <= a["created_at"]:
+                    bucket = u
+                else:
+                    break
+        if not bucket:
             continue
         if a.get("kind") == "tool_start":
             started.setdefault(bucket, []).append(name)
@@ -284,8 +302,20 @@ def to_llm_history(history: list[dict],
                                 "re-answer the earlier message unless they "
                                 "ask again.]"),
                 })
-        elif pending:
-            content = f"{content}\n\n{pending}"
+        else:
+            # The assistant row names its own turn, so prefer the note filed
+            # under that trace over the one guessed from the preceding user
+            # message's clock. Falls back for rows written before tool rows
+            # carried a trace_id.
+            meta = m.get("metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta or "{}")
+                except ValueError:
+                    meta = {}
+            note = notes.get((meta or {}).get("trace_id") or "") or pending
+            if note:
+                content = f"{content}\n\n{note}"
             pending = None
         out.append({"role": m["role"], "content": content})
     return out
