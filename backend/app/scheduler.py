@@ -11,7 +11,8 @@ import datetime as dt
 from pathlib import Path
 from datetime import datetime, timezone
 
-from app import automations, instances, retention, settings_store, sysmon, trace
+from app import (automations, bg, instances, retention, settings_store, sysmon,
+                 trace)
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.llm import router as llm_router
@@ -25,6 +26,39 @@ _running = asyncio.Lock()
 
 # NOTE: the backup interval used to live here as a module global and
 # measured uptime rather than time — see _maybe_backup and migration 089.
+
+
+async def _record_backup_failure(outcome: str, reason: str, *, title: str,
+                                 lead: str) -> None:
+    """Write down an attempt that produced no bundle, and say so ONCE.
+
+    Guarantees the two halves stay together on every failing path. Recording
+    is what `backup_service.freshness` and the operator's history read; the
+    notification is what reaches him when the app is closed. Splitting them is
+    how the crash branch came to record silently while a refusal on the same
+    tick shouted: a60d8d7 (2026-08-04) gave the refusal branch a `news` check
+    and a notify.send and gave the crash branch a bare record_attempt, so from
+    the moment the attempt history existed the louder outcome was the one
+    working as designed.
+
+    Quiet on a repeat, by the same mechanism as before: `record_attempt`
+    returns news only when the outcome or the reason CHANGED, so a standing
+    condition notifies once rather than every interval — 76 backend starts and
+    29 identical refusal notifications in the 24h of 2026-08-04 is what that
+    costs. It never raises: a backup that failed is not made worse by failing
+    to talk about it.
+    """
+    from app import backup_service
+    news = await backup_service.record_attempt(outcome, reason=reason)
+    if not news:
+        log.info("...same backup %s as last time; not notifying again", outcome)
+        return
+    try:
+        from app import notify
+        await notify.send(f"{lead}: {reason}"[:400], title=title,
+                          tags=["warning"])
+    except Exception:
+        log.exception("could not notify about the %s backup", outcome)
 
 
 async def _maybe_backup() -> None:
@@ -55,7 +89,17 @@ async def _maybe_backup() -> None:
 
     ok, why = backup_service.store_available()
     if not ok:
+        # Log-only was the whole problem. An unmounted bundle store stops
+        # backups happening and wrote NO attempt row, so the one condition
+        # that silences backups entirely was also the one condition no reader
+        # could see — docker logs are not a surface Nova or the operator has.
+        # Recorded as 'refused' because that is exactly what snapshot() raises
+        # for this same `why`, so a repeat dedupes against itself; recording it
+        # also puts the interval clock back in charge, instead of re-checking
+        # an unmounted directory every 60 seconds forever.
         log.warning("scheduled backup skipped: %s", why)
+        await _record_backup_failure("refused", why, title="Backup refused",
+                                     lead="Nova could not back up")
         return
     # Before asking for room, give back what a killed run is still holding.
     backup_service.sweep_partials()
@@ -70,20 +114,19 @@ async def _maybe_backup() -> None:
         # thing every interval is how he learns to dismiss the alert without
         # reading it, which costs the next, different refusal.
         log.error("scheduled backup REFUSED: %s", e)
-        news = await backup_service.record_attempt("refused", reason=str(e))
-        if news:
-            try:
-                from app import notify
-                await notify.send(f"Nova could not back up: {e}",
-                                  title="Backup refused", tags=["warning"])
-            except Exception:
-                log.exception("could not notify about the refused backup")
-        else:
-            log.info("...same refusal as last time; not notifying again")
+        await _record_backup_failure("refused", str(e), title="Backup refused",
+                                     lead="Nova could not back up")
         return
-    except Exception as e:  # noqa: BLE001 — recorded, then re-raised to the log
+    except Exception as e:  # noqa: BLE001 — recorded, told, then dropped
+        # An unexpected crash was the QUIETEST outcome here: the row was
+        # written and the operator was never told, so a refusal — a control
+        # working as designed — shouted while the snapshot code actually
+        # breaking said nothing. Same dedupe as a refusal, so a crash that
+        # repeats every interval still notifies once.
         log.exception("scheduled backup failed")
-        await backup_service.record_attempt("error", reason=str(e)[:500])
+        await _record_backup_failure("error", str(e)[:500],
+                                     title="Backup failed",
+                                     lead="Nova's scheduled backup crashed")
         return
     _prune_bundles()
 
@@ -141,6 +184,24 @@ async def run_one(automation: dict) -> tuple[bool, str]:
     return True, final.strip() or "(no report)"
 
 
+async def _tournament_night() -> None:
+    """The tournament, off the tick.
+
+    Re-asserts leadership itself. `tick()` checks `instances.is_leader()` once
+    and then everything below inherits that answer for a few milliseconds —
+    fine for work that finishes inside the tick, wrong for a job that can run
+    for six hours. A night that outlives its own leadership would have two
+    instances driving the same eval slot on a shared database.
+    """
+    if not instances.is_leader():
+        return
+    try:
+        from app import model_tournament
+        await model_tournament.maybe_run()
+    except Exception:  # noqa: BLE001 — a tournament never costs the tick
+        log.exception("model tournament failed")
+
+
 async def tick():
     # every instance reports its own hardware — sampling is never gated
     await sysmon.maybe_sample()
@@ -171,11 +232,17 @@ async def tick():
     # only ever RECORDS — no binding is swapped and no model is deleted, for
     # the reason in model_tournament's docstring: the same model has scored
     # 2/7 and 3/7 on consecutive runs of the same suite.
-    try:
-        from app import model_tournament
-        await model_tournament.maybe_run()
-    except Exception:  # noqa: BLE001 — a tournament never costs the tick
-        log.exception("model tournament failed")
+    # SPAWNED, never awaited. A night is six models with a 3600s ceiling each;
+    # awaited here it sat on the critical path of a 60-second heartbeat, and
+    # everything below this line — the entire automation body — never ran again
+    # for the life of the process. Measured 2026-08-05: 177 launches, zero
+    # finishes, and her followed sources unpolled the whole time. The comment
+    # above said "a tournament never costs the tick"; it cost the tick every
+    # tick. Migration 093 has the rest.
+    #
+    # `maybe_run` holds both halves of its own gate (an in-process lock and a
+    # durable attempt row), so spawning it once a tick is safe and idempotent.
+    bg.spawn(_tournament_night(), name="tournament-night")
     if not settings_store.get("automations.enabled"):
         return
     if _running.locked():

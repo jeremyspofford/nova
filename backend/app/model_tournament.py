@@ -29,6 +29,8 @@ glm-5.2 from FAILED into 3/3.
 
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 import logging
 import time
 from typing import Optional
@@ -40,7 +42,11 @@ log = logging.getLogger(__name__)
 # not move when nothing changed.
 DEFAULT_REPEAT = 3
 
-_last_run = 0.0
+# In-process single-flight. The DURABLE half of the gate is the
+# tournament_attempts row (migration 093); this only stops two ticks in one
+# backend overlapping, which the tick's own await used to prevent for free
+# before the night moved off it.
+_night = asyncio.Lock()
 
 
 async def _installed_local() -> list[str]:
@@ -271,29 +277,98 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
     }
 
 
-async def maybe_run() -> Optional[dict]:
-    """One tournament night, if one is due. Called from the scheduler tick.
+async def last_attempt() -> Optional[dict]:
+    """The most recent tournament night claimed, or None if there never was one.
 
-    Self-limiting the same way every other job in that tick is, and gated on
-    a setting so it can be turned off without editing code. Returns a summary
-    or None when nothing ran.
+    Read from the database rather than a module global, because the global
+    measured UPTIME. `time.monotonic()` on Linux is seconds-since-boot and a
+    fresh process starts the counter at 0.0, so on any box up longer than the
+    interval the gate opened on the FIRST tick after every restart. Under
+    `--reload` every source edit is a restart: 177 launches and zero finishes
+    in the 48h before this was written. Migration 093 has the measurements.
     """
-    global _last_run
+    from app import db
+    try:
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT at, outcome, suite, detail FROM tournament_attempts "
+                " ORDER BY at DESC LIMIT 1")
+    except Exception:  # noqa: BLE001 — a missing history is not a failed night
+        log.exception("could not read the tournament attempt history")
+        return None
+    return dict(row) if row else None
+
+
+async def _record_attempt(outcome: str, *, suite: Optional[str] = None,
+                          detail: Optional[str] = None) -> None:
+    """Write the night down. Best effort — a night that ran is not undone by
+    failing to record it — but see the caller: the CLAIM is checked, because a
+    claim that silently failed to persist would re-enter on the next tick."""
+    from app import db
+    async with db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO tournament_attempts (outcome, suite, detail) "
+            "VALUES ($1,$2,$3)", outcome, suite, detail)
+
+
+async def maybe_run() -> Optional[dict]:
+    """One tournament night, if one is due. Spawned OFF the scheduler tick.
+
+    Gated on a setting so it can be turned off without editing code. Returns a
+    summary or None when nothing ran.
+
+    NOT awaited by the tick any more. A night is six models with a 3600s
+    ceiling each, and it used to sit on the critical path of a 60-second
+    heartbeat: everything below it in `tick()` — the whole automation body —
+    never ran again for the life of the process. See migration 093.
+
+    Two guards, because they answer different questions. `_night` is
+    in-process and stops two ticks in ONE backend overlapping; the attempt row
+    is durable and stops a RESTART re-arming the interval. Neither substitutes
+    for the other.
+    """
     from app import eval_runs, settings_store
 
     every_hours = float(settings_store.get("evals.tournament_every_hours") or 0)
     if every_hours <= 0:
         return None                       # off, and off is the default
-    if time.monotonic() - _last_run < every_hours * 3600:
-        return None
-    # Claim the slot BEFORE the work, so a run that dies half way does not
-    # re-enter on the next tick and spend another hour of the box.
-    _last_run = time.monotonic()
+    if _night.locked():
+        return None                       # this process is already running one
 
-    pairing = await next_pairing()
-    if not pairing:
-        return None
-    suite, models = pairing
+    async with _night:
+        # DUE? Asked of the attempt history, not of a module global — the
+        # `_maybe_backup` pattern, for the reason migration 089 records.
+        last = await last_attempt()
+        if last and last.get("at"):
+            age = (dt.datetime.now(dt.timezone.utc) - last["at"]).total_seconds()
+            if age < every_hours * 3600:
+                return None
+
+        pairing = await next_pairing()
+        if not pairing:
+            # Still a claim. Nothing being due is a fact about tonight, and
+            # without recording it the gate reopens on the very next tick and
+            # re-asks a question whose answer has not changed.
+            await _record_attempt("nothing_due")
+            return None
+        suite, models = pairing
+
+        # Claim the slot BEFORE the work, so a night that dies half way does
+        # not re-enter on the next tick and spend another six hours of the
+        # box. Deliberately NOT best-effort: if this write fails the interval
+        # is unenforceable, and running anyway is how 177 launches happened.
+        try:
+            await _record_attempt("claimed", suite=suite)
+        except Exception:  # noqa: BLE001
+            log.exception("tournament: could not claim the night — not running")
+            return None
+        return await _run_night(suite, models, eval_runs, settings_store)
+
+
+async def _run_night(suite: str, models: list[str], eval_runs,
+                     settings_store) -> Optional[dict]:
+    """The night itself, once it has been claimed. Split out so the claim and
+    the work are separately readable — the claim is the control."""
     repeat = int(settings_store.get("evals.tournament_repeat") or DEFAULT_REPEAT)
 
     log.info("tournament: %s against %d local model(s), repeat=%d",
@@ -339,6 +414,14 @@ async def maybe_run() -> Optional[dict]:
         await _evict(model)
 
     summary = {"suite": suite, "repeat": repeat, "ran": done, "skipped": skipped}
+    # The night finished. Recorded so the history says what a claim bought —
+    # the claim row alone cannot tell "ran six" from "died on the first".
+    try:
+        await _record_attempt(
+            "ok", suite=suite,
+            detail=f"ran {len(done)}, skipped {len(skipped)}")
+    except Exception:  # noqa: BLE001 — bookkeeping never undoes work that ran
+        log.exception("tournament: could not record the finished night")
     log.info("tournament: finished %s — ran %d, skipped %d",
              suite, len(done), len(skipped))
 

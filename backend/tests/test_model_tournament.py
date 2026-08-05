@@ -362,7 +362,24 @@ def main() -> int:
         1 if k == "evals.tournament_every_hours"
         else 3 if k == "evals.tournament_repeat" else real_setting(k, *a, **kw))
     real_pairing, real_slot = mt.next_pairing, mt._await_slot
-    mt._last_run = 0.0
+    # FORCING A NIGHT DUE, the way the gate actually works now. This used to
+    # set `mt._last_run = 0.0`, a module global holding time.monotonic() — the
+    # very thing migration 093 removed, because monotonic() is seconds since
+    # BOOT and a fresh process starts the counter at zero, so on any box up
+    # longer than the interval the gate opened on the first tick after every
+    # restart. Measured 2026-08-05: 177 launches in 48h, zero finishes.
+    # Due-ness is now asked of the tournament_attempts ledger, so the stub is
+    # "there has never been a night" plus a recorder that writes nothing.
+    real_last, real_record = mt.last_attempt, mt._record_attempt
+
+    async def _no_history():
+        return None
+
+    async def _record(outcome, **kw):
+        recorded.append(outcome)
+
+    recorded: list = []
+    mt.last_attempt, mt._record_attempt = _no_history, _record
 
     async def _pairing():
         return ("alpha", ["ollama:a", "ollama:b", "ollama:c"])
@@ -379,11 +396,31 @@ def main() -> int:
               summary and len(summary["skipped"]) == 3
               and "run-that-never-let-go" in summary["skipped"][0],
               str(summary and summary["skipped"]))
+        # THE CLAIM IS WRITTEN BEFORE THE WORK, and a night that bought
+        # nothing still counts as spent. Both halves matter: without the
+        # first, a night that dies half way re-enters on the next tick and
+        # spends another six hours of the box; without the second, a run of
+        # held slots re-asks the same question every sixty seconds forever.
+        check("the night was claimed before any model was tried",
+              recorded and recorded[0] == "claimed", str(recorded))
+
+        # And the durable gate holds: with that claim now in the ledger, a
+        # second call inside the interval must do nothing at all. This is the
+        # property the module global could not express — it survived a
+        # restart only by accident of uptime, which is to say never.
+        import datetime as dt
+
+        async def _just_claimed():
+            return {"at": dt.datetime.now(dt.timezone.utc), "outcome": "claimed"}
+
+        mt.last_attempt = _just_claimed
+        check("a second call inside the interval is refused by the ledger",
+              asyncio.run(mt.maybe_run()) is None)
     finally:
         eval_runs.busy, eval_runs.start = real_busy, real_start
         mt.next_pairing, mt._await_slot = real_pairing, real_slot
+        mt.last_attempt, mt._record_attempt = real_last, real_record
         settings_store.get = real_setting
-        mt._last_run = 0.0
 
     print("8. off is the default, and off means nothing happens")
     from app import settings_store
