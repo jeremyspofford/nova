@@ -43,8 +43,9 @@ from typing import Any, Awaitable, Callable, Optional
 from pydantic import TypeAdapter, ValidationError
 
 from app import db
+from app.actions import home_assistant as _home_assistant
 from app.actions import mcp_server as _mcp_server
-from app.actions.schemas import ActionDoc, McpServerAdd
+from app.actions.schemas import ActionDoc, HomeAssistantDeploy, McpServerAdd
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,13 @@ class Spec:
     describe: Callable[[Any], str]
     preflight: Callable[..., Awaitable[tuple[str, str, Optional[list[dict]]]]]
     execute: Optional[Callable[..., Awaitable[dict]]] = None
+    # ...or an ordered list of named steps, which is the same thing made
+    # RESUMABLE (phase 3, `task_steps`). A step-based executor survives a
+    # restart at its cursor and may raise `NeedAnswer` to stop and ask the
+    # operator one thing in chat. `execute` stays for single-shot actions —
+    # `mcp_server.add` is genuinely one call and gains nothing from steps.
+    # Exactly one of the two is required; `is_executable` reads both.
+    steps: Optional[list] = None
 
 
 _TYPES: dict[str, Spec] = {
@@ -84,6 +92,20 @@ _TYPES: dict[str, Spec] = {
         describe=_mcp_server.describe,
         preflight=_mcp_server.preflight,
         execute=_mcp_server.execute,
+    ),
+    "home_assistant.deploy": Spec(
+        model=HomeAssistantDeploy,
+        # The route the operator presses himself. `assert_routes_exist()`
+        # resolves this at boot, which is what makes the executor legal:
+        # she reaches nothing here that he cannot already reach.
+        operator_route="home_assistant_control",
+        describe=_home_assistant.describe,
+        preflight=_home_assistant.preflight,
+        # STEPS, not a single execute: this one starts a service, waits
+        # minutes for it, configures it and then checks the operator can
+        # actually open it — and it may need one answer from him in the
+        # middle. See `task_steps` for the contract.
+        steps=_home_assistant.STEPS,
     ),
 }
 
@@ -140,7 +162,8 @@ def is_executable(raw: Any) -> bool:
         doc = parse(raw)
     except ValueError:
         return False
-    return _TYPES[doc.type].execute is not None
+    spec = _TYPES[doc.type]
+    return spec.execute is not None or bool(spec.steps)
 
 
 _ACTION_GUIDANCE = (
@@ -240,6 +263,53 @@ async def preflight(rec_id: str, *, operator: bool = False) -> Optional[dict]:
             rid, state, detail, json.dumps(tools) if tools is not None else None)
     log.info("Action preflight for %s: %s (%s)", rid, state, detail)
     return dict(row) if row else None
+
+
+def covered_by(text: str) -> Optional[tuple[str, str]]:
+    """(action type, its one-line description) when a registered executor
+    already does what `text` is asking for. None otherwise.
+
+    THE LAST MILE, and it is worth naming because the capability worked
+    without it. Home Assistant shipped with a compose service, a sidecar verb,
+    an operator route and a one-click card — and asked to get it running, she
+    proposed a `deploy_workload` goal for her Kubernetes namespace, twice.
+    Her reasoning was sound; that IS how she stands a service up. She simply
+    had no way to discover that this one already had a better route.
+
+    DERIVED FROM THE EXECUTORS. Each declares its own `COVERS` beside itself
+    (`home_assistant.COVERS`), so registering the next executor teaches this
+    function by existing. A keyword list here would be the copy that drifts —
+    the failure `scopes.py`'s whole docstring is about.
+
+    Absent `COVERS` means "matches nothing", so an executor never captures a
+    goal proposal by accident.
+    """
+    if not text:
+        return None
+    for name, spec in sorted(_TYPES.items()):
+        module = _MODULES.get(name)
+        pattern = getattr(module, "COVERS", None) if module else None
+        if pattern is not None and pattern.search(text):
+            return name, _COVER_HINTS.get(name, "")
+    return None
+
+
+# What to tell her instead, per type. Beside the registry rather than in the
+# tool, for the same reason `tool_schema()` is generated here.
+_COVER_HINTS = {
+    "home_assistant.deploy": (
+        "Home Assistant already has a one-click route: raise_recommendation "
+        "with action {\"type\": \"home_assistant.deploy\", \"why\": \"...\"}. "
+        "It runs as a compose service on the operator's own machine, which is "
+        "where it has to be — your Kubernetes namespace has no route to his "
+        "LAN, so devices there are unreachable. Approving the card starts it; "
+        "no goal and no deploy_workload are involved."),
+}
+
+_MODULES = {
+    "mcp_server.add": _mcp_server,
+    "home_assistant.deploy": _home_assistant,
+}
 
 
 def assert_routes_exist() -> None:

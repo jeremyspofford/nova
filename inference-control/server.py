@@ -23,9 +23,12 @@ GPU reservation block) are honored without duplicating config here.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -50,7 +53,15 @@ STATE_MODELS_FILE = os.environ.get("STATE_MODELS_FILE", "/state/models_dir")
 # from it, so a mismatch silently breaks background push. Empty = leave the
 # compose default.
 STATE_NTFY_BASE_URL_FILE = os.environ.get("STATE_NTFY_BASE_URL_FILE", "/state/ntfy_base_url")
+# Same handoff as the ntfy base-url: the backend owns the setting, writes it
+# to the shared /state volume, and this sidecar reads it fresh at each start.
+# The sidecar has no database and must never grow one.
+STATE_HOME_TZ_FILE = os.environ.get("STATE_HOME_TZ_FILE", "/state/home_timezone")
 PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
+# Absolute path to the repo ON THE HOST, so relative bind mounts in the
+# compose file resolve to the operator's real directories rather than to
+# paths inside this container. See _compose_cmd.
+HOST_ROOT = os.environ.get("NOVA_HOST_ROOT", "").strip()
 SERVICE = "ollama"                       # the toggle target (start/stop)
 OLLAMA_TARGET = "/root/.ollama"          # where ollama keeps its store
 PORT = 9911
@@ -114,7 +125,22 @@ def _compose_env() -> dict:
 
 
 def _compose_cmd(profile: str = "inference") -> list:
-    cmd = ["docker", "compose", "-f", COMPOSE_FILE]
+    # --project-directory, and it is load-bearing. Compose resolves RELATIVE
+    # bind mounts against the compose file's directory, which here is
+    # `/compose` INSIDE this container. Every service this sidecar started
+    # until 2026-08-05 used named volumes (ollama_models, ntfy_cache) so
+    # nothing noticed; Home Assistant is the first with a relative bind, and
+    # it came up mounted from `/compose/data/home-assistant` — a path in this
+    # container's own filesystem. Its entire configuration would have been
+    # deleted by the next `docker compose build inference-control`, silently,
+    # and the backend could never have read it.
+    #
+    # Pointing the project directory at the real host root makes `./data/...`
+    # in the compose file mean what it says in every other context.
+    cmd = ["docker", "compose"]
+    if HOST_ROOT:
+        cmd += ["--project-directory", HOST_ROOT]
+    cmd += ["-f", COMPOSE_FILE]
     if _use_gpu_file():
         cmd += ["-f", GPU_COMPOSE_FILE]
     if _use_models_file():
@@ -326,6 +352,137 @@ def _containers() -> dict:
     return {"containers": sorted(rows.values(), key=lambda r: r["service"] or r["name"])}
 
 
+def _service_names() -> set[str]:
+    """Every service in THIS compose project, from docker's own labels.
+
+    The closed set `_service_logs` validates against. Derived, never listed:
+    a service added to docker-compose.yml is readable the day it exists, and
+    nothing outside this project ever is.
+    """
+    proc = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={PROJECT}",
+         "--format", '{{.Label "com.docker.compose.service"}}'],
+        capture_output=True, text=True, timeout=10)
+    return {s.strip() for s in proc.stdout.splitlines() if s.strip()}
+
+
+def _service_logs(service: str, lines: int = 80) -> dict:
+    """Recent stdout/stderr of ONE service in this project. Read-only.
+
+    THE ONE PARAMETERIZED ENDPOINT HERE, and the exception is argued rather
+    than assumed. Every other verb on this socket-holding sidecar is fixed,
+    because a parameter plus a docker socket is a way to run anything. This
+    one takes a service name and is still safe for a reason that does not
+    depend on the caller being careful: the name is checked for membership in
+    the project's OWN service labels before it reaches a subprocess, so an
+    unknown value is a 404 and never an argument. `docker logs` reads; it
+    cannot start, stop or change anything.
+
+    It exists because Nova could not answer "why did that not come up".
+    `service_status` gives her container state and `workload_logs` covers her
+    Kubernetes pods, but the compose services this install is MADE of had no
+    log surface at all — so every diagnosis of a failed start was a human
+    reading `docker compose logs`, which is the exact failure Jeremy named on
+    2026-08-05: the capability gap gets papered over by a person and she stays
+    unable.
+    """
+    known = _service_names()
+    if service not in known:
+        return {"error": f"unknown service {service!r}",
+                "known": sorted(known)}
+    n = max(1, min(int(lines or 80), 400))
+    # `docker logs <container>`, not `docker compose logs <service>`: compose
+    # refuses a service whose PROFILE is not enabled, and every optional
+    # service here (home, notify, media, voice, coder) lives behind one — so
+    # the compose form fails on exactly the services most likely to need
+    # diagnosing. Resolve the container by label and read it directly.
+    ps = subprocess.run(
+        ["docker", "ps", "-a", "--filter",
+         f"label=com.docker.compose.project={PROJECT}", "--filter",
+         f"label=com.docker.compose.service={service}",
+         "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=10)
+    names = [x.strip() for x in ps.stdout.splitlines() if x.strip()]
+    if not names:
+        return {"service": service, "lines": n, "logs": "",
+                "note": "no container exists for this service yet"}
+    proc = subprocess.run(
+        ["docker", "logs", "--tail", str(n), names[0]],
+        capture_output=True, text=True, timeout=60)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return {"service": service, "container": names[0], "lines": n,
+            "logs": out[-20000:]}
+
+
+def _reachable(service: str) -> dict:
+    """Can this service actually be reached — locally, and from the tailnet?
+
+    "Is it running" and "can Jeremy open it on his phone" are different
+    questions, and the second is the one he asks. A container can be healthy
+    with no published port, or published and not served on the tailnet, or
+    served and answering 400 because the app refuses proxied requests — all
+    three happened on 2026-08-05 and every one was diagnosed by a human with
+    curl, which is the gap this closes.
+
+    `fetch_url` cannot answer it and must not learn how: `net_guard`
+    allow-lists globally routable addresses only, and CGNAT — 100.64.0.0/10,
+    exactly Tailscale's range — is excluded on purpose so the model cannot
+    reach tailnet peers. This asks about THIS INSTALL'S OWN services, by name,
+    from the closed set docker reports. It is not a URL fetcher and cannot be
+    turned into one.
+    """
+    known = _service_names()
+    if service not in known:
+        return {"error": f"unknown service {service!r}", "known": sorted(known)}
+
+    ports = subprocess.run(
+        ["docker", "ps", "--filter",
+         f"label=com.docker.compose.project={PROJECT}", "--filter",
+         f"label=com.docker.compose.service={service}",
+         "--format", "{{.Ports}}"],
+        capture_output=True, text=True, timeout=10).stdout.strip()
+    # "127.0.0.1:8123->8123/tcp" -> 8123. Only published ports are reachable
+    # from outside the compose network, which is what this is about.
+    host_ports = sorted({int(m) for m in re.findall(r":(\d+)->", ports)})
+
+    # urllib, not curl: this image is alpine + docker-cli and has no curl.
+    # An HTTP status of any kind answers the question — 200, 302 and 401 all
+    # mean something is listening and speaking HTTP, which is what "can it be
+    # reached" asks. Only a transport failure is unreachable.
+    local: list[dict] = []
+    for p in host_ports:
+        code, err = None, None
+        url = f"http://host.docker.internal:{p}/"
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                code = resp.status
+        except urllib.error.HTTPError as e:
+            code = e.code                    # reached it; it said no
+        except Exception as e:               # noqa: BLE001 — transport failure
+            err = f"{type(e).__name__}: {str(e)[:100]}"
+        local.append({"port": p, "url": url, "http_status": code, "error": err})
+
+    # ...and whether tailscale is serving it, which is the half that decides
+    # whether another device can see it at all.
+    served: list[str] = []
+    if _container_state("tailscale")["running"]:
+        try:
+            st = subprocess.run(
+                _compose_cmd("tailscale") + ["exec", "-T", "tailscale",
+                                             "tailscale", "serve", "status"],
+                capture_output=True, text=True, timeout=30).stdout
+            for line in st.splitlines():
+                if service in line or any(f":{p}" in line for p in host_ports):
+                    served.append(line.strip())
+        except Exception:                            # noqa: BLE001
+            served = []
+
+    return {"service": service, "published_ports": host_ports,
+            "local": local, "tailnet_routes": served,
+            "tailscale_running": _container_state("tailscale")["running"]}
+
+
 def _round1(v: float | None) -> float | None:
     return round(v, 2) if v is not None else None
 
@@ -423,6 +580,34 @@ def _expose_ntfy_route() -> None:
                     (proc.stderr or proc.stdout)[-200:].strip())
 
 
+def _expose_home_route() -> None:
+    """Apply the :8123 -> home-assistant tailnet route LIVE via the serve CLI.
+
+    Same path and same reasoning as `_expose_ntfy_route`: a `docker compose
+    exec`, NEVER a recreate, because this sidecar has no host .env and
+    recreating tailscale once wiped its serve config and tailnet auth.
+    Idempotent; the route also lives in serve.json for fresh starts.
+
+    Reaching it from another device is the whole point of running it here —
+    Jeremy, 2026-08-05: "I'm not at that device, I need to see things like
+    this from other devices." A published port bound to 127.0.0.1 is not an
+    answer to that on its own.
+    """
+    if not _container_state("tailscale")["running"]:
+        log.info("expose: tailscale down — :8123 route deferred to serve.json")
+        return
+    proc = subprocess.run(
+        _compose_cmd("tailscale") + ["exec", "-T", "tailscale", "tailscale",
+                                     "serve", "--bg", "--https=8123",
+                                     "http://home-assistant:8123"],
+        capture_output=True, text=True, timeout=30)
+    if proc.returncode == 0:
+        log.info("expose: :8123 -> home-assistant route applied live")
+    else:
+        log.warning("expose: :8123 failed (non-fatal): %s",
+                    (proc.stderr or proc.stdout)[-200:].strip())
+
+
 def _notify_status() -> dict:
     """State of the notification-reachability services: the self-hosted ntfy
     server, the tailscale node, and whether the :8443 route is actually served.
@@ -481,6 +666,87 @@ def _run_notify(verb: str):
         # serve CLI, never a recreate (see _expose_ntfy_route). Non-fatal.
         if verb == "notify_up":
             _expose_ntfy_route()
+        _op["error"] = None
+        log.info("%s: done", verb)
+    except Exception as e:
+        _op["error"] = str(e)[:400]
+        log.exception("%s crashed", verb)
+    finally:
+        _op["verb"] = None
+
+
+HOME_SERVICE = "home-assistant"          # the profile `home` toggle target
+
+
+def _home_timezone() -> str:
+    """Operator's Home Assistant timezone (Settings → Home, written by the
+    backend). Read fresh each start. Empty = keep the compose default."""
+    try:
+        with open(STATE_HOME_TZ_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _home_status() -> dict:
+    """State of the Home Assistant container. Read-only.
+
+    `url` is what the operator opens, and it is stated here rather than
+    derived in the backend so the port cannot drift from the compose block
+    this sidecar actually runs.
+    """
+    return {**_container_state(HOME_SERVICE),
+            "url": "http://127.0.0.1:8123",
+            "op": _op["verb"], "error": _op["error"]}
+
+
+def _run_home(verb: str):
+    """Fixed Home Assistant ops — nothing parameterized by the request.
+
+    ROADMAP #35. The service block lives in docker-compose.yml, reviewed and
+    in git; this only brings it up or stops it. That split is the whole
+    security argument for the feature (Jeremy, 2026-08-05, choosing typed
+    executors over letting Nova write compose YAML to the host): the sidecar
+    holds the docker socket, which is root-equivalent, so its API stays a
+    FIXED VERB LIST exactly as the compose comment above this container
+    promises. A `/profile/<name>/up` endpoint would have been one parameter
+    away from starting anything on the box.
+
+    So the next service gets its own verb and its own review, and that cost
+    is deliberate.
+
+    Same shape as _run_op and _run_notify: sets _op['error'] on failure,
+    clears verb when done.
+    """
+    try:
+        env = _compose_env()
+        if verb == "home_up":
+            tz = _home_timezone()
+            if tz:
+                env["NOVA_TZ"] = tz
+            # first start pulls the HA image (~1.5GB) and builds its frontend.
+            # force-recreate so a changed timezone actually reaches a container
+            # that is already up — the same reason notify_up does it.
+            cmd, timeout = (_compose_cmd("home")
+                            + ["up", "-d", "--force-recreate", HOME_SERVICE],
+                            1800)
+        elif verb == "home_down":
+            cmd, timeout = (_compose_cmd("home") + ["stop", HOME_SERVICE], 120)
+        else:
+            _op["error"] = f"unknown home verb {verb}"
+            return
+        log.info("%s: %s", verb, " ".join(cmd))
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout, env=env)
+        if proc.returncode != 0:
+            _op["error"] = (proc.stderr or proc.stdout)[-400:].strip()
+            log.warning("%s failed: %s", verb, _op["error"])
+            return
+        # ...and make it reachable from his other devices, live. Non-fatal:
+        # a running instance he can only reach on the host still beats a
+        # failed start.
+        if verb == "home_up":
+            _expose_home_route()
         _op["error"] = None
         log.info("%s: done", verb)
     except Exception as e:
@@ -609,6 +875,42 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _notify_status())
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/home/status":
+            try:
+                return self._send(200, _home_status())
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path.startswith("/reachable"):
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            svc = (q.get("service") or [""])[0]
+            if not svc:
+                return self._send(400, {"error": "service is required",
+                                        "known": sorted(_service_names())})
+            try:
+                out = _reachable(svc)
+                return self._send(404 if out.get("error") else 200, out)
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+        if self.path.startswith("/logs"):
+            # /logs?service=<name>&lines=<n> — the only endpoint here that
+            # reads a parameter, validated against the project's own service
+            # labels before it reaches a subprocess. See _service_logs.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            svc = (q.get("service") or [""])[0]
+            try:
+                n = int((q.get("lines") or ["80"])[0])
+            except ValueError:
+                n = 80
+            if not svc:
+                return self._send(400, {"error": "service is required",
+                                        "known": sorted(_service_names())})
+            try:
+                out = _service_logs(svc, n)
+                return self._send(404 if out.get("error") else 200, out)
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
         if self.path == "/gpu-stats":
             try:
                 return self._send(200, _gpu_stats())
@@ -641,6 +943,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path in ("/notify/up", "/notify/down", "/notify/expose"):
             verb = {"/notify/up": "notify_up", "/notify/down": "notify_down",
                     "/notify/expose": "notify_expose"}[self.path]
+        elif self.path in ("/home/up", "/home/down"):
+            verb = {"/home/up": "home_up", "/home/down": "home_down"}[self.path]
         else:
             return self._send(404, {"error": "not found"})
         with _lock:
@@ -652,6 +956,8 @@ class Handler(BaseHTTPRequestHandler):
             target = _relocate
         elif verb.startswith("notify_"):
             target = lambda: _run_notify(verb)  # noqa: E731
+        elif verb.startswith("home_"):
+            target = lambda: _run_home(verb)    # noqa: E731
         else:
             target = lambda: _run_op(verb)      # noqa: E731
         threading.Thread(target=target, daemon=True).start()

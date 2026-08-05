@@ -99,6 +99,14 @@ services:
       # out; the index rescans on startup and reindexes on write.
       - ${NOVA_MEMORY_DIR:-./data/memory}:/app/data/memory
       - ./data/wake-training:/app/data/wake-training
+      # Home Assistant's config dir (roadmap #35), so the deploy can make it
+      # TRUST THE TAILNET PROXY. Without an `http:` block naming the compose
+      # subnet, HA answers 400 to every request carrying X-Forwarded-For —
+      # measured 2026-08-05 — which means it works on the host and is dead
+      # from the phone. Reaching it from another device is the entire point
+      # of running it here, so that config is part of the deploy rather than
+      # something the operator discovers later.
+      - ./data/home-assistant:/app/data/home-assistant
       # documents the operator handed over (roadmap #22b). Its OWN mount, not
       # a corner of the memory tree: that tree is relocatable to an Obsidian
       # vault and is hand-editable markdown, and binaries do not belong in it.
@@ -209,6 +217,49 @@ services:
       # sidecar merges docker-compose.models.yml so the ollama toggle recreates
       # the container binding $NOVA_MODELS_DIR/ollama. Empty = default volume.
       NOVA_MODELS_DIR: ${NOVA_MODELS_DIR:-}
+      # The repo's absolute path ON THE HOST. Compose resolves relative bind
+      # mounts against the compose FILE's directory, which inside this
+      # container is /compose — so a service this sidecar starts with a
+      # `./data/...` bind would mount a path in the sidecar's own filesystem
+      # and lose it on the next rebuild. Measured 2026-08-05 when Home
+      # Assistant became the first sidecar-started service with a relative
+      # bind. Passed through so `--project-directory` can correct it.
+      NOVA_HOST_ROOT: ${PWD:-}
+    restart: unless-stopped
+
+  # Repository write access, in one container that can do nothing else
+  # (roadmap: phase 4 of the autonomy lane). Nova writes code through
+  # `delegate_coding_task`, which produces a branch and a diff inside the
+  # coder's private volume — a safe place, and a place nothing could reach, so
+  # every change she wrote still had to be typed out by a human against the
+  # real repo. This is what lands it instead.
+  #
+  # WHY IT IS NOT THE BACKEND. The backend is the process a poisoned web page
+  # talks to, and it deliberately mounts the repo READ-ONLY (/app/project).
+  # Giving it write access would put "rewrite your own source" one prompt
+  # injection away. Same argument as inference-control and the docker socket:
+  # the dangerous capability gets its own container and a fixed verb list.
+  #
+  # WHAT IT CANNOT DO, enforced in server.py rather than promised here: land
+  # on `main` (branch names must match `nova/<slug>`), push (there is no
+  # remote credential in this image), apply onto a dirty worktree, or leave a
+  # half-applied patch (a conflicting `git am` aborts and deletes the branch).
+  # No published port — only the backend talks to it, over the compose network.
+  git-landing:
+    build: ./git-landing
+    profiles: ["coder"]
+    environment:
+      NOVA_REPO_DIR: /repo
+      # The commit author for landed work. Attribution matters on a machine
+      # where two authors write to one repo: `git log --author` has to be able
+      # to answer "what did she write".
+      GIT_AUTHOR_NAME: ${NOVA_GIT_AUTHOR_NAME:-Nova}
+      GIT_AUTHOR_EMAIL: ${NOVA_GIT_AUTHOR_EMAIL:-nova@localhost}
+      GIT_COMMITTER_NAME: ${NOVA_GIT_AUTHOR_NAME:-Nova}
+      GIT_COMMITTER_EMAIL: ${NOVA_GIT_AUTHOR_EMAIL:-nova@localhost}
+    volumes:
+      # The ONLY read-write mount of the repo anywhere in this stack.
+      - .:/repo
     restart: unless-stopped
 
   # stdio MCP server bridge (docs/plans/mcp-client.md, phase 4). Spawns
@@ -349,6 +400,47 @@ services:
       MEDIA_WHISPER_WINDOW_S: ${MEDIA_WHISPER_WINDOW_S:-300}
     restart: unless-stopped
 
+  # Home Assistant (optional): docker compose --profile home up -d
+  #
+  # ROADMAP #35, LOCKED by Jeremy 2026-07-24: HA Container as a nova compose
+  # service now; a dedicated HAOS box later for Zigbee/Thread. IP-based
+  # devices only under WSL2 — no USB-radio passthrough fights.
+  #
+  # THIS BLOCK IS THE CONTAINMENT. Nova does not author it and cannot edit
+  # it: she reaches Home Assistant through one fixed verb on the docker
+  # sidecar (`/home/start`), never by submitting YAML. That was Jeremy's
+  # choice on 2026-08-05 when the alternative — letting her write compose
+  # files that land on the host — was put in front of him. The consequence
+  # is that adding the NEXT service means editing this file and reviewing
+  # the diff, which is the review point, not a limitation to route around.
+  #
+  # NO host networking, deliberately. mDNS/SSDP discovery needs it, and
+  # under WSL2 host networking does not behave the way it does on Linux
+  # anyway. Bridge + a published port reaches IP-addressable devices
+  # outbound, which is exactly the scope #35 locked. If discovery becomes
+  # necessary it is a HAOS box, not a flag on this block.
+  #
+  # 127.0.0.1 like every other published port here: reachable from the
+  # phone over tailscale, never from the LAN directly.
+  home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    profiles: ["home"]
+    environment:
+      TZ: ${NOVA_TZ:-America/New_York}
+    volumes:
+      - ./data/home-assistant:/config
+    ports:
+      - "127.0.0.1:8123:8123"
+    restart: unless-stopped
+    healthcheck:
+      # HA answers / with a 200 once the frontend is built; the first boot
+      # takes a while, so start_period is generous rather than the interval.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8123/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
   # Self-hosted ntfy server (optional): docker compose --profile notify up -d
   # The private alternative to public ntfy.sh for push notifications — set
   # Settings -> Notifications -> ntfy server to "builtin" and the backend
@@ -404,7 +496,25 @@ services:
       TS_USERSPACE: "true"
     volumes:
       - tailscale_state:/var/lib/tailscale
-      - ./tailscale/serve.json:/config/serve.json:ro
+      # THE DIRECTORY, not the single file — the same repair searxng needed
+      # after a 43-hour outage. A single-file bind resolves to an inode at
+      # container-create time, so EDITING serve.json breaks the mount and the
+      # container will not start: "no such file or directory" on a path that
+      # plainly exists. It happened here on 2026-08-05 while adding the Home
+      # Assistant route, and it takes the phone path down with it, because
+      # :443 is served by this same container.
+      #
+      # Port 8123 in that file is a TLS-TERMINATED TCP FORWARD, not an HTTP
+      # proxy like :443 and :8443. Proxying Home Assistant as HTTP makes
+      # tailscale add X-Forwarded-For, and HA answers 400 to any forwarded
+      # request unless its own configuration.yaml trusts the proxy — measured
+      # 2026-08-05, and it kept answering 400 even once that config was
+      # verifiably parsed. Forwarding raw TCP means HA never sees a forwarded
+      # header, so reachability stops depending on a setting inside an
+      # application Nova does not own. (JSON has no comments and that map is
+      # keyed by port number, so this note cannot live in serve.json — a
+      # non-numeric key there makes tailscale discard the whole config.)
+      - ./tailscale:/config:ro
     depends_on:
       - web
     restart: unless-stopped

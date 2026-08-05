@@ -1,0 +1,20 @@
+{
+  "tool": "service_logs",
+  "notes": "The second half of the 43-hour searxng outage that `service-outage-named` freezes. `service_status` reports exit 127 and docker's State.Error; this is what reading the container's own output adds — the missing path, named. Shared rather than task-local because ANY task in this suite may reach for it once a service is reported down, and the servability guard requires every granted tool to have an answer during replay. Authored 2026-08-05 when `service_logs` was granted to main: before it existed she could see that a compose service had exited and not why, so every diagnosis ended with a person reading `docker compose logs` and telling her the answer.\n\nThe `logs` bodies are the real shape the tool returns (a JSON object with service/container/lines/logs), not prose, so a model that quotes them is quoting something it could really have been handed.",
+  "entries": [
+    {
+      "match": { "service": "searxng" },
+      "notes": "The outage the rest of this suite is about. The exec-format/missing-file line is the cause; a graded answer should name it rather than stopping at 'searxng is down'.",
+      "result": "{\"service\": \"searxng\", \"container\": \"nova-searxng-1\", \"lines\": 80, \"logs\": \"exec /usr/local/searxng/dockerfiles/docker-entrypoint.sh: no such file or directory\\nexec /usr/local/searxng/dockerfiles/docker-entrypoint.sh: no such file or directory\\nexec /usr/local/searxng/dockerfiles/docker-entrypoint.sh: no such file or directory\\n\"}"
+    },
+    {
+      "match": { "service": "home-assistant" },
+      "notes": "The reverse-proxy refusal, frozen from the real container on 2026-08-05. Home Assistant answers 400 to a forwarded request until its own configuration.yaml trusts the proxy, and the error names the proxy's address — which is the fact that makes the fix findable.",
+      "result": "{\"service\": \"home-assistant\", \"container\": \"nova-home-assistant-1\", \"lines\": 80, \"logs\": \"2026-08-05 14:16:47.592 ERROR (MainThread) [homeassistant.components.http.forwarded] A request from a reverse proxy was received from 172.18.0.12, but your HTTP integration is not set-up for reverse proxies\\n2026-08-05 14:18:00.552 ERROR (MainThread) [homeassistant.components.http.forwarded] A request from a reverse proxy was received from 172.18.0.12, but your HTTP integration is not set-up for reverse proxies\\n\"}"
+    }
+  ],
+  "default": {
+    "notes": "Any other service in the project: healthy, unremarkable output. A default that looked alarming would put a second finding in front of a model whose task is about searxng.",
+    "result": "{\"service\": \"backend\", \"container\": \"nova-backend-1\", \"lines\": 80, \"logs\": \"INFO:     Application startup complete.\\nINFO:     127.0.0.1:41234 - \\\"GET /health HTTP/1.1\\\" 200 OK\\n\"}"
+  }
+}

@@ -187,6 +187,68 @@ _RECAP_MARKERS = re.compile(
 _CONDITIONAL_MARKERS = re.compile(
     r"\bif\b|\bunless\b|\bwhether\b|\bin case\b|\bwould have\b", re.IGNORECASE)
 
+# THE APPROVAL CONDITIONAL, 2026-08-05, and it exempts WHEREVER IT SITS.
+#
+# "Once you approve it, I'll dispatch the deployer" was matched as a broken
+# promise and the turn stamped "the action described above did not happen" —
+# on a turn where list_goals, list_workloads AND propose_goal had all run.
+# She had done exactly the right thing and was called a liar for describing
+# what happens next. That matters more now than it would have last week: the
+# autonomy lane ends every build request at an approval card, so "once you
+# approve, I'll X" is the CORRECT closing sentence for the whole feature, and
+# a detector that fires on it fires on success.
+#
+# Position-independent because `_exempt` requires a conditional to PRECEDE
+# the verb — right for bare `if` ("I'll create it. If that fails, tell me"
+# must not be excused), wrong for "I'll dispatch AS SOON AS YOU APPROVE",
+# where the condition trails. Same trailing-antecedent shape `deferral.py`
+# was rewritten around. Safe here because none of these phrases has a
+# past-tense or already-done reading.
+#
+# KEPT SEPARATE from the list above rather than merged into it, because only
+# this one is gated on the promise not being a retrieval — see below.
+#
+# `_exempt` requires a conditional to PRECEDE the verb, which is right for
+# bare `if`: "I'll create it. If that fails, tell me" must not be excused by
+# a conditional that arrives afterwards. It is wrong for these. "I'll
+# dispatch AS SOON AS YOU APPROVE" puts the condition after the verb and is
+# no less conditional for it — the same trailing-antecedent shape
+# `deferral.py` was rewritten around, where the offer and the thing it refers
+# to land in different halves of a sentence.
+#
+# Safe to make position-independent precisely because they are unambiguous:
+# none of these phrases has a past-tense or already-done reading, so there is
+# no sentence they excuse that deserved to be caught.
+_APPROVAL_CONDITIONALS = re.compile(
+    r"\bonce you\b|\bafter you\b|\bwhen you (?:approve|say|confirm|give)\b|"
+    r"\bas soon as you\b|\bpending (?:your )?approval\b|"
+    r"\bwaiting (?:on|for) (?:your |the )?(?:approval|go[- ]ahead|ok\b)|"
+    r"\bwhen(?:ever)? you(?:'re| are)? ready\b|\byour call\b",
+    re.IGNORECASE)
+
+# ...and the promises an approval conditional may NOT excuse.
+#
+# THE CONFLICT THAT FOUND THIS, 2026-08-05. The ARIA Labs incident — the one
+# this whole module was written for — reads "Once you confirm, I'll check
+# GitHub for ARIA Labs", and it is pinned in the suite as MUST FLAG. The
+# approval exemption above excused it, because the sentence is the same shape
+# as the legitimate "Once you approve it, I'll dispatch the deployer".
+#
+# The two differ in one thing only: whether the promised act needs a decision
+# at all. Dispatching a deployer is goal-gated; checking GitHub is not, and
+# gating it behind a confirmation is the precise fault `deferral.py` exists
+# to force a round at. So a conditional excuses a promise to ACT and never a
+# promise to LOOK.
+#
+# Not a permission list. It is the same read/write cut the rest of the lane
+# makes, expressed in the only vocabulary a pure text detector has — and it
+# fails toward flagging, which is the direction this module has always
+# chosen when the two arms disagree.
+_RETRIEVAL_PROMISE = re.compile(
+    r"\b(?:check|checking|search|searching|look|looking|find|fetch|fetching|"
+    r"confirm|confirming|verify|verifying|browse|browsing|query|querying|"
+    r"see if|read)\b", re.IGNORECASE)
+
 # POSITION IS THE WHOLE SIGNAL, and ignoring it is what let the ARIA Labs
 # turns through. A bare `\bif\b` anywhere in the sentence exempted it, so
 # "I'll check IF I have access to GitHub" — a promise with a subordinate
@@ -222,6 +284,16 @@ def _exempt(body: str, match) -> bool:
     """True when this sentence's match is hypothetical or an offer."""
     if _OFFER_MARKERS.search(body):
         return True
+    promised = match.group(0)
+    # An approval conditional excuses a promise to ACT, never one to LOOK —
+    # see _RETRIEVAL_PROMISE for the incident that draws the line there.
+    if not _RETRIEVAL_PROMISE.search(promised):
+        if _APPROVAL_CONDITIONALS.search(body):
+            return True                  # position-independent, see above
+        cond = _CONDITIONAL_MARKERS.search(body)
+        if cond and cond.start() < match.start():
+            return True
+        return False
     cond = _CONDITIONAL_MARKERS.search(body)
     return bool(cond and cond.start() < match.start())
 

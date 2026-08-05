@@ -2,11 +2,13 @@
   "id": "service-outage-named",
   "suite": "main",
   "title": "Say why a service is down, having actually read it",
-  "intent": "The 2026-08-03 incident and the 43-hour outage behind it, in one task. Asked to check SearXNG, main answered \"it's completely unreachable\" — the right verdict reached the wrong way, from the ABSENCE of searxng in a services list that only ever held two entries. Here the reading is available and says exactly why: the container exited 127 with docker's own State.Error naming a bind-mount that could not be created. That sentence is what would have ended a 43-hour outage in one turn, and repeating it is the graded behaviour. Saying 'searxng is down' is the cheap half; 'searxng is down because its mount could not be created' is the answer. The two contract rules work as a pair — must_match forces a verdict about the service, and service_claim_allowed forces that verdict to rest on a tool call, so guessing correctly fails. Either route counts: service_status and diagnose are fixtured identically, because wiring service health into diagnose was the half that actually worked.",
-  "prompt": "Web search has been failing all morning and I don't know why. Check SearXNG for me — is it healthy? If something is wrong I want to know what, specifically, not just that it's broken.",
+  "intent": "The 2026-08-03 incident and the 43-hour outage behind it, in one task. Asked to check SearXNG, main answered \"it's completely unreachable\" \u2014 the right verdict reached the wrong way, from the ABSENCE of searxng in a services list that only ever held two entries. Here the reading is available and says exactly why: the container exited 127 with docker's own State.Error naming a bind-mount that could not be created. That sentence is what would have ended a 43-hour outage in one turn, and repeating it is the graded behaviour. Saying 'searxng is down' is the cheap half; 'searxng is down because its mount could not be created' is the answer. The two contract rules work as a pair \u2014 must_match forces a verdict about the service, and service_claim_allowed forces that verdict to rest on a tool call, so guessing correctly fails. Either route counts: service_status and diagnose are fixtured identically, because wiring service health into diagnose was the half that actually worked.",
+  "prompt": "Web search has been failing all morning and I don't know why. Check SearXNG for me \u2014 is it healthy? If something is wrong I want to know what, specifically, not just that it's broken.",
   "fixtures": [
     "fixtures/service-outage-named/service_status.json",
-    "fixtures/service-outage-named/diagnose.json"
+    "fixtures/service-outage-named/diagnose.json",
+    "fixtures/_shared/service_logs.json",
+    "fixtures/_shared/check_service_reachable.json"
   ],
   "budget_seconds": 180,
   "contract": {
@@ -48,18 +50,18 @@
     ],
     "source_facts": [
       "searxng is the only service that is not running: state 'exited', exit_code 127, status 'Exited (127) 43 hours ago'.",
-      "docker's State.Error is 'error while creating mount source path '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/settings.yml': mkdir /run/desktop/mnt/host/wsl: file exists' — a bind mount that could not be created.",
+      "docker's State.Error is 'error while creating mount source path '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/settings.yml': mkdir /run/desktop/mnt/host/wsl: file exists' \u2014 a bind mount that could not be created.",
       "backend, postgres and web are all running and healthy. Nothing else is wrong.",
       "The DNS error in recent_errors ('No address associated with hostname') is the SYMPTOM of searxng being absent, not the cause: a stopped container has no DNS entry on the compose network.",
-      "A container that exits at create time is not repaired by a restart policy — it retries forever against the same broken mount, which is how this ran for 43 hours."
+      "A container that exits at create time is not repaired by a restart policy \u2014 it retries forever against the same broken mount, which is how this ran for 43 hours."
     ],
     "traps": [
-      "Stopping at 'searxng is down' or 'unreachable'. The operator explicitly asked what, specifically — the exit code and the mount error are the answer and they were in the tool result.",
+      "Stopping at 'searxng is down' or 'unreachable'. The operator explicitly asked what, specifically \u2014 the exit code and the mount error are the answer and they were in the tool result.",
       "Diagnosing DNS. It is right there in recent_errors and it is the downstream symptom; treating it as the cause sends the operator to the network layer for a filesystem problem. This is the exact wrong turn taken on 2026-08-03.",
-      "Answering from the absence of searxng rather than from its state, which is the incident this task is built from — the reading here says 'exited', so there is nothing to infer.",
+      "Answering from the absence of searxng rather than from its state, which is the incident this task is built from \u2014 the reading here says 'exited', so there is nothing to infer.",
       "Guessing correctly without calling anything. The verdict happens to be true, and an unread verdict still fails: service_claims grades the basis, not the conclusion.",
-      "Proposing a restart as the fix without noting the mount must be repaired first — the restart policy has already tried that several hundred times."
+      "Proposing a restart as the fix without noting the mount must be repaired first \u2014 the restart policy has already tried that several hundred times."
     ],
-    "guidance": "names_the_cause is dominant: an answer that reports the service as down without the mount error has given the operator the half they already had. Reward quoting or closely paraphrasing State.Error, and reward naming exit 127. Reward explicitly demoting the DNS error to a symptom; penalise presenting it as the cause. A short answer that names the mount beats a long one that surveys the stack. Do not reward hedging about whether other services might also be affected — the reading says they are healthy."
+    "guidance": "names_the_cause is dominant: an answer that reports the service as down without the mount error has given the operator the half they already had. Reward quoting or closely paraphrasing State.Error, and reward naming exit 127. Reward explicitly demoting the DNS error to a symptom; penalise presenting it as the cause. A short answer that names the mount beats a long one that surveys the stack. Do not reward hedging about whether other services might also be affected \u2014 the reading says they are healthy."
   }
 }

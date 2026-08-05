@@ -2292,6 +2292,70 @@ async def notify_service_action(body: dict):
     return resp.json()
 
 
+# ── Home Assistant (roadmap #35) ─────────────────────────────────────────
+#
+# THE OPERATOR ROUTE THAT MAKES THE EXECUTOR LEGAL. `actions.__init__`
+# refuses to boot if an action type names a route that is not here, and the
+# rule it enforces is "an executor may only exist where the operator can
+# already do this from the UI". So this pair is not decoration around the
+# `home_assistant.deploy` action — it is the thing that permits it to exist.
+#
+# Nothing here is parameterized past an up/down verb, matching the sidecar
+# it calls. The service definition lives in docker-compose.yml, in git.
+
+@router.get("/api/v1/home-assistant")
+async def home_assistant_status():
+    """Is Home Assistant running, and where. Read-only."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{settings.inference_control_url}/home/status")
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPError as e:
+        # Not a 502: "the sidecar is down" is a legible state for a panel that
+        # is mostly asking "is this thing on", and a red card beats a stack
+        # trace. Same shape the notify panel uses.
+        return {"running": False, "state": "unknown", "url": None,
+                "error": f"inference-control sidecar unreachable: {e}"}
+
+
+@router.post("/api/v1/home-assistant")
+async def home_assistant_control(body: dict):
+    """Bring Home Assistant up or stop it. The operator's own switch."""
+    import httpx
+
+    action = str(body.get("action", "")).strip()
+    if action not in ("up", "down"):
+        raise HTTPException(status_code=422,
+                            detail="action must be 'up' or 'down'")
+    if action == "up":
+        # the SAME function the approved plan calls, so the operator's button
+        # and her card cannot apply different clocks
+        from app.actions import home_assistant as _ha
+        _ha.write_timezone()
+    path = {"up": "/home/up", "down": "/home/down"}[action]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{settings.inference_control_url}{path}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"inference-control sidecar unreachable: {e}")
+    if resp.status_code not in (200, 202):
+        try:
+            detail = resp.json().get("error", resp.text)
+        except ValueError:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    # actor defaults to "operator", which is the truth on this path: the
+    # executor records its own event with actor="agent" so the two routes to
+    # the same effect stay distinguishable in the log.
+    from app import capability_events as ce
+    ce.record(ce.WORKLOAD, "home-assistant", action)
+    return resp.json()
+
+
 # ── automations ──────────────────────────────────────────────────────────
 
 @router.get("/api/v1/automations")

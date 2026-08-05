@@ -7,6 +7,7 @@ import { ThemePreview } from '../ThemePreview';
 import { CardsSkeleton } from '../ui';
 import { SecretsCard } from './secrets';
 import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
+import { HomeAssistantControl } from './home';
 import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices, WakeLearning } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
 import { BackupsCard } from './BackupsCard';
@@ -305,6 +306,11 @@ export function SettingsTab({ only, exclude, types, untitled }:
                   )}
                 </div>
                 <NotificationsHelp defs={defs} />
+              </div>
+            )}
+            {section === 'Home' && (
+              <div className="pt-1 space-y-3">
+                <HomeAssistantControl />
               </div>
             )}
             {/* model inventory (pull, curated table) lives in the Models tab;

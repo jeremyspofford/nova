@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, "/app/backend")
 
 from app import actions, mcp_client, recommendations              # noqa: E402
-from app.actions.schemas import McpServerAdd                      # noqa: E402
+from app.actions.schemas import HomeAssistantDeploy, McpServerAdd  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -660,28 +660,50 @@ def test_she_can_fill_in_the_form_herself():
 
     props = builtin.BUILTIN_TOOLS["raise_recommendation"]["parameters"]["properties"]
     check("the tool offers an `action` at all", "action" in props)
-    check("...whose fields come from the registered model, not a copy here",
-          sorted((props["action"].get("properties") or {}).keys())
-          == sorted(McpServerAdd.model_fields.keys()),
-          str(sorted((props["action"].get("properties") or {}).keys())))
-    check("...and it forbids extras, so an invented field is refused up front",
-          props["action"].get("additionalProperties") is False)
     check("a plan stays OPTIONAL — a card that needs a person is still a card",
           "action" not in builtin.BUILTIN_TOOLS[
               "raise_recommendation"]["parameters"]["required"])
 
-    # MECHANICAL: register a second type and the schema grows on its own.
-    # A hand-written copy would not, and nothing would fail to say so.
+    # WRITTEN FOR ONE REGISTERED TYPE, and rewritten on 2026-08-05 when a
+    # second arrived (`home_assistant.deploy`). The original asserted the
+    # single-variant shape — `properties` equal to McpServerAdd's fields,
+    # `additionalProperties is False` at the top level — and both are facts
+    # about there being exactly one Spec, not about derivation. They went red
+    # on a change that was entirely correct, which is the definition of a test
+    # asserting the wrong thing.
+    #
+    # The INTENT survives and is what is checked now: every registered model
+    # appears, none of them by hand, each still forbidding extras.
+    schema = actions.tool_schema()
+    variants = schema.get("anyOf") or [schema]
+    check("every registered action type reaches the schema she is shown",
+          len(variants) == len(actions._TYPES),
+          f"{len(variants)} variants for {len(actions._TYPES)} types")
+    check("...including the one added second",
+          any(sorted((v.get("properties") or {}).keys())
+              == sorted(HomeAssistantDeploy.model_fields.keys())
+              for v in variants))
+    check("...and the first is still there, from its model and not a copy",
+          any(sorted((v.get("properties") or {}).keys())
+              == sorted(McpServerAdd.model_fields.keys())
+              for v in variants))
+    check("...every variant forbids extras, so an invented field is refused",
+          all(v.get("additionalProperties") is False for v in variants),
+          str([v.get("additionalProperties") for v in variants]))
+
+    # MECHANICAL: register one more and the schema grows on its own. A
+    # hand-written copy would not, and nothing would fail to say so.
     real = actions._TYPES["mcp_server.add"]
+    before = len(variants)
     actions._TYPES["_probe.add"] = actions.Spec(
         model=real.model, operator_route=real.operator_route,
         describe=real.describe, preflight=real.preflight)
     try:
         grown = actions.tool_schema()
-        check("a second registered type changes the schema without an edit "
+        check("another registered type changes the schema without an edit "
               "here — that is what 'derived' has to mean",
-              "anyOf" in grown and len(grown["anyOf"]) == 2,
-              str(sorted(grown.keys())))
+              len(grown.get("anyOf") or []) == before + 1,
+              str(len(grown.get("anyOf") or [])))
     finally:
         del actions._TYPES["_probe.add"]
 

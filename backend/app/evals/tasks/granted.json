@@ -12,10 +12,12 @@
   "deployer": [
     "allow_host_egress",
     "allow_internet_egress",
+    "check_service_reachable",
     "delete_workload",
     "deploy_workload",
     "list_egress",
     "list_workloads",
+    "service_logs",
     "workload_logs"
   ],
   "guardian": [
@@ -43,7 +45,9 @@
     "write_memory"
   ],
   "main": [
+    "answer_task",
     "check_coding_session",
+    "check_service_reachable",
     "delegate_coding_task",
     "diagnose",
     "dispatch_to_agent",
@@ -66,6 +70,7 @@
     "read_memory_item",
     "retry_ingest_job",
     "search_memory",
+    "service_logs",
     "service_status",
     "web_search",
     "write_memory"

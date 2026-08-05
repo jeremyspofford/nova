@@ -244,8 +244,19 @@ def test_invariants():
     # TERMINAL state='failed' on a broker 404. A bare count is a mystery
     # constant, so the reason lives here — if this number moves, someone
     # declared a tool read-only and owes the same trace.
+    # 23 since 2026-08-05: `service_logs` then `check_service_reachable`
+    # joined it. The second answers "can he OPEN it" — running and
+    # reachable are different questions and only the second is what he
+    # asks. It issues one GET at this install's own published port and
+    # cannot be aimed elsewhere; `fetch_url` still refuses the tailnet.
+    # `service_logs` joined it first. She could see that a
+    # compose service had exited and not why — so every diagnosis of a failed
+    # start ended with a person reading `docker compose logs` and telling her
+    # the answer. It reads a container's stdout through an endpoint that
+    # validates the service name against the compose project's own labels;
+    # naming a service starts nothing.
     check("the declared read-only set is the expected size",
-          len(ro) == 21, str(len(ro)))
+          len(ro) == 23, str(len(ro)))
     check("check_coding_session is not in it — it writes a session state",
           "check_coding_session" not in ro)
 

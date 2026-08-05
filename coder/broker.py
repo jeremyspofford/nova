@@ -285,6 +285,41 @@ def get(sid: str, authorization: str | None = Header(default=None)):
     return s.snapshot()
 
 
+@app.get("/session/{sid}/patch")
+def patch(sid: str, authorization: str | None = Header(default=None)):
+    """The session's work as a patch, so it can LEAVE this container.
+
+    Phase 4. Until now the deliverable was "a branch and a diff" living in a
+    private clone inside a named volume, which is a safe place and also a
+    place nothing can reach — so every change Nova wrote had to be re-typed by
+    a human against the real repo. That is the failure Jeremy named on
+    2026-08-05: the capability exists, a person does the work anyway, and she
+    stays exactly as unable.
+
+    Still nothing here merges or pushes. This hands out TEXT. What lands it is
+    a separate, operator-approved action against the host repo, and the branch
+    it creates is never `main`.
+
+    `git format-patch` rather than `git diff` on purpose: it carries the commit
+    message and authorship, so what lands is attributable to the session that
+    wrote it rather than appearing as an anonymous working-tree change.
+    """
+    _guard(authorization)
+    s = _sessions.get(sid)
+    if not s:
+        raise HTTPException(404, "no such session")
+    if not s.commit:
+        return {"id": s.id, "state": s.state, "patch": "", "commit": "",
+                "note": "this session produced no commit — nothing to land"}
+    try:
+        text = s._git("format-patch", "--stdout", "HEAD~1..HEAD")
+    except Exception as e:                       # noqa: BLE001
+        raise HTTPException(500, f"could not format the patch: {e}")
+    return {"id": s.id, "state": s.state, "commit": s.commit,
+            "branch": s.branch, "diffstat": s.diffstat.strip(),
+            "patch": text}
+
+
 @app.post("/session/{sid}/kill")
 def kill(sid: str, authorization: str | None = Header(default=None)):
     _guard(authorization)

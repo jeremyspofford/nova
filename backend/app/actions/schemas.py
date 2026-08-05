@@ -109,4 +109,36 @@ class McpServerAdd(_Action):
         return v
 
 
-ActionDoc = Annotated[Union[McpServerAdd], Field(discriminator="type")]
+class HomeAssistantDeploy(_Action):
+    """Bring up the Home Assistant service defined in docker-compose.yml.
+
+    NOTE WHAT IS NOT HERE, because the absences are the design. No image, no
+    ports, no volumes, no environment, no compose YAML of any kind. The
+    service block is in `docker-compose.yml`, in git, reviewed — and this
+    document cannot reach it. The only thing the model gets to decide is
+    whether to ask, and why.
+
+    That was Jeremy's call on 2026-08-05, choosing typed executors over a
+    general compose-deploy verb. The sidecar that actually runs it holds the
+    docker socket, so its API is a fixed verb list; this schema is the same
+    boundary one layer up. A second service means a new block in that file, a
+    new verb on the sidecar, and a new model here — three reviewed edits, on
+    purpose, rather than one free-text field.
+
+    `timezone` is the single exception and it is not passed through: the
+    executor validates it against the host's zoneinfo and it reaches compose
+    as an environment variable that the image itself parses. An unknown zone
+    fails the preflight rather than the container.
+    """
+
+    type: Literal["home_assistant.deploy"]
+    # IANA zone names only — the shape rules out path traversal and shell
+    # metacharacters before the value is looked up at all.
+    timezone: Annotated[str, StringConstraints(
+        pattern=r"^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}$",
+        max_length=64)] = "America/New_York"
+    why: Annotated[str, StringConstraints(max_length=280)]
+
+
+ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy],
+                      Field(discriminator="type")]

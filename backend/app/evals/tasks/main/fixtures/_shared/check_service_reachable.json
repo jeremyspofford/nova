@@ -1,0 +1,20 @@
+{
+  "tool": "check_service_reachable",
+  "notes": "Reachability, frozen. Authored 2026-08-05 with the tool. The pairing with `service_logs` is deliberate: `service_status` says a container is healthy, this says whether the operator can actually OPEN it, and on 2026-08-05 those disagreed three separate times for Home Assistant — published but not served on the tailnet, then served but answering 400, then working. A model that reports 'it's running' from container state alone has answered a question nobody asked.\n\nThe searxng entry is the outage this suite is built around: nothing is listening, so there is no HTTP status at all — which is a different and stronger fact than a bad status code.",
+  "entries": [
+    {
+      "match": { "service": "searxng" },
+      "notes": "Down. The container is not running, so the port is not bound and the connection is refused outright — no status code, an error instead.",
+      "result": "{\"service\": \"searxng\", \"published_ports\": [8380], \"local\": [{\"port\": 8380, \"url\": \"http://host.docker.internal:8380/\", \"http_status\": null, \"error\": \"URLError: [Errno 111] Connection refused\"}], \"tailnet_routes\": [], \"tailscale_running\": true}"
+    },
+    {
+      "match": { "service": "home-assistant" },
+      "notes": "Up and reachable both ways — the state the deploy's verify step is trying to reach. 302 is Home Assistant redirecting to onboarding, which is a service answering, not a fault.",
+      "result": "{\"service\": \"home-assistant\", \"published_ports\": [8123], \"local\": [{\"port\": 8123, \"url\": \"http://host.docker.internal:8123/\", \"http_status\": 302, \"error\": null}], \"tailnet_routes\": [\"|-- tcp://nova.example.ts.net:8123 (TLS terminated, tailnet only)\", \"|--> tcp://home-assistant:8123\"], \"tailscale_running\": true}"
+    }
+  ],
+  "default": {
+    "notes": "Anything else: healthy and answering locally, with no tailnet route — the ordinary case for a service only the backend talks to.",
+    "result": "{\"service\": \"backend\", \"published_ports\": [8000], \"local\": [{\"port\": 8000, \"url\": \"http://host.docker.internal:8000/\", \"http_status\": 200, \"error\": null}], \"tailnet_routes\": [], \"tailscale_running\": true}"
+  }
+}

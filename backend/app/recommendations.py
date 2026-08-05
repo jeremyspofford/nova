@@ -90,9 +90,22 @@ def _run_row(r) -> dict:
     return d
 
 
+def _cid(value):
+    """A conversation id as a UUID, or None. Never raises: a card raised from
+    an automation has no conversation, and a malformed one must not stop the
+    card from existing — it only means the question has nowhere to go, which
+    `_block` already handles by leaving it on the row for the inbox."""
+    import uuid as _u
+    try:
+        return _u.UUID(str(value)) if value else None
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 async def create(kind: str, title: str, body: str, *, source: str,
                  action: Optional[dict] = None, priority: int = 0,
-                 dedupe_key: Optional[str] = None) -> dict:
+                 dedupe_key: Optional[str] = None,
+                 conversation_id: Optional[str] = None) -> dict:
     dedupe_key = (dedupe_key or "").strip() or None
     if action is not None:
         # THE DOOR IN. A plan that does not typecheck never becomes a card,
@@ -114,8 +127,8 @@ async def create(kind: str, title: str, body: str, *, source: str,
         if dedupe_key is None:
             r = await conn.fetchrow(
                 "INSERT INTO recommendations (kind, title, body, source, action, "
-                "priority) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
-                kind, title, body, source, action_json, priority)
+                "priority, conversation_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+                kind, title, body, source, action_json, priority, _cid(conversation_id))
         else:
             # Refresh the live row; never resurrect a decided/dismissed one.
             #
@@ -134,7 +147,7 @@ async def create(kind: str, title: str, body: str, *, source: str,
             # the operator wait out a preflight for no reason.
             r = await conn.fetchrow(
                 "INSERT INTO recommendations (kind, title, body, source, action, "
-                "priority, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6,$7) "
+                "priority, dedupe_key, conversation_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
                 "ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL "
                 "DO UPDATE SET title=EXCLUDED.title, body=EXCLUDED.body, "
                 "  source=EXCLUDED.source, action=EXCLUDED.action, "
@@ -151,9 +164,11 @@ async def create(kind: str, title: str, body: str, *, source: str,
                 "  action_checked_at = CASE WHEN recommendations.action "
                 "      IS DISTINCT FROM EXCLUDED.action THEN NULL "
                 "      ELSE recommendations.action_checked_at END "
-                "WHERE recommendations.status = ANY($8) RETURNING *",
+                "  , conversation_id = COALESCE(EXCLUDED.conversation_id, "
+                "      recommendations.conversation_id) "
+                "WHERE recommendations.status = ANY($9) RETURNING *",
                 kind, title, body, source, action_json, priority, dedupe_key,
-                list(_ACTIONABLE))
+                _cid(conversation_id), list(_ACTIONABLE))
             if r is None:   # conflict on an already-decided row → leave it be
                 r = await conn.fetchrow(
                     "SELECT * FROM recommendations WHERE dedupe_key = $1", dedupe_key)
@@ -234,7 +249,7 @@ async def decide(rec_id: str, choice: str,
     async with db.acquire() as conn:
         async with conn.transaction():
             cur = await conn.fetchrow(
-                "SELECT action, action_state FROM recommendations "
+                "SELECT action, action_state, conversation_id FROM recommendations "
                 "WHERE id = $1 FOR UPDATE", rid)
             if cur is None:
                 return None
@@ -254,9 +269,15 @@ async def decide(rec_id: str, choice: str,
                 # ON CONFLICT DO NOTHING pairs with the partial unique index:
                 # a double-click cannot start two runs.
                 await conn.execute(
-                    "INSERT INTO action_runs (recommendation_id, action, action_type) "
-                    "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-                    rid, json.dumps(action), action["type"])
+                    # conversation_id rides along so a step that needs to
+                    # ASK has somewhere to ask (phase 3). NULL is fine and
+                    # means "raised by an automation" — the question then
+                    # waits on the row rather than being posted anywhere.
+                    "INSERT INTO action_runs (recommendation_id, action, "
+                    "action_type, conversation_id) "
+                    "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    rid, json.dumps(action), action["type"],
+                    cur["conversation_id"] if cur else None)
     if r:
         await _receipt(_row(r), new_status)
     return (await get(str(rid))) if r else None

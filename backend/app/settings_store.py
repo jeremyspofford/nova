@@ -354,6 +354,30 @@ SETTING_DEFS: list[dict] = [
                      "anything, or notifying you are all still her asking "
                      "first — those are irreversible or they reach outside. "
                      "Turn this OFF and she offers and waits before saving.")},
+    # EMPTY BY DEFAULT, deliberately. A default of "America/New_York" made
+    # "he chose this" and "nobody has chosen" the same value, so the deploy
+    # could never tell that it needed to ask — and a wrong timezone is wrong
+    # in every automation he writes afterwards. Empty means unset, and the
+    # step that needs it stops and asks him in chat (phase 3).
+    {"key": "home.timezone", "type": "string", "default": "",
+     "section": "Home", "label": "Home Assistant timezone",
+     "description": ("IANA zone name (America/New_York, Europe/London) for "
+                     "the Home Assistant container — it drives automations "
+                     "and history, so a wrong one makes 'at sunset' wrong. "
+                     "Leave it blank and Nova asks you once, in chat, the "
+                     "first time she starts Home Assistant, then keeps the "
+                     "answer here.")},
+    {"key": "autonomy.propose_the_build", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Answer a build request with a plan, not a menu",
+     "description": ("When you ask her to set up, install or deploy "
+                     "something and she ends the reply by asking which way "
+                     "you want to go — having called nothing — the draft is "
+                     "discarded and she is told to call propose_goal with a "
+                     "finish line and the verbs the build needs. She may "
+                     "still name a fork; she has to name it inside the "
+                     "proposal, with the option she would pick, rather than "
+                     "handing you a menu. Turn this OFF and a build request "
+                     "can end as a list of options again.")},
     {"key": "observability.measure_reply_shape", "type": "boolean", "default": True,
      "section": "Agents", "label": "Record how long her replies are",
      "description": ("Writes one span per turn holding the reply's word "

@@ -64,6 +64,15 @@ MEMORY = "memory"
 # would read "ingest_jobs 2" in the next turn's facts, take it for a fresh
 # failure, and spend the operator's budget again on the same two rows.
 INGEST = "ingest"
+# A service standing up or going down on the operator's own machine. This is
+# a capability change in the plainest sense the file has: after `home_up`
+# there is something running that was not running before, holding a port and
+# a config directory, and she will answer questions about it. Roadmap #35
+# brought the first one (Home Assistant), and it arrives by a route the
+# operator can press AND by a recommendation he approves — two paths to the
+# same effect, which is exactly the case where "who did this" stops being
+# obvious from context.
+WORKLOAD = "workload"
 
 # How much history the prompt block may spend. Small on purpose: this is a
 # nudge, not an archive — `list_capability_changes` is there for the rest.

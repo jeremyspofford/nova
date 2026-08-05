@@ -20,6 +20,7 @@ from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
 from app import (bg, capability_claims, deferral, model_claims, narration,
+                 proposal,
                  redact, service_claims, settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
@@ -745,6 +746,7 @@ async def _build_system_prompt(agent: dict, query: str, *,
                                speaker: dict | None = None,
                                tool_names: list[str] | None = None,
                                signals: dict | None = None,
+                               conversation_id: str | None = None,
                                degraded: list[str] | None = None) -> tuple[str, str]:
     """Slot-based prompt assembly — persona-layer phase 1.
 
@@ -1173,6 +1175,31 @@ async def _build_system_prompt(agent: dict, query: str, *,
         volatile.append(_HOUSE_RULES.format(name=name))
         if system_suffix:
             volatile.append(system_suffix)
+    # A JOB IS PARKED WAITING ON HIM, and it goes last because it is the one
+    # thing in this prompt with a deadline. Phase 3: a long run that needed one
+    # answer stopped at its cursor and asked here, in chat. Until it is
+    # answered the question is re-stated EVERY turn — she cannot forget it,
+    # and neither can he, because it is in front of both of them.
+    #
+    # Derived from the live row, not remembered from the turn that asked: the
+    # answer may arrive three turns later, after two unrelated questions, and
+    # a prompt built from conversation history would have lost it by then.
+    if conversation_id:
+        try:
+            from app import tasks
+            for p in await tasks.pending_for(conversation_id):
+                volatile.append(
+                    f"## A job of yours is waiting on him\n"
+                    f"\"{p['title']}\" stopped and asked: {p['question']}\n"
+                    f"It is parked exactly where it stopped and resumes the "
+                    f"moment it has an answer. If his message answers this — "
+                    f"even loosely, even in passing — call `answer_task` with "
+                    f"run_id {p['run_id']} and his own words, in the same "
+                    f"turn. If he is talking about something else, leave it "
+                    f"open and do not mention it again unless he asks.")
+        except Exception:
+            log.debug("pending-task block unavailable", exc_info=True)
+
     # speaker register composes AFTER the channel register — the very last
     # word for non-operator voices; operator turns append nothing
     reg = _speaker_register(speaker)
@@ -2087,6 +2114,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             agent, query, include_index=can_dispatch,
             conversation_summary=conversation_summary, system_suffix=system_suffix,
             speaker=speaker, degraded=degraded, signals=prompt_signals,
+            conversation_id=conversation_id,
             tool_names=[t["function"]["name"] for t in tools])
         psp["prompt_chars"] = len(stable_prompt) + len(volatile_prompt) + 2
         psp["agent"] = agent.get("name")
@@ -2172,6 +2200,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # offering to REMEMBER are different faults, and one shared counter would
     # let a read retry spend the write's only chance.
     write_retried = False
+    # Third separate budget, same reasoning a third time: answering a build
+    # request with a menu is its own fault and gets its own one chance.
+    proposal_retried = False
     # THE FLOOR'S RAW MATERIAL. Both guards above discard a draft the operator
     # has already watched appear, on the promise that the forced round will
     # write a better one. Nothing made that promise good: a round that returns
@@ -2583,6 +2614,52 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                                   f"— {w_covered[0]} needed no approval, "
                                   f"asked again")}
                 continue
+
+            # HE ASKED HER TO BUILD SOMETHING AND SHE ANSWERED WITH A MENU.
+            # Measured 2026-08-05: "Set up a Home Assistant instance for me"
+            # drew 168 words comparing where it could run, "Which way do you
+            # want to go?", and zero tool calls — while holding propose_goal,
+            # with her own prompt telling her to call it for exactly this.
+            #
+            # LAST of the four, because it is the widest net: the other three
+            # read only her draft, this one reads his request too, and a turn
+            # that trips an earlier guard has a more specific fault to fix.
+            b_window = (proposal.unproposed_build(
+                            query, round_text, 0, called_names)
+                        if (not proposal_retried and round_no + 1 < max_rounds
+                            and settings_store.get("autonomy.propose_the_build")
+                            and proposal.can_propose(ctx.get("granted") or ()))
+                        else None)
+            if b_window:
+                proposal_retried = True
+                retracted = final_text[round_started_at:]
+                final_text = final_text[:round_started_at]
+                last_retracted = retracted
+                if round_text:
+                    messages.append({"role": "assistant", "content": round_text})
+                messages.append({"role": "system", "content": (
+                    "He asked you to build something and you ended by asking "
+                    "him which way to go. Handing the decision back is not a "
+                    "plan. Call propose_goal now with a checkable finish line "
+                    "and the verbs the build needs — one approval covers the "
+                    "whole thing, so you are asking once, not once per step. "
+                    "\n\nYou may still have a real question, and a fork in a "
+                    "build is worth naming. Name it INSIDE the proposal: pick "
+                    "the option you would choose, say in one line why, and say "
+                    "what you would need to switch. A recommendation he can "
+                    "wave through beats a menu he has to work out. If the "
+                    "choice genuinely blocks the goal's shape, propose the "
+                    "goal anyway and put the question in the rationale. Your "
+                    "previous draft was discarded and NOT shown — write the "
+                    "whole reply again, do not continue it.")})
+                log.info("Proposal retry: agent=%s round=%d matched=%r",
+                         agent.get("name"), round_no, b_window[:80])
+                yield {"type": "activity", "kind": "proposal_retry",
+                       "name": agent.get("name", ""), "agent": agent.get("name"),
+                       "retract": len(retracted),
+                       "detail": ("asked which way to go instead of proposing "
+                                  "the build — asked again")}
+                continue
             break  # final answer reached
 
         # Record the assistant turn that requested the tools
@@ -2978,9 +3055,21 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
         # final_text fixes the operator's record, the model's next-turn context
         # and the spoken channel at once. Same shape as the round-limit note ~25
         # lines above, so streaming, persistence and TTS all behave identically.
-        note = ("\n\n[No tool ran this turn, so the action described above did "
-                "not happen. Nothing was dispatched, created, scheduled or "
-                "saved.]")
+        # DERIVED FROM WHAT ACTUALLY RAN. "No tool ran this turn" was a
+        # hardcoded sentence beside a ROUND-scoped trigger, so a turn that
+        # called three tools and then closed with a promise got a correction
+        # asserting none of them happened — measured 2026-08-05 on a turn that
+        # ran list_goals, list_workloads and propose_goal. Commit 12c5511
+        # already fixed this exact disagreement one layer up, in what the
+        # detector READS; the sentence it prints kept the old assumption.
+        if called_names:
+            ran = ", ".join(sorted(set(called_names)))
+            note = (f"\n\n[The action described above did not happen — no tool "
+                    f"ran in this final step. What did run this turn: {ran}.]")
+        else:
+            note = ("\n\n[No tool ran this turn, so the action described above "
+                    "did not happen. Nothing was dispatched, created, "
+                    "scheduled or saved.]")
         final_text += note
         if dispatch_depth == 0:
             yield {"type": "text", "text": note}

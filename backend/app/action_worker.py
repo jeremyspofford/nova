@@ -39,7 +39,14 @@ async def claim_next() -> Optional[dict]:
                WHERE id = (
                    SELECT r0.id FROM action_runs r0
                      JOIN recommendations rec ON rec.id = r0.recommendation_id
-                    WHERE r0.status = 'queued'
+                    WHERE (r0.status = 'queued'
+                           -- ...or it asked him something and he answered.
+                           -- Resumed by the SAME claim, so a blocked run
+                           -- needs no second worker and no loop of its own,
+                           -- and inherits the approval re-check below for
+                           -- free: dismiss the card while it waits and it
+                           -- never starts again.
+                           OR (r0.status = 'blocked' AND r0.answer IS NOT NULL))
                       AND rec.status = 'approved'
                       AND rec.decided_by = 'operator'
                     ORDER BY r0.created_at
@@ -69,8 +76,78 @@ async def _finish(run_id, status: str, *, result: Optional[dict] = None,
             (error or "")[:2000] or None)
 
 
+async def _block(run_id, conversation_id, key: str, text: str) -> None:
+    """Park the run on a question and put that question in front of him.
+
+    IN CHAT, by his instruction ("Questions, if any, that need clarification
+    from me for nova, should be asked via chat"). Written as an assistant
+    message in the conversation the card came from, so it arrives where he is
+    already looking and the answer is a reply rather than a form.
+
+    The row is written FIRST and the message second: a question he can see and
+    cannot answer is recoverable, a run parked on a question nobody was ever
+    shown is not.
+    """
+    from app import conversations, task_steps
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE action_runs SET status = 'blocked', question = $2::jsonb, "
+            "answer = NULL, answered_at = NULL, updated_at = now() "
+            "WHERE id = $1", run_id,
+            json.dumps(task_steps.question_for(key, text)))
+    log.info("Action run %s blocked on %r", run_id, key)
+    if not conversation_id:
+        return
+    try:
+        await conversations.append_message(
+            str(conversation_id), "assistant", text, None,
+            metadata={"action_run": str(run_id), "question_key": key})
+    except Exception:
+        log.exception("could not post the question for run %s", run_id)
+
+
+async def _run_steps(spec, doc, rec_dict, run, step) -> dict:
+    """Drive a step-based executor from its cursor. Returns the final result.
+
+    Raises `NeedAnswer` outward — `_process` turns that into a blocked run,
+    because only it knows the row and the conversation.
+    """
+    from app import db as _db
+    from app.task_steps import StepContext
+
+    run_id = run["id"]
+    ctx = StepContext(answer=run.get("answer"), record=step, run_id=run_id,
+                      conversation_id=(str(run["conversation_id"])
+                                       if run.get("conversation_id") else None))
+    q = run.get("question")
+    q = json.loads(q) if isinstance(q, str) else q
+    if q:
+        ctx.scratch["answer_key"] = q.get("key")
+
+    start = int(run.get("step_index") or 0)
+    result: dict = {"status": "ok"}
+    for i in range(start, len(spec.steps)):
+        name, fn = spec.steps[i]
+        detail = await fn(doc, rec_dict, ctx)
+        await step(name, "ok", str(detail or ""))
+        # Cursor AFTER the side effect, so a crash mid-step repeats that step
+        # rather than skipping it. Steps are written to tolerate that; skipping
+        # one silently is the failure that cannot be recovered from.
+        async with _db.acquire() as conn:
+            await conn.execute(
+                "UPDATE action_runs SET step_index = $2, answer = NULL, "
+                "question = NULL, updated_at = now() WHERE id = $1",
+                run_id, i + 1)
+        ctx.answer = None                 # spent; never satisfies a later ask
+        ctx.scratch.pop("answer_key", None)
+        if isinstance(detail, dict):
+            result = detail
+    return result
+
+
 async def _process(run: dict) -> None:
     from app import actions, notify, recommendations, settings_store
+    from app.task_steps import NeedAnswer
 
     run_id = run["id"]
     rec_id = run["recommendation_id"]
@@ -86,7 +163,7 @@ async def _process(run: dict) -> None:
         # to typecheck before an executor is looked up.
         doc = actions.parse(raw)
         spec = actions._TYPES[doc.type]
-        if spec.execute is None:
+        if spec.execute is None and not spec.steps:
             raise RuntimeError(f"no executor for {doc.type}")
 
         async with db.acquire() as conn:
@@ -98,11 +175,22 @@ async def _process(run: dict) -> None:
 
         timeout = float(settings_store.get("actions.timeout_s")
                         or actions.DEFAULT_EXECUTE_TIMEOUT_S)
-        result = await asyncio.wait_for(
-            spec.execute(doc, rec_dict, step=step), timeout)
+        if spec.steps:
+            result = await asyncio.wait_for(
+                _run_steps(spec, doc, rec_dict, run, step), timeout)
+        else:
+            result = await asyncio.wait_for(
+                spec.execute(doc, rec_dict, step=step), timeout)
         await _finish(run_id, "succeeded", result=result)
         log.info("Action run %s succeeded: %s", run_id, doc.type)
         summary = "installed"
+    except NeedAnswer as q:
+        # NOT a failure and NOT the end. The run keeps its cursor and its
+        # recommendation; it is waiting on a person, which is a state this
+        # table did not have before phase 3.
+        await step("asked", "ok", q.text[:400])
+        await _block(run_id, run.get("conversation_id"), q.key, q.text)
+        return                      # no receipt: nothing has finished yet
     except asyncio.TimeoutError:
         await step("timeout", "error", "the executor did not finish in time")
         await _finish(run_id, "failed", error="timed out")

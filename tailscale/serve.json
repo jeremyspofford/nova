@@ -1,7 +1,11 @@
 {
   "TCP": {
     "443": { "HTTPS": true },
-    "8443": { "HTTPS": true }
+    "8443": { "HTTPS": true },
+    "8123": {
+      "TCPForward": "home-assistant:8123",
+      "TerminateTLS": "${TS_CERT_DOMAIN}"
+    }
   },
   "Web": {
     "${TS_CERT_DOMAIN}:443": {

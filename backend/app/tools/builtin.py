@@ -1512,6 +1512,104 @@ async def _workload_logs(args, ctx):
     return await workloads.logs(pod, lines)
 
 
+async def _service_logs(args, ctx):
+    """Why a service of this install did not come up.
+
+    The gap Jeremy named on 2026-08-05: `service_status` tells her a container
+    is `exited (1)` and `workload_logs` covers her Kubernetes pods, but the
+    compose services Nova is MADE of had no log surface at all. So every
+    diagnosis of a failed start ended with a person reading
+    `docker compose logs` and reporting back — the capability papered over,
+    her left exactly as unable as before.
+    """
+    import httpx
+    from app.config import settings          # late local, the file's idiom
+    service = str(args.get("service") or "").strip()
+    if not service:
+        return ("Error: service is required. service_status lists the "
+                "services of this install and their state.")
+    try:
+        lines = int(args.get("lines") or 80)
+    except (TypeError, ValueError):
+        lines = 80
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.get(
+                f"{settings.inference_control_url}/logs",
+                params={"service": service, "lines": lines})
+    except httpx.HTTPError as e:
+        return (f"Error: the docker-control sidecar is unreachable ({e}) — "
+                f"container logs cannot be read without it.")
+    try:
+        data = r.json()
+    except ValueError:
+        return f"Error: unreadable response from the sidecar ({r.status_code})"
+    if data.get("error"):
+        known = ", ".join(data.get("known") or [])
+        return f"Error: {data['error']}." + (f" Known services: {known}." if known else "")
+    return _j(data)
+
+
+async def _answer_task(args, ctx):
+    """Hand the operator's answer to the run that is waiting on it.
+
+    Phase 3. A long job stopped, asked one thing in chat, and is parked at its
+    cursor; this is what restarts it. The backend checks the run is blocked
+    and belongs to this conversation, and never judges whether the words are a
+    good answer — that is a reading of intent, and `tasks.py` argues at length
+    why the alternative (silently capturing his next message) is worse.
+    """
+    from app import tasks
+    run_id = str(args.get("run_id") or "").strip()
+    text = str(args.get("answer") or "").strip()
+    if not run_id or not text:
+        return ("Error: run_id and answer are both required. The open "
+                "question and its run_id are in this turn's context.")
+    out = await tasks.answer(run_id, text, ctx.get("conversation_id"))
+    if out.get("status") != "ok":
+        return f"Error: {out.get('detail')}"
+    return _j(out)
+
+
+async def _check_service_reachable(args, ctx):
+    """Can the operator actually open this service, from here and from away?
+
+    NOT a URL fetcher and must never become one. `fetch_url` refuses anything
+    that is not globally routable — `net_guard` allow-lists on purpose, and
+    CGNAT (100.64.0.0/10, exactly Tailscale's range) is excluded so the model
+    cannot reach tailnet peers on its own say-so. That boundary stays. This
+    asks about THIS INSTALL'S OWN services, by name, from the closed set
+    docker reports, and cannot be pointed anywhere else.
+
+    It exists because "is it running" and "can he open it on his phone" are
+    different questions and only the second one is what he asked. On
+    2026-08-05 a container was healthy, published, served on the tailnet, and
+    still answering 400 — three layers, each fine, and the answer only visible
+    by checking the whole path.
+    """
+    import httpx
+    from app.config import settings
+    service = str(args.get("service") or "").strip()
+    if not service:
+        return ("Error: service is required. service_status lists the "
+                "services of this install.")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.get(f"{settings.inference_control_url}/reachable",
+                                 params={"service": service})
+    except httpx.HTTPError as e:
+        return (f"Error: the docker-control sidecar is unreachable ({e}) — "
+                f"reachability cannot be checked without it.")
+    try:
+        data = r.json()
+    except ValueError:
+        return f"Error: unreadable response from the sidecar ({r.status_code})"
+    if data.get("error"):
+        known = ", ".join(data.get("known") or [])
+        return f"Error: {data['error']}." + (f" Known services: {known}." if known else "")
+    return _j(data)
+
+
 async def _allow_internet_egress(args, ctx):
     """Open the public internet to her workloads; private ranges stay denied.
 
@@ -1642,6 +1740,26 @@ async def _propose_goal(args, ctx):
                 "finish line the operator can check — 'a router-manager agent "
                 "that can list VLANs and show per-client bandwidth' is a "
                 "target; 'manage the router' is a wish.")
+    # ALREADY BUILT? Refuse before the card, not after. A goal proposal for
+    # something an executor already does costs the operator a decision he
+    # should never see, and points the build at the wrong place — measured
+    # 2026-08-05, twice, proposing a Kubernetes deploy_workload goal for Home
+    # Assistant while the one-click compose route sat unused.
+    #
+    # Derived from the executors' own COVERS declarations, so the next one
+    # teaches this check by existing. Returned as a tool ERROR rather than a
+    # prompt hint because that is the difference between a request and a
+    # control: she cannot proceed past it, and the message names the exact
+    # call to make instead.
+    try:
+        from app import actions
+        covered = actions.covered_by(f"{title} {target}")
+    except Exception:  # noqa: BLE001 — a redirect never breaks a proposal
+        covered = None
+    if covered:
+        _type, hint = covered
+        return f"Not proposed — this is already built. {hint}"
+
     unknown = [v for v in verbs if v not in scopes.GOAL_SCOPED_TOOLS]
     if unknown or not verbs:
         return ("Error: `verbs` must name at least one of: "
@@ -1907,7 +2025,12 @@ async def _raise_recommendation(args, ctx):
         row = await recommendations.create(
             kind, title, body,
             source=ctx.get("agent_name") or "unknown",
-            action=action, priority=priority, dedupe_key=dedupe_key)
+            action=action, priority=priority, dedupe_key=dedupe_key,
+            # Where this was raised, so a step-based plan that has to ASK the
+            # operator something has a thread to ask in (phase 3). Taken from
+            # the tool ctx rather than a model argument: which conversation
+            # this is, is a fact about the turn, not a choice.
+            conversation_id=ctx.get("conversation_id"))
     except ValueError as e:
         return f"Error: {e}"
 
@@ -2666,6 +2789,66 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "parameters": {"type": "object", "properties": {}, "required": []},
         "reads_only": True,
         "execute": _list_workloads,
+    },
+    "answer_task": {
+        "name": "answer_task",
+        "description": (
+            "Give a waiting job the operator's answer so it carries on. When "
+            "a long task needs one thing from him it stops at that exact "
+            "point and asks HERE, in chat; this turn's context names the open "
+            "question and its run_id. Call this with what he actually said, "
+            "in his words, the moment he answers it — the job resumes from "
+            "where it stopped rather than starting over. If his reply is "
+            "about something else, do not call this; the question stays open."),
+        "parameters": {"type": "object", "properties": {
+            "run_id": {"type": "string",
+                       "description": "the waiting job's run_id, from this turn's context"},
+            "answer": {"type": "string",
+                       "description": "what the operator said, in his own words"},
+        }, "required": ["run_id", "answer"]},
+        "execute": _answer_task,
+    },
+    "check_service_reachable": {
+        "name": "check_service_reachable",
+        "description": (
+            "Whether one of this install's services can actually be OPENED — "
+            "which published ports it has, what each answers over HTTP, and "
+            "whether tailscale is serving it so another device can reach it. "
+            "'Running' and 'reachable' are different: a container can be "
+            "healthy with no published port, or published but not on the "
+            "tailnet, or served and still refusing requests. Use this before "
+            "telling the operator a service is available to him. Read-only."),
+        "parameters": {"type": "object", "properties": {
+            "service": {"type": "string",
+                        "description": ("compose service name as service_status "
+                                        "reports it, e.g. home-assistant")},
+        }, "required": ["service"]},
+        # Issues one GET at this install's own published port. Cannot be
+        # aimed anywhere else — the sidecar refuses any name outside the
+        # compose project.
+        "reads_only": True,
+        "execute": _check_service_reachable,
+    },
+    "service_logs": {
+        "name": "service_logs",
+        "description": (
+            "Recent output from one of the SERVICES THIS INSTALL IS MADE OF — "
+            "home-assistant, ollama, searxng, whisper, media, ntfy, coder and "
+            "the rest. This is how you find out WHY something did not come "
+            "up, after service_status has told you that it didn't. Different "
+            "tool from workload_logs, which reads your Kubernetes pods. "
+            "Read-only."),
+        "parameters": {"type": "object", "properties": {
+            "service": {"type": "string",
+                        "description": ("compose service name as service_status "
+                                        "reports it, e.g. home-assistant")},
+            "lines": {"type": "integer",
+                      "description": "how many lines (default 80, max 400)"},
+        }, "required": ["service"]},
+        # Reads a container's stdout. Naming a service does not start one, and
+        # the sidecar refuses any name outside this compose project.
+        "reads_only": True,
+        "execute": _service_logs,
     },
     "workload_logs": {
         "name": "workload_logs",

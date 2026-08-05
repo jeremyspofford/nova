@@ -916,6 +916,33 @@ export async function getNotifyService(): Promise<NotifyService> {
   return r.json();
 }
 
+export interface HomeAssistantStatus {
+  present: boolean;
+  running: boolean;
+  state: string;
+  url: string | null;
+  op?: string | null;
+  error?: string | null;
+}
+
+/** Is Home Assistant running, and where (roadmap #35). */
+export async function getHomeAssistant(): Promise<HomeAssistantStatus> {
+  const r = await apiFetch(`${API_URL}/api/v1/home-assistant`);
+  if (!r.ok) throw new Error('Failed to load Home Assistant status');
+  return r.json();
+}
+
+/** Start or stop Home Assistant. The same route Nova's approved plan uses —
+ *  `actions.assert_routes_exist()` refuses to boot if it goes missing. */
+export async function homeAssistantAction(action: 'up' | 'down'): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/home-assistant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Action failed');
+}
+
 /** Start/stop the self-hosted ntfy service, or (re)apply just the tailnet
  *  route. 'up' also derives + applies the correct base URL so the phone stays
  *  in sync; 'expose' re-applies the :8443 route live (no ntfy restart). */
