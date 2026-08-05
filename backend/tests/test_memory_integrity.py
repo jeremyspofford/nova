@@ -113,10 +113,86 @@ async def test_pinned_targets():
     check("pinning a skill still works", res["status"] == "written", str(res))
 
 
+async def test_write_carries_mtime():
+    """A document written in this process must look as new as it is.
+
+    memory_usage.report reads index mtime and nothing else: below the window
+    cutoff a doc is eligible for never_retrieved_sample (the report's own
+    guard is "only fair to call it unused if it existed for the whole
+    window") and never counts toward changed_in_window. _index_file defaulted
+    that to 0.0 and every write path here called it with no mtime, so until
+    the next backend start — nothing rescans in between — everything written
+    was indexed as older than any window. The weekly review-memory-usage
+    automation then handed the ingestion agent a three-day-old channel as
+    unused dead weight.
+
+    Checked on the WRITE paths, not on _index_file directly, because the
+    default is the whole defect.
+    """
+    print("a document written now is indexed with the mtime it actually has")
+    mem = memory_mod.OkfMemory(base_dir=SCRATCH)
+
+    topic = await mem.write("Freshly written body.", type="topic",
+                            title="Recency Probe", link_pass=False)
+    check("a topic write carries a real mtime",
+          mem.index.docs[topic["id"]]["mtime"] > 0,
+          str(mem.index.docs[topic["id"]]["mtime"]))
+    # ...and it is the FILE's, not the clock's. A default of time.time() would
+    # satisfy "> 0" while quietly overwriting the one case the store goes out
+    # of its way to preserve: normalize_source_transcript restores the older
+    # mtime with os.utime so a mechanical retag does not read as a fresh edit,
+    # and a re-index that stamped "now" would undo it on the next write.
+    check("...the one the file actually has",
+          mem.index.docs[topic["id"]]["mtime"]
+          == (mem.store.base_dir / topic["id"]).stat().st_mtime,
+          str((mem.store.base_dir / topic["id"]).stat().st_mtime))
+
+    appended = await mem.write("A later line.", type="topic", title="Recency Probe",
+                               item_id=topic["id"], append=True, link_pass=False)
+    check("and so does an append",
+          mem.index.docs[appended["id"]]["mtime"] > 0,
+          str(mem.index.docs[appended["id"]]["mtime"]))
+
+    journal = await mem.write("Something happened.", type="journal")
+    check("and a journal entry",
+          mem.index.docs[journal["id"]]["mtime"] > 0,
+          str(mem.index.docs[journal["id"]]["mtime"]))
+
+    skill = await mem.write("How to do the thing.", type="skill",
+                            title="Recency Skill", link_pass=False)
+    check("and a skill", mem.index.docs[skill["id"]]["mtime"] > 0,
+          str(mem.index.docs[skill["id"]]["mtime"]))
+
+    # A caller that knows better still wins: startup and the file explorer
+    # pass what they already read, and store.normalize_source_transcript hands
+    # ingest_backfill back the OLDER mtime it restored with os.utime, so a
+    # mechanical retag does not read as a fresh edit.
+    mem._index_file(topic["id"], 1.0)
+    check("an explicit mtime is honoured, never re-derived",
+          mem.index.docs[topic["id"]]["mtime"] == 1.0,
+          str(mem.index.docs[topic["id"]]["mtime"]))
+
+    # ...including an explicit 0.0, which the old sentinel could not tell
+    # apart from a caller that passed nothing
+    mem._index_file(topic["id"], 0.0)
+    check("...including an explicit 0.0",
+          mem.index.docs[topic["id"]]["mtime"] == 0.0,
+          str(mem.index.docs[topic["id"]]["mtime"]))
+
+    # the stat sits after the read-back check, so a vanished file is an
+    # eviction and not an OSError
+    (mem.store.base_dir / topic["id"]).unlink()
+    mem._index_file(topic["id"])
+    check("a document that vanished is evicted, not statted",
+          topic["id"] not in mem.index.docs)
+
+
 async def main():
     await test_slug_collision()
     print()
     await test_pinned_targets()
+    print()
+    await test_write_carries_mtime()
     print()
     shutil.rmtree(SCRATCH, ignore_errors=True)
     if FAILURES:

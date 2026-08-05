@@ -129,11 +129,46 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             body = re.sub(rf"\b{re.escape(self_name)}\b", name, body)
         return body
 
-    def _index_file(self, doc_id: str, mtime: float = 0.0):
+    def _index_file(self, doc_id: str, mtime: float | None = None):
+        """Index (or re-index) one document, deriving its mtime from the file
+        when the caller does not supply one.
+
+        The old default was the literal 0.0, and every write path in this
+        module called it with no mtime — so from the moment a document was
+        written until the next process start (nothing rescans in between) the
+        index carried it as older than any window. memory_usage.report reads
+        exactly that field: measured 2026-08-05, a document written since the
+        last backend start was eligible for never_retrieved_sample despite
+        the explicit "only fair to call it unused if it existed for the whole
+        window" guard, and never counted toward changed_in_window. The weekly
+        review-memory-usage automation therefore offered a channel followed
+        three days earlier to the ingestion agent as unused dead weight, in a
+        report that tells it not to second-guess the numbers.
+
+        Derived here rather than by passing an mtime at each call site: the
+        call sites are what went wrong, and the fifth one added tomorrow
+        would drop it again.
+
+        A supplied mtime always wins and is never re-derived — startup and
+        the file explorer already hold the value they read, and
+        store.normalize_source_transcript hands ingest_backfill back the OLDER
+        mtime it restored with os.utime, so a mechanical retag does not read
+        as a fresh edit.
+
+        Deliberately does NOT stat a document that has vanished: a doc that
+        no longer reads back is evicted from the index and returns before the
+        stat. The stat is guarded anyway, for a file deleted between the
+        write and this call.
+        """
         parsed = self.store.read_file(doc_id)
         if not parsed:
             self.index.remove(doc_id)
             return
+        if mtime is None:
+            try:
+                mtime = (self.store.base_dir / doc_id).stat().st_mtime
+            except OSError:
+                mtime = 0.0
         fm, body = parsed
         try:
             priority = int(fm.get("priority", 0))

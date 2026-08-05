@@ -100,9 +100,12 @@ async def run() -> None:
         check("and it is not even listed", "escape.txt" not in listed, str(listed))
 
         print("\n-- memory is shaped by what the store can see --")
+        # The substring is the DOOR the refusal offers, which is the part
+        # that has to stay true: it used to send the operator to a Settings
+        # persona card that does not exist, so this now pins the host path.
         await refuses("soul.md is identity, not a note",
                       rf.write_content(rf.WriteBody(root="memory", path="soul.md", content="x")),
-                      status=403, contains="settings")
+                      status=403, contains="data/memory/soul.md")
         await refuses("journals are the record of what happened",
                       rf.write_content(rf.WriteBody(
                           root="memory", path="journals/2026-08-02.md", content="x")),

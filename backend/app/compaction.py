@@ -73,11 +73,35 @@ async def maybe_compact(conversation_id: str, model: str,
             if len(rows) < settings_store.get("compaction.min_aged"):
                 return
 
-            parts = []
+            # Cap the ROW SET, not the rendered string. The watermark set at
+            # the end of this function is the created_at of the last row that
+            # was actually summarized; slicing the joined transcript instead
+            # dropped the NEWEST messages from what the model saw and then
+            # buried them under the watermark, permanently outside the
+            # rolling summary that is injected into every later system
+            # prompt. Every other way this function can fail to summarize
+            # (LLM error, empty summary, grounding refusal) leaves the
+            # watermark alone so the messages come back on a later turn; this
+            # path consumed them silently. Not a corner case: the SELECT has
+            # no LIMIT, compaction.min_aged is allowed up to 100, and ~110
+            # live messages fill the 24,000-char budget.
+            parts: list[str] = []
+            used = 0
             for r in rows:
                 speaker = "User" if r["role"] == "user" else "Nova"
-                parts.append(f"{speaker}: {r['content'][:_MAX_MSG_CHARS]}")
-            transcript = "\n\n".join(parts)[:_MAX_TRANSCRIPT_CHARS]
+                line = f"{speaker}: {r['content'][:_MAX_MSG_CHARS]}"
+                # The first row goes in unconditionally, so the pass always
+                # advances. Slack today (800 per message against a 24,000
+                # budget), but a checked-first loop would stall the watermark
+                # forever the day _MAX_MSG_CHARS is raised above
+                # _MAX_TRANSCRIPT_CHARS.
+                if parts and used + len(line) + 2 > _MAX_TRANSCRIPT_CHARS:
+                    break
+                used += len(line) + (2 if parts else 0)
+                parts.append(line)
+            included = len(parts)
+            deferred = len(rows) - included
+            transcript = "\n\n".join(parts)
 
             user_prompt = ""
             if prev:
@@ -160,9 +184,11 @@ async def maybe_compact(conversation_id: str, model: str,
                               ", ".join(invented[:6]))
                     return
 
-            upto = rows[-1]["created_at"]
+            # The last row INCLUDED, never the last row fetched.
+            upto = rows[included - 1]["created_at"]
             await conversations.set_summary(conversation_id, summary, upto)
-            log.info("Compacted %d aged messages into summary (%d chars, upto %s)",
-                     len(rows), len(summary), upto)
+            log.info("Compacted %d of %d aged messages into summary (%d chars, "
+                     "upto %s); %d deferred above the watermark for the next "
+                     "pass", included, len(rows), len(summary), upto, deferred)
         except Exception:
             log.exception("compaction pass failed; watermark unchanged")
