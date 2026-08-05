@@ -84,25 +84,84 @@ async def run() -> None:
         skipped_with_text = await conn.fetchval(
             "SELECT count(*) FROM ingest_jobs WHERE status = 'skipped' "
             "AND error IS NOT NULL AND error <> ''")
+        # A dismissed row is a row the operator has taken off his screen, and
+        # the control has to say the same thing the census does or it is
+        # pinning the pre-dismissal contract. Both of his members-only videos
+        # are here: failed forever, dismissed on purpose.
         really_failed = await conn.fetchval(
-            "SELECT count(*) FROM ingest_jobs WHERE status = 'failed'")
+            "SELECT count(*) FROM ingest_jobs WHERE status = 'failed' "
+            "AND dismissed_at IS NULL")
     counted = c["sources"].get("ingest_jobs", {}).get("failed", 0)
     check("a skipped job carrying a reason is NOT counted as a failure",
           counted == really_failed,
           f"counted={counted} failed={really_failed} skipped_with_text={skipped_with_text}")
 
-    print("3b. a GRADE is not a fault, and the rule is derived not listed")
+    print("3a. dismissing a row REMOVES it from the count")
+    # The two failures the operator dismissed are members-only videos that
+    # will never succeed. Clearing them off the Activity page has to clear
+    # them here too, or the button empties one screen while she goes on
+    # reporting them in the FACTS block of every system prompt. Proved by
+    # doing it — inside a transaction that is rolled back, so the property is
+    # tested on every run rather than only while the live queue is red.
+    store = failures._Store("ingest_jobs", schema["ingest_jobs"])
+    check("the suppression is DERIVED from the column, not from a table name",
+          store.dismissed_col == "dismissed_at", str(store.dismissed_col))
+    where, args = store.predicate()
+    async with db.acquire() as conn:
+        tx = conn.transaction()
+        await tx.start()
+        try:
+            job = await conn.fetchval(
+                "INSERT INTO ingest_jobs (url, status, error) VALUES "
+                "($1, 'failed', 'synthetic; this transaction is rolled back') "
+                "RETURNING id", "https://example.invalid/census-probe")
+            before = await conn.fetchval(
+                f'SELECT count(*) FROM ingest_jobs WHERE {where}', *args)
+            await conn.execute(
+                "UPDATE ingest_jobs SET dismissed_at = now() WHERE id = $1", job)
+            after = await conn.fetchval(
+                f'SELECT count(*) FROM ingest_jobs WHERE {where}', *args)
+        finally:
+            await tx.rollback()
+    check("a failed job is counted", before >= 1, f"{before} failed")
+    check("...and dismissing it takes it out — exactly that one row",
+          after == before - 1, f"{before} -> {after}")
+
+    print("3b. a GRADE is not a fault, and a HARNESS CRASH is not a grade")
     # eval_runs writes status='failed' when the model under test scored below
     # the pass bar on a run the harness completed perfectly, and reserves
-    # 'error' for a harness crash. Counting the grade put 4 false failures in
-    # front of her. The excuse must come from the SCHEMA (a score pair beside
-    # the status), not from someone remembering to add eval_runs to a list.
-    check("eval_runs is excused", "eval_runs" in c.get("declined", {}),
-          str(c.get("declined", {}).get("eval_runs", ""))[:60])
-    check("...and NOT by being named in _DECLINED",
+    # 'error' for a crash ("a harness failure is not a verdict", eval_runs.py).
+    # Counting the grade put 4 false failures in front of her — but excusing
+    # the whole TABLE on that evidence hid the crashes: measured 2026-08-05,
+    # 175 rows at status='error', every run since 2026-08-03 dead and no suite
+    # ever passed, while the census total read 14 and the prompt line carried
+    # no eval signal at all. So the score pair must narrow the VOCABULARY, not
+    # excuse the store, and it must do it from the SCHEMA rather than from
+    # someone remembering to name eval_runs somewhere.
+    check("eval_runs is censused, not excused", "eval_runs" in c["scanned"])
+    check("...and is named in no list — the narrowing reads the schema",
           "eval_runs" not in failures.declined())
-    check("...but by carrying a score pair next to its status",
-          "GRADE" in c["declined"]["eval_runs"])
+    ev = failures._Store("eval_runs", schema["eval_runs"])
+    check("the score pair beside the status is what narrows it",
+          ev.score_pair is not None, str(ev.score_pair))
+    check("a scored store loses the GRADE words",
+          not set(failures._GRADE_WORDS) & set(ev.failed_words),
+          str(ev.failed_words))
+    check("...and keeps the FAULT words, or a dead harness reads as a low score",
+          {"error", "crashed", "timeout"} <= set(ev.failed_words))
+    check("a store with no score pair keeps the whole vocabulary",
+          failures._Store("automation_runs",
+                          schema["automation_runs"]).failed_words
+          == failures._FAILED)
+    async with db.acquire() as conn:
+        harness_dead = await conn.fetchval(
+            "SELECT count(*) FROM eval_runs WHERE status = 'error'")
+        graded_down = await conn.fetchval(
+            "SELECT count(*) FROM eval_runs WHERE status = 'failed'")
+    counted_evals = c["sources"].get("eval_runs", {}).get("failed", 0)
+    check("every harness crash is counted and no graded run is",
+          counted_evals == harness_dead,
+          f"counted={counted_evals} error={harness_dead} graded_failed={graded_down}")
     check("a run-outcome table with no score pair is still counted",
           "automation_runs" in c["scanned"])
 
@@ -194,6 +253,107 @@ async def run() -> None:
                     break
             break
     check("the nudge is bounded and short", len(line) < 400, f"{len(line)} chars")
+
+    print("10. the failure a count can never see: backups that STOP")
+    # `backup_attempts` records one row per attempt, so counting rows can find
+    # a refusal and can NEVER find the disaster: an interval of 0, an unmounted
+    # bundle store, or a scheduler that has stopped ticking each write no row
+    # at all, and an empty history counts the same as a healthy one. Absence is
+    # invisible to count(*) by construction, so it is asked max(at) instead —
+    # and the store owes the module's own invariant a reason for not being
+    # censused, exactly like any other decline.
+    from app import backup_service
+    why = failures.declined().get("backup_attempts", "")
+    check("backup_attempts is declined, so the report stays honest about it",
+          bool(why), why[:60])
+    check("...and the reason names the check that replaces counting",
+          "freshness" in why)
+    v = failures._Store("backup_attempts", schema["backup_attempts"])
+    check("counting it would find nothing anyway — outcome/reason are outside "
+          "the census vocabulary", not v.qualifies,
+          f"status={v.status_col} err={v.qualifying_col}")
+
+    # The verdict is a pure function of three numbers, so the rule is tested
+    # here rather than by waiting a day for a real history to go stale.
+    off = backup_service._verdict(every_hours=0, age_hours=None, outcome=None)
+    check("an interval of 0 is a DECISION, not an alarm",
+          not off["alarm"] and "OFF" in off["note"], off["note"][:60])
+    never = backup_service._verdict(every_hours=24, age_hours=None, outcome=None)
+    check("a history with nothing in it is STALE, never clean",
+          never["stale"] and never["headline"], never["headline"][:70])
+    stopped = backup_service._verdict(every_hours=24, age_hours=73, outcome="ok")
+    check("three days since the last attempt on a daily schedule is stale",
+          stopped["stale"], stopped["headline"][:70])
+    fresh = backup_service._verdict(every_hours=24, age_hours=2, outcome="ok")
+    check("a backup taken two hours ago is not", not fresh["stale"]
+          and not fresh["alarm"] and not fresh["headline"])
+    refused = backup_service._verdict(every_hours=24, age_hours=2,
+                                      outcome="refused")
+    check("...but running on time and producing no bundle still alarms",
+          refused["alarm"] and not refused["stale"], refused["headline"][:70])
+    live = await backup_service.freshness()
+    check("the live verdict carries the facts it was computed from",
+          {"stale", "alarm", "headline", "note", "every_hours", "at",
+           "outcome"} <= set(live), str(sorted(live))[:80])
+    clause = await failures._backup_clause()
+    check("the prompt clause matches the verdict, both ways",
+          bool(clause) == bool(live["headline"]), f"{live['headline']!r}")
+    if live.get("reason"):
+        check("no refusal text — which quotes paths — reaches the prompt",
+              live["reason"][:40] not in clause)
+
+    # The whole chain, driven from a STALE history. Everything above holds
+    # while backups happen to be healthy, so on this machine today none of it
+    # exercises the wiring: delete the append in `prompt_line` and every check
+    # so far stays green. So the verdict is forced and the FACTS line is read.
+    real = backup_service.freshness
+
+    async def _stopped():
+        return {"stale": True, "alarm": True,
+                "headline": "the last attempt was 73h ago and one is due "
+                            "every 24h",
+                "note": "The last backup attempt was 73h ago.",
+                "every_hours": 24.0, "at": None, "age_hours": 73.0,
+                "outcome": "ok", "bundle": None, "reason": None}
+
+    backup_service.freshness = _stopped
+    try:
+        failures._LINE_CACHE = (0.0, "")
+        stale_line = await failures.prompt_line()
+    finally:
+        backup_service.freshness = real
+        failures._LINE_CACHE = (0.0, "")
+    check("a stopped backup reaches the FACTS block, not just diagnose",
+          "73h ago" in stale_line, stale_line[-90:])
+    check("...APPENDED to the counts, never instead of them — a run where "
+          "work is failing AND backups stopped is where either fact alone "
+          "reads like the whole answer",
+          all(t in stale_line for t in c["sources"]) if c["sources"] else True,
+          stale_line[:60])
+    check("...and the line is still bounded", len(stale_line) < 400,
+          f"{len(stale_line)} chars")
+
+    # `note` is the sentence she quotes back, and it is the one place the
+    # all-clear is supposed to be structurally unreachable. A stopped backup
+    # is a failure the census CANNOT count — no row is written — so without
+    # the verdict passed in, "no open failures" was sayable through a week of
+    # no backups at all.
+    clean_census = {"scanned": ["ingest_jobs"], "sources": {}, "total": 0,
+                    "recent_total": 0, "days": 7, "unreadable": [],
+                    "unclassified": []}
+    check("with a healthy verdict the all-clear is still available",
+          "RECORDED" in failures.note(clean_census, backups=fresh))
+    stopped_note = failures.note(clean_census, backups=await _stopped())
+    check("a stopped backup makes the all-clear unreachable",
+          "RECORDED" not in stopped_note and "73h" in stopped_note,
+          stopped_note[:70])
+    unreadable_note = failures.note(clean_census, backups={"note": "could "
+                                                          "not be read"})
+    check("...and so does a verdict with no verdict in it — an unreadable "
+          "backup story is not a healthy one",
+          "RECORDED" not in unreadable_note, unreadable_note[:70])
+    check("omitting the verdict entirely invents nothing",
+          "backup" not in failures.note(clean_census).lower())
 
     await db.close_pool()
 

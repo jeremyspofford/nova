@@ -182,6 +182,61 @@ async def take_unannounced_source_stats(source_key: str) -> dict:
     return {"done": row["done"], "failed": row["failed"], "skipped": row["skipped"]}
 
 
+DISMISSABLE = ("done", "failed", "skipped")
+
+
+async def dismiss(job_id) -> Optional[dict]:
+    """Clear one terminal row off the Activity page. Returns the row, or None
+    if it wasn't dismissable.
+
+    The status guard is the whole control, and it is in the WHERE clause: a
+    queued or running job is LIVE WORK, and hiding live work from the operator
+    is how a queue silently stops. Only something already finished — done,
+    failed or skipped — can be cleared.
+
+    Not a delete. `dismissed_at` is a tombstone the followed-source poll reads
+    (see `_enqueue_source_entries`), which is what makes clearing a permanently
+    failing video actually stop it coming back. See migration 091.
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE ingest_jobs
+                 SET dismissed_at = now(), updated_at = now()
+               WHERE id = $1 AND dismissed_at IS NULL
+                 AND status = ANY($2)
+               RETURNING *""",
+            job_id, list(DISMISSABLE))
+    return dict(row) if row else None
+
+
+async def dismiss_finished() -> int:
+    """Clear every finished row at once — the 'Clear finished' button. Live
+    work (queued/running) is untouched by the same predicate as `dismiss`.
+    Returns how many rows were cleared."""
+    async with db.acquire() as conn:
+        res = await conn.execute(
+            """UPDATE ingest_jobs
+                 SET dismissed_at = now(), updated_at = now()
+               WHERE dismissed_at IS NULL AND status = ANY($1)""",
+            list(DISMISSABLE))
+    return _rowcount(res)
+
+
+async def restore(job_id) -> Optional[dict]:
+    """Undo a dismissal — the row returns to the panel in whatever state it was
+    already in. Deliberately NOT a retry: restoring a dismissed 'done' row must
+    not re-run a completed ingest. The operator retries it afterwards if that's
+    what they meant."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE ingest_jobs
+                 SET dismissed_at = NULL, updated_at = now()
+               WHERE id = $1 AND dismissed_at IS NOT NULL
+               RETURNING *""",
+            job_id)
+    return dict(row) if row else None
+
+
 async def find_open(media_key: str) -> Optional[dict]:
     """Most recent non-done job for this media_key, if any. Lets a producer
     (follow_source backfill, poll) revive a stuck failed/skipped row instead
@@ -212,7 +267,8 @@ async def purge_superseded_siblings(media_key: str) -> int:
     return _rowcount(res)
 
 
-async def retry(job_id, *, refill_agent_budget: bool = False) -> Optional[dict]:
+async def retry(job_id, *, refill_agent_budget: bool = False,
+                clear_dismissal: bool = False) -> Optional[dict]:
     """Retry of a failed/skipped job: reset it to queued with a fresh error AND
     interruption budget (attempts=0, orphans=0) so the worker picks it up
     again. Returns the row, or None if it wasn't retryable.
@@ -223,16 +279,26 @@ async def retry(job_id, *, refill_agent_budget: bool = False) -> Optional[dict]:
     model can also trigger with `poll_sources` — so a version of this that
     always zeroed `agent_retries` would let the poll refill the model's retry
     budget on a timer. The WHERE-clause control in `retry_by_agent` would then
-    be a control the system defeated by itself, on a schedule."""
+    be a control the system defeated by itself, on a schedule.
+
+    `clear_dismissal` is opt-in for exactly the same reason and the same
+    caller. A retry the OPERATOR asked for plainly overrules his own earlier
+    dismissal — he is looking at the row. A revival by the poll must not, or
+    the tombstone would be swept away by the very loop it exists to stop, and
+    the two members-only videos would be back within the hour. The poll also
+    skips dismissed rows before it ever reaches here; this flag is the second
+    of the two guards, so neither alone is load-bearing."""
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """UPDATE ingest_jobs
                  SET status = 'queued', error = NULL, attempts = 0, orphans = 0,
                      agent_retries = CASE WHEN $2 THEN 0 ELSE agent_retries END,
+                     dismissed_at = CASE WHEN $3 THEN NULL ELSE dismissed_at END,
                      started_at = NULL, finished_at = NULL, updated_at = now()
                WHERE id = $1 AND status IN ('failed', 'skipped')
+                 AND (dismissed_at IS NULL OR $3)
                RETURNING *""",
-            job_id, refill_agent_budget)
+            job_id, refill_agent_budget, clear_dismissal)
     return dict(row) if row else None
 
 
@@ -252,11 +318,17 @@ async def retry_by_agent(job_id, *, agent_name: str = "") -> dict:
     zero `agent_retries`, because the only UPDATE that does is `retry` above,
     reachable solely from the operator's authenticated endpoint.
 
-    Returns {"status": "queued"|"not_retryable"|"budget_spent"|"not_found"}
-    plus the row when it worked. The refusals are distinguished with one extra
-    SELECT so she can tell the operator WHICH wall she hit — "I already
-    retried this once, use the Retry button on Activity" is actionable, and a
-    bare no is what sends a model round the loop again.
+    Returns {"status": "queued"|"not_retryable"|"budget_spent"|"dismissed"|
+    "not_found"} plus the row when it worked. The refusals are distinguished
+    with one extra SELECT so she can tell the operator WHICH wall she hit — "I
+    already retried this once, use the Retry button on Activity" is actionable,
+    and a bare no is what sends a model round the loop again.
+
+    `dismissed_at IS NULL` joins the WHERE clause because a dismissal is an
+    operator DECISION about a row, not a state to be worked around. He cleared
+    those two members-only videos off the page precisely so nothing would keep
+    trying them; a model that could re-queue one would undo that on his behalf,
+    silently, and put the row back on his screen.
     """
     async with db.acquire() as conn:
         # The CTE carries the OLD error out with the row. The UPDATE clears
@@ -275,16 +347,22 @@ async def retry_by_agent(job_id, *, agent_name: str = "") -> dict:
                 WHERE j.id = prev.id
                   AND j.status IN ('failed', 'skipped')
                   AND j.agent_retries < $2
+                  AND j.dismissed_at IS NULL
                RETURNING j.*, prev.prev_error""",
             job_id, AGENT_RETRY_BUDGET)
         if row:
             log.info("agent %s re-queued ingest job %s", agent_name or "?", job_id)
             return {"status": "queued", "job": dict(row)}
         cur = await conn.fetchrow(
-            "SELECT status, agent_retries, url, title FROM ingest_jobs "
-            "WHERE id = $1", job_id)
+            "SELECT status, agent_retries, dismissed_at, url, title "
+            "FROM ingest_jobs WHERE id = $1", job_id)
     if not cur:
         return {"status": "not_found"}
+    # DISMISSAL FIRST among the refusals. It is the operator's own decision and
+    # it outranks both of the budget answers: telling him "you already retried
+    # this once" about a row he deliberately cleared explains the wrong wall.
+    if cur["dismissed_at"] is not None:
+        return {"status": "dismissed", "job": dict(cur)}
     # STATUS FIRST, and the order is load-bearing. A row that is no longer
     # failed/skipped was not refused for budget, whatever the counter says —
     # it may have been re-queued by this very tool and already SUCCEEDED, and
@@ -300,29 +378,57 @@ async def retry_by_agent(job_id, *, agent_name: str = "") -> dict:
 
 async def summary(recent: int = 60) -> dict:
     """Counts by status + the most-recently-touched jobs — the ingestion panel's
-    one call."""
+    one call.
+
+    Dismissed rows are excluded from BOTH halves, which is the point of the
+    feature: the rail badge is driven by these counts, so a cleared failure
+    that still reddened the badge would have been cleared from nowhere. The
+    `dismissed` total rides along so the panel can offer to show them again —
+    hidden is not deleted, and the operator should be able to see that."""
     async with db.acquire() as conn:
         counts = await conn.fetch(
-            "SELECT status, count(*) AS n FROM ingest_jobs GROUP BY status")
+            "SELECT status, count(*) AS n FROM ingest_jobs "
+            "WHERE dismissed_at IS NULL GROUP BY status")
         rows = await conn.fetch(
             """SELECT id, url, title, source_key, status, attempts, max_attempts,
                       orphans, error, result_item_id, enqueued_by, enqueued_at,
-                      started_at, finished_at
+                      started_at, finished_at, dismissed_at
                FROM ingest_jobs
+               WHERE dismissed_at IS NULL
                ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC
                LIMIT $1""",
             recent)
+        dismissed = await conn.fetchval(
+            "SELECT count(*) FROM ingest_jobs WHERE dismissed_at IS NOT NULL")
     return {"counts": {r["status"]: r["n"] for r in counts},
-            "jobs": [dict(r) for r in rows]}
+            "jobs": [dict(r) for r in rows],
+            "dismissed": int(dismissed or 0)}
 
 
 async def purge_old(days: int = 7) -> int:
-    """Trim finished (done/skipped) rows older than `days` — diagnostics, nothing
-    depends on them. Failed rows are kept until retried or manually cleared."""
+    """Trim finished rows older than `days` — diagnostics, nothing depends on
+    them. Failed rows are kept until retried or manually cleared.
+
+    A DISMISSED 'skipped' row is the one exception, and it is not a tidiness
+    call: that row IS the tombstone. `find_open` revives anything that is not
+    'done', and a live/upcoming-stream skip leaves no media_ingests ledger
+    entry to fall back on — so deleting it hands the next poll a clean slate,
+    `_enqueue_source_entries` takes the enqueue branch, and the item the
+    operator cleared is downloaded and back on his page. The sweep would have
+    quietly undone the decision a week later, which is exactly the resurrection
+    this feature exists to stop, just on a timer.
+
+    'done' needs no such guard: the media_ingests ledger is checked first and
+    is never purged, so a dismissed done row was never what was protecting that
+    media_key. Keeping the asymmetry is what stops every cleared row living
+    forever — done rows are the bulk of the trail."""
     async with db.acquire() as conn:
         res = await conn.execute(
-            "DELETE FROM ingest_jobs WHERE status IN ('done', 'skipped') "
-            "AND finished_at < now() - ($1 || ' days')::interval", str(days))
+            "DELETE FROM ingest_jobs "
+            "WHERE finished_at < now() - ($1 || ' days')::interval "
+            "  AND (status = 'done' "
+            "       OR (status = 'skipped' AND dismissed_at IS NULL))",
+            str(days))
     try:
         return int(res.split()[-1])
     except (ValueError, IndexError):

@@ -119,20 +119,44 @@ async def status() -> dict:
 
     # Reachability, attached where the names line up. A probe with no container
     # (or the reverse) is kept rather than dropped — a mismatch is information.
+    # `sysmon._HTTP_CHECKS` names its probes after compose services precisely
+    # so this join lands; a mismatch here now means a real mismatch, not a
+    # label.
     for s in services:
         probe = by_name.pop(s["service"], None)
         if probe:
             s["reachable"] = bool(probe.get("ok"))
+            # Only when true. The flag says "this being down may be nothing" —
+            # a false on every core row is noise in a payload a model reads.
+            if probe.get("optional"):
+                s["optional"] = True
             if probe.get("ms") is not None:
                 s["response_ms"] = probe["ms"]
             if probe.get("detail"):
                 s["unreachable_detail"] = probe["detail"]
-    unmatched = [
-        {"service": n, "container": None, "state": None,
-         "reachable": bool(p.get("ok")), "response_ms": p.get("ms"),
-         "unreachable_detail": p.get("detail"),
-         "note": "probed by URL; not a container in this compose project"}
-        for n, p in by_name.items()]
+
+    unmatched: list[dict] = []
+    for n, p in by_name.items():
+        row = {"service": n, "container": None, "state": None,
+               "reachable": bool(p.get("ok")), "response_ms": p.get("ms"),
+               "unreachable_detail": p.get("detail")}
+        if p.get("optional"):
+            row["optional"] = True
+        # WHY there is no container, three different facts, never guessed. The
+        # old single sentence ("not a container in this compose project") was
+        # said about ollama and inference-control while docker ps listed both.
+        if rows is None:
+            row["note"] = ("no container view this reading — the sidecar was "
+                           "unreachable, so this is the URL probe alone")
+        elif p.get("external"):
+            row["note"] = "probed by URL; not a container in this compose project"
+        elif p.get("optional"):
+            row["note"] = (f"no container in project '{project}' — an optional "
+                           "service whose compose profile is not enabled")
+        else:
+            row["note"] = (f"probed by URL; no container named this in project "
+                           f"'{project}'")
+        unmatched.append(row)
 
     down = [s for s in services if s.get("state") and s["state"] != "running"]
     unhealthy = [s for s in services if s.get("health") == "unhealthy"]
@@ -144,8 +168,34 @@ async def status() -> dict:
     # stays in `unreachable` because it is a fact; only the prose is narrowed
     # to services that really are up.
     _down_names = {s["service"] for s in down}
+    # The same narrowing, one step further out: a probe with NO container row
+    # is not "running" either, whatever the reason. It splits in two, and the
+    # split is the point — one of these is a fault and one is not, and calling
+    # either of them running is the sentence this module exists to stop:
+    #
+    #   optional + absent   its compose profile is simply not enabled. On an
+    #                       install that leaves `inference` off — the default,
+    #                       since ollama can live on the host — the probe fails
+    #                       every cycle forever, so the note carried a
+    #                       PERMANENT "running but not answering: ollama" about
+    #                       a container that does not exist.
+    #   required + absent   a core service with no container at all. Measured
+    #                       2026-08-05 against searxng removed: the row read
+    #                       "no container named this in project 'nova'" while
+    #                       the note in the same payload read "running but not
+    #                       answering: searxng". One reading, two contradictory
+    #                       sentences, both from here.
+    #
+    # Only meaningful when the container view was actually readable — with the
+    # sidecar down, absence proves nothing, so this is empty then and the
+    # refusal note below is what the caller gets.
+    _absent = ([s for s in unreachable if not s.get("container")]
+               if rows is not None else [])
+    not_installed = [s for s in _absent if s.get("optional")]
+    no_container = [s for s in _absent if not s.get("optional")]
+    _silent_excluded = _down_names | {s["service"] for s in _absent}
     still_running_but_silent = [s for s in unreachable
-                                if s["service"] not in _down_names]
+                                if s["service"] not in _silent_excluded]
 
     out: dict = {
         "project": project,
@@ -193,5 +243,15 @@ async def status() -> dict:
             parts.append("running but not answering: "
                          + ", ".join(s["service"]
                                      for s in still_running_but_silent))
+        if no_container:
+            parts.append(f"has no container in project '{project}': "
+                         + ", ".join(s["service"] for s in no_container))
+        if not_installed:
+            # Said last, and said plainly: this is the one clause in the note
+            # that is not a fault. Every unreachable row lands in exactly one
+            # of down / silent / no-container / not-installed, so `parts` is
+            # never empty here and the note is never a bare full stop.
+            parts.append("not enabled in this install (optional, no container): "
+                         + ", ".join(s["service"] for s in not_installed))
         out["note"] = ". ".join(parts) + "."
     return out

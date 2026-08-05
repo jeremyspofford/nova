@@ -119,19 +119,45 @@ _STATUS_RE = re.compile(r"(^|_)(status|state)$")
 _FAILED = ("failed", "failing", "error", "errored", "crashed",
            "timeout", "timed_out", "dead", "unreachable", "broken")
 
-# A SCORE PAIR next to a status column means the status is a GRADE, not a
-# fault: `eval_runs` writes status='failed' when the model under test scored
-# below the pass bar on a run the harness completed perfectly, and reserves
-# 'error' for a harness crash. Counting the grade put four false failures in
-# front of her. Derived from the schema, so a future scoring table excuses
-# itself and `automation_runs` (ok/failed, no score pair) stays counted.
+# A SCORE PAIR next to a status column means part of that status vocabulary is
+# a GRADE, not a fault: `eval_runs` writes status='failed' when the model under
+# test scored below the pass bar on a run the harness completed perfectly.
+# Counting the grade put four false failures in front of her.
+#
+# It does NOT mean the table is exempt, and reading it that way was the second
+# bug. Excusing the whole store also dropped 'error', which in `eval_runs` is a
+# HARNESS CRASH and not a verdict at all (eval_runs.py: "a harness failure is
+# not a verdict"; migration 060 defines it that way). Measured 2026-08-05: 175
+# eval_runs rows sat at status='error', every run since 2026-08-03 had died and
+# no suite had ever passed — while the census total read 14 and the FACTS line
+# carried no eval signal whatsoever. Asked "is anything broken?" she would have
+# answered that background work was essentially healthy, which is the exact
+# sentence this module exists to make unreachable.
+#
+# So a score pair narrows the VOCABULARY for that store and nothing else: the
+# grade words go, the fault words stay. Still derived from the schema, so a
+# scoring table that lands next month is narrowed the same way and
+# `automation_runs` (ok/failed, no score pair) goes on counting its 'failed' as
+# the fault it is.
 _SCORE_PAIRS = (("tasks_passed", "tasks_total"), ("passed", "total"),
                 ("score", "max_score"))
+
+# The words a score pair takes away. Only these two are ever a grade — nothing
+# scores a model 'crashed', 'timeout' or 'unreachable', so those keep meaning
+# what they say however the table is shaped.
+_GRADE_WORDS = ("failed", "failing")
 
 # The raise/clear shape: BOTH are required, for the `conversations` reason
 # given in the docstring.
 _RAISED_COLS = ("raised_at", "opened_at", "triggered_at")
 _CLEARED_COLS = ("cleared_at", "resolved_at", "closed_at")
+
+# An operator decision to stop hearing about a row. Narrow on purpose: each of
+# these names means "a human looked at this and said enough", which is the only
+# thing entitled to remove a live failure from the count. `cleared_at` and
+# friends are NOT here — those are the raise/clear shape above, written by the
+# system when a condition ends, and they already decide their own predicate.
+_DISMISSED_COLS = ("dismissed_at", "acknowledged_at", "silenced_at")
 
 # Newest-first ordering, best first. Every candidate is a timestamp.
 _TIME_COLS = ("updated_at", "finished_at", "raised_at", "last_checked_at",
@@ -176,24 +202,30 @@ _DECLINED = {
                    "switched off. It has no status column to overrule it and "
                    "nothing ever clears it, so counting it would make every "
                    "chat photo a permanent open failure",
+    "backup_attempts": "counting rows here cannot answer the question. Its "
+                       "vocabulary is outcome='ok'|'refused'|'error', and the "
+                       "disaster is the case that writes NO ROW AT ALL: an "
+                       "interval of 0, an unmounted bundle store, or a "
+                       "scheduler that has stopped ticking all leave an empty "
+                       "table, which a census reads as a clean one. Checked "
+                       "by freshness instead — backup_service.freshness() "
+                       "reads max(at) against backups.every_hours, and "
+                       "diagnose and the prompt nudge both carry it",
 }
 
 
-def _decline_reason(table: str, store: "_Store") -> Optional[str]:
-    """Why a failure-shaped table is not a failure store — static or derived.
+def _decline_reason(table: str) -> Optional[str]:
+    """Why a failure-shaped table is not a failure store at all.
 
-    Derived reasons are preferred: `_DECLINED` is a list someone maintains,
-    and the score-pair rule excuses a whole CLASS of scoring tables without
-    anyone editing anything.
+    Static now, on purpose. This also used to decline any store carrying a
+    score pair beside its status, which excused `eval_runs` — and with it 175
+    harness crashes — on the strength of the handful of rows that really were
+    grades. A table whose status column is partly a scoreboard is not a table
+    to skip; it is a table with a narrower fault vocabulary, which is what
+    `_Store.failed_words` does instead. Declining is for stores that are not
+    about background failure in the first place.
     """
-    if table in _DECLINED:
-        return _DECLINED[table]
-    if store.status_col and store.score_pair:
-        return (f"{store.status_col} is a GRADE, not a fault — the table "
-                f"carries {store.score_pair[0]}/{store.score_pair[1]}, so "
-                f"'failed' means scored-below-the-bar on a run that "
-                f"completed")
-    return None
+    return _DECLINED.get(table)
 
 
 def declined() -> dict:
@@ -249,11 +281,39 @@ class _Store:
         # disable, so without this a broken thing you turned OFF reports
         # forever and there is no way to make it stop.
         self.enabled_col = "enabled" if "enabled" in cols else None
+        # And something the operator DISMISSED is not something that is
+        # failing either — the same argument, one step further. He cleared his
+        # two members-only videos off the Activity page precisely so nothing
+        # would keep raising them; a census that went on counting them would
+        # put "ingest_jobs 2" back in the FACTS block of every system prompt,
+        # and the button would have cleared the row from one screen while she
+        # kept reporting it on another. DERIVED, like everything else here: any
+        # future queue that grows a dismissal column is honoured the day its
+        # migration runs, with no edit to this module.
+        self.dismissed_col = _first(cols, _DISMISSED_COLS)
 
     @property
     def qualifies(self) -> bool:
         return bool(self.cleared_col or self.status_col
                     or self.counter_col or self.qualifying_col)
+
+    @property
+    def failed_words(self) -> tuple[str, ...]:
+        """The status values that mean FAULT in this store.
+
+        `_FAILED` unchanged, except where a score pair proves the status
+        column is partly a scoreboard — there the grade words are dropped and
+        every other word is kept. It guarantees only that: it does not decide
+        whether the store is censused at all, and it deliberately does NOT try
+        to tell a real fault from a grade row by row. `eval_runs` writes
+        status='error' from a `finally` after tasks_total has been
+        incremented, so "no tasks and an error means the harness broke" is a
+        shape heuristic that matches today's rows and misses a harness that
+        raises partway through grading.
+        """
+        if self.score_pair:
+            return tuple(w for w in _FAILED if w not in _GRADE_WORDS)
+        return _FAILED
 
     @property
     def shape(self) -> str:
@@ -271,7 +331,7 @@ class _Store:
             where, args = f'"{self.cleared_col}" IS NULL', []
         elif self.status_col:
             where, args = (f'lower("{self.status_col}"::text) = ANY($1)',
-                           [list(_FAILED)])
+                           [list(self.failed_words)])
         elif self.counter_col:
             where, args = f'"{self.counter_col}" > 0', []
         else:
@@ -279,6 +339,8 @@ class _Store:
                            f'AND btrim("{self.qualifying_col}"::text) <> \'\''), []
         if self.enabled_col:
             where += f' AND "{self.enabled_col}" IS NOT FALSE'
+        if self.dismissed_col:
+            where += f' AND "{self.dismissed_col}" IS NULL'
         return where, args
 
     @property
@@ -392,8 +454,8 @@ async def census(*, samples: int = _SAMPLES, days: int = _RECENT_DAYS) -> dict:
         async with db.acquire() as conn:
             schema = await _schema(conn)
             stores = {t: _Store(t, c) for t, c in schema.items()}
-            excused = {t: r for t, s in stores.items()
-                       if (r := _decline_reason(t, s))}
+            excused = {t: r for t in stores
+                       if (r := _decline_reason(t))}
             out["declined"] = excused
             for table in sorted(stores):
                 store = stores[table]
@@ -438,14 +500,20 @@ def _shaped(table: str, cols: set[str]) -> bool:
 
 
 def note(census_: dict, ledger_errors: Optional[int] = None,
-         ledger_hours: int = 72) -> str:
+         ledger_hours: int = 72, backups: Optional[dict] = None) -> str:
     """The sentence diagnose hands the model about failure — computed.
 
     This is the control. The reassuring branch is LAST, and every earlier
     branch is a fact about live rows, so "nothing is failing" is structurally
-    unreachable while anything is failing or anything failed to be read. The
-    wording is assembled from the census rather than authored, so there is no
-    phrasing left for a model to prefer over the numbers.
+    unreachable while anything is failing, anything failed to be read, or the
+    backup verdict alarms. The wording is assembled from the census rather
+    than authored, so there is no phrasing left for a model to prefer over the
+    numbers.
+
+    `backups` is a `backup_service.freshness` verdict, passed IN so this stays
+    synchronous and pure. Optional because it is the caller's to supply, but a
+    caller that omits it gets a sentence that says nothing about backups — it
+    never invents one.
     """
     parts = []
     if census_.get("total"):
@@ -467,6 +535,25 @@ def note(census_: dict, ledger_errors: Optional[int] = None,
     if ledger_errors:
         parts.append(f"{ledger_errors} error(s) also recorded in the turn "
                      f"ledger in the last {ledger_hours}h.")
+
+    # Backups are the one failure this census is structurally unable to
+    # count: the way they stop is by writing NO ROW, and count(*) reads an
+    # empty attempt history exactly like a healthy one — which is why
+    # `backup_attempts` is declined rather than scanned. It has to land in
+    # THIS sentence rather than only in diagnose's separate `backups` key,
+    # because the key is a fact she has to choose to read and this is the
+    # line she quotes back. Without it the all-clear below stayed reachable
+    # while nothing had been backed up for days, which is the same
+    # confidently-clean answer, one subsystem along.
+    #
+    # `alarm` DEFAULTS TO TRUE on a verdict that does not carry one — a
+    # backup story that could not be read is not a backup story that is
+    # fine. Same rule as `unreadable` above; see diagnostics._backup_health,
+    # whose failure shape is a note with no verdict in it.
+    if backups is not None and backups.get("alarm", True):
+        parts.append(backups.get("note")
+                     or "The backup verdict could not be read at all, so "
+                        "nothing here says whether backups are running.")
 
     # Incompleteness PREFIXES the counts, never replaces them. An earlier
     # draft returned early here, which meant one unreadable store deleted
@@ -509,15 +596,44 @@ _LINE_CACHE: tuple[float, str] = (0.0, "")
 _LINE_TTL_S = 60
 
 
+async def _backup_clause() -> str:
+    """The backup sentence for the nudge, or "" when there is nothing to say.
+
+    Its own reader rather than a census entry, because the way backups fail is
+    by NOT HAPPENING and the census counts rows: an interval of 0, an
+    unmounted bundle store or a scheduler that has stopped ticking all leave
+    `backup_attempts` empty, and an empty table counts the same as a healthy
+    one. Absence is invisible to count(*) by construction, so it is asked a
+    different question — max(at) against backups.every_hours.
+
+    Timings and outcome words only. The refusal text names paths on this
+    machine and belongs in diagnose, not in a system prompt.
+    """
+    try:
+        from app import backup_service
+        head = (await backup_service.freshness()).get("headline") or ""
+    except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
+        log.debug("backup freshness unavailable", exc_info=True)
+        return ""
+    if not head:
+        return ""
+    return f"Backups: {head}. Call diagnose before saying his data is backed up."
+
+
 async def prompt_line(days: int = 7) -> str:
     """One line of counts for the FACTS block, or "" when nothing is failing.
 
-    Counts only — no third-party error text goes into a system prompt.
+    Counts only — no third-party error text goes into a system prompt. The
+    one thing here that is not a count is the backup clause, because backups
+    fail by not happening and there is no row to count; see `_backup_clause`.
 
     Bounded to a window on purpose: ingest_jobs.purge_old sweeps only
     done/skipped, so a failed row lives forever. Unbounded, the operator's two
     permanently-members-only videos would sit in every system prompt for the
-    life of the install, which is how a warning becomes wallpaper.
+    life of the install, which is how a warning becomes wallpaper. (Dismissing
+    them on the Activity page is now the direct answer — `_Store.dismissed_col`
+    takes them out of the count. The window still matters for everything he
+    hasn't got round to.)
     """
     global _LINE_CACHE
     now = time.monotonic()
@@ -547,6 +663,12 @@ async def prompt_line(days: int = 7) -> str:
             line = ("Your failure census is INCOMPLETE — some stores could "
                     "not be classified or read. Call diagnose before "
                     "claiming anything is healthy.")
+        # APPENDED, never instead: a run where things are failing AND the
+        # backups have stopped is the one where either fact alone reads like
+        # the whole answer.
+        backups = await _backup_clause()
+        if backups:
+            line = f"{line} {backups}" if line else backups
     except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
         log.debug("failure prompt line unavailable", exc_info=True)
     _LINE_CACHE = (now, line)

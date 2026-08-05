@@ -182,10 +182,26 @@ async def snapshot() -> dict:
 # Service reachability for the health strip. Core services are always
 # expected up; profile-gated ones (bundled inference, voice) may be
 # legitimately down — flagged `optional` so the UI shows them muted, not red.
+#
+# THE FIRST ELEMENT IS THE COMPOSE SERVICE NAME, not a friendly label, and
+# `tests/test_service_health.py` asserts that mechanically against
+# docker-compose.yml. Two entries carried labels until 2026-08-05 —
+# "inference" for ollama and "sidecar" for inference-control — and
+# `service_health.status()` joins probes to `docker ps -a` on this name, so
+# neither probe ever met its container. Measured: `docker compose stop ollama`
+# reported "ollama is exited" AND "running but not answering: inference", plus
+# a third row claiming inference was "not a container in this compose project"
+# while docker ps showed it was — one outage told as two services, one of them
+# said to be up. In the other direction a WEDGED ollama (socket open,
+# /api/tags dead) produced a container row with no reachability verdict at
+# all, so nothing connected the failing probe to the container to restart.
+# `service_claims._service_names()` derives its vocabulary from here too, and
+# could not hear a claim about "ollama" — the word an operator actually says —
+# while spending an entry on "sidecar". Friendly labels belong in the UI.
 _HTTP_CHECKS = [
-    ("inference", settings.bundled_ollama_url, "/api/tags", True),
+    ("ollama", settings.bundled_ollama_url, "/api/tags", True),
     ("searxng", settings.searxng_url, "/healthz", False),
-    ("sidecar", settings.inference_control_url, "/status", False),
+    ("inference-control", settings.inference_control_url, "/status", False),
     ("whisper", settings.whisper_url, "/health", True),
     ("kokoro", settings.kokoro_url, "/health", True),
     # The yt-dlp/whisper worker behind every ingest. Absent from this list
@@ -197,18 +213,27 @@ _HTTP_CHECKS = [
     ("media", settings.media_worker_url, "/health", True),
 ]
 
+# Probes whose target is deliberately NOT a container in this compose project
+# — an ollama on another box, a hosted searxng. Empty today: every name above
+# is a service in docker-compose.yml, which is what the test asserts. This is
+# a declaration of externality, not a probe-name -> service alias map: a name
+# listed here is exempt from that assertion, and `service_health` stops
+# expecting a container for it rather than reporting it as a missing one.
+EXTERNAL_CHECKS: frozenset[str] = frozenset()
+
 
 async def _probe(client: httpx.AsyncClient, name: str, base: str, path: str,
                  optional: bool) -> dict:
     t0 = time.monotonic()
+    external = name in EXTERNAL_CHECKS
     try:
         r = await client.get(f"{base}{path}")
         ok = r.status_code < 500
         return {"name": name, "ok": ok, "ms": round((time.monotonic() - t0) * 1000),
-                "optional": optional}
+                "optional": optional, "external": external}
     except Exception as e:
         return {"name": name, "ok": False, "optional": optional,
-                "detail": str(e)[:160]}
+                "external": external, "detail": str(e)[:160]}
 
 
 async def health() -> dict:

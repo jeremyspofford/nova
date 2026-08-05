@@ -182,6 +182,24 @@ async def _error_count(section: Optional[str]) -> Optional[int]:
         return None
 
 
+async def _backup_health() -> dict:
+    """Whether backups are still happening, or why that could not be read.
+
+    Never returns an empty dict on failure. An unreadable backup history that
+    came back as {} would be indistinguishable from a healthy one in the
+    payload — the same silent-zero this module's fourth rule refuses for
+    errors.
+    """
+    try:
+        from app import backup_service
+        return await backup_service.freshness()
+    except Exception:  # noqa: BLE001 — never blank the whole report over this
+        log.debug("backup freshness failed", exc_info=True)
+        return {"note": "Backup health could not be read at all. That says "
+                        "nothing about whether backups are running — do not "
+                        "report them as fine on the strength of it."}
+
+
 async def report(area: Optional[str] = None) -> dict:
     """Configuration, failures and reachability for one area, or a summary."""
     # UNCONDITIONAL, and deliberately not filtered by `area`. The failure that
@@ -190,6 +208,13 @@ async def report(area: Optional[str] = None) -> dict:
     # — may return without the live failure census. diagnose('Notifications')
     # must not be able to imply health while ingestion is broken.
     census = await failures.census()
+    # Unconditional for the same reason, and needed as its own reader: the
+    # census counts rows, and backups fail by NOT HAPPENING. An interval of 0,
+    # an unmounted bundle store or a scheduler that has stopped ticking each
+    # leave `backup_attempts` empty, and count(*) reads an empty history
+    # exactly like a healthy one. Asked in the only way that can answer — the
+    # newest attempt against the interval.
+    backups = await _backup_health()
     stores = census.get("scanned", [])
     known = areas() + stores
 
@@ -199,8 +224,8 @@ async def report(area: Optional[str] = None) -> dict:
         # Still carries the census: an unrecognised word must not be a way to
         # get an answer with no failures in it.
         return {"error": f"no such area {area!r}", "areas": known,
-                "background_failures": census,
-                "errors_note": failures.note(census)}
+                "background_failures": census, "backups": backups,
+                "errors_note": failures.note(census, backups=backups)}
 
     out: dict = {"area": section or store or "all", "areas": known}
     out["settings"] = await _settings_for(section)
@@ -213,9 +238,15 @@ async def report(area: Optional[str] = None) -> dict:
             f"showing the {len(errors)} most recent of {total_errors}")
     out["background_failures"] = census
     # The one sentence a model is most likely to quote back. Computed from the
-    # census, so the reassuring wording is unreachable while anything is
-    # failing or anything failed to be read. See failures.note.
-    out["errors_note"] = failures.note(census, total_errors, _ERROR_HOURS)
+    # census AND the backup verdict, so the reassuring wording is unreachable
+    # while anything is failing, anything failed to be read, or backups have
+    # stopped happening. The verdict goes in here as well as into `backups`
+    # below because a separate key is something she has to choose to read,
+    # and the census can never count a backup that was never attempted. See
+    # failures.note.
+    out["errors_note"] = failures.note(census, total_errors, _ERROR_HOURS,
+                                       backups=backups)
+    out["backups"] = backups
 
     # `services` used to be `sysmon._reaches()` — postgres and the memory
     # directory, two entries. Asked whether searxng was healthy, she read that
