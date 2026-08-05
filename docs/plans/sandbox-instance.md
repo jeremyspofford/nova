@@ -1,5 +1,9 @@
 # Sandbox — she builds it, boots it, and proves it before it reaches him
 
+> **Part of `self-improvement-loop.md`**, which is the umbrella flow Jeremy
+> specified. This document is that flow's steps 7 and 10; steps 8-9 (the
+> data import) are decided here and referenced there. Read that one first.
+
 Implementation plan, authored 2026-08-05 at Jeremy's request:
 
 > "it would be beneficial to have her work sandboxed. ie: if she's spinning up
@@ -48,8 +52,11 @@ Jeremy, 2026-08-05, in the message that requested this:
 Decided in the same exchange and recorded here because the reasoning is the
 expensive part:
 
-- **The sandbox shares NOTHING with production.** Its own Postgres, its own
-  memory directory, its own `nova_state`, its own auth token. This is not
+- **The sandbox shares NOTHING LIVE with production.** Its own Postgres, its
+  own memory directory, its own `nova_state`, its own auth token. Note the
+  word: it may hold a COPY of his data (see the import decision below) and it
+  may never hold a HANDLE to his. A copy that goes wrong is discarded with the
+  stack; a shared connection that goes wrong is his install. This is not
   tidiness. A sandbox that touches live rows is *worse than no sandbox*
   because it looks safe: it has happened twice already on this install —
   the staged-tree suite that mutated live rows
@@ -63,10 +70,30 @@ expensive part:
   (`tournament-vram-self-starvation`); a second stack competing for 24GB
   makes both stacks slow and neither trustworthy. The sandbox uses cloud
   models, or a stub.
-- **Her memory is SEEDED, never copied.** A sandbox runs model-authored code;
-  handing it his real journals makes it an exfiltration surface. Seed a small
-  synthetic corpus, or a redacted snapshot, and accept that some behaviour is
-  not reproducible there.
+- **Her data is IMPORTED FROM PRODUCTION, minus four tables.** Superseded by
+  Jeremy's steps 8–9 in `self-improvement-loop.md`, hours after this was
+  first written, and he was right. The original decision here said "seeded,
+  never copied" on the grounds that a sandbox runs model-authored code — but
+  a sandbox seeded with synthetic notes tests a system nobody uses.
+  Retrieval, clustering, the brain graph and compaction are all shaped by the
+  real corpus, and none of them is exercised by a fixture pack.
+
+  The exfiltration concern was right about the *credentials* and wrong about
+  the *content*. So the import copies conversations, memory, agents, tools,
+  rules, goals, recommendations and automations (seeded **disabled**), and
+  excludes exactly four tables, each for its own reason:
+
+  | table | why |
+  |---|---|
+  | `secrets` | a sandbox that can spend his credentials is not a sandbox |
+  | `llm_providers` | API keys — a runaway loop bills his account |
+  | `push_subscriptions` | a test run pushing to his phone |
+  | `user_profiles` | voiceprints and household facts, in a stack running model-authored code |
+
+  Mechanism is `backup_snapshot` → `backup_apply` against the sandbox
+  database, with that exclusion list living beside `backup_coverage` — which
+  already knows how to argue about what a bundle must contain, read in the
+  other direction.
 
 ## Phases
 
@@ -78,7 +105,7 @@ Given a `nova/<slug>` branch that `git-landing` produced:
    repo, per the project's own worktree policy, never a sibling directory.
 2. `docker compose -p nova-sandbox -f <worktree>/docker-compose.yml up -d`
    with an **override file** that: renames every volume, binds no host ports
-   (or binds high ones), points `NOVA_MEMORY_DIR` at a seeded directory, sets
+   (or binds high ones), points `NOVA_MEMORY_DIR` at the imported copy, sets
    a fresh `NOVA_AUTH_TOKEN`, and omits the `inference`, `notify`, `home` and
    `tailscale` profiles.
 3. Wait for `/health`, then assert three things and report each separately:
@@ -108,7 +135,7 @@ click through her change before merging.
   and is torn down on a timer, because "I'll clean it up later" is how a
   second Nova ends up running for a week.
 - The preview is where "exactly as her" starts to matter: same agents, same
-  tools, seeded memory.
+  tools, imported memory (see the data decision above).
 
 ### Phase 3 — the loop closes
 
@@ -126,12 +153,12 @@ a mechanical gate rather than a habit.
    *Leaning: host socket via a dedicated fixed verb on the existing sidecar,
    because the compose project name is the real isolation and DinD's cost is
    paid on every run.*
-2. **How is the sandbox's database seeded?** Migrations alone give an empty
-   install with no agents. Either run the same seed path a fresh install uses,
-   or snapshot-and-redact production. The first is honest and diverges from
-   his real setup; the second reproduces his setup and carries his data.
-   *Leaning: fresh-install seed, plus a fixture pack of agents/tools so
-   behaviour is comparable.*
+2. ~~How is the sandbox's database seeded?~~ **ANSWERED** by Jeremy's steps
+   8-9: snapshot production and apply it, minus the four credential tables.
+   The open remainder is narrower — does the memory DIRECTORY copy as files
+   alongside the pg_dump, and is the import re-run per pass or once per
+   sandbox lifetime? (Per pass is correct if a change touches migrations,
+   which is the case this exists to catch.)
 3. **What does a k8s variant buy?** Jeremy raised it as an option. Her
    namespace is already fenced (Pod Security, quota, default-deny egress), so
    it is a genuinely stronger boundary than a compose project — but Nova is

@@ -43,9 +43,11 @@ from typing import Any, Awaitable, Callable, Optional
 from pydantic import TypeAdapter, ValidationError
 
 from app import db
+from app.actions import code_change as _code_change
 from app.actions import home_assistant as _home_assistant
 from app.actions import mcp_server as _mcp_server
-from app.actions.schemas import ActionDoc, HomeAssistantDeploy, McpServerAdd
+from app.actions.schemas import (ActionDoc, CodeChangeLand,
+                                 HomeAssistantDeploy, McpServerAdd)
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +108,18 @@ _TYPES: dict[str, Spec] = {
         # actually open it — and it may need one answer from him in the
         # middle. See `task_steps` for the contract.
         steps=_home_assistant.STEPS,
+    ),
+    "code_change.land": Spec(
+        model=CodeChangeLand,
+        # The operator's own route for the same effect. He can land a branch
+        # from the UI; `assert_routes_exist()` refuses to boot if that stops
+        # being true, which is what keeps this executor legal.
+        operator_route="land_code_change",
+        describe=_code_change.describe,
+        preflight=_code_change.preflight,
+        # One call, genuinely: git-landing applies the whole patch or leaves
+        # the repo untouched, so there is no partial state to resume from.
+        execute=_code_change.execute,
     ),
 }
 
@@ -309,6 +323,7 @@ _COVER_HINTS = {
 _MODULES = {
     "mcp_server.add": _mcp_server,
     "home_assistant.deploy": _home_assistant,
+    "code_change.land": _code_change,
 }
 
 

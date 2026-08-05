@@ -140,5 +140,32 @@ class HomeAssistantDeploy(_Action):
     why: Annotated[str, StringConstraints(max_length=280)]
 
 
-ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy],
+class CodeChangeLand(_Action):
+    """Put a finished coding session's work on a branch in the operator's repo.
+
+    NOTE WHAT IS NOT HERE, because the absences are the design again. No patch
+    text, no file list, no diff. The document names a SESSION and a branch
+    slug; the patch is fetched from the broker at execute time, so a card
+    cannot carry code the operator did not see reviewed and a model cannot
+    hand-write a diff into an approval.
+
+    `branch` is a slug, not a ref: the executor prefixes `nova/` and the
+    landing sidecar refuses anything that does not match `nova/<slug>`. Two
+    layers saying the same thing, because the one that matters is the one
+    furthest from the model.
+
+    Landing is not merging. The work arrives on its own branch and the
+    operator's working copy is put back where it was; merging to `main` is his
+    decision and there is deliberately no field here that could express it.
+    """
+
+    type: Literal["code_change.land"]
+    session_id: Annotated[str, StringConstraints(
+        pattern=r"^[0-9a-fA-F-]{36}$")]
+    branch: Annotated[str, StringConstraints(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,50}$")]
+    why: Annotated[str, StringConstraints(max_length=280)]
+
+
+ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy, CodeChangeLand],
                       Field(discriminator="type")]

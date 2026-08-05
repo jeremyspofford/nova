@@ -2292,6 +2292,50 @@ async def notify_service_action(body: dict):
     return resp.json()
 
 
+# ── landing her code (phase 4) ───────────────────────────────────────────
+#
+# The operator's own route for the effect `code_change.land` reproduces, which
+# is what `actions.assert_routes_exist()` checks at boot. Same rule as Home
+# Assistant below: an executor may only exist where he can already do this
+# himself.
+
+@router.get("/api/v1/code/repo")
+async def code_repo_status():
+    """Branch, HEAD and whether the working copy is dirty. Read-only.
+
+    Exposed because a landing is REFUSED on a dirty worktree, so "why can't I
+    press this" has to be answerable before the attempt.
+    """
+    from app import coder
+    return await coder.repo_status()
+
+
+@router.post("/api/v1/code/land")
+async def land_code_change(body: dict):
+    """Land a finished coding session's work on a `nova/<slug>` branch.
+
+    Nothing here decides anything: the patch comes from the broker and every
+    refusal that matters (not `main`, not a dirty tree, no push, abort on
+    conflict) is enforced in the `git-landing` container, which is the only
+    thing in this stack with write access to the repository.
+    """
+    from app import coder
+    session_id = str(body.get("session_id") or "").strip()
+    slug = str(body.get("branch") or "").strip()
+    if not session_id or not slug:
+        raise HTTPException(status_code=422,
+                            detail="session_id and branch are both required")
+    got = await coder.patch(session_id)
+    if got.get("status") != "ok":
+        raise HTTPException(status_code=409, detail=str(got.get("detail")))
+    out = await coder.land(got["patch"], f"nova/{slug}")
+    if out.get("status") != "ok":
+        raise HTTPException(status_code=409, detail=str(out.get("detail")))
+    from app import capability_events as ce
+    ce.record(ce.WORKLOAD, f"nova/{slug}", "code_landed")
+    return out
+
+
 # ── Home Assistant (roadmap #35) ─────────────────────────────────────────
 #
 # THE OPERATOR ROUTE THAT MAKES THE EXECUTOR LEGAL. `actions.__init__`

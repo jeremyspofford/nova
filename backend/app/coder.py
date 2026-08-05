@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 import httpx
@@ -254,3 +255,97 @@ async def _update(sid, **fields):
         await conn.execute(
             f"UPDATE coding_sessions SET {sets}, updated_at = now() WHERE id = $1",
             sid, *fields.values())
+
+
+async def patch(session_id: str) -> dict:
+    """The session's work as a patch, fetched from the broker.
+
+    Phase 4. The deliverable used to be "a branch and a diff" in a private
+    clone inside a named volume — safe, and unreachable, so every change she
+    wrote was retyped by a human against the real repo. This is the text
+    coming out. It still lands nowhere: `land()` does that, behind an
+    operator's approval, onto a branch that is never `main`.
+    """
+    if not configured():
+        return {"status": "error", "detail": "the coder sidecar is not configured"}
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, broker_session_id, state, branch, commit_sha, task "
+            "FROM coding_sessions WHERE id = $1::uuid", session_id)
+    if row is None:
+        return {"status": "error", "detail": f"no coding session {session_id}"}
+    if not row["broker_session_id"]:
+        return {"status": "error",
+                "detail": "that session never reached the broker"}
+    if not row["commit_sha"]:
+        return {"status": "error",
+                "detail": (f"session {session_id} produced no commit — state "
+                           f"{row['state']!r}. There is nothing to land.")}
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            r = await client.get(
+                f"{settings.coder_url}/session/{row['broker_session_id']}/patch",
+                headers=_auth())
+    except httpx.HTTPError as e:
+        return {"status": "error", "detail": f"the coder sidecar is unreachable: {e}"}
+    if r.status_code == 404:
+        # The broker keeps sessions in memory; a restart forgets them. That is
+        # an outcome to report, not a gap to paper over — the branch still
+        # exists in the clone, so this is recoverable by re-running, and
+        # saying so beats a generic failure.
+        return {"status": "error",
+                "detail": ("the broker no longer has that session (it restarts "
+                           "with an empty map). The work is not lost — the "
+                           "branch is still in the clone — but the patch has "
+                           "to come from a fresh run.")}
+    if r.status_code != 200:
+        return {"status": "error", "detail": _detail(r)}
+    body = r.json()
+    if not (body.get("patch") or "").strip():
+        return {"status": "error", "detail": "the broker returned an empty patch"}
+    return {"status": "ok", "session_id": str(row["id"]), "task": row["task"],
+            "branch": row["branch"] or body.get("branch") or "",
+            "commit": body.get("commit") or row["commit_sha"],
+            "diffstat": body.get("diffstat") or "", "patch": body["patch"]}
+
+
+async def land(patch_text: str, branch: str) -> dict:
+    """Apply a patch to the host repository, on a branch, via `git-landing`.
+
+    THE BACKEND DOES NOT DO THIS ITSELF and must not learn how. It mounts the
+    repo read-only on purpose: it is the process a poisoned web page talks to,
+    and repository write access there would put "rewrite your own source" one
+    injection away. The capability lives in one container that can do nothing
+    else, and every refusal that matters — not `main`, not a dirty worktree,
+    no push, abort-on-conflict — is enforced there rather than here.
+    """
+    url = os.environ.get("NOVA_GIT_LANDING_URL", "http://git-landing:9912")
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.post(f"{url}/land",
+                                  json={"patch": patch_text, "branch": branch})
+    except httpx.HTTPError as e:
+        return {"status": "error",
+                "detail": (f"the git-landing sidecar is unreachable ({e}). It "
+                           f"runs under the `coder` profile; nothing can be "
+                           f"landed without it.")}
+    try:
+        return r.json()
+    except ValueError:
+        return {"status": "error", "detail": f"unreadable reply ({r.status_code})"}
+
+
+async def repo_status() -> dict:
+    """What the host repo looks like — branch, HEAD, whether it is dirty.
+
+    Read-only, and the reason it is exposed at all: a landing is refused on a
+    dirty worktree, so "why did that fail" has to be answerable before the
+    attempt rather than only after it.
+    """
+    url = os.environ.get("NOVA_GIT_LANDING_URL", "http://git-landing:9912")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{url}/status")
+        return r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        return {"error": f"the git-landing sidecar is unreachable: {e}"}
