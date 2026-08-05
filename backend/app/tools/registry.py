@@ -520,11 +520,13 @@ def returns_untrusted(name: str) -> bool:
 # The goal-scoped set lives in `scopes` so `builtin` can DESCRIBE it without
 # importing this module (registry imports builtin, not the other way).
 # It was duplicated by hand until the copies disagreed — see scopes.py.
+from app.tools import scopes  # noqa: E402
 from app.tools.scopes import GOAL_SCOPED_TOOLS, needs_goal  # noqa: E402,F401
 
 
 def is_actor(name: str, db_tools: Optional[dict] = None,
-             read_only_servers: Optional[set[str]] = None) -> bool:
+             read_only_servers: Optional[set[str]] = None,
+             args: Optional[dict] = None) -> bool:
     """True for tools that may not run on untrusted context.
 
     Fail CLOSED for anything not recognised. An MCP tool can do literally
@@ -532,9 +534,18 @@ def is_actor(name: str, db_tools: Optional[dict] = None,
     a write to somewhere — neither can be assumed harmless. A GET-only
     http_call IS a read, and treating it as an actor would block "what's the
     weather" on most turns for no safety gained.
+
+    `args` decides, not just the name — the same correction `needs_goal`
+    already carries. A caller that omits them gets the conservative answer,
+    which is what the toolset-level question at runner.py wants: "does this
+    agent hold an actor verb at all" is about the verb, not about one call.
     """
     if name in ACTOR_TOOLS:
-        return True
+        # A read action on an actor verb creates no capability and cannot be
+        # an injection sink — `list` is how she answers "what do I have?".
+        # Derived from scopes.READ_ACTIONS, the same default-deny table the
+        # goal gate spends against, so a new verb stays refused by default.
+        return not scopes.is_read_action(name, args)
     if name in BUILTIN_TOOLS:
         return False
     if name.startswith("mcp:"):
@@ -608,8 +619,15 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     # The inversion is the point: "search memory, then act on what you find"
     # is the move that defeats a prompt warning, and here it is the very act
     # that disarms the tool.
+    #
+    # `args` are passed because the classification depends on them: on
+    # 2026-08-04 this refused three `{"action": "list"}` calls — inventory,
+    # on a turn whose taint came from researching the very thing the
+    # operator had already approved. Blocking a read buys no containment
+    # and cost the whole task.
     if ctx.get("untrusted_context") and is_actor(
-            name, await _load_db_tools(), await _read_only_servers()):
+            name, await _load_db_tools(), await _read_only_servers(),
+            args=args):
         return (f"Error: '{name}' changes what this system can do, and this "
                 f"turn is holding text from an outside source (a fetched "
                 f"page, a transcript, or an earlier conversation). Refused "

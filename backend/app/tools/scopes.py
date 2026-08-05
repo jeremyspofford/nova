@@ -78,6 +78,33 @@ READ_ACTIONS: dict[str, frozenset[str]] = {
 }
 
 
+def is_read_action(name: str, args: dict | None = None) -> bool:
+    """Whether this exact call only READS — the one definition of that fact.
+
+    Extracted from `needs_goal` because the containment fence needed the
+    same answer and asked a different question: `is_actor` matched on the
+    NAME alone, so on a turn holding fetched text it refused
+    `manage_tool_hosts{action: "list"}` — inventory, which creates no
+    capability and is not a prompt-injection sink. MEASURED 2026-08-04:
+    every containment refusal in the live transcript was `{"action":
+    "list"}`, three of them, on a turn where the operator had already
+    approved the goal. She was blocked at looking, never reached a write,
+    and reported to him that she could not do the job.
+
+    Two gates asking the same question of different code is the bug class
+    `needs_goal`'s own docstring was written about. So: one table, one
+    reader, both callers derive.
+
+    DEFAULT-DENY is preserved verbatim — an unknown verb, a renamed action
+    or a typo is not a read.
+    """
+    reads = READ_ACTIONS.get(name)
+    if not reads:
+        return False
+    action = str((args or {}).get("action") or "").strip().lower()
+    return action in reads
+
+
 def needs_goal(name: str, args: dict | None = None) -> bool:
     """Whether this exact call needs a standing approval.
 
@@ -92,11 +119,7 @@ def needs_goal(name: str, args: dict | None = None) -> bool:
     """
     if name not in GOAL_SCOPED_TOOLS:
         return False
-    reads = READ_ACTIONS.get(name)
-    if not reads:
-        return True
-    action = str((args or {}).get("action") or "").strip().lower()
-    return action not in reads
+    return not is_read_action(name, args)
 
 
 def verb_list() -> str:

@@ -186,15 +186,47 @@ async def run() -> None:
           _FENCE not in read and _GOAL not in read, read[:70])
     # exactly what _run_tool now does after fetch_url returns
     ctx["untrusted_context"] = True
-    tainted = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
-    check("...but the fence refuses even that READ once the turn is tainted — "
-          "containment is about the actor tool, not about the action",
+    # CHANGED 2026-08-05, and it reverses what this test asserted before:
+    # the fence used to refuse a READ on a tainted turn too, on the stated
+    # ground that "containment is about the actor tool, not about the
+    # action". Live evidence retired that. On 2026-08-04 the operator
+    # approved a goal to register a filesystem MCP server; she researched
+    # the server (fetch_url — the research the task REQUIRED), which tainted
+    # the turn; and then all three of `manage_tool_hosts{list}`,
+    # `manage_tools{list}` and a dispatched retry were refused. She was
+    # blocked at INVENTORY, never reached a write, and told him she could
+    # not do the job.
+    #
+    # A read creates no capability, so it is not a sink: a poisoned page
+    # that talks her into `list` gets an enumeration she cannot act on,
+    # because every write on this turn is still refused below. The blast
+    # radius is what she might repeat in her reply, which is the same
+    # exposure `search_memory` already has. The task cost was total.
+    #
+    # Derived from scopes.READ_ACTIONS — the same default-deny table the
+    # goal gate spends against — so a new verb, a renamed action or a typo
+    # is still fenced.
+    tainted_read = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    check("a READ passes the fence even on a tainted turn — it creates no "
+          "capability, and refusing it cost an approved task on 2026-08-04",
+          _FENCE not in tainted_read, tainted_read[:80])
+    tainted = await r.execute_tool("manage_automations", write, ctx)
+    check("...but a WRITE is still refused once the turn is tainted — that "
+          "is the whole containment invariant and it is unchanged",
           _FENCE in tainted, tainted[:80])
     # Ordering is load-bearing: were the goal gate first, an operator-approved
     # goal would let a poisoned page spend it. The fence has to win.
+    # Checked on the WRITE — on a read neither rail speaks, so the old
+    # version of this assertion passed for the wrong reason.
     check("the fence is checked BEFORE the goal gate, so an approved goal "
           "cannot be spent on a tainted turn", _GOAL not in tainted,
           tainted[:80])
+    # An unlisted action on a fenced verb is not a read. Default-deny is the
+    # entire safety argument for the carve-out above, so it gets a probe.
+    unknown = await r.execute_tool("manage_automations", {"action": "frobnicate"}, ctx)
+    check("an action absent from READ_ACTIONS is still fenced — the "
+          "carve-out is a named allowlist, not a guess",
+          _FENCE in unknown, unknown[:80])
 
     print("8. a dispatch cannot launder the taint")
     # dispatch_to_agent is runner-inlined and never reaches execute_tool, so
