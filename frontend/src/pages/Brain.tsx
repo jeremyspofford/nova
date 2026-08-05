@@ -65,6 +65,26 @@ const CHIP_COLOR: Record<string, string> = { ...TYPE_COLOR, topic: '#2dd4bf' };
 const MEMORY_CHIPS = ['topic', 'skill', 'journal', 'source'];
 const PLATFORM_CHIPS = ['agent', 'tool', 'automation', 'rule'];
 
+// View-scoped settings: `brain.<view>.<option>` reaches the live renderer as a
+// configure() option, and only while that view is the selected one. Keeping
+// the mapping here (rather than a field per option in BrainPrefs) is what lets
+// a renderer add controls by declaring settings — the theme registry's promise
+// is that Brain.tsx never changes to gain a view, and its options are part of
+// the view.
+const VIEW_OPT = /^brain\.([a-z0-9]+)\.(.+)$/;
+const camel = (s: string) => s.replace(/_(.)/g, (_, c: string) => c.toUpperCase());
+
+/** The subset of `brain.<view>.*` values belonging to `view`, as configure()
+ *  options (snake_case key tail → camelCase option name). */
+function viewOptions(all: Record<string, unknown>, view: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(all)) {
+    const m = key.match(VIEW_OPT);
+    if (m && m[1] === view) out[camel(m[2])] = value;
+  }
+  return out;
+}
+
 // parseInt(null) and parseInt('garbage') are both NaN, and a NaN width
 // propagates straight into a style prop as `width: NaN` — a panel that
 // silently collapses because localStorage held something unexpected.
@@ -244,9 +264,15 @@ export function Brain() {
 
   // Appearance lives in the settings platform (Settings -> Appearance);
   // load on mount, then react live to overlay changes via the change event.
+  // every `brain.<view>.*` value, keyed by its full setting key. All views'
+  // options are held, not just the current one's — switching views must not
+  // have to re-fetch settings to know how to configure the new renderer.
+  const viewOptsRef = useRef<Record<string, unknown>>({});
+
   useEffect(() => {
     getSettings().then(defs => {
       const v = (k: string) => defs.find(d => d.key === k)?.value;
+      for (const d of defs) if (VIEW_OPT.test(d.key)) viewOptsRef.current[d.key] = d.value;
       setPrefs({
         view: String(v('brain.view') ?? DEFAULT_THEME),
         detailStyle: String(v('brain.detail_style') ?? 'sidebar'),
@@ -255,6 +281,13 @@ export function Brain() {
         labelScale: Number(v('brain.label_scale') ?? 1),
         showPlatform: v('brain.show_platform') !== false,
       });
+      // The renderer is created on mount, before this resolves. If the stored
+      // view happens to equal DEFAULT_THEME, setPrefs above changes nothing,
+      // the renderer effect never re-runs, and its options would never arrive
+      // — so hand them over directly rather than relying on that re-run.
+      const view = String(v('brain.view') ?? DEFAULT_THEME);
+      const opts = viewOptions(viewOptsRef.current, view);
+      if (Object.keys(opts).length) rendererRef.current?.configure?.(opts);
       const nm = v('nova.assistant_name');
       if (typeof nm === 'string' && nm.trim()) {
         nameRef.current = nm.trim();
@@ -270,6 +303,15 @@ export function Brain() {
         return;
       }
       if (!key.startsWith('brain.')) return;
+      const vm = key.match(VIEW_OPT);
+      if (vm) {
+        viewOptsRef.current[key] = value;
+        // only the renderer this option belongs to hears about it
+        if (vm[1] === prefsRef.current.view) {
+          rendererRef.current?.configure?.({ [camel(vm[2])]: value });
+        }
+        return;
+      }
       setPrefs(prev => {
         const next = { ...prev };
         if (key === 'brain.view') next.view = String(value);
@@ -357,6 +399,7 @@ export function Brain() {
       // Nova opens already centered in the current band
       leftInset: atlasOpenRef.current && !mobileRef.current
         ? ATLAS_LEFT + atlasWidthRef.current : 0,
+      ...viewOptions(viewOptsRef.current, themeKey),
     });
 
     const size = () => {

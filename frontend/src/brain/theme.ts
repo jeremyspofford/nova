@@ -9,6 +9,7 @@ import { createGalaxy, GALAXY_LEGEND } from './galaxy';
 import { createGraph2D, GRAPH_LEGEND } from './graph2d';
 import { createNova, NOVA_LEGEND } from './nova';
 import { createUniverse, UNIVERSE_LEGEND } from './universe';
+import { createUniverse2, UNIVERSE2_LEGEND } from './universe2';
 
 export interface RendererHandle {
   setData(nodes: GraphNode[], edges: GraphEdge[]): void;
@@ -53,6 +54,7 @@ export const THEMES: Record<string, { label: string; create: RendererFactory; le
   graph: { label: 'Graph', create: createGraph2D, legend: GRAPH_LEGEND },
   galaxy: { label: 'Galaxy', create: createGalaxy, legend: GALAXY_LEGEND },
   universe: { label: 'Universe', create: createUniverse, legend: UNIVERSE_LEGEND },
+  universe2: { label: 'Nova Universe (2)', create: createUniverse2, legend: UNIVERSE2_LEGEND },
   nova: { label: 'Nova', create: createNova, legend: NOVA_LEGEND },
 };
 

@@ -249,6 +249,13 @@ export function SettingsTab({ only, exclude, types, untitled }:
               .filter(d => {
                 const m = d.key.match(/^notify\.(ntfy|webhook)\./);
                 if (m && m[1] !== defs.find(x => x.key === 'notify.provider')?.value) return false;
+                // same idea for the brain views: `brain.<view>.*` belongs to
+                // that renderer and shows only while it is the selected one.
+                // Derived from the THEMES registry, so registering a view is
+                // still the only step — nothing here to extend.
+                const v = d.key.match(/^brain\.([a-z0-9]+)\./);
+                if (v && v[1] in THEMES
+                    && v[1] !== defs.find(x => x.key === 'brain.view')?.value) return false;
                 // the custom-URL field only matters when the ntfy server is "custom"
                 if (d.key === 'notify.ntfy.custom_url'
                     && defs.find(x => x.key === 'notify.ntfy.server_mode')?.value !== 'custom') return false;

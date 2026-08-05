@@ -216,10 +216,29 @@ SETTING_DEFS: list[dict] = [
                      "graph as first-class nodes with their real relationships "
                      "as edges. Off = knowledge-only view.")},
     {"key": "brain.view", "type": "enum", "default": "graph",
-     "options": ["graph", "galaxy", "universe", "nova"], "section": "Appearance",
-     "label": "Nova view",
+     "options": ["graph", "galaxy", "universe", "universe2", "nova"],
+     "section": "Appearance", "label": "Nova view",
      "description": ("How Nova is rendered — as a knowledge graph, a galaxy, "
-                     "a universe, or just her presence.")},
+                     "an orrery-style universe, a star field where clusters "
+                     "find their own shape, or just her presence.")},
+    # View-scoped appearance. `brain.<view>.<option>` is a namespace, not a
+    # convention for its own sake: the settings UI hides any key whose <view>
+    # segment names a theme that isn't the selected one, and Brain.tsx hands
+    # the matching ones to the live renderer as configure() options — so a new
+    # view's controls appear and disappear on their own, with no code to edit
+    # in either place. Same shape as notify.<provider>.*.
+    {"key": "brain.universe2.color_mode", "type": "enum", "default": "cluster",
+     "options": ["cluster", "type", "importance"], "section": "Appearance",
+     "label": "Star colour",
+     "description": ("What a star's colour means — the cluster it fell into, "
+                     "what kind of thing it is, or nothing at all (one colour, "
+                     "brightness carries the weight).")},
+    {"key": "brain.universe2.edge_style", "type": "enum", "default": "animated",
+     "options": ["animated", "gradient", "static"], "section": "Appearance",
+     "label": "Link style",
+     "description": ("How links between stars are drawn. animated: gradient "
+                     "threads with light drifting along them. gradient: the "
+                     "same threads, still. static: plain faint white lines.")},
     {"key": "brain.detail_style", "type": "enum", "default": "sidebar",
      "options": ["sidebar", "modal"], "section": "Appearance",
      "label": "Memory detail style",
