@@ -51,8 +51,13 @@
 - Payloads are end-to-end encrypted; Apple/Google relays see only that a
   push happened. ntfy (builtin server) remains the fully-tailnet-local
   provider.
-- VAPID `sub` contact: `mailto:jeremyspofford@gmail.com`
-  (`backend/app/push.py _VAPID_SUB`).
+- VAPID `sub` contact: the `notify.webpush.contact` **setting**
+  (Settings → Notifications → Web Push contact address), falling back to the
+  `mailto:nova@localhost` placeholder in `backend/app/push.py`. It was a
+  hardcoded personal address, then an env var no compose service declared;
+  it is a setting because it is behavioural config, and because Apple
+  answers an unroutable contact with a bare 403 that only a UI field can
+  fix in under a minute.
 
 ## Verified (2026-07-23)
 

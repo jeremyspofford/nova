@@ -250,8 +250,10 @@ than greying out a button:
 - **Memory has no subfolders.** The store globs `<type-dir>/*.md` exactly
   one level deep, so a folder made there would hold notes she could never
   find. `journals/` is append-only (it is the record of what happened) and
-  `soul.md` is edited in Settings, where it is kept in sync with the
-  persona.
+  `soul.md` is not a note at all — it is identity, loaded by its own path
+  and deliberately outside the search index, so the Files editor refuses it
+  and the only way in is the file itself: `data/memory/soul.md` on the host
+  (or wherever `NOVA_MEMORY_DIR` points). She re-reads it on the next turn.
 - **Nova's own source code is not a root.** A file manager over the
   checkout would be a second, unreviewed way to rewrite `consents.py` and
   `rules.py`; source changes go through the coder sidecar and its review.
@@ -362,6 +364,7 @@ an agent. See `docs/plans/mcp-client.md` for the full design.
 | **Files explorer** | Library → Files; expand-in-place tree over the memory store and a workspace, with a byte-faithful editor. Reachable paths are an allowlist of declared roots resolved through `realpath`, so a symlink cannot read out of one |
 | **The Vault** | A top-level view over the same two roots, but arranged around the questions a file manager cannot answer: `[[wikilinks]]` are clickable, a Links pane names what points here, a tag browser filters 465 tags by how many notes carry them, and a 2D force graph draws the corpus locally or whole. It shares one write path with Library → Files, so there is one retitle dialog and one refusal vocabulary |
 | **She can see what is failing** | `diagnose` carries a failure census discovered from `information_schema` on every call — the background queues (ingestion, automations, evals, MCP servers, alerts, push endpoints) whose failures never reach the turn ledger. A failure-shaped table that the census does not understand makes the report `INCOMPLETE` and reddens `test_failure_census.py`, so a new queue cannot silently read as healthy. Counts ride in her prompt each turn; `retry_ingest_job` gives her one re-queue per job, budgeted in a `WHERE` clause |
+| **…and you can say "enough"** | Activity → `×` on a finished row, or *Clear finished*. Dismissal is a tombstone (`dismissed_at`), not a delete, because the followed-source poll revives a failed row and enqueues a fresh one where none exists — so a delete would put a permanently-failing video back within the hour. The cleared row leaves the panel, the rail badge **and** the failure census (derived from the column, so any future queue that grows one is honoured for free). Operator-only: no tool writes it, and `retry_by_agent` refuses a dismissed row in SQL, because a model that can dismiss can silence its own failures. `N cleared` reopens the drawer to restore |
 
 Seeded system agents (`is_system`, disable-able but never deletable): `main`,
 `agent-manager`, `agent-creator`, `skill-manager`, `tool-creator`.

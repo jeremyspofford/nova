@@ -231,9 +231,18 @@ def _memory_writable(rel: str) -> None:
     """
     parts = Path(rel).parts
     if rel == memory.SOUL_ID:
+        # It used to say "edit it in Settings" and name a persona setting that
+        # syncs with it. Checked 2026-08-05: there is no such key among
+        # settings_store's 83 and no persona card in the Settings UI, and
+        # nothing syncs soul.md to anything — so the refusal sent the operator
+        # to a screen that does not exist. A refusal must name a door someone
+        # can actually open, and the one that works is the file on the host.
         raise HTTPException(
-            403, "soul.md is her identity and is kept in sync with the "
-                 "persona setting — edit it in Settings, not here.")
+            403, "soul.md is her identity, not a note: it is loaded by its "
+                 "own path, deliberately kept out of the search index, and "
+                 "protected from her own tools. Edit it on the host — "
+                 "data/memory/soul.md (or wherever NOVA_MEMORY_DIR points); "
+                 "she re-reads it on the next turn.")
     if len(parts) != 2 or parts[0] not in _PINNABLE_DIRS:
         raise HTTPException(
             403, f"Only {', '.join(sorted(_PINNABLE_DIRS))} items can be "

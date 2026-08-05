@@ -34,3 +34,7 @@ data/runtime/
 # statement that drifts silently from the one pip actually reads.
 # Kept on disk, out of git, until something consumes it.
 backend/uv.lock
+
+# Coverage output. An artifact of running the suite, not a statement about it —
+# and it changes on every run, so tracking it makes every test run a diff.
+backend/.coverage

@@ -36,6 +36,16 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
       NOVA_TRUST_LOCALHOST: ${NOVA_TRUST_LOCALHOST:-true}
+      # Master key for the encrypted secrets store. Undeclared until
+      # 2026-08-05, which made it unreachable — there is no env_file: here, so
+      # `docker compose exec backend env | grep NOVA_SECRET` returned nothing
+      # and the remedy secret_store printed, Settings -> Secrets showed and
+      # the operator notes prescribed did precisely nothing. Unset is fine and
+      # is the single-machine default: the backend generates a key into the
+      # nova_state volume. It matters on the two events the docs anticipate —
+      # a second instance against this Postgres, and restoring a bundle on a
+      # new host, since backup bundles exclude the key by default.
+      NOVA_SECRET_KEY: ${NOVA_SECRET_KEY:-}
       OKF_MEMORY_DIR: /app/data/memory
       NOVA_BACKUP_DIR: /app/data/backups
       NOVA_PROJECT_DIR: /app/project

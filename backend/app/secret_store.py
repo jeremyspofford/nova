@@ -34,6 +34,23 @@ Two things the fallback cannot do, both warned about loudly at generation:
 losing the key loses the secrets, and the key is PER HOST — a second instance
 sharing this Postgres has its own `/state` and will not decrypt these rows. A
 fleet needs `NOVA_SECRET_KEY` set to the same value everywhere.
+
+That advice was unfollowable until 2026-08-05: the backend service declared no
+`NOVA_SECRET_KEY` and docker-compose.yml has no `env_file:`, so the variable
+could not reach the container at all (`docker compose exec backend env | grep
+NOVA_SECRET` returned nothing). The remedy this module PRINTS at generation,
+the one Settings -> Secrets shows and the one the operator notes prescribe all
+silently did nothing — on exactly the two events they were written for: a
+second instance against this Postgres, and restoring a bundle on a new host,
+where `backup_coverage` leaves the master key out by default.
+
+Fixing the wiring alone would have caused the failure it prevents. This host
+has held a generated key at `/state/secret.key` since Jul 30 with live rows
+encrypted under it, and the old `_load_key` returned the environment key first
+and never looked at the file — so the first `NOVA_SECRET_KEY=` on a machine
+that had been running without one would have turned every stored secret into
+undecryptable bytes. The wiring is plumbing; `_load_key`'s refusal below is
+the actual fix.
 """
 
 from __future__ import annotations
@@ -49,7 +66,14 @@ from app import db
 
 log = logging.getLogger(__name__)
 
-_KEY_FILE = os.environ.get("NOVA_SECRET_KEY_FILE", "/state/secret.key")
+# A CONTAINER path, and deliberately not operator-settable. It used to read
+# NOVA_SECRET_KEY_FILE, which no compose service declared either — so the only
+# thing that read as configurable about it was the name. Passing it through
+# would have handed the operator a way to aim the master key at `/app/data`,
+# the overlay filesystem whose loss on a routine `up -d backend` is the trap
+# the module docstring above exists to describe. `/state` is the named volume;
+# there is one right answer here and the code holds it.
+_KEY_FILE = "/state/secret.key"
 _REF_RE = re.compile(r"\{\{secret:([a-zA-Z0-9_.-]{1,64})\}\}")
 
 # Slug-ish: this name goes into config strings and UI, so keep it boring.
@@ -63,10 +87,54 @@ class SecretError(RuntimeError):
     swallowed — a silently-empty credential is a worse bug than a loud one."""
 
 
+def _stored_key() -> Optional[bytes]:
+    """The persisted master key, or None when there is no usable one.
+
+    None means "no file" or "the file does not hold a 32-byte key". It
+    deliberately does NOT cover an unreadable file: a permissions error read
+    as absence would generate a fresh key and orphan every stored secret,
+    which is the one outcome this module has no repair path for.
+    """
+    try:
+        with open(_KEY_FILE, "rb") as f:
+            raw = f.read().strip()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SecretError(f"cannot read the master key at {_KEY_FILE}: {exc}") from exc
+    try:
+        key = base64.urlsafe_b64decode(raw)
+    except Exception:
+        key = b""
+    if len(key) == 32:
+        return key
+    # Not "regenerating" — that was true while this was inline in the single
+    # file-reading path, and stopped being true when the read moved ahead of
+    # the NOVA_SECRET_KEY branch: with an environment key set, the file is
+    # ignored and left exactly as it is.
+    log.error("%s does not hold a 32-byte key; ignoring it", _KEY_FILE)
+    return None
+
+
 def _load_key() -> bytes:
+    """The master key, or a refusal.
+
+    Guarantees the key it returns is the key this database was encrypted
+    with, to the extent that is knowable without decrypting a row: if
+    NOVA_SECRET_KEY is set AND a different key is already persisted at
+    _KEY_FILE, nothing is returned at all. It deliberately does NOT
+    re-encrypt — rewriting every row under a new key is an operator decision
+    with a backup as its precondition, not something a lazy first call should
+    do behind their back.
+
+    The refusal is at first use rather than at boot because it needs no
+    lifespan hook to be a control, and because an instance that still starts
+    is one the operator can fix from Settings -> Secrets.
+    """
     global _key_cache
     if _key_cache:
         return _key_cache
+    stored = _stored_key()
     env = (os.environ.get("NOVA_SECRET_KEY") or "").strip()
     if env:
         try:
@@ -78,20 +146,33 @@ def _load_key() -> bytes:
         if len(key) != 32:
             raise SecretError(
                 f"NOVA_SECRET_KEY decodes to {len(key)} bytes, need 32.")
+        if stored is not None and stored != key:
+            # The env var reached the container for the first time on
+            # 2026-08-05 (it was never declared in compose). On any machine
+            # that had been running without it — this one has held a
+            # generated key since Jul 30 — taking the env key silently would
+            # turn every stored secret into bytes nobody can read, and the
+            # only symptom would be "could not decrypt" from `_decrypt`,
+            # blaming a key change the operator did not think they made.
+            raise SecretError(
+                f"NOVA_SECRET_KEY does not match the master key already at "
+                f"{_KEY_FILE}, and the secrets in this database were "
+                f"encrypted with the FILE key. Using the environment key "
+                f"would make every one of them unreadable — the exact loss "
+                f"NOVA_SECRET_KEY exists to prevent — so nothing was "
+                f"changed and no secret resolves until this is settled. "
+                f"Either unset NOVA_SECRET_KEY, and the file key keeps "
+                f"working as it has; or, if the environment key is the fleet "
+                f"key you mean to keep, copy {_KEY_FILE} somewhere safe, "
+                f"move it aside, and re-enter each secret in "
+                f"Settings -> Secrets. Ciphertext is worthless without the "
+                f"key that wrote it, so there is no third option.")
         _key_cache = key
         return key
 
-    try:
-        with open(_KEY_FILE, "rb") as f:
-            key = base64.urlsafe_b64decode(f.read().strip())
-        if len(key) == 32:
-            _key_cache = key
-            return key
-        log.error("%s does not hold a 32-byte key; regenerating", _KEY_FILE)
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        raise SecretError(f"cannot read the master key at {_KEY_FILE}: {exc}") from exc
+    if stored is not None:
+        _key_cache = stored
+        return stored
 
     key = _stdlib_secrets.token_bytes(32)
     try:
@@ -109,7 +190,11 @@ def _load_key() -> bytes:
         "%s. TWO THINGS THIS MEANS: lose that file and every stored secret is "
         "unrecoverable, and the key is PER HOST — a second instance sharing "
         "this database will not be able to decrypt these secrets. Set "
-        "NOVA_SECRET_KEY in .env for anything beyond one machine.", _KEY_FILE)
+        "NOVA_SECRET_KEY in .env for anything beyond one machine — and set it "
+        "NOW, while there is nothing to lose: once secrets exist, a "
+        "NOVA_SECRET_KEY that differs from this file is refused rather than "
+        "silently applied, and adopting it means re-entering every value.",
+        _KEY_FILE)
     _key_cache = key
     return key
 

@@ -244,7 +244,18 @@ async def spend(verb: str, *, agent_name: Optional[str] = None) -> Optional[dict
 
 
 async def active() -> list[dict]:
-    """Live goals, newest first. Read-only — never charges."""
+    """Live goals, newest first. Read-only — never charges.
+
+    Expiry is READ-TIME, the same shape as consents: run-out and past-deadline
+    goals are filtered here and refused independently in `spend`, so neither
+    depends on a sweep having run. There used to be an `expire_stale()`
+    housekeeping UPDATE alongside this, whose own docstring conceded it was
+    cosmetic; it had no caller of any kind between 2026-07-29 and 2026-08-05
+    and no UI to be cosmetic FOR, so it was deleted rather than wired — a
+    row's `status` column staying 'active' past its deadline is legible to
+    nothing that reads goals, because everything that reads goals reads it
+    through one of these two filters.
+    """
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """SELECT * FROM goals
@@ -270,17 +281,3 @@ async def get(goal_id: str) -> Optional[dict]:
     async with db.acquire() as conn:
         r = await conn.fetchrow("SELECT * FROM goals WHERE id = $1", gid)
     return _row(r) if r else None
-
-
-async def expire_stale() -> int:
-    """Move run-out goals out of 'active' so the UI and the prompt block stop
-    listing them as live. Cosmetic only — `spend` already refuses them, and
-    it must, because housekeeping that has not run yet is not a control."""
-    async with db.acquire() as conn:
-        result = await conn.execute(
-            """UPDATE goals SET status = 'done', closed_at = now(),
-                                updated_at = now()
-                WHERE status = 'active'
-                  AND (actions_used >= max_actions
-                       OR (expires_at IS NOT NULL AND expires_at <= now()))""")
-    return int(result.rsplit(" ", 1)[-1] or 0)

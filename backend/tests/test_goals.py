@@ -30,6 +30,22 @@ import sys
 
 sys.path.insert(0, "/app/backend")
 
+# THE PROPOSER IS TEST-ONLY, AND THAT IS A CONTROL, NOT A STYLE CHOICE.
+#
+# `goals.spend` matches on (verb, proposed_by) against the LIVE goals table —
+# this suite runs inside the backend container, against Jeremy's real
+# database. Proposing as "main" put every check in this section into direct
+# collision with his own approved goals: on 2026-08-05 two live rows
+# ("Shell access via MCP server", "Filesystem access via MCP server", both
+# proposed_by='main', both carrying manage_tools + manage_tool_hosts) matched
+# first, so three checks failed against a correct implementation AND each run
+# silently charged an action to an approval he was still using. One of them
+# reached 10/10 that way.
+#
+# A name no live goal can carry keeps the assertions about the MECHANISM,
+# which is what they were always testing.
+TEST_AGENT = "test-goals-suite"
+
 FAILURES: list[str] = []
 
 
@@ -71,32 +87,48 @@ async def run() -> None:
               "propose_goal" in out)
 
         print("3. a goal grants exactly the verbs it names")
+        # TEST_AGENT isolates this section from goals proposed by a named
+        # agent, but not from an operator-created one: `spend` matches
+        # `proposed_by IS NULL OR proposed_by = $2`, so a goal Jeremy raised
+        # himself is spendable by anybody, deliberately. That shape would put
+        # the checks below back on his live grants without saying so — state
+        # the isolation, then check it.
+        async with db.acquire() as conn:
+            loose = await conn.fetch(
+                """SELECT title FROM goals
+                    WHERE status = 'active' AND proposed_by IS NULL
+                      AND approved_verbs && $1::text[]""",
+                ["manage_tools", "manage_tool_hosts", "manage_agents"])
+        check("no operator-created goal carries this section's verbs — one "
+              "that did would be charged by these checks instead of the "
+              "goal they create",
+              not loose, str([r["title"] for r in loose]))
         g = await goals.propose("Router management",
                                 "a router-manager agent that lists VLANs",
                                 ["manage_tools", "manage_tool_hosts"],
-                                proposed_by="main")
+                                proposed_by=TEST_AGENT)
         made.append(g["id"])
         check("proposing grants nothing on its own",
               (await goals.get(g["id"]))["status"] == "proposed"
-              and not await goals.spend("manage_tools", agent_name="main"))
+              and not await goals.spend("manage_tools", agent_name=TEST_AGENT))
         await goals.activate(g["id"], max_actions=2)
-        # The goal was proposed BY main, so main is who may spend it. Until
-        # 2026-08-04 spend() matched on verb alone and `agent_name` reached
-        # only the log line, so this same call succeeded for every other agent
-        # and for every scheduled automation.
-        check("another agent cannot spend main's approval",
-              not await goals.spend("manage_tools", agent_name="ingestion"))
+        # The goal was proposed BY this suite's agent, so that agent is the
+        # only one who may spend it. Until 2026-08-04 spend() matched on verb
+        # alone and `agent_name` reached only the log line, so this same call
+        # succeeded for every other agent and for every scheduled automation.
+        check("another agent cannot spend the proposer's approval",
+              not await goals.spend("manage_tools", agent_name="some-other-agent"))
         check("an approved verb spends",
-              bool(await goals.spend("manage_tools", agent_name="main")))
+              bool(await goals.spend("manage_tools", agent_name=TEST_AGENT)))
         check("a verb outside the goal does NOT, however related it sounds — "
               "'I need an agent to manage the router' is exactly the argument "
               "a model would make, and it is not a key",
-              not await goals.spend("manage_agents", agent_name="main"))
+              not await goals.spend("manage_agents", agent_name=TEST_AGENT))
 
         print("4. the bounds are columns, not heuristics")
         check("the action cap holds",
-              bool(await goals.spend("manage_tool_hosts", agent_name="main"))
-              and not await goals.spend("manage_tools", agent_name="main"))
+              bool(await goals.spend("manage_tool_hosts", agent_name=TEST_AGENT))
+              and not await goals.spend("manage_tools", agent_name=TEST_AGENT))
         check("an exhausted goal leaves active()",
               all(x["id"] != g["id"] for x in await goals.active()))
 

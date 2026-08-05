@@ -14,6 +14,8 @@ The properties worth pinning, in the order they would fail:
   3. a missing reference RAISES — never an empty credential, which becomes
      someone else's confusing 401 three layers from the mistake
   4. a resolved value cannot reach the trace ledger
+  5. a documented NOVA_* variable can actually REACH the container, and the
+     master key is never swapped out from under existing ciphertext
 """
 
 import asyncio
@@ -177,6 +179,12 @@ async def run() -> None:
               not any("secret" in n and "reveal" in n
                       for n in builtin.BUILTIN_TOOLS),
               str([n for n in builtin.BUILTIN_TOOLS if "secret" in n]))
+
+        print("10. a variable .env.example documents can REACH the container")
+        _env_example_vars_are_wired()
+
+        print("11. the master key is never swapped under existing ciphertext")
+        _key_conflict_is_refused()
     finally:
         async with db.acquire() as conn:
             await conn.execute("DELETE FROM secrets WHERE name = $1", NAME)
@@ -187,6 +195,117 @@ async def _blob(name: str, value: str) -> bytes:
     """Re-encrypt the same value to prove the nonce differs per write."""
     from app import secret_store
     return secret_store._encrypt(value)
+
+
+def _env_example_vars_are_wired() -> None:
+    """Every NOVA_* variable .env.example documents must be declared in a
+    compose file, or setting it does nothing at all.
+
+    There is no `env_file:` in docker-compose.yml — compose interpolates each
+    variable it names, one at a time, and ignores the rest of .env. So a
+    documented variable that no service declares is not "a default"; it is
+    unreachable, and the operator has no way to tell the difference from
+    outside the container. Two shipped that way and both were found by
+    someone debugging the feature months later: NOVA_VAPID_SUB (whose real
+    control turned out to be a setting) and NOVA_SECRET_KEY, the master key
+    for this very store — the remedy the code PRINTED on every start.
+
+    NOVA_* rather than every key, because the docker CLI reads a few of its
+    own (COMPOSE_FILE) from the environment and no service block would ever
+    name them; the prefix keeps this derived from the file rather than from
+    an exemption list somebody has to maintain.
+
+    Commented lines count on the .env.example side — `#NOVA_MEMORY_DIR=./data/
+    memory` is documentation of a supported variable, which is exactly the
+    claim under test. They do NOT count on the compose side: the same edit
+    that declared NOVA_SECRET_KEY also wrote a paragraph of comment above it
+    naming the variable, and a check a comment can satisfy would have passed
+    on the paragraph alone. Declarations only.
+    """
+    import glob
+    import os
+    import re
+    root = os.environ.get("NOVA_PROJECT_DIR", "/app/project")
+    example = os.path.join(root, ".env.example")
+    if not os.path.exists(example):
+        check("the project mount carries .env.example", False, example)
+        return
+    with open(example) as f:
+        documented = sorted(set(re.findall(r"^\s*#?\s*(NOVA_[A-Z0-9_]+)\s*=",
+                                           f.read(), re.M)))
+    check("…and it documents NOVA_* variables at all", bool(documented),
+          str(documented))
+    compose = ""
+    for path in sorted(glob.glob(os.path.join(root, "docker-compose*.yml"))):
+        with open(path) as f:
+            for line in f:
+                compose += line.split("#", 1)[0] + "\n"
+    missing = [v for v in documented
+               if not re.search(rf"\b{re.escape(v)}\b", compose)]
+    check("every documented NOVA_* variable is declared in a compose file — "
+          "one that is not cannot reach any container, whatever .env says",
+          not missing, "unreachable: " + ", ".join(missing) if missing else "")
+
+
+def _key_conflict_is_refused() -> None:
+    """NOVA_SECRET_KEY arriving on a machine that already generated one is a
+    refusal, not a silent switch.
+
+    The wiring fix that let NOVA_SECRET_KEY reach the container would, on its
+    own, have destroyed data on any instance already running: this host has
+    held a generated key at /state/secret.key since 2026-07-30 with live rows
+    under it, and `_load_key` used to return the environment key first and
+    never look at the file. Every stored secret would have become
+    undecryptable at the first resolution, reported as "the master key
+    changed" by a key the operator did not knowingly change.
+    """
+    import base64
+    import os
+    import tempfile
+    from app import secret_store
+
+    a = base64.urlsafe_b64encode(b"A" * 32).decode()
+    b = base64.urlsafe_b64encode(b"B" * 32).decode()
+    saved_cache, saved_file = secret_store._key_cache, secret_store._KEY_FILE
+    saved_env = os.environ.get("NOVA_SECRET_KEY")
+    fd, tmp = tempfile.mkstemp()
+    with os.fdopen(fd, "w") as f:
+        f.write(a)
+    try:
+        secret_store._KEY_FILE = tmp
+
+        secret_store._key_cache = None
+        os.environ["NOVA_SECRET_KEY"] = b
+        try:
+            secret_store._load_key()
+            check("a DIFFERENT env key is refused", False, "loaded it")
+        except secret_store.SecretError as e:
+            check("a DIFFERENT env key is refused rather than silently "
+                  "orphaning every row encrypted under the stored one",
+                  tmp in str(e), str(e)[:80])
+            check("…and the refusal says how to get out of it, both ways",
+                  "unset" in str(e) and "re-enter" in str(e))
+
+        secret_store._key_cache = None
+        os.environ["NOVA_SECRET_KEY"] = a
+        check("the SAME key in both places is not a conflict — a fleet that "
+              "pins the key it already generated must keep working",
+              secret_store._load_key() == b"A" * 32)
+
+        secret_store._key_cache = None
+        os.environ.pop("NOVA_SECRET_KEY", None)
+        check("unset still falls back to the persisted key",
+              secret_store._load_key() == b"A" * 32)
+    finally:
+        os.unlink(tmp)
+        secret_store._KEY_FILE = saved_file
+        # restore the LIVE key, not a reload: the tests above deliberately
+        # poisoned the module globals this process resolves secrets with
+        secret_store._key_cache = saved_cache
+        if saved_env is None:
+            os.environ.pop("NOVA_SECRET_KEY", None)
+        else:
+            os.environ["NOVA_SECRET_KEY"] = saved_env
 
 
 def main() -> int:
