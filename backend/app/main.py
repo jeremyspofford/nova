@@ -23,6 +23,41 @@ logging.basicConfig(level=settings.get_log_level())
 log = logging.getLogger(__name__)
 
 
+async def _report_stale_grants() -> None:
+    """Log every agent grant that names a tool this build does not define.
+
+    A stale grant is invisible until an agent happens to run: `retry_ingest_job`
+    was granted to `main` and defined nowhere for ~18h on 2026-08-04, and the
+    only place it surfaced was a degraded-grant line in five chat turns, which
+    told the operator a service was down. It was not — a worktree backend had
+    applied a migration to the shared live DB ahead of the code in this
+    checkout, so the grant row arrived before the tool existed.
+
+    Reported, never fatal. Refusing to boot on this would turn a routine
+    migration-order skew into an outage, and the running system degrades
+    honestly on its own (see runner's degraded-grant split). MCP grants are
+    excluded: those resolve against a sidecar that is legitimately down at
+    boot and comes back by itself.
+
+    Derived from the same resolver the runtime uses, so a tool added tomorrow
+    silences this with no edit here.
+    """
+    try:
+        from app.agents import registry as agent_registry
+        from app.tools import registry as tool_registry
+        for agent in await agent_registry.list_agents():
+            missing = [n for n in await tool_registry.degraded_grants(agent)
+                       if not n.startswith("mcp:")]
+            if missing:
+                log.error(
+                    "STALE GRANT: agent %r is granted %s, which no tool in "
+                    "this build defines. The grant will never resolve — "
+                    "remove it, or deploy the code that provides it.",
+                    agent.get("name"), ", ".join(missing))
+    except Exception:   # noqa: BLE001 — a boot report must never stop the boot
+        log.exception("stale-grant check failed")
+
+
 def _refuse_split_state() -> None:
     """A secondary pointed at a central PG while keeping the default local
     memory dir is a split-brain entity — half its mind in the shared DB,
@@ -66,6 +101,7 @@ async def lifespan(app: FastAPI):
     actions.assert_routes_exist()
     await db.init_pool()
     await db.run_migrations()
+    await _report_stale_grants()
     await settings_store.warm()
     await providers.warm()
     await rules.warm()

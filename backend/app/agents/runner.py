@@ -1743,12 +1743,31 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     try:
         missing = await tool_registry.degraded_grants(agent)
         if missing:
-            degraded.append(
-                f"{len(missing)} granted tool(s) are not callable right now "
-                f"({', '.join(missing[:5])}) — whatever provides them is down "
-                f"or gone, so say so rather than working around it silently")
-            log.warning("degraded grants for %s: %s",
-                        agent.get("name"), ", ".join(missing))
+            # SPLIT BY CAUSE, derived from the entry itself. "whatever
+            # provides them is down or gone" covered two situations that call
+            # for opposite responses: an MCP server that is down will come
+            # back and waiting is right, while a grant naming a tool no code
+            # defines is stale and will never resolve — waiting on it is a
+            # turn spent on nothing. `retry_ingest_job` sat in the second
+            # state for ~18h on 2026-08-04, reported as if a service were
+            # merely down, and she told the operator so on five turns.
+            down = [n for n in missing if n.startswith("mcp:")]
+            stale = [n for n in missing if not n.startswith("mcp:")]
+            if down:
+                degraded.append(
+                    f"{len(down)} granted tool(s) cannot be reached right now "
+                    f"({', '.join(down[:5])}) — the server that provides them "
+                    f"is down. Say so rather than working around it silently; "
+                    f"it may come back.")
+            if stale:
+                degraded.append(
+                    f"{len(stale)} granted tool(s) name nothing this build "
+                    f"defines ({', '.join(stale[:5])}) — the grant is stale, "
+                    f"not a service outage. It will not start working: say so "
+                    f"and do not wait for it.")
+            log.warning("degraded grants for %s: down=%s stale=%s",
+                        agent.get("name"), ", ".join(down) or "-",
+                        ", ".join(stale) or "-")
     except Exception:  # noqa: BLE001 — a missing warning never costs the turn
         log.debug("degraded-grant check failed", exc_info=True)
 

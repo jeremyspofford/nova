@@ -121,12 +121,20 @@ async def load_tool_activity(conversation_id: str, since: Optional[str],
 
     Its own query on purpose: load_history's row cap is spent on the
     user/assistant transcript and has to stay that way.
+
+    NEWEST-WINS at the cap, like load_history. This was a plain
+    `ORDER BY created_at ASC LIMIT 300`, which drops the wrong end: past the
+    cap it discards what just happened and keeps the oldest rows in the
+    window, so the turn most likely to matter — the one she is about to
+    answer a follow-up to — is the first to vanish. Not yet triggered live
+    (65 rows on the busiest conversation), and the fix costs one subquery.
     """
     if not since:
         return []
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT content, tool_calls, created_at FROM messages
+            """SELECT content, tool_calls, created_at FROM (
+                 SELECT id, content, tool_calls, created_at FROM messages
                  WHERE conversation_id = $1 AND role = 'tool'
                    -- only rows that record a CALL. 'narration_retry' and
                    -- friends are activity notes about the turn, and letting
@@ -145,7 +153,8 @@ async def load_tool_activity(conversation_id: str, since: Optional[str],
                    AND tool_calls->>'kind' IN
                        ('tool_start', 'tool_result', 'dispatch')
                    AND created_at >= $2::text::timestamptz
-                 ORDER BY created_at ASC LIMIT $3""",
+                 ORDER BY created_at DESC, id DESC LIMIT $3
+               ) recent ORDER BY created_at ASC, id ASC""",
             uuid.UUID(conversation_id), since, limit)
     out = []
     for r in rows:
@@ -182,9 +191,23 @@ def tool_activity_notes(history: list[dict], activity: list[dict]) -> dict[str, 
              if m["role"] == "user" and m.get("created_at")]
     if not users or not activity:
         return {}
-    notes: dict[str, list[str]] = {}
+    # AN OUTCOME COMES FROM A RESULT, NEVER FROM A CALL. `tool_start` rows
+    # carry the ARGUMENTS as their content, and `{"action": "list"}` does not
+    # begin with "error", so _outcome scored every one of them `ok`. Each call
+    # therefore produced two contradictory entries and the model was handed
+    # both. MEASURED 2026-08-04, replayed verbatim into her next turn:
+    #
+    #   manage_tool_hosts -> ok; manage_tool_hosts -> error;
+    #   manage_tools -> ok; manage_tools -> error
+    #
+    # Both of those calls were REFUSED. This note exists to be the mechanical
+    # record she trusts over her own prose, and it was asserting that a denied
+    # call had succeeded — in the same breath as saying it failed.
+    results: dict[str, list[str]] = {}
+    started: dict[str, list[str]] = {}
     for a in activity:
-        if not a.get("name"):
+        name = a.get("name")
+        if not name:
             continue
         bucket = None
         for u in users:
@@ -194,12 +217,30 @@ def tool_activity_notes(history: list[dict], activity: list[dict]) -> dict[str, 
                 break
         if bucket is None:
             continue
-        label = f"{a['name']} -> {_outcome(a['content'])}"
-        seen = notes.setdefault(bucket, [])
+        if a.get("kind") == "tool_start":
+            started.setdefault(bucket, []).append(name)
+            continue
+        label = f"{name} -> {_outcome(a['content'])}"
+        seen = results.setdefault(bucket, [])
         if label not in seen:
             seen.append(label)
-    return {b: "[tools that ran in this turn: " + "; ".join(v[:8]) + "]"
-            for b, v in notes.items()}
+    out: dict[str, str] = {}
+    for bucket in set(results) | set(started):
+        entries = list(results.get(bucket, []))
+        # A call with no result is not a success and not a failure — it is a
+        # call that did not finish, which is exactly what an interrupted turn
+        # leaves behind. Saying so beats inventing either verdict.
+        answered = {e.split(" -> ", 1)[0] for e in entries}
+        for name in started.get(bucket, []):
+            if name in answered:
+                continue
+            label = f"{name} -> started, no result recorded"
+            if label not in entries:
+                entries.append(label)
+        if entries:
+            out[bucket] = ("[tools that ran in this turn: "
+                           + "; ".join(entries[:8]) + "]")
+    return out
 
 
 def to_llm_history(history: list[dict],
