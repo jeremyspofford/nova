@@ -521,6 +521,10 @@ export interface StoredMessage {
   created_at: string;
   tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
   trace?: TraceSummary | null;
+  /** On role='tool' rows: the turn that ran it. Lets the transcript file an
+   *  action under its own turn rather than under whichever message sits next
+   *  to it. Null on rows written before tool rows were stamped. */
+  trace_id?: string | null;
   attachments?: ChatAttachment[];
   speaker?: { id: string | null; name: string; role: string };
 }

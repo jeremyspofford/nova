@@ -54,7 +54,9 @@ type Item =
   | { id: string; kind: 'msg'; role: 'user' | 'assistant'; content: string;
       streaming?: boolean; trace?: TraceSummary; attachments?: UiAttachment[];
       speaker?: { name: string; role: string } }
-  | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean }
+  | { id: string; kind: 'activity'; activity: Activity; fromHistory?: boolean;
+      /** The turn that ran it, when the row recorded one. */
+      traceId?: string | null }
   /** A dispatched specialist thinking out loud while it works. Live only —
    *  never persisted, so it does not come back on reload. */
   | { id: string; kind: 'subtext'; agent: string; turnId: string; content: string }
@@ -474,32 +476,69 @@ function renderItem(item: Item, onInspect?: (traceId: string) => void,
 /** Past turns' activity trail collapses into a dim expandable trace so it's
  *  reviewable without competing with the conversation; narration warnings
  *  stay visible (dimmed). Live activity renders inline as it happens. */
+type ActivityItem = Extract<Item, { kind: 'activity' }>;
+
+const traceBlock = (group: ActivityItem[]) => (
+  <details key={`trace-${group[0].id}`} className="opacity-70 hover:opacity-100 transition-opacity">
+    <summary className="text-[11px] text-stone-600 cursor-pointer select-none px-1">
+      ⚙ {group.length} agent action{group.length > 1 ? 's' : ''}
+    </summary>
+    <div className="space-y-1 mt-1 pl-2 border-l border-stone-800">
+      {group.map(it => renderItem(it))}
+    </div>
+  </details>
+);
+
+const isTrail = (it: Item): it is ActivityItem =>
+  it.kind === 'activity' && !!it.fromHistory
+  && it.activity.kind !== 'narration' && it.activity.kind !== 'capability';
+
 function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
                        onConsent?: OnConsent, mobile?: boolean) {
+  // BY TRACE WHERE THE ROW NAMES ONE. Grouping was purely positional — a run
+  // of activity rows flushed against whatever message came next — so an
+  // action was filed under whichever message happened to sit beside it. On a
+  // conversation where turns overlapped, that is the wrong one: the 18 tool
+  // rows from a 57s turn render against the "Say ACK" that overtook it.
+  //
+  // Rows written before tool rows carried a trace_id have no id to group by,
+  // so they keep the positional behaviour exactly. This is additive.
+  //
+  // Only a trace with a reply ON THIS PAGE may claim its rows. A group with
+  // nowhere to render is a group that silently disappears — the turn whose
+  // assistant row was never written, or one whose reply sits on an earlier
+  // page. Those fall through to the positional path and are still shown.
+  const homes = new Set<string>();
+  for (const it of items) {
+    if (it.kind === 'msg' && it.role === 'assistant' && it.trace?.id) homes.add(it.trace.id);
+  }
+  const byTrace = new Map<string, ActivityItem[]>();
+  for (const it of items) {
+    if (isTrail(it) && it.traceId && homes.has(it.traceId)) {
+      const group = byTrace.get(it.traceId);
+      if (group) group.push(it);
+      else byTrace.set(it.traceId, [it]);
+    }
+  }
+
   const blocks: React.ReactNode[] = [];
-  let trace: Extract<Item, { kind: 'activity' }>[] = [];
+  let loose: ActivityItem[] = [];
   const flush = () => {
-    if (!trace.length) return;
-    blocks.push(
-      <details key={`trace-${trace[0].id}`} className="opacity-70 hover:opacity-100 transition-opacity">
-        <summary className="text-[11px] text-stone-600 cursor-pointer select-none px-1">
-          ⚙ {trace.length} agent action{trace.length > 1 ? 's' : ''}
-        </summary>
-        <div className="space-y-1 mt-1 pl-2 border-l border-stone-800">
-          {trace.map(it => renderItem(it))}
-        </div>
-      </details>,
-    );
-    trace = [];
+    if (!loose.length) return;
+    blocks.push(traceBlock(loose));
+    loose = [];
   };
   for (const item of items) {
-    if (item.kind === 'activity' && item.fromHistory
-        && item.activity.kind !== 'narration' && item.activity.kind !== 'capability') {
-      trace.push(item);
-    } else {
-      flush();
-      blocks.push(renderItem(item, onInspect, onConsent, mobile));
+    // claimed by a turn — rendered with it, below
+    if (isTrail(item) && item.traceId && byTrace.has(item.traceId)) continue;
+    if (isTrail(item)) { loose.push(item); continue; }
+    flush();
+    // the turn's actions read before its reply, the way they happened
+    if (item.kind === 'msg' && item.role === 'assistant' && item.trace?.id) {
+      const group = byTrace.get(item.trace.id);
+      if (group) blocks.push(traceBlock(group));
     }
+    blocks.push(renderItem(item, onInspect, onConsent, mobile));
   }
   flush();
   return blocks;
@@ -1777,7 +1816,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // rendering older rows differently from newer ones.
   const toItem = (m: StoredMessage): Item => m.role === 'tool'
     ? {
-        id: m.id, kind: 'activity', fromHistory: true,
+        id: m.id, kind: 'activity', fromHistory: true, traceId: m.trace_id,
         activity: {
           kind: m.tool_calls?.kind ?? 'tool_result',
           name: m.tool_calls?.name ?? '',

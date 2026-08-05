@@ -962,8 +962,19 @@ async def get_messages(conversation_id: str, before: str | None = None,
                     tc = json.loads(tc)
                 except ValueError:
                     continue
+            # The turn this ran in, so the UI can file it under that turn's
+            # reply instead of under whatever message happens to sit next to
+            # it in the row order. Null on rows written before tool rows were
+            # stamped; the client keeps its positional fallback for those.
+            tmeta = m.get("metadata")
+            if isinstance(tmeta, str):
+                try:
+                    tmeta = json.loads(tmeta)
+                except ValueError:
+                    tmeta = {}
             out.append({"id": m["id"], "role": "tool", "content": m["content"] or "",
-                        "created_at": m["created_at"], "tool_calls": tc})
+                        "created_at": m["created_at"], "tool_calls": tc,
+                        "trace_id": (tmeta or {}).get("trace_id")})
     if trace_ids:
         async with db.acquire() as conn:
             rows = await conn.fetch(
