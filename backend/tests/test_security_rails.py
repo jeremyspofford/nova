@@ -10,6 +10,14 @@ hand against the running stack:
   * fetch_url's deny-list missed 100.64.0.0/10 — the whole tailnet
   * manage_agents could disable guardian, or hand any agent any tool
 
+and one that was still live on 2026-08-05, after all of the above shipped:
+
+  * DNS rebinding walked straight through them. Point a domain you own at
+    127.0.0.1 and your page's fetches are local by IP AND same-origin by
+    Sec-Fetch-Site, so both surviving rails say yes. Verified by hand:
+    `curl -H 'Host: evil.test:8000' -H 'Sec-Fetch-Site: same-origin'
+    http://127.0.0.1:8000/api/v1/auth/token` returned 200 and the admin token.
+
 These are the parts that are pure functions of their input; the DB-backed
 half (update_agent's is_system refusal) is exercised live, since faking an
 asyncpg pool would test the fake.
@@ -38,12 +46,18 @@ class FakeClient:
         self.host = host
 
 
-class FakeRequest:
-    """Only what the middleware reads: headers, and the socket peer."""
+class FakeUrl:
+    def __init__(self, path):
+        self.path = path
 
-    def __init__(self, peer=None, **headers):
+
+class FakeRequest:
+    """Only what the middleware reads: headers, the socket peer, the path."""
+
+    def __init__(self, peer=None, path="/api/v1/auth/token", **headers):
         self.headers = {k.replace("_", "-"): v for k, v in headers.items()}
         self.client = FakeClient(peer) if peer else None
+        self.url = FakeUrl(path)
 
 
 # ── 0. who counts as this machine ────────────────────────────────────────
@@ -97,6 +111,94 @@ def test_cross_site():
     check("Sec-Fetch-Site wins over a spoofed-looking Origin",
           x(FakeRequest(sec_fetch_site="cross-site",
                         origin="http://127.0.0.1:5173")))
+
+
+# ── 1b. Host allow-list (the DNS-rebinding gate) ─────────────────────────
+
+def test_host_allowlist():
+    print("Host allow-list (the rebinding gate)")
+    import app.main as m
+    from app import settings_store
+
+    # a real value, not the shipped default of "", so the derivation is
+    # actually exercised rather than skipped
+    saved = settings_store._cache.get("ui.public_url")
+    settings_store._cache["ui.public_url"] = "https://nova.example.ts.net"
+    m._proxy_cache = (float("inf"), frozenset({"172.18.0.12"}))
+    try:
+        bare = m._bare_host
+        check("a port is stripped", bare("127.0.0.1:8000") == "127.0.0.1")
+        check("an origin reduces to its hostname",
+              bare("https://nova.example.ts.net") == "nova.example.ts.net")
+        check("IPv6 brackets are stripped", bare("[::1]:8000") == "::1")
+        check("case cannot smuggle a host past the set",
+              bare("EVIL.Test:8000") == "evil.test")
+        check("empty stays empty", bare("") == "")
+        check("a malformed host does not crash the middleware",
+              bare("[::1") == "")
+
+        hosts = m._nova_hosts()
+        check("loopback names are ours",
+              {"127.0.0.1", "localhost", "::1"} <= hosts, str(sorted(hosts)))
+        check("the compose alias vite rewrites Host to is ours",
+              "backend" in hosts)
+        check("ui.public_url's host is DERIVED, not listed",
+              "nova.example.ts.net" in hosts, str(sorted(hosts)))
+        check("a foreign name is not ours", "evil.test" not in hosts)
+        check("no empty string leaked in to match a missing Host",
+              "" not in hosts)
+
+        nova = m._host_is_nova
+        check("the rebinding Host loses localhost trust",
+              not nova(FakeRequest(host="evil.test:8000")))
+        check("a subdomain of ours is still not ours",
+              not nova(FakeRequest(host="nova.example.ts.net.evil.test")))
+        check("the real loopback Host keeps it",
+              nova(FakeRequest(host="127.0.0.1:8000")))
+        check("the vite proxy's rewritten Host keeps it",
+              nova(FakeRequest(host="backend:8000")))
+        check("the operator's public URL keeps it",
+              nova(FakeRequest(host="nova.example.ts.net")))
+        check("a request with no Host at all is not Nova",
+              not nova(FakeRequest()))
+
+        ref = m._host_refused
+        gw = m._GATEWAY_IP
+        check("a foreign Host straight to :8000 is refused outright",
+              ref(FakeRequest(peer=gw, host="evil.test:8000")))
+        check("...including with the same-origin header rebinding gets free",
+              ref(FakeRequest(peer=gw, host="evil.test:8000",
+                              sec_fetch_site="same-origin")))
+        check("our own Host straight to :8000 is not",
+              not ref(FakeRequest(peer=gw, host="127.0.0.1:8000")))
+        check("a name behind the proxy is left to the 401, never 400ed "
+              "(that path is the phone)",
+              not ref(FakeRequest(peer="172.18.0.12",
+                                  host="nova.tunnel.example")))
+        check("/health is exempt, so liveness never depends on a setting",
+              not ref(FakeRequest(peer=gw, host="evil.test", path="/health")))
+        check("a request with no Host at all is refused on the direct path",
+              ref(FakeRequest(peer=gw)))
+
+        # The 400 only beats the 401 because host_allowlist_middleware is the
+        # OUTERMOST layer, which it is only because it is DECLARED LAST
+        # (Starlette inserts each added middleware at index 0). That is an
+        # ordering a later edit can silently invert by adding a middleware
+        # below it, and nothing else in the file would complain — so the
+        # property gets asserted rather than commented. Verified live
+        # 2026-08-05: a foreign Host carrying a VALID Bearer token still gets
+        # 400, which is only possible if the host gate ran first.
+        outer = m.app.user_middleware[0]
+        check("the host gate is the outermost middleware, ahead of auth",
+              outer.kwargs.get("dispatch").__name__ == "host_allowlist_middleware",
+              str([mw.kwargs.get("dispatch").__name__
+                   for mw in m.app.user_middleware]))
+    finally:
+        m._proxy_cache = None
+        if saved is None:
+            settings_store._cache.pop("ui.public_url", None)
+        else:
+            settings_store._cache["ui.public_url"] = saved
 
 
 # ── 2. SSRF allow-list ───────────────────────────────────────────────────
@@ -180,6 +282,8 @@ async def main():
     test_is_local()
     print()
     test_cross_site()
+    print()
+    test_host_allowlist()
     print()
     test_ssrf()
     print()

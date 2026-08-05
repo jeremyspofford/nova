@@ -9,8 +9,18 @@ execution_spec shape:
     }
 
 Placeholders {name} are substituted from the tool-call arguments (URL-quoted in
-the URL). The target host must be present in tool_host_allowlist — checked here
-at execution time regardless of any creation-time validation.
+the URL). Two checks run here at execution time regardless of any
+creation-time validation, because the URL is only known once the arguments
+are in it:
+
+    the allow-list     the host must be a row in tool_host_allowlist
+    the off-stack guard the host must not RESOLVE to this machine or to one
+                       of this install's own services (net_guard)
+
+The second one is the one that has to be here rather than at approval time:
+allow-listing takes a name, and a name that pointed at the router when an
+operator approved it can point at 127.0.0.1 by the time a tool call carries
+it. See the comment block in net_guard for what that reached.
 """
 
 import json
@@ -19,7 +29,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from app import db
+from app import db, net_guard
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +43,13 @@ class _QuotingDict(dict):
 
 
 async def host_allowed(host: str) -> bool:
+    """Is this hostname a row in tool_host_allowlist?
+
+    Matches the NAME only. The table has no port column, so an approved host
+    is approved on every port it listens on — which is why the second check
+    exists: what an operator is agreeing to is a machine, and the machines
+    that must never be that machine are settled by resolution, not by name.
+    """
     async with db.acquire() as conn:
         row = await conn.fetchrow("SELECT 1 FROM tool_host_allowlist WHERE host = $1", host)
         return row is not None
@@ -58,6 +75,11 @@ async def execute_http_tool(tool_row: dict, args: dict) -> str:
     if not await host_allowed(host):
         return (f"Error: host '{host}' is not in the approved allowlist. "
                 f"An operator must add it before this tool can run.")
+    refusal = await net_guard.validate_offstack_target(url)
+    if refusal:
+        return (f"Error: {refusal}. Being on the approved host list does not "
+                f"make a target reachable — an operator cannot approve this "
+                f"one, and no tool call will reach it.")
 
     headers = spec.get("headers") or {}
     body = None

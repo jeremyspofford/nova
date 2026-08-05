@@ -264,6 +264,100 @@ def _nova_origins() -> set[str]:
     return origins
 
 
+# The name the in-network proxies dial this service by. Not derivable from
+# inside the container: socket.gethostname() and $HOSTNAME are both the
+# container ID (measured 2026-08-05 — `bb047e280a41`), reverse DNS on our own
+# address gives the same ID back, and the com.docker.compose.service label
+# needs the docker socket. It has to be listed because vite's dev proxy runs
+# changeOrigin:true: measured on the same day, EVERY request through :5173
+# reaches us as `Host: backend:8000` with the browser's own Host destroyed.
+# It is not a rebinding vector — a bare label with no public TLD is a name no
+# attacker can win the DNS for, so no browser can be steered onto it.
+_SERVICE_HOST = "backend"
+
+
+def _bare_host(value: str) -> str:
+    """Hostname out of a Host header or an origin: lowercased, port dropped,
+    IPv6 brackets removed. Returns "" for anything unparseable.
+
+    Deliberately does NOT validate or normalise beyond that, and the result is
+    only ever compared against a known set — never used to build a URL."""
+    from urllib.parse import urlsplit
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "//" + value          # a bare Host is not a URL until it is
+    try:
+        return (urlsplit(value).hostname or "").lower()
+    except ValueError:                # malformed IPv6 brackets
+        return ""
+
+
+def _nova_hosts() -> frozenset[str]:
+    """The hostnames this backend answers to, port-stripped.
+
+    Derived from the same `_nova_origins()` the cross-site fallback uses, so
+    setting ui.public_url is the only way to add one and nothing here rots.
+    This is NOT the set of names the operator may front nginx with — a tunnel
+    or tailnet name arrives through the `web` proxy, and that path is governed
+    by the proxy exemption in `_host_refused` rather than by this set."""
+    hosts = {_bare_host(o) for o in _nova_origins()}
+    hosts.add(_SERVICE_HOST)
+    hosts.discard("")
+    return frozenset(hosts)
+
+
+def _host_is_nova(request: Request) -> bool:
+    """True when the Host header names Nova rather than a domain the caller
+    chose. Closes DNS rebinding, which defeats every other rail here: the
+    attacker points evil.test at 127.0.0.1, so their page's packets really do
+    come from this machine (`_is_local` is True via the docker gateway) and
+    the browser really does consider the fetch same-origin (`Sec-Fetch-Site:
+    same-origin`, so `_browser_cross_site` is False). Verified live
+    2026-08-05: `curl -H 'Host: evil.test:8000' -H 'Sec-Fetch-Site:
+    same-origin' http://127.0.0.1:8000/api/v1/auth/token` returned 200 and the
+    admin token with no Authorization header. The Host is the one part of that
+    request the attacker cannot launder, because it is the name they had to
+    own to run the attack at all."""
+    return _bare_host(request.headers.get("host", "")) in _nova_hosts()
+
+
+def _via_trusted_proxy(request: Request) -> bool:
+    """True when `web` or `frontend` is the immediate peer, i.e. the Host we
+    see is whatever that proxy chose to send rather than the client's own."""
+    peer = request.client.host if request.client else None
+    return peer is not None and peer in _proxy_ips()
+
+
+def _host_refused(request: Request) -> bool:
+    """True when the request must be rejected outright for naming a foreign
+    host. Pure decision; `host_allowlist_middleware` only turns it into a 400.
+
+    Scoped to the direct path on purpose. Measured 2026-08-05: every caller
+    that reaches :8000 without a proxy in front sends a loopback Host, so
+    refusing a foreign one there costs nothing — while a request relayed by
+    `web` carries whatever name the operator fronts nginx with (a .ts.net
+    node, a tunnel), which this process cannot enumerate. 400ing those would
+    take out the phone path on :8080, the one surface the web service exists
+    for. Rebinding through nginx is still refused, one layer down: it loses
+    `trusted_local` in auth_middleware and gets a 401.
+
+    /health is exempt, and NOT because the probes would otherwise fail: the
+    three names they dial today all land in the derived set anyway — backend
+    probes `http://localhost:8000/health` (compose:143), web probes
+    `http://127.0.0.1/health` (compose:502) and nginx relays that on as
+    `Host: backend:8000`. The exemption is there so liveness never becomes a
+    function of ui.public_url. Anything that can red the `docker compose ps`
+    column when a setting changes is a rail that gets deleted the first time
+    it does, so this one is kept off that path by construction."""
+    if request.url.path == "/health":
+        return False
+    if _via_trusted_proxy(request):
+        return False
+    return not _host_is_nova(request)
+
+
 def _browser_cross_site(request: Request) -> bool:
     """True when a BROWSER says this request was initiated by another site.
 
@@ -294,25 +388,56 @@ async def auth_middleware(request: Request, call_next):
 
     Localhost trust is machine-level and never extends to a web page: a
     cross-site request always has to carry the token, however local its
-    packets look."""
+    packets look — nor to a request that reached us under a name we do not
+    answer to, however local its packets look."""
     token = settings.nova_auth_token
     if token and request.url.path.startswith("/api/"):
         supplied = request.headers.get("authorization", "")
         authed = hmac.compare_digest(supplied, f"Bearer {token}")
         trusted_local = (settings.nova_trust_localhost
                          and _is_local(request)
+                         and _host_is_nova(request)
                          and not _browser_cross_site(request))
         if not authed and not trusted_local:
             # masked forensics: enough to diagnose entry/transport issues,
             # never the secret itself
             log.warning(
-                "auth failed: path=%s real_ip=%s fetch_site=%s origin=%s "
-                "got_len=%d got_prefix=%r",
-                request.url.path, request.headers.get("x-real-ip"),
+                "auth failed: path=%s host=%s real_ip=%s fetch_site=%s "
+                "origin=%s got_len=%d got_prefix=%r",
+                request.url.path, request.headers.get("host"),
+                request.headers.get("x-real-ip"),
                 request.headers.get("sec-fetch-site"),
                 request.headers.get("origin"),
                 len(supplied), supplied[:14])
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+# Registered AFTER auth_middleware so it runs BEFORE it: Starlette inserts
+# each added middleware at index 0, so the last one declared is the outermost.
+# A request naming a host we do not answer to should never get as far as a
+# trust decision.
+#
+# Hand-rolled rather than Starlette's TrustedHostMiddleware, which takes its
+# allow-list once at construction. settings_store is not warm until lifespan
+# runs, so a list built at import time could never contain ui.public_url's
+# host — the check would have to be hardcoded, which is the one thing it must
+# not be.
+@app.middleware("http")
+async def host_allowlist_middleware(request: Request, call_next):
+    """Refuse requests that arrive under a hostname that is not Nova's.
+
+    Guarantees only this: a Host we do not recognise, arriving without a
+    trusted proxy in front, gets a 400 and touches no route. It deliberately
+    does NOT police the proxied path (see `_host_refused`), and it is not the
+    load-bearing half of the rebinding fix — `_host_is_nova` inside
+    auth_middleware is, because that one applies to every surface and cannot
+    be widened by an operator's reverse-proxy choices."""
+    if _host_refused(request):
+        log.warning("host refused: path=%s host=%s peer=%s",
+                    request.url.path, request.headers.get("host"),
+                    request.client.host if request.client else None)
+        return JSONResponse({"detail": "invalid host"}, status_code=400)
     return await call_next(request)
 
 
