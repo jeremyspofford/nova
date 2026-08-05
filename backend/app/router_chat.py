@@ -8,6 +8,7 @@ SSE contract for POST /api/v1/chat/stream:
     data: [DONE]
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -406,6 +407,43 @@ def _attached_block(name: str, text: str, source: str) -> str:
     return f"\n\n--- attached file: {name}{note} ---\n{text}"
 
 
+# ONE TURN AT A TIME, PER CONVERSATION.
+#
+# Nothing serialized turns until now. MEASURED 2026-08-04: turn a6630aee ran
+# 57.8s on conversation ec3a4260 while two other turns started AND finished
+# inside it — three concurrent turns, rows interleaving by created_at, an
+# "ACK" landing between a question and its answer 49 seconds later. Worse
+# than the display: each later turn snapshots history (below) while the
+# earlier one is still generating, so it sees the operator's previous
+# message with no reply after it and answers BOTH. That is one of the three
+# routes to the merged reply he reported.
+#
+# `busy` in ChatPanel is not this control. It is component state: it dies on
+# unmount, and it does not exist across surfaces — the phone on :8080 and the
+# desktop on :5173 are two clients with no shared flag, hitting one backend.
+# A control the client holds is a request, not an enforcement.
+#
+# In-process, deliberately. A DB advisory lock is the cross-backend answer,
+# but session-scoped locks pin a pooled connection for the whole turn and
+# xact-scoped ones need a transaction held just as long — both trade a rare
+# correctness win for pool exhaustion on every turn. Chat from every surface
+# reaches one backend container today; when that stops being true this
+# becomes an advisory lock and the shape here does not change.
+_turn_locks: dict[str, asyncio.Lock] = {}
+
+
+def _turn_lock(conversation_id: str) -> asyncio.Lock:
+    """The lock for one conversation, created on first use.
+
+    Not evicted: conversations are a handful of rows and an asyncio.Lock is
+    tiny, so a reaper would be more code than the leak it prevents.
+    """
+    lock = _turn_locks.get(conversation_id)
+    if lock is None:
+        lock = _turn_locks[conversation_id] = asyncio.Lock()
+    return lock
+
+
 @router.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
     if not request.message.strip() and not request.attachments:
@@ -462,14 +500,6 @@ async def chat_stream(request: ChatRequest):
     # second hand-tuned number subtracted from the first.
     from app.agents import context_trim
     history_budget = context_trim.history_budget_for(model_eff)
-
-    # user/assistant only: tool rows are an audit trail the LLM never replays
-    # (to_llm_history drops them anyway), and letting them occupy the row cap
-    # is what starved the window to a third of history_budget.
-    history = await conversations.load_history(
-        conversation_id, roles=("user", "assistant"))
-    window, _aged = conversations.window_history(history, history_budget)
-    window_oldest_at = window[0]["created_at"] if window else None
 
     # Attachments ride THIS turn only as full content — images as image_url
     # content parts, text files inlined into the turn's text — so the model
@@ -546,37 +576,89 @@ async def chat_stream(request: ChatRequest):
     turn_text = user_text + turn_extra_text
     turn_content = ([{"type": "text", "text": turn_text}] + image_parts
                     if image_parts else turn_text)
-    # Replay what actually RAN in each past turn alongside what was said.
-    # Without it she sees only her own prose across turns, which is how she
-    # promised to "dig deeper" four times after list_egress had already
-    # returned, and how a read_memory_item result she never called got
-    # reported as fact.
-    _first = next((m["created_at"] for m in window if m.get("created_at")), None)
-    _activity = await conversations.load_tool_activity(conversation_id, _first)
-    replayed = conversations.to_llm_history(window, _activity)
-    turn_messages = replayed + [{"role": "user", "content": turn_content}]
 
-    user_meta: dict = {}
-    if attach_meta:
-        user_meta["attachments"] = attach_meta
-    if speaker:
-        user_meta["speaker"] = {"id": speaker["id"], "name": speaker["name"],
-                                "role": speaker["role"]}
-    user_message_id = await conversations.append_message(
-        conversation_id, "user", persist_text,
-        metadata=user_meta or None)
-    # Bind the kept originals to the turn that carried them. Provenance only —
-    # the bytes were already safe before this request started, which is the
-    # point of uploading separately — but without it `attachments.message_id`
-    # is never written by anything, and "which conversation was that letter
-    # from?" has no answer at all.
-    if request.attachment_ids:
-        from app import attachments as attachment_store
-        await attachment_store.attach_to_message(
-            request.attachment_ids, user_message_id)
+    # ── the serialized section ─────────────────────────────────────────────
+    # Everything from here to the assistant row is one turn's worth of state:
+    # snapshot history, write the question, answer it. Taken AFTER attachment
+    # extraction on purpose — that part can raise 422 and can take seconds on
+    # a scanned PDF, and neither is a reason to make another surface wait.
+    #
+    # Bounded, and it proceeds rather than refusing on timeout. A stuck turn
+    # must not become "Nova stopped accepting messages"; the overlap this
+    # prevents is bad, a swallowed message is worse. Derived from the same
+    # setting evals/suites.py already treats as how long a turn may run.
+    _lock = _turn_lock(conversation_id)
+    _wait_s = float(settings_store.get("automations.run_timeout_seconds") or 300)
+    _held = False
+    if _lock.locked():
+        log.info("chat turn queued behind one already running on %s",
+                 conversation_id)
+    try:
+        await asyncio.wait_for(_lock.acquire(), timeout=_wait_s)
+        _held = True
+    except asyncio.TimeoutError:
+        log.warning("turn lock on %s not released within %ss — proceeding "
+                    "unserialized rather than dropping the message",
+                    conversation_id, _wait_s)
+
+    try:
+        # user/assistant only: tool rows are an audit trail the LLM never
+        # replays (to_llm_history drops them anyway), and letting them occupy
+        # the row cap is what starved the window to a third of history_budget.
+        #
+        # UNDER THE LOCK. This snapshot is the thing concurrency corrupts:
+        # read while an earlier turn is still generating, it lacks that
+        # turn's answer, so this turn sees an unanswered question and merges.
+        history = await conversations.load_history(
+            conversation_id, roles=("user", "assistant"))
+        window, _aged = conversations.window_history(history, history_budget)
+        window_oldest_at = window[0]["created_at"] if window else None
+
+        # Replay what actually RAN in each past turn alongside what was said.
+        # Without it she sees only her own prose across turns, which is how she
+        # promised to "dig deeper" four times after list_egress had already
+        # returned, and how a read_memory_item result she never called got
+        # reported as fact.
+        _first = next((m["created_at"] for m in window if m.get("created_at")), None)
+        _activity = await conversations.load_tool_activity(conversation_id, _first)
+        replayed = conversations.to_llm_history(window, _activity)
+        turn_messages = replayed + [{"role": "user", "content": turn_content}]
+
+        user_meta: dict = {}
+        if attach_meta:
+            user_meta["attachments"] = attach_meta
+        if speaker:
+            user_meta["speaker"] = {"id": speaker["id"], "name": speaker["name"],
+                                    "role": speaker["role"]}
+        # Written under the lock, so the question can never land in the middle
+        # of the previous turn's rows — which is how "ACK" came to sit between
+        # a question and the answer to it.
+        user_message_id = await conversations.append_message(
+            conversation_id, "user", persist_text,
+            metadata=user_meta or None)
+        # Bind the kept originals to the turn that carried them. Provenance
+        # only — the bytes were already safe before this request started,
+        # which is the point of uploading separately — but without it
+        # `attachments.message_id` is never written by anything, and "which
+        # conversation was that letter from?" has no answer at all.
+        if request.attachment_ids:
+            from app import attachments as attachment_store
+            await attachment_store.attach_to_message(
+                request.attachment_ids, user_message_id)
+    except BaseException:
+        # Nothing downstream will run, so this is the only release path left.
+        if _held:
+            _lock.release()
+        raise
 
     async def generate():
         final_text = ""
+        # Everything that actually reached the client, accumulated as it
+        # streams. `final_text` is assigned ONLY from the terminal `final`
+        # event, so a turn cancelled mid-generation had an empty string to
+        # persist — the reply the operator was watching appear existed
+        # nowhere but on their screen. See the CancelledError arm below.
+        streamed = ""
         # A turn that dies used to persist NOTHING: the SSE error card is
         # live-only, so after a reload the user's message sat alone with no
         # reply and no reason. That is the literal shape of "it just quits
@@ -604,6 +686,7 @@ async def chat_stream(request: ChatRequest):
                 async for event in events:
                     etype = event["type"]
                     if etype == "text":
+                        streamed += event["text"]
                         yield _sse({"t": event["text"]})
                     elif etype == "sub_text":
                         # a specialist's live thinking (turn-speed phase 5).
@@ -619,16 +702,33 @@ async def chat_stream(request: ChatRequest):
                         # `args` is additive (parallel tool results carry the
                         # brief so simultaneous same-name lines are
                         # distinguishable); old clients ignore unknown keys
+                        # `retract` unwinds deltas the client already drew:
+                        # a narration retry discards the draft it is
+                        # complaining about, and that draft is already on
+                        # screen. Keep `streamed` in step so an interrupted
+                        # turn persists what is actually visible.
+                        if event.get("retract"):
+                            streamed = streamed[:-int(event["retract"])] \
+                                if int(event["retract"]) <= len(streamed) else ""
                         yield _sse({"activity": {k: event.get(k) for k in
                                                  ("kind", "name", "agent",
-                                                  "args", "detail")}})
+                                                  "args", "detail", "retract")}})
                         # persist tool activity as an audit row (fire and forget)
+                        # Stamped with the turn. Only assistant rows carried a
+                        # trace_id, so a tool row could be attributed to a turn
+                        # only by timestamp — and these are written
+                        # fire-and-forget, so they can land after the row they
+                        # belong to. Serialization now keeps the ordering
+                        # honest, but "which turn ran this tool" should be a
+                        # recorded fact rather than something reconstructed
+                        # from clocks.
                         bg.spawn(conversations.append_message(
                             conversation_id, "tool",
                             content=(event.get("detail") or "")[:2000],
                             tool_calls={"kind": event.get("kind"),
                                         "name": event.get("name"),
-                                        "agent": event.get("agent")}))
+                                        "agent": event.get("agent")},
+                            metadata={"trace_id": str(turn.id)}))
                     elif etype == "model":
                         # the turn moved to another model before its first
                         # byte. Restamp the trace and tell the client, so the
@@ -643,6 +743,46 @@ async def chat_stream(request: ChatRequest):
                         turn_error = str(event["error"])
                         turn.set_error(event["error"])
                         yield _sse({"error": event["error"]})
+            except asyncio.CancelledError:
+                # THE INTERRUPTED TURN. A disconnect (navigate away, Stop,
+                # interject, barge-in) cancels this generator while it is
+                # suspended at a yield. CancelledError is a BaseException, so
+                # it walks straight past the handler below, past
+                # trace.turn's `raise`, and out of generate() — skipping the
+                # persist block after this `async with` entirely.
+                #
+                # The cost is not just a missing row. With no assistant row
+                # the user's message stays unanswered FOREVER, and
+                # to_llm_history replays it next turn followed immediately
+                # by the new question — two consecutive user turns — so she
+                # answers both at once. That is the merged reply Jeremy
+                # reported on 2026-08-04, and 21 cancelled traces plus 66
+                # consecutive-user pairs say it has been happening all along.
+                #
+                # bg.spawn, not await: our own cancel scope is dead, so every
+                # await here would raise immediately. A detached task is
+                # outside that scope and can finish the write. Same reasoning
+                # as _cancel_and_drain in the runner.
+                partial = streamed.strip()
+                if partial:
+                    bg.spawn(conversations.append_message(
+                        conversation_id, "assistant",
+                        partial + "\n\n[This turn was interrupted before it "
+                                  "finished, so this reply is incomplete.]",
+                        ran_model, metadata={"trace_id": str(turn.id),
+                                             "interrupted": True}),
+                        name="persist-interrupted-turn")
+                else:
+                    # Nothing had generated yet. Still mark the turn, or the
+                    # question sits alone and the next one absorbs it.
+                    bg.spawn(conversations.append_message(
+                        conversation_id, "assistant",
+                        "[This turn was interrupted before it produced a "
+                        "reply.]", ran_model,
+                        metadata={"trace_id": str(turn.id),
+                                  "interrupted": True}),
+                        name="persist-interrupted-turn")
+                raise
             except Exception as e:
                 log.exception("chat stream failed")
                 turn_error = str(e)
@@ -715,7 +855,24 @@ async def chat_stream(request: ChatRequest):
 
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream",
+    async def streamed_turn():
+        """generate(), plus the release of the turn lock.
+
+        A wrapper rather than a try/finally inside generate() so the release
+        lives in one place and cannot be missed by a future early return. The
+        finally runs on all three exits — normal completion, an exception,
+        and the aclose() Starlette performs on client disconnect — and that
+        third one is the path that matters, since disconnect is how turns
+        actually end here.
+        """
+        try:
+            async for chunk in generate():
+                yield chunk
+        finally:
+            if _held:
+                _lock.release()
+
+    return StreamingResponse(streamed_turn(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
 
@@ -726,12 +883,58 @@ async def get_active_conversation():
 
 
 @router.get("/api/v1/conversations/{conversation_id}/messages")
-async def get_messages(conversation_id: str):
+async def get_messages(conversation_id: str, before: str | None = None,
+                       limit: int = 100):
     """User/assistant turns plus the persisted activity trail (tool rows) —
     the UI shows past turns' actions as a dim, collapsible trace. Assistant
     rows carry their turn-ledger summary (duration, tool count) when one
-    exists, feeding the duration chip → Turn Inspector."""
-    history = await conversations.load_history(conversation_id, limit=100)
+    exists, feeding the duration chip → Turn Inspector.
+
+    TWO QUERIES, ONE BUDGET EACH. This used to be a single
+    load_history(limit=100) with no `roles` filter, so the LIMIT applied
+    across all roles and the activity trail evicted the conversation:
+    measured 2026-08-05 on the live DB, the 100 rows came back 28 user / 26
+    assistant / 46 tool, and the visible transcript stopped a day and a half
+    short of where the history actually started. 17 of Jeremy's 45 messages
+    were unreachable, which is what "my messages were no longer to be found
+    in the chat window" was. It got worse as she used more tools.
+
+    The split is the same one load_history's own docstring prescribes and
+    load_tool_activity already applies on the LLM path; the endpoint just
+    never took it, because it wants the tool rows too. So: the transcript
+    gets a row budget, the trail gets its own, and neither can starve the
+    other.
+
+    PAGED, AND HONEST ABOUT IT. Returns an object rather than a bare array:
+    `has_more` says whether older turns exist beyond this page and `before`
+    walks back through them. A window that just ends is indistinguishable
+    from a conversation that started there — which is how 17 unreachable
+    messages went unnoticed until someone went looking for one of them."""
+    limit = max(1, min(500, limit))
+    # Asking for one extra row IS the has_more test — cheaper than a separate
+    # COUNT(*), and it cannot disagree with the page the way a count taken at
+    # a different instant can.
+    page = await conversations.load_history(
+        conversation_id, limit=limit + 1, roles=("user", "assistant"),
+        before=before)
+    has_more = len(page) > limit
+    history = page[-limit:] if has_more else page
+    # Bounded by the transcript, not by a count of its own: activity older
+    # than the oldest visible turn has nothing to attach to.
+    oldest = next((m["created_at"] for m in history if m.get("created_at")), None)
+    newest = next((m["created_at"] for m in reversed(history)
+                   if m.get("created_at")), None)
+    if oldest:
+        tool_rows = [m for m in await conversations.load_history(
+                         conversation_id, limit=300, roles=("tool",),
+                         before=before)
+                     if m.get("created_at") and m["created_at"] >= oldest
+                     and (newest is None or m["created_at"] <= newest)]
+        # (created_at, id) — created_at ties are real (an assistant row and
+        # its narration warning share a microsecond), and a tie that sorts
+        # differently on each reload moves the trail between messages.
+        history = sorted(history + tool_rows,
+                         key=lambda m: (m["created_at"] or "", m["id"]))
     out = []
     trace_ids: dict[str, list[dict]] = {}   # trace_id -> messages wearing it
     for m in history:
@@ -779,7 +982,10 @@ async def get_messages(conversation_id: str):
                        "tools": r["tools"], "dispatches": r["dispatches"]}
             for row in trace_ids[str(r["id"])]:
                 row["trace"] = summary
-    return out
+    # `oldest` is the cursor for the next page — the client hands it straight
+    # back as `before` rather than deriving it from the rows, so the two can
+    # never disagree about where this page began.
+    return {"messages": out, "has_more": has_more, "oldest": oldest}
 
 
 @router.get("/api/v1/traces")
@@ -2192,21 +2398,30 @@ async def ingest_summary_endpoint():
 
 
 @router.get("/api/v1/ingest/jobs")
-async def ingest_jobs_endpoint(status: str | None = None, limit: int = 100):
+async def ingest_jobs_endpoint(status: str | None = None, limit: int = 100,
+                               dismissed: str = "exclude"):
     """Full job list, optionally filtered by status (queued|running|done|
-    skipped|failed)."""
+    skipped|failed).
+
+    `dismissed` is exclude (default, matches the panel) | only (the 'show
+    dismissed' drawer) | include (everything, for debugging)."""
     limit = max(1, min(500, limit))
+    if dismissed not in ("exclude", "only", "include"):
+        raise HTTPException(status_code=400,
+                            detail="dismissed must be exclude|only|include")
+    where = {"exclude": "dismissed_at IS NULL",
+             "only": "dismissed_at IS NOT NULL",
+             "include": "TRUE"}[dismissed]
+    order = "ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC"
     async with db.acquire() as conn:
         if status:
             rows = await conn.fetch(
-                "SELECT * FROM ingest_jobs WHERE status = $1 "
-                "ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC "
-                "LIMIT $2", status, limit)
+                f"SELECT * FROM ingest_jobs WHERE {where} AND status = $1 "
+                f"{order} LIMIT $2", status, limit)
         else:
             rows = await conn.fetch(
-                "SELECT * FROM ingest_jobs "
-                "ORDER BY COALESCE(finished_at, started_at, enqueued_at) DESC "
-                "LIMIT $1", limit)
+                f"SELECT * FROM ingest_jobs WHERE {where} {order} LIMIT $1",
+                limit)
     return [dict(r) for r in rows]
 
 
@@ -2219,13 +2434,63 @@ async def ingest_retry_endpoint(job_id: str):
         jid = uuid.UUID(job_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="job not found")
-    # The one place the agent retry budget is refilled: a human clicked Retry
-    # on the Activity page, behind the auth middleware. Nothing a model can
-    # reach passes this flag.
-    row = await ingest_jobs.retry(jid, refill_agent_budget=True)
+    # The one place the agent retry budget is refilled AND the one place a
+    # dismissal is lifted by a retry: a human clicked Retry on the Activity
+    # page, behind the auth middleware. Nothing a model can reach passes
+    # either flag.
+    row = await ingest_jobs.retry(jid, refill_agent_budget=True,
+                                  clear_dismissal=True)
     if not row:
         raise HTTPException(status_code=409,
                             detail="job is not in a retryable state (failed/skipped)")
+    return dict(row)
+
+
+# ── dismissal: the operator clears a finished row off the page ──────────────
+#
+# OPERATOR-ONLY, and that is a design constraint rather than an oversight.
+# `dismissed_at` suppresses a row from failures.census, so a tool that wrote it
+# would hand a model the ability to silence its own failures — the exact thing
+# app/failures.py exists to make impossible. There is no dismiss tool, and
+# `retry_by_agent` refuses a dismissed row in SQL.
+
+@router.post("/api/v1/ingest/jobs/{job_id}/dismiss")
+async def ingest_dismiss_endpoint(job_id: str):
+    """Hide one finished row (done/failed/skipped). Queued and running jobs are
+    refused — hiding live work is how a queue silently stops."""
+    from app import ingest_jobs
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="job not found")
+    row = await ingest_jobs.dismiss(jid)
+    if not row:
+        raise HTTPException(
+            status_code=409,
+            detail="only a finished job (done/failed/skipped) that is not "
+                   "already dismissed can be cleared")
+    return dict(row)
+
+
+@router.post("/api/v1/ingest/jobs/dismiss-finished")
+async def ingest_dismiss_finished_endpoint():
+    """Clear the whole finished trail in one click. Live work is untouched."""
+    from app import ingest_jobs
+    return {"dismissed": await ingest_jobs.dismiss_finished()}
+
+
+@router.post("/api/v1/ingest/jobs/{job_id}/restore")
+async def ingest_restore_endpoint(job_id: str):
+    """Put a dismissed row back on the page, in whatever state it was in.
+    Not a retry: restoring a done job must not re-run a finished ingest."""
+    from app import ingest_jobs
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="job not found")
+    row = await ingest_jobs.restore(jid)
+    if not row:
+        raise HTTPException(status_code=409, detail="job is not dismissed")
     return dict(row)
 
 

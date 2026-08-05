@@ -306,10 +306,15 @@ export interface Activity {
    *  unreadable, the reply not persisted). Pairs with the backend's
    *  honest-receipts change; harmless if that half is not deployed. */
   kind: 'tool_start' | 'tool_result' | 'dispatch' | 'narration' | 'capability' | 'agent_reply'
-      | 'degraded';
+      | 'degraded' | 'narration_retry';
   name: string;
   agent?: string;
   detail?: string;
+  /** Characters of already-streamed reply to unwind. A narration retry
+   *  throws its draft away and rewrites the whole answer, so without this
+   *  the client keeps text the server will never store — the reply renders
+   *  twice, spliced mid-sentence. */
+  retract?: number;
 }
 
 export type ChatEvent =
@@ -520,8 +525,21 @@ export interface StoredMessage {
   speaker?: { id: string | null; name: string; role: string };
 }
 
-export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
-  const r = await apiFetch(`${API_URL}/api/v1/conversations/${conversationId}/messages`);
+/** One page of a conversation, newest-last.
+ *
+ *  `hasMore` is why this is not a bare array any more: the window is finite,
+ *  and a transcript that simply stops looks identical to one that started
+ *  there. `oldest` is the cursor to pass back as `before` for the next page. */
+export interface MessagePage {
+  messages: StoredMessage[];
+  has_more: boolean;
+  oldest: string | null;
+}
+
+export async function getMessages(conversationId: string,
+                                  before?: string | null): Promise<MessagePage> {
+  const q = before ? `?before=${encodeURIComponent(before)}` : '';
+  const r = await apiFetch(`${API_URL}/api/v1/conversations/${conversationId}/messages${q}`);
   if (!r.ok) throw new Error('Failed to load messages');
   return r.json();
 }
@@ -1107,25 +1125,61 @@ export interface IngestJob {
   enqueued_at: string;
   started_at: string | null;
   finished_at: string | null;
+  dismissed_at?: string | null;
 }
 
 export interface IngestSummary {
   counts: Partial<Record<IngestStatus, number>>;
   jobs: IngestJob[];
+  /** How many rows are hidden because the operator cleared them. Dismissal is
+   *  a tombstone, not a delete — this is what makes "hidden" visible. */
+  dismissed?: number;
 }
 
 /** Counts by status + the most-recently-touched jobs — the Ingestion panel's
- *  live poll. queued+running = work in flight; done/failed/skipped = the trail. */
+ *  live poll. queued+running = work in flight; done/failed/skipped = the trail.
+ *  Dismissed rows are excluded from both, which is what makes clearing one also
+ *  clear the rail badge. */
 export async function getIngestSummary(): Promise<IngestSummary> {
   const r = await apiFetch(`${API_URL}/api/v1/ingest/summary`);
   if (!r.ok) throw new Error('Failed to load ingestion status');
   return r.json();
 }
 
-/** Requeue a failed/skipped job so the worker tries it again. */
+/** Requeue a failed/skipped job so the worker tries it again. Also lifts a
+ *  dismissal — an operator asking for a retry has plainly changed his mind. */
 export async function retryIngestJob(id: string): Promise<IngestJob> {
   const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs/${id}/retry`, { method: 'POST' });
   if (!r.ok) throw new Error((await r.json()).detail ?? 'Retry failed');
+  return r.json();
+}
+
+/** Clear one finished row (done/failed/skipped) off the page. Queued and
+ *  running jobs are refused by the backend — live work stays visible. */
+export async function dismissIngestJob(id: string): Promise<IngestJob> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs/${id}/dismiss`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Dismiss failed');
+  return r.json();
+}
+
+/** Clear the whole finished trail at once. Returns how many rows went. */
+export async function dismissFinishedIngestJobs(): Promise<{ dismissed: number }> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs/dismiss-finished`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Clear failed');
+  return r.json();
+}
+
+/** Undo a dismissal — the row returns in whatever state it was already in. */
+export async function restoreIngestJob(id: string): Promise<IngestJob> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs/${id}/restore`, { method: 'POST' });
+  if (!r.ok) throw new Error((await r.json()).detail ?? 'Restore failed');
+  return r.json();
+}
+
+/** The dismissed rows themselves, for the "show cleared" drawer. */
+export async function getDismissedIngestJobs(): Promise<IngestJob[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/ingest/jobs?dismissed=only&limit=200`);
+  if (!r.ok) throw new Error('Failed to load cleared items');
   return r.json();
 }
 

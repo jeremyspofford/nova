@@ -6,6 +6,7 @@ import {
   ModelInfo,
   RecCard,
   SlashCommand,
+  StoredMessage,
   TraceSummary,
   decideConsent,
   decideRecCard,
@@ -591,6 +592,48 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // proactive recommendation cards Nova/automations raised (keystone)
   const [recs, setRecs] = useState<RecCard[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+
+  // THE QUEUE OUTLIVES THE PANEL. `queue` above was plain component state,
+  // and this panel is conditionally rendered (pages/Brain.tsx:800) — on a
+  // phone every route other than /chat unmounts it. So a follow-up typed
+  // while Nova was replying was destroyed by navigating away: never POSTed,
+  // no row in any table, gone from the UI with no trace anywhere. The
+  // operator had already pressed Enter and watched it be accepted. That is
+  // the only true message LOSS in this area — everything else was a display
+  // or a replay fault.
+  //
+  // localStorage rather than lifting the state above <Routes>: it survives a
+  // full reload and an iOS PWA eviction too, which hoisting would not, and
+  // from the operator's side those are the same event. Keyed per
+  // conversation so a queue can never drain into the wrong one.
+  const queueKey = conversationId ? `nova.chat.queue.${conversationId}` : null;
+  const queueLoaded = useRef(false);
+  useEffect(() => {
+    if (!queueKey || queueLoaded.current) return;
+    queueLoaded.current = true;
+    try {
+      const saved = JSON.parse(localStorage.getItem(queueKey) || '[]') as QueuedTurn[];
+      // Ahead of anything queued since mount: these were typed first.
+      if (Array.isArray(saved) && saved.length) setQueue(q => [...saved, ...q]);
+    } catch { /* a corrupt entry must never stop the panel loading */ }
+  }, [queueKey]);
+  useEffect(() => {
+    // Gated on the restore having run, or the initial empty state would
+    // erase a stored queue before it was ever read back.
+    if (!queueKey || !queueLoaded.current) return;
+    try {
+      if (queue.length) localStorage.setItem(queueKey, JSON.stringify(queue));
+      else localStorage.removeItem(queueKey);
+    } catch { /* private mode / quota — the in-memory queue still works */ }
+  }, [queue, queueKey]);
+
+  // Paging backwards through history. `earliestAt` is the server's cursor
+  // for the page we hold, handed straight back rather than re-derived from
+  // the rows so the two can never disagree about where the page began.
+  const [hasEarlier, setHasEarlier] = useState(false);
+  const [earliestAt, setEarliestAt] = useState<string | null>(null);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+
   const [inspectTraceId, setInspectTraceId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1729,33 +1772,65 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     }
   }
 
+  // One mapper for both the first page and every "load earlier" page — two
+  // copies of this drifted apart is exactly how a paged list starts
+  // rendering older rows differently from newer ones.
+  const toItem = (m: StoredMessage): Item => m.role === 'tool'
+    ? {
+        id: m.id, kind: 'activity', fromHistory: true,
+        activity: {
+          kind: m.tool_calls?.kind ?? 'tool_result',
+          name: m.tool_calls?.name ?? '',
+          agent: m.tool_calls?.agent,
+          detail: m.content,
+        },
+      }
+    : { id: m.id, kind: 'msg', role: m.role, content: m.content,
+        trace: m.trace ?? undefined,
+        speaker: m.speaker && m.speaker.role !== 'operator'
+          ? { name: m.speaker.name, role: m.speaker.role } : undefined,
+        attachments: m.attachments?.map(a => ({ kind: a.kind, name: a.name, mime: a.mime })) };
+
   useEffect(() => {
     (async () => {
       try {
         const conv = await getActiveConversation();
         setConversationId(conv.id);
-        const msgs = await getMessages(conv.id);
-        setItems(msgs.map((m): Item => m.role === 'tool'
-          ? {
-              id: m.id, kind: 'activity', fromHistory: true,
-              activity: {
-                kind: m.tool_calls?.kind ?? 'tool_result',
-                name: m.tool_calls?.name ?? '',
-                agent: m.tool_calls?.agent,
-                detail: m.content,
-              },
-            }
-          : { id: m.id, kind: 'msg', role: m.role, content: m.content,
-              trace: m.trace ?? undefined,
-              speaker: m.speaker && m.speaker.role !== 'operator'
-                ? { name: m.speaker.name, role: m.speaker.role } : undefined,
-              attachments: m.attachments?.map(a => ({ kind: a.kind, name: a.name, mime: a.mime })) }));
+        const page = await getMessages(conv.id);
+        setItems(page.messages.map(toItem));
+        setHasEarlier(page.has_more);
+        setEarliestAt(page.oldest);
         void loadConsents(conv.id);
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "Load earlier" — PREPEND, and keep the scroll anchored so the operator
+  // is not thrown to the top of a page they did not ask to jump to.
+  async function loadEarlier() {
+    if (!conversationId || !earliestAt || loadingEarlier) return;
+    setLoadingEarlier(true);
+    const el = scrollerRef.current;
+    const before = el ? el.scrollHeight - el.scrollTop : 0;
+    try {
+      const page = await getMessages(conversationId, earliestAt);
+      setItems(prev => [...page.messages.map(toItem), ...prev]);
+      setHasEarlier(page.has_more);
+      setEarliestAt(page.oldest);
+      // restore the reading position after the taller list paints
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = el.scrollHeight - before;
+      });
+    } catch (err) {
+      setItems(prev => [{ id: uid(), kind: 'error',
+                          content: `Could not load earlier messages: ${errText(err)}` }, ...prev]);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }
 
   // Autoscroll ONLY when the operator is already at the bottom. It used to
   // fire on every `items` change — i.e. every streamed token — which both
@@ -1873,6 +1948,19 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               : [...prev.slice(0, at), line, ...prev.slice(at)];
           });
         } else if (event.type === 'activity') {
+          // A narration retry discards the draft it is complaining about and
+          // writes the whole reply again, so the deltas already rendered
+          // have to come back off — otherwise the answer appears twice,
+          // joined mid-sentence, and disagrees with the row that gets
+          // stored. `retract` is the character count to unwind.
+          if (event.activity.retract) {
+            const n = event.activity.retract;
+            setItems(prev => prev.map(it =>
+              it.id === assistantId && it.kind === 'msg'
+                ? { ...it, content: it.content.slice(0, Math.max(0, it.content.length - n)) }
+                : it));
+            speaker.cancel();   // don't finish speaking a retracted draft
+          }
           if (event.activity.kind === 'tool_start') {
             liveTools++;
             emitPresence(true, 'tool');
@@ -2519,6 +2607,24 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           <div className="text-center text-stone-500 mt-10">
             <p className="text-base font-medium text-stone-400">Talk to {assistantName}</p>
             <p className="text-sm mt-1">One continuous conversation — it remembers.</p>
+          </div>
+        )}
+
+        {/* The window is finite. Saying so — and offering the way back — is
+            the difference between a transcript that ends and one that looks
+            like it never began. */}
+        {hasEarlier && (
+          <div className="flex justify-center pb-2">
+            <button
+              type="button"
+              onClick={loadEarlier}
+              disabled={loadingEarlier}
+              className="px-3 py-1.5 rounded-full border border-stone-700 bg-stone-900/70
+                         text-xs text-stone-400 hover:text-stone-200 hover:border-stone-600
+                         disabled:opacity-50 transition-colors"
+            >
+              {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
+            </button>
           </div>
         )}
 

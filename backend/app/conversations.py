@@ -63,7 +63,8 @@ async def append_message(conversation_id: str, role: str, content: Optional[str]
 
 
 async def load_history(conversation_id: str, limit: int = 200,
-                       roles: Optional[tuple[str, ...]] = None) -> list[dict]:
+                       roles: Optional[tuple[str, ...]] = None,
+                       before: Optional[str] = None) -> list[dict]:
     """The most recent `limit` messages, in chronological order.
 
     `roles` filters INSIDE the limit, which is the whole point: every tool
@@ -74,6 +75,16 @@ async def load_history(conversation_id: str, limit: int = 200,
     200 fetched, so 72 real turns against a budget sized for far more. Nova
     forgot roughly three times sooner than configured, and decoded 128 rows
     of jsonb tool_calls to throw them away.
+
+    `before` is the pagination cursor — rows strictly older than that
+    timestamp. It backs the chat UI's "load earlier": the endpoint's window
+    is finite, and without a way to walk backwards the only honest thing it
+    could say is that older turns exist and cannot be reached.
+
+    ORDER BY carries `id` as a tiebreak. created_at ties are real — an
+    assistant row and the narration warning about it share a microsecond —
+    and once the window can be paged, a tie that sorts differently between
+    calls drops a row from every page or returns it on two.
     """
     async with db.acquire() as conn:
         rows = await conn.fetch(
@@ -83,10 +94,16 @@ async def load_history(conversation_id: str, limit: int = 200,
                    WHERE m.conversation_id = $1
                      AND ($3::text[] IS NULL OR m.role = ANY($3::text[]))
                      AND (c.cleared_at IS NULL OR m.created_at > c.cleared_at)
-                   ORDER BY m.created_at DESC
+                     -- ::text::timestamptz, like load_tool_activity's cursor:
+                     -- the value arrives as a string and asyncpg will not
+                     -- encode a str into a timestamptz parameter directly.
+                     AND ($4::text IS NULL
+                          OR m.created_at < $4::text::timestamptz)
+                   ORDER BY m.created_at DESC, m.id DESC
                    LIMIT $2
-               ) recent ORDER BY created_at ASC""",
-            uuid.UUID(conversation_id), limit, list(roles) if roles else None)
+               ) recent ORDER BY created_at ASC, id ASC""",
+            uuid.UUID(conversation_id), limit, list(roles) if roles else None,
+            before)
     return [{
         "id": str(r["id"]),
         "role": r["role"],
@@ -114,8 +131,19 @@ async def load_tool_activity(conversation_id: str, since: Optional[str],
                    -- only rows that record a CALL. 'narration_retry' and
                    -- friends are activity notes about the turn, and letting
                    -- one in produced "main -> ok", which names no tool.
+                   --
+                   -- 'capability' was left in and is the same defect: its row
+                   -- is a GUARD VIOLATION ("claimed filesystem access, which
+                   -- no tool in this turn's toolset provides") written under
+                   -- name='main', and _outcome scores it 'ok'. So the finding
+                   -- that she claimed something false replayed to her as a
+                   -- successful tool call named `main` — evidence FOR the
+                   -- claim it was raised to refute. Nothing is lost by
+                   -- dropping it: the correction is appended to the reply
+                   -- text itself, so it is already in the assistant row this
+                   -- note hangs off.
                    AND tool_calls->>'kind' IN
-                       ('tool_start', 'tool_result', 'dispatch', 'capability')
+                       ('tool_start', 'tool_result', 'dispatch')
                    AND created_at >= $2::text::timestamptz
                  ORDER BY created_at ASC LIMIT $3""",
             uuid.UUID(conversation_id), since, limit)
@@ -194,6 +222,27 @@ def to_llm_history(history: list[dict],
         content = m["content"]
         if m["role"] == "user":
             pending = notes.get(m.get("created_at"))
+            # ORPHAN GUARD. A user row with no assistant row after it means
+            # that turn never landed one — it was cancelled, or a second turn
+            # on the same conversation overtook it. Replayed raw, the model
+            # receives two consecutive user messages and answers BOTH in one
+            # reply: measured 66 times live, and the shape Jeremy reported on
+            # 2026-08-04 ("she merges her responses into one longer message").
+            #
+            # Derived from the row sequence, so it goes quiet by itself the
+            # moment orphans stop appearing — there is no list to maintain.
+            # Stated as a fact about the transcript, not an instruction: this
+            # text is replayed to the model, and "answer it now" is exactly
+            # the merge being prevented.
+            if out and out[-1]["role"] == "user":
+                out.append({
+                    "role": "assistant",
+                    "content": ("[This turn was interrupted and never "
+                                "answered. The operator has since sent the "
+                                "message below — answer that one. Do not "
+                                "re-answer the earlier message unless they "
+                                "ask again.]"),
+                })
         elif pending:
             content = f"{content}\n\n{pending}"
             pending = None
