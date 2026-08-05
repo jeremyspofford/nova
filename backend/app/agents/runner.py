@@ -19,8 +19,8 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import (bg, capability_claims, model_claims, narration, redact,
-                 service_claims, settings_store, timefmt, trace)
+from app import (bg, capability_claims, deferral, model_claims, narration,
+                 redact, service_claims, settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
 from app.memory import provenance
@@ -391,20 +391,77 @@ _RESTRICTED_ROLES = {"kid", "guest", "unknown"}
 _FAMILY_HARD_EXCLUDE = {"dispatch_to_agent"}
 
 
+def _render_unattended(free) -> str:
+    """The unattended set as a sentence — with the qualification that earned
+    each name still attached to it.
+
+    `unattended_tools` keys on the BARE TOOL NAME, but four of those names got
+    in on a read-only ARGUMENT probe: `scopes.READ_ACTIONS` says
+    `manage_automations` is free at `{"action": "list"}`, and
+    `unattended_tools` probes it with exactly that before dropping the arg.
+    Rendered bare, main's last-word block asserted that scheduling "needs no
+    approval, no consent and no goal" — while its very next clause said
+    "creating, scheduling ... you still ask about first". Two sentences, one
+    verb, opposite instructions.
+
+    The cost was measured elsewhere and is not hypothetical: the model calls
+    `manage_automations{action:"create"}` on the strength of the promise, the
+    goal gate refuses it, and `goals.card_for_refusal` puts an approval card
+    in the operator's inbox that nobody asked for — the exact harm scopes.py
+    documents ("MEASURED 2026-08-04: two such cards in `goals`, neither with a
+    decision behind it").
+
+    Qualified rather than dropped. That listing her automations really is free
+    is a TRUE fact, and it is the fact that stops her asking permission to
+    look — which is the whole point of the lane this block belongs to. The
+    qualification is read from `READ_ACTIONS` itself, so a verb that grows a
+    new read action says so here with no edit.
+    """
+    from app.tools import scopes
+    out = []
+    for n in sorted(free):
+        reads = scopes.READ_ACTIONS.get(n)
+        out.append(f"{n} ({'/'.join(sorted(reads))} only)" if reads else n)
+    return ", ".join(out)
+
+
+def _family_patterns() -> list[str]:
+    """The operator's `voice.family_tools` patterns, as written."""
+    raw = str(settings_store.get("voice.family_tools") or "web_search")
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _family_permits(name: str, patterns: list[str]) -> bool:
+    """Does the family allowlist admit this tool? CANONICAL names only.
+
+    Canonical rather than wire, because the setting's own documentation offers
+    `mcp:*` — and a wire name is `mcp__server__tool`, which no `mcp:`-prefixed
+    pattern can ever match. "Let the guests use one MCP server" was therefore
+    unconfigurable: the pattern matched nothing and read to the operator as a
+    working restriction, which is the worse of the two failures.
+
+    Split out from `_family_allowed` because the clamp has to be re-applied
+    to tools that did not exist when it first ran — `find_mcp_tools` loads
+    them mid-round. A predicate can travel; a computed set cannot.
+    """
+    if name in _FAMILY_HARD_EXCLUDE:
+        return False
+    return any((p.endswith("*") and name.startswith(p[:-1])) or name == p
+               for p in patterns)
+
+
 def _family_allowed(available: set[str]) -> set[str]:
     """The family-tier toolset: the operator's `voice.family_tools` patterns
     intersected with what the agent actually has. Entries ending in `*`
     match by prefix (so `mcp:*` covers every connected MCP tool). Pure
-    narrowing — nothing the agent lacks can appear here."""
-    raw = str(settings_store.get("voice.family_tools") or "web_search")
-    patterns = [p.strip() for p in raw.split(",") if p.strip()]
-    out: set[str] = set()
-    for name in available:
-        for p in patterns:
-            if (p.endswith("*") and name.startswith(p[:-1])) or name == p:
-                out.add(name)
-                break
-    return out - _FAMILY_HARD_EXCLUDE
+    narrowing — nothing the agent lacks can appear here.
+
+    Takes and returns WIRE names (it filters the offered `tools` list); the
+    matching itself is done on canonical names by `_family_permits`.
+    """
+    patterns = _family_patterns()
+    return {n for n in available
+            if _family_permits(tool_registry.canonical_name(n), patterns)}
 
 
 async def _shapes_block(tool_names: list[str]) -> str:
@@ -1002,6 +1059,35 @@ async def _build_system_prompt(agent: dict, query: str, *,
             block = ["## What you can actually do",
                      "Tools you can call yourself this turn:",
                      ", ".join(own) + "."]
+            # ...AND WHICH OF THEM NEED NOBODY'S PERMISSION. The block above
+            # answers "can you", and she has been answering "may I" from the
+            # conversation instead of from the gates — 2026-08-05, offering to
+            # check whether a site was reachable while holding fetch_url.
+            #
+            # DERIVED from the same function the guard below enforces against,
+            # so this sentence can never name a tool she does not hold or
+            # promise autonomy a gate is about to refuse. State what is true,
+            # then check it anyway.
+            try:
+                # agent_name is not decoration. `gate_refusing` -> `rules.check`
+                # skips every rule carrying `target_agents` when it is None, so
+                # an operator's agent-scoped BLOCK rule was invisible here and
+                # the sentence named a tool `execute_tool` would refuse — the
+                # precise drift the comment above claims is impossible.
+                free = await tool_registry.unattended_tools(
+                    {"granted": own_canon, "agent_name": agent.get("name")})
+                if free:
+                    block.append(
+                        "These need no approval, no consent and no goal — "
+                        + _render_unattended(free) + ". If the operator's "
+                        "question can be settled by one of them, call it in "
+                        "this same turn and answer from what it returns. "
+                        "Offering to call one is not an answer, and he does "
+                        "not have to say yes first. Everything NOT in that "
+                        "line — writing, deleting, creating, scheduling, "
+                        "notifying — you still ask about first.")
+            except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
+                log.debug("unattended set unavailable", exc_info=True)
             # Gated on dispatch actually being granted: at the dispatch-depth
             # limit, and on family-voice turns, it is not — and those turns must
             # keep exactly the strict closed-world statement. Gated on the GRANT
@@ -1069,19 +1155,57 @@ async def _build_system_prompt(agent: dict, query: str, *,
 
 # ── parallel same-round tool calls (docs/plans/turn-speed.md, phase 1) ────
 #
-# A WHITELIST, never a blacklist: only tools that (a) mutate nothing and
-# (b) carry no same-round ordering contract may overlap. Everything else —
-# every write, dispatch_to_agent, find_mcp_tools (it mutates the live
-# toolset), every MCP/DB/http_call tool — runs sequentially in the model's
-# call order, because the model relies on that order (create-then-append
-# memory sequences, the per-chunk ingest flow) and serialized writes gain
-# no wall-clock from parallelism anyway. New read-only builtins do NOT
-# join this set automatically; adding one is a deliberate decision.
-_PARALLEL_TOOLS = frozenset({
-    "web_search", "fetch_url", "get_weather", "search_memory",
-    "read_memory_item", "list_agents", "list_models",
-    "list_followed_sources", "list_stale_topics",
+# DERIVED, never hand-listed. The old frozenset stated the rule — "only tools
+# that (a) mutate nothing and (b) carry no same-round ordering contract may
+# overlap" — and then asked a human to remember it. Its own comment admitted
+# the flaw out loud: "New read-only builtins do NOT join this set
+# automatically." That is the hardcoding CLAUDE.md warns about, a control you
+# have to edit the day a feature lands.
+#
+# The claim now comes off the `reads_only` declaration beside each tool in
+# builtin.py, minus the exclusions below. That flag is already load-bearing
+# for `registry.unattended_tools`, so a wrong one now fails TWO ways at once
+# instead of hiding in one — which is exactly how `check_coding_session`'s
+# wrong flag was found: it writes a terminal session state, and nothing
+# checked because only one consumer existed.
+#
+# BUILTINS ONLY, and NAME-LEVEL. Deliberately not `registry.reads_only()`:
+# that also answers True for a goal-scoped verb called with a read ACTION
+# (`scopes.is_read_action`) and for MCP tools on an operator-declared
+# read-only server. The first is arg-dependent while `_is_parallel_safe` sees
+# only a name; the second is an operator's claim about a remote, not a traced
+# audit of its leaves. Neither belongs in a concurrency decision.
+#
+# Everything else — every write, dispatch_to_agent, find_mcp_tools (it mutates
+# the live toolset), every MCP/DB/http_call tool — still runs sequentially in
+# the model's call order, because the model relies on that order
+# (create-then-append memory sequences, the per-chunk ingest flow) and
+# serialized writes gain no wall-clock from parallelism anyway.
+#
+# COST, NOT CORRECTNESS, is what the exclusion set holds. A tool that mutates
+# does not belong here — it belongs out of `reads_only`.
+_PARALLEL_EXCLUDE = frozenset({
+    # It CONTAINS service_status: diagnostics.py calls `service_health.status()`
+    # itself, so overlapping the two runs the same 7 probes and 3 docker
+    # subprocesses twice for one report. Per call it also does an
+    # information_schema join plus a `SELECT count(*)` over every
+    # failure-shaped table, and a degraded-grant resolve per agent. Three at
+    # once is three whole-schema sweeps to answer one question.
+    "diagnose",
+    # models_catalog's 300s cache is TTL-checked with no lock, so concurrent
+    # misses each fan out one HTTP call per configured provider.
+    # recommend_models is that fan-out PLUS hardware.detect's two sidecar
+    # round trips, one of which shells `nvidia-smi` on a 25s budget —
+    # GPU-adjacent work, serialised everywhere else here for good reason.
+    # Excluding it also breaks the list_models pairing: a batch needs two
+    # parallel-safe members, so `list_models` + `recommend_models` in one round
+    # now serialises and the second reads the cache the first filled.
+    "recommend_models",
 })
+
+_PARALLEL_TOOLS = frozenset(
+    name for name, spec in tool_registry.BUILTIN_TOOLS.items()
+    if spec.get("reads_only")) - _PARALLEL_EXCLUDE
 
 # Per-tool ceilings INSIDE a batch, under the global concurrency budget.
 # web_search is capped because SearXNG proxies rate-limited upstream
@@ -1091,7 +1215,34 @@ _PARALLEL_TOOLS = frozenset({
 # the same results as running them one at a time, in 3.0s vs 4.7s. Two it
 # is. fetch_url is deliberately uncapped (distinct hosts; overlapping is
 # exactly where the timeout-stacking win lives).
-_TOOL_CONCURRENCY_CAPS = {"web_search": 2}
+#
+# The 1s are the derivation's other half. Each is CORRECT to overlap with a
+# sibling — hiding behind a slow web_search is free — but never with ITSELF:
+# N copies do N times the work and share nothing, so N concurrent is strictly
+# worse than N sequential. A cap of 1 buys the first property and refuses the
+# second, which is why these stay in _PARALLEL_TOOLS rather than joining the
+# exclusion set above.
+_TOOL_CONCURRENCY_CAPS = {
+    "web_search": 2,
+    # Unlocked 300s catalog cache: concurrent misses each fan out to Ollama
+    # plus every configured provider, ~5s apiece, serially. One at a time
+    # means the first fills it and the rest are free.
+    "list_models": 1,
+    # Reads and frontmatter-parses EVERY markdown file in the store with a
+    # synchronous `read_text()` — hundreds of topics, some 50 KB, all on the
+    # event loop. Two finish no sooner than one after the other, and block
+    # every sibling task for twice as long.
+    "list_stale_topics": 1,
+    # 7 outbound probes plus three docker subprocesses per call, one of them
+    # `docker stats --no-stream` on a 20s timeout. Asking the daemon the same
+    # question twice at once learns nothing.
+    "service_status": 1,
+    # 11 sequential k8s API calls at a 20s timeout each.
+    "list_workloads": 1,
+    # One aggregate with a LATERAL jsonb expansion over up to 90 days of
+    # turn_spans — a ledger-wide scan, not a lookup.
+    "memory_usage_report": 1,
+}
 
 # The tool-result guarantee's last resort: a missing tool message for a
 # tool_call id is a provider 400 that kills the turn mid-research, so every
@@ -1106,12 +1257,93 @@ def _is_dispatch(entry: tuple[dict, dict, bool]) -> bool:
     return not malformed and tc["name"] == "dispatch_to_agent"
 
 
+# The two tools the runner executes ITSELF. registry.py says it out loud —
+# "dispatch_to_agent is runner-inlined" — and find_mcp_tools joined it for
+# phase-2 lazy loading, because both mutate state `execute_tool` cannot reach
+# (a nested turn; the live round's toolset). The cost was that they became the
+# only two tools in the system whose grant was enforced by the model not
+# naming them.
+_RUNNER_INLINED = frozenset({"dispatch_to_agent", "find_mcp_tools"})
+
+
+def _inlined_refusal(entry: tuple[dict, dict, bool], ctx: dict,
+                     dispatch_depth: int) -> Optional[str]:
+    """Why a runner-inlined call must be refused, or None to let it run.
+
+    THE MISSING HALF OF THE GRANT CHECK. Every other tool call reaches
+    `registry.execute_tool`, which refuses a name outside `ctx["granted"]`.
+    These two never get there, so a model that simply EMITTED the name — from
+    history, from a hallucination, or because a guest steered it there —
+    executed it.
+
+    That is not theoretical for the family tier. `_family_allowed` narrows a
+    kid/guest/unknown turn to the operator's `voice.family_tools` allowlist and
+    `_FAMILY_HARD_EXCLUDE` drops dispatch outright, with the comment at
+    runner.py:386 promising it is "enforced mechanically below, at the same
+    layer as tool grants". It was enforced by FILTERING THE OFFERED LIST — and
+    an offered list is a suggestion. A guest turn that emitted
+    `dispatch_to_agent` ran a full nested turn at operator tier; one that
+    emitted `find_mcp_tools` had `ctx["granted"]` rebuilt from the extended
+    toolset and every lazy MCP tool on the agent row became callable for the
+    rest of the turn. Dispatch escaped the clamp; find_mcp_tools deleted it.
+
+    Operator rules were bypassed the same way: rules.py states enforcement
+    lives in `execute_tool`, so a block rule targeting either name never fired.
+
+    Returns the refusal string `execute_tool` would have returned, so the two
+    paths stay indistinguishable to the model — the failure registry.py's own
+    lazy-MCP comment describes.
+    """
+    tc, args, malformed = entry
+    if malformed:
+        return None                     # the malformed path has its own answer
+    raw = tc.get("name") or ""
+    if raw not in _RUNNER_INLINED:
+        return None                     # execute_tool checks everything else
+    if raw == "dispatch_to_agent" and dispatch_depth >= MAX_DISPATCH_DEPTH:
+        # `_run_dispatch` already has a better sentence for this than a bare
+        # "not granted" — and at the limit the tool is excluded from `tools`,
+        # so it is absent from `granted` for a reason that is not a denial.
+        return None
+    name = tool_registry.canonical_name(raw)
+    granted = ctx.get("granted")
+    if granted is not None and name not in granted:
+        return f"Error: tool '{name}' is not granted to this agent"
+    try:
+        from app import rules
+        verdict = rules.check(name, args or {}, ctx.get("agent_name"))
+        if verdict and verdict[0] == "block":
+            rule = verdict[1]
+            log.warning("Rule '%s' BLOCKED %s by agent %s (runner-inlined)",
+                        rule["name"], name, ctx.get("agent_name"))
+            return (f"Blocked by rule '{rule['name']}': "
+                    f"{rule['description'] or 'no description'}")
+    except Exception:  # noqa: BLE001 — fail-open, exactly as execute_tool does
+        log.exception("rules engine failed on an inlined tool; allowing call")
+    return None
+
+
 def _is_parallel_safe(entry: tuple[dict, dict, bool]) -> bool:
     """(tool_call, args, malformed) -> may this call share a round with its
     neighbours? Malformed calls never qualify: they take the sequential
     path that hands the model a correctable error."""
     tc, _args, malformed = entry
     return not malformed and tc["name"] in _PARALLEL_TOOLS
+
+
+async def _unattended_for(ctx: dict) -> dict[str, set[str]]:
+    """What she may call with no operator decision, cached for the turn.
+
+    Recomputed when the taint flips: a fetch mid-turn disarms every actor for
+    the rest of it, which SHRINKS this set, and caching through that would
+    have the guard force a round toward a tool the containment fence is about
+    to refuse. Cheap either way — two queries, both already warm.
+    """
+    tainted = bool(ctx.get("untrusted_context"))
+    if "unattended" not in ctx or ctx.get("unattended_tainted") != tainted:
+        ctx["unattended"] = await tool_registry.unattended_tools(ctx)
+        ctx["unattended_tainted"] = tainted
+    return ctx["unattended"]
 
 
 async def _run_tool(name: str, args: dict, ctx: dict,
@@ -1287,6 +1519,49 @@ async def _run_tools_parallel(batch: list[tuple[dict, dict]], ctx: dict,
 # sub-agent.
 _FORWARDED_FROM_SUB = ("activity", "error", "sub_text", "taint")
 
+
+def _from_sub(event: dict, agent_name: str) -> dict:
+    """Re-scope one event on its way up out of a sub-agent.
+
+    THE SINGLE BOUNDARY. Both forwarding sites (`_run_dispatch` and
+    `_run_dispatch_group.pump`) go through here rather than each emitter
+    guarding itself, because a guard added later would otherwise reintroduce
+    both of these by simply not knowing about them.
+
+    Two facts change meaning when they cross this line, and both were
+    travelling verbatim.
+
+    `retract` is a statement about the DEPTH-0 CLIENT STREAM — "erase the last
+    N characters you have drawn". A sub-agent's draft was streamed as
+    `sub_text` and never as `text`, so its count refers to characters the
+    assistant bubble never contained. Forwarded unmodified, a specialist's
+    640-character narration retry sliced 640 characters off main's
+    180-character bubble and zeroed router_chat's `streamed`; if the operator
+    then hit Stop, the "produced no reply" placeholder was persisted over a
+    reply he had just watched generate. Zeroed rather than dropped: both
+    consumers test truthiness, so 0 is inert and the shape stays stable.
+
+    `error` from a sub-agent is a TOOL RESULT, not a turn outcome. The parent
+    already receives it as the dispatch's return value and routinely answers
+    around it — "ingestion is unavailable, here is what I have from memory".
+    Untagged, router_chat marked the whole turn failed, appended "[This turn
+    stopped before finishing: ...]" to a complete answer, and — because
+    assistant rows are replayed by `to_llm_history` — taught every later turn
+    that her own last answer had been cut off when it had not.
+
+    The parent's OWN error (its model dying, at depth 0) never passes through
+    here and keeps the fatal handling it should have.
+    """
+    if event["type"] == "error":
+        # `agent` is set only if absent: through two nesting levels the
+        # attribution must stay with the specialist that actually failed,
+        # not with whichever agent last forwarded it.
+        return {**event, "scope": "dispatch",
+                "agent": event.get("agent") or agent_name}
+    if event["type"] == "activity" and event.get("retract"):
+        return {**event, "retract": 0}
+    return event
+
 _SENTENCE_END = (". ", "! ", "? ", ".\n", "!\n", "?\n", "\n\n")
 _SUB_TEXT_MAX_CHARS = 400          # flush long unpunctuated runs anyway
 _SUB_TEXT_MAX_IDLE_S = 0.25
@@ -1397,7 +1672,8 @@ async def _run_dispatch_group(entries: list[tuple[dict, dict]], *,
                                 if sub["type"] == "final":
                                     text = sub["text"]
                                 elif sub["type"] in _FORWARDED_FROM_SUB:
-                                    queue.put_nowait(("event", name, sub))
+                                    queue.put_nowait(
+                                        ("event", name, _from_sub(sub, name)))
                         finally:
                             # closing it HERE is what runs the child's own
                             # cancellation contract inside this task
@@ -1687,10 +1963,16 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     exclude = {"dispatch_to_agent"} if dispatch_depth >= MAX_DISPATCH_DEPTH else set()
     tools = await tool_registry.get_agent_tools(agent, exclude=exclude)
     speaker_role = (speaker or {}).get("role")
+    # None means NO TIER CLAMP — the operator's own turn. Set only below, and
+    # carried in ctx so the clamp can be re-applied to tools that do not exist
+    # yet: find_mcp_tools loads more of them mid-round, and a set computed here
+    # cannot narrow what arrives later.
+    family_patterns: Optional[list[str]] = None
     if speaker_role in _RESTRICTED_ROLES:
         # the tier clamp: intersect with the operator's family allowlist,
         # never extend — with no voiceprints enrolled this branch is
         # unreachable and behavior is exactly the single-operator behavior
+        family_patterns = _family_patterns()
         available = {t["function"]["name"] for t in tools}
         allowed = _family_allowed(available)
         tools = [t for t in tools if t["function"]["name"] in allowed]
@@ -1816,6 +2098,17 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
            "model": agent["model"],
            "dispatch_depth": dispatch_depth, "automation": automation,
            "speaker_role": speaker_role,
+           # None on an operator turn; the allowlist patterns on a family one.
+           # Read by the find_mcp_tools branch, which is the only place the
+           # toolset can grow AFTER the clamp has run.
+           "family_patterns": family_patterns,
+           # THE AGENT ROW ITSELF. `execute_tool`'s lazy-MCP routing branch
+           # reads ctx["agent"] to tell "you were never granted this" from
+           # "you hold this but its server's tools are lazy" — and no caller
+           # has ever set the key, so that branch has been dead since it was
+           # written and she was told she lacked a grant she holds, which she
+           # then reported to the operator as a missing capability.
+           "agent": agent,
            # Which chat this turn belongs to. Absent until 2026-07-31 — never
            # present, per `git log -S`— so every consent card an agent raised
            # was written with conversation_id NULL, and `consents.list_pending`
@@ -1842,6 +2135,19 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # calls nothing is not a finished answer, and the loop had 9 of 10
     # rounds left every time it happened on 2026-08-03.
     narration_retried = False
+    # SEPARATE from narration_retried on purpose. Announcing work you did not
+    # do and offering work you were free to do are different faults, and one
+    # budget shared between them would let a narration retry silently spend
+    # the other's only chance.
+    deferral_retried = False
+    # THE FLOOR'S RAW MATERIAL. Both guards above discard a draft the operator
+    # has already watched appear, on the promise that the forced round will
+    # write a better one. Nothing made that promise good: a round that returns
+    # empty text and no tool calls is not an error anywhere in the LLM layer,
+    # so the loop simply broke with final_text == "" and the turn ended with a
+    # complete answer erased from the screen and nothing in its place. Kept so
+    # the terminal floor has something true to say. See `_floor` below.
+    last_retracted = ""
     last_round_calls = 0
     # every tool name called this turn, across all rounds
     called_names: list[str] = []
@@ -1853,7 +2159,20 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     dispatches_made = 0
     sub_stream = _SubTextBatcher()
 
-    max_rounds = int(settings_store.get("agents.max_tool_rounds") or 10)
+    # CONTEXT-SCOPED, not global. The eval harness used to pin a suite's cap by
+    # writing straight into `settings_store._cache`, which is process-wide: its
+    # own log line said so out loud ("concurrent live chat turns see it too").
+    # Evals run continuously on this box, so Jeremy's nine-round turn was
+    # silently cut off at six or eight while nothing in the chat path knew an
+    # eval was running, and the narration and deferral retries lost their last
+    # round. It also clobbered a Settings write made while a pin was held — the
+    # UI renders from that same cache, so the operator's change vanished with
+    # no restart to explain it.
+    #
+    # Imported here rather than at module scope: evals/runner imports this
+    # file, so a top-level import back would be a cycle.
+    from app.evals.runner import effective_max_tool_rounds
+    max_rounds = int(effective_max_tool_rounds() or 10)
     round_model = agent["model"]      # may switch to the fallback mid-turn
     # Every model this TURN has already asked, resolved. The loop below had
     # no bound of its own — see _fallback_target — and a cloud<->local
@@ -2068,7 +2387,20 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 continue
             name = c.get("name") or (c.get("function") or {}).get("name")
             if name:
-                called_names.append(str(name))
+                # CANONICAL, because the model answers with the WIRE name it
+                # was given (`mcp__context7__query-docs`) while every consumer
+                # that matches on identity holds the canonical one
+                # (`mcp:context7/query-docs`) — ctx["granted"] is built that
+                # way at the bottom of this function, and so is the map
+                # `deferral.satisfied` subtracts `already_called` from. An MCP
+                # tool was therefore never subtracted: she could call
+                # query-docs, offer to look up one more page, and be told
+                # "nothing was stopping you: mcp:context7/query-docs" about the
+                # tool she had just used — the precise regression that
+                # parameter exists to prevent. Token-based consumers
+                # (narration._could_have_done, service_claims) are unaffected;
+                # _TOKEN_SPLIT yields the same tokens for either form.
+                called_names.append(tool_registry.canonical_name(str(name)))
         if not tool_calls:
             slip = narration.detect(round_text, 0, called_names)
             if slip and not narration_retried and round_no + 1 < max_rounds:
@@ -2081,6 +2413,7 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 # concatenates two complete replies.
                 retracted = final_text[round_started_at:]
                 final_text = final_text[:round_started_at]
+                last_retracted = retracted
                 # And show the model what it actually wrote. The `continue`
                 # below skips the assistant append at the bottom of the loop
                 # (that one is for rounds that DID call tools), so round 2
@@ -2109,6 +2442,62 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                        "name": agent.get("name", ""), "agent": agent.get("name"),
                        "retract": len(retracted),
                        "detail": f"announced {slip!r} and called nothing — asked again"}
+                continue
+
+            # SHE OFFERED TO DO SOMETHING NOTHING WAS STOPPING HER FROM DOING.
+            # Placed after the narration branch so announcing wins a tie:
+            # firing both for one draft would be incoherent, and "you said you
+            # would and did not" is the more serious of the two.
+            #
+            # ROADMAP #12, recorded 2026-07-17 and never folded in: low-risk
+            # lookups get acted on, confirmation is for the irreversible.
+            # Cheap regex first — the live derivation costs two queries and
+            # only runs once a window has already matched.
+            window = (deferral.offer(round_text, 0)
+                      if (not deferral_retried and round_no + 1 < max_rounds
+                          and settings_store.get("autonomy.act_on_reads"))
+                      else None)
+            covered: list[str] = []
+            if window:
+                try:
+                    covered = deferral.satisfied(
+                        window, await _unattended_for(ctx),
+                        already_called=called_names)
+                except Exception:
+                    log.exception("deferral check failed; letting the turn end")
+            if covered:
+                deferral_retried = True
+                retracted = final_text[round_started_at:]
+                final_text = final_text[:round_started_at]
+                last_retracted = retracted
+                if round_text:
+                    messages.append({"role": "assistant", "content": round_text})
+                messages.append({"role": "system", "content": (
+                    f"You ended that reply by offering to do something instead "
+                    f"of doing it. Nothing was stopping you: "
+                    # Same renderer as the prompt block, for the same reason:
+                    # this sentence makes the identical "no goal gates it"
+                    # promise from the identical bare names. No satisfier row
+                    # can reach a manage_* verb TODAY, so it cannot misfire yet
+                    # — but that is a property of a regex table someone will
+                    # extend, not of the derivation, and betting a false
+                    # permission statement on it is the hardcoding CLAUDE.md
+                    # warns about.
+                    f"{_render_unattended(covered)} — granted to you this "
+                    f"turn, and no approval, consent or goal gates "
+                    f"{'them' if len(covered) > 1 else 'it'}. The operator "
+                    f"asked the question, not whether you could answer it. "
+                    f"Call it now and answer from what comes back; if the call "
+                    f"fails, say what failed in one line. Your previous draft "
+                    f"was discarded and NOT shown — write the whole reply "
+                    f"again, do not continue it.")})
+                log.info("Deferral retry: agent=%s covered=%s round=%d",
+                         agent.get("name"), covered, round_no)
+                yield {"type": "activity", "kind": "deferral_retry",
+                       "name": agent.get("name", ""), "agent": agent.get("name"),
+                       "retract": len(retracted),
+                       "detail": (f"offered to look instead of looking — "
+                                  f"{covered[0]} needed no approval, asked again")}
                 continue
             break  # final answer reached
 
@@ -2178,6 +2567,26 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                                  results.get(bt["id"], _NO_RESULT), round_model)})
                     i = j
                     continue
+
+            # THE INLINED TOOLS' GRANT CHECK — before either branch below
+            # runs, because neither of them reaches `execute_tool`, where the
+            # same check refuses every other ungranted call. See
+            # `_inlined_refusal` for what was reachable without it.
+            refusal = _inlined_refusal(parsed[i], ctx, dispatch_depth)
+            if refusal:
+                rtc, rargs, _ = parsed[i]
+                calls_made += 1
+                called_names.append(tool_registry.canonical_name(rtc["name"]))
+                yield {"type": "activity", "kind": "tool_result",
+                       "name": rtc["name"], "agent": agent.get("name"),
+                       "args": _brief(rargs), "detail": refusal[:200]}
+                # One tool message per tool_call id, always: a missing id is a
+                # provider 400 that kills the turn outright, which would make
+                # a refusal indistinguishable from a crash.
+                messages.append({"role": "tool", "tool_call_id": rtc["id"],
+                                 "content": refusal})
+                i += 1
+                continue
 
             # EVERY dispatch goes through the group machinery, even a lone
             # one. It used to be the parallel-only path, and the inline
@@ -2308,6 +2717,27 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     found = await tool_registry.search_lazy_mcp_tools(agent, query)
                     have = {t["function"]["name"] for t in tools}
                     new_defs = [d for d in found if d["function"]["name"] not in have]
+                    # RE-APPLY THE TIER CLAMP. `search_lazy_mcp_tools` resolves
+                    # against the AGENT ROW's allowed_tools, not against the
+                    # post-clamp toolset — the clamp only ever filtered the
+                    # local `tools` list. So on a kid/guest/unknown turn this
+                    # branch loaded the agent's MCP tools and the re-stamp
+                    # below made every one of them callable for the rest of
+                    # the turn, past `voice.family_tools`. runner.py:388
+                    # promises recognition "can only ever NARROW, never
+                    # widen"; this is the line that keeps that true when the
+                    # toolset changes mid-round.
+                    fam = ctx.get("family_patterns")
+                    if fam is not None:
+                        kept = [d for d in new_defs
+                                if _family_permits(tool_registry.canonical_name(
+                                    d["function"]["name"]), fam)]
+                        if len(kept) != len(new_defs):
+                            log.info("family clamp dropped %d lazily-loaded "
+                                     "tool(s) on a %s turn",
+                                     len(new_defs) - len(kept),
+                                     ctx.get("speaker_role"))
+                        new_defs = kept
                     tools.extend(new_defs)
                     ctx["granted"] = {tool_registry.canonical_name(t["function"]["name"])
                                       for t in tools}
@@ -2484,6 +2914,54 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     if ctx.get("untrusted_context"):
         yield {"type": "taint", "agent": agent.get("name")}
 
+    # THE FLOOR. A turn never ends with nothing.
+    #
+    # Every error path above `return`s, so reaching here with empty text means
+    # the model produced none — an empty provider choice, a local model that
+    # emitted only `thinking`, a token budget exhausted mid-reasoning. None of
+    # those raise, so the loop broke normally and yielded `final` with "" and
+    # no error event: router_chat's `if final_text.strip():` then skipped the
+    # assistant row, the journal, compaction and the push, and the client
+    # dropped the empty bubble. The operator saw nothing at all, and because
+    # no assistant row was written `to_llm_history` replayed his unanswered
+    # question next turn so she answered both at once — the merged reply
+    # already documented in router_chat.
+    #
+    # The two guards made that hole expensive rather than merely quiet: they
+    # discard a draft he has WATCHED APPEAR, so an empty re-ask deleted a
+    # complete answer in front of him.
+    #
+    # Restored rather than replaced, when there is something to restore. A
+    # deferral draft is a good answer that merely ended by offering instead of
+    # acting; throwing it away costs more than the offer did. A narration
+    # draft announced work that did not happen — so it comes back with the
+    # same sentence the round-limit and no-tool paths use, because the note is
+    # what makes it honest, not the discarding.
+    #
+    # Mechanical, not a prompt: nothing here asks the model to always write
+    # something. This is the line that refuses when it does not.
+    if not final_text.strip():
+        if last_retracted.strip():
+            floor = last_retracted + (
+                "\n\n[The reply above was set aside and asked for again, and "
+                "the second attempt produced nothing — so this is the earlier "
+                "draft. Anything it says was done, was not: no tool ran after "
+                "it was written.]")
+        else:
+            floor = ("[This turn produced no reply. The model returned an "
+                     "empty answer and called nothing — nothing was done.]")
+        log.warning("agent %s: empty final (tools called: %s) — floor applied "
+                    "(restored=%s)", agent.get("name"),
+                    ", ".join(called_names) or "none",
+                    bool(last_retracted.strip()))
+        final_text = floor
+        # Re-emitted so the screen, the stream and the persisted row agree.
+        # The client rendered the draft from `text` deltas and then erased
+        # them on the retract; putting the string only into `final` would
+        # persist a reply the operator never sees until he reloads.
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": floor}
+
     yield {"type": "final", "text": final_text}
 
 
@@ -2530,7 +3008,7 @@ async def _run_dispatch(args: dict, parent_depth: int,
         if event["type"] == "final":
             sub_final = event["text"]
         elif event["type"] in _FORWARDED_FROM_SUB:
-            yield event
+            yield _from_sub(event, agent_name)
             if event["type"] == "error":
                 sub_final = f"Error from {agent_name}: {event['error']}"
 

@@ -12,7 +12,7 @@ import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
-from app import bg, db, goals, redact, settings_store
+from app import bg, db, goals, narration, redact, settings_store
 from app.tools import builtin, fixtures
 from app.tools.http_executor import execute_http_tool
 
@@ -576,6 +576,127 @@ async def _read_only_servers() -> set[str]:
         return set()          # fail closed
 
 
+# ── "what may she do with no operator decision?" ─────────────────────────────
+#
+# Read by `deferral`, which has to know whether an offer to look something up
+# was an offer to do something nothing was stopping her from doing. It asks
+# the ENFORCER'S predicates, in the enforcer's order, so the two cannot drift
+# — the exact failure scopes.py's whole docstring is about, where a control
+# and its description came from different places and disagreed within an hour.
+#
+# Spends nothing and mutates nothing: `goals.active()` is read-only (a
+# reporter, unlike `goals.spend`), and `fixtures` is tested for membership
+# only, never via `intercept()`, which appends to `.violations`/`.misses` and
+# would corrupt the eval run it was called inside.
+
+# The arguments that make a goal-scoped verb a READ. `manage_automations`
+# gates on args, not on its name, so probing it arg-free would report the
+# whole verb ungated. One entry per verb that has a read action at all.
+_READ_PROBE = {n: {"action": sorted(a)[0]} for n, a in scopes.READ_ACTIONS.items()}
+
+
+async def gate_refusing(name: str, args: Optional[dict], ctx: dict) -> Optional[str]:
+    """Which gate in `execute_tool` would refuse this call as state stands now.
+
+    None means it would run. Mirrors the sequence above: grant, containment,
+    goal, rules, eval replay. Never raises — a reporter that throws would take
+    down the turn it was only describing.
+    """
+    name = canonical_name(name)
+    granted = ctx.get("granted")
+    if granted is not None and name not in granted:
+        return "grant"
+    if ctx.get("untrusted_context") and is_actor(
+            name, await _load_db_tools(), await _read_only_servers(), args=args):
+        return "containment"
+    if needs_goal(name, args) and settings_store.get("autonomy.goal_scoped_actions"):
+        if not any(name in (g.get("approved_verbs") or ())
+                   for g in await goals.active()):
+            return "goal"
+    try:
+        from app import rules
+        # record=False: this is a REPORTER. The section header two functions
+        # up promises it "spends nothing and mutates nothing", and audits
+        # `goals.active()` and `fixtures` on exactly that ground — `rules.check`
+        # was not in that audit and bumps hit_count/last_hit_at on any match.
+        # Left recording, an operator's rule would report hundreds of hits for
+        # calls that were only ever simulated, once per turn per granted
+        # read-only tool, and the guardian suite reasons from hit_count == 0
+        # as proof a rule has matched no call by any agent.
+        verdict = rules.check(name, args or {}, ctx.get("agent_name"),
+                              record=False)
+        if verdict and verdict[0] == "block":
+            return f"rule:{verdict[1]['name']}"
+    except Exception:
+        log.exception("rules engine failed in gate_refusing; treating as open")
+    # An eval replay refuses NEVER_EXECUTE outright, so forcing a round toward
+    # one would push at a wall inside a graded run.
+    if fixtures.active() is not None and name in fixtures.NEVER_EXECUTE:
+        return "eval"
+    return None
+
+
+def reads_only(name: str, args: Optional[dict] = None,
+               db_tools: Optional[dict] = None,
+               read_only_servers: Optional[set[str]] = None) -> bool:
+    """Does this exact call only READ?
+
+    DECLARED BESIDE THE TOOL, never listed here — the `service_health.
+    EVIDENCE_TOOLS` pattern. Absent means False, so a builtin added tomorrow
+    never widens the unattended set by default; someone has to say it reads.
+
+    Not the inverse of `is_actor`. `is_actor` answers a narrower question —
+    "does this CREATE CAPABILITY", deliberately not "does this write" — so
+    `write_memory` and `notify_operator` are both non-actors. Using it here
+    would have put writing to the operator's record and pushing to his phone
+    in the set of things she may do unasked.
+    """
+    if scopes.is_read_action(name, args):     # the ONE definition, scopes.py:81
+        return True
+    spec = BUILTIN_TOOLS.get(name)
+    if spec is not None:
+        return bool(spec.get("reads_only"))
+    if name.startswith("mcp:"):
+        server = name[len("mcp:"):].split("/", 1)[0]
+        return server in (read_only_servers or set())
+    tool = (db_tools or {}).get(name)
+    if tool is None:
+        return False
+    spec2 = tool.get("execution_spec") or {}
+    if isinstance(spec2, str):
+        try:
+            spec2 = json.loads(spec2)
+        except ValueError:
+            return False
+    return str(spec2.get("method", "GET")).upper() == "GET"
+
+
+async def unattended_tools(ctx: dict) -> dict[str, set[str]]:
+    """Every call this turn may make with no operator decision:
+    name -> its name tokens.
+
+    Read-only, granted AND LOADED, and refused by no gate as state stands
+    right now.
+
+    No degraded filter: `ctx['granted']` is built from the LOADED toolset, so
+    an unresolved grant is already absent. A loaded tool whose SERVICE is down
+    (searxng) deliberately stays in — the forced round then reports "search is
+    unreachable" as a fact, which beats offering a check she could not have
+    completed.
+    """
+    db_tools = await _load_db_tools()
+    ro = await _read_only_servers()
+    out: dict[str, set[str]] = {}
+    for name in sorted(ctx.get("granted") or ()):
+        args = _READ_PROBE.get(name)
+        if not reads_only(name, args, db_tools, ro):
+            continue
+        if await gate_refusing(name, args, ctx):
+            continue
+        out[name] = set(narration._TOKEN_SPLIT.findall(name.lower()))
+    return out
+
+
 async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     """Single dispatch point for every tool call (dispatch_to_agent is runner-inlined).
 
@@ -598,9 +719,16 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
         #
         # Routing, not a dead end — the same argument the goal gate makes: a
         # refusal that names the call which turns it into a yes gets used.
+        # `_mcp_granted`, not raw membership. The registry's grant syntax
+        # includes the wildcard `mcp:<server>:*` (see `_granted_mcp_tools`),
+        # and a `name in set(allowed)` test misses every one of them — so an
+        # agent granted a whole server kept receiving the false "not granted"
+        # string this branch exists to prevent. Derived from the same pair of
+        # helpers the loader uses, so the two cannot disagree about what a
+        # grant is.
         agent = ctx.get("agent") or {}
-        allowed = agent.get("allowed_tools")
-        if allowed and name in set(allowed):
+        restricted, named, wildcards = _granted_mcp_tools(agent)
+        if restricted and _mcp_granted(name, named, wildcards):
             server = name.split("/", 1)[0].split(":", 1)[-1]
             return (f"Error: '{name}' IS granted to you but is not loaded this "
                     f"turn — its server's tools are lazy. Call "

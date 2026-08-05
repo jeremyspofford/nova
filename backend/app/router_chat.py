@@ -740,9 +740,29 @@ async def chat_stream(request: ChatRequest):
                     elif etype == "final":
                         final_text = event["text"]
                     elif etype == "error":
-                        turn_error = str(event["error"])
-                        turn.set_error(event["error"])
-                        yield _sse({"error": event["error"]})
+                        # A SPECIALIST'S failure is not this turn's failure.
+                        # `scope: dispatch` is stamped at the sub-agent
+                        # boundary (runner._from_sub); the parent already has
+                        # the same text as the dispatch's tool result and
+                        # routinely answers around it — "ingestion is
+                        # unavailable, here is what I have from memory". Left
+                        # untagged, a complete answer was stored with "[This
+                        # turn stopped before finishing: ...]" appended, and
+                        # since assistant rows are replayed by to_llm_history
+                        # every later turn read that her own last answer had
+                        # been cut off. The turn ledger recorded it failed
+                        # too, so observability counted finished turns as
+                        # failures.
+                        #
+                        # Still yielded: the operator sees the specialist
+                        # failed. Only `turn_error`/`set_error` — the two
+                        # things that speak for the WHOLE turn — are withheld.
+                        if event.get("scope") != "dispatch":
+                            turn_error = str(event["error"])
+                            turn.set_error(event["error"])
+                        yield _sse({"error": event["error"],
+                                    "scope": event.get("scope"),
+                                    "agent": event.get("agent")})
             except asyncio.CancelledError:
                 # THE INTERRUPTED TURN. A disconnect (navigate away, Stop,
                 # interject, barge-in) cancels this generator while it is
@@ -806,6 +826,22 @@ async def chat_stream(request: ChatRequest):
             stopped = f"[This turn stopped before finishing: {turn_error.strip()}]"
             final_text = f"{final_text.rstrip()}\n\n{stopped}" if final_text.strip() else stopped
             yield _sse({"t": ("\n\n" + stopped) if final_text != stopped else stopped})
+
+        # SECOND FLOOR, behind the runner's. `run_agent` now guarantees a
+        # non-empty final (see its `_floor` block), so this should be
+        # unreachable — but the gate it replaces skipped the assistant row,
+        # the journal, compaction AND the push in one silent branch, and an
+        # unanswered user message with no assistant row after it is the merged
+        # reply this file already carries 60 lines of comment about. A hole
+        # with that blast radius does not get to rely on another module
+        # holding. Same shape as the interrupted-turn placeholder above:
+        # persist a stated failure, never the empty string.
+        if not final_text.strip():
+            log.warning("turn %s produced no text and no error — persisting a "
+                        "stated failure rather than nothing", turn.id)
+            final_text = ("[This turn produced no reply, and no error was "
+                          "reported. Nothing was done.]")
+            yield _sse({"t": final_text})
 
         if final_text.strip():
             try:

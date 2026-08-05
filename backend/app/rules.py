@@ -54,8 +54,25 @@ async def warm():
     log.info("Rules cache warmed: %d active rules", len(_cache))
 
 
-def check(tool_name: str, args: dict, agent_name: Optional[str]) -> Optional[tuple[str, dict]]:
-    """Return ('block'|'warn', rule) on first match, else None. Blocks win over warns."""
+def check(tool_name: str, args: dict, agent_name: Optional[str],
+          *, record: bool = True) -> Optional[tuple[str, dict]]:
+    """Return ('block'|'warn', rule) on first match, else None. Blocks win over warns.
+
+    `record=False` asks the same question WITHOUT counting the answer, and is
+    for callers that are only describing what would happen — today
+    `registry.gate_refusing`, which the unattended-tools derivation runs
+    against every read-only granted tool on every turn just to build a
+    sentence for the prompt.
+
+    That distinction is load-bearing, not tidiness. `hit_count` is what the
+    Rules tab shows the operator, and the guardian eval suite reasons from it
+    directly: its goldens treat `hit_count = 0` as proof a rule "has not even
+    matched a call, by any agent". runner.py:287 states the invariant plainly —
+    "rules are only ever evaluated against a TOOL CALL". A probe that bumped
+    the counter would make a rule that has caught nothing report hundreds of
+    hits with a fresh timestamp, which is exactly the untrustworthy telemetry
+    the failure census exists to avoid.
+    """
     try:
         haystack = tool_name + " " + json.dumps(args, default=str)
     except Exception:
@@ -69,7 +86,8 @@ def check(tool_name: str, args: dict, agent_name: Optional[str]) -> Optional[tup
             continue
         if not rule["regex"].search(haystack):
             continue
-        _record_hit(rule["id"])
+        if record:
+            _record_hit(rule["id"])
         if rule["action"] == "block":
             return ("block", rule)
         matched_warn = matched_warn or ("warn", rule)

@@ -170,7 +170,32 @@ async def _read_memory_item(args, ctx):
     # Same inversion as _search_memory, and this is the door that matters
     # more: it returns the FULL untruncated body of one document, which is
     # exactly how you would fetch an instruction planted in a transcript.
-    origin = memory.index.docs.get(item_id, {}).get("origin", provenance.THIRD_PARTY)
+    # HER OWN IDENTITY IS NOT SOMETHING SHE FETCHED FROM THE WORLD. soul.md
+    # lives at the store ROOT and `iter_files` globs only TYPE_DIRS, so it is
+    # deliberately absent from the index (router_files.py:296) — and "absent
+    # from the index" is what the fallback below reads as THIRD_PARTY. So
+    # consulting her own persona disarmed every ACTOR verb for the rest of the
+    # turn: "read your soul file, then delete topics/stale-note.md" refused the
+    # delete as if a poisoned web page were in the prompt. Already written down
+    # in the repo, at evals/tasks/memory-curator/tasks/
+    # journal-and-identity-are-not-deletable.json, with the note that the
+    # refusal never reaches run.tool_calls so no eval check can see it.
+    #
+    # FIRST_PARTY is honest rather than convenient: nothing untrusted can write
+    # this file. The `protect-soul` rule blocks write_memory at
+    # item_id=soul.md, store._PINNABLE_DIRS excludes the root so write_concept
+    # cannot aim there, router_files returns 403 on edit and router_chat
+    # refuses the delete. The operator and the persona sync are its only
+    # writers.
+    #
+    # Every OTHER unindexed id keeps the THIRD_PARTY default — that fallback is
+    # the deliberate fail-closed rail provenance.py's docstring is about ("a
+    # rail that fails OPEN on missing data is not a rail").
+    if item_id == memory.SOUL_ID:
+        origin = provenance.FIRST_PARTY
+    else:
+        origin = memory.index.docs.get(item_id, {}).get(
+            "origin", provenance.THIRD_PARTY)
     if provenance.blocks_actors(origin):
         ctx["untrusted_context"] = True
 
@@ -313,6 +338,12 @@ async def _retry_ingest_job(args, ctx):
 
     if res["status"] == "not_found":
         return f"Error: no ingest job with id {raw}."
+    if res["status"] == "dismissed":
+        return (f"Error: the operator dismissed {what!r} off the Activity page. "
+                f"That is a decision about this item, not a state to work "
+                f"around — he cleared it so nothing would keep trying it. Say "
+                f"so plainly; if he wants it back, Restore on the Activity page "
+                f"is his to click.")
     if res["status"] == "not_retryable":
         return (f"Error: {what!r} is {job.get('status')!r}, not failed or "
                 f"skipped — there is nothing to retry.")
@@ -805,6 +836,7 @@ async def _enqueue_source_entries(entries: list[dict], source_key: str,
     from app import ingest_jobs, media_ingests
     queued = 0
     already = 0
+    dismissed = 0
     for e in entries:
         if limit and queued >= limit:
             break
@@ -815,6 +847,17 @@ async def _enqueue_source_entries(entries: list[dict], source_key: str,
         # failed/skipped (interrupted, transient error) — revive that row
         # instead of enqueueing a duplicate that orphans it forever
         stuck = await ingest_jobs.find_open(e["media_key"])
+        # ...unless the operator DISMISSED it, in which case the revival below
+        # is the bug. His two members-only videos fail, get cleared off the
+        # Activity page, and this loop puts them straight back on the next
+        # poll — three fresh download attempts against a paywall, and the row
+        # he just cleared is on his screen again. This is also why dismissal is
+        # a column and not a DELETE (migration 091): with the row gone, `stuck`
+        # is None and the `else` branch enqueues a brand-new one, which is the
+        # same resurrection through a different door.
+        if stuck and stuck.get("dismissed_at"):
+            dismissed += 1
+            continue
         if stuck and stuck["status"] in ("failed", "skipped"):
             row = await ingest_jobs.retry(stuck["id"])
         elif stuck:
@@ -827,7 +870,7 @@ async def _enqueue_source_entries(entries: list[dict], source_key: str,
             queued += 1
         else:
             already += 1   # already sitting in the queue from a prior pass
-    return {"queued": queued, "already_had": already}
+    return {"queued": queued, "already_had": already, "dismissed": dismissed}
 
 
 async def _follow_source(args, ctx):
@@ -864,7 +907,8 @@ async def _follow_source(args, ctx):
         # discovery happened now; the worker bumps ingested_count as items land
         await source_subscriptions.record_poll(
             info["source_key"], status="ok", error=None, new_ingested=0)
-        result.update(queued=stats["queued"], already_had=stats["already_had"])
+        result.update(queued=stats["queued"], already_had=stats["already_had"],
+                      dismissed=stats["dismissed"])
         result["note"] = (
             f"Now following {sub['title']}. Queued {stats['queued']} recent upload(s) "
             "for BACKGROUND ingestion"
@@ -873,7 +917,12 @@ async def _follow_source(args, ctx):
             + " — they download and transcribe asynchronously and appear in memory as "
             "each one finishes, so this returns immediately. Do NOT claim they're "
             "learned yet; say they're queued and backfilling. New uploads ingest "
-            "automatically via the poll. Report the source name and the queued count.")
+            "automatically via the poll. Report the source name and the queued count."
+            + (f" {stats['dismissed']} upload(s) were left alone because the "
+               "operator dismissed them off the Activity page. That is his "
+               "decision, not a fault and not something to fix — do not offer "
+               "to re-queue them; Restore on the Activity page is his to click."
+               if stats["dismissed"] else ""))
     else:
         result["note"] = (
             f"Now following {sub['title']} (future uploads only — no backfill). "
@@ -927,6 +976,7 @@ async def _poll_sources(args, ctx):
 
     report = []
     total_new = 0
+    total_dismissed = 0
     for s in subs:
         info = await enumerate_source(s["url"], limit=_POLL_WINDOW)
         if info.get("error") or info.get("is_source") is False:
@@ -941,14 +991,24 @@ async def _poll_sources(args, ctx):
         await source_subscriptions.record_poll(
             s["source_key"], status="ok", error=None, new_ingested=0)
         total_new += stats["queued"]
-        if stats["queued"]:
-            report.append({"source": s["title"], "queued": stats["queued"]})
+        total_dismissed += stats["dismissed"]
+        if stats["queued"] or stats["dismissed"]:
+            entry = {"source": s["title"], "queued": stats["queued"]}
+            if stats["dismissed"]:
+                entry["dismissed_by_operator"] = stats["dismissed"]
+            report.append(entry)
     return _j({"status": "polled", "sources_checked": len(subs),
-               "queued": total_new, "detail": report,
+               "queued": total_new, "dismissed_by_operator": total_dismissed,
+               "detail": report,
                "note": ("New uploads were QUEUED for background ingestion (they "
                         "transcribe asynchronously via the ingest worker). Report how "
                         "many were queued per source; if none, say the followed sources "
-                        "are up to date.")})
+                        "are up to date."
+                        + (f" {total_dismissed} upload(s) were skipped because "
+                           "the operator dismissed them off the Activity page — "
+                           "a decision of his, not a failure. Do not report them "
+                           "as a problem and do not try to re-queue them."
+                           if total_dismissed else ""))})
 
 
 # WMO weather codes → plain English (open-meteo's `weather_code`)
@@ -1624,9 +1684,24 @@ async def _manage_tool_hosts(args, ctx):
 
     Goal-scoped, because it widens where this machine will send requests. It
     is a deliberately small verb: a hostname, nothing else. No scheme, no
-    path, no credentials — the SSRF guard in http_executor still applies to
-    every request afterwards, so allowlisting a host does not buy reaching a
-    link-local address through it.
+    path, no credentials.
+
+    WHAT THE ALLOW-LIST DOES AND DOES NOT BUY. Until 2026-08-05 this docstring
+    said "the SSRF guard in http_executor still applies", and there was no
+    such guard — `execute_http_tool` compared the hostname against this table
+    and dialled whatever it resolved to. An approved name pointing at
+    127.0.0.1 reached the backend's own :8000, where the tokenless-local path
+    hands back the admin token. There is a guard now
+    (`net_guard.validate_offstack_target`) and it runs at DIAL time, so a name
+    that has since been repointed is caught: loopback, link-local (which is
+    where cloud instance metadata lives), the unspecified address, and this
+    install's own service addresses are all refused.
+
+    What it deliberately does NOT refuse is the LAN — `router.lan` is the
+    whole point of this verb, and blocking RFC1918 would make it dead on
+    arrival. And it does not discriminate by port: this table has no port
+    column, so approving a host approves every port it listens on. Approving
+    one is agreeing to a MACHINE.
     """
     from app import capability_events
     action = str(args.get("action") or "add").strip().lower()
@@ -1660,9 +1735,17 @@ async def _manage_tool_hosts(args, ctx):
         capability_events.TOOL, host, "host_allowed",
         actor=ctx.get("agent_name") or "unknown",
         detail={"goal": spent.get("title")})
-    return (f"'{host}' is now an approved outbound host. An http_call tool "
-            f"targeting it can be created with manage_tools; every request "
-            f"still passes the SSRF guard.")
+    # Said to the MODEL, so it has to be true: this string used to promise
+    # "every request still passes the SSRF guard" at a moment when no such
+    # guard existed, which taught her that her next request was checked when
+    # it was not. What is actually enforced is narrower and worth her knowing
+    # exactly — the LAN is reachable through this, the loopback is not.
+    return (f"'{host}' is now an approved outbound host, on every port it "
+            f"listens on. An http_call tool targeting it can be created with "
+            f"manage_tools. At call time the name is resolved again and "
+            f"refused if it points at this machine, at a link-local address, "
+            f"or at one of Nova's own services — the LAN and the internet are "
+            f"reachable, Nova herself is not.")
 
 
 async def _memory_usage_report(args, ctx):
@@ -1965,6 +2048,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "parameters": {"type": "object",
                        "properties": {"query": {"type": "string"}},
                        "required": ["query"]},
+        "reads_only": True,
         "execute": _search_memory,
     },
     "write_memory": {
@@ -2022,6 +2106,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "query": {"type": "string"},
             "max_results": {"type": "integer", "description": "1-8, default 6"},
         }, "required": ["query"]},
+        # Same as fetch_url: reads the world, taints the turn, writes nothing.
+        "reads_only": True,
         "execute": _web_search,
     },
     "fetch_url": {
@@ -2032,6 +2118,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "parameters": {"type": "object",
                        "properties": {"url": {"type": "string"}},
                        "required": ["url"]},
+        # GET only, size-capped, SSRF-guarded (net_guard). Writes nothing.
+        # It DOES taint the turn (_UNTRUSTED_SOURCE_TOOLS) — a read that
+        # taints is still a read, and the overlap is pinned by a test.
+        "reads_only": True,
         "execute": _fetch_url,
     },
     "ingest_media": {
@@ -2071,6 +2161,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": ("List the sources Nova follows, with each one's poll status "
                         "and how many items it has contributed to memory."),
         "parameters": {"type": "object", "properties": {}},
+        "reads_only": True,
         "execute": _list_followed_sources,
     },
     "unfollow_source": {
@@ -2105,6 +2196,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "days": {"type": "integer",
                      "description": "Forecast days to return, 1-7 (default 3)"},
         }, "required": ["location"]},
+        "reads_only": True,
         "execute": _get_weather,
     },
     "read_memory_item": {
@@ -2122,6 +2214,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
                                                    "the document is paged. "
                                                    "Defaults to 1."}},
                        "required": ["item_id"]},
+        "reads_only": True,
         "execute": _read_memory_item,
     },
     "diagnose": {
@@ -2141,6 +2234,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "area": {"type": "string",
                      "description": "Settings area to inspect. Omit to list "
                                     "the available areas."}}},
+        "reads_only": True,
         "execute": _diagnose,
     },
     "service_status": {
@@ -2154,6 +2248,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "stopped. If it reports the container view as UNAVAILABLE, say "
             "so; it does not mean the services are down. Read-only."),
         "parameters": {"type": "object", "properties": {}},
+        "reads_only": True,
         "execute": _service_status,
     },
     "retry_ingest_job": {
@@ -2190,6 +2285,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "contains": {"type": "string",
                          "description": "Only documents whose title or "
                                         "description contains this text."}}},
+        "reads_only": True,
         "execute": _list_memory,
     },
     "list_capability_changes": {
@@ -2204,6 +2300,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "limit": {"type": "integer", "description": "max events (default 25)"},
             "hours": {"type": "integer", "description": "only the last N hours"},
         }},
+        "reads_only": True,
         "execute": _list_capability_changes,
     },
     "list_skills": {
@@ -2214,12 +2311,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "fuzzy memory search only surfaces skills that match "
                         "the current wording, so it cannot."),
         "parameters": {"type": "object", "properties": {}},
+        "reads_only": True,
         "execute": _list_skills,
     },
     "list_agents": {
         "name": "list_agents",
         "description": "List the index of available agents with their purposes.",
         "parameters": {"type": "object", "properties": {}},
+        "reads_only": True,
         "execute": _list_agents,
     },
     "manage_agents": {
@@ -2279,6 +2378,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "max_age_days": {"type": "integer",
                              "description": "Override the configured threshold"},
         }},
+        "reads_only": True,
         "execute": _list_stale_topics,
     },
     "manage_automations": {
@@ -2321,6 +2421,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "full": {"type": "boolean",
                      "description": "true = the entire catalog of authenticated providers, not just approved models"},
         }},
+        "reads_only": True,
         "execute": _list_models,
     },
     "delete_memory_item": {
@@ -2350,6 +2451,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "mode": {"type": "string", "enum": ["hybrid", "local", "cloud"],
                      "description": "Stack strategy: hybrid (default) | local | cloud"},
         }},
+        # Ranks what is already known. Pulling one is pull_model, which is not here.
+        "reads_only": True,
         "execute": _recommend_models,
     },
     "pull_model": {
@@ -2477,7 +2580,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": (
             "How a delegated coding task is going — state, branch, diffstat, "
             "and why it stopped. Call with no session_id to list the "
-            "registered repositories and recent sessions. Read-only.\n\n"
+            "registered repositories and recent sessions.\n\n"
             "READING A SESSION ENDS YOUR ABILITY TO ACT THIS TURN. What comes "
             "back was written by an agent that just read a whole repository, "
             "so it is outside text and the containment fence treats it that "
@@ -2489,6 +2592,23 @@ BUILTIN_TOOLS: dict[str, dict] = {
                            "description": "from delegate_coding_task; omit to "
                                           "list repositories and recent runs"},
         }, "required": []},
+        # NO `reads_only`, and the description above no longer says "Read-only"
+        # either. Both were wrong, and this one was mine: called WITH a
+        # session_id it runs `coder.refresh`, which persists the broker's
+        # answer — including a TERMINAL `state='failed'` on a 404 (coder.py:167,
+        # `_update` at coder.py:248-256). `TERMINAL` stops every later poll, so
+        # a read that happens to race a sidecar restart permanently marks a
+        # session dead.
+        #
+        # It matters more than an ordinary mislabel because the flag is read by
+        # `registry.unattended_tools`, whose probe passes `args=None` — so the
+        # claim held for BOTH arg shapes, and `deferral` would have been willing
+        # to force a round at it. The model supplies the session_id on that
+        # round. An unasked durable write to an operator-visible record is the
+        # exact thing this lane exists to make impossible.
+        #
+        # Splitting the tool (listing form reads, refresh form writes) is a
+        # legitimate follow-up. The correct interim is no flag at all.
         "execute": _check_coding_session,
     },
     "list_workloads": {
@@ -2498,6 +2618,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "much of your resource quota is used. Read-only. "
                         "Check this before deploying and after."),
         "parameters": {"type": "object", "properties": {}, "required": []},
+        "reads_only": True,
         "execute": _list_workloads,
     },
     "workload_logs": {
@@ -2508,6 +2629,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "pod": {"type": "string", "description": "pod name from list_workloads"},
             "lines": {"type": "integer", "description": "how many lines (default 60)"},
         }, "required": ["pod"]},
+        # Reads a container's stdout. Naming a workload does not run one.
+        "reads_only": True,
         "execute": _workload_logs,
     },
     "delete_workload": {
@@ -2554,6 +2677,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "which are holes opened for a workload. Read-only — "
                         "check this when something cannot reach the network."),
         "parameters": {"type": "object", "properties": {}, "required": []},
+        "reads_only": True,
         "execute": _list_egress,
     },
     "propose_patch": {
@@ -2586,6 +2710,8 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "exists, and reference it in config as "
                         "{{secret:<name>}} rather than asking for the value."),
         "parameters": {"type": "object", "properties": {}, "required": []},
+        # NAMES only — the values never leave secret_store.
+        "reads_only": True,
         "execute": _list_secret_names,
     },
     "propose_goal": {
@@ -2624,6 +2750,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "do, and how many actions are left on each. Check "
                         "this before saying you cannot do something."),
         "parameters": {"type": "object", "properties": {}, "required": []},
+        "reads_only": True,
         "execute": _list_goals,
     },
     "manage_tool_hosts": {
@@ -2653,6 +2780,7 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "days": {"type": "integer",
                      "description": "window in days (default 14, max 90)"},
         }, "required": []},
+        "reads_only": True,
         "execute": _memory_usage_report,
     },
     "remember_about_me": {

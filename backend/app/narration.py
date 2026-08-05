@@ -200,6 +200,25 @@ def _clauses(text: str):
             yield body, end
 
 
+def clauses(text: str):
+    """(sentence, terminator) pairs. Public because `deferral` splits on the
+    same boundaries: two guards reading the same reply must never disagree
+    about where a sentence ends."""
+    return _clauses(text)
+
+
+def is_offer(body: str) -> bool:
+    """True when this text asks permission rather than announcing action.
+
+    ONE definition, two readers with OPPOSITE consequences: this module
+    EXEMPTS an offer — asking permission is correct behaviour when the act
+    needs a decision — and `deferral` TARGETS one when the act needs none.
+    Sharing the definition is what stops the pair drifting into a state
+    where a phrase is exempt from both, or caught by both.
+    """
+    return bool(_OFFER_MARKERS.search(body))
+
+
 def _completion_slip(final_text: str, called_tools=None) -> str | None:
     """A claim to have DONE something, with nothing that could have done it."""
     for sentence in _SENTENCES.split(final_text):

@@ -328,6 +328,20 @@ SETTING_DEFS: list[dict] = [
                      "it is met. Research and memory are never gated. Turn "
                      "this OFF and those actions become entirely ungated, "
                      "which is what they were before this shipped.")},
+    {"key": "autonomy.act_on_reads", "type": "boolean", "default": True,
+     "section": "Agents", "label": "Do read-only checks instead of offering to",
+     "description": ("When she ends a reply by offering to look something up "
+                     "that she could have looked up — a page, a service, her "
+                     "own notes — the draft is discarded and she is asked "
+                     "again with the tool named. It only ever fires on tools "
+                     "that read: anything that writes, deletes, creates a "
+                     "capability, or sits behind an approved goal is "
+                     "untouched, and she still asks about those first. Turn "
+                     "this OFF and the forced round stops — but her prompt "
+                     "still names the tools that need no permission, and "
+                     "main's own prompt still says a read is answered by "
+                     "calling it, so she will often act anyway. To undo that "
+                     "half, edit main at Library → Agents.")},
     {"key": "actions.enabled", "type": "boolean", "default": True,
      "section": "Agents", "label": "Approving a recommendation may run its plan",
      "description": ("A recommendation card can carry a typed plan — register "
@@ -673,7 +687,15 @@ def _validate(key: str, value: Any) -> Any:
             raise ValueError(f"{key}: below minimum {d['min']}")
         if "max" in d and value > d["max"]:
             raise ValueError(f"{key}: above maximum {d['max']}")
-        return value
+        # A COUNT IS A WHOLE NUMBER, and this is where that is enforced. Three
+        # consumers reach for `int(settings_store.get(...))`, which TRUNCATES:
+        # a stored 2.8 ran as 2 while the UI went on displaying 2.8 forever, so
+        # the value in use and the value on screen were different numbers and
+        # nothing anywhere said so. Truncation scattered across three call
+        # sites is not a control; refusing the write is.
+        if is_integral(d) and float(value) != int(value):
+            raise ValueError(f"{key}: expected a whole number, got {value}")
+        return int(value) if is_integral(d) else value
     if t == "boolean":
         if not isinstance(value, bool):
             raise ValueError(f"{key}: expected true/false")
@@ -700,6 +722,36 @@ async def set_value(key: str, value: Any):
     log.info("Setting changed: %s = %r", key, value)
 
 
+def is_integral(d: dict) -> bool:
+    """Does this number setting count things rather than measure them?
+
+    DERIVED FROM THE DEFAULT'S OWN TYPE, which the author already wrote down
+    correctly: every counting setting here has an `int` default (3 rounds, 7
+    bundles, 90 days) and every measuring one has a `float` (tts_speed 1.0,
+    wake_threshold 0.5, speaker_margin 0.10). So there is no second list to
+    keep in step with the first, and a setting added tomorrow classifies
+    itself.
+
+    `bool` is excluded explicitly — it is a subclass of `int` in Python, and a
+    boolean setting reaching a numeric branch would be a different bug wearing
+    this one's clothes.
+    """
+    return (d.get("type") == "number"
+            and isinstance(d.get("default"), int)
+            and not isinstance(d.get("default"), bool))
+
+
 def all_settings() -> list[dict]:
-    """Defs merged with live values — the UI renders directly from this."""
-    return [{**d, "value": _cache.get(d["key"], d["default"])} for d in SETTING_DEFS]
+    """Defs merged with live values — the UI renders directly from this.
+
+    `step` is served rather than guessed. The slider hardcoded
+    (max - min) / 20 notches, so agents.max_dispatches_per_turn (1..10) got a
+    step of 0.45: the operator dragged to the notch labelled "2.8", 2.8 was
+    stored, and `int()` in the runner ran 2. The stored default of 3 was not
+    even ON that grid, so once the slider was touched it could never be put
+    back. Derived here so the UI cannot disagree with what the backend will
+    accept.
+    """
+    return [{**d, "value": _cache.get(d["key"], d["default"]),
+             **({"step": 1} if is_integral(d) else {})}
+            for d in SETTING_DEFS]
