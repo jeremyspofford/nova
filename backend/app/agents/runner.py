@@ -796,11 +796,31 @@ async def _build_system_prompt(agent: dict, query: str, *,
                 # in the reach list below would have Nova promise a capability
                 # that vanishes the moment she dispatches for it. One small
                 # query per agent, on a turn that already does BM25 retrieval.
+                # LAZY GRANTS COUNT AS REACH. get_agent_tools returns the
+                # LOADED toolset, so a specialist's granted-but-unloaded MCP
+                # tools resolved to nothing here — and `reach` is built from
+                # this dict, so the closed-world block below then asserted
+                # its two lists were COMPLETE while omitting them. MEASURED
+                # 2026-08-04: `maintainer` held seven `mcp:nova-src/*` read
+                # grants against a connected stdio server, and main told the
+                # operator it had no filesystem access by any route. 3849d4a
+                # fixed the same falsehood for an agent's OWN tools (the
+                # `own` list below) and left this half.
+                #
+                # The specialist loads them mid-turn via find_mcp_tools, the
+                # way `own` already says — so from main's side these are
+                # reachable, and that is the only question `reach` asks.
                 resolved: dict[str, list[str]] = {}
                 for a in others:
-                    resolved[a["name"]] = sorted(
-                        tool_registry.canonical_name(d["function"]["name"])
-                        for d in await tool_registry.get_agent_tools(a))
+                    loaded = {tool_registry.canonical_name(d["function"]["name"])
+                              for d in await tool_registry.get_agent_tools(a)}
+                    try:
+                        loaded |= set(await tool_registry.lazy_tool_names(a))
+                    except Exception:  # noqa: BLE001 — never cost the index
+                        log.exception("lazy MCP names unavailable for %s; its "
+                                      "reach will understate what it holds",
+                                      a.get("name"))
+                    resolved[a["name"]] = sorted(loaded)
 
                 # A specialist whose grants do not resolve is worse than one
                 # with none: main dispatches confidently, the specialist has
@@ -1821,6 +1841,9 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # alternation is real billed calls, so the set spans rounds, not just
     # the inner retry.
     tried: set[str] = set()
+    # Bound before the loop so the end-of-turn narration check cannot raise
+    # NameError if max_rounds is ever configured to 0.
+    round_text = ""
     for round_no in range(max_rounds):
         round_text = ""
         tool_calls: list[dict] = []
@@ -2001,6 +2024,13 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             # themselves against it must not keep quoting the dead model's
             ctx["model"] = target
 
+        # Where this round's text starts, so a narration retry can take it
+        # back out. Without it the retry DOUBLES the answer: round 1's draft
+        # is already in final_text, round 2 writes a fresh one from scratch,
+        # and both land in the persisted row joined mid-sentence. Both
+        # narration retries in the live database produced exactly that seam
+        # (2026-08-04 23:32:59: "…Magic DNS name?Noted on both counts.").
+        round_started_at = len(final_text)
         final_text += round_text
 
         last_round_calls = len(tool_calls)
@@ -2027,18 +2057,38 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                 # so say so where the model can still act on it. Capped at one
                 # retry so a model that simply will not call a tool still ends.
                 narration_retried = True
+                # Take the rejected draft back out. Round 2 answers the whole
+                # question again — it is not a continuation — so keeping this
+                # concatenates two complete replies.
+                retracted = final_text[round_started_at:]
+                final_text = final_text[:round_started_at]
+                # And show the model what it actually wrote. The `continue`
+                # below skips the assistant append at the bottom of the loop
+                # (that one is for rounds that DID call tools), so round 2
+                # used to run against a transcript containing the complaint
+                # but not the draft it was about — which is why the model
+                # restarted from nothing instead of correcting.
+                if round_text:
+                    messages.append({"role": "assistant", "content": round_text})
                 messages.append({
                     "role": "system",
                     "content": (
                         f"You wrote {slip!r} and then called no tool, so the "
                         f"action you described did not happen and the operator "
                         f"cannot see it. Either make the call now, or say "
-                        f"plainly that you are not going to and why."),
+                        f"plainly that you are not going to and why. Your "
+                        f"previous draft was discarded and NOT shown — write "
+                        f"the whole reply again, do not continue it."),
                 })
                 log.info("Narration retry: agent=%s matched=%r round=%d",
                          agent.get("name"), slip, round_no)
+                # `retract` tells the client to unwind the deltas it already
+                # rendered. The text was streamed as it generated, so a
+                # server-only fix leaves the doubled draft on screen and
+                # disagreeing with the row that gets stored.
                 yield {"type": "activity", "kind": "narration_retry",
                        "name": agent.get("name", ""), "agent": agent.get("name"),
+                       "retract": len(retracted),
                        "detail": f"announced {slip!r} and called nothing — asked again"}
                 continue
             break  # final answer reached
@@ -2369,7 +2419,11 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # last_round_calls, not calls_made: one call in round 1 used to blind
     # this for every later round, which is exactly how 'The egress rules
     # look fine … Let me dig deeper:' got through after list_egress ran.
-    snippet = narration.detect(final_text, last_round_calls, called_names)
+    # round_text is the LAST round's text — the same round last_round_calls
+    # counts. Passing the cumulative turn text against a round-scoped count is
+    # what stamped "called no tool" on a turn that ran four of them.
+    snippet = narration.detect(final_text, last_round_calls, called_names,
+                               round_text=round_text)
     if snippet:
         yield {"type": "activity", "kind": "narration",
                "name": agent.get("name", ""), "agent": agent.get("name"),

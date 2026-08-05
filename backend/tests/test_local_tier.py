@@ -434,7 +434,7 @@ async def test_dispatch_budget():
     script = DispatchScript(4)
     llm_router.stream_chat = script.stream_chat
     llm_router.effective_model = lambda m: m
-    narration.detect = lambda text, calls, called=None: None
+    narration.detect = lambda text, calls, called=None, **kw: None
 
     async def get_agent_tools(agent, exclude=None):
         return [{"type": "function", "function": {

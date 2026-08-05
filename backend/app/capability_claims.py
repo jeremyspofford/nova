@@ -101,7 +101,12 @@ _NOT_A_CLAIM = re.compile(
     r"\bcan(?:no|')t\b|\bcannot\b|\bdo(?:n't| not)\b|\bunable\b|\bnot able\b"
     r"|\bno (?:ability|access|way|tool|tools)\b|\bnever\b|\black\b|\blacks\b"
     r"|\bwithout\b|\bwant me to\b|\bshould i\b|\bused to\b|\bnot yet\b"
-    r"|\byet to\b|\bwish i\b|\bcan you\b|\bdo you\b",
+    r"|\byet to\b|\bwish i\b|\bcan you\b|\bdo you\b"
+    # "I can only register remote HTTP servers, not deploy processes" — a
+    # denial by narrowing, which none of the patterns above recognise. Scoped
+    # tightly (`only` … `not` inside one clause) rather than a bare `\bnot\b`,
+    # which would exempt "I'm not going to lie, I can read your files".
+    r"|\bonly\b[^.!?\n]{0,60}\bnot\b",
     re.IGNORECASE)
 
 # Hypotheticals, split out of the list above on 2026-07-31 because POSITION
@@ -125,7 +130,25 @@ _SUPPOSING = re.compile(
 _FIRST_PERSON = re.compile(
     r"\b(?:i|i'?m|i am|i'?ve|i have|i can|i could|my)\b", re.IGNORECASE)
 
-_SENTENCES = re.compile(r"[.!?\n]+")
+# Clauses, not just sentences. A spaced em/en dash and a semicolon join two
+# independent statements, and this check asks TWO questions of whatever it is
+# handed — "is the subject first person?" and "does it claim a capability?".
+# Split too coarsely, those land on different halves and the answer is
+# nonsense. MEASURED 2026-08-04, the sentence that produced a false
+# accusation in front of the operator:
+#
+#   "But to access your **local** filesystem, the server has to actually run
+#    on your machine — and I can only register remote HTTP servers, not
+#    deploy processes"
+#
+# The capability phrase is in the first clause, which is about what the
+# SERVER needs. The first person is in the second, which is a DENIAL. Read as
+# one sentence it looks like "I ... access your local filesystem", and her
+# reply was stamped "Nova claimed filesystem access — treat that claim as
+# false" while she was in fact explaining she could not do it.
+#
+# Spaces required around the dash so hyphenated words and ranges are safe.
+_SENTENCES = re.compile(r"[.!?\n;]+|\s+[—–]+\s+")
 
 
 def _tokens(name: str) -> set[str]:
@@ -178,12 +201,32 @@ def detect(final_text: str, tool_names: Iterable[str]) -> Optional[str]:
         return None
     names = list(tool_names or [])
     for sentence in _SENTENCES.split(final_text):
-        if not _FIRST_PERSON.search(sentence) or _NOT_A_CLAIM.search(sentence):
+        if not sentence:
+            continue
+        first_person = _FIRST_PERSON.search(sentence)
+        if not first_person or _NOT_A_CLAIM.search(sentence):
             continue
         supposing = _SUPPOSING.search(sentence)
         for label, claim, tools in _COMPILED:
             m = claim.search(sentence)
             if not m or _satisfied(tools, names):
+                continue
+            # POSITION DECIDES THE SUBJECT, the same rule _SUPPOSING already
+            # follows. This searched the whole clause, so any "I" or "my"
+            # anywhere in it made a claim about something else read as a claim
+            # about her. MEASURED 2026-08-04:
+            #
+            #   "To access your **local** filesystem, the server has to run on
+            #    your machine and expose an HTTPS endpoint (my registration
+            #    requires `https://`)"
+            #
+            # The subject is "the server"; the only first person is a
+            # parenthetical AFTER the claim, about her registration tool. Her
+            # reply was stamped "Nova claimed filesystem access — treat that
+            # claim as false" while she was explaining she could not do it.
+            # This is the check's own docstring ("the subject test is on the
+            # sentence's opening") finally being true of the code.
+            if first_person.start() > m.start():
                 continue
             if supposing and supposing.start() < m.start():
                 continue          # hypothesising, not claiming — see _SUPPOSING

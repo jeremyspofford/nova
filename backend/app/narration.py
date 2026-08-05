@@ -216,7 +216,7 @@ def _completion_slip(final_text: str, called_tools=None) -> str | None:
 
 
 def detect(final_text: str, tool_calls_made: int,
-           called_tools=None) -> str | None:
+           called_tools=None, round_text: str | None = None) -> str | None:
     """The matched phrase when the text announces or claims action while no
     tool ran; None otherwise.
 
@@ -232,9 +232,24 @@ def detect(final_text: str, tool_calls_made: int,
     would" is about this round, while "did the thing you claim to have done
     happen" is about the turn. Omit it and behaviour is exactly as before —
     every existing caller keeps its semantics.
+
+    `round_text` finishes that separation. The round-scoped arms were reading
+    the CUMULATIVE turn text while being gated on a round-scoped call count,
+    and the two disagree on every turn that ends with prose: `tool_calls_made`
+    is 0 for the closing round, so "Let me check" written in round 1 — and
+    KEPT, by a tool call in round 1 — was still matched at the end. MEASURED
+    2026-08-04 on turn a6630aee: four tools ran (two searches, a fetch, a
+    dispatch) and the reply was still stamped "announced an action but called
+    no tool (matched 'Let me check')" plus "[No tool ran this turn]". The
+    detector called her a liar about work she had actually done, in the reply
+    the operator reads.
+
+    So: the round arms read the round, the completion arm still reads the
+    turn. Omitted, it falls back to `final_text` and nothing changes.
     """
     if not final_text:
         return None
+    scoped = round_text if round_text is not None else final_text
     if tool_calls_made:
         # Only the completion arm survives, and only against calls that could
         # not have performed the claim. The structural and future-tense arms
@@ -248,7 +263,7 @@ def detect(final_text: str, tool_calls_made: int,
     # which is the hardcoding CLAUDE.md warns about, and it caught 1 of the
     # 10 real slips in the 2026-08-03 incident. Three of those replies ended
     # in a colon with zero tool calls.
-    lines = [ln.rstrip() for ln in final_text.strip().splitlines() if ln.strip()]
+    lines = [ln.rstrip() for ln in scoped.strip().splitlines() if ln.strip()]
     if lines and lines[-1].endswith((":", "—", "-")) and "?" not in lines[-1]:
         return lines[-1][-60:]
     # The future-tense arm is per-sentence for the same reason the completion
@@ -259,7 +274,7 @@ def detect(final_text: str, tool_calls_made: int,
     # read aloud) contradicted an answer that was correct. The module's own
     # docstring has always said questions must not be matched; only the
     # completion arm actually honoured it.
-    for body, end in _clauses(final_text):
+    for body, end in _clauses(scoped):
         if "?" in end:
             continue
         for pat in _COMPILED:

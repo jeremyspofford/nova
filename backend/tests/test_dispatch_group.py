@@ -118,7 +118,7 @@ def install(fleet: Fleet, script: Script, concurrency=3):
     settings_store._cache["agents.tool_concurrency"] = concurrency
     settings_store._cache["agents.max_dispatches_per_turn"] = 5
     settings_store._cache["agents.dispatch_timeout_s"] = 30
-    narration.detect = lambda text, calls, called=None: None
+    narration.detect = lambda text, calls, called=None, **kw: None
     trace._flush = lambda t: asyncio.sleep(0)
 
     from app.agents import registry as agent_registry
