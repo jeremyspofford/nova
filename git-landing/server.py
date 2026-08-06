@@ -251,10 +251,43 @@ def _worktree(branch: str, remove: bool = False) -> dict:
                 "detail": f"branch {branch!r} must look like nova/<name>"}
     slug = branch.split("/", 1)[1]
     path = f"{REPO}/.worktrees/sandbox-{slug}"
+
+    def _clear(p: str) -> None:
+        """Remove the worktree AND any directory left behind.
+
+        `git worktree remove` refuses a path it does not have registered, and
+        `worktree prune` drops the REGISTRATION while leaving the FILES. So a
+        prune run from anywhere — including a human running it on the host,
+        which is how this happened — orphans the directory, and every later
+        `worktree add` then dies with "already exists".
+
+        Nova hit exactly that and had no way out: she told the operator to run
+        `rm -rf` himself, which is the thing this project exists to stop. The
+        capability belongs here, in the container that owns repository writes,
+        and it has to be idempotent because the states it must recover from
+        are the ones nobody planned.
+        """
+        import shutil
+        _git("worktree", "remove", "--force", p, check=False)
+        _git("worktree", "prune", check=False)
+        if os.path.isdir(p):
+            # NOT ignore_errors. It silently swallowed the reason a directory
+            # would not go, and the endpoint then reported {"status": "ok",
+            # "gone": false} — a success with the failure printed beside it,
+            # which is the same "report what you did not verify" defect this
+            # session keeps finding. The error is raised to the caller.
+            shutil.rmtree(p)
+
     with _lock:
         if remove:
-            _git("worktree", "remove", "--force", path, check=False)
-            _git("worktree", "prune", check=False)
+            try:
+                _clear(path)
+            except OSError as e:
+                return {"status": "error",
+                        "detail": f"could not remove {path}: {e}"}
+            if os.path.isdir(path):
+                return {"status": "error",
+                        "detail": f"{path} still exists after removal"}
             return {"status": "ok", "removed": path}
         try:
             _git("rev-parse", "--verify", branch)
@@ -263,8 +296,7 @@ def _worktree(branch: str, remove: bool = False) -> dict:
         # Idempotent: a leftover tree from a previous run is replaced rather
         # than failing the whole check, because a sandbox that cannot start
         # because of its own debris is worse than no sandbox.
-        _git("worktree", "remove", "--force", path, check=False)
-        _git("worktree", "prune", check=False)
+        _clear(path)
         try:
             _git("worktree", "add", "--detach", path, branch)
         except RuntimeError as e:
@@ -303,6 +335,20 @@ def _worktree(branch: str, remove: bool = False) -> dict:
                     "  backend:\n"
                     "    ports: !reset []\n"
                     "    environment:\n"
+                    # NO BYTECODE. The sandbox backend bind-mounts the
+                    # worktree's ./backend, and CPython writes __pycache__
+                    # into it as root — which then cannot be deleted by this
+                    # container (uid 1000), so the worktree survives its own
+                    # cleanup and every later run dies with "already exists".
+                    # Nova hit exactly that and had to tell the operator to
+                    # run `rm -rf` himself.
+                    #
+                    # Fixed at the source rather than by escalating this
+                    # container back to root: a test run has no use for
+                    # cached bytecode, and a container that writes his files
+                    # should be him.
+                    '      PYTHONDONTWRITEBYTECODE: "1"\n'
+                    '      PYTHONPYCACHEPREFIX: "/tmp/pycache"\n'
                     # THE STACK DECLARES ITSELF. Some suites are about the
                     # LIVE install — that the operator's real agent grants
                     # still match a snapshot, that a sidecar answers — and
