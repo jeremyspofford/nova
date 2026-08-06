@@ -27,6 +27,13 @@
     "request_operator_confirmation",
     "search_memory"
   ],
+  "ideator": [
+    "list_past_ideas",
+    "list_stale_topics",
+    "raise_recommendation",
+    "read_memory_item",
+    "search_memory"
+  ],
   "ingestion": [
     "fetch_url",
     "follow_source",

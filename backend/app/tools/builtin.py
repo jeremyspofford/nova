@@ -1131,6 +1131,32 @@ async def _get_weather(args, ctx):
 
 # ── staleness scanner (mechanical; the ingestion agent acts on it) ──────
 
+async def _list_past_ideas(args, ctx):
+    """Every idea ever raised and what became of it. Read-only.
+
+    THE DEDUPE LEDGER, and the reason the ideator can be trusted to run every
+    week without becoming noise. Without it, "propose things worth building"
+    means proposing the same three things forever: the model has no memory of
+    last week's cards, an undecided one is invisible to it, and a dismissed
+    one looks exactly like a new idea.
+
+    Statuses included deliberately — a DISMISSED subject is the most important
+    row here. It is the operator saying no, and re-proposing it is worse than
+    proposing nothing.
+    """
+    from app import db
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT title, status, dedupe_key, created_at, decided_at "
+            "FROM recommendations WHERE kind = 'idea' "
+            "ORDER BY created_at DESC LIMIT 100")
+    return _j([{"title": r["title"], "status": r["status"],
+                "dedupe_key": r["dedupe_key"],
+                "raised": str(r["created_at"])[:10],
+                "decided": str(r["decided_at"])[:10] if r["decided_at"] else None}
+               for r in rows])
+
+
 async def _list_stale_topics(args, ctx):
     from datetime import datetime, timedelta, timezone
     from app import settings_store
@@ -2739,6 +2765,18 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "body_template": {"type": "object"},
         }, "required": ["action"]},
         "execute": _manage_tools,
+    },
+    "list_past_ideas": {
+        "name": "list_past_ideas",
+        "description": (
+            "Every idea that has ever been raised, with its fate — approved, "
+            "dismissed, still waiting. Call this FIRST when proposing ideas: "
+            "nothing on this list may be proposed again in any wording, "
+            "whatever its status. A dismissed subject is the operator saying "
+            "no. Read-only."),
+        "parameters": {"type": "object", "properties": {}},
+        "reads_only": True,
+        "execute": _list_past_ideas,
     },
     "list_stale_topics": {
         "name": "list_stale_topics",

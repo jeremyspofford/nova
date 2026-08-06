@@ -255,8 +255,11 @@ def test_invariants():
     # the answer. It reads a container's stdout through an endpoint that
     # validates the service name against the compose project's own labels;
     # naming a service starts nothing.
+    # 24 since 2026-08-06: `list_past_ideas` joined it, the ideator's dedupe
+    # ledger (ROADMAP #34). It reads `recommendations` where kind = 'idea' and
+    # returns titles and statuses; raising one is a different tool entirely.
     check("the declared read-only set is the expected size",
-          len(ro) == 23, str(len(ro)))
+          len(ro) == 24, str(len(ro)))
     check("check_coding_session is not in it — it writes a session state",
           "check_coding_session" not in ro)
 
