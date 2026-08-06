@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Brain } from '../pages/Brain';
+import { PlainChat } from '../pages/PlainChat';
+import { PLAIN_EVENT, plainMode } from './plainMode';
 import { SettingsPage } from '../components/settings/SettingsPage';
 import { LibraryPage } from '../components/library/LibraryPage';
 import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
@@ -19,6 +21,15 @@ import { Rail } from './Rail';
 export function AppShell() {
   const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  // Which backdrop the routed surfaces are drawn over. Not a route: see
+  // shell/plainMode.ts for why the universe must not become a URL.
+  const [plain, setPlain] = useState(plainMode);
+  useEffect(() => {
+    const onPlain = (e: Event) =>
+      setPlain(Boolean((e as CustomEvent).detail?.on));
+    window.addEventListener(PLAIN_EVENT, onPlain);
+    return () => window.removeEventListener(PLAIN_EVENT, onPlain);
+  }, []);
   const home = () => navigate(window.innerWidth < 768 ? '/chat' : '/');
 
   useEffect(() => {
@@ -50,7 +61,10 @@ export function AppShell() {
     <div className="flex w-full h-[100dvh] overflow-hidden bg-stone-950">
       <Rail />
       <div className="relative flex-1 min-w-0 h-full">
-        <Brain />
+        {/* Exactly one of these is mounted. Swapping rather than hiding is
+            the point of plain mode: a hidden canvas is still a live WebGL
+            context doing work for a view that is meant not to have one. */}
+        {plain ? <PlainChat /> : <Brain />}
         <Routes>
           <Route path="/" element={null} />
           <Route path="/chat" element={isMobile ? null : <Navigate to="/" replace />} />

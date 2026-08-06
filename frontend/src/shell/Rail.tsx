@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { plainMode, setPlainMode } from './plainMode';
 import { useIngestSummary } from '../components/IngestionPanel';
 
 /** The utility rail. The canvas is the app — these items open utility
@@ -53,6 +54,8 @@ export const ICONS = {
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   ),
+  /* a plain document/pane — the view with no universe in it */
+  plain: <svg {...STROKE}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /></svg>,
   collapse: <svg {...STROKE}><path d="m11 17-5-5 5-5" /><path d="m18 17-5-5 5-5" /></svg>,
   expand: <svg {...STROKE}><path d="m13 17 5-5-5-5" /><path d="m6 17 5-5-5-5" /></svg>,
 };
@@ -83,6 +86,7 @@ function RailItem({ icon, label, expanded, active, onClick, badge }: {
 export function Rail() {
   const [expanded, setExpanded] = useState(() => localStorage.getItem(EXPAND_KEY) === '1');
   const [chatOpen, setChatOpen] = useState(() => localStorage.getItem(CHAT_KEY) !== '0');
+  const [plain, setPlain] = useState(plainMode);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { summary } = useIngestSummary(false);
@@ -108,6 +112,15 @@ export function Rail() {
     localStorage.setItem(EXPAND_KEY, next ? '1' : '0');
   };
 
+  const togglePlain = () => {
+    const next = !plain;
+    setPlain(next);
+    setPlainMode(next);
+    // Back to the backdrop, so the switch is visible immediately rather than
+    // happening behind whatever surface is open.
+    if (pathname !== '/') navigate('/');
+  };
+
   const toggleChat = () => {
     const next = !chatOpen;
     setChatOpen(next);
@@ -122,8 +135,8 @@ export function Rail() {
     >
       <button
         onClick={() => navigate('/')}
-        title="Back to the universe"
-        aria-label="Back to the universe"
+        title={plain ? 'Back to chat' : 'Back to the universe'}
+        aria-label={plain ? 'Back to chat' : 'Back to the universe'}
         className={`flex items-center gap-3 mx-2 px-2 py-1.5 rounded-lg hover:bg-stone-800/40 ${
           expanded ? '' : 'justify-center'}`}
       >
@@ -143,8 +156,15 @@ export function Rail() {
       </nav>
 
       <div className="flex flex-col gap-1">
-        <RailItem icon={ICONS.chat} label={chatOpen ? 'Hide chat' : 'Show chat'}
-          expanded={expanded} active={chatOpen} onClick={toggleChat} />
+        <RailItem icon={ICONS.plain}
+          label={plain ? 'Show the universe' : 'Plain view'}
+          expanded={expanded} active={plain} onClick={togglePlain} />
+        {/* Hiding chat is a canvas control: in plain view the chat IS the
+            view, and a button that empties the screen is not a feature. */}
+        {!plain && (
+          <RailItem icon={ICONS.chat} label={chatOpen ? 'Hide chat' : 'Show chat'}
+            expanded={expanded} active={chatOpen} onClick={toggleChat} />
+        )}
         <RailItem icon={ICONS.settings} label="Settings" expanded={expanded}
           active={at('/settings')} onClick={() => go('/settings')} />
         <RailItem icon={expanded ? ICONS.collapse : ICONS.expand}
