@@ -43,6 +43,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("git-landing")
 
 REPO = os.environ.get("NOVA_REPO_DIR", "/repo")
+# Running as the operator's uid (see docker-compose) means $HOME may not exist
+# in this image, and `git config --global` needs somewhere to write. /tmp is
+# per-container and disposable, which is exactly right for a trust setting
+# that has to be re-applied on every start anyway.
+os.environ.setdefault("HOME", "/tmp")
+os.environ.setdefault("GIT_CONFIG_GLOBAL", "/tmp/.gitconfig")
 PORT = int(os.environ.get("PORT", "9912"))
 
 # `nova/` prefixed, lowercase, no traversal, no refspec punctuation. The

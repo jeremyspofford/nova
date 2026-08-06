@@ -262,6 +262,16 @@ services:
   git-landing:
     build: ./git-landing
     profiles: ["coder"]
+    # RUNS AS THE OPERATOR, not root. It writes into HIS `.git` — branches,
+    # objects, worktree metadata — and as root those files come out
+    # root-owned, so his own `git commit` then fails with "insufficient
+    # permission for adding an object to repository database". Measured
+    # 2026-08-05: landing two branches locked him out of his own repository
+    # until the ownership was put back.
+    #
+    # A container that edits the operator's files has to be the operator, or
+    # it is quietly taking them away from him.
+    user: "${NOVA_UID:-1000}:${NOVA_GID:-1000}"
     environment:
       NOVA_REPO_DIR: /repo
       # The commit author for landed work. Attribution matters on a machine
