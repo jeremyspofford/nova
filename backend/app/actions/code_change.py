@@ -116,10 +116,31 @@ async def preflight(doc: CodeChangeLand, *, operator: bool = False
         }.get(state, f"no usable sandbox verdict ({state})")
         return ("blocked", why, None)
 
+    # ...AND A SECOND MODEL HAS READ IT. Step 11. The sandbox answers "does
+    # it work"; nothing before this answered "does it do what was asked", and
+    # a change can be green on every gate while implementing the wrong thing.
+    #
+    # NEVER-REVIEWED IS TREATED LIKE CONCERNS, for the reason never-checked is
+    # treated like failed: letting an unread change through because there is
+    # no bad news about it is how a gate becomes a formality.
+    rev = await coder.review_verdict(doc.session_id)
+    r_state = rev.get("state")
+    if r_state != "pass":
+        why = {
+            "never": ("no second model has read this yet. Run the review — it "
+                      "is given the task and the diff and asked whether one "
+                      "implements the other."),
+            "stale": (f"the review is out of date — {rev.get('detail')}. What "
+                      f"was read is not what would land."),
+            "concerns": (f"the reviewer raised concerns "
+                         f"({rev.get('model')}):\n{rev.get('detail')}"),
+        }.get(r_state, f"no usable review ({r_state})")
+        return ("blocked", why, None)
+
     stat = (got.get("diffstat") or "").strip().splitlines()
     summary = stat[-1].strip() if stat else "changes"
     return ("ready",
-            (f"sandbox green ({verdict.get('detail')}); ready to land on "
+            (f"sandbox green, reviewed by {rev.get('model')}; ready to land on "
              f"nova/{doc.branch} off {st.get('branch')} ({st.get('head')}): "
              f"{summary}"), None)
 
@@ -146,6 +167,14 @@ async def execute(doc: CodeChangeLand, rec: dict, *, step) -> dict:
         await step("sandbox", "error", detail[:300])
         return {"status": "error", "detail": detail}
     await step("sandbox", "ok", str(verdict.get("detail"))[:200])
+
+    rev = await coder.review_verdict(doc.session_id)
+    if rev.get("state") != "pass":
+        detail = (f"refused: the review is {rev.get('state')} — "
+                  f"{str(rev.get('detail'))[:400]}")
+        await step("review", "error", detail[:300])
+        return {"status": "error", "detail": detail}
+    await step("review", "ok", f"passed by {rev.get('model')}")
 
     got = await coder.patch(doc.session_id)
     if got.get("status") != "ok":

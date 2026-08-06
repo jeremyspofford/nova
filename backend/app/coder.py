@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 import httpx
@@ -524,3 +525,118 @@ async def sandbox_verdict(session_id: str) -> dict:
                            f"{(row['commit_sha'] or '')[:10]}")}
     return {"state": row["sandbox_status"], "detail": row["sandbox_detail"],
             "at": row["sandbox_at"].isoformat() if row["sandbox_at"] else None}
+
+
+# --- a second model reads it ------------------------------------------------
+
+#: How much diff the reviewer is shown. A change this large is not reviewable
+#: in one pass by anyone, and truncating silently would produce a confident
+#: verdict on half a patch — so it is REPORTED as unreviewable instead.
+_REVIEW_MAX_PATCH = 60_000
+
+
+def _coder_model() -> str:
+    """What model wrote the code, as the compose file configures it."""
+    return (os.environ.get("CODER_MODEL")
+            or "anthropic/claude-sonnet-4.6").strip()
+
+
+async def review(session_id: str) -> dict:
+    """Have a DIFFERENT model read the diff against the task it claims to do.
+
+    Step 11, and the last judgment in the loop that was still resting on the
+    model that wrote the code. Everything else is mechanical by now — the
+    sandbox builds it, boots it against his real data and runs both suites —
+    and all of that answers "does it work". None of it answers "does it do
+    what was asked", and a change can be green on every gate while
+    implementing the wrong thing.
+
+    REFUSES WHEN THE MODELS MATCH. A model grading its own work is the same
+    judgment twice with more words, and the failure mode is that it reads
+    like a second opinion. Asserted from live config rather than assumed, so
+    setting CODER_MODEL to the reviewer's model stops the step instead of
+    quietly degrading it.
+
+    Lives here and NOT in `actions/`: that package forbids an LLM client at
+    any depth, enforced by an AST walk, because approving a card must not run
+    a model. Review is something she or the operator asks for BEFORE the card
+    is approved — the card then only checks the recorded verdict.
+    """
+    from app.agents import registry as agent_registry
+    from app.agents import runner as agent_runner
+
+    got = await patch(session_id)
+    if got.get("status") != "ok":
+        return {"status": "error", "detail": got.get("detail")}
+    commit = got.get("commit") or ""
+    diff = got.get("patch") or ""
+
+    reviewer = await agent_registry.get_agent_by_name("reviewer")
+    if not reviewer:
+        return {"status": "error",
+                "detail": "no `reviewer` agent — migration 103 creates it"}
+    r_model = (reviewer.get("model") or "").strip()
+    c_model = _coder_model()
+    # Compare the MODEL, not the provider prefix: `openrouter:z-ai/glm-5.2`
+    # and `z-ai/glm-5.2` are the same judgment reached twice.
+    if r_model.split(":", 1)[-1] == c_model.split(":", 1)[-1]:
+        return {"status": "error",
+                "detail": (f"the reviewer and the coding agent are both "
+                           f"{r_model} — a model grading its own work is not "
+                           f"a review. Point CODER_MODEL or the reviewer "
+                           f"agent at a different model.")}
+
+    if len(diff) > _REVIEW_MAX_PATCH:
+        detail = (f"the diff is {len(diff):,} bytes, past the "
+                  f"{_REVIEW_MAX_PATCH:,} a single review pass can honestly "
+                  f"cover. Split the change.")
+        await _store_review(session_id, "concerns", commit, detail, r_model)
+        return {"status": "concerns", "commit": commit, "detail": detail}
+
+    prompt = (f"TASK\n{got.get('task') or '(not recorded)'}\n\n"
+              f"DIFF\n```diff\n{diff}\n```")
+    text = ""
+    async for ev in agent_runner.run_agent(reviewer, [{"role": "user",
+                                                       "content": prompt}],
+                                           dispatch_depth=1):
+        if ev.get("type") == "final":
+            text = ev.get("text") or ""
+
+    body = text.strip()
+    # FAILS CLOSED. An unparseable verdict is a concern, never a pass: the
+    # whole point is that nothing lands unread, and "the reviewer said
+    # something I could not interpret" is indistinguishable from unread.
+    verdict = "pass" if re.search(r"^\s*VERDICT:\s*PASS\b", body,
+                                  re.I | re.M) else "concerns"
+    await _store_review(session_id, verdict, commit, body[:4000], r_model)
+    log.info("review %s: %s (%s)", session_id, verdict, r_model)
+    return {"status": verdict, "commit": commit, "model": r_model,
+            "detail": body[:4000]}
+
+
+async def _store_review(session_id, status, commit, detail, model) -> None:
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE coding_sessions SET review_status = $2, review_commit = $3,"
+            " review_detail = $4, review_model = $5, review_at = now(), "
+            "updated_at = now() WHERE id = $1::uuid",
+            session_id, status, commit, detail, model)
+
+
+async def review_verdict(session_id: str) -> dict:
+    """The recorded review, and whether it still applies to this commit."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT commit_sha, review_status, review_commit, review_detail, "
+            "review_model FROM coding_sessions WHERE id = $1::uuid", session_id)
+    if row is None:
+        return {"state": "unknown", "detail": "no such session"}
+    if not row["review_status"]:
+        return {"state": "never", "detail": "no second model has read this yet"}
+    if row["review_commit"] != row["commit_sha"]:
+        return {"state": "stale",
+                "detail": (f"reviewed {(row['review_commit'] or '')[:10]}, "
+                           f"session is now at "
+                           f"{(row['commit_sha'] or '')[:10]}")}
+    return {"state": row["review_status"], "detail": row["review_detail"],
+            "model": row["review_model"]}

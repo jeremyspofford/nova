@@ -1571,6 +1571,24 @@ async def _answer_task(args, ctx):
     return _j(out)
 
 
+async def _review_code(args, ctx):
+    """Have a different model read a finished change against its task.
+
+    The sandbox proves it WORKS. This asks whether it does what was asked —
+    the one judgment the gates cannot make. Refuses if the reviewer and the
+    coding agent resolve to the same model, because that is the same opinion
+    twice.
+    """
+    from app import coder
+    session_id = str(args.get("session_id") or "").strip()
+    if not session_id:
+        return "Error: session_id is required."
+    out = await coder.review(session_id)
+    if out.get("status") == "error":
+        return f"Error: {out.get('detail')}"
+    return _j(out)
+
+
 async def _sandbox_check(args, ctx):
     """Build and boot a finished coding session in a stack of its own.
 
@@ -2828,6 +2846,21 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "description": "what the operator said, in his own words"},
         }, "required": ["run_id", "answer"]},
         "execute": _answer_task,
+    },
+    "review_code": {
+        "name": "review_code",
+        "description": (
+            "Have a SECOND model read a finished coding session's diff against "
+            "the task it was meant to implement, and say whether it does. The "
+            "sandbox proves the change works; this is the only thing that asks "
+            "whether it is the right change. Landing refuses anything not "
+            "reviewed, and a review of an older commit does not count. Expect "
+            "a verdict of pass or concerns, with findings."),
+        "parameters": {"type": "object", "properties": {
+            "session_id": {"type": "string",
+                           "description": "the coding session to review"},
+        }, "required": ["session_id"]},
+        "execute": _review_code,
     },
     "sandbox_check": {
         "name": "sandbox_check",
