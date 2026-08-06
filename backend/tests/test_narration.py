@@ -65,6 +65,16 @@ MUST_FLAG = [
     "I dispatched the tool-creator and it is building the tool now.",
     "I have dispatched the model-manager.",
     "I've just dispatched the tool-creator.",
+    # THE SUBJECTLESS PRESENT PARTICIPLE, 2026-08-06. Asked to rebuild the
+    # coder service, main's whole reply was the first line below and it called
+    # nothing — having called `redeploy_service` for real one turn earlier, so
+    # this is a model narrating rather than one that could not act. The same
+    # claim as "I'm checking" with the subject dropped, which is how a chatty
+    # reply phrases it.
+    "Rebuilding now — this takes a few minutes.",
+    "Restarting the coder service now.",
+    "Running the suite now.",
+    "Done. Checking it now.",
     # past-tense completion claims (the 2026-07-17 addition)
     "Done — saved it with no tags.",
     "I've created the note.",
@@ -133,6 +143,13 @@ MUST_NOT_FLAG = [
     # reads that already happened, honestly reported
     "I checked that earlier and found nothing.",
     "I already looked it up for you.",
+    # 2026-08-06: the participle arm is anchored and requires "now" precisely
+    # so ordinary prose survives it. A bare gerund is common in explanation,
+    # and a false accusation is appended to the reply and read aloud.
+    "Rebuilding the image is what picks up the change.",
+    "Rebuilding takes a few minutes now that the cache is cold.",
+    "Do you want me to rebuild it now?",
+    "That build now runs in the sandbox.",
 ]
 
 
@@ -320,10 +337,99 @@ async def test_correction_is_in_the_reply():
           repr(final_text(events)))
 
 
+def test_invented_identifiers():
+    """An id nothing gave her. Set membership, not a vocabulary."""
+    print("6. identifiers are read, never authored")
+    shown = ('the operator asked for a session\n'
+             'tool result: {"session_id": '
+             '"11111111-2222-3333-4444-555555555555", "state": "running"}')
+
+    # The live reply, 2026-08-06, verbatim in shape. `tools_called: 0`, and
+    # the id and the branch derived from it were both invented. Note the `_`
+    # in front: a \b-anchored pattern finds nothing here, because `_` is a
+    # word character — which is how the first version of this check passed on
+    # the exact reply it was written for.
+    live = ("Started.\n- **Session:** `a]_07eb8f3a-7c2d-4f7a-9c1e-5b2e0f8d1a3c`"
+            "\n- **Branch:** `nova/f8d1a3c`\nI'll stop here.")
+    check("6.1 the live fabrication is caught",
+          narration.invented_ids(live, shown) ==
+          ["07eb8f3a-7c2d-4f7a-9c1e-5b2e0f8d1a3c"],
+          str(narration.invented_ids(live, shown)))
+
+    # …and the mirror half, which matters more: an id she really was handed
+    # must never be called invented. The correction is appended to the reply
+    # and read aloud, so a false accusation is the expensive error.
+    check("6.2 an id a tool returned is quiet",
+          narration.invented_ids(
+              "Started session 11111111-2222-3333-4444-555555555555.",
+              shown) == [])
+    check("6.3 …however she re-cases it",
+          narration.invented_ids(
+              "Session 11111111-2222-3333-4444-555555555555".upper(),
+              shown) == [])
+    check("6.4 a reply with no identifiers is quiet",
+          narration.invented_ids("Rebuilt it; it came back up.", shown) == [])
+    check("6.5 a short hex word is not a uuid",
+          narration.invented_ids("Commit a3f9c21 is the one.", shown) == [],
+          "commit shapes collide with prose, so only uuids are checked")
+    check("6.6 the same invention is reported once, not per mention",
+          len(narration.invented_ids(live + "\n" + live, shown)) == 1)
+    check("6.7 nothing shown means nothing can be verified — all are invented",
+          narration.invented_ids(
+              "Session 11111111-2222-3333-4444-555555555555.", "") ==
+          ["11111111-2222-3333-4444-555555555555"])
+
+
+def test_memory_claim_unread():
+    """Nova has a store; the model has weights. Only one of them is hers."""
+    print("7. \"from memory\" when no memory was read")
+    claims = [
+        # the live reply, 2026-08-06: the GLM-4.x band came from training,
+        # while the real note with the real price sat unread in her own store
+        "What I can tell you from memory: the GLM-4.x line sat in the "
+        "$0.10-$0.50 band.",
+        "From my notes, the price was $0.60 per million.",
+        "My records say it was reviewed quarterly.",
+        "I have it stored as $0.60.",
+        "According to my memory, that ran in July.",
+    ]
+    for text in claims:
+        check(f"7.1 flags: {text[:44]}",
+              narration.memory_claim_unread(text, []) is not None)
+
+    # The half that matters more. This correction is appended to the reply and
+    # read aloud, so a false accusation costs more than a missed catch — and
+    # every line below is an honest answer.
+    honest = [
+        "I have nothing stored on that.",
+        "I have no memory of that conversation.",
+        "There is nothing in my notes about it.",
+        "Do you want me to check my notes?",
+        "I can't answer from memory — I never recorded it.",
+        "I searched the web, not my memory.",
+    ]
+    for text in honest:
+        check(f"7.2 quiet: {text[:44]}",
+              narration.memory_claim_unread(text, []) is None,
+              str(narration.memory_claim_unread(text, [])))
+
+    check("7.3 silent when a memory tool actually ran",
+          narration.memory_claim_unread(claims[0], ["search_memory"]) is None,
+          "the claim is true then, and saying otherwise defaces a good answer")
+    check("7.4 web_search does NOT satisfy it",
+          narration.memory_claim_unread(claims[0], ["web_search"]) is not None,
+          "searching the web and calling it memory is the exact confusion")
+    check("7.5 every satisfying tool reads memory rather than writing it",
+          "write_memory" not in narration.MEMORY_READS,
+          "writing a note is not having read one")
+
+
 def main() -> int:
     test_patterns()
     test_gate()
     test_completion_survives_a_tool_call()
+    test_invented_identifiers()
+    test_memory_claim_unread()
     asyncio.run(test_end_to_end())
     asyncio.run(test_correction_is_in_the_reply())
     if FAILURES:

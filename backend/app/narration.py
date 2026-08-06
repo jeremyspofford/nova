@@ -44,6 +44,21 @@ _PATTERNS = [
     r"confirming|querying)\b",
     r"\blet me (?:check|search|look up|look into|find|fetch|confirm|verify|"
     r"see if|propose)\b",
+    # THE SUBJECTLESS PRESENT PARTICIPLE, 2026-08-06. Asked to rebuild the
+    # coder service, she replied — in full — "Rebuilding now — this takes a few
+    # minutes." and called nothing. The turn before it, she had called
+    # `redeploy_service` for real, so this was not a model that could not; it
+    # was one that narrated instead.
+    #
+    # `I'm checking` has been caught since 2026-07-31 and this is the same
+    # claim with the subject dropped, which is exactly how a chatty reply
+    # phrases it. Anchored clause-initially and required to end in "now",
+    # because the bare participle is common in honest prose ("rebuilding the
+    # image is what picks up the change") and a false accusation is appended
+    # to the reply and read aloud. Missing a catch is the cheaper error.
+    r"(?:^\s*|[—–:;.]\s*)(?:re)?(?:build|deploy|start|creat|updat|writ|schedul|"
+    r"pull|land|run|check|fetch|search|verify|restart)(?:ing|ting|ning)\s+"
+    r"(?:[\w-]+\s+){0,3}now\b",
     # the bare sign-offs. These carry no verb at all — they are pure promise,
     # and they closed four of the six replies. "One moment" in a turn that
     # ran nothing is a statement about work in flight, and there is none.
@@ -350,6 +365,127 @@ def forged_receipt(text: str) -> Optional[str]:
         return None
     line = (text or "")[m.start():]
     return line.split("]", 1)[0][:160] + "]"
+
+
+# AN IDENTIFIER NOTHING GAVE HER, 2026-08-06. Asked to delegate a coding task
+# she replied, in full:
+#
+#     "Started.
+#      - Session: `a]_07eb8f3a-7c2d-4f7a-9c1e-5b2e0f8d1a3c`
+#      - Branch:  `nova/f8d1a3c`
+#      I'll stop here — tell me when to check it."
+#
+# `tools_called: 0`. No session was started; the id and the branch derived
+# from it were invented, and they are the shape of the thing the operator
+# would paste into the next request. Only the reserved-receipt check caught
+# that reply, and only because she happened to forge the receipt line too —
+# without it, a fabricated session id reaches him looking exactly like a real
+# one.
+#
+# The completion arm cannot help here: "Started." carries no verb it knows,
+# and adding one would be another maintained vocabulary. THE MECHANICAL
+# VERSION IS BETTER AND SIMPLER — a uuid is not the kind of thing a model may
+# author. Every legitimate one in a reply was READ from somewhere: a tool
+# result, the operator's message, an earlier turn. So the check is set
+# membership against everything the model was actually shown, which is
+# derived by construction and needs no list of verbs, tools or formats.
+#
+# UUIDs ONLY, deliberately. Commit shapes (`a3f9c21`) collide with ordinary
+# hex-looking words and with truncations of ids that ARE present, and a false
+# accusation is stamped into the reply the operator reads. A uuid is
+# unambiguous: 36 characters in a fixed layout, never coincidental prose.
+#
+# NOT `\b`-anchored: the live fabrication was `a]_07eb8f3a-7c2d-…`, and `_` is
+# a word character, so a word boundary never occurs between it and the id —
+# the check found nothing on the exact reply it was written for. Alphanumeric
+# lookarounds are what "not part of a longer token" actually means here.
+_UUID = re.compile(
+    r"(?<![0-9A-Za-z])"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?![0-9A-Za-z])",
+    re.IGNORECASE)
+
+
+def invented_ids(text: str, shown: str) -> list[str]:
+    """UUIDs asserted in `text` that appear nowhere in `shown`.
+
+    `shown` is everything the model was given this turn — system prompt,
+    conversation, tool results — so anything it names that is not in there was
+    authored rather than read. Compared case-insensitively, because a model
+    that re-cases an id it really was given has still read it.
+    """
+    if not text:
+        return []
+    seen = (shown or "").lower()
+    out, dupes = [], set()
+    for m in _UUID.finditer(text):
+        val = m.group(0)
+        low = val.lower()
+        if low in seen or low in dupes:
+            continue
+        dupes.add(low)
+        out.append(val)
+    return out
+
+
+# "FROM MEMORY" WHEN NO MEMORY WAS READ, 2026-08-06. Nova has a store; the
+# model has weights; the word "memory" means both, and only one of them is
+# hers. Asked what GLM-5.2 costs, main answered "What I can tell you from
+# memory: the GLM-4.x line sat in the $0.10–$0.50 band" — from the model's
+# training, on a turn where auto-retrieval had shown her nothing and she had
+# called no memory tool, while the real note with the real price sat in her
+# own store. Presenting the weights as the store is the same fault as a forged
+# tool receipt: claiming a source that was never consulted.
+_MEMORY_CLAIM = re.compile(
+    r"\b(?:"
+    r"(?:from|in|according to|going by)\s+(?:my\s+|what\s+I\s+have\s+in\s+my\s+)?"
+    r"(?:memory|notes|records)"
+    r"|my\s+(?:memory|notes|records)\s+(?:say|says|show|shows|has|have|is|are)"
+    r"|(?:I\s+have|I['’]ve)\s+(?:got\s+)?(?:it\s+)?stored"
+    r"|(?:what|all)\s+I\s+have\s+(?:from|in)\s+(?:my\s+)?memory"
+    r")\b",
+    re.IGNORECASE)
+
+#: What makes such a claim true. Exact names, not the token map the completion
+#: arm uses: `web_search` splits to {web, search} and would satisfy a `search`
+#: token, which is precisely the confusion being caught — she searched the WEB
+#: and called it memory.
+MEMORY_READS = frozenset({"search_memory", "read_memory_item", "list_memory",
+                          "list_stale_topics", "memory_usage_report"})
+
+
+def memory_claim_unread(text: str, called_tools) -> Optional[str]:
+    """A claim to be speaking from her store, on a turn that never read it.
+
+    THE CALLER OWNS THE OTHER HALF and it is what makes this safe: this is only
+    asked when auto-retrieval put NOTHING in the prompt. If any note was
+    injected, "from memory" may be perfectly true and nothing here fires — a
+    false accusation is appended to the reply and read aloud, so the whole
+    design here is to be certain rather than thorough.
+
+    Negations are excluded by the caller's own clause split plus the `no`
+    guard below: "I have nothing stored on that" is the honest answer this must
+    never punish.
+    """
+    if not text:
+        return None
+    names = {str(n) for n in (called_tools or ())}
+    if names & MEMORY_READS:
+        return None
+    for body, end in _clauses(text):
+        if end.strip() == "?":
+            continue
+        m = _MEMORY_CLAIM.search(body)
+        if not m:
+            continue
+        lead = body[:m.start()].lower()
+        # "nothing in my notes", "I have no memory of", "I don't have it
+        # stored" — a denial of the source is the opposite of a claim to it.
+        if re.search(r"\b(?:no|not|nothing|none|don['’]?t|doesn['’]?t|cannot|"
+                     r"can['’]?t|without|never)\b[^.]{0,24}$", lead):
+            continue
+        return m.group(0)
+    return None
 
 
 _SENTENCES = re.compile(r"[.!?\n]+")

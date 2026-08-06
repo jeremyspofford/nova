@@ -506,6 +506,26 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         results = self._collapse_to_summaries(results)[:top_k]
         lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
+        # HOW MANY NOTES THE TRUST FILTER TOOK AWAY. Nothing used to say, and
+        # the consequence is measurable: main is an actor-holder, so a stored
+        # note with a source_url is invisible to it here, and asked "what is
+        # GLM-5.2 costing right now" it answered from the model's own weights
+        # while calling that "memory" — with the real note, price and date, in
+        # its own store the whole time. It had no way to know the note existed
+        # and no reason to reach for `search_memory`.
+        #
+        # A COUNT, and deliberately nothing else. Titles and snippets are the
+        # third-party text this filter exists to keep out of the prompt, so
+        # naming them would reopen the channel to say it is closed. A number is
+        # a fact about her own store that carries none of its content.
+        suppressed = 0
+        if origins is not None:
+            unfiltered = self.index.search(
+                query, type_filter={"topic", "journal", "source"},
+                top_k=top_k * 2)
+            kept = {i for i, _ in results}
+            suppressed = len({i for i, _ in self._collapse_to_summaries(
+                unfiltered)[:top_k]} - kept)
         # The origin mix of what was actually RETRIEVED — not of the corpus.
         # Phase 2 turns `untrusted` into a refusal at execute_tool; phase 1
         # only has to make it true and available.
@@ -517,6 +537,7 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             "total_tokens": len(text.split()),
             "memory_ids": ids,
             "origins": origins,
+            "suppressed": suppressed,
             "untrusted": any(provenance.blocks_actors(o) for o in origins),
         }
 
