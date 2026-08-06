@@ -2244,9 +2244,19 @@ async def _raise_recommendation(args, ctx):
 
 
 async def _notify_operator(args, ctx):
-    """Push a notification to the operator's device via ntfy — the way to reach
-    them when the app is closed. Honest about outcome: reports SERVER acceptance
-    (with ntfy's message id), never phone delivery."""
+    """Push a notification to the operator's device — the way to reach them
+    when the app is closed. Honest about outcome: reports SERVER acceptance
+    (with the provider's message id), never phone delivery.
+
+    NAMES THE PROVIDER THAT ACTUALLY SENT IT, read from the result. This text
+    used to say "ntfy" unconditionally, so on an install whose active provider
+    is Web Push the tool handed the model a false fact and the model repeated
+    it: asked to verify the notification path, Nova checked ntfy's health, sent
+    through here, and reported "accepted by the ntfy server, published to 2/2
+    devices" — while the push that arrived came from the PWA. Jeremy caught it
+    because he could see which app buzzed. A hardcoded name in a tool result is
+    a lie the model cannot detect.
+    """
     from app import notify
     message = (args.get("message") or "").strip()
     if not message:
@@ -2261,10 +2271,12 @@ async def _notify_operator(args, ctx):
                    "note": ("The notification did NOT go out. Tell the operator "
                             "plainly (they may need to enable/configure "
                             "notifications in Settings).")})
-    return _j({"status": "accepted", "id": result.get("id"),
-               "note": ("Accepted by the ntfy server — this confirms it was "
-                        "PUBLISHED, not that it reached the operator's device. "
-                        "Say you sent it; don't claim they've seen it.")})
+    via = result.get("provider") or "the notification provider"
+    return _j({"status": "accepted", "id": result.get("id"), "provider": via,
+               "note": (f"Accepted by {via} — this confirms it was PUBLISHED, "
+                        f"not that it reached the operator's device. Say you "
+                        f"sent it and name {via} if you name anything; don't "
+                        f"claim they have seen it.")})
 
 
 async def _manage_rules(args, ctx):

@@ -129,6 +129,18 @@ async def pending_for(verb: str, agent_name: Optional[str] = None) -> Optional[d
                                WHERE a.activated_at IS NOT NULL
                                  AND a.activated_at > g.created_at
                                  AND a.approved_verbs && g.approved_verbs)""")
+        # AND THE CARD GOES WITH THE GOAL. A retired goal whose consent stayed
+        # `pending` leaves an Approve button in his chat for something that no
+        # longer exists — and clicking it would do NOTHING, because
+        # `consents.decide` calls `goals.activate`, which refuses anything that
+        # is not proposed or paused. A button that silently does nothing is the
+        # exact shape this codebase keeps deleting. Measured 2026-08-06: he
+        # approved one of two duplicate cards and the other stayed on screen.
+        await conn.execute(
+            """UPDATE consents SET status = 'expired'
+                WHERE status = 'pending' AND kind = 'goal.activate'
+                  AND subject IN (SELECT id::text FROM goals
+                                   WHERE status IN ('abandoned', 'done'))""")
         # KEYED ON THE VERB ALONE. It used to also match `proposed_by`, so one
         # refusal arriving without an agent name and another as `main` raised
         # TWO cards for the same question, seconds apart — measured
