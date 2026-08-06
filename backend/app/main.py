@@ -126,6 +126,15 @@ async def lifespan(app: FastAPI):
     # elsewhere and there is no heartbeat window to wait out.
     from app import action_worker
     await action_worker.reset_orphans()
+    # DID SOMETHING REDEPLOY US WHILE WE WERE GONE? A backend redeploy kills
+    # the turn that asked for it, so the verdict is parked in the sidecar —
+    # the one process that does not restart — and read exactly once by
+    # whoever asks first. Without this, the single capability she has that
+    # ends her own turn would be the one that never reports its outcome.
+    # Backgrounded: it is an HTTP call to a sidecar that may be absent, and a
+    # boot must not wait on it.
+    from app.tools import builtin as _builtin
+    bg.spawn(_builtin.report_pending_redeploy(), name="redeploy-report")
     # Size the local models' context windows before anything trims against
     # them. Backgrounded: it is metadata probes against ollama, which may be
     # absent or slow, and a boot must not wait on it.

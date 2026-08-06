@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,6 +63,10 @@ PROJECT = os.environ.get("COMPOSE_PROJECT", "nova")
 # compose file resolve to the operator's real directories rather than to
 # paths inside this container. See _compose_cmd.
 HOST_ROOT = os.environ.get("NOVA_HOST_ROOT", "").strip()
+# THIS container's view of the same repo (`.:/repo:ro`), which is what a build
+# context has to be packaged from. See `_redeploy` for why the two cannot be
+# one value.
+REPO_ROOT = os.environ.get("NOVA_REPO_ROOT", "/repo").strip()
 SERVICE = "ollama"                       # the toggle target (start/stop)
 OLLAMA_TARGET = "/root/.ollama"          # where ollama keeps its store
 PORT = 9911
@@ -124,6 +129,29 @@ def _compose_env() -> dict:
     return {**os.environ, "NOVA_MODELS_DIR": _models_dir()}
 
 
+def _env_file_args() -> list:
+    """`--env-file`, pointing at the copy THIS container can read.
+
+    Compose loads `.env` from `--project-directory`, and that directory is a
+    HOST path that does not exist in here — so every `${VAR}` in the compose
+    file interpolated to empty and compose said nothing, because a missing
+    `.env` is not an error to it.
+
+    MEASURED 2026-08-06, on the first real use of `/service/redeploy`: the
+    coder sidecar was rebuilt and came back with `NOVA_CODER_TOKEN` unset, so
+    the broker refused every request — "a token that defaults to off is not a
+    control" working exactly as designed, against a container that had simply
+    been recreated with its configuration silently removed. The ollama toggle
+    has had the same defect since `--project-directory` was introduced; it went
+    unnoticed only because that service block interpolates almost nothing.
+
+    The repo is mounted read-only at `/repo`, so this file exists precisely
+    when the operator's does, and passing it is the whole fix.
+    """
+    path = os.path.join(REPO_ROOT, ".env")
+    return ["--env-file", path] if os.path.exists(path) else []
+
+
 def _compose_cmd(profile: str = "inference") -> list:
     # --project-directory, and it is load-bearing. Compose resolves RELATIVE
     # bind mounts against the compose file's directory, which here is
@@ -140,6 +168,7 @@ def _compose_cmd(profile: str = "inference") -> list:
     cmd = ["docker", "compose"]
     if HOST_ROOT:
         cmd += ["--project-directory", HOST_ROOT]
+    cmd += _env_file_args()
     cmd += ["-f", COMPOSE_FILE]
     if _use_gpu_file():
         cmd += ["-f", GPU_COMPOSE_FILE]
@@ -165,6 +194,24 @@ _op: dict = {"verb": None, "error": None}
 # caller that waits ten minutes for a slot has no way to tell that from a
 # hang — being told "one is already running" is actionable.
 _sandbox_lock = threading.Lock()
+
+#: Same argument, different resource: two `compose up` runs against the same
+#: project race, and the loser reports a state the winner has already replaced.
+_redeploy_lock = threading.Lock()
+
+#: The outcome of the last DETACHED redeploy, held until somebody reads it.
+#:
+#: The backend cannot redeploy itself synchronously — recreating it kills the
+#: process that would report what happened, and this repo's oldest rule is that
+#: a step which cannot verify its own result must not claim one. So the answer
+#: outlives the caller HERE, in the process that does not restart, and whoever
+#: asks next takes it: the backend after it comes back, or the same backend
+#: still running because the build failed and it was never brought down.
+#:
+#: READ-AND-CLEAR, so exactly one reader gets it. Two notifications for one
+#: redeploy is a small lie about how many things happened.
+_last_detached: dict | None = None
+_detached_lock = threading.Lock()
 
 
 def _container_state(service: str = SERVICE) -> dict:
@@ -381,6 +428,239 @@ def _service_names() -> set[str]:
          "--format", '{{.Label "com.docker.compose.service"}}'],
         capture_output=True, text=True, timeout=10)
     return {s.strip() for s in proc.stdout.splitlines() if s.strip()}
+
+
+def _self_service() -> str:
+    """This sidecar's own compose service, from docker's own labels.
+
+    DERIVED, not written down. It is the one name `/service/redeploy` must
+    refuse, and a rename in docker-compose.yml must not silently disarm that
+    — a hardcoded string would keep matching nothing and the endpoint would
+    happily recreate the container serving the request.
+
+    An empty answer fails the endpoint CLOSED: not knowing which service is
+    us is exactly the state in which redeploying anything is unsafe.
+    """
+    cid = os.environ.get("HOSTNAME", "").strip()
+    if not cid:
+        return ""
+    proc = subprocess.run(
+        ["docker", "inspect", "--format",
+         '{{index .Config.Labels "com.docker.compose.service"}}', cid],
+        capture_output=True, text=True, timeout=10)
+    return proc.stdout.strip()
+
+
+def _all_profiles() -> set[str]:
+    """Every profile named in the compose file, so any service is addressable.
+
+    Derived by reading the file this sidecar already mounts. `_compose_cmd`
+    enables only `inference`, which is right for the ollama toggle and wrong
+    here: `coder`, `voice` and the rest would be invisible, and a redeploy
+    that cannot see a service reports "unknown service" for one that is
+    plainly running.
+    """
+    try:
+        text = open(COMPOSE_FILE).read()
+    except OSError:
+        return set()
+    out: set[str] = set()
+    for m in re.finditer(r"^\s*profiles:\s*\[([^\]]*)\]", text, re.M):
+        out |= {p.strip().strip("\"'") for p in m.group(1).split(",")
+                if p.strip()}
+    return out
+
+
+def _builds(cmd: list, service: str) -> bool:
+    """Does this service build from source, or is it a pulled image?
+
+    Asked rather than assumed, because `docker compose build postgres` is an
+    error and swallowing it would be the fallback-that-reads-as-success this
+    file keeps having to remove.
+    """
+    proc = subprocess.run(cmd + ["config", "--format", "json"],
+                          capture_output=True, text=True, timeout=120,
+                          env=_compose_env())
+    try:
+        conf = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool((conf.get("services") or {}).get(service, {}).get("build"))
+
+
+def _redeploy(service: str) -> dict:
+    """Rebuild ONE service of this project from source and bring it back up.
+
+    THE STEP BETWEEN "her code landed" AND "her code is running". The
+    self-improvement loop could write a change, boot it in a sandbox, have a
+    second model read it and put it on a branch in his repo — and then stopped,
+    because nothing she holds could make the running stack pick it up. Every
+    change she made reached production by Jeremy typing `docker compose build`,
+    which is the capability gap wearing a shipped feature as a disguise.
+
+    PARAMETERIZED, on a socket-holding sidecar, which this file argues against
+    everywhere else. The argument for the exception is the same one
+    `_service_logs` makes and it has to be as strong, because this one WRITES:
+
+      * the name is checked against the project's own container labels before
+        it reaches a subprocess, so an unknown value is an error and never an
+        argument;
+      * `--no-deps` keeps the blast radius to the service named — a redeploy
+        of `web` must not recreate postgres underneath a running backend;
+      * this sidecar refuses ITSELF, derived from its own labels, because a
+        process cannot report the outcome of its own recreation;
+      * `up -d`, never `restart`: restart does not re-read `.env`, so a
+        redeploy that appeared to work would run the old configuration.
+
+    Synchronous, like `/sandbox/`: the answer is "is it up on the new image",
+    which is not knowable at request time, and a caller polling a status flag
+    would learn less than one that waits.
+    """
+    me = _self_service()
+    if not me:
+        return {"error": ("this sidecar cannot identify its own container, so "
+                          "it cannot tell whether you are asking it to "
+                          "recreate itself. Refusing every redeploy until it "
+                          "can.")}
+    if service == me:
+        return {"error": (f"{service} is this sidecar. Recreating it would "
+                          f"kill the process handling this request, and a "
+                          f"redeploy that cannot report its own outcome is "
+                          f"worse than one that did not happen. Ask the "
+                          f"operator to run it.")}
+    known = _service_names()
+    if service not in known:
+        return {"error": (f"no service {service!r} in this project. Only "
+                          f"something already deployed can be redeployed."),
+                "known": sorted(known)}
+
+    # BUILD AND RUN NEED DIFFERENT VIEWS OF THE SAME DIRECTORY — the same trap
+    # `_sandbox` documents at length, hit again here on the first live call.
+    # A build CONTEXT is packaged by the compose client and streamed to the
+    # daemon, so `./coder` has to resolve to a path THIS container can read
+    # (`/repo/coder`). A bind MOUNT is created by the daemon on the host, so it
+    # has to resolve to the host's path. One `--project-directory` cannot be
+    # both, and pointed at the host the build fails with "path not found" for
+    # a directory that plainly exists.
+    def _base(project_dir: str) -> list:
+        cmd = ["docker", "compose"]
+        if project_dir:
+            cmd += ["--project-directory", project_dir]
+        # Without this the recreated container comes back with every `${VAR}`
+        # in its block empty — see `_env_file_args`, which this endpoint is
+        # what discovered.
+        cmd += _env_file_args()
+        cmd += ["-f", COMPOSE_FILE]
+        if _use_gpu_file():
+            cmd += ["-f", GPU_COMPOSE_FILE]
+        if _use_models_file():
+            cmd += ["-f", MODELS_COMPOSE_FILE]
+        # Every profile the compose file names, so a service under `coder` or
+        # `voice` is addressable at all. Derived by reading the file rather
+        # than listed, so a profile added tomorrow works tomorrow.
+        for p in sorted(_all_profiles()):
+            cmd += ["--profile", p]
+        return cmd
+
+    build_cmd = _base(REPO_ROOT)
+    up_cmd = _base(HOST_ROOT)
+
+    steps: list[dict] = []
+
+    def run(name, cmd, args, timeout):
+        p = subprocess.run(cmd + args, capture_output=True, text=True,
+                           timeout=timeout, env=_compose_env())
+        so, se = (p.stdout or "").strip(), (p.stderr or "").strip()
+        steps.append({"step": name, "ok": p.returncode == 0,
+                      "output": (se or so)[-1200:]})
+        return p.returncode == 0
+
+    try:
+        if _builds(build_cmd, service):
+            if not run("build", build_cmd, ["build", service], 3600):
+                return {"status": "failed", "stage": "build", "steps": steps}
+        else:
+            steps.append({"step": "build", "ok": True,
+                          "output": "pulled image, nothing to build"})
+        if not run("up", up_cmd, ["up", "-d", "--no-deps", service], 900):
+            return {"status": "failed", "stage": "up", "steps": steps}
+    except subprocess.TimeoutExpired as e:
+        return {"status": "failed", "stage": "timeout",
+                "steps": steps + [{"step": "timeout", "ok": False,
+                                   "output": str(e)[:300]}]}
+
+    # AND THEN CHECK IT CAME UP. `docker compose up -d` returns as soon as it
+    # has asked, not when the container is serving — this repo has already
+    # logged "git daemon serving" for a binary that had died and reported
+    # "import ok" for a load that never happened. A container that exits three
+    # seconds later must not be reported as a successful redeploy.
+    deadline = time.time() + 120
+    state = _container_state(service)
+    while time.time() < deadline:
+        state = _container_state(service)
+        if state.get("running"):
+            health = _service_health(service)
+            if health in (None, "healthy"):
+                break
+            if health == "unhealthy":
+                break
+        time.sleep(3)
+    health = _service_health(service)
+    ok = bool(state.get("running")) and health != "unhealthy"
+    return {"status": "ok" if ok else "failed",
+            "stage": "complete" if ok else "verify",
+            "service": service, "state": state.get("state"),
+            "health": health, "steps": steps,
+            "detail": (f"{service} is {state.get('state')}"
+                       + (f" ({health})" if health else "")
+                       + ("" if ok else " — it did not come back up"))}
+
+
+def _redeploy_detached(service: str) -> None:
+    """Run a redeploy on a thread and park the verdict for whoever asks.
+
+    The lock is taken HERE rather than by the caller: the caller has already
+    returned 202 by the time this starts, so a second request must be refused
+    against the work actually in flight.
+    """
+    global _last_detached
+    if not _redeploy_lock.acquire(blocking=False):
+        with _detached_lock:
+            _last_detached = {"service": service, "status": "failed",
+                              "detail": ("a redeploy was already in progress, "
+                                         "so this one never started")}
+        return
+    try:
+        out = _redeploy(service)
+    except Exception as e:                           # noqa: BLE001
+        log.exception("detached redeploy of %s crashed", service)
+        out = {"status": "failed", "stage": "crashed", "detail": str(e)[:300]}
+    finally:
+        _redeploy_lock.release()
+    failing = next((s for s in (out.get("steps") or []) if not s.get("ok")), {})
+    with _detached_lock:
+        _last_detached = {
+            "service": service,
+            "status": out.get("status") or ("failed" if out.get("error") else "ok"),
+            "stage": out.get("stage"),
+            "state": out.get("state"),
+            "health": out.get("health"),
+            "detail": (out.get("detail") or out.get("error")
+                       or (failing.get("output") or "")[-600:]),
+        }
+    log.info("detached redeploy of %s finished: %s", service, out.get("status"))
+
+
+def _service_health(service: str) -> str | None:
+    """The healthcheck verdict for one service, or None if it declares none."""
+    proc = subprocess.run(
+        ["docker", "ps", "-a",
+         "--filter", f"label=com.docker.compose.project={PROJECT}",
+         "--filter", f"label=com.docker.compose.service={service}",
+         "--format", "{{.Status}}"],
+        capture_output=True, text=True, timeout=10)
+    lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
+    return _health(lines[0]) if lines else None
 
 
 def _service_logs(service: str, lines: int = 80) -> dict:
@@ -1256,6 +1536,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _containers())
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
+        if self.path == "/service/redeploy/last":
+            # READ AND CLEAR. Exactly one reader gets each verdict, so a
+            # backend that restarts twice cannot report one redeploy twice.
+            global _last_detached
+            with _detached_lock:
+                out, _last_detached = _last_detached, None
+            return self._send(200, out or {"status": "none"})
         if self.path == "/disk":
             try:
                 return self._send(200, _disk_info())
@@ -1280,6 +1567,44 @@ class Handler(BaseHTTPRequestHandler):
                     "/notify/expose": "notify_expose"}[self.path]
         elif self.path in ("/home/up", "/home/down"):
             verb = {"/home/up": "home_up", "/home/down": "home_down"}[self.path]
+        elif self.path == "/service/redeploy":
+            # Synchronous for the same reason as `/sandbox/`: the answer is
+            # "is it up on the new image", which is minutes away and is the
+            # only thing worth returning. Outside `_lock` because a redeploy
+            # of `coder` and an ollama toggle touch nothing in common, and
+            # inside its own lock because two concurrent `compose up`s on one
+            # project fight.
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as e:
+                return self._send(400, {"error": f"unreadable body: {e}"})
+            service = str(body.get("service") or "")
+            if body.get("detach"):
+                # For the one service whose redeploy kills its own caller. The
+                # verdict is parked in `_last_detached` instead of returned,
+                # because there will be nobody on this connection to receive
+                # it. 202 here means REQUESTED and says so — it is not a claim
+                # that anything worked.
+                threading.Thread(target=_redeploy_detached, args=(service,),
+                                 daemon=True).start()
+                return self._send(202, {
+                    "status": "requested", "service": service,
+                    "detail": ("running in the background; the outcome is at "
+                               "GET /service/redeploy/last, once, for whoever "
+                               "asks first")})
+            if not _redeploy_lock.acquire(blocking=False):
+                return self._send(409, {
+                    "error": "a redeploy is already in progress",
+                    "detail": ("Two `compose up` runs against one project "
+                               "race each other. Wait for the first.")})
+            try:
+                out = _redeploy(service)
+                return self._send(400 if out.get("error") else 200, out)
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
+            finally:
+                _redeploy_lock.release()
         elif self.path.startswith("/sandbox/"):
             # SYNCHRONOUS, unlike every other verb here. A sandbox run is the
             # answer to a question ("does her branch boot?") rather than a

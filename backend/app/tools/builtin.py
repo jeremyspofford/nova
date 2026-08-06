@@ -7,9 +7,11 @@ execution is inlined by the runner (it needs to stream the sub-agent's events);
 the execute function below only fires if something calls it outside the runner.
 """
 
+import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from urllib.parse import urlparse
 
@@ -1446,9 +1448,18 @@ async def _delegate_coding_task(args, ctx):
         return ("Error: workspace and task are both required. Call "
                 "check_coding_session with no id, or ask the operator, to see "
                 "which repositories are registered.")
+    # RESUME, rather than start over. `code_change.build` does this between
+    # attempts — the retry clones the previous session's own tree, so the code
+    # under discussion is really there — and the same thing is worth having by
+    # hand: a session that stopped short is continued, not re-run from the
+    # trunk with a description of what went wrong. An id that cannot be
+    # resumed is an error rather than a quiet fresh start, because a session
+    # that claims to continue and does not is worse than one that never tried.
     r = await coder.start(workspace, task, mode="default",
                           budget_s=int(args.get("budget_s") or 0),
-                          requested_by=ctx.get("agent_name") or "nova")
+                          requested_by=ctx.get("agent_name") or "nova",
+                          continue_from=(str(args.get("continue_from") or "")
+                                         .strip() or None))
     if r.get("status") == "error":
         return f"Error: {r['detail']}"
     return _j(r)
@@ -1548,6 +1559,139 @@ async def _service_logs(args, ctx):
         known = ", ".join(data.get("known") or [])
         return f"Error: {data['error']}." + (f" Known services: {known}." if known else "")
     return _j(data)
+
+
+#: The one service whose redeploy kills its own caller, so it cannot be
+#: reported the ordinary way. Named here rather than in the sidecar because the
+#: problem is about the CALLER, not about the service.
+_SELF_SERVICE = "backend"
+
+
+async def _redeploy_service(args, ctx):
+    """Rebuild one service of this install from source and bring it back up.
+
+    THE STEP BETWEEN "her code landed" AND "her code is running". The loop
+    could write a change, boot it in a sandbox, have a second model read it and
+    put it on a branch in his repo — and then stopped dead, because picking it
+    up meant a person typing `docker compose build`. Every improvement she made
+    reached the running stack by Jeremy's hand, which is the capability gap
+    wearing a shipped feature as a disguise.
+
+    `backend` IS ALLOWED, and it is the only one that goes out DETACHED.
+    Recreating it kills the process running this turn, so the call can never
+    return — which for a long time made it a refusal, because this repo's
+    oldest rule is that a step unable to verify its own result must not claim
+    one. The way out is not to claim less, it is to put the verdict somewhere
+    that outlives the caller: the sidecar holds it, and whoever asks next takes
+    it — the backend after it comes back, or this same backend still running
+    because the BUILD failed and it was therefore never brought down.
+
+    Build-then-up ordering is what makes that safe: a change that does not
+    compile never reaches the running container.
+    """
+    import httpx
+    from app.config import settings          # late local, the file's idiom
+    service = str(args.get("service") or "").strip()
+    if not service:
+        return ("Error: service is required. service_status lists the "
+                "services of this install and their state.")
+    detach = service == _SELF_SERVICE
+    try:
+        async with httpx.AsyncClient(timeout=30.0 if detach else 3900.0) as client:
+            r = await client.post(
+                f"{settings.inference_control_url}/service/redeploy",
+                json={"service": service, "detach": detach})
+    except httpx.HTTPError as e:
+        return (f"Error: the docker-control sidecar is unreachable ({e}) — "
+                f"nothing can be rebuilt without it.")
+    try:
+        data = r.json()
+    except ValueError:
+        return f"Error: unreadable response from the sidecar ({r.status_code})"
+    if data.get("error"):
+        known = ", ".join(data.get("known") or [])
+        return (f"Error: {data['error']}"
+                + (f" Known services: {known}." if known else ""))
+    if detach:
+        # Say REQUESTED, never "done". Nothing has been verified at this point
+        # and the process about to be replaced is the one writing this
+        # sentence. The watcher below is what turns it into a fact.
+        asyncio.get_running_loop().create_task(_watch_redeploy(3900.0))
+        return _j({**data,
+                   "note": ("Requested, not finished. This build runs in the "
+                            "background and your reply may be cut off when the "
+                            "container is replaced — that is the redeploy "
+                            "working, not a crash. The outcome arrives as a "
+                            "notification either way; do not claim it worked "
+                            "until you have seen it.")})
+    # The verdict is the sidecar's, which checked the container came back and
+    # is still up — not the fact that the request returned 200.
+    return _j(data)
+
+
+async def _watch_redeploy(window_s: float) -> None:
+    """Poll for a detached redeploy's verdict and tell the operator.
+
+    ONE watcher, started from two places, because either process can be the
+    one alive when the answer lands and neither can know in advance which:
+
+      * the turn that asked — it usually dies when the container is replaced,
+        but it survives when the BUILD failed and nothing was brought down,
+        which is the case a restart-triggered read would never cover;
+      * the backend that came back — which is most of the time.
+
+    POLLS RATHER THAN READING ONCE. Measured on the first real backend
+    redeploy: the new container was healthy at 21:02:4x and the sidecar
+    recorded its verdict at 21:03:01, because the sidecar keeps verifying for
+    up to two minutes after `up -d`. A single read at boot found an empty slot,
+    the verdict was parked a few seconds later, and nobody was left to want it.
+
+    Exactly-once still holds however many watchers run: the slot is read-and-
+    clear at the sidecar.
+    """
+    import httpx
+    from app import notify
+    from app.config import settings
+    deadline = time.monotonic() + window_s
+    while time.monotonic() < deadline:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                r = await client.get(
+                    f"{settings.inference_control_url}/service/redeploy/last")
+            out = r.json()
+        except (httpx.HTTPError, ValueError):
+            out = {}
+        if isinstance(out, dict) and out.get("status") not in (None, "none"):
+            log.info("reporting a detached redeploy: %s", out)
+            try:
+                await notify.send(_redeploy_line(out), title="Redeploy")
+            except Exception:                            # noqa: BLE001
+                log.exception("could not report the redeploy outcome")
+            return
+        await asyncio.sleep(10.0)
+
+
+def _redeploy_line(out: dict) -> str:
+    ok = out.get("status") == "ok"
+    svc = out.get("service") or "a service"
+    if ok:
+        return (f"{svc} redeployed and came back "
+                f"{out.get('state') or 'up'}"
+                + (f" ({out['health']})" if out.get("health") else ""))
+    return (f"{svc} redeploy FAILED at {out.get('stage') or 'an unknown stage'}"
+            f" — {str(out.get('detail') or '')[:300]}")
+
+
+async def report_pending_redeploy() -> None:
+    """At startup: is there a redeploy verdict nobody has collected?
+
+    A short window rather than one read, for the race measured on the first
+    real run — see `_watch_redeploy`. Three minutes covers the gap between a
+    healthy container and the sidecar finishing its own verification, and
+    costs eighteen requests to a sidecar on the same network if there is
+    nothing to find.
+    """
+    await _watch_redeploy(180.0)
 
 
 async def _answer_task(args, ctx):
@@ -2761,9 +2905,11 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "name": "delegate_coding_task",
         "description": (
             "Hand a coding task to a coding agent running in its own "
-            "container. It clones the repository fresh, works on a private "
-            "copy, and produces A BRANCH AND A DIFF — it never merges, never "
-            "pushes, and never touches the operator's working copy. Returns "
+            "container. It clones the repository (fresh from the trunk, or "
+            "from an earlier session when you pass continue_from), works on a "
+            "private copy, and produces A BRANCH AND A DIFF — it never merges, "
+            "never pushes, and never touches the operator's working copy. "
+            "Returns "
             "immediately with a session id; the work runs for MINUTES, so say "
             "you have started it and report back later rather than waiting. "
             "Be specific about which files to change: the agent sees only "
@@ -2780,6 +2926,13 @@ BUILTIN_TOOLS: dict[str, dict] = {
             "budget_s": {"type": "integer",
                          "description": "wall-clock seconds before it is "
                                         "killed (default 1800)"},
+            "continue_from": {
+                "type": "string",
+                "description": ("session id to RESUME. The new session starts "
+                                "from that one's tree with its commits already "
+                                "in place, so a change that nearly worked is "
+                                "continued rather than rewritten from scratch. "
+                                "Omit to start from the trunk.")},
         }, "required": ["workspace", "task"]},
         "execute": _delegate_coding_task,
     },
@@ -2919,6 +3072,30 @@ BUILTIN_TOOLS: dict[str, dict] = {
         # the sidecar refuses any name outside this compose project.
         "reads_only": True,
         "execute": _service_logs,
+    },
+    "redeploy_service": {
+        "name": "redeploy_service",
+        "description": (
+            "Rebuild one of the SERVICES THIS INSTALL IS MADE OF from its "
+            "current source and restart it — coder, git-landing, web, "
+            "searxng, mcp-runner and the rest. This is how a change that has "
+            "landed in the repository actually starts running; until you do "
+            "this the stack is still on the old image. Takes minutes, and it "
+            "verifies the container came back up rather than assuming. "
+            "`backend` is allowed but runs DETACHED — it replaces the service "
+            "you are running inside, so your reply may be cut off mid-sentence "
+            "and the outcome arrives as a notification instead. For that one, "
+            "never say it worked; say you requested it."),
+        "parameters": {"type": "object", "properties": {
+            "service": {"type": "string",
+                        "description": ("compose service name as "
+                                        "service_status reports it, e.g. coder")},
+        }, "required": ["service"]},
+        # WRITES: it recreates a container. Not `reads_only`, which also keeps
+        # it out of _PARALLEL_TOOLS — two redeploys at once fight over one
+        # compose project, and the sidecar already refuses the second with a
+        # 409 rather than letting them race.
+        "execute": _redeploy_service,
     },
     "workload_logs": {
         "name": "workload_logs",
