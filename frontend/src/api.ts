@@ -1254,6 +1254,16 @@ export async function setModelsDir(path: string): Promise<ModelsDirInfo> {
   return r.json();
 }
 
+/** Calendar recurrence. Mirrors backend/app/schedules.py; null means the row
+ *  still runs on `interval_minutes`, which every automation did before 107. */
+export type Schedule =
+  | { every: 'minutes'; n: number }
+  | { every: 'hour'; n: number; minute: number }
+  | { every: 'day'; at: string }
+  | { every: 'week'; on: string[]; at: string }
+  | { every: 'month'; day: number; at: string }
+  | { every: 'once'; date: string; at: string };
+
 export interface Automation {
   id: string;
   name: string;
@@ -1261,6 +1271,7 @@ export interface Automation {
   instruction: string;
   agent_name: string;
   interval_minutes: number;
+  schedule: Schedule | null;
   timeout_seconds: number | null;
   enabled: boolean;
   is_system: boolean;
@@ -1292,7 +1303,8 @@ export async function getAutomationRuns(id: string): Promise<AutomationRun[]> {
 }
 
 export async function createAutomation(body: {
-  name: string; instruction: string; agent_name: string; interval_minutes: number;
+  name: string; instruction: string; agent_name: string;
+  interval_minutes?: number; schedule?: Schedule;
 }): Promise<Automation> {
   const r = await apiFetch(`${API_URL}/api/v1/automations`, {
     method: 'POST',

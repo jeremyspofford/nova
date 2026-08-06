@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import {
-  Automation, AutomationRun, createAutomation, deleteAutomation, getAgents, getAutomationRuns, getAutomations, patchAutomation,
+  Automation, AutomationRun, Schedule, createAutomation, deleteAutomation, getAgents, getAutomationRuns, getAutomations, patchAutomation,
 } from '../../api';
+import { SchedulePicker, defaultsFor, describeSchedule } from './SchedulePicker';
 import { agentDisplayName, displayName } from '../../names';
 import { fmtDateTime } from '../../time';
 import { Toggle, CardsSkeleton } from '../ui';
@@ -14,7 +15,8 @@ export function AutomationsTab() {
   const [status, setStatus] = useState('');
   const [expandedInstr, setExpandedInstr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [form, setForm] = useState({ name: '', instruction: '', agent_name: '', interval_minutes: 60 });
+  const [form, setForm] = useState({ name: '', instruction: '', agent_name: '' });
+  const [newSchedule, setNewSchedule] = useState<Schedule>(defaultsFor('hour'));
 
   const load = () => getAutomations().then(setRows).catch(e => setStatus(String(e)))
     .finally(() => setLoaded(true));
@@ -26,7 +28,8 @@ export function AutomationsTab() {
   }, []);
 
   const [editing, setEditing] = useState<Automation | null>(null);
-  const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', interval_minutes: 60, timeout_seconds: '' });
+  const [editForm, setEditForm] = useState({ description: '', instruction: '', agent_name: '', timeout_seconds: '' });
+  const [editSchedule, setEditSchedule] = useState<Schedule>(defaultsFor('hour'));
 
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
@@ -61,9 +64,12 @@ export function AutomationsTab() {
       description: a.description,
       instruction: a.instruction,
       agent_name: a.agent_name,
-      interval_minutes: a.interval_minutes,
       timeout_seconds: a.timeout_seconds == null ? '' : String(a.timeout_seconds),
     });
+    // A row created before migration 107 carries no schedule; show it as the
+    // interval it actually runs on rather than a default that would silently
+    // change its cadence on save.
+    setEditSchedule(a.schedule ?? { every: 'minutes', n: Math.max(a.interval_minutes, 5) });
   }
 
   async function saveEdit(e: React.FormEvent) {
@@ -72,6 +78,7 @@ export function AutomationsTab() {
     try {
       await patchAutomation(editing.id, {
         ...editForm,
+        schedule: editSchedule,
         timeout_seconds: editForm.timeout_seconds === '' ? null : Number(editForm.timeout_seconds),
       });
       setEditing(null);
@@ -94,9 +101,10 @@ export function AutomationsTab() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await createAutomation(form);
+      await createAutomation({ ...form, schedule: newSchedule });
       setCreating(false);
-      setForm({ name: '', instruction: '', agent_name: '', interval_minutes: 60 });
+      setForm({ name: '', instruction: '', agent_name: '' });
+      setNewSchedule(defaultsFor('hour'));
       load();
     } catch (err) {
       setStatus(String(err));
@@ -144,13 +152,7 @@ export function AutomationsTab() {
                 >
                   {agents.map(n => <option key={n} value={n}>{agentDisplayName(n)}</option>)}
                 </select>
-                <input
-                  type="number" min={5}
-                  value={editForm.interval_minutes}
-                  onChange={e => setEditForm({ ...editForm, interval_minutes: parseInt(e.target.value || '60') })}
-                  className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
-                  title="Interval (minutes)"
-                />
+
                 <input
                   type="number" min={30}
                   placeholder="timeout"
@@ -160,6 +162,7 @@ export function AutomationsTab() {
                   title="Per-run timeout override in seconds — empty uses the global automations setting"
                 />
               </div>
+              <SchedulePicker value={editSchedule} onChange={setEditSchedule} />
               <div className="flex gap-2 justify-end">
                 <button type="button" onClick={() => setEditing(null)} className="text-xs text-stone-400 px-2">cancel</button>
                 <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">save</button>
@@ -194,7 +197,7 @@ export function AutomationsTab() {
                 </div>
               </div>
               <div className="mt-1 text-xs text-stone-500">
-                {agentDisplayName(a.agent_name)} · every {a.interval_minutes >= 60 ? `${Math.round(a.interval_minutes / 60)}h` : `${a.interval_minutes}m`}
+                {agentDisplayName(a.agent_name)} · {describeSchedule(a.schedule, a.interval_minutes)}
                 {a.timeout_seconds != null && <span> · timeout {a.timeout_seconds}s</span>}
                 {a.last_status && (
                   <span className={a.last_status === 'ok' ? ' text-emerald-500' : ' text-red-400'}>
@@ -293,14 +296,8 @@ export function AutomationsTab() {
               <option value="">agent…</option>
               {agents.map(a => <option key={a} value={a}>{agentDisplayName(a)}</option>)}
             </select>
-            <input
-              type="number" min={5}
-              value={form.interval_minutes}
-              onChange={e => setForm({ ...form, interval_minutes: parseInt(e.target.value || '60') })}
-              className="w-24 bg-stone-800 border border-stone-700 rounded px-2 py-1 text-sm text-stone-200"
-              title="Interval (minutes)"
-            />
           </div>
+          <SchedulePicker value={newSchedule} onChange={setNewSchedule} />
           <div className="flex gap-2 justify-end">
             <button type="button" onClick={() => setCreating(false)} className="text-xs text-stone-400 px-2">cancel</button>
             <button type="submit" className="text-xs bg-teal-700 hover:bg-teal-600 text-white rounded px-3 py-1">create</button>

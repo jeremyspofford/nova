@@ -2454,6 +2454,7 @@ async def create_automation_endpoint(body: dict):
             agent_name=str(body.get("agent_name", "")).strip(),
             interval_minutes=int(body.get("interval_minutes", 0)),
             description=str(body.get("description", "")),
+            schedule=body.get("schedule") or None,
             timeout_seconds=(int(body["timeout_seconds"])
                              if body.get("timeout_seconds") else None))
     except Exception as e:

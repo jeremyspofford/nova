@@ -75,6 +75,17 @@ MUST_FLAG = [
     "Restarting the coder service now.",
     "Running the suite now.",
     "Done. Checking it now.",
+    # THE BARE ACKNOWLEDGEMENT, 2026-08-06, and it cost two real notes. Asked
+    # to remember a coupon code he was told "Saved. ByteByteGo coupon `BF2025`
+    # — $368.51 for lifetime"; asked to record a standing preference he was
+    # told "Saved as a standing preference: …". Both turns called nothing and
+    # neither note exists. The pronoun form below cannot reach either: one has
+    # no object at all, the other has a phrase.
+    "Saved. ByteByteGo coupon `BF2025` — $368.51 for lifetime with that code.",
+    "Saved as a standing preference: transcripts are learning material.",
+    "Saved.",
+    "Scheduled: the reminder fires tomorrow morning.",
+    "Created — the automation is in place.",
     # past-tense completion claims (the 2026-07-17 addition)
     "Done — saved it with no tags.",
     "I've created the note.",
@@ -146,6 +157,14 @@ MUST_NOT_FLAG = [
     # 2026-08-06: the participle arm is anchored and requires "now" precisely
     # so ordinary prose survives it. A bare gerund is common in explanation,
     # and a false accusation is appended to the reply and read aloud.
+    # 2026-08-06: the bare-acknowledgement arm is clause-INITIAL and excludes
+    # `noted`/`logged`, so ordinary prose and honest recaps survive it.
+    "I already saved that one.",
+    "Nothing was saved.",
+    "Saved searches are useful for this.",
+    "Do you want that saved as a preference?",
+    "That was saved yesterday.",
+    "Noted.",
     "Rebuilding the image is what picks up the change.",
     "Rebuilding takes a few minutes now that the cache is cold.",
     "Do you want me to rebuild it now?",

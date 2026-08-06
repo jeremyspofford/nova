@@ -89,6 +89,21 @@ _COMPLETION_PATTERNS = [
     r"set (?:it |that |this )?up)\b",
     r"(?:^\s*|[—–:;-]\s*)(?:saved|created|added|updated|deleted|scheduled|"
     r"logged|noted)\s+(?:it|that|this|them|one)\b(?!['’])",
+    # THE BARE ACKNOWLEDGEMENT, 2026-08-06, and it cost him two real notes.
+    # Asked to remember a coupon code and a price he answered "Saved.
+    # ByteByteGo coupon `BF2025` — $368.51 for lifetime"; asked to record a
+    # standing preference about YouTube transcripts he answered "Saved as a
+    # standing preference: …". Both turns called NOTHING, both read as done,
+    # and neither note exists — the only trace of either is the journal, which
+    # records what he SAID and will be read back tomorrow as if it happened.
+    #
+    # The pronoun form above could not catch these: "Saved." has no object at
+    # all and "Saved as a standing preference" has a phrase rather than a
+    # pronoun. Clause-INITIAL only, so "I already saved that one" and "nothing
+    # was saved" are untouched, and `noted`/`logged` are deliberately absent
+    # here — "Noted." is ordinary acknowledgement in a way "Saved." is not.
+    r"(?:^\s*|[—–:;-]\s*)(?:saved|created|added|updated|deleted|scheduled|"
+    r"remembered)(?:\s*$|\s*[:—–-]|\s+(?:as|to|under|in)\b)",
     r"\b(?:it|that|this)['’]s (?:been )?(?:saved|created|added|updated|"
     r"deleted|scheduled)\b",
     r"\b(?:done|all set)\s*[—–-]\s*(?:saved|created|added|updated|deleted|"

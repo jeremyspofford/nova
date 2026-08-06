@@ -1199,7 +1199,8 @@ async def _manage_automations(args, ctx):
     if action == "list":
         rows = await auto.list_automations()
         slim = [{k: r[k] for k in ("name", "description", "agent_name",
-                                   "interval_minutes", "enabled", "is_system",
+                                   "interval_minutes", "schedule",
+                                   "enabled", "is_system",
                                    "last_status", "last_summary",
                                    "consecutive_failures",
                                    "last_run_at", "next_run_at")}
@@ -1223,10 +1224,17 @@ async def _manage_automations(args, ctx):
                 description=args.get("description", ""),
                 timeout_seconds=(int(args["timeout_seconds"])
                                  if args.get("timeout_seconds") else None),
-                actor=who)
+                actor=who,
+                schedule=args.get("schedule") or None)
         except Exception as e:
             return f"Error creating automation: {e}"
+        # `when` in words, so the reply she writes from this cannot disagree
+        # with the row — she told Jeremy "tomorrow morning" for a job the
+        # table had recorded as every 1440 minutes starting 5:24 PM.
+        from app import schedules as _sch
         return _j({"status": "created", "name": row["name"],
+                   "when": _sch.describe(row.get("schedule"),
+                                         row["interval_minutes"]),
                    "next_run_at": row["next_run_at"]})
 
     if action in ("update", "enable", "disable"):
@@ -1235,7 +1243,7 @@ async def _manage_automations(args, ctx):
             return f"Error: automation '{args.get('name')}' not found"
         updates = {k: v for k, v in args.items()
                    if k in ("description", "instruction", "agent_name",
-                            "interval_minutes", "timeout_seconds")}
+                            "interval_minutes", "timeout_seconds", "schedule")}
         if action == "enable":
             updates["enabled"] = True
         elif action == "disable":
@@ -2738,10 +2746,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "description": ("Manage scheduled automations (a schedule + an instruction + the "
                         "agent that executes it). Use to list existing automations or "
                         "create new recurring behaviors, e.g. periodic research or "
-                        "refresh jobs. Minimum interval 5 minutes. 'list' includes each "
-                        "automation's last outcome and failure streak; 'runs' returns "
-                        "one automation's recent run history (status, summary, "
-                        "duration) — use it to diagnose WHY an automation failed."),
+                        "refresh jobs. PREFER `schedule` over `interval_minutes`: a "
+                        "reminder for \"tomorrow\" is {\"every\":\"once\",\"date\":"
+                        "\"2026-08-07\",\"at\":\"09:00\"}, which fires once and stops — "
+                        "an interval would repeat it forever at whatever time you "
+                        "happened to create it. 'list' includes each automation's last "
+                        "outcome and failure streak; 'runs' returns one automation's "
+                        "recent run history (status, summary, duration) — use it to "
+                        "diagnose WHY an automation failed."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string",
                        "enum": ["list", "runs", "create", "update", "enable",
@@ -2752,7 +2764,36 @@ BUILTIN_TOOLS: dict[str, dict] = {
                             "description": "Self-contained instructions the agent runs each time"},
             "agent_name": {"type": "string",
                            "description": "Which agent executes it (see list_agents)"},
-            "interval_minutes": {"type": "integer"},
+            "interval_minutes": {"type": "integer",
+                                 "description": ("Plain repeat every N minutes "
+                                                 "(min 5). Use `schedule` "
+                                                 "instead when the operator "
+                                                 "named a day or a time.")},
+            "schedule": {
+                "type": "object",
+                "description": (
+                    "When it runs, in the operator's timezone. One of: "
+                    "{\"every\":\"once\",\"date\":\"2026-08-07\",\"at\":\"09:00\"} "
+                    "— fires once and disables itself; "
+                    "{\"every\":\"day\",\"at\":\"07:30\"}; "
+                    "{\"every\":\"week\",\"on\":[\"mon\",\"thu\"],\"at\":\"09:00\"}; "
+                    "{\"every\":\"month\",\"day\":1,\"at\":\"09:00\"} (a day past "
+                    "the end of a short month means its last day); "
+                    "{\"every\":\"hour\",\"n\":6,\"minute\":0}; "
+                    "{\"every\":\"minutes\",\"n\":30}."),
+                "properties": {
+                    "every": {"type": "string",
+                              "enum": ["once", "day", "week", "month",
+                                       "hour", "minutes"]},
+                    "date": {"type": "string", "description": "YYYY-MM-DD, for `once`"},
+                    "at": {"type": "string", "description": "24-hour HH:MM"},
+                    "on": {"type": "array", "items": {"type": "string"},
+                           "description": "for `week`: mon tue wed thu fri sat sun"},
+                    "day": {"type": "integer", "description": "for `month`: 1-31"},
+                    "n": {"type": "integer", "description": "for `hour` / `minutes`"},
+                    "minute": {"type": "integer", "description": "for `hour`: 0-59"},
+                },
+                "required": ["every"]},
             "timeout_seconds": {"type": "integer",
                                 "description": ("Per-run timeout override in seconds "
                                                 "(min 30) for legitimately long jobs; "

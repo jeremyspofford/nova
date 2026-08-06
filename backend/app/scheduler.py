@@ -256,7 +256,7 @@ async def tick():
             outcome = await automations.record_run(
                 automation["id"], "ok" if ok else "failed", summary,
                 automation["interval_minutes"], failed=not ok,
-                started_at=started)
+                started_at=started, schedule=automation.get("schedule"))
             # failures land in the journal too — Nova's own memory must hold
             # a trace of her automations breaking, not just docker logs
             if not ok and outcome != "auto_disabled":
