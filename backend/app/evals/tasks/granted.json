@@ -69,6 +69,8 @@
     "raise_recommendation",
     "read_memory_item",
     "retry_ingest_job",
+    "review_code",
+    "sandbox_check",
     "search_memory",
     "service_logs",
     "service_status",
