@@ -612,10 +612,13 @@ def _sandbox(slug: str, verb: str) -> dict:
         # "it boots" a statement about the wrong code.
         subprocess.run(base + ["down", "-v", "--remove-orphans"],
                        capture_output=True, text=True, timeout=600, env=env)
-        if not run("build", ["build", "backend"], 2400, cmd=build_base):
+        # `web` too: building it runs the real vite build, so a TypeScript
+        # error or a broken import fails HERE rather than reaching him as a
+        # blank page. That is a verdict the backend suite cannot produce.
+        if not run("build", ["build", "backend", "web"], 3600, cmd=build_base):
             return {"status": "failed", "stage": "build", "steps": steps}
         # Migrations run at backend startup, so "up" IS the migration test.
-        if not run("up", ["up", "-d", "postgres", "backend"], 1200):
+        if not run("up", ["up", "-d", "postgres", "backend", "web"], 1200):
             return {"status": "failed", "stage": "up", "steps": steps}
         if not run("health", ["exec", "-T", "backend", "sh", "-c",
                               "for i in $(seq 1 60); do "
@@ -623,10 +626,22 @@ def _sandbox(slug: str, verb: str) -> dict:
                               "sleep 3; done; exit 1"], 300):
             run("boot-logs", ["logs", "--tail", "60", "backend"], 120)
             return {"status": "failed", "stage": "boot", "steps": steps}
-        ok = run("suite", ["exec", "-T", "backend", "python",
-                           "tests/run_all.py"], 2400)
+        if not run("suite", ["exec", "-T", "backend", "python",
+                             "tests/run_all.py"], 2400):
+            return {"status": "failed", "stage": "suite", "steps": steps}
+
+        # THE FOURTH VERDICT, and the one that makes "green" mean what its
+        # name implies. Until this ran, a passing gate meant the UNIT TESTS
+        # passed — a change could blank the settings page or ship a bundle
+        # that never paints and the gate would wave it through. The e2e suite
+        # opens the app in a real browser against this sandbox's own `web`.
+        #
+        # `run --rm`, not `up`: it is a test with an exit code, not a service.
+        # --profile e2e because the service is opt-in; the sandbox is the one
+        # place it should always run.
+        ok = run("e2e", ["--profile", "e2e", "run", "--rm", "-T", "e2e"], 2400)
         return {"status": "ok" if ok else "failed",
-                "stage": "suite" if not ok else "complete", "steps": steps}
+                "stage": "complete" if ok else "e2e", "steps": steps}
     except subprocess.TimeoutExpired as e:
         steps.append({"step": "timeout", "ok": False, "output": str(e)[:400]})
         return {"status": "failed", "stage": "timeout", "steps": steps}

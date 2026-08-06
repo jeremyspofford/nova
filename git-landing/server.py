@@ -295,6 +295,11 @@ def _worktree(branch: str, remove: bool = False) -> dict:
                     "# lives in a worktree that is removed with the run.\n"
                     "services:\n"
                     "  postgres:\n    ports: !reset []\n"
+                    # `web` publishes 127.0.0.1:8080 and would collide with
+                    # the live one exactly as postgres collided on 5432. The
+                    # e2e browser reaches it over the sandbox's OWN compose
+                    # network by alias, so nothing needs a host port.
+                    "  web:\n    ports: !reset []\n"
                     "  backend:\n"
                     "    ports: !reset []\n"
                     "    environment:\n"
