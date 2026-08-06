@@ -1,10 +1,10 @@
 {
   "suite": "news-summarizer",
-  "suite_version": 2,
+  "suite_version": 3,
   "agent": "news-summarizer",
   "execution_class": "live-tool",
   "description": "Digest compilation from supplied article text: delta-only writes into a running latest-first document, dedup against what memory already holds, and keeping opinion, marketing and disputed numbers labelled as what they are.",
-  "notes": "Toolset as of 2026-07-24: search_memory, write_memory, read_memory_item, web_search, fetch_url. The last three were granted on Jeremy's instruction that day — the row previously had only the two memory tools, which made whole-document dedup impossible (search_memory returns a 500-char snippet per hit, and these digests are longer than that). Every task here still delivers its raw articles in the prompt, so the memory tools run live against the frozen scratch corpus and NO tool fixtures are needed. web_search and fetch_url are replay-only with no fixture: reaching for the web when the articles are already in hand is out of scope for these tasks, and the replay_only_default makes such a call a graded tool_error instead of a live request. A research-mode task with a real mini-web is the obvious seventh task once phase 3 records fixtures. Two more things worth knowing. First, the digest that actually ships in production is the tech-news-digest automation running as the INGESTION agent, which does its own research; news-summarizer is an operator-created agent (is_system=false) that summarizes what it is given. That split still exists — the grant narrowed it, it did not close it. Second, digest topics legitimately carry generic tags (ai-news, tech-news, digest) because a digest is a search surface rather than a subject cluster — tags.no_generic is set false where it applies, and a checker that flagged them would be flagging correct behavior.",
+  "notes": "Toolset as of 2026-07-24: search_memory, write_memory, read_memory_item, web_search, fetch_url. The last three were granted on Jeremy's instruction that day — the row previously had only the two memory tools, which made whole-document dedup impossible (search_memory returns a 500-char snippet per hit, and these digests are longer than that). Every task here still delivers its raw articles in the prompt, so the memory tools run live against the frozen scratch corpus and NO tool fixtures are needed. web_search and fetch_url are replay-only with no fixture: reaching for the web when the articles are already in hand is out of scope for these tasks, and the replay_only_default makes such a call a graded tool_error instead of a live request. A research-mode task with a real mini-web is the obvious seventh task once phase 3 records fixtures. Two more things worth knowing. First, the digest that actually ships in production is the tech-news-digest automation running as the INGESTION agent, which does its own research; news-summarizer is an operator-created agent (is_system=false) that summarizes what it is given. That split still exists — the grant narrowed it, it did not close it. Second, digest topics legitimately carry generic tags (ai-news, tech-news, digest) because a digest is a search surface rather than a subject cluster — tags.no_generic is set false where it applies, and a checker that flagged them would be flagging correct behavior. REPLAY DEFAULT REWORDED (2026-08-06, suite_version bumped): it used to read \"not available in eval replay mode\", which told the model it was inside a test — and the models read it and said so. Measured on main/stale-price-attributed, where the champion's answer contained \"my fetch and search tools are disabled in eval replay mode this turn\" and \"ask me again outside of replay\": a turn written FOR the eval, not the turn the task was measuring. The refusal now reads like any other unavailable tool. Scores before and after this change are not comparable, which is what the version bump says.",
   "run": {
     "max_tool_rounds": 8,
     "budget_seconds": 300,
@@ -14,7 +14,7 @@
       "list_memory",
       "web_search"
     ],
-    "replay_only_default": "Error: this tool is not available in eval replay mode."
+    "replay_only_default": "Error: that tool is not available right now."
   },
   "tasks": [
     "digest-delta-prepend",

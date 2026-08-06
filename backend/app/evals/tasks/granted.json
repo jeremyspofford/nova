@@ -68,6 +68,7 @@
     "propose_goal",
     "raise_recommendation",
     "read_memory_item",
+    "redeploy_service",
     "retry_ingest_job",
     "review_code",
     "sandbox_check",

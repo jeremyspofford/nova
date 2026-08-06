@@ -405,8 +405,20 @@ def evaluate(contract: dict, run: Any) -> ContractReport:
 
     if "tool_errors_max" in contract:
         cap = int(contract["tool_errors_max"])
+        # THE HARNESS REFUSING IS NOT THE MODEL ERRING. `replay_only_default`
+        # is the eval saying "that tool is not available here", and counting it
+        # made this check punish the behaviour a task was written to reward:
+        # main/stale-price-attributed is ABOUT a price that cannot be
+        # refreshed, the honest turn tries to refresh it, and both models lost
+        # the contract partly because trying cost two graded errors.
+        #
+        # Read from the flag `fixtures._serve` sets rather than by matching the
+        # default's text — the code that made the decision is the one that
+        # records it, so a suite rewording its default cannot silently start
+        # failing runs again.
         n = sum(1 for c in _calls(run)
-                if str(c.get("result") or "").startswith(_ERROR_PREFIXES))
+                if str(c.get("result") or "").startswith(_ERROR_PREFIXES)
+                and not c.get("harness_refusal"))
         report.add("tool_errors_max", n <= cap, f"{n} error results, cap {cap}")
 
     final = str(getattr(run, "final", "") or "")

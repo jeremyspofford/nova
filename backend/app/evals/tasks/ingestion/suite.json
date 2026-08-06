@@ -1,10 +1,10 @@
 {
   "suite": "ingestion",
-  "suite_version": 4,
+  "suite_version": 5,
   "agent": "ingestion",
   "execution_class": "live-tool",
   "description": "The ingestion agent's four operating modes — RESEARCH, REFRESH, INGEST-MEDIA, FOLLOW-A-SOURCE — graded against a frozen mini-web and a frozen scratch memory corpus.",
-  "notes": "Every task here is a rail from the agent's own system prompt or a real incident. Tasks 1-3 grade the memory-write half (distillation, update-in-place, tag hygiene); tasks 4-6 grade the media half (source vs single video, already-ingested honesty, the do-NOT-chunk-a-short-transcript rule from migration 036). The tech-news-digest automation also runs as this agent, but its digest behavior is graded in the news-summarizer suite because that is where the digest corpus lives. v2: web_search and fetch_url joined replay_only_tools — the four media/tag tasks grant them but author no fixture, so a stray call used to reach nothing and invalidate the whole run; now it is served the replay-only default and costs a graded tool_error (three of those tasks also name them in must_not_call). The two research tasks are unaffected: their fixtures are matched before the default. Recording NEW web fixtures for this suite means temporarily removing them from this list — replay-only means never execute, in record mode too. v3: research-and-write-topic's forbidden spec numbers moved from body_must_not_contain to the new body_must_not_match — every one of them is a SUBSTRING of the correct value ('1.2 trillion' contains '2 trillion'), so the substring form failed right answers.",
+  "notes": "Every task here is a rail from the agent's own system prompt or a real incident. Tasks 1-3 grade the memory-write half (distillation, update-in-place, tag hygiene); tasks 4-6 grade the media half (source vs single video, already-ingested honesty, the do-NOT-chunk-a-short-transcript rule from migration 036). The tech-news-digest automation also runs as this agent, but its digest behavior is graded in the news-summarizer suite because that is where the digest corpus lives. v2: web_search and fetch_url joined replay_only_tools — the four media/tag tasks grant them but author no fixture, so a stray call used to reach nothing and invalidate the whole run; now it is served the replay-only default and costs a graded tool_error (three of those tasks also name them in must_not_call). The two research tasks are unaffected: their fixtures are matched before the default. Recording NEW web fixtures for this suite means temporarily removing them from this list — replay-only means never execute, in record mode too. v3: research-and-write-topic's forbidden spec numbers moved from body_must_not_contain to the new body_must_not_match — every one of them is a SUBSTRING of the correct value ('1.2 trillion' contains '2 trillion'), so the substring form failed right answers. REPLAY DEFAULT REWORDED (2026-08-06, suite_version bumped): it used to read \"not available in eval replay mode\", which told the model it was inside a test — and the models read it and said so. Measured on main/stale-price-attributed, where the champion's answer contained \"my fetch and search tools are disabled in eval replay mode this turn\" and \"ask me again outside of replay\": a turn written FOR the eval, not the turn the task was measuring. The refusal now reads like any other unavailable tool. Scores before and after this change are not comparable, which is what the version bump says.",
   "run": {
     "max_tool_rounds": 10,
     "budget_seconds": 300,
@@ -23,7 +23,7 @@
       "unfollow_source",
       "web_search"
     ],
-    "replay_only_default": "Error: this tool is not available in eval replay mode."
+    "replay_only_default": "Error: that tool is not available right now."
   },
   "tasks": [
     "research-and-write-topic",

@@ -1,16 +1,22 @@
 {
   "suite": "model-manager",
-  "suite_version": 2,
+  "suite_version": 3,
   "agent": "model-manager",
   "execution_class": "live-tool",
   "description": "Model inventory and fit against a frozen hardware snapshot and a frozen catalog: recommend with reasons, notice when the curated table has aged, and refuse to invent models or specs.",
-  "notes": "Every task runs against the same machine — 64GB RAM (60GB sizing), 16 cores, linux, RTX 4070 Ti SUPER with 16GB VRAM — so VRAM fit is a real constraint the agent has to reason about rather than a number it can wave at. list_models and recommend_models are replay-only here for determinism rather than for safety: both read live hardware, the live curated table and the live agents table, none of which are stable across machines or weeks. pull_model is excluded per the plan's no-real-side-effects rail, which is also why pull discipline is not graded in this suite (see README, Known gaps). v2: web_search joined replay_only_tools — four of the six tasks grant it with no fixture, so a stray search used to invalidate the run instead of costing a graded tool_error; the two tasks that do fixture it are unaffected, since fixtures are matched before the default. Recording new web fixtures here means temporarily removing it from this list.",
+  "notes": "Every task runs against the same machine — 64GB RAM (60GB sizing), 16 cores, linux, RTX 4070 Ti SUPER with 16GB VRAM — so VRAM fit is a real constraint the agent has to reason about rather than a number it can wave at. list_models and recommend_models are replay-only here for determinism rather than for safety: both read live hardware, the live curated table and the live agents table, none of which are stable across machines or weeks. pull_model is excluded per the plan's no-real-side-effects rail, which is also why pull discipline is not graded in this suite (see README, Known gaps). v2: web_search joined replay_only_tools — four of the six tasks grant it with no fixture, so a stray search used to invalidate the run instead of costing a graded tool_error; the two tasks that do fixture it are unaffected, since fixtures are matched before the default. Recording new web fixtures here means temporarily removing it from this list. REPLAY DEFAULT REWORDED (2026-08-06, suite_version bumped): it used to read \"not available in eval replay mode\", which told the model it was inside a test — and the models read it and said so. Measured on main/stale-price-attributed, where the champion's answer contained \"my fetch and search tools are disabled in eval replay mode this turn\" and \"ask me again outside of replay\": a turn written FOR the eval, not the turn the task was measuring. The refusal now reads like any other unavailable tool. Scores before and after this change are not comparable, which is what the version bump says.",
   "run": {
     "max_tool_rounds": 8,
     "budget_seconds": 240,
-    "exclude_tools": ["pull_model"],
-    "replay_only_tools": ["list_models", "recommend_models", "web_search"],
-    "replay_only_default": "Error: this tool is not available in eval replay mode."
+    "exclude_tools": [
+      "pull_model"
+    ],
+    "replay_only_tools": [
+      "list_models",
+      "recommend_models",
+      "web_search"
+    ],
+    "replay_only_default": "Error: that tool is not available right now."
   },
   "tasks": [
     "hardware-fit-recommend",
