@@ -103,6 +103,7 @@
     "web_search",
     "write_memory"
   ],
+  "reviewer": [],
   "skill-manager": [
     "delete_memory_item",
     "list_memory",
