@@ -278,6 +278,29 @@ async def decide(rec_id: str, choice: str,
                     "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                     rid, json.dumps(action), action["type"],
                     cur["conversation_id"] if cur else None)
+    # AN APPROVED IDEA BECOMES A TRACKED GOAL. ROADMAP #34 phase I2, and the
+    # only thing that makes the ideator worth running: without it an approved
+    # idea is a card whose status changed and nothing else — "yes, build that"
+    # with nowhere for it to live.
+    #
+    # OUTSIDE the transaction above on purpose. That block holds `FOR UPDATE`
+    # on the card while it decides and enqueues, and a goal that failed to
+    # write must not roll back the operator's decision — the decision is the
+    # part that has to be durable. A missing goal is visible and fixable; a
+    # decision that silently did not happen is the failure this lane exists to
+    # remove.
+    #
+    # `create` grants NOTHING: no verbs, no budget, no expiry. Approving an
+    # idea means "this is worth doing", never "and you may start changing the
+    # system to do it" — see migration 110.
+    if r and new_status == "approved" and r["kind"] == "idea":
+        try:
+            from app import goals
+            await goals.create(r["title"], description=r["body"] or "",
+                               created_by=r["source"] or "ideator",
+                               source_recommendation_id=str(rid))
+        except Exception:                                # noqa: BLE001
+            log.exception("approved idea %s produced no goal", rid)
     if r:
         await _receipt(_row(r), new_status)
     return (await get(str(rid))) if r else None

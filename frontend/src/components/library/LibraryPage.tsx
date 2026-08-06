@@ -7,6 +7,7 @@ import { RulesTab } from './RulesTab';
 import { ToolsTab } from './ToolsTab';
 import { SkillsTab } from './SkillsTab';
 import { CodingTab } from './CodingTab';
+import { GoalsTab } from './GoalsTab';
 import { DocumentsTab } from './DocumentsTab';
 import { FilesTab } from './FilesTab';
 import { NavList, NavRow, Surface } from '../ui';
@@ -22,13 +23,14 @@ import { confirmDiscard } from '../../files/dirty';
  *  "what have I given her?" has to be one click from the things she is made
  *  of. */
 
-const KINDS = ['agents', 'models', 'automations', 'rules', 'tools', 'skills',
-               'documents', 'coding', 'files'] as const;
+const KINDS = ['goals', 'agents', 'models', 'automations', 'rules', 'tools',
+               'skills', 'documents', 'coding', 'files'] as const;
 type Kind = typeof KINDS[number];
 
 /** What each section holds, said once. The phone index shows it under the
  *  row — nine bare nouns is a quiz — and the desktop tab strip stays bare. */
 const BLURB: Record<Kind, string> = {
+  goals: 'What she is working towards, and what it lets her do',
   agents: 'Who does the work, and on which model',
   models: 'The pool she can draw on, local and cloud',
   automations: 'What runs on a schedule',
@@ -41,6 +43,7 @@ const BLURB: Record<Kind, string> = {
 };
 
 const TAB: Record<Kind, ComponentType> = {
+  goals: GoalsTab,
   agents: AgentsTab,
   models: ModelsTab,
   automations: AutomationsTab,

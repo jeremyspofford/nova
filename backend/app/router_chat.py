@@ -2730,6 +2730,52 @@ async def push_subscriptions():
     return {"devices": await push.list_subscriptions()}
 
 
+# ── goals: the operator's own list ──────────────────────────────────────────
+#    Goals have existed since 2026-07-29 with no UI at all — he approved a card
+#    in chat and then could not see what was active, what it authorised, how
+#    much budget was left, or when it expired. These are the routes that end
+#    that. Everything that GRANTS is deliberately absent: `approved_verbs`,
+#    `max_actions` and `expires_at` are the authorisation, and widening a
+#    standing grant belongs on an approval card rather than in a text field.
+
+@router.get("/api/v1/goals")
+async def list_goals_endpoint(limit: int = 50):
+    from app import goals
+    return await goals.list_all(limit=limit)
+
+
+@router.post("/api/v1/goals", status_code=201)
+async def create_goal_endpoint(body: dict):
+    from app import goals
+    title = str(body.get("title", "")).strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title is required")
+    return await goals.create(
+        title, description=str(body.get("description", "")),
+        target=str(body.get("target", "")), created_by="operator")
+
+
+@router.patch("/api/v1/goals/{goal_id}")
+async def edit_goal_endpoint(goal_id: str, body: dict):
+    from app import goals
+    allowed = {k: v for k, v in body.items() if k in goals.EDITABLE}
+    try:
+        row = await goals.edit(goal_id, **allowed)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not row:
+        raise HTTPException(status_code=404, detail="no such goal")
+    return row
+
+
+@router.delete("/api/v1/goals/{goal_id}")
+async def delete_goal_endpoint(goal_id: str):
+    from app import goals
+    if not await goals.delete(goal_id):
+        raise HTTPException(status_code=404, detail="no such goal")
+    return {"status": "deleted"}
+
+
 @router.post("/api/v1/recommendations/{rec_id}/decide")
 async def decide_recommendation_endpoint(rec_id: str, body: dict):
     """The operator's authenticated decision. Agents RAISE recommendations

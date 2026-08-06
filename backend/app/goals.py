@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 
 _FIELDS = ("id", "title", "target", "status", "approved_verbs", "max_actions",
            "actions_used", "expires_at", "proposed_by", "rationale",
-           "created_at", "activated_at", "closed_at")
+           "created_at", "activated_at", "closed_at", "description",
+           "created_by", "source_recommendation_id")
 
 # How long an approved goal stays spendable when the operator does not say.
 # Long enough for real work, short enough that a forgotten goal is not a
@@ -51,8 +52,14 @@ def _row(r) -> dict:
     d = {k: r[k] for k in _FIELDS}
     d["id"] = str(d["id"])
     d["approved_verbs"] = list(d["approved_verbs"] or [])
+    d["source_recommendation_id"] = (str(d["source_recommendation_id"])
+                                     if d.get("source_recommendation_id") else None)
     for k in ("expires_at", "created_at", "activated_at", "closed_at"):
         d[k] = str(d[k]) if d[k] else None
+    # What this goal AUTHORISES, said once here rather than re-derived by the
+    # UI, the tool and whoever reads it next. An empty verb list is a tracked
+    # intention; a non-empty one is a standing pre-approval being drawn down.
+    d["authorises"] = bool(d["approved_verbs"])
     return d
 
 
@@ -348,3 +355,112 @@ async def get(goal_id: str) -> Optional[dict]:
     async with db.acquire() as conn:
         r = await conn.fetchrow("SELECT * FROM goals WHERE id = $1", gid)
     return _row(r) if r else None
+
+
+# ── the operator's own list ──────────────────────────────────────────────────
+#
+# Goals have existed since 2026-07-29 with NO UI AT ALL. He approves a card in
+# chat and then has no way to see what is active, what it authorises, how much
+# of its budget is left or when it expires — which is exactly what bit him on
+# 2026-08-06: a goal sat at 3/3 actions, every further attempt was refused, and
+# the only visible symptom was Nova saying she was blocked.
+
+#: What the operator may edit by hand. Deliberately NOT `approved_verbs`,
+#: `max_actions` or `expires_at`: those are the authorisation, and widening a
+#: standing grant is a decision that belongs on an approval card, not in a
+#: text field. `status` is here because closing or reopening the WORK is his
+#: to say — and `activate` still guards the transition that grants anything.
+EDITABLE = {"title", "description", "target", "status"}
+
+#: Statuses the operator may set directly. `active` is absent on purpose: it is
+#: what activation produces, and letting a UI write it would be a way to grant
+#: a goal's verbs without the consent that exists to grant them.
+SETTABLE_STATUS = ("proposed", "paused", "done", "abandoned")
+
+
+async def create(title: str, *, description: str = "", target: str = "",
+                 created_by: str = "operator",
+                 source_recommendation_id: Optional[str] = None) -> dict:
+    """A tracked goal that authorises NOTHING.
+
+    No verbs, no action budget, no expiry — `approved_verbs` is empty, which
+    `spend` can never match and `_row` reports as `authorises: false`. This is
+    the shape an approved idea becomes, and the shape the operator gets when he
+    writes one down himself. Turning it into a standing grant is `activate`,
+    which is reached only through a consent he clicks.
+    """
+    src = None
+    if source_recommendation_id:
+        try:
+            src = uuid_mod.UUID(str(source_recommendation_id))
+        except ValueError:
+            src = None
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            """INSERT INTO goals (title, description, target, approved_verbs,
+                                  status, created_by, source_recommendation_id)
+               VALUES ($1, $2, $3, ARRAY[]::text[], 'proposed', $4, $5)
+               ON CONFLICT (source_recommendation_id)
+                    WHERE source_recommendation_id IS NOT NULL
+                    DO NOTHING
+               RETURNING *""",
+            title.strip()[:200], (description or "").strip()[:8000],
+            (target or "").strip()[:1000], created_by, src)
+    if r is None:
+        # The card already produced a goal. Returning the existing one rather
+        # than raising: a second approval of the same idea is a double-click or
+        # a re-approval after `later`, and neither is an error worth showing.
+        return await from_recommendation(str(src)) or {}
+    log.info("Goal created: %s (by %s)", r["title"], created_by)
+    return _row(r)
+
+
+async def from_recommendation(rec_id: str) -> Optional[dict]:
+    """The goal an idea card produced, if it produced one."""
+    try:
+        rid = uuid_mod.UUID(str(rec_id))
+    except ValueError:
+        return None
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT * FROM goals WHERE source_recommendation_id = $1", rid)
+    return _row(r) if r else None
+
+
+async def edit(goal_id: str, **updates) -> Optional[dict]:
+    """Operator edits. Everything that grants anything is out of reach."""
+    updates = {k: v for k, v in updates.items() if k in EDITABLE}
+    if not updates:
+        return None
+    if "status" in updates and updates["status"] not in SETTABLE_STATUS:
+        raise ValueError(
+            f"status must be one of {', '.join(SETTABLE_STATUS)} — `active` is "
+            f"reached by approving the goal, not by setting a field")
+    try:
+        gid = uuid_mod.UUID(str(goal_id))
+    except ValueError:
+        return None
+    clauses, params = [], [gid]
+    for i, (k, v) in enumerate(updates.items(), start=2):
+        clauses.append(f"{k} = ${i}")
+        params.append(v)
+    # closed_at follows status rather than being set separately, so a goal
+    # cannot report itself finished with no time attached to that claim.
+    extra = (", closed_at = now()"
+             if updates.get("status") in ("done", "abandoned") else "")
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            f"UPDATE goals SET {', '.join(clauses)}{extra}, updated_at = now() "
+            f"WHERE id = $1 RETURNING *", *params)
+    return _row(r) if r else None
+
+
+async def delete(goal_id: str) -> bool:
+    """Remove a goal outright. Only the operator's route reaches this."""
+    try:
+        gid = uuid_mod.UUID(str(goal_id))
+    except ValueError:
+        return False
+    async with db.acquire() as conn:
+        out = await conn.execute("DELETE FROM goals WHERE id = $1", gid)
+    return out.endswith("1")

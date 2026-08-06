@@ -1264,6 +1264,57 @@ export type Schedule =
   | { every: 'month'; day: number; at: string }
   | { every: 'once'; date: string; at: string };
 
+/** A goal. Two kinds in one table: `authorises: false` is a tracked
+ *  intention (an approved idea, or one he typed) that grants nothing;
+ *  `true` is a standing pre-approval being drawn down — see migration 110. */
+export interface Goal {
+  id: string;
+  title: string;
+  description: string;
+  target: string;
+  status: string;
+  approved_verbs: string[];
+  authorises: boolean;
+  actions_used: number;
+  max_actions: number;
+  expires_at: string | null;
+  created_at: string;
+  created_by: string | null;
+  proposed_by: string | null;
+  source_recommendation_id: string | null;
+}
+
+export async function getGoals(): Promise<Goal[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/goals`);
+  if (!r.ok) throw new Error('Failed to load goals');
+  return r.json();
+}
+
+export async function createGoal(body: { title: string; description?: string }): Promise<Goal> {
+  const r = await apiFetch(`${API_URL}/api/v1/goals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Failed to create goal');
+  return r.json();
+}
+
+export async function patchGoal(id: string, body: Partial<Goal>): Promise<Goal> {
+  const r = await apiFetch(`${API_URL}/api/v1/goals/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Failed to save goal');
+  return r.json();
+}
+
+export async function deleteGoal(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/goals/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('Failed to delete goal');
+}
+
 export interface Automation {
   id: string;
   name: string;
