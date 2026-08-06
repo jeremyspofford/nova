@@ -316,7 +316,14 @@ def _worktree(branch: str, remove: bool = False) -> dict:
                     # hiding: `run_all` prints what was skipped and why, and
                     # the same suites still run in production where their
                     # question is meaningful.
-                    '      NOVA_SANDBOX: "1"\n')
+                    '      NOVA_SANDBOX: "1"\n'
+                    # Chat tests write real turns into a real journal, so they
+                    # are opt-in — see e2e/test_chat_turn.py. The sandbox is
+                    # the one place they should ALWAYS run: its database is
+                    # thrown away with the stack, so there is no record of his
+                    # to pollute. (The reply half still skips there: no model
+                    # credential, by design.)
+                    '  e2e:\n    environment:\n      NOVA_E2E_CHAT: "1"\n')
         except OSError as e:
             return {"status": "error",
                     "detail": f"could not write the sandbox override: {e}"}
