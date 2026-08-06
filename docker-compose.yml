@@ -241,6 +241,45 @@ services:
     labels:
       nova.sandbox: "runs -p nova-sandbox from .worktrees/, repo mounted ro"
 
+  # End-to-end tests in a real browser: docker compose --profile e2e run --rm e2e
+  #
+  # Step 10 of the self-improvement flow, and the gap was stark: 77 backend
+  # suites and not one of them opened the app. "The suite passed" meant the
+  # unit tests passed — a change could break the settings page or leave a
+  # panel blank and every suite would still be green.
+  #
+  # Its own service because playwright needs real browser binaries (hundreds
+  # of MB) that the backend image has no business carrying, and because these
+  # tests need the app SERVED rather than imported. That is the point: they
+  # are the only tests that exercise nginx, the built bundle, the API proxy
+  # and the router together.
+  #
+  # Drives `web`, not the vite dev server. A dev-server pass says nothing
+  # about the artefact that ships, and this project has been bitten twice by
+  # exactly that difference — a change live on :5173 and absent from :8080
+  # until `web` was rebuilt.
+  e2e:
+    # PINNED IN LOCKSTEP with the playwright pip package below. The image
+    # ships the browser binaries for exactly one version; installing a
+    # newer package into it fails with "Executable doesn't exist" and a
+    # message telling you to update the image. Both numbers move together
+    # or neither does.
+    image: mcr.microsoft.com/playwright/python:v1.62.0-noble
+    profiles: ["e2e"]
+    working_dir: /e2e
+    environment:
+      # See the alias on `web`: the service NAME is refused by nginx's
+      # Host allowlist, so the browser uses a name the deployment claims.
+      NOVA_E2E_URL: ${NOVA_E2E_URL:-http://nova-e2e.ts.net}
+      NOVA_AUTH_TOKEN: ${NOVA_AUTH_TOKEN:-}
+    volumes:
+      - ./e2e:/e2e
+    # `run --rm`, never `up`: this is a test run with an exit code, not a
+    # service. Chromium only — three engines triples the runtime to defend
+    # against a browser matrix nobody is shipping to.
+    command: ["sh", "-c",
+              "pip install --quiet pytest-playwright playwright==1.62.0 && pytest -q --browser chromium"]
+
   # Repository write access, in one container that can do nothing else
   # (roadmap: phase 4 of the autonomy lane). Nova writes code through
   # `delegate_coding_task`, which produces a branch and a diff inside the
@@ -631,6 +670,24 @@ services:
       context: ./frontend
       target: web
     restart: unless-stopped
+    # A NAME THIS DEPLOYMENT ANSWERS TO, for in-cluster callers.
+    #
+    # nginx drops any request whose Host is not `localhost`, `127.0.0.1` or
+    # `*.ts.net` — a DNS-rebinding defence, verified live against
+    # `Host: evil.test`. That is correct and stays, and it means the compose
+    # service name `web` is NOT a usable address: it answers 444, an empty
+    # response with no error to read. The e2e suite found this the first time
+    # it tried to open the app, which is precisely the class of thing no
+    # backend test could have noticed.
+    #
+    # So the browser addresses it by an alias that matches the existing
+    # allowlist rather than by widening the allowlist. Nothing about the
+    # security posture changes: the name resolves only on this private compose
+    # network, and every other caller still has to present a name the
+    # deployment claims.
+    networks:
+      default:
+        aliases: ["nova-e2e.ts.net"]
     ports:
       - "127.0.0.1:8080:80"
     # /health traverses nginx AND its proxy to the backend, so red here means
