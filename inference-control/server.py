@@ -490,6 +490,139 @@ SANDBOX_PROJECT = "nova-sandbox"
 _SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9._-]{0,60}$")
 
 
+# NEVER COPIED INTO A SANDBOX. Four tables, four different reasons, and the
+# reasoning matters more than the list because the list will grow.
+#
+#   secrets             encrypted, but a sandbox holding the key too can spend
+#                       what they protect. A sandbox that can spend his
+#                       credentials is not a sandbox.
+#   llm_providers       API keys. A loop that misbehaves in here bills him.
+#   push_subscriptions  a test run pushing to his phone.
+#   user_profiles       voiceprints and household facts, inside a stack whose
+#                       whole purpose is running code a model just wrote.
+#
+# Everything else copies verbatim, and that is the point: conversations,
+# memory, agents, tools, rules, goals and recommendations are what make
+# retrieval, clustering and compaction behave like his install rather than
+# like a fixture pack. Jeremy overrode the original "seed it, never copy"
+# decision on exactly that ground and was right.
+_SANDBOX_EXCLUDE = ("secrets", "llm_providers", "push_subscriptions",
+                    "user_profiles")
+
+_PROD_DB = ("nova-postgres-1", "nova", "nova")      # container, user, db
+
+
+def _import_production_data(base: list, env: dict, record) -> bool:
+    """Copy his data into the sandbox, minus the credentials.
+
+    BEFORE THE BACKEND BOOTS, deliberately. Migrations run at backend startup,
+    so importing first means the candidate branch's migrations run against his
+    REAL schema and REAL rows — which is the question actually worth asking. A
+    migration that works on an empty database and fails on 2,890 messages is
+    exactly the failure this whole gate exists to catch, and it is invisible
+    to an empty sandbox.
+
+    `docker exec` on the two postgres containers rather than a client here:
+    the client is then the same binary as the server, which sidesteps the
+    version-skew trap that made every backup on this install unrestorable
+    (client 17 against server 16, silently).
+    """
+    sandbox_pg = f"{SANDBOX_PROJECT}-postgres-1"
+    container, user, dbname = _PROD_DB
+
+    # WAIT FOR IT TO ACCEPT CONNECTIONS, not merely to exist. `compose up -d`
+    # returns when the container has STARTED, and postgres then spends several
+    # seconds initialising — so the load ran against a socket that was not
+    # there yet and psql failed with "No such file or directory".
+    #
+    # That run reported IMPORT OK, because the summary fell back to a friendly
+    # word when its verification query produced nothing. The gate was green
+    # and the data had never landed. Both halves are fixed here: this waits,
+    # and the caller no longer accepts an unreadable result as success.
+    import time as _t
+    for _ in range(60):
+        ready = subprocess.run(
+            ["docker", "exec", sandbox_pg, "pg_isready", "-U", user,
+             "-d", dbname],
+            capture_output=True, text=True, timeout=30)
+        if ready.returncode == 0:
+            break
+        _t.sleep(2)
+    else:
+        record("import", False,
+               "the sandbox database never accepted connections")
+        return False
+    excludes = []
+    for t in _SANDBOX_EXCLUDE:
+        excludes += ["--exclude-table-data", f"public.{t}"]
+
+    # Schema AND data: the sandbox database is empty, and letting his schema
+    # arrive with it is what makes the migration test real. --exclude-table-DATA
+    # rather than --exclude-table so the tables still EXIST — the backend
+    # queries them at boot and a missing table is a crash, not an isolation.
+    dump = subprocess.run(
+        ["docker", "exec", container, "pg_dump", "-U", user, "-d", dbname,
+         "--no-owner", "--no-privileges", *excludes],
+        capture_output=True, text=True, timeout=600)
+    if dump.returncode != 0:
+        record("import", False, (dump.stderr or "")[-800:])
+        return False
+
+    load = subprocess.run(
+        ["docker", "exec", "-i", sandbox_pg, "psql", "-U", user, "-d", dbname,
+         "-v", "ON_ERROR_STOP=0", "-q"],
+        input=dump.stdout, capture_output=True, text=True, timeout=900)
+
+    # AUTOMATIONS OFF, and this is not tidiness. An imported automation is a
+    # standing claim on a scheduler that will start running agent turns inside
+    # a sandbox — spending his model budget and, before notify was excluded,
+    # reaching his phone. Disabled at import so the rows are there to be read
+    # and nothing acts on them.
+    subprocess.run(
+        ["docker", "exec", sandbox_pg, "psql", "-U", user, "-d", dbname, "-q",
+         "-c", "UPDATE automations SET enabled = false;"],
+        capture_output=True, text=True, timeout=120)
+
+    # COUNTED, AND THE COUNT IS THE RECEIPT. The first version fell back to
+    # the word "imported" when this query produced nothing, which is how a
+    # gate reports success it did not verify — the same defect this codebase
+    # keeps finding in the model. If the numbers cannot be read, the step says
+    # so and fails, because "his data is in there" is the whole claim.
+    counts = subprocess.run(
+        ["docker", "exec", sandbox_pg, "psql", "-U", user, "-d", dbname,
+         "-tAc",
+         "SELECT (SELECT count(*) FROM messages) || ' messages / ' || "
+         "(SELECT count(*) FROM agents) || ' agents / ' || "
+         "(SELECT count(*) FROM secrets) || ' secrets / ' || "
+         "(SELECT count(*) FROM llm_providers) || ' providers / ' || "
+         "(SELECT count(*) FROM push_subscriptions) || ' push / ' || "
+         "(SELECT count(*) FROM user_profiles) || ' profiles'"],
+        capture_output=True, text=True, timeout=120)
+    summary = (counts.stdout or "").strip()
+    if not summary:
+        record("import", False,
+               "the import ran but its result could not be read: "
+               + ((counts.stderr or "").strip()[-600:] or "no output")
+               + " | load stderr: " + (load.stderr or "").strip()[-600:])
+        return False
+
+    # THE EXCLUSIONS, ASSERTED. Not trusted from the pg_dump flags — a typo in
+    # a table name would silently copy his API keys into a stack that runs
+    # model-authored code, and nothing downstream would notice.
+    nums = [int(n) for n in re.findall(r"(\d+) (?:secrets|providers|push|profiles)",
+                                       summary)]
+    if any(n > 0 for n in nums):
+        record("import", False,
+               f"REFUSED: credential tables are not empty in the sandbox "
+               f"({summary}). Nothing may run against this.")
+        return False
+    record("import", True, f"{summary}; automations disabled")
+    if load.returncode != 0:
+        log.warning("sandbox import reported errors: %s",
+                    (load.stderr or "")[-300:])
+    return True
+
+
 def _sandbox(slug: str, verb: str) -> dict:
     """Boot her candidate code in an isolated stack, and report three facts.
 
@@ -618,7 +751,23 @@ def _sandbox(slug: str, verb: str) -> dict:
         if not run("build", ["build", "backend", "web"], 3600, cmd=build_base):
             return {"status": "failed", "stage": "build", "steps": steps}
         # Migrations run at backend startup, so "up" IS the migration test.
-        if not run("up", ["up", "-d", "postgres", "backend", "web"], 1200):
+        # POSTGRES FIRST, ALONE. His data has to be in place before the
+        # backend starts, because migrations run at backend startup — and
+        # running the candidate branch's migrations against his REAL rows is
+        # the question worth asking. A migration that works on an empty
+        # database and fails on 2,890 messages is exactly what this gate
+        # exists to catch, and an empty sandbox cannot see it.
+        if not run("up-db", ["up", "-d", "postgres"], 600):
+            return {"status": "failed", "stage": "up-db", "steps": steps}
+
+        def _record(name, ok, out):
+            steps.append({"step": name, "ok": ok, "summary": out[-1500:],
+                          "stdout": out[-2500:], "stderr": ""})
+
+        if not _import_production_data(base, env, _record):
+            return {"status": "failed", "stage": "import", "steps": steps}
+
+        if not run("up", ["up", "-d", "backend", "web"], 1200):
             return {"status": "failed", "stage": "up", "steps": steps}
         if not run("health", ["exec", "-T", "backend", "sh", "-c",
                               "for i in $(seq 1 60); do "
