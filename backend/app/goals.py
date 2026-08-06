@@ -72,20 +72,75 @@ async def propose(title: str, target: str, verbs: list[str], *,
     return _row(r)
 
 
-async def pending_for(verb: str, agent_name: Optional[str]) -> Optional[dict]:
+#: How long a proposed goal counts as "in front of the operator".
+#:
+#: MEASURED, and it cost him a working feature. A phantom card raised by an
+#: eval run on 2026-08-04 16:16 (the incident registry.py:860 records) sat
+#: `proposed` forever, and `pending_for` matched it — so for two days every
+#: refusal of `manage_automations` told the model "an approval card for this is
+#: ALREADY in front of the operator", which was false. He was waiting for a
+#: card that did not exist and she was telling him it did.
+#:
+#: A card nobody has decided in a week is not awaiting a decision; it is
+#: litter, and litter that suppresses real requests is worse than no
+#: idempotency at all. Matched to the consent decide window for goals, because
+#: they are the same question asked in two places.
+_PROPOSED_TTL_DAYS = 7
+
+
+async def pending_for(verb: str, agent_name: Optional[str] = None) -> Optional[dict]:
+    # `agent_name` is no longer part of the match — see the query below — but
+    # it stays in the signature because callers pass it positionally and a
+    # silent arity change is a worse trade than an unused argument.
     """A goal already awaiting the operator that would cover `verb`.
 
     The idempotency the gate needs. Without it a model that retries a refused
     call — and the refusal text used to ask it to do exactly that — raises a
     fresh card every attempt, which is how an approval queue becomes noise the
     operator stops reading.
+
+    FRESH ONES ONLY. An ancient proposal is not idempotency, it is a card that
+    suppresses the one he would actually see. Stale rows are abandoned on the
+    way past, the same lazy sweep `consents.list_pending` uses, so the queue
+    cleans itself without a job somebody has to remember to run.
     """
     async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE goals SET status = 'abandoned', updated_at = now() "
+            "WHERE status = 'proposed' "
+            f"  AND created_at <= now() - interval '{_PROPOSED_TTL_DAYS} days'")
+        # ANSWERED, NOT JUST OLD. An auto-raised refusal card is a note that
+        # something was attempted; once the operator has approved a goal
+        # covering the same verb, he has answered it, and leaving it
+        # `proposed` makes it suppress every card raised afterwards. That is
+        # the bug this whole function grew: two cards from 2026-08-04 — one an
+        # eval-run artifact — silently absorbed every later refusal of
+        # `manage_automations`, so the model kept reporting a card was in front
+        # of him and none was.
+        #
+        # ONLY the auto-raised ones (`target = ''`, which `card_for_refusal`
+        # writes because it has no finish line to invent). A goal the model
+        # PROPOSED carries a title and a checkable target and is a real ask
+        # about specific work — an unrelated approval must not discard it.
+        await conn.execute(
+            """UPDATE goals g SET status = 'abandoned', updated_at = now()
+                WHERE g.status = 'proposed' AND coalesce(g.target, '') = ''
+                  AND EXISTS (SELECT 1 FROM goals a
+                               WHERE a.activated_at IS NOT NULL
+                                 AND a.activated_at > g.created_at
+                                 AND a.approved_verbs && g.approved_verbs)""")
+        # KEYED ON THE VERB ALONE. It used to also match `proposed_by`, so one
+        # refusal arriving without an agent name and another as `main` raised
+        # TWO cards for the same question, seconds apart — measured
+        # 2026-08-06 23:08:57 and 23:09:52, both asking him to approve
+        # `manage_automations` for the same edit. Who attempted it belongs in
+        # the card's body; it is not part of what he is being asked. And the
+        # approval is verb-scoped anyway: activating the goal lets any agent
+        # spend it, so a second card could only ever be the same yes twice.
         r = await conn.fetchrow(
             "SELECT * FROM goals WHERE status = 'proposed' "
             "  AND $1 = ANY(approved_verbs) "
-            "  AND proposed_by IS NOT DISTINCT FROM $2 "
-            " ORDER BY created_at DESC LIMIT 1", verb, agent_name)
+            " ORDER BY created_at DESC LIMIT 1", verb)
     return _row(r) if r else None
 
 

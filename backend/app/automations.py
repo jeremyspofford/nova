@@ -63,7 +63,7 @@ async def _auto_description(instruction: str) -> str:
 _FIELDS = ("id", "name", "description", "instruction", "agent_name",
            "interval_minutes", "timeout_seconds", "enabled", "is_system",
            "consecutive_failures", "last_run_at", "next_run_at", "last_status",
-           "last_summary", "created_at", "schedule")
+           "last_summary", "created_at", "schedule", "notify")
 
 # Public because the HTTP route filters an incoming body against it before
 # calling update(). A second copy in the router would be the scopes.py lesson
@@ -71,7 +71,7 @@ _FIELDS = ("id", "name", "description", "instruction", "agent_name",
 # an hour — and here the drift would be silent: a field the router let
 # through and this set did not would simply not be written.
 UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes",
-             "timeout_seconds", "enabled", "schedule"}
+             "timeout_seconds", "enabled", "schedule", "notify"}
 
 
 def _row(r) -> dict:
@@ -121,7 +121,8 @@ async def create(name: str, instruction: str, agent_name: str,
                  interval_minutes: int = 0, description: str = "",
                  timeout_seconds: Optional[int] = None,
                  actor: Optional[str] = None,
-                 schedule: Optional[dict] = None) -> dict:
+                 schedule: Optional[dict] = None,
+                 notify: bool = False) -> dict:
     from app import schedules
     # A SCHEDULE OR AN INTERVAL, and the schedule wins when both are given.
     # `interval_minutes` stays NOT NULL in the table, so a calendar schedule
@@ -154,11 +155,12 @@ async def create(name: str, instruction: str, agent_name: str,
         r = await conn.fetchrow(
             """INSERT INTO automations (name, description, instruction, agent_name,
                                         interval_minutes, timeout_seconds,
-                                        schedule, next_run_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                                        schedule, next_run_at, notify)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
                RETURNING *""",
             name, description, instruction, agent_name, interval_minutes,
-            timeout_seconds, json.dumps(schedule) if schedule else None, first)
+            timeout_seconds, json.dumps(schedule) if schedule else None, first,
+            bool(notify))
     when = schedules.describe(schedule, interval_minutes)
     log.info("Automation created: %s (%s, agent=%s, first run %s)",
              name, when, agent_name, first.isoformat())

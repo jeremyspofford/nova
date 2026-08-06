@@ -11,8 +11,8 @@ import datetime as dt
 from pathlib import Path
 from datetime import datetime, timezone
 
-from app import (automations, bg, instances, retention, settings_store, sysmon,
-                 trace)
+from app import (automations, bg, instances, notify, retention, settings_store,
+                 sysmon, trace)
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.llm import router as llm_router
@@ -257,6 +257,23 @@ async def tick():
                 automation["id"], "ok" if ok else "failed", summary,
                 automation["interval_minutes"], failed=not ok,
                 started_at=started, schedule=automation.get("schedule"))
+            # A REMINDER HAS TO REACH HIM, and the backend is what makes sure.
+            # His ByteByteGo reminder was written as "Remind Jeremy to check
+            # the price" and said nothing about HOW — so the run would produce
+            # text, the text would become the summary, the summary would go to
+            # the journal, and the reminder would have reminded nobody.
+            #
+            # Delivered HERE rather than by the agent calling notify_operator,
+            # because whether that call happens is a model's choice and this is
+            # a property that has to hold. The agent may still call it; a
+            # duplicate push is a far smaller failure than a silent one.
+            if automation.get("notify"):
+                try:
+                    await notify.send(summary[:400] or f"{automation['name']} ran",
+                                      title=automation["name"])
+                except Exception:
+                    log.exception("notify for automation %s failed",
+                                  automation["name"])
             # failures land in the journal too — Nova's own memory must hold
             # a trace of her automations breaking, not just docker logs
             if not ok and outcome != "auto_disabled":

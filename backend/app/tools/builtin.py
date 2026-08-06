@@ -1199,7 +1199,7 @@ async def _manage_automations(args, ctx):
     if action == "list":
         rows = await auto.list_automations()
         slim = [{k: r[k] for k in ("name", "description", "agent_name",
-                                   "interval_minutes", "schedule",
+                                   "interval_minutes", "schedule", "notify",
                                    "enabled", "is_system",
                                    "last_status", "last_summary",
                                    "consecutive_failures",
@@ -1225,7 +1225,8 @@ async def _manage_automations(args, ctx):
                 timeout_seconds=(int(args["timeout_seconds"])
                                  if args.get("timeout_seconds") else None),
                 actor=who,
-                schedule=args.get("schedule") or None)
+                schedule=args.get("schedule") or None,
+                notify=bool(args.get("notify")))
         except Exception as e:
             return f"Error creating automation: {e}"
         # `when` in words, so the reply she writes from this cannot disagree
@@ -1243,7 +1244,8 @@ async def _manage_automations(args, ctx):
             return f"Error: automation '{args.get('name')}' not found"
         updates = {k: v for k, v in args.items()
                    if k in ("description", "instruction", "agent_name",
-                            "interval_minutes", "timeout_seconds", "schedule")}
+                            "interval_minutes", "timeout_seconds", "schedule",
+                            "notify")}
         if action == "enable":
             updates["enabled"] = True
         elif action == "disable":
@@ -2794,6 +2796,15 @@ BUILTIN_TOOLS: dict[str, dict] = {
                     "minute": {"type": "integer", "description": "for `hour`: 0-59"},
                 },
                 "required": ["every"]},
+            "notify": {"type": "boolean",
+                       "description": (
+                           "TRUE when the whole point of this automation is to "
+                           "TELL THE OPERATOR something — a reminder, an alert. "
+                           "The backend then pushes the run's output to him "
+                           "itself, so it reaches him whether or not you "
+                           "remember to call notify_operator during the run. "
+                           "Leave false for background work whose output "
+                           "belongs in memory.")},
             "timeout_seconds": {"type": "integer",
                                 "description": ("Per-run timeout override in seconds "
                                                 "(min 30) for legitimately long jobs; "

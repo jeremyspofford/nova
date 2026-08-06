@@ -868,13 +868,22 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
                     _goal, created = await goals.card_for_refusal(
                         name, agent_name=ctx.get("agent_name"),
                         conversation_id=ctx.get("conversation_id"), args=args)
+                    # SAY WHEN. "Already in front of the operator" is a claim
+                    # about his inbox, and for two days it was false: a phantom
+                    # card from an eval run sat `proposed` forever and
+                    # suppressed every real one, so she kept telling him
+                    # something was waiting that was not. Stale proposals are
+                    # abandoned now (goals._PROPOSED_TTL_DAYS), and what
+                    # survives says its age, so the sentence is checkable
+                    # rather than reassuring.
+                    raised = str(_goal.get("created_at") or "")[:16]
                     card = (
                         "\n\nAn approval card for this is now in front of the "
                         "operator. Nothing is approved yet."
                         if created else
-                        "\n\nAn approval card for this is ALREADY in front of "
-                        "the operator, from an earlier attempt. Raising "
-                        "another would only bury it.")
+                        f"\n\nAn approval card for this was already raised at "
+                        f"{raised} and is still undecided. Raising another "
+                        f"would only bury it — point him at that one.")
             except Exception:  # noqa: BLE001
                 log.exception("goal card not raised for refused %s", name)
                 card = ("\n\nThe approval card could not be raised, so say so "
