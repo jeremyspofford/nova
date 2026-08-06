@@ -172,3 +172,174 @@ async def execute(doc: CodeChangeLand, rec: dict, *, step) -> dict:
                        f"working copy is still on {out.get('returned_to')} — "
                        f"review with `git diff {out.get('returned_to')}.."
                        f"{branch}` and merge if you want it.")}
+
+
+# ── step 5: write it, check it, try again ────────────────────────────────────
+#
+# Jeremy's flow, step 5: "loop 3 & 4 until completed the task". Until now
+# `delegate_coding_task` ran ONCE — no iteration, and no stopping condition
+# either, which is the more dangerous half. A loop with neither is a loop that
+# runs all night.
+#
+# WHAT MAKES A PASS SUCCEED is the sandbox boot gate, not the coding agent's
+# own account of itself. The agent reporting "done" means it stopped, which is
+# the same silent no-op that made an earlier session finish with no commit and
+# look exactly like success. Green means built, booted and suite-passed.
+
+#: Wall clock for the WHOLE loop, not per attempt. Three attempts of a coding
+#: agent plus three sandbox runs is the shape being bounded, and bounding each
+#: piece separately lets the total drift past anything anyone intended.
+_LOOP_BUDGET_S = 5400.0
+#: How long one coding session may run before the loop stops waiting on it.
+_SESSION_WAIT_S = 1800.0
+_POLL_S = 15.0
+
+
+async def _await_session(session_id: str, ctx, deadline: float) -> dict:
+    """Poll one coding session to a terminal state, or give up honestly."""
+    import asyncio
+    import time
+    from app import coder
+    while time.monotonic() < deadline:
+        r = await coder.refresh(session_id)
+        if r.get("state") in ("done", "failed", "killed"):
+            return r
+        await asyncio.sleep(_POLL_S)
+    return {"state": "timeout",
+            "error": f"still running after {int(_SESSION_WAIT_S)}s"}
+
+
+async def _step_build(doc, rec, ctx) -> dict:
+    """Write, check, and try again — bounded on both axes.
+
+    Each pass hands the NEXT attempt what actually went wrong, because a
+    retry that repeats the original instruction verbatim is just a second roll
+    of the dice. The sandbox's failing stage and its summary are the most
+    useful thing anyone could tell a coding agent, and they are facts rather
+    than an opinion about the code.
+    """
+    import time
+    from app import coder
+
+    started = time.monotonic()
+    deadline = started + _LOOP_BUDGET_S
+    task = doc.task
+    tried: list[str] = []
+
+    for attempt in range(1, doc.attempts + 1):
+        if time.monotonic() > deadline:
+            return {"status": "error",
+                    "detail": (f"stopped after {attempt - 1} attempt(s): the "
+                               f"{int(_LOOP_BUDGET_S / 60)}-minute budget for "
+                               f"this build is spent. What was tried: "
+                               + " | ".join(tried))}
+
+        started_r = await coder.start(
+            doc.workspace, task, requested_by="code_change.build")
+        if started_r.get("status") == "error":
+            return {"status": "error",
+                    "detail": f"attempt {attempt} could not start: "
+                              f"{started_r.get('detail')}"}
+        sid = started_r["session_id"]
+        await ctx.record(f"attempt-{attempt}", "ok",
+                         f"session {sid[:8]} started")
+
+        r = await _await_session(sid, ctx, min(deadline,
+                                               time.monotonic() + _SESSION_WAIT_S))
+        if r.get("state") != "done":
+            note = f"attempt {attempt}: session {r.get('state')} — {r.get('error')}"
+            tried.append(note)
+            await ctx.record(f"attempt-{attempt}", "error", note[:300])
+            continue
+        if not r.get("commit"):
+            # THE SILENT NO-OP. An agent that changes nothing reports `done`
+            # and is indistinguishable from one that judged the work already
+            # complete — it happened for real when the clone did not contain
+            # the file being edited. Treated as a failed attempt, and the next
+            # one is told so explicitly.
+            note = f"attempt {attempt}: finished without changing anything"
+            tried.append(note)
+            await ctx.record(f"attempt-{attempt}", "error", note)
+            task = (doc.task + "\n\nIMPORTANT: a previous attempt finished "
+                    "without modifying any file. Confirm the files you intend "
+                    "to change actually exist in this checkout before editing, "
+                    "and if the task looks already-done, say so explicitly "
+                    "rather than exiting silently.")
+            continue
+
+        await ctx.record(f"attempt-{attempt}", "ok",
+                         f"committed {str(r.get('commit'))[:10]}; checking it")
+        gate = await coder.sandbox_check(sid)
+        if gate.get("status") == "ok":
+            ctx.scratch["session_id"] = sid
+            return {"status": "ok", "session_id": sid,
+                    "commit": r.get("commit"), "attempts": attempt,
+                    "detail": (f"green on attempt {attempt}: built, booted and "
+                               f"the suite passed. Session {sid} is ready to "
+                               f"land — that is a separate decision.")}
+
+        note = f"attempt {attempt}: {gate.get('detail') or gate.get('status')}"
+        tried.append(note)
+        await ctx.record(f"attempt-{attempt}", "error", note[:400])
+        # HAND THE FAILURE FORWARD. This is the whole difference between a
+        # loop and repetition.
+        task = (doc.task + f"\n\nA previous attempt was rejected by the "
+                f"sandbox check. Fix this before anything else:\n"
+                f"{(gate.get('detail') or '')[:1200]}")
+
+    return {"status": "error",
+            "detail": (f"stopped after {doc.attempts} attempts, none green. "
+                       f"What was tried: " + " | ".join(tried))}
+
+
+BUILD_STEPS = [("build", _step_build)]
+
+
+def describe_build(doc) -> str:
+    return "\n".join([
+        "Write a change, and keep going until the sandbox says it works",
+        f"    Workspace   {doc.workspace}",
+        f"    Attempts    up to {doc.attempts} "
+        f"(each one is a coding agent, a built image, a booted stack and the "
+        f"full suite)",
+        f"    Budget      {int(_LOOP_BUDGET_S / 60)} minutes for the whole "
+        f"loop, then it stops and reports what it tried",
+        f"    Why         {doc.why}",
+        "    Task        " + (doc.task[:300]
+                              + ("…" if len(doc.task) > 300 else "")),
+        "    Result      a VERIFIED session, not a branch. Putting it in your "
+        "repository is a separate card you approve afterwards.",
+        "    Green means built, booted and suite-passed — not the coding "
+        "agent's own account of itself.",
+    ])
+
+
+async def preflight_build(doc, *, operator: bool = False
+                          ) -> tuple[str, str, None]:
+    """Can this even start? Cheapest questions first.
+
+    Deliberately does NOT check the repository is clean: this produces a
+    session, and nothing touches his repo until a separate landing card is
+    approved. Requiring a clean tree here would block honest work for a reason
+    that does not apply yet.
+    """
+    from app import coder
+
+    if not coder.configured():
+        return ("blocked",
+                ("coding delegation is not configured — NOVA_CODER_TOKEN is "
+                 "unset, so the sidecar refuses everything"), None)
+    names = [w["name"] for w in await coder.list_workspaces()]
+    if doc.workspace not in names:
+        return ("blocked",
+                f"no enabled workspace named {doc.workspace!r}. "
+                f"Available: {', '.join(names) or '(none)'}", None)
+    st = await coder.repo_status()
+    if st.get("error"):
+        return ("blocked",
+                f"the landing sidecar is unreachable ({st['error']}) — the "
+                f"sandbox check stages its work through it, so nothing could "
+                f"be verified", None)
+    return ("ready",
+            (f"ready: up to {doc.attempts} attempts against {doc.workspace} "
+             f"at {st.get('head')}, each verified by the boot gate"), None)

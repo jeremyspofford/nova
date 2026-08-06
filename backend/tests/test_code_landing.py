@@ -239,12 +239,53 @@ def test_the_sidecar_refuses():
         check("5.4 a clean worktree would accept one (nothing to assert)", True)
 
 
+def test_the_loop_is_bounded():
+    """Step 5's ceilings. A loop with no stopping condition runs all night."""
+    print("\n6. THE BUILD LOOP IS BOUNDED ON BOTH AXES")
+    from app.actions.schemas import CodeChangeBuild   # noqa: F401
+    base = {"type": "code_change.build", "workspace": "nova",
+            "task": "x" * 40, "why": "because"}
+
+    check("6.1 attempts default to 3", actions.parse(base).attempts == 3)
+    check("6.2 attempts are capped — 6 is refused",
+          _refused({**base, "attempts": 6}),
+          "each pass is an agent, an image, a booted stack and a suite")
+    check("6.3 …and 0 is refused", _refused({**base, "attempts": 0}))
+    check("6.4 a task too short to act on is refused",
+          _refused({**base, "task": "fix it"}),
+          "a coding agent cannot ask a follow-up question")
+    check("6.5 there is no `branch` field — building is not landing",
+          _refused({**base, "branch": "x"}),
+          "one approval must not both write code and place it in his repo")
+    check("6.6 …and no way to ask for a merge",
+          _refused({**base, "merge": True}))
+
+    from app.actions import code_change as _cc
+    check("6.7 the loop carries a wall clock, not just an attempt count",
+          _cc._LOOP_BUDGET_S > 0 and _cc._SESSION_WAIT_S > 0,
+          f"{int(_cc._LOOP_BUDGET_S)}s total, {int(_cc._SESSION_WAIT_S)}s per session")
+
+    spec = actions._TYPES["code_change.build"]
+    check("6.8 the OUTER timeout exceeds the loop's own budget",
+          (spec.timeout_s or 0) > _cc._LOOP_BUDGET_S,
+          "so the two cannot disagree about which one fired")
+    # THE BUG THIS PINS. One global 120s executor timeout was sized for
+    # "register an MCP server" and silently wrong for everything slower: the
+    # Home Assistant deploy pulls ~1.5GB on a first install and passed its
+    # live test only because the image was already cached by then.
+    ha = actions._TYPES["home_assistant.deploy"]
+    check("6.9 a slow action declares its own timeout",
+          (ha.timeout_s or 0) > 600,
+          f"{ha.timeout_s}s — a first install pulls ~1.5GB before it answers")
+
+
 def main() -> int:
     test_schema()
     test_main_is_unreachable()
     test_boot_gate()
     test_preflight_asks_the_world()
     test_the_sidecar_refuses()
+    test_the_loop_is_bounded()
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:8]))
         return 1

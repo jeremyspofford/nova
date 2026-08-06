@@ -173,7 +173,12 @@ async def _process(run: dict) -> None:
         rec_dict = {"id": str(rec_id),
                     "action_tools": json.loads(tools) if isinstance(tools, str) else tools}
 
-        timeout = float(settings_store.get("actions.timeout_s")
+        # PER-ACTION where it declares one, because a single number cannot
+        # be right for both "register an MCP server" (seconds) and "pull
+        # 1.5GB, boot it, and run a suite" (tens of minutes). The operator's
+        # setting still governs everything that does not declare.
+        timeout = float(spec.timeout_s
+                        or settings_store.get("actions.timeout_s")
                         or actions.DEFAULT_EXECUTE_TIMEOUT_S)
         if spec.steps:
             result = await asyncio.wait_for(

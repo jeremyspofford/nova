@@ -167,5 +167,35 @@ class CodeChangeLand(_Action):
     why: Annotated[str, StringConstraints(max_length=280)]
 
 
-ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy, CodeChangeLand],
+class CodeChangeBuild(_Action):
+    """Write a change and keep going until the sandbox says it works.
+
+    Step 5 of Jeremy's self-improvement flow: "loop 3 & 4 until completed the
+    task". `delegate_coding_task` is one shot — it runs once and produces a
+    branch, with no iteration and, more importantly, no stopping condition.
+
+    TWO CEILINGS, and neither is optional. "If it fails, go back to step 2"
+    with no limit is a loop that runs all night: each pass is a coding agent,
+    a built image, a booted stack and a full test suite, which is real money
+    and real disk. `attempts` is capped at 5 by the schema and defaults to 3,
+    because a fourth attempt on the same failure is rarely the one that
+    works and reporting what was tried is more useful to him than another
+    guess. The wall clock is enforced in the executor.
+
+    NO `branch` FIELD, deliberately. This produces a verified session; putting
+    it on a branch is `code_change.land`, which is a separate decision with
+    its own card. Merging the two would let one approval both write code and
+    place it in his repository.
+    """
+
+    type: Literal["code_change.build"]
+    workspace: Annotated[str, StringConstraints(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,38}$")]
+    task: Annotated[str, StringConstraints(min_length=20, max_length=4000)]
+    attempts: Annotated[int, Field(ge=1, le=5)] = 3
+    why: Annotated[str, StringConstraints(max_length=280)]
+
+
+ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy, CodeChangeLand,
+                            CodeChangeBuild],
                       Field(discriminator="type")]

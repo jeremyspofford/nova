@@ -46,8 +46,9 @@ from app import db
 from app.actions import code_change as _code_change
 from app.actions import home_assistant as _home_assistant
 from app.actions import mcp_server as _mcp_server
-from app.actions.schemas import (ActionDoc, CodeChangeLand,
-                                 HomeAssistantDeploy, McpServerAdd)
+from app.actions.schemas import (ActionDoc, CodeChangeBuild,
+                                 CodeChangeLand, HomeAssistantDeploy,
+                                 McpServerAdd)
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,19 @@ class Spec:
     # `mcp_server.add` is genuinely one call and gains nothing from steps.
     # Exactly one of the two is required; `is_executable` reads both.
     steps: Optional[list] = None
+    #: How long this action's work may legitimately take, in seconds. None
+    #: means the `actions.timeout_s` setting (120).
+    #:
+    #: ONE GLOBAL NUMBER WAS SIZED FOR THE SHORTEST ACTION and silently
+    #: mis-sized for the rest. Registering an MCP server is seconds; starting
+    #: Home Assistant pulls ~1.5GB and builds a frontend on FIRST install, and
+    #: the deploy passed its live test only because the image was already
+    #: cached by then — a fresh machine would have been killed at 120s with
+    #: the container still coming up. The build loop is tens of minutes by
+    #: design and would not have survived its first second.
+    #:
+    #: Declared beside the action because only the action knows.
+    timeout_s: Optional[float] = None
 
 
 _TYPES: dict[str, Spec] = {
@@ -103,6 +117,9 @@ _TYPES: dict[str, Spec] = {
         operator_route="home_assistant_control",
         describe=_home_assistant.describe,
         preflight=_home_assistant.preflight,
+        # A first install pulls ~1.5GB and builds Home Assistant's frontend
+        # before it answers, then restarts once to apply proxy trust.
+        timeout_s=2400.0,
         # STEPS, not a single execute: this one starts a service, waits
         # minutes for it, configures it and then checks the operator can
         # actually open it — and it may need one answer from him in the
@@ -120,6 +137,22 @@ _TYPES: dict[str, Spec] = {
         # One call, genuinely: git-landing applies the whole patch or leaves
         # the repo untouched, so there is no partial state to resume from.
         execute=_code_change.execute,
+    ),
+    "code_change.build": Spec(
+        model=CodeChangeBuild,
+        # Same operator route as landing: what he can already do himself is
+        # start a coding session and check it. This automates the loop
+        # between those, it does not reach anywhere new.
+        operator_route="sandbox_check_code",
+        describe=_code_change.describe_build,
+        preflight=_code_change.preflight_build,
+        # The loop bounds ITSELF at 90 minutes; this is the outer stop, with
+        # margin, so the two cannot disagree about which one fired.
+        timeout_s=_code_change._LOOP_BUDGET_S + 600.0,
+        # STEPS: attempts take tens of minutes and the run has to survive a
+        # backend restart at its cursor rather than starting the whole loop
+        # again.
+        steps=_code_change.BUILD_STEPS,
     ),
 }
 
@@ -324,6 +357,7 @@ _MODULES = {
     "mcp_server.add": _mcp_server,
     "home_assistant.deploy": _home_assistant,
     "code_change.land": _code_change,
+    "code_change.build": _code_change,
 }
 
 
