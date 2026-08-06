@@ -226,6 +226,78 @@ def _land(patch: str, branch: str, base: str = "") -> dict:
                            f"you are happy.")}
 
 
+def _worktree(branch: str, remove: bool = False) -> dict:
+    """Check a `nova/<slug>` branch out into `.worktrees/sandbox-<slug>`.
+
+    The sandbox's first step. A worktree rather than a second clone because it
+    shares the object store — a checkout is seconds and a few hundred KB
+    instead of a full copy of history — and INSIDE the repo under
+    `.worktrees/`, which is this project's own stated policy and is
+    gitignored.
+
+    Note what this does NOT do: run anything. Creating the tree and running a
+    stack from it are separate capabilities in separate containers, because
+    this one holds repository write access and the other holds the docker
+    socket. Neither should hold both.
+    """
+    if not _BRANCH_OK.match(branch or ""):
+        return {"status": "error",
+                "detail": f"branch {branch!r} must look like nova/<name>"}
+    slug = branch.split("/", 1)[1]
+    path = f"{REPO}/.worktrees/sandbox-{slug}"
+    with _lock:
+        if remove:
+            _git("worktree", "remove", "--force", path, check=False)
+            _git("worktree", "prune", check=False)
+            return {"status": "ok", "removed": path}
+        try:
+            _git("rev-parse", "--verify", branch)
+        except RuntimeError:
+            return {"status": "error", "detail": f"no such branch: {branch}"}
+        # Idempotent: a leftover tree from a previous run is replaced rather
+        # than failing the whole check, because a sandbox that cannot start
+        # because of its own debris is worse than no sandbox.
+        _git("worktree", "remove", "--force", path, check=False)
+        _git("worktree", "prune", check=False)
+        try:
+            _git("worktree", "add", "--detach", path, branch)
+        except RuntimeError as e:
+            return {"status": "error", "detail": f"could not create worktree: {e}"}
+        head = _git("rev-parse", "--short", "HEAD", cwd=path).strip()
+        # THE SANDBOX OVERRIDE, written here because this is the container
+        # with repository write access — the one that runs the stack mounts
+        # the repo read-only and got EROFS trying to produce it, which is the
+        # split doing its job.
+        #
+        # Only PORTS need overriding, and why the rest does not is the
+        # interesting part: compose resolves `./data/...` against the project
+        # directory, which is this worktree, and a worktree contains no
+        # `data/` (it is gitignored). So every data bind lands in a fresh
+        # empty directory beside the candidate code and the sandbox gets its
+        # own memory, attachments and workspace by construction. Volumes are
+        # namespaced by `-p nova-sandbox` for the same reason.
+        #
+        # Published ports are the one thing that cannot isolate itself: they
+        # are host-global, so the sandbox postgres collided with the live one
+        # on 127.0.0.1:5432 and the whole stack refused to start. Nothing
+        # outside needs to reach a sandbox — its suite runs inside it — so the
+        # correct number of published ports is zero.
+        try:
+            with open(f"{path}/docker-compose.sandbox.yml", "w") as f:
+                f.write(
+                    "# Generated for the sandbox boot gate. Disposable: it\n"
+                    "# lives in a worktree that is removed with the run.\n"
+                    "services:\n"
+                    "  postgres:\n    ports: !reset []\n"
+                    "  backend:\n    ports: !reset []\n")
+        except OSError as e:
+            return {"status": "error",
+                    "detail": f"could not write the sandbox override: {e}"}
+    log.info("worktree %s -> %s (%s)", branch, path, head)
+    return {"status": "ok", "path": path, "branch": branch, "head": head,
+            "slug": slug}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, obj: dict):
         body = json.dumps(obj).encode()
@@ -243,15 +315,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/land":
+        if self.path not in ("/land", "/worktree", "/worktree/remove"):
             return self._send(404, {"error": "not found"})
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:                   # noqa: BLE001
             return self._send(400, {"error": f"unreadable body: {e}"})
-        out = _land(str(body.get("patch") or ""), str(body.get("branch") or ""),
-                    str(body.get("base") or ""))
+        if self.path == "/land":
+            out = _land(str(body.get("patch") or ""),
+                        str(body.get("branch") or ""),
+                        str(body.get("base") or ""))
+        else:
+            out = _worktree(str(body.get("branch") or ""),
+                            remove=self.path.endswith("/remove"))
         return self._send(200 if out.get("status") == "ok" else 409, out)
 
     def log_message(self, fmt, *args):

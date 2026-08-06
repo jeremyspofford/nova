@@ -483,6 +483,161 @@ def _reachable(service: str) -> dict:
             "tailscale_running": _container_state("tailscale")["running"]}
 
 
+SANDBOX_PROJECT = "nova-sandbox"
+# `nova/<slug>` slugs only. The path is COMPOSED here from a validated slug,
+# never accepted as a path — a caller cannot point this at a directory of its
+# choosing, which matters because what happens next is `docker compose up`.
+_SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9._-]{0,60}$")
+
+
+def _sandbox(slug: str, verb: str) -> dict:
+    """Boot her candidate code in an isolated stack, and report three facts.
+
+    `docs/plans/sandbox-instance.md` phase 1. Her only test surface before
+    this was a coding agent running unit tests in a private clone, and of the
+    six real failures on 2026-08-05 that would have caught exactly one. The
+    rest — a bind mount resolving inside the wrong container, a config key
+    that made tailscale discard its whole serve config, a service that would
+    not start — were only visible in a running stack.
+
+    THE ISOLATION IS THE PROJECT NAME. `-p nova-sandbox` gives every container
+    and every volume a different namespace, so the sandbox cannot touch the
+    live database, the live memory volume or the live state volume. It is the
+    single most important flag here.
+
+    Deliberately NOT the whole stack: postgres and backend only. That is
+    enough to answer the three questions worth asking of a candidate branch —
+    do the migrations apply, does the backend boot, does the suite pass — and
+    it leaves out every service that would contend for the GPU, hold his ntfy
+    topic or take a tailnet name.
+    """
+    if not _SLUG_OK.match(slug or ""):
+        return {"error": f"slug {slug!r} is not allowed"}
+    if not HOST_ROOT:
+        return {"error": "NOVA_HOST_ROOT is unset; the worktree path cannot "
+                         "be composed"}
+    # TWO PATHS TO THE SAME DIRECTORY, and they are not interchangeable.
+    # `-f` is read by the compose CLI running INSIDE this container, so it
+    # must be the container's view (`/repo/...`, via the read-only mount).
+    # `--project-directory` is what relative bind mounts resolve against, and
+    # those are created by the docker DAEMON on the host, so it must be the
+    # host's view. Passing the host path to `-f` fails with "no such file"
+    # against a path that plainly exists — measured on the first run.
+    work = f"{HOST_ROOT}/.worktrees/sandbox-{slug}"
+    local = f"/repo/.worktrees/sandbox-{slug}"
+    compose = f"{local}/docker-compose.yml"
+    base = ["docker", "compose", "--project-directory", work,
+            "-f", compose, "-p", SANDBOX_PROJECT]
+    # BUILD AND RUN NEED DIFFERENT VIEWS OF THE SAME DIRECTORY, and the reason
+    # is not arbitrary. A build CONTEXT is packaged by the compose client and
+    # sent to the daemon, so it must be a path this container can read
+    # (`/repo/...`). A bind MOUNT is created by the daemon on the host, so it
+    # must be a host path (`/home/...`). One `--project-directory` cannot be
+    # both: pointed at the host it fails with "path not found" packaging the
+    # context, pointed at the container it silently mounts directories from
+    # inside this sidecar — the same class of bug that nearly deleted Home
+    # Assistant's config.
+    # THE OVERRIDE. Written into the worktree (which is disposable) rather
+    # than shipped in the repo, because it is derived from what the sandbox
+    # must not do rather than authored per branch.
+    #
+    # Only PORTS need overriding, and understanding why the rest does not is
+    # the interesting part: `--project-directory` is the worktree, and a
+    # worktree contains no `data/` (it is gitignored), so every `./data/...`
+    # bind resolves to a fresh empty directory beside the candidate code. The
+    # sandbox therefore gets its own memory, attachments and workspace for
+    # free, by construction, without a line of configuration. Volumes are
+    # namespaced by `-p nova-sandbox` for the same reason.
+    #
+    # Published ports are the one thing that cannot isolate itself: they are
+    # host-global, so the sandbox postgres collided with the live one on
+    # 127.0.0.1:5432 and the whole stack failed to start. Nothing outside
+    # needs to reach the sandbox — the suite runs INSIDE it via `compose
+    # exec` — so the correct number of published ports is zero.
+    # WRITTEN BY git-landing, not here. This container mounts the repo
+    # READ-ONLY on purpose — it holds the docker socket, and the two
+    # capabilities stay apart — so the container that owns repository writes
+    # produces the override when it creates the worktree. Trying to write it
+    # from here failed with EROFS, which is the split working rather than a
+    # problem to route around.
+    override = f"{local}/docker-compose.sandbox.yml"
+    if not os.path.exists(override):
+        return {"error": (f"no sandbox override at {override} — the worktree "
+                          f"must be created through git-landing's /worktree, "
+                          f"which writes it")}
+
+    base += ["-f", override]
+    build_base = ["docker", "compose", "--project-directory", local,
+                  "-f", compose, "-f", override, "-p", SANDBOX_PROJECT]
+
+    if verb == "down":
+        # -v so the sandbox's volumes go with it. They are its own (the
+        # project name saw to that), and leaving them behind is how a second
+        # database quietly accumulates on his disk.
+        proc = subprocess.run(base + ["down", "-v", "--remove-orphans"],
+                              capture_output=True, text=True, timeout=600)
+        return {"status": "ok" if proc.returncode == 0 else "error",
+                "detail": (proc.stderr or proc.stdout)[-400:].strip()}
+
+    env = {**os.environ,
+           # Its own credentials and its own ports. A sandbox that answered on
+           # the live port would be reachable as if it were Nova.
+           "NOVA_AUTH_TOKEN": "sandbox-" + slug,
+           "POSTGRES_PORT": "0", "BACKEND_PORT": "0"}
+    steps: list[dict] = []
+
+    def run(name, args, timeout, cmd=None):
+        p = subprocess.run((cmd or base) + args, capture_output=True,
+                           text=True, timeout=timeout, env=env)
+        # STDOUT AND STDERR SEPARATELY, and stdout wins the space. The first
+        # version concatenated them and kept the last 1500 characters — which
+        # is the tail of STDERR, so a failed suite reported a wall of routine
+        # log noise while the line that names the failing suites (printed on
+        # stdout, at the end) was cut. A gate that cannot say why it failed is
+        # barely better than no gate.
+        so, se = (p.stdout or "").strip(), (p.stderr or "").strip()
+        # The lines a reader actually needs: verdicts and failures, wherever
+        # they appear. Falls back to the plain tail when nothing matches, so
+        # this can never hide output it did not recognise.
+        keep = [ln for ln in so.splitlines()
+                if ("FAIL" in ln or "passed" in ln or "Error" in ln
+                    or "error" in ln)]
+        steps.append({"step": name, "ok": p.returncode == 0,
+                      "summary": "\n".join(keep[-12:]) or so[-600:],
+                      "stdout": so[-2500:], "stderr": se[-1200:]})
+        return p.returncode == 0
+
+    try:
+        # Always start from nothing: a previous run's containers would make
+        # "it boots" a statement about the wrong code.
+        subprocess.run(base + ["down", "-v", "--remove-orphans"],
+                       capture_output=True, text=True, timeout=600, env=env)
+        if not run("build", ["build", "backend"], 2400, cmd=build_base):
+            return {"status": "failed", "stage": "build", "steps": steps}
+        # Migrations run at backend startup, so "up" IS the migration test.
+        if not run("up", ["up", "-d", "postgres", "backend"], 1200):
+            return {"status": "failed", "stage": "up", "steps": steps}
+        if not run("health", ["exec", "-T", "backend", "sh", "-c",
+                              "for i in $(seq 1 60); do "
+                              "curl -sf http://localhost:8000/health && exit 0; "
+                              "sleep 3; done; exit 1"], 300):
+            run("boot-logs", ["logs", "--tail", "60", "backend"], 120)
+            return {"status": "failed", "stage": "boot", "steps": steps}
+        ok = run("suite", ["exec", "-T", "backend", "python",
+                           "tests/run_all.py"], 2400)
+        return {"status": "ok" if ok else "failed",
+                "stage": "suite" if not ok else "complete", "steps": steps}
+    except subprocess.TimeoutExpired as e:
+        steps.append({"step": "timeout", "ok": False, "output": str(e)[:400]})
+        return {"status": "failed", "stage": "timeout", "steps": steps}
+    finally:
+        # ALWAYS, including on failure and including on an exception. A
+        # sandbox left running is a second attack surface and a disk drain,
+        # and "I will clean it up later" is how one ends up running for a week.
+        subprocess.run(base + ["down", "-v", "--remove-orphans"],
+                       capture_output=True, text=True, timeout=600, env=env)
+
+
 def _round1(v: float | None) -> float | None:
     return round(v, 2) if v is not None else None
 
@@ -945,6 +1100,27 @@ class Handler(BaseHTTPRequestHandler):
                     "/notify/expose": "notify_expose"}[self.path]
         elif self.path in ("/home/up", "/home/down"):
             verb = {"/home/up": "home_up", "/home/down": "home_down"}[self.path]
+        elif self.path.startswith("/sandbox/"):
+            # SYNCHRONOUS, unlike every other verb here. A sandbox run is the
+            # answer to a question ("does her branch boot?") rather than a
+            # state change to poll for, and the caller is a background task
+            # that is already prepared to wait minutes. Handled before the
+            # single-op lock below so a sandbox run and an ollama toggle do
+            # not exclude each other — they touch nothing in common.
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as e:
+                return self._send(400, {"error": f"unreadable body: {e}"})
+            which = self.path.rsplit("/", 1)[-1]
+            if which not in ("check", "down"):
+                return self._send(404, {"error": "not found"})
+            try:
+                out = _sandbox(str(body.get("slug") or ""),
+                               "down" if which == "down" else "check")
+                return self._send(400 if out.get("error") else 200, out)
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:400]})
         else:
             return self._send(404, {"error": "not found"})
         with _lock:

@@ -205,6 +205,11 @@ services:
       - ./docker-compose.yml:/compose/docker-compose.yml:ro
       - ./docker-compose.gpu.yml:/compose/docker-compose.gpu.yml:ro
       - ./docker-compose.models.yml:/compose/docker-compose.models.yml:ro
+      # The repo, READ-ONLY, so the sandbox boot gate can reach the candidate
+      # branch's compose file under .worktrees/. Read-only is the whole point:
+      # this container holds the docker socket, and repository WRITES live in
+      # git-landing instead. Neither holds both.
+      - .:/repo:ro
       # operator-chosen model-store path, written by the backend (read-only
       # here — the sidecar only ever reads where to bind, never sets it)
       - nova_state:/state:ro
@@ -226,6 +231,15 @@ services:
       # bind. Passed through so `--project-directory` can correct it.
       NOVA_HOST_ROOT: ${PWD:-}
     restart: unless-stopped
+    # The sandbox boot gate (docs/plans/sandbox-instance.md) runs a SECOND
+    # compose project, `-p nova-sandbox`, from a worktree under .worktrees/.
+    # That needs the compose file of the CANDIDATE branch, which lives in the
+    # repo rather than in the three files mounted above — read-only, because
+    # this container only ever reads what to run. Creating the worktree is
+    # git-landing's job: repository writes and the docker socket stay in
+    # different containers.
+    labels:
+      nova.sandbox: "runs -p nova-sandbox from .worktrees/, repo mounted ro"
 
   # Repository write access, in one container that can do nothing else
   # (roadmap: phase 4 of the autonomy lane). Nova writes code through
