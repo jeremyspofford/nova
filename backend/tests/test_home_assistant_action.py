@@ -37,6 +37,8 @@ from app import actions, settings_store            # noqa: E402
 from app.actions import home_assistant as ha       # noqa: E402
 from app.actions.schemas import HomeAssistantDeploy  # noqa: E402
 
+import _env                                        # noqa: E402
+
 FAILURES: list[str] = []
 
 
@@ -140,6 +142,9 @@ def test_card_text():
 
 def test_timezone_authority():
     print("\n4. HIS SETTING BEATS HER PLAN")
+    if not _env.reachable("http://inference-control:9911/home/status"):
+        print("  SKIP  inference-control is not in this stack")
+        return
     before = settings_store.get("home.timezone")
     try:
         settings_store._cache["home.timezone"] = "Europe/London"
@@ -161,6 +166,9 @@ def test_timezone_authority():
 
 def test_preflight_reads_the_world():
     print("\n5. PREFLIGHT ASKS THE SIDECAR, NOT THE MODEL")
+    if not _env.reachable("http://inference-control:9911/home/status"):
+        print("  SKIP  inference-control is not in this stack")
+        return
     state, detail, tools = asyncio.run(ha.preflight(_doc()))
     check("5.1 it reached the sidecar and formed a verdict",
           state in ("ready", "blocked"), f"{state}: {detail[:60]}")

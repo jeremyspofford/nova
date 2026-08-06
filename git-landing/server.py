@@ -289,7 +289,23 @@ def _worktree(branch: str, remove: bool = False) -> dict:
                     "# lives in a worktree that is removed with the run.\n"
                     "services:\n"
                     "  postgres:\n    ports: !reset []\n"
-                    "  backend:\n    ports: !reset []\n")
+                    "  backend:\n"
+                    "    ports: !reset []\n"
+                    "    environment:\n"
+                    # THE STACK DECLARES ITSELF. Some suites are about the
+                    # LIVE install — that the operator's real agent grants
+                    # still match a snapshot, that a sidecar answers — and
+                    # against a fresh database with no sidecars they fail for
+                    # reasons that have nothing to do with the branch being
+                    # tested. A failure that does not mean "your change is
+                    # wrong" trains everyone to ignore the gate.
+                    #
+                    # So the environment says where it is and those suites
+                    # SKIP, visibly and counted separately. Skipping is not
+                    # hiding: `run_all` prints what was skipped and why, and
+                    # the same suites still run in production where their
+                    # question is meaningful.
+                    '      NOVA_SANDBOX: "1"\n')
         except OSError as e:
             return {"status": "error",
                     "detail": f"could not write the sandbox override: {e}"}

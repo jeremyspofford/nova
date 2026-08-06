@@ -27,6 +27,8 @@ import json
 import sys
 from pathlib import Path
 
+import _env
+
 sys.path.insert(0, "/app/backend")
 
 from app.evals import suites  # noqa: E402
@@ -37,6 +39,17 @@ REGENERATE = (
     "— see the generator in tests/test_eval_grants.py:live_grants()")
 
 FAILURES: list[str] = []
+
+# THIS SUITE IS ABOUT THE OPERATOR'S INSTALL, not about any branch. It asks
+# whether the live agent toolsets still match the snapshot the eval suites
+# were authored against — which is a real and important question, and one
+# with no meaning against the sandbox's fresh database, where the grants are
+# simply whatever the migrations created. Failing there would report drift
+# that does not exist and would say nothing about the code under test.
+if _env.in_sandbox():
+    _env.skip("compares the LIVE install's agent grants against the eval "
+              "snapshot; the sandbox has a fresh database, so there is no "
+              "live install to have drifted")
 
 
 def check(label, cond, detail=""):

@@ -32,6 +32,8 @@ from app import actions                                  # noqa: E402
 from app.actions import code_change as cc                # noqa: E402
 from app.actions.schemas import CodeChangeLand           # noqa: E402
 
+import _env                                              # noqa: E402
+
 FAILURES: list[str] = []
 SESSION = "12cd3035-1482-4bfb-ab48-e69601ab5242"          # shape-valid uuid
 
@@ -181,6 +183,14 @@ def test_preflight_asks_the_world():
 
 def test_the_sidecar_refuses():
     print("\n5. THE CONTAINER THAT HOLDS THE REPO IS WHAT REFUSES")
+    # SECTION-level, not suite-level. Sections 1-4 are pure — schema, boot
+    # gate, card text — and they are the ones that would catch a real
+    # regression in a branch, so they must run everywhere. Only this section
+    # needs git-landing, which the sandbox does not start.
+    if not _env.reachable("http://git-landing:9912/health"):
+        print("  SKIP  git-landing is not in this stack "
+              "(sandbox runs postgres + backend only)")
+        return
     # Reached over the network, because the point is that these checks do NOT
     # live in the backend. If git-landing is not running, that is itself the
     # correct answer to "can anything land right now".
