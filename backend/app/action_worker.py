@@ -106,6 +106,27 @@ async def _block(run_id, conversation_id, key: str, text: str) -> None:
         log.exception("could not post the question for run %s", run_id)
 
 
+def refusal(result) -> Optional[str]:
+    """Why this result is a failure, or None if it is not one.
+
+    One predicate, used by both executor shapes, because "did that work" must
+    not be answered differently depending on whether the action declared
+    `execute` or `steps`.
+    """
+    if isinstance(result, dict) and result.get("status") == "error":
+        return str(result.get("detail") or "the executor reported an error")
+    return None
+
+
+def _receipt(detail) -> str:
+    """The one line the operator reads for a step. A dict's `detail` field, not
+    its repr — a receipt reading `{'status': 'error', 'session_id': ...}` is a
+    debug dump, and he is the audience."""
+    if isinstance(detail, dict):
+        return str(detail.get("detail") or detail.get("status") or "")
+    return str(detail or "")
+
+
 async def _run_steps(spec, doc, rec_dict, run, step) -> dict:
     """Drive a step-based executor from its cursor. Returns the final result.
 
@@ -129,7 +150,24 @@ async def _run_steps(spec, doc, rec_dict, run, step) -> dict:
     for i in range(start, len(spec.steps)):
         name, fn = spec.steps[i]
         detail = await fn(doc, rec_dict, ctx)
-        await step(name, "ok", str(detail or ""))
+        # A STEP THAT SAYS IT FAILED IS A FAILURE. This line used to record
+        # every step as "ok" whatever it returned, and `_process` then called
+        # the whole run "succeeded" and notified him "installed" — so a build
+        # loop that burned all three attempts without going green, and a
+        # landing refused for a red sandbox verdict, both reached him as
+        # success. It is the defect this repo keeps finding in itself: a
+        # fallback that reads as success is worse than a crash.
+        #
+        # Returned dicts are the contract for a step's result, so the status
+        # inside one is the step's own verdict and is believed over the mere
+        # fact that it returned.
+        failed = refusal(detail)
+        await step(name, "error" if failed else "ok", _receipt(detail))
+        if failed:
+            # Cursor deliberately NOT advanced: a failed step is where this run
+            # stopped, and a later reader deserves to see that rather than a
+            # run that looks like it completed every step.
+            return detail
         # Cursor AFTER the side effect, so a crash mid-step repeats that step
         # rather than skipping it. Steps are written to tolerate that; skipping
         # one silently is the failure that cannot be recovered from.
@@ -186,6 +224,17 @@ async def _process(run: dict) -> None:
         else:
             result = await asyncio.wait_for(
                 spec.execute(doc, rec_dict, step=step), timeout)
+        # THE LAST PLACE A REFUSAL CAN BE TURNED INTO SUCCESS, and for a while
+        # it was. Every other executor raises on failure; `code_change` returns
+        # `{"status": "error"}`, which reached `_finish("succeeded")` and told
+        # him "installed" for a landing the sandbox gate had just refused.
+        #
+        # Checked HERE rather than fixed only in that executor, because the
+        # next one written will make the same choice and nothing would catch
+        # it: the control has to live where the verdict is recorded.
+        refused = refusal(result)
+        if refused:
+            raise RuntimeError(refused)
         await _finish(run_id, "succeeded", result=result)
         log.info("Action run %s succeeded: %s", run_id, doc.type)
         summary = "installed"

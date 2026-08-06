@@ -92,12 +92,19 @@ async def delete_workspace(name: str) -> bool:
 # --- sessions --------------------------------------------------------------
 
 async def start(workspace: str, task: str, *, mode: str = "default",
-                budget_s: int = 0, requested_by: str | None = None) -> dict:
+                budget_s: int = 0, requested_by: str | None = None,
+                continue_from: str | None = None) -> dict:
     """Kick off one coding task. Returns immediately — sessions run minutes.
 
     The row is written BEFORE the broker is called and updated after, so a
     broker that dies mid-request leaves a record saying what was attempted
     rather than nothing at all.
+
+    `continue_from` is one of OUR session ids, not a broker id: callers hold
+    the durable row and should not have to know the broker's bookkeeping. It
+    is resolved here, and an unresolvable one is an ERROR rather than a
+    fresh start — a "resumed" session that quietly began from the trunk is
+    the false premise the whole parameter exists to remove.
     """
     if not configured():
         return {"status": "error",
@@ -114,11 +121,26 @@ async def start(workspace: str, task: str, *, mode: str = "default",
                 "detail": (f"No enabled workspace named '{workspace}'. "
                            f"Available: {', '.join(available) or '(none)'}")}
 
+    resume_broker_id = ""
+    if continue_from:
+        async with db.acquire() as conn:
+            prev = await conn.fetchrow(
+                "SELECT broker_session_id, commit_sha FROM coding_sessions "
+                "WHERE id = $1::uuid", str(continue_from))
+        if not prev or not prev["broker_session_id"]:
+            return {"status": "error",
+                    "detail": (f"cannot resume session {continue_from}: it "
+                               f"never reached the broker, so there is no "
+                               f"clone to continue from")}
+        resume_broker_id = prev["broker_session_id"]
+
     async with db.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO coding_sessions (workspace_id, task, mode, requested_by)
-               VALUES ($1, $2, $3, $4) RETURNING *""",
-            ws["id"], task, mode, requested_by)
+            """INSERT INTO coding_sessions
+                   (workspace_id, task, mode, requested_by, continued_from)
+               VALUES ($1, $2, $3, $4, $5::uuid) RETURNING *""",
+            ws["id"], task, mode, requested_by,
+            str(continue_from) if continue_from else None)
     sid = row["id"]
 
     try:
@@ -126,7 +148,12 @@ async def start(workspace: str, task: str, *, mode: str = "default",
             resp = await client.post(
                 f"{settings.coder_url}/session", headers=_auth(),
                 json={"repo": ws["git_url"], "task": task, "mode": mode,
-                      "budget_s": budget_s})
+                      "budget_s": budget_s,
+                      "continue_from": resume_broker_id,
+                      # What the patch is measured from. The workspace's own
+                      # trunk, never a guess: `sandbox_check` and `land` both
+                      # apply the result to it.
+                      "base_ref": ws["default_branch"] or "main"})
         if resp.status_code >= 400:
             detail = _detail(resp)
             await _update(sid, state="failed", error=detail)
@@ -141,6 +168,7 @@ async def start(workspace: str, task: str, *, mode: str = "default",
                   branch=body.get("branch"))
     return {"status": "started", "session_id": str(sid),
             "branch": body.get("branch"),
+            "continued_from": str(continue_from) if continue_from else None,
             "note": ("Started — it runs for minutes, not seconds. Nothing is "
                      "merged: the deliverable is a branch and a diff for the "
                      "operator to review.")}
@@ -252,6 +280,8 @@ def _shape(row: dict) -> dict:
             "task": row["task"], "branch": row["branch"],
             "commit": row["commit_sha"], "diffstat": row["diffstat"],
             "error": row["error"], "workspace": row.get("workspace"),
+            "continued_from": (str(row["continued_from"])
+                               if row.get("continued_from") else None),
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None}
 
 

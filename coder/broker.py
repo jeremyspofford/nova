@@ -53,6 +53,7 @@ model key — and nothing else. It has no published ports.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
@@ -112,14 +113,72 @@ class StartSession(BaseModel):
     branch: str = ""               # branch to create; derived when empty
     mode: str = "dontAsk"
     budget_s: int = 0
+    #: Resume a previous session's work instead of starting from the trunk.
+    #: The retry half of the build loop, and the reason it exists: every
+    #: attempt used to clone the repo fresh, so a retry told "a previous
+    #: attempt failed the sandbox, fix this" opened a checkout in which the
+    #: failing change did not exist. The prompt described a world the agent
+    #: was not in — worse than no retry at all, because it is a false premise
+    #: rather than a repetition. Given this, the clone source is that
+    #: session's own directory, so the broken code is really there and the
+    #: agent can run the failing check itself.
+    continue_from: str = ""
+    #: What a patch is measured against. Not "the commit this clone started
+    #: at": a resumed session starts at the PREVIOUS ATTEMPT's tip, and a
+    #: patch measured from there would carry only the last delta while the
+    #: sandbox and the landing both apply it to the trunk.
+    base_ref: str = "main"
 
 
 _sessions: dict[str, "Session"] = {}
 _lock = threading.Lock()
 
 
+#: ONE CLONE PER REPOSITORY, kept and fetched. Every session used to run its
+#: own `git clone`, so N tasks against one repo meant N copies of it on disk —
+#: minutes and hundreds of megabytes each, and N drifting views of `main`.
+#: A checkout is a thing you keep in sync, not a thing you make again.
+REPOS = os.path.join(WORKSPACES, ".repos")
+
+#: Serialises fetch and `worktree add` against a shared mirror. Two sessions
+#: starting at once would otherwise race on the same refs and index.
+_mirror_lock = threading.Lock()
+
+
+def _mirror(repo: str) -> str:
+    """The persistent checkout for `repo`, cloned once and fetched after that.
+
+    Keyed by the URL rather than by workspace name, because the URL is what the
+    broker is given and two workspaces pointing at the same repository should
+    share the objects rather than duplicate them.
+
+    A FETCH FAILURE IS AN ERROR, not a shrug. Working from a stale mirror would
+    produce a patch against a `main` that moved days ago, and `git am` would
+    then fail at landing time with a conflict nobody could explain.
+    """
+    key = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    path = os.path.join(REPOS, key)
+    with _mirror_lock:
+        if not os.path.isdir(os.path.join(path, ".git")):
+            os.makedirs(REPOS, exist_ok=True)
+            log.info("cloning %s -> %s (first time for this repo)", repo, path)
+            subprocess.run(["git", "clone", "--no-hardlinks", repo, path],
+                           capture_output=True, text=True, timeout=600,
+                           check=True)
+        else:
+            r = subprocess.run(
+                ["git", "-C", path, "fetch", "--prune", "origin"],
+                capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"could not fetch {repo}: {r.stderr[:300]}. Refusing to "
+                    f"work from a stale checkout — the patch would be measured "
+                    f"against a trunk that has moved.")
+    return path
+
+
 class Session:
-    """One coding task: a private clone, an agent subprocess, a deadline."""
+    """One coding task: a worktree of the shared clone, an agent, a deadline."""
 
     def __init__(self, spec: StartSession):
         self.id = str(uuid.uuid4())
@@ -136,6 +195,10 @@ class Session:
         self.diffstat = ""
         self.commit = ""
         self.timed_out = False
+        #: The trunk commit this session's work will be measured from. Set at
+        #: clone time and never derived from HEAD, which on a resumed session
+        #: is the previous attempt's tip.
+        self.base_commit = ""
 
     # -- lifecycle ---------------------------------------------------------
     #: States nothing may overwrite. A session an operator stopped must keep
@@ -154,7 +217,7 @@ class Session:
 
     def run(self):
         try:
-            self._clone()
+            self._checkout()
             self._settle("running")
             self._drive()
             self._capture()
@@ -174,20 +237,71 @@ class Session:
             raise RuntimeError(f"git {' '.join(args)}: {r.stderr[:300]}")
         return r.stdout
 
-    def _clone(self):
-        """A PRIVATE clone, never a mounted worktree.
+    def _checkout(self):
+        """A worktree of the ONE clone this repository gets, never a new copy.
 
-        docs/plans/capability-and-containment.md, 2026-07-25: a git worktree is
-        not a portable containment unit — its `.git` is a `gitdir:` pointer to
-        an absolute path in the parent repo, and commits inside it write refs
-        into the parent's `.git/refs/heads`. Mounting "just the worktree" would
-        require the parent `.git` writable at the same absolute path inside the
-        container, which is the opposite of confinement.
+        The repository is cloned the first time it is seen and FETCHED after
+        that; each session is a `git worktree` off it. Cloning per session was
+        minutes and hundreds of megabytes each time, N copies of one repo on
+        disk, and N views of `main` that drifted apart as they aged.
+
+        WHY A WORKTREE IS FINE HERE, when capability-and-containment.md
+        (2026-07-25) rejected it. That argument is about MOUNTING a worktree
+        into a container: its `.git` is a `gitdir:` pointer to an absolute path
+        in the parent, so "just the worktree" would need the parent's `.git`
+        writable at the same path on the other side of the boundary. Nothing
+        crosses a boundary here — mirror and worktree are both inside this
+        container's private volume at the same absolute paths, and the
+        containment argument was never about the two of them, it was about the
+        host. The agent still cannot leave the container.
         """
         os.makedirs(WORKSPACES, exist_ok=True)
-        subprocess.run(["git", "clone", "--no-hardlinks", self.spec.repo, self.dir],
-                       capture_output=True, text=True, timeout=600, check=True)
-        self._git("checkout", "-b", self.branch)
+        mirror = _mirror(self.spec.repo)
+
+        # The trunk, freshly fetched. Read from the mirror rather than from the
+        # session tree, because on a resumed session HEAD is the previous
+        # attempt's tip and a patch measured from there carries only its last
+        # delta — while the sandbox and the landing both apply it to `main`.
+        r = subprocess.run(["git", "-C", mirror, "rev-parse",
+                            f"origin/{self.spec.base_ref}"],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"{self.spec.repo} has no origin/{self.spec.base_ref}: "
+                f"{r.stderr[:200]}")
+        self.base_commit = r.stdout.strip()
+
+        start = f"origin/{self.spec.base_ref}"
+        if self.spec.continue_from:
+            # Resume from the previous session's BRANCH, which lives in the
+            # shared mirror and therefore outlives its worktree — strictly
+            # better than the directory this used to depend on. The name is the
+            # one `__init__` derives, so it is recoverable without the
+            # in-memory session map that a restart empties.
+            prev = _sessions.get(self.spec.continue_from)
+            start = (prev.branch if prev
+                     else f"nova/{self.spec.continue_from[:8]}")
+            # FAILS RATHER THAN FALLING BACK to the trunk: a session that says
+            # it is resuming and quietly is not hands the agent a clean tree
+            # while its prompt describes a change that is not in it.
+            check = subprocess.run(["git", "-C", mirror, "rev-parse",
+                                    "--verify", start],
+                                   capture_output=True, text=True, timeout=60)
+            if check.returncode != 0:
+                raise RuntimeError(
+                    f"cannot resume session {self.spec.continue_from}: no "
+                    f"branch {start} in this repository, so there is nothing "
+                    f"to continue from. Start a fresh attempt instead of "
+                    f"pretending to resume one.")
+
+        with _mirror_lock:
+            r = subprocess.run(
+                ["git", "-C", mirror, "worktree", "add", "-b", self.branch,
+                 self.dir, start],
+                capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise RuntimeError(f"could not create a worktree for "
+                               f"{self.branch}: {r.stderr[:300]}")
         self._git("config", "user.email", "nova@localhost")
         self._git("config", "user.name", "Nova")
 
@@ -214,10 +328,23 @@ class Session:
 
     def _capture(self):
         """The deliverable is a branch and a diff. Nothing here merges or pushes."""
-        excl = os.path.join(self.dir, ".git", "info", "exclude")
+        # ASK GIT WHERE ITS DIRECTORY IS. In a worktree `.git` is a FILE — a
+        # `gitdir:` pointer — so joining `.git/info` onto the working directory
+        # raises ENOTDIR, which is exactly how the first worktree-backed
+        # session died: the agent wrote the file, `_capture` blew up before the
+        # commit, and the session reported `failed` with nothing to land.
+        common = self._git("rev-parse", "--git-common-dir").strip()
+        if not os.path.isabs(common):
+            common = os.path.join(self.dir, common)
+        excl = os.path.join(common, "info", "exclude")
         os.makedirs(os.path.dirname(excl), exist_ok=True)
-        with open(excl, "a") as f:
-            f.write("\n" + "\n".join(self._NEVER_COMMIT) + "\n")
+        # Idempotent, because the common dir is now SHARED by every worktree of
+        # this repository: appending per session would grow the file forever.
+        have = open(excl).read() if os.path.exists(excl) else ""
+        missing = [p for p in self._NEVER_COMMIT if p not in have]
+        if missing:
+            with open(excl, "a") as f:
+                f.write("\n" + "\n".join(missing) + "\n")
         self._git("rm", "-r", "--cached", "-q", "--ignore-unmatch",
                   "--", "__pycache__", ".pytest_cache", check=False)
         self._git("add", "-A")
@@ -225,7 +352,11 @@ class Session:
         if status.strip():
             self._git("commit", "-m", f"nova: {self.spec.task[:60]}")
             self.commit = self._git("rev-parse", "HEAD").strip()
-        self.diffstat = self._git("diff", "--stat", "HEAD~1..HEAD",
+        # FROM THE TRUNK, not from the previous commit. On a resumed session
+        # HEAD~1 is the last attempt's work, and a diffstat that excluded it
+        # would describe a fraction of what the patch actually carries.
+        self.diffstat = self._git("diff", "--stat",
+                                  f"{self.base_commit or 'HEAD~1'}..HEAD",
                                   check=False) if self.commit else ""
 
     def snapshot(self) -> dict:
@@ -247,6 +378,10 @@ class Session:
         return {
             "id": self.id, "state": self.state, "error": self.error,
             "branch": self.branch, "commit": self.commit,
+            # So "attempt 2 resumed attempt 1" is a recorded fact rather than
+            # something a reader infers from timestamps.
+            "resumed_from": self.spec.continue_from or None,
+            "base_commit": self.base_commit,
             "diffstat": self.diffstat.strip(),
             "updates": len(self.updates),
             "denials": denials,
@@ -303,6 +438,12 @@ def patch(sid: str, authorization: str | None = Header(default=None)):
     `git format-patch` rather than `git diff` on purpose: it carries the commit
     message and authorship, so what lands is attributable to the session that
     wrote it rather than appearing as an anonymous working-tree change.
+
+    MEASURED FROM THE TRUNK, so a resumed session hands out the whole series
+    rather than its last commit. Both consumers apply this to `main` — the
+    sandbox stages `main + patch` and landing creates a branch off HEAD — so a
+    patch carrying only attempt 3's delta would be checked and landed without
+    the two attempts it was written on top of.
     """
     _guard(authorization)
     s = _sessions.get(sid)
@@ -312,7 +453,8 @@ def patch(sid: str, authorization: str | None = Header(default=None)):
         return {"id": s.id, "state": s.state, "patch": "", "commit": "",
                 "note": "this session produced no commit — nothing to land"}
     try:
-        text = s._git("format-patch", "--stdout", "HEAD~1..HEAD")
+        text = s._git("format-patch", "--stdout",
+                      f"{s.base_commit or 'HEAD~1'}..HEAD")
     except Exception as e:                       # noqa: BLE001
         raise HTTPException(500, f"could not format the patch: {e}")
     return {"id": s.id, "state": s.state, "commit": s.commit,
@@ -341,7 +483,21 @@ def cleanup(sid: str, authorization: str | None = Header(default=None)):
     if s:
         if s.acp:
             s.acp.close()
-        shutil.rmtree(s.dir, ignore_errors=True)
+        # A WORKTREE IS REMOVED, NOT DELETED. `rmtree` would leave the mirror
+        # holding a registration for a directory that no longer exists, and
+        # every later `worktree add` would warn about it. The BRANCH is kept
+        # deliberately: it is the only durable record of the work, and it is
+        # what a later session resumes from.
+        try:
+            mirror = _mirror(s.spec.repo)
+            subprocess.run(["git", "-C", mirror, "worktree", "remove",
+                            "--force", s.dir],
+                           capture_output=True, text=True, timeout=120)
+            subprocess.run(["git", "-C", mirror, "worktree", "prune"],
+                           capture_output=True, text=True, timeout=60)
+        except Exception:                            # noqa: BLE001
+            log.exception("could not remove the worktree for %s", sid)
+            shutil.rmtree(s.dir, ignore_errors=True)
     return {"status": "removed"}
 
 

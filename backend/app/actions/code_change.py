@@ -238,22 +238,75 @@ async def _await_session(session_id: str, ctx, deadline: float) -> dict:
             "error": f"still running after {int(_SESSION_WAIT_S)}s"}
 
 
+#: How much of one failure's text reaches the next attempt. Twelve lines of
+#: pytest output name the failing tests, which is the actionable part.
+_FAILURE_CHARS = 1200
+
+
+def retry_task(task: str, history: list[str], resume_from: str | None) -> str:
+    """The instruction attempt N+1 is given. A pure function so it is testable.
+
+    THREE THINGS THE FIRST VERSION GOT WRONG, all of which made the retry
+    weaker than the first try rather than stronger:
+
+    1. It described a checkout the agent was not in. Every attempt clones the
+       trunk fresh, so "a previous attempt was rejected, fix this" arrived with
+       a quoted test failure the agent could not reproduce — the failing change
+       was not in its tree. A false premise is worse than a repetition. The
+       fix is `continue_from` in the broker; this text now states which of the
+       two situations the agent is actually in, and never guesses.
+    2. It kept only the LAST failure, because it rebuilt from `doc.task` each
+       pass. Attempt 3 could therefore undo attempt 1's fix and rediscover
+       attempt 1's failure, forever.
+    3. The no-commit path replaced the text entirely, throwing away any sandbox
+       failure an earlier attempt had found.
+
+    All three are the same mistake: treating a retry as a re-roll rather than
+    as the next step of one piece of work.
+    """
+    if not history:
+        return task
+    log = "\n".join(f"  attempt {i}: {t}" for i, t in enumerate(history, 1))
+    if resume_from:
+        where = (
+            "YOUR CHECKOUT ALREADY CONTAINS THE PREVIOUS ATTEMPT'S WORK. It is "
+            "committed on this branch — this is a continuation, not a fresh "
+            "start. Reproduce the failure yourself first (run the check that "
+            "failed), then fix it. Do not rewrite from scratch, and do not "
+            "assume the previous attempt was wrong about everything.")
+    else:
+        where = (
+            "NO PREVIOUS ATTEMPT LEFT ANY CODE — you are starting from a clean "
+            "checkout of the trunk. Confirm the files you intend to change "
+            "actually exist here before editing, and if the task looks "
+            "already-done, say so explicitly rather than exiting silently.")
+    return (f"{task}\n\n"
+            f"--- THIS IS ATTEMPT {len(history) + 1} ---\n"
+            f"What has already been tried, and how each pass ended:\n{log}\n\n"
+            f"{where}")
+
+
 async def _step_build(doc, rec, ctx) -> dict:
     """Write, check, and try again — bounded on both axes.
 
-    Each pass hands the NEXT attempt what actually went wrong, because a
-    retry that repeats the original instruction verbatim is just a second roll
-    of the dice. The sandbox's failing stage and its summary are the most
-    useful thing anyone could tell a coding agent, and they are facts rather
-    than an opinion about the code.
+    Each pass hands the next attempt the tree it produced AND every failure so
+    far, because a retry that starts over is a second roll of the dice. The
+    sandbox's failing stage and its summary are the most useful thing anyone
+    could tell a coding agent, and they are facts rather than an opinion about
+    the code.
     """
     import time
     from app import coder
 
     started = time.monotonic()
     deadline = started + _LOOP_BUDGET_S
-    task = doc.task
-    tried: list[str] = []
+    history: list[str] = []
+    #: The last session that actually produced a commit. The next attempt
+    #: clones ITS directory, so the code under discussion is really there.
+    #: Unchanged by an attempt that produced nothing — there is no work in a
+    #: session that wrote no file, and resuming from it would only reset the
+    #: base to the trunk without saying so.
+    resume_from: str | None = None
 
     for attempt in range(1, doc.attempts + 1):
         if time.monotonic() > deadline:
@@ -261,39 +314,37 @@ async def _step_build(doc, rec, ctx) -> dict:
                     "detail": (f"stopped after {attempt - 1} attempt(s): the "
                                f"{int(_LOOP_BUDGET_S / 60)}-minute budget for "
                                f"this build is spent. What was tried: "
-                               + " | ".join(tried))}
+                               + " | ".join(history))}
 
         started_r = await coder.start(
-            doc.workspace, task, requested_by="code_change.build")
+            doc.workspace, retry_task(doc.task, history, resume_from),
+            requested_by="code_change.build", continue_from=resume_from)
         if started_r.get("status") == "error":
             return {"status": "error",
                     "detail": f"attempt {attempt} could not start: "
                               f"{started_r.get('detail')}"}
         sid = started_r["session_id"]
-        await ctx.record(f"attempt-{attempt}", "ok",
-                         f"session {sid[:8]} started")
+        await ctx.record(
+            f"attempt-{attempt}", "ok",
+            f"session {sid[:8]} started"
+            + (f", resuming {resume_from[:8]}" if resume_from else ""))
 
         r = await _await_session(sid, ctx, min(deadline,
                                                time.monotonic() + _SESSION_WAIT_S))
         if r.get("state") != "done":
-            note = f"attempt {attempt}: session {r.get('state')} — {r.get('error')}"
-            tried.append(note)
+            note = f"session {r.get('state')} — {r.get('error')}"
+            history.append(note)
             await ctx.record(f"attempt-{attempt}", "error", note[:300])
             continue
         if not r.get("commit"):
             # THE SILENT NO-OP. An agent that changes nothing reports `done`
             # and is indistinguishable from one that judged the work already
             # complete — it happened for real when the clone did not contain
-            # the file being edited. Treated as a failed attempt, and the next
-            # one is told so explicitly.
-            note = f"attempt {attempt}: finished without changing anything"
-            tried.append(note)
+            # the file being edited. A failed attempt, and `resume_from` stays
+            # where it was: this session added nothing to resume from.
+            note = "finished without changing anything"
+            history.append(note)
             await ctx.record(f"attempt-{attempt}", "error", note)
-            task = (doc.task + "\n\nIMPORTANT: a previous attempt finished "
-                    "without modifying any file. Confirm the files you intend "
-                    "to change actually exist in this checkout before editing, "
-                    "and if the task looks already-done, say so explicitly "
-                    "rather than exiting silently.")
             continue
 
         await ctx.record(f"attempt-{attempt}", "ok",
@@ -307,18 +358,17 @@ async def _step_build(doc, rec, ctx) -> dict:
                                f"the suite passed. Session {sid} is ready to "
                                f"land — that is a separate decision.")}
 
-        note = f"attempt {attempt}: {gate.get('detail') or gate.get('status')}"
-        tried.append(note)
+        note = str(gate.get("detail") or gate.get("status"))[:_FAILURE_CHARS]
+        history.append(note)
         await ctx.record(f"attempt-{attempt}", "error", note[:400])
-        # HAND THE FAILURE FORWARD. This is the whole difference between a
-        # loop and repetition.
-        task = (doc.task + f"\n\nA previous attempt was rejected by the "
-                f"sandbox check. Fix this before anything else:\n"
-                f"{(gate.get('detail') or '')[:1200]}")
+        # HAND THE TREE AND THE FAILURE FORWARD. Both halves matter: the text
+        # says what went wrong, and the tree is what makes that statement true
+        # of the checkout the next agent opens.
+        resume_from = sid
 
     return {"status": "error",
             "detail": (f"stopped after {doc.attempts} attempts, none green. "
-                       f"What was tried: " + " | ".join(tried))}
+                       f"What was tried: " + " | ".join(history))}
 
 
 BUILD_STEPS = [("build", _step_build)]
