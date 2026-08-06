@@ -87,11 +87,41 @@ async def preflight(doc: CodeChangeLand, *, operator: bool = False
                 f"branch nova/{doc.branch} already exists — give this one a "
                 f"different name, or delete that branch first", None)
 
+    # ONLY A GREEN SANDBOX MAY LAND. `docs/plans/sandbox-instance.md` phase 3,
+    # and the clause the whole document exists for: it turns "she wrote some
+    # code" into "she wrote code that demonstrably boots".
+    #
+    # The gate existed for several commits and enforced nothing — a card could
+    # be raised, approved and executed for a branch that had never been built,
+    # never booted and never run a test. That is the shape of every control
+    # this codebase has had to replace: a good capability that nothing
+    # required anyone to use.
+    #
+    # NEVER-CHECKED IS TREATED EXACTLY LIKE FAILED. The alternative — letting
+    # an unchecked branch through because there is no bad news about it — is
+    # how a gate becomes a formality.
+    verdict = await coder.sandbox_verdict(doc.session_id)
+    state = verdict.get("state")
+    if state != "ok":
+        why = {
+            "never": ("this work has not been through the sandbox yet. Run "
+                      "the boot gate on it first — it builds the branch, "
+                      "starts it against its own database, and runs the "
+                      "suite."),
+            "stale": (f"the sandbox verdict is out of date — "
+                      f"{verdict.get('detail')}. The session has been re-run "
+                      f"since it passed, so what was verified is not what "
+                      f"would land."),
+            "failed": f"the sandbox check failed — {verdict.get('detail')}",
+        }.get(state, f"no usable sandbox verdict ({state})")
+        return ("blocked", why, None)
+
     stat = (got.get("diffstat") or "").strip().splitlines()
     summary = stat[-1].strip() if stat else "changes"
     return ("ready",
-            (f"ready to land on nova/{doc.branch} off {st.get('branch')} "
-             f"({st.get('head')}): {summary}"), None)
+            (f"sandbox green ({verdict.get('detail')}); ready to land on "
+             f"nova/{doc.branch} off {st.get('branch')} ({st.get('head')}): "
+             f"{summary}"), None)
 
 
 async def execute(doc: CodeChangeLand, rec: dict, *, step) -> dict:
@@ -103,6 +133,19 @@ async def execute(doc: CodeChangeLand, rec: dict, *, step) -> dict:
     no partial state a cursor could resume from.
     """
     from app import coder
+
+    # RE-CHECKED AT EXECUTE TIME, not trusted from the preflight. The
+    # operator's approval is a standing precondition the worker re-reads at
+    # claim time (see `action_worker.claim_next`), and the sandbox verdict is
+    # the same kind of fact: a session re-run between the card being read and
+    # the run being claimed would otherwise land code nothing had checked.
+    verdict = await coder.sandbox_verdict(doc.session_id)
+    if verdict.get("state") != "ok":
+        detail = (f"refused: the sandbox verdict is "
+                  f"{verdict.get('state')} — {verdict.get('detail')}")
+        await step("sandbox", "error", detail[:300])
+        return {"status": "error", "detail": detail}
+    await step("sandbox", "ok", str(verdict.get("detail"))[:200])
 
     got = await coder.patch(doc.session_id)
     if got.get("status") != "ok":

@@ -2310,6 +2310,23 @@ async def code_repo_status():
     return await coder.repo_status()
 
 
+@router.post("/api/v1/code/sandbox")
+async def sandbox_check_code(body: dict):
+    """Run the boot gate on a coding session. The operator's own button.
+
+    Minutes: it builds the branch, starts a stack of its own and runs the
+    suite inside it. Landing refuses any session this has not passed.
+    """
+    from app import coder
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=422, detail="session_id is required")
+    out = await coder.sandbox_check(session_id)
+    if out.get("status") == "error":
+        raise HTTPException(status_code=409, detail=str(out.get("detail")))
+    return out
+
+
 @router.post("/api/v1/code/land")
 async def land_code_change(body: dict):
     """Land a finished coding session's work on a `nova/<slug>` branch.

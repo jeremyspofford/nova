@@ -320,6 +320,29 @@ def _worktree(branch: str, remove: bool = False) -> dict:
             "slug": slug}
 
 
+def _drop_branch(branch: str) -> dict:
+    """Delete a `nova/<slug>` branch. Only ever one this container made.
+
+    Exists for the scratch branches the boot gate stages — "main plus her
+    patch" has to be produced to be tested, and a red check must not leave a
+    branch behind for the operator to find later and wonder about.
+
+    The same `_BRANCH_OK` pattern guards it, so `main` is not deletable here
+    any more than it is landable. Refuses the CURRENT branch outright: git
+    would refuse anyway, and a clear sentence beats git's.
+    """
+    if not _BRANCH_OK.match(branch or ""):
+        return {"status": "error",
+                "detail": f"branch {branch!r} must look like nova/<name>"}
+    with _lock:
+        st = _status()
+        if st.get("branch") == branch:
+            return {"status": "error",
+                    "detail": f"{branch} is checked out; not deleting it"}
+        _git("branch", "-D", branch, check=False)
+    return {"status": "ok", "deleted": branch}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, obj: dict):
         body = json.dumps(obj).encode()
@@ -337,7 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in ("/land", "/worktree", "/worktree/remove"):
+        if self.path not in ("/land", "/worktree", "/worktree/remove",
+                             "/branch/remove"):
             return self._send(404, {"error": "not found"})
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -348,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
             out = _land(str(body.get("patch") or ""),
                         str(body.get("branch") or ""),
                         str(body.get("base") or ""))
+        elif self.path == "/branch/remove":
+            out = _drop_branch(str(body.get("branch") or ""))
         else:
             out = _worktree(str(body.get("branch") or ""),
                             remove=self.path.endswith("/remove"))

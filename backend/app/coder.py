@@ -424,3 +424,103 @@ async def repo_status() -> dict:
         return r.json()
     except (httpx.HTTPError, ValueError) as e:
         return {"error": f"the git-landing sidecar is unreachable: {e}"}
+
+
+# --- the boot gate ---------------------------------------------------------
+
+_LANDING_URL = os.environ.get("NOVA_GIT_LANDING_URL", "http://git-landing:9912")
+
+
+async def sandbox_check(session_id: str) -> dict:
+    """Build and boot this session's work in a stack of its own, and record it.
+
+    `docs/plans/sandbox-instance.md` phase 3. Minutes, not seconds: it builds
+    an image, starts postgres and a backend, waits for `/health` — which is
+    the migrations-and-boot test — and runs the suite inside it.
+
+    ON A SCRATCH BRANCH, removed either way. The thing worth verifying is
+    "main plus her patch", which is exactly what landing would produce, and
+    producing it is the only honest way to test it. Naming it `nova/sbx-…`
+    keeps it distinguishable from a branch the operator asked for, and the
+    finally-block removes it so a red check leaves nothing behind for someone
+    to find later and wonder about.
+
+    The verdict is keyed to the COMMIT, not the session: a session can be
+    re-run and its patch re-captured, and a verdict that outlived the code it
+    was about would be worse than none.
+    """
+    got = await patch(session_id)
+    if got.get("status") != "ok":
+        return {"status": "error", "detail": got.get("detail")}
+    commit = got.get("commit") or ""
+    slug = f"sbx-{(commit or session_id)[:8]}"
+    branch = f"nova/{slug}"
+
+    async def _post(url, payload, timeout):
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(url, json=payload)
+        try:
+            return r.json()
+        except ValueError:
+            return {"status": "error", "detail": f"unreadable ({r.status_code})"}
+
+    landed = await _post(f"{_LANDING_URL}/land",
+                         {"patch": got["patch"], "branch": branch}, 180.0)
+    if landed.get("status") != "ok":
+        return {"status": "error",
+                "detail": f"could not stage the check: {landed.get('detail')}"}
+    try:
+        wt = await _post(f"{_LANDING_URL}/worktree", {"branch": branch}, 120.0)
+        if wt.get("status") != "ok":
+            return {"status": "error", "detail": wt.get("detail")}
+        # Long: a first build pulls a base image and installs dependencies.
+        # The sidecar tears its own stack down in a finally, so a timeout here
+        # leaves the caller without an answer but never leaves a stack running.
+        from app.config import settings as _s
+        async with httpx.AsyncClient(timeout=3000.0) as c:
+            r = await c.post(f"{_s.inference_control_url}/sandbox/check",
+                             json={"slug": slug})
+        out = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        out = {"status": "failed", "stage": "unreachable", "steps": [],
+               "error": str(e)[:300]}
+    finally:
+        await _post(f"{_LANDING_URL}/worktree/remove", {"branch": branch}, 120.0)
+        await _post(f"{_LANDING_URL}/branch/remove", {"branch": branch}, 60.0)
+
+    ok = out.get("status") == "ok"
+    failing = next((s for s in (out.get("steps") or []) if not s.get("ok")), {})
+    detail = (f"{out.get('stage') or 'unknown'}: "
+              f"{(failing.get('summary') or out.get('error') or '')[:900]}"
+              if not ok else "build, boot and suite all green")
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE coding_sessions SET sandbox_status = $2, "
+            "sandbox_commit = $3, sandbox_detail = $4, sandbox_at = now(), "
+            "updated_at = now() WHERE id = $1::uuid",
+            session_id, "ok" if ok else "failed", commit, detail)
+    log.info("sandbox check %s: %s (%s)", session_id, out.get("status"),
+             out.get("stage"))
+    return {"status": "ok" if ok else "failed", "commit": commit,
+            "stage": out.get("stage"), "detail": detail,
+            "steps": [{"step": s.get("step"), "ok": s.get("ok")}
+                      for s in (out.get("steps") or [])]}
+
+
+async def sandbox_verdict(session_id: str) -> dict:
+    """The recorded verdict, and whether it still applies to this commit."""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT commit_sha, sandbox_status, sandbox_commit, sandbox_detail,"
+            " sandbox_at FROM coding_sessions WHERE id = $1::uuid", session_id)
+    if row is None:
+        return {"state": "unknown", "detail": "no such session"}
+    if not row["sandbox_status"]:
+        return {"state": "never", "detail": "this work has never been checked"}
+    if row["sandbox_commit"] != row["commit_sha"]:
+        return {"state": "stale",
+                "detail": (f"the check was for {(row['sandbox_commit'] or '')[:10]} "
+                           f"and the session is now at "
+                           f"{(row['commit_sha'] or '')[:10]}")}
+    return {"state": row["sandbox_status"], "detail": row["sandbox_detail"],
+            "at": row["sandbox_at"].isoformat() if row["sandbox_at"] else None}

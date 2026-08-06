@@ -1571,6 +1571,27 @@ async def _answer_task(args, ctx):
     return _j(out)
 
 
+async def _sandbox_check(args, ctx):
+    """Build and boot a finished coding session in a stack of its own.
+
+    Minutes, not seconds — it builds an image, starts postgres and a backend,
+    waits for the health endpoint (which is the migrations-and-boot test) and
+    runs the suite inside it. Say so before calling it.
+
+    The verdict is recorded against the COMMIT, and `code_change.land` refuses
+    to land anything that is not green. Never-checked counts as failed.
+    """
+    from app import coder
+    session_id = str(args.get("session_id") or "").strip()
+    if not session_id:
+        return ("Error: session_id is required — the coding session whose "
+                "work should be checked.")
+    out = await coder.sandbox_check(session_id)
+    if out.get("status") == "error":
+        return f"Error: {out.get('detail')}"
+    return _j(out)
+
+
 async def _check_service_reachable(args, ctx):
     """Can the operator actually open this service, from here and from away?
 
@@ -2807,6 +2828,22 @@ BUILTIN_TOOLS: dict[str, dict] = {
                        "description": "what the operator said, in his own words"},
         }, "required": ["run_id", "answer"]},
         "execute": _answer_task,
+    },
+    "sandbox_check": {
+        "name": "sandbox_check",
+        "description": (
+            "Prove a finished coding session actually WORKS before asking the "
+            "operator to land it. Builds that branch, starts it against a "
+            "database of its own, and runs the whole test suite inside it — "
+            "so 'it boots' becomes a fact rather than a hope. Takes MINUTES: "
+            "tell him you are running it, then report what came back. Landing "
+            "refuses anything that has not passed this, and a session that "
+            "was re-run afterwards has to pass again."),
+        "parameters": {"type": "object", "properties": {
+            "session_id": {"type": "string",
+                           "description": "the coding session to check"},
+        }, "required": ["session_id"]},
+        "execute": _sandbox_check,
     },
     "check_service_reachable": {
         "name": "check_service_reachable",
