@@ -23,6 +23,31 @@ DECIDE_TTL_MIN = 10
 USE_TTL_MIN = 3          # the follow-up fires immediately; keep the window tight
 CREATE_LIMIT_PER_HOUR = 6  # card-spam / operator-fatigue guard
 
+#: PER KIND, because one window cannot be right for two different questions.
+#:
+#: Ten minutes is correct for a destructive burn — "delete these three notes"
+#: is about to happen, the operator is in the conversation, and an approval
+#: that goes cold should die rather than sit there waiting to be spent.
+#:
+#: It is wrong for a GOAL. A goal is a standing scope the operator is being
+#: asked to think about, and ten minutes made that a trick question: of the
+#: last twelve goal cards on this install, EIGHT expired unclicked, and Jeremy
+#: hit it on 2026-08-06 — the card refused on his desktop and worked on his
+#: phone, which was nothing but which one he reached inside the window.
+#:
+#: A late click is not more dangerous than an early one, which is the whole
+#: argument for the longer window: `goals.activate` sets `expires_at` from the
+#: MOMENT OF THE CLICK, and the goal carries its own `max_actions`. Approving
+#: on Thursday a goal proposed on Monday authorises exactly what approving it
+#: on Monday would have.
+_DECIDE_TTL_MIN: dict[str, int] = {
+    "goal.activate": 7 * 24 * 60,
+}
+
+
+def decide_ttl_min(kind: str) -> int:
+    return _DECIDE_TTL_MIN.get(kind, DECIDE_TTL_MIN)
+
 _FIELDS = ("id", "kind", "subject", "question", "requested_by",
            "conversation_id", "status", "chosen", "created_at",
            "decided_at", "used_at")
@@ -71,9 +96,17 @@ async def create(kind: str, subject: str, question: str, *,
 async def list_pending(conversation_id: Optional[str] = None) -> list[dict]:
     """Fresh pending consents (stale ones are lazily expired first)."""
     async with db.acquire() as conn:
+        # The sweep honours the same per-kind windows as `decide`. Driven off
+        # the map rather than a second copy of the rule, so a kind added there
+        # cannot be swept away here while still being decidable.
         await conn.execute(
             "UPDATE consents SET status = 'expired' WHERE status = 'pending' "
-            f"AND created_at <= now() - interval '{DECIDE_TTL_MIN} minutes'")
+            "AND created_at <= now() - make_interval(mins => "
+            "  coalesce((SELECT v FROM (SELECT unnest($1::text[]) AS k, "
+            "                                  unnest($2::int[]) AS v) m "
+            "            WHERE m.k = consents.kind), $3))",
+            list(_DECIDE_TTL_MIN.keys()), list(_DECIDE_TTL_MIN.values()),
+            DECIDE_TTL_MIN)
         if conversation_id:
             rows = await conn.fetch(
                 "SELECT * FROM consents WHERE status = 'pending' "
@@ -93,11 +126,15 @@ async def decide(consent_id: str, chosen: str) -> Optional[dict]:
     except ValueError:
         return None
     async with db.acquire() as conn:
+        # The window depends on the KIND, so read it first. Not a race: the
+        # UPDATE below still requires `status = 'pending'`, which is what makes
+        # a decision single-use — two clicks cannot both win it.
+        kind = await conn.fetchval("SELECT kind FROM consents WHERE id = $1", cid)
         r = await conn.fetchrow(
             "UPDATE consents SET status = 'decided', chosen = $2, decided_at = now() "
             "WHERE id = $1 AND status = 'pending' "
-            f"AND created_at > now() - interval '{DECIDE_TTL_MIN} minutes' "
-            "RETURNING *", cid, chosen)
+            "AND created_at > now() - make_interval(mins => $3) "
+            "RETURNING *", cid, chosen, decide_ttl_min(kind or ""))
         if not r:  # stale pending row → expire it so the UI stops showing it
             await conn.execute(
                 "UPDATE consents SET status = 'expired' "
