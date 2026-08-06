@@ -22,6 +22,7 @@ via per-sentence past-time markers ("I created that yesterday").
 """
 
 import re
+from typing import Optional
 
 _PATTERNS = [
     # announcing a dispatch
@@ -94,6 +95,18 @@ _COMPLETION_PATTERNS = [
     # what replaces it is a confident invention.
     r"\b(?:I['’]ve|I have|I) (?:just )?(?:checked|fetched|searched|looked|"
     r"verified|confirmed|queried|browsed|pulled up|tested|pinged)\b",
+    # RESULTS ASSERTED FROM NOTHING, 2026-08-06. Alongside the forged receipt
+    # she wrote "Sandbox passed — all tests green" and "The card is in your
+    # chat" on a turn with no tool calls at all. Both are statements about
+    # work a TOOL performs, so both belong in the completion arm — and
+    # neither matched any pattern here, because every existing one is about
+    # something she claims to have DONE rather than a verdict she claims to
+    # have RECEIVED.
+    r"\b(?:sandbox|the check|the suite|the tests?|the build|the review)\s+"
+    r"(?:has\s+)?(?:passed|is\s+green|came\s+back\s+green|succeeded)\b",
+    r"\b(?:the\s+)?card\s+is\s+(?:in|now in)\s+your\s+chat\b",
+    r"\b(?:I['’]ve|I have|I) (?:just )?(?:raised|flagged|filed)\s+"
+    r"(?:the|a|an)\s+(?:card|recommendation|landing card)\b",
     r"(?:^\s*|[—–:;-]\s*)(?:just )?(?:checked|fetched|searched|verified|"
     r"confirmed|queried|tested|pinged)\s+(?:it|that|this|them|"
     r"(?:the|his|your)\s+\w+)\b(?!['’])",
@@ -143,6 +156,11 @@ _COMPLETION_TOKENS: list[tuple[str, set[str]]] = [
     # `_could_have_done` is the half that must never accuse her wrongly —
     # the cost of a false "you did not check" is a correction stamped into a
     # reply the operator reads and hears. Missing a catch is cheaper.
+    (r"sandbox|the check|the suite|the build|the review",
+     {"sandbox", "check", "review", "code", "land", "run", "tests", "suite"}),
+    (r"card|recommendation|flagged|raised|filed",
+     {"raise", "recommendation", "recommendations", "card", "propose",
+      "propose_goal"}),
     (r"check|fetch|search|look|verif|confirm|quer|brows|test|ping",
      {"fetch", "url", "web", "search", "http", "diagnose", "service",
       "status", "read", "query", "browse", "docs", "doc", "page", "list",
@@ -296,6 +314,43 @@ def _exempt(body: str, match) -> bool:
         return False
     cond = _CONDITIONAL_MARKERS.search(body)
     return bool(cond and cond.start() < match.start())
+
+# THE SYSTEM'S OWN RECEIPT, FORGED. `conversations.tool_activity_notes`
+# appends "[tools that ran in this turn: ...]" after each assistant turn in
+# the LLM history — a MECHANICAL record of what really ran, so she can see
+# her own past turns honestly. On 2026-08-06 she reproduced that exact format
+# in a live reply:
+#
+#     "Sandbox passed — all tests green. Raising the landing card now.
+#      [tools that ran this turn: sandbox_check -> ok]
+#      ...
+#      The card is in your chat."
+#
+# Zero tools ran in that turn. The trace has four spans, none of them a tool.
+# An honesty device had become a template for forgery — she had read hundreds
+# of real ones and wrote a plausible fake.
+#
+# This is the cheapest possible thing to catch and the most damning to miss:
+# the string belongs to the backend, so a model emitting it is ALWAYS lying,
+# whatever else the turn did. No verb list, no token map, no judgment — the
+# prefix is reserved, and that is the whole check.
+_FORGED_RECEIPT = re.compile(r"\[\s*tools?\s+that\s+ran\b", re.IGNORECASE)
+
+
+def forged_receipt(text: str) -> Optional[str]:
+    """The model wrote the system's tool-receipt line. Always a fabrication.
+
+    Returns the matched fragment, or None. Deliberately not gated on whether
+    tools ran: even on a turn that called something, inventing the receipt
+    means inventing WHICH things and with what outcome, and the operator reads
+    that line as machine-generated truth.
+    """
+    m = _FORGED_RECEIPT.search(text or "")
+    if not m:
+        return None
+    line = (text or "")[m.start():]
+    return line.split("]", 1)[0][:160] + "]"
+
 
 _SENTENCES = re.compile(r"[.!?\n]+")
 # Same split, but KEEPING the terminator. "?" is the entire signal for "that

@@ -98,3 +98,70 @@ Verify in the running app (real chat flow through :5173), not just tests or
 code review. Leave changes **uncommitted** and summarize them — Jeremy
 reviews and decides when to commit/push; never commit or push unprompted
 (rule set 2026-07-14). Never delete `LICENSE`.
+
+## The work is her capability, not the outcome
+
+Jeremy's rule, stated 2026-08-05 and again 2026-08-06 after I kept doing
+things for her:
+
+> "when we hit friction with nova, you need to fix nova to give her the
+>  capabilities to do so, otherwise it's just you fucking doing it and nova is
+>  just a fancy stupid ai."
+
+> "i'm concerned with you giving nova the ability to do things I'm asking. and
+>  ensuring that you don't actually go and do them for nova, but instead give
+>  her what she needs"
+
+**When a task hits friction operating the running system, the gap IS the
+task.** Doing it yourself produces a working demo and leaves her exactly as
+incapable — and worse, it hides the gap, because the feature looks shipped.
+
+### The line
+
+**Infrastructure code in git is mine. Operating the running system is hers.**
+
+Writing a compose service block, a migration, an executor, a tool — mine,
+reviewed as a diff. Starting that service, exposing it, checking it came up,
+reading why it didn't, verifying a change works — hers, through tools.
+
+The moment I reach for `docker`, `tailscale`, `psql`, `rm -rf`, or a `curl`
+that *verifies* something, I should stop: that is a capability she is missing.
+
+### The loop that actually works
+
+1. **Name the gap.** Which tool does she lack?
+2. **Build it** — tool + executor + whatever sidecar it needs.
+3. **GRANT IT.** A tool is not a capability until an agent holds it. This was
+   missed FIVE times in one session (`service_logs`, `check_service_reachable`,
+   `answer_task`, `sandbox_check`, `review_code`) and every time the gap was
+   invisible from the code and obvious the moment she was asked to use it.
+4. **Ask her to do the thing** — in chat, in her words, not by curling the
+   route yourself. "I curled it and it works" proves nothing about her.
+5. **Read the trace.** `turn_spans` says what actually ran. A reply is a
+   claim; the trace is the fact.
+
+### Never report success you did not check
+
+The most repeated defect in this repo, in her AND in me. Real examples, all
+mine, all in one session: a startup line logging "git daemon serving" when the
+binary had died; an import step falling back to the word "imported" when its
+verification query returned nothing, so a totally failed load reported OK; an
+endpoint returning `{"status": "ok", "gone": false}`; `rmtree(ignore_errors=
+True)` swallowing the reason.
+
+If a step cannot verify its own result, it must FAIL and say why. A fallback
+that reads as success is worse than a crash.
+
+### Pinned-expectation suites are tripwires, not obstacles
+
+Adding a tool turns `test_eval_grants`, `test_eval_servability` and the
+`reads_only` count red. That is them working. Update the snapshot
+deliberately, bump `suite_version`, and say in the commit why the number
+moved — never route around them.
+
+### Mechanical over prompts applies to ME
+
+Same rule as the rest of the codebase: if a property must hold, something has
+to enforce it. When she does something wrong, the fix is the line of code that
+refuses — not a better sentence in her prompt. When *I* do something wrong,
+the fix is a rule here, a test, or a check in the code — not an intention.

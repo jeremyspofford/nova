@@ -302,6 +302,58 @@ def test_past_tense_retrieval():
               repr(narration.detect(text, 0, tools)))
 
 
+def test_forged_receipts():
+    """She wrote the system's own tool-receipt line. Always a fabrication.
+
+    2026-08-06, in a live reply, on a turn whose trace holds four spans and no
+    tool at all:
+
+        "Sandbox passed — all tests green. Raising the landing card now.
+         [tools that ran this turn: sandbox_check -> ok]
+         ... The card is in your chat."
+
+    None of it happened. `conversations.tool_activity_notes` writes that
+    bracketed line into her HISTORY as a mechanical record of what really ran,
+    so she had read hundreds of genuine ones — an honesty device became a
+    template for forgery.
+
+    The string belongs to the backend, so a model emitting it is lying
+    whatever else the turn did. No verb list and no judgment: the prefix is
+    reserved, and that is the entire check.
+    """
+    print("\n9. THE SYSTEM'S RECEIPT IS RESERVED")
+    from app import narration
+
+    for label, text in [
+        ("9.1 the live forgery, verbatim",
+         "Sandbox passed. [tools that ran this turn: sandbox_check -> ok]"),
+        ("9.2 the exact system spelling too",
+         "[tools that ran in this turn: web_search -> ok]"),
+        ("9.3 spacing and case do not help",
+         "[  Tools  That  Ran : x ]"),
+    ]:
+        check(label, bool(narration.forged_receipt(text)))
+    check("9.4 an ordinary reply is untouched",
+          not narration.forged_receipt("I checked the logs and found it."))
+
+    print("   …and the claims that rode alongside it")
+    for label, text in [
+        ("9.5 a verdict she never received", "Sandbox passed — all tests green."),
+        ("9.6 a card that does not exist", "The card is in your chat."),
+        ("9.7 work she did not do", "I raised the landing card for you."),
+    ]:
+        check(label, bool(narration.detect(text, 0, [])))
+    # ...and the same sentence is FINE when the tool really ran. Without this
+    # the patterns above would flag honest reporting, which is how a detector
+    # trains people to switch it off.
+    check("9.8 …but quiet when raise_recommendation actually ran",
+          not narration.detect("I raised the landing card for you.", 0,
+                               ["raise_recommendation"]))
+    check("9.9 …and quiet when the sandbox really ran",
+          not narration.detect("Sandbox passed — all tests green.", 0,
+                               ["sandbox_check"]))
+
+
 async def test_off_switch():
     print("\n7. THE OPERATOR'S SWITCH")
     settings_store._cache["autonomy.act_on_writes"] = False
@@ -321,6 +373,7 @@ def main() -> int:
     test_derived()
     test_measurement()
     test_past_tense_retrieval()
+    test_forged_receipts()
     asyncio.run(test_off_switch())
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:8]))

@@ -3113,6 +3113,33 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     #
     # Mechanical, not a prompt: nothing here asks the model to always write
     # something. This is the line that refuses when it does not.
+    # A FORGED RECEIPT NEVER REACHES HIM. `[tools that ran in this turn: ...]`
+    # is written by `conversations.tool_activity_notes` into her HISTORY, as a
+    # mechanical record of what really ran. On 2026-08-06 she reproduced the
+    # format in a live reply — "[tools that ran this turn: sandbox_check ->
+    # ok]" — on a turn whose trace contains four spans and no tool at all.
+    # She had read hundreds of genuine ones and wrote a plausible fake.
+    #
+    # Unconditional, and not gated on the tool count: even in a turn that
+    # called something, inventing the receipt invents WHICH things and with
+    # what outcome, and the operator reads that line as machine-generated
+    # truth. So it is stripped from the reply and replaced with the fact.
+    forged = narration.forged_receipt(final_text)
+    if forged:
+        final_text = re.sub(r"\[\s*tools?\s+that\s+ran[^\]]*\]", "",
+                            final_text).strip()
+        note = ("\n\n[A line claiming which tools ran was removed from this "
+                "reply: the assistant wrote it, and only the system may. "
+                f"What actually ran this turn: {', '.join(called_names) or 'nothing'}.]")
+        final_text += note
+        log.warning("Forged tool receipt from agent=%s: %r (real calls: %s)",
+                    agent.get("name"), forged, called_names or "none")
+        if dispatch_depth == 0:
+            yield {"type": "text", "text": note}
+        yield {"type": "activity", "kind": "forged_receipt",
+               "name": agent.get("name", ""), "agent": agent.get("name"),
+               "detail": f"invented a tool-activity line: {forged[:120]}"}
+
     if not final_text.strip():
         if last_retracted.strip():
             floor = last_retracted + (
