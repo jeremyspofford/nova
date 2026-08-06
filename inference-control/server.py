@@ -150,6 +150,22 @@ def _compose_cmd(profile: str = "inference") -> list:
 _lock = threading.Lock()
 _op: dict = {"verb": None, "error": None}
 
+# ONE SANDBOX RUN AT A TIME. Every run uses the same compose project name —
+# `-p nova-sandbox`, which is the whole isolation mechanism — so two
+# concurrent runs are two processes driving ONE stack: the first one's
+# teardown removes the second's containers, and both report nonsense.
+#
+# Nova hit this by retrying a check three times after a transient error. The
+# retries collided, each killed the others, and every attempt came back
+# "server disconnected without sending a response" — an infrastructure
+# symptom with a concurrency cause, which is the worst kind to debug.
+#
+# A separate lock from `_lock` on purpose: a sandbox run takes minutes and
+# must not block an ollama toggle, and vice versa. Non-blocking, because a
+# caller that waits ten minutes for a slot has no way to tell that from a
+# hang — being told "one is already running" is actionable.
+_sandbox_lock = threading.Lock()
+
 
 def _container_state(service: str = SERVICE) -> dict:
     proc = subprocess.run(
@@ -1279,12 +1295,20 @@ class Handler(BaseHTTPRequestHandler):
             which = self.path.rsplit("/", 1)[-1]
             if which not in ("check", "down"):
                 return self._send(404, {"error": "not found"})
+            if not _sandbox_lock.acquire(blocking=False):
+                return self._send(409, {
+                    "error": "a sandbox run is already in progress",
+                    "detail": ("Every run uses the same compose project, so a "
+                               "second one would tear down the first. Wait for "
+                               "it to finish rather than retrying.")})
             try:
                 out = _sandbox(str(body.get("slug") or ""),
                                "down" if which == "down" else "check")
                 return self._send(400 if out.get("error") else 200, out)
             except Exception as e:
                 return self._send(500, {"error": str(e)[:400]})
+            finally:
+                _sandbox_lock.release()
         else:
             return self._send(404, {"error": "not found"})
         with _lock:
