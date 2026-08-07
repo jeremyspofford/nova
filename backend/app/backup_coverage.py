@@ -204,6 +204,12 @@ PATH_POLICY: dict[str, tuple[str, str]] = {
     # that matching them anywhere would repeat the `data` mistake above.
     "frontend/dist": (EXCLUDE_CODE,
                       "a build output; `npm run build` reproduces it"),
+    # `coverage` is as generic as names get, so exact path only. Refused
+    # the first scheduled backup after the vitest suite landed (2026-08-07)
+    # — the tripwire working as designed; the decision is recorded here.
+    "frontend/coverage": (
+        EXCLUDE_EPHEMERAL,
+        "vitest's coverage report; `npm run test:coverage` regenerates it"),
     "backend/uv.lock": (
         EXCLUDE_EPHEMERAL,
         "a resolver lockfile. Gitignored here on purpose — the image installs "

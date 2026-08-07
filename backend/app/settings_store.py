@@ -318,6 +318,21 @@ SETTING_DEFS: list[dict] = [
     {"key": "automations.enabled", "type": "boolean", "default": True,
      "section": "Automations", "label": "Automations enabled",
      "description": "Master switch for all scheduled automations (applies at the next tick)."},
+    {"key": "heartbeat.active_hours", "type": "string", "default": "08:00-22:00",
+     "section": "Automations", "label": "Heartbeat active hours",
+     "description": ("When heartbeats may run, HH:MM-HH:MM in your timezone "
+                     "(overnight windows like 22:00-06:00 work). The cadence "
+                     "itself is the 'heartbeat' row in Library → Automations "
+                     "— every 30 minutes by default. Beats outside this "
+                     "window are recorded as quiet, so 3 a.m. stays silent "
+                     "without turning the feature off. Empty = always "
+                     "active; docs/plans/heartbeat.md is the full story.")},
+    {"key": "heartbeat.model", "type": "model", "default": "",
+     "section": "Automations", "label": "Heartbeat model",
+     "description": ("Model for the half-hourly look-around. Empty = the "
+                     "main agent's model. Point it somewhere cheap or local "
+                     "if the cadence makes cloud pricing add up — the beat "
+                     "is a read-only checklist pass, not deep work.")},
     {"key": "automations.staleness_max_age_days", "type": "number", "default": 7,
      "min": 1, "max": 365, "section": "Automations",
      "label": "Staleness threshold (days)",

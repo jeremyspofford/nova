@@ -188,8 +188,17 @@ async def _restore_drill(automation: dict) -> tuple[bool, str]:
     return await backup_service.drill(automation)
 
 
+async def _heartbeat(automation: dict) -> tuple[bool, str]:
+    # Mechanical about the CONTRACT, not the work: heartbeat.beat runs a
+    # real agent turn, but the quiet/notify decision and the delivery are
+    # code — which is exactly what the handler column is for.
+    from app import heartbeat
+    return await heartbeat.beat(automation)
+
+
 MECHANICAL_HANDLERS: dict = {
     "restore_drill": _restore_drill,
+    "heartbeat": _heartbeat,
 }
 
 
