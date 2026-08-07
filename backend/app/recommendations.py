@@ -299,8 +299,24 @@ async def decide(rec_id: str, choice: str,
             await goals.create(r["title"], description=r["body"] or "",
                                created_by=r["source"] or "ideator",
                                source_recommendation_id=str(rid))
-        except Exception:                                # noqa: BLE001
+        except Exception as e:                           # noqa: BLE001
             log.exception("approved idea %s produced no goal", rid)
+            # THE JOURNAL, NOT JUST THE LOG. Jeremy's point, 2026-08-07,
+            # standing over exactly this line's corpse: the backend was
+            # recreated overnight, docker logs went with it, and a failure
+            # recorded only there never happened as far as anyone could
+            # later tell. Her journal is the durable record — it is where
+            # the APPROVAL was already written, so the failure of what that
+            # approval was supposed to produce belongs beside it.
+            try:
+                from app.memory.memory import memory
+                await memory.write(
+                    f"Approving the idea \"{r['title']}\" FAILED to create "
+                    f"its goal ({e!r}). The goal list heals itself when the "
+                    f"operator next opens Library → Goals.",
+                    type="journal", source_type="system")
+            except Exception:                            # noqa: BLE001
+                log.exception("could not journal the seam failure")
     if r:
         await _receipt(_row(r), new_status)
     return (await get(str(rid))) if r else None

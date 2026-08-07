@@ -2747,6 +2747,8 @@ async def list_goals_endpoint(limit: int = 50):
     fetch per row would answer it one goal at a time or not at all.
     """
     from app import goals
+    # The operator's route heals; the model's read-only tool never writes.
+    await goals.reconcile_approved_ideas()
     rows = await goals.list_all(limit=limit)
     for g in rows:
         g["sessions"] = await goals.sessions_for(g["id"])

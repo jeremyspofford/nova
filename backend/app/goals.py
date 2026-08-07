@@ -415,6 +415,58 @@ async def create(title: str, *, description: str = "", target: str = "",
     return _row(r)
 
 
+async def reconcile_approved_ideas() -> int:
+    """Every approved idea has a goal. Convergent, not event-driven.
+
+    The decide seam creates the goal at the moment of approval, and on
+    2026-08-07 Jeremy found two approved ideas with no goal behind them — the
+    backend had been recreated overnight and whatever went wrong at 23:52 went
+    with the logs. That is the weakness of a fire-and-forget side effect: when
+    it misses once, the miss is permanent and invisible.
+
+    So the STATE is the contract now: this derives the missing rows from the
+    recommendations table itself, idempotently (the partial unique index on
+    source_recommendation_id makes the INSERT a no-op for anything already
+    linked). Called from the OPERATOR'S goals route, so opening the tab heals
+    the list and the seam's failure mode becomes a delay rather than a loss.
+
+    Deliberately NOT called from `list_all`: the model's `list_goals` tool is
+    declared read-only and runs in the parallel set, and hanging a write off it
+    turned that declaration into a lie — `test_parallel_tools` went red on this
+    exact line the first time it ran, which is the pinned-suite tripwire doing
+    its job. A model listing goals must never be the thing that mutates them.
+    """
+    async with db.acquire() as conn:
+        out = await conn.execute(
+            """INSERT INTO goals (title, description, target, approved_verbs,
+                                  status, created_by, source_recommendation_id)
+               SELECT left(r.title, 200), coalesce(r.body, ''), '',
+                      ARRAY[]::text[], 'proposed',
+                      coalesce(r.source, 'ideator'), r.id
+                 FROM recommendations r
+                WHERE r.kind = 'idea' AND r.status = 'approved'
+                  AND NOT EXISTS (SELECT 1 FROM goals g
+                                   WHERE g.source_recommendation_id = r.id)
+               ON CONFLICT (source_recommendation_id)
+                    WHERE source_recommendation_id IS NOT NULL
+                    DO NOTHING""")
+    n = int(out.split()[-1] or 0)
+    if n:
+        log.info("reconciled %d approved idea(s) that had no goal", n)
+        # Journaled for the same reason the seam failure is: a heal is the
+        # visible half of a miss that was silent, and the journal outlives
+        # the container that logged it.
+        try:
+            from app.memory.memory import memory
+            await memory.write(
+                f"Goal reconciliation created {n} goal(s) for approved "
+                f"idea(s) that had none — the approval seam missed them.",
+                type="journal", source_type="system")
+        except Exception:                                # noqa: BLE001
+            log.exception("could not journal the reconcile")
+    return n
+
+
 async def sessions_for(goal_id: str) -> list[dict]:
     """The coding work done under this goal — what came of it.
 
