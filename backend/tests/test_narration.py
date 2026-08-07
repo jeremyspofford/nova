@@ -443,6 +443,129 @@ def test_memory_claim_unread():
           "writing a note is not having read one")
 
 
+# ── 8. the memory-claim guard actually fires from the runner ──────────────
+# Section 7 proves the regex; this proves the WIRING. _build_system_prompt
+# wrote memory_suppressed/memory_shown into `signals`, but the ctx dict
+# copied only untrusted_context out of prompt_signals — so the guard's
+# condition read keys that never existed and the sixth retry budget was dead
+# code from the day it landed. No unit test could see that: only driving the
+# real runner with retrieval that withholds notes does.
+
+class MemoryScript:
+    """Round 1 quotes "memory" it never read; round 2 answers honestly."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def stream_chat(self, *a, **kw):
+        self.calls += 1
+        n = self.calls
+
+        async def gen():
+            if n == 1:
+                text = "From my notes, the price was $0.60 per million."
+            else:
+                text = "That is general knowledge; I have nothing stored on that."
+            for token in text.split(" "):
+                yield {"type": "text", "text": token + " "}
+        return gen()
+
+
+class WithheldMemory(memory_mod.OkfMemory):
+    """Retrieval that puts NOTHING in the prompt while notes sit withheld."""
+
+    async def context(self, query, max_chars=None, origins=None):
+        return {"context": "", "suppressed": 2, "untrusted": False,
+                "origins": []}
+
+
+async def test_memory_guard_end_to_end():
+    print("8. end to end — the memory-claim retry leaves the real runner")
+    install(MemoryScript())
+    events = []
+    with memory_mod.sandbox(WithheldMemory(base_dir=SCRATCH_MEM)):
+        async with trace.turn("test"):
+            async for ev in runner.run_agent(
+                    AGENT, [{"role": "user", "content": "what did it cost"}]):
+                events.append(ev)
+    hits = [e for e in events if e.get("type") == "activity"
+            and e.get("kind") == "memory_claim_retry"]
+    check("withheld notes + empty retrieval + no tool forces the retry",
+          len(hits) == 1, f"{len(hits)} memory_claim_retry events")
+    check("the false claim is retracted from the final reply",
+          "From my notes" not in final_text(events),
+          repr(final_text(events)[:70]))
+    check("round 2's honest answer is what persists",
+          "general knowledge" in final_text(events),
+          repr(final_text(events)[:70]))
+
+
+# ── 9. the round seam — rounds join with a break, stream == persisted ─────
+# The live row of 2026-08-07 00:45:35 read "Doing it now.Card is in your
+# chat": each round's text was appended onto final_text with plain +=, while
+# every injected note nearby carries its own \n\n. The separator must live
+# INSIDE the round's slice, so a retraction removes it with the round — and
+# it must be streamed as well as persisted, because a stream that reads
+# differently from the saved row is its own defect.
+
+class ToolThenTextScript:
+    """Round 1 talks mid-sentence and calls a tool; round 2 answers."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def stream_chat(self, *a, **kw):
+        self.calls += 1
+        n = self.calls
+
+        async def gen():
+            if n == 1:
+                for token in "Doing it now.".split(" "):
+                    yield {"type": "text", "text": token + " "}
+                yield {"type": "tool_calls", "tool_calls": [
+                    {"id": "c1", "name": "fetch_url",
+                     "arguments": '{"url": "https://example.com"}'}]}
+            else:
+                for token in "The page returned 200 and looks healthy.".split(" "):
+                    yield {"type": "text", "text": token + " "}
+        return gen()
+
+
+async def test_round_seam():
+    print("9. a two-round reply carries the separator, and the stream matches")
+    install(ToolThenTextScript())
+
+    async def one_tool(agent, exclude=None):
+        return [{"type": "function", "function": {
+            "name": "fetch_url", "description": "d", "parameters": {}}}]
+
+    tool_registry.get_agent_tools = one_tool
+
+    async def ran(name, args, ctx):
+        return "200 OK"
+
+    tool_registry.execute_tool = ran
+
+    async def unattended(ctx):
+        return {}
+
+    tool_registry.unattended_tools = unattended
+
+    events = []
+    with memory_mod.sandbox(memory_mod.OkfMemory(base_dir=SCRATCH_MEM)):
+        async with trace.turn("test"):
+            async for ev in runner.run_agent(
+                    AGENT, [{"role": "user", "content": "check the page"}]):
+                events.append(ev)
+    text = final_text(events)
+    check("the rounds are separated, not fused mid-sentence",
+          "now. \n\nThe page" in text, repr(text))
+    streamed = "".join(e.get("text", "") for e in events
+                       if e.get("type") == "text")
+    check("the stream reads exactly what is persisted", streamed == text,
+          f"streamed {streamed[-40:]!r} vs final {text[-40:]!r}")
+
+
 def main() -> int:
     test_patterns()
     test_gate()
@@ -451,6 +574,8 @@ def main() -> int:
     test_memory_claim_unread()
     asyncio.run(test_end_to_end())
     asyncio.run(test_correction_is_in_the_reply())
+    asyncio.run(test_memory_guard_end_to_end())
+    asyncio.run(test_round_seam())
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:6]))
         return 1

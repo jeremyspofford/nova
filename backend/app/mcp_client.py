@@ -23,6 +23,7 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from app import redact
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,20 @@ def explain(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
+def _scrub_detail(detail: str, resolved_url: str, template_url: str) -> str:
+    """A detail string outlives this call — logged, persisted into
+    `mcp_servers.status_detail`, served to the UI card — and httpx writes the
+    full request URL into its exception text. By the time an exception exists
+    that URL is the RESOLVED one: `{{secret:name}}` already substituted with
+    the value, anywhere in the URL including the path, where no shape rule
+    can find it. Put the template back (the value goes, the structure the
+    operator reads stays), then run the one scrubber over whatever else the
+    transport echoed."""
+    if resolved_url and resolved_url != template_url:
+        detail = detail.replace(resolved_url, template_url)
+    return redact.scrub_text(detail)
+
+
 async def _guard_url(server: dict, url: str) -> Optional[str]:
     """Refuse a non-public target for any server the OPERATOR did not add.
 
@@ -76,8 +91,10 @@ async def _guard_url(server: dict, url: str) -> Optional[str]:
     from app import net_guard
     err = await net_guard.validate_target(url)
     if err:
+        # server["url"], not the `url` param: the param is post-resolve, so
+        # `{{secret:name}}` has already become the value in it.
         log.warning("MCP outbound guard refused server '%s' (%s): %s",
-                    server.get("name"), url, err)
+                    server.get("name"), server.get("url"), err)
         return f"refused by the outbound guard: {err}"
     return None
 
@@ -115,14 +132,14 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
     from app import secret_store
     try:
         headers = await secret_store.resolve(server.get("headers") or {})
-        url = await secret_store.resolve(url)
+        resolved = await secret_store.resolve(url)
     except secret_store.SecretError as exc:
         return "error", [], str(exc)
-    guard = await _guard_url(server, url)      # on the RESOLVED url, not the template
+    guard = await _guard_url(server, resolved)  # on the RESOLVED url, not the template
     if guard:
         return "error", [], guard
     try:
-        async with streamablehttp_client(url, headers=headers,
+        async with streamablehttp_client(resolved, headers=headers,
                                          timeout=_CONNECT_TIMEOUT_S) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -133,7 +150,7 @@ async def connect_and_list(server: dict) -> tuple[str, list[dict], Optional[str]
                  for t in result.tools]
         return "connected", tools, None
     except Exception as e:
-        detail = explain(e)
+        detail = _scrub_detail(explain(e), resolved, url)
         log.warning("MCP connect failed for server '%s' (%s): %s",
                     server.get("name"), url, detail)
         return "error", [], detail

@@ -51,6 +51,22 @@ def is_local(model: str) -> bool:
     return model.split(":", 1)[0] == "ollama"
 
 
+def qualify(model: str) -> str:
+    """Provider-qualify an operator-typed model string.
+
+    Same trap `effective_model` documents above: a local tag carries its own
+    colon ("qwen3:8b" — a TAG separator), so "contains ':'" cannot tell
+    qualified from bare — it read qwen3 as a provider and sent the lookup to
+    the cloud catalog. The prefix is tested against the providers that
+    actually exist instead: derived, so registering one changes the answer
+    with no edit here.
+    """
+    slug = model.split(":", 1)[0]
+    if slug == "ollama" or slug in providers.known_slugs():
+        return model
+    return f"ollama:{model}"
+
+
 # Model families whose prompt cache must be asked for. Everyone else on this
 # list of providers — OpenAI, Grok, Groq, DeepSeek, Moonshot, Z.AI — caches
 # common prefixes automatically and charges nothing to mark one, so sending a

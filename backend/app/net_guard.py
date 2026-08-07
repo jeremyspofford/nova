@@ -86,7 +86,14 @@ async def validate_target(url: str) -> str | None:
 
     for info in infos:
         if not is_public_address(info[4][0]):
-            log.warning("SSRF guard refused %s (resolves to %s)", url, info[4][0])
+            # host_of, not the url: mcp_client and http_executor hand this
+            # the RESOLVED url — `{{secret:name}}` already substituted,
+            # possibly into the PATH where no shape rule finds it — so the
+            # raw form put credentials in the log on every refusal. The
+            # refusal is about where the host resolves; the host is the fact.
+            from app import redact
+            log.warning("SSRF guard refused %s (resolves to %s)",
+                        redact.host_of(url), info[4][0])
             return (f"host '{host}' resolves to a non-public address "
                     f"({info[4][0]}) — connecting to internal/private targets "
                     f"is not allowed")

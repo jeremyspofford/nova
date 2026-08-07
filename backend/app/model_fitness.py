@@ -368,6 +368,7 @@ async def check_roles() -> list[dict]:
     control.
     """
     from app import settings_store
+    from app.llm import router as llm_router
     installed = await rank_local()
     smallest_first = sorted(installed, key=lambda m: m["billions"] or 0)
     out = []
@@ -377,7 +378,9 @@ async def check_roles() -> list[dict]:
             out.append({"setting": key, "role": label, "model": None,
                         "findings": [], "note": f"unset — {blank_means}"})
             continue
-        model = raw if ":" in raw else f"ollama:{raw}"
+        # never "does it contain ':'" — a bare local tag carries its own
+        # colon, and this line used to read qwen3:8b as cloud-qualified
+        model = llm_router.qualify(raw)
         findings = await assess(model, needs_tools=False, role=f"{label}")
         # The specific thing worth saying, and the reason this function
         # exists: a consequential role running on the least capable thing

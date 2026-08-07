@@ -49,7 +49,11 @@ services:
       OKF_MEMORY_DIR: /app/data/memory
       NOVA_BACKUP_DIR: /app/data/backups
       NOVA_PROJECT_DIR: /app/project
-      NOVA_PROJECT_DIR_HOST: ${PWD:-/home/jeremy/workspace/nova}
+      # NOVA_HOST_ROOT (set in .env) wins over ${PWD}: PWD is the directory
+      # compose was INVOKED from, which is only the repo root by habit —
+      # `docker compose -f <path> ...` from anywhere else silently gets this
+      # wrong, and every relative bind mount downstream resolves against it.
+      NOVA_PROJECT_DIR_HOST: ${NOVA_HOST_ROOT:-${PWD:-/home/jeremy/workspace/nova}}
 
       # labelled wake-word clips (voice.wake_learning, off by default) — plain
       # files next to memory, so tools/wake-training reads them directly
@@ -229,7 +233,11 @@ services:
       # and lose it on the next rebuild. Measured 2026-08-05 when Home
       # Assistant became the first sidecar-started service with a relative
       # bind. Passed through so `--project-directory` can correct it.
-      NOVA_HOST_ROOT: ${PWD:-}
+      #
+      # From .env first: ${PWD} is the shell's cwd at invocation, so running
+      # compose with -f from any other directory handed this the WRONG root
+      # — and everything the paragraph above warns about came back.
+      NOVA_HOST_ROOT: ${NOVA_HOST_ROOT:-${PWD:-}}
     restart: unless-stopped
     # The sandbox boot gate (docs/plans/sandbox-instance.md) runs a SECOND
     # compose project, `-p nova-sandbox`, from a worktree under .worktrees/.

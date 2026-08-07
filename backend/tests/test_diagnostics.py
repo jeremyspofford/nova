@@ -66,6 +66,23 @@ async def run() -> None:
         if saved is not None:
             settings_store._cache["notify.webhook.url"] = saved
 
+    # The ntfy topic is the OTHER shapeless secret: a plain word that, on a
+    # shared server, is the whole credential (its own description says so).
+    # Its def declares `secret: True` and diagnose masks on that declaration,
+    # because no shape rule can know a word is a password.
+    saved = settings_store._cache.get("notify.ntfy.topic")
+    settings_store._cache["notify.ntfy.topic"] = "shhh8f2k1x9qtopic441"
+    try:
+        r = await diagnostics.report("Notifications")
+        topic = str(r["settings"].get("notify.ntfy.topic", ""))
+        check("the ntfy topic does not come back whole",
+              "8f2k1x9qtopic441" not in topic, topic)
+        check("...but answers 'is it set and does it look right'",
+              topic.startswith("shhh") and "20 chars" in topic, topic)
+    finally:
+        if saved is not None:
+            settings_store._cache["notify.ntfy.topic"] = saved
+
     print("4. absence is stated, not implied — and health cannot be IMPLIED")
     from app import failures
     base = {"scanned": ["ingest_jobs"], "sources": {}, "total": 0,

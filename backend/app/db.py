@@ -23,6 +23,17 @@ _LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 # would answer a question nobody asked.
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
+#: The prefix collisions that predate the one-number-one-migration rule and
+#: cannot be undone: both files were APPLIED on 2026-08-04, thirteen minutes
+#: apart, and renumbering an applied migration is what caused the incident
+#: this whole guard exists for. Mirrored by ACCEPTED_COLLISIONS in
+#: tests/test_migration_identity.py — the mechanical gate that refuses NEW
+#: ones. Nothing may be added here without the same evidence: applied, on
+#: this database, un-renumberable.
+ACCEPTED_COLLISIONS: dict[str, set[str]] = {
+    "088": {"088_action_runs.sql", "088_eval_runs_gradeable.sql"},
+}
+
 
 def migration_prefix(filename: str) -> str:
     """The leading number of a migration filename, or "" if it has none.
@@ -175,13 +186,23 @@ async def run_migrations():
         # a tombstone sharing 087 by design. Counting it would put an ERROR
         # in the log on every one of this box's ~76 daily backend starts, and
         # a warning that is always there is one nobody reads.
+        #
+        # And the ONE collision that predates the rule is accepted by name,
+        # for exactly the reason the paragraph above gives about tombstones:
+        # it is unfixable (both files applied on 2026-08-04; renumbering an
+        # applied migration is the disease, not the cure), so logging it
+        # fires an ERROR on every start forever and teaches everyone that
+        # migration errors are background noise — which is how the NEXT
+        # collision gets scrolled past. Same set as ACCEPTED_COLLISIONS in
+        # tests/test_migration_identity.py, which is the mechanical gate; a
+        # collision not in this set is still loud here.
         by_prefix: dict[str, list[str]] = {}
         for name, body in bodies.items():
             if not has_statements(body):
                 continue
             by_prefix.setdefault(migration_prefix(name), []).append(name)
         for prefix, names in sorted(by_prefix.items()):
-            if prefix and len(names) > 1:
+            if prefix and len(names) > 1 and set(names) != ACCEPTED_COLLISIONS.get(prefix):
                 log.error(
                     "Migration prefix %s is used by %d files (%s) — the "
                     "number no longer identifies one migration. Give the "

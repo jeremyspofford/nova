@@ -78,13 +78,13 @@ async def _settings_for(section: Optional[str]) -> dict:
             continue
         key = d["key"]
         try:
-            out[key] = _safe(settings_store.get(key))
+            out[key] = _safe(settings_store.get(key), secret=bool(d.get("secret")))
         except Exception:  # noqa: BLE001 — one bad key never hides the rest
             out[key] = "<unreadable>"
     return out
 
 
-def _safe(value):
+def _safe(value, *, secret: bool = False):
     """Scrub a setting value, including URLs whose secret is the PATH.
 
     `redact.scrub_value` catches secret-shaped values, and a webhook URL is
@@ -95,6 +95,13 @@ def _safe(value):
     The host survives, because the diagnostic question is "is it set and
     where does it point", never "what is the token".
     """
+    if secret and isinstance(value, str) and value:
+        # A def can declare its value secret outright — `"secret": True` in
+        # SETTING_DEFS — for the case no rule here can see: the ntfy topic is
+        # a plain word, and on a shared server that word IS the credential.
+        # First chars + length answer "is it set and does it look right".
+        # Empty falls through, because "unset" is itself the diagnostic fact.
+        return f"{value[:4]}{redact.MASK} ({len(value)} chars)"
     scrubbed = redact.scrub_value(value)
     if not isinstance(scrubbed, str) or "://" not in scrubbed:
         return scrubbed

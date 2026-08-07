@@ -3056,6 +3056,20 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
             Now
           </button>
         )}
+        {/* Same escape hatch the mobile composer got: "Now" only appears
+            with text in the box, so a stream that stalled left "thinking…"
+            on screen with no way out but a reload. */}
+        {busy && !input.trim() && pending.length === 0 && (
+          <button
+            type="button"
+            onClick={stopTurn}
+            aria-label={`Stop ${assistantName}`}
+            title={`Stop ${assistantName}`}
+            className="px-3 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded text-sm transition"
+          >
+            Stop
+          </button>
+        )}
         <button
           type="submit"
           disabled={!input.trim() && pending.length === 0}

@@ -88,6 +88,66 @@ async def run() -> None:
         check("...and by value shape, loose in text",
               VALUE not in trace.redact_text(f"the token is {VALUE}"))
 
+        print("5b. a resolved value cannot reach an MCP status card or the log")
+        # The connect-failure path resolved `{{secret:name}}` into the url,
+        # then logged that url and persisted `explain(e)` — httpx embeds the
+        # full request URL in its exception text — into
+        # mcp_servers.status_detail, which the UI serves. A secret in the
+        # PATH has no shape any scrub rule knows, so the fix must restore
+        # the TEMPLATE rather than hunt for the value.
+        import logging
+        from app import mcp_client
+        path_secret = "p8jq3v7xk2m9r5w1"          # shapeless on purpose
+        await secret_store.put("zz-mcp-path", path_secret, description="test")
+        records: list[str] = []
+        capture = logging.Handler()
+        capture.emit = lambda r: records.append(r.getMessage())
+        logging.getLogger().addHandler(capture)
+        saved_client = mcp_client.streamablehttp_client
+
+        def _fake_client(url, **kw):
+            class _CM:
+                async def __aenter__(self):
+                    raise RuntimeError(
+                        f"Server error '502 Bad Gateway' for url '{url}'")
+
+                async def __aexit__(self, *exc):
+                    return False
+            return _CM()
+
+        try:
+            mcp_client.streamablehttp_client = _fake_client
+            status, _, err = await mcp_client.connect_and_list(
+                {"transport": "http", "created_by": "operator", "name": "zz-mcp",
+                 "url": "https://mcp.example.com/{{secret:zz-mcp-path}}/sse",
+                 "headers": {"Authorization": f"Bearer {{{{secret:{NAME}}}}}"}})
+            check("the connect still fails as an error status",
+                  status == "error", str(status))
+            check("status_detail carries no resolved value",
+                  path_secret not in (err or ""), (err or "")[:90])
+            check("...and stays legible — the template names the secret",
+                  "{{secret:zz-mcp-path}}" in (err or ""), (err or "")[:90])
+
+            # the guard path: a model-added server dialling a private target
+            status2, _, err2 = await mcp_client.connect_and_list(
+                {"transport": "http", "created_by": "recommendation",
+                 "name": "zz-mcp2",
+                 "url": "http://127.0.0.1:9/{{secret:zz-mcp-path}}/x"})
+            check("the guard refuses the private target",
+                  status2 == "error" and "outbound guard" in (err2 or ""),
+                  (err2 or "")[:70])
+            check("...without the resolved value in its refusal",
+                  path_secret not in (err2 or ""), (err2 or "")[:70])
+            logged = " | ".join(records)
+            check("no log line anywhere carried the resolved value",
+                  path_secret not in logged, logged[:90])
+        finally:
+            mcp_client.streamablehttp_client = saved_client
+            logging.getLogger().removeHandler(capture)
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM secrets WHERE name = 'zz-mcp-path'")
+
         print("6. names are constrained — they go into config strings")
         for bad in ("Has Caps", "has spaces", "x", "a" * 80):
             try:

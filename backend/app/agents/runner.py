@@ -2240,6 +2240,13 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
     # it IS outside text; one flag, inherited downward, never cleared.
     ctx = {"untrusted_context": (bool(prompt_signals.get("untrusted_context"))
                                  or parent_untrusted),
+           # The memory facts _build_system_prompt computed. Its comment said
+           # "also on ctx" but only untrusted_context was ever copied, so the
+           # repeat-failure hint and the memory-claim guard below read keys
+           # that never existed — the sixth retry budget was dead code from
+           # the day it landed.
+           "memory_suppressed": prompt_signals.get("memory_suppressed") or 0,
+           "memory_shown": prompt_signals.get("memory_shown") or 0,
            "agent_id": agent.get("id"), "agent_name": agent.get("name"),
            # so a tool can size its own result against the window it has to
            # fit — kept current below when a round falls back to another model
@@ -2389,6 +2396,20 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                         thinking=agent.get("thinking") or "auto"):
                     etype = event.get("type")
                     if etype == "text":
+                        # THE ROUND SEAM. Rounds are joined onto final_text
+                        # with plain +=, so a tool round ending mid-sentence
+                        # persisted as "Doing it now.Card is in your chat"
+                        # (live DB, 2026-08-07 00:45:35) — the seam class the
+                        # fallback note above pads for. Prepended into
+                        # round_text, never final_text, so it sits inside
+                        # this round's slice and a retraction removes it with
+                        # the round; and yielded too, so the stream reads
+                        # exactly what is persisted.
+                        if (event["text"] and not round_text and final_text
+                                and not final_text.endswith("\n")):
+                            round_text = "\n\n"
+                            if dispatch_depth == 0:
+                                yield {"type": "text", "text": "\n\n"}
                         round_text += event["text"]
                         if dispatch_depth == 0:
                             yield {"type": "text", "text": event["text"]}

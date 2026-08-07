@@ -103,6 +103,13 @@ _TEXT_SECRET_ASSIGN = re.compile(
 
 
 def _mask_assignment(m: re.Match) -> str:
+    # `{{secret:name}}` is a REFERENCE, not a value — the safe spelling the
+    # secret store exists so config can use. Names are listable by design,
+    # and masking one turns "which secret is this" into a guess exactly where
+    # someone is reading an error. Detected by the braces, not the word:
+    # `secret: hunter2` in prose is still masked.
+    if m.string[max(0, m.start() - 2):m.start()] == "{{":
+        return m.group(0)
     quoted = m.group(2)[:1] in ('"', "'")
     return m.group(1) + (f'"{MASK}"' if quoted else MASK)
 

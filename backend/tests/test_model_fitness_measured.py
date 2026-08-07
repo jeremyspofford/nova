@@ -188,6 +188,53 @@ def main() -> int:
     check("the failing task is extracted from a string payload",
           ev and ev["failed_tasks"] == ["main/a"], str(ev and ev["failed_tasks"]))
 
+    print("8. a bare local tag in a role setting resolves local, not cloud")
+    # "qwen3:8b" carries a colon — its TAG separator, not a provider prefix.
+    # check_roles used to test for ":" (the exact test model_chain and the
+    # router both document as wrong), read the tag as cloud-qualified, and
+    # grade the role against a catalog entry that does not exist.
+    from app import settings_store
+    from app.llm import router as llm_router, providers
+
+    real_slugs = providers.known_slugs
+    providers.known_slugs = lambda: {"openrouter"}
+    try:
+        check("the tag family is not a provider, so it gets the ollama prefix",
+              llm_router.qualify("qwen3:8b") == "ollama:qwen3:8b",
+              llm_router.qualify("qwen3:8b"))
+        check("a registered provider's id passes through untouched",
+              llm_router.qualify("openrouter:z-ai/glm-5.2")
+              == "openrouter:z-ai/glm-5.2")
+        check("an already-local id is not doubled",
+              llm_router.qualify("ollama:qwen3:8b") == "ollama:qwen3:8b")
+    finally:
+        providers.known_slugs = real_slugs
+
+    seen: list[str] = []
+
+    async def _role_assess(model, **kw):
+        seen.append(model)
+        return []
+
+    async def _no_local():
+        return []
+
+    real_get = settings_store.get
+    real_assess, real_rank = mf.assess, mf.rank_local
+    settings_store.get = lambda key: (
+        "qwen3:8b" if key == "compaction.model" else "")
+    mf.assess, mf.rank_local = _role_assess, _no_local
+    try:
+        rows = asyncio.run(mf.check_roles())
+    finally:
+        settings_store.get = real_get
+        mf.assess, mf.rank_local = real_assess, real_rank
+    row = next((r for r in rows if r["setting"] == "compaction.model"), None)
+    check("check_roles reports the role's model as ollama-local",
+          row and row["model"] == "ollama:qwen3:8b", str(row and row["model"]))
+    check("and assess was asked about the local model, not a cloud id",
+          seen == ["ollama:qwen3:8b"], str(seen))
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILED: " + "; ".join(FAILURES))

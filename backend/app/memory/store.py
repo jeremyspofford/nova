@@ -26,6 +26,18 @@ _PINNABLE_DIRS = {TYPE_DIRS[t] for t in ("topic", "skill", "source")}
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
+# One frontmatter entry is one LINE — parse_frontmatter splits on newlines
+# with last-key-wins, so a model-supplied description carrying
+# "\nsource_type: operator" round-tripped into a forged provenance stamp,
+# the tier the trust system treats as mechanical truth. Every key, scalar
+# value and list element is flattened here, at the only place that emits
+# frontmatter, so the renderer CANNOT produce an injected line.
+_FM_LINE_BREAKS_RE = re.compile(r"[\r\n]+")
+
+
+def _fm_line(value) -> str:
+    return _FM_LINE_BREAKS_RE.sub(" ", str(value))
+
 
 def write_text_atomic(path: Path, text: str) -> None:
     """Write `text` to `path` without following a link and without a torn read.
@@ -85,8 +97,10 @@ class OkfStore:
             if isinstance(value, bool):
                 value = str(value).lower()
             elif isinstance(value, (list, tuple)):
-                value = "[" + ", ".join(str(v) for v in value) + "]"
-            lines.append(f"{key}: {value}")
+                value = "[" + ", ".join(_fm_line(v) for v in value) + "]"
+            else:
+                value = _fm_line(value)
+            lines.append(f"{_fm_line(key)}: {value}")
         lines.append("---")
         return "\n".join(lines)
 

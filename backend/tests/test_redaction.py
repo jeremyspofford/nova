@@ -58,6 +58,7 @@ MUST_MASK = [
     ({"raw": '{"api_key": "hunter2", broken'}, "hunter2"),
     ({"raw": "token=abc123secret&next=1"}, "abc123secret"),
     ({"err": 'invalid value for password: "sw0rdfish"'}, "sw0rdfish"),
+    ({"cfg": "config {secret: hunter2}"}, "hunter2"),  # ONE brace ≠ a reference
 ]
 
 # (args, the substring that MUST survive) — the reason anyone reads a trace
@@ -75,6 +76,10 @@ MUST_KEEP = [
     ({"content": "The keynote covered secret management."}, "secret management"),
     ({"note": "the tokenizer split it oddly"}, "tokenizer"),
     ({"raw": '{"api_key": "hunter2", broken'}, "api_key"),     # the NAME stays
+    # a {{secret:name}} REFERENCE is the safe spelling by design — masking
+    # the NAME hides which secret failed while hiding nothing secret
+    ({"url": "https://mcp.example.com/{{secret:hook_path}}/sse"},
+     "{{secret:hook_path}}"),
 ]
 
 

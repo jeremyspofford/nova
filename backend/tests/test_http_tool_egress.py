@@ -230,7 +230,13 @@ class _FakeClient:
 
     async def request(self, method, url, headers=None, json=None):
         DIALLED.append(url)
-        return _FakeResponse()
+        SENT.append({"headers": headers, "json": json})
+        if "raise-with-url" in MISBEHAVE:
+            raise httpx.ConnectError(f"All connection attempts failed for {url}")
+        r = _FakeResponse()
+        if "echo-401" in MISBEHAVE:
+            r.status_code, r.text = 401, f'{{"error": "bad key", "url": "{url}"}}'
+        return r
 
 
 class _FakeHttpx:
@@ -239,6 +245,11 @@ class _FakeHttpx:
 
 
 DIALLED: list[str] = []
+SENT: list[dict] = []
+# Section 6 flips these to make the fake misbehave the way the real thing
+# does: httpx embeds the full URL in its error messages, and a 4xx body
+# loves echoing the request that earned it.
+MISBEHAVE: list[str] = []
 
 
 def _run_tool(url: str) -> str:
@@ -281,12 +292,110 @@ def test_the_executor_refuses_before_it_dials():
           str(DIALLED))
 
 
+# ── 6. secrets resolve at the call; a chosen argument stays a value ────────
+
+SECRET_NAME = "egress-suite-tmp"
+# A shape redact.py does NOT recognise, on purpose: if this stays out of the
+# error text it is because the executor put the reference form back, not
+# because a pattern happened to match.
+SECRET_PLAIN = "plaintext-scratch-value-77g"
+
+
+def test_secrets_and_the_body_stay_where_they_were_put():
+    print("6. {{secret:...}} resolves at the call; a chosen argument stays a value")
+    asyncio.run(_secrets_and_body())
+
+
+async def _secrets_and_body():
+    from app import db, secret_store
+    await db.init_pool()
+    # A real row in the LIVE store — resolution that only works against a
+    # stub is the stub working. Named to be recognisable, deleted in finally.
+    await secret_store.put(SECRET_NAME, SECRET_PLAIN,
+                           description="egress suite scratch — safe to delete")
+    real_allowed, real_httpx = http_executor.host_allowed, http_executor.httpx
+    http_executor.host_allowed = lambda host: _true()
+    http_executor.httpx = _FakeHttpx
+
+    async def run(spec: dict, call_args: dict) -> str:
+        return await http_executor.execute_http_tool(
+            {"name": "probe", "execution_spec": spec}, call_args)
+
+    ref = "{{secret:" + SECRET_NAME + "}}"
+    url_spec = {"method": "GET",
+                "url_template": f"http://router.lan/api?owm={ref}&q={{q}}",
+                "headers": {"Authorization": f"Bearer {ref}"}}
+    try:
+        # resolution — the DB tool's whole defect: the placeholder went out
+        # literally, mangled by format_map to {secret:name} on the way
+        DIALLED.clear(); SENT.clear()
+        with resolving({"router.lan": "192.168.1.1"}):
+            out = await run(url_spec, {"q": "chicago"})
+        dialled = (DIALLED or ["<nothing dialled>"])[0]
+        check("the dialled URL carries the value, not any spelling of the ref",
+              SECRET_PLAIN in dialled and "secret" not in dialled, dialled[:90])
+        check("q={q} still substitutes alongside it", "q=chicago" in dialled)
+        check("the header value resolved too",
+              SENT and SENT[0]["headers"].get("Authorization") == f"Bearer {SECRET_PLAIN}")
+        check("the response body still comes back", out == "LAN-BODY", out[:90])
+
+        # error paths: the value must never ride an error back into model text
+        MISBEHAVE.append("raise-with-url")
+        with resolving({"router.lan": "192.168.1.1"}):
+            out = await run(url_spec, {"q": "chicago"})
+        MISBEHAVE.clear()
+        check("a transport error shows the reference, never the value",
+              out.startswith("Error calling") and SECRET_PLAIN not in out
+              and "{{secret:" in out, out[:110])
+
+        MISBEHAVE.append("echo-401")
+        with resolving({"router.lan": "192.168.1.1"}):
+            out = await run(url_spec, {"q": "chicago"})
+        MISBEHAVE.clear()
+        check("a 4xx body echoing the request loses the value on the way back",
+              out.startswith("HTTP 401") and SECRET_PLAIN not in out, out[:110])
+
+        DIALLED.clear()
+        out = await run({"method": "GET",
+                         "url_template": "http://router.lan/api?k={{secret:egress-suite-absent}}"},
+                        {})
+        check("a missing secret is a refusal that names it",
+              out.startswith("Error:") and "egress-suite-absent" in out, out[:90])
+        check("and nothing was dialled", DIALLED == [], str(DIALLED))
+
+        DIALLED.clear()
+        out = await run({"method": "GET", "url_template": "http://router.lan/api?q={q}"},
+                        {"q": ref})
+        check("an argument carrying a reference is refused outright",
+              out.startswith("Error:") and SECRET_PLAIN not in out, out[:90])
+        check("and nothing was dialled either", DIALLED == [], str(DIALLED))
+
+        # the body: substitution must not cross JSON syntax
+        SENT.clear()
+        inj = '","admin":true,"x":"'
+        with resolving({"router.lan": "192.168.1.1"}):
+            await run({"method": "POST", "url_template": "http://router.lan/api",
+                       "body_template": {"msg": "{text}", "admin": False}},
+                      {"text": inj})
+        body = SENT[-1]["json"] if SENT else {}
+        check("the injection landed as the literal string it is",
+              body.get("msg") == inj, str(body)[:90])
+        check("no field was smuggled in and admin stayed False",
+              set(body) == {"msg", "admin"} and body["admin"] is False, str(body)[:90])
+    finally:
+        http_executor.host_allowed, http_executor.httpx = real_allowed, real_httpx
+        MISBEHAVE.clear()
+        await secret_store.delete(SECRET_NAME)
+        await db.close_pool()
+
+
 def main() -> int:
     for t in (test_names_pointing_back_at_nova_are_refused,
               test_the_scheme_and_the_unresolvable_still_refuse,
               test_the_stack_set_is_derived_and_covers_what_auth_trusts,
               test_the_lan_is_still_reachable,
-              test_the_executor_refuses_before_it_dials):
+              test_the_executor_refuses_before_it_dials,
+              test_secrets_and_the_body_stay_where_they_were_put):
         t()
         print()
     if FAILURES:
