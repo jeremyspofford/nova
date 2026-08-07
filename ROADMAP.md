@@ -462,6 +462,10 @@ See README for what works. This file is the ordered backlog.
 > security holes (unauthenticated git-landing and inference-control on
 > the compose network). Findings + fix plan:
 > `docs/plans/repo-review-2026-08-07.md`.
+>
+> **Amended 2026-08-07, later (Jeremy):** **#45 heartbeat jumps to the
+> front** — spec'd (`docs/plans/heartbeat.md`), three DECIDE items open,
+> then implement. #44 immediately after.
 
 1. **Voice — talking to and hearing Nova (decided 2026-07-14; CORE ARC
    SHIPPED — status corrected 2026-07-17)** — full spec + phase status in
@@ -2266,3 +2270,19 @@ See README for what works. This file is the ordered backlog.
 
     Items 3–5 need no design input and can run as a fix batch; 1–2 are
     each a one-sentence decision (both recommended) and an afternoon.
+
+45. **Heartbeat — she looks around on her own (2026-08-07) — NEXT, spec
+    then implement.** Full spec: `docs/plans/heartbeat.md`. The gap: Nova
+    is reactive between automations; automations are per-instruction cron,
+    and nothing periodically re-evaluates the world asking "does anything
+    need Jeremy?". OpenClaw, Hermes and Vellum all converged on the same
+    primitive — periodic main-agent turn (default ~30m), operator-editable
+    `HEARTBEAT.md` checklist, a quiet contract (`HEARTBEAT_OK` → the
+    BACKEND suppresses delivery), proactive delivery on anything else,
+    mechanical dedupe, cheap-model/active-hours cost controls. Nova's
+    version rides the existing automations scheduler (leader-gated,
+    capability-evented), stamps `source: heartbeat` on traces (journal
+    noise), enforces quiet + dedupe mechanically (the failures.py
+    fingerprint pattern), and puts the checklist in Library → Files.
+    Three phases in the spec; three DECIDE items for Jeremy (default on?,
+    delivery channel, checklist seed).
