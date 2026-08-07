@@ -1,0 +1,64 @@
+#!/bin/sh
+# The full gate, before anything leaves the machine:
+#
+#   1. backend suite under coverage, held to the floor in
+#      backend/tests/coverage_floor.json (a ratchet: it only moves up, in
+#      the same commit as the tests that earned it)
+#   2. frontend unit tests under coverage, held to frontend/coverage_floor.json
+#   3. the e2e suite in a real browser against the running stack
+#
+# ~4-6 minutes. That is the price of "the suite passed" meaning something.
+# Every skip is LOUD and names its reason; NOVA_SKIP_HOOKS=1 skips the lot,
+# NOVA_PUSH_FAST=1 skips only the e2e half — both say so on every use.
+set -u
+
+if [ "${NOVA_SKIP_HOOKS:-}" = "1" ]; then
+    echo "pre-push: SKIPPED ENTIRELY (NOVA_SKIP_HOOKS=1) — nothing was checked" >&2
+    exit 0
+fi
+
+repo="$(git rev-parse --show-toplevel)"
+compose="docker compose --project-directory $repo"
+fail=0
+
+echo "pre-push: backend suite with coverage floor (~2-4 min)"
+if ! $compose ps backend --status running 2>/dev/null | grep -q backend; then
+    echo "  BACKEND CONTAINER IS NOT RUNNING — cannot run the suite." >&2
+    echo "  Start it (docker compose up -d backend) or push with" >&2
+    echo "  NOVA_SKIP_HOOKS=1 and say why in the PR." >&2
+    exit 1
+fi
+# coverage is a dev-only dep the runtime image does not carry; installing it
+# into the running container is idempotent and quiet when already present.
+$compose exec -T backend pip install --quiet coverage 2>/dev/null
+if ! $compose exec -T -e NOVA_COVERAGE=1 backend python tests/run_all.py \
+        >/tmp/nova-hook-backend.log 2>&1; then
+    echo "  BACKEND SUITE OR COVERAGE FLOOR FAILED:" >&2
+    tail -30 /tmp/nova-hook-backend.log >&2
+    fail=1
+else
+    tail -3 /tmp/nova-hook-backend.log
+fi
+
+echo "pre-push: frontend tests with coverage floor"
+if ! npm --prefix "$repo/frontend" run test:coverage \
+        >/tmp/nova-hook-fe.log 2>&1; then
+    echo "  FRONTEND TESTS OR COVERAGE FLOOR FAILED:" >&2
+    tail -30 /tmp/nova-hook-fe.log >&2
+    fail=1
+fi
+
+if [ "${NOVA_PUSH_FAST:-}" = "1" ]; then
+    echo "pre-push: e2e SKIPPED (NOVA_PUSH_FAST=1) — the browser suite did not run" >&2
+else
+    echo "pre-push: e2e browser suite (~2 min)"
+    if ! $compose --profile e2e run --rm e2e >/tmp/nova-hook-e2e.log 2>&1; then
+        echo "  E2E SUITE FAILED:" >&2
+        tail -30 /tmp/nova-hook-e2e.log >&2
+        fail=1
+    else
+        tail -2 /tmp/nova-hook-e2e.log
+    fi
+fi
+
+exit $fail

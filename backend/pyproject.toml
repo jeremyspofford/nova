@@ -47,6 +47,10 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
+    # tests/run_all.py NOVA_COVERAGE=1 mode; the pre-push hook installs it
+    # into the running container when absent (the runtime image does not
+    # carry dev deps)
+    "coverage>=7.5",
 ]
 
 [tool.ruff]

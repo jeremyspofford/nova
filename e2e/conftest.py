@@ -56,3 +56,28 @@ def app(page: Page) -> Page:
             f"window.localStorage.setItem('nova.token', {TOKEN!r});")
     page.goto(BASE_URL, wait_until="domcontentloaded")
     return page
+
+
+@pytest.fixture
+def mobile_app(browser) -> Page:
+    """The app as the phone sees it: a 390×844 touch viewport.
+
+    A separate context rather than a resized desktop page, because the app
+    decides mobile-vs-desktop at mount (`window.innerWidth < 768` in
+    AppShell) and phones land on /chat via a replace-navigation that only
+    happens on first load. Resizing an already-mounted desktop page tests a
+    state no real phone is ever in.
+    """
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        device_scale_factor=2, is_mobile=True, has_touch=True,
+        user_agent=("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                    "Mobile/15E148 Safari/604.1"))
+    if TOKEN:
+        ctx.add_init_script(
+            f"window.localStorage.setItem('nova.token', {TOKEN!r});")
+    page = ctx.new_page()
+    page.goto(BASE_URL, wait_until="domcontentloaded")
+    yield page
+    ctx.close()

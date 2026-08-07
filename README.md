@@ -36,6 +36,42 @@ stored server-side and never shown again. Note that Anthropic and Gemini are
 reached through their OpenAI-compatibility endpoints, and are also available
 through OpenRouter with no extra setup.
 
+## Tests and gates
+
+Three suites, three commands:
+
+```bash
+# backend: ~80 standalone script-suites, in the running container
+docker compose exec backend python tests/run_all.py
+# ...with line coverage held to the floor in backend/tests/coverage_floor.json
+docker compose exec -T -e NOVA_COVERAGE=1 backend python tests/run_all.py
+
+# frontend: vitest unit tests (host node), coverage floor in frontend/coverage_floor.json
+npm --prefix frontend test
+npm --prefix frontend run test:coverage
+
+# e2e: the served app in a real browser, desktop AND phone viewports
+docker compose --profile e2e run --rm e2e
+```
+
+Git hooks in `.githooks/` run these automatically — **pre-commit** is the
+fast pair (frontend typecheck + unit tests), **pre-push** is the full gate
+(backend suite with its coverage floor, frontend coverage, e2e). Enable them
+once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The coverage floors are **ratchets**: each records the best total the suite
+has honestly reached, a change that drops below it fails the gate, and the
+number only moves up — in the same commit as the tests that earned it, where
+lowering it is a visible diff. Skips are always loud (`NOVA_SKIP_HOOKS=1`,
+`NOVA_PUSH_FAST=1` for the e2e half), and each says what it skipped.
+
+The e2e chat tests write real turns into the operator's journal, so they
+stay opt-in (`NOVA_E2E_CHAT=1`); navigation and render tests run everywhere.
+
 ## GPU acceleration (bundled Ollama)
 
 `docker-compose.gpu.yml` grants the ollama service NVIDIA GPU access. The

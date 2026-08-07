@@ -1,0 +1,33 @@
+#!/bin/sh
+# The fast gate: typecheck + frontend unit tests, under ~30s.
+# The full gate (backend suite with the coverage floor, e2e) runs pre-push —
+# splitting them keeps commits cheap enough that nobody reaches for -n.
+#
+# Skips are LOUD, never silent: a gate that quietly measured nothing is this
+# repo's most-documented defect shape. NOVA_SKIP_HOOKS=1 skips everything and
+# says so — for rebases and emergencies, not for habit.
+set -u
+
+if [ "${NOVA_SKIP_HOOKS:-}" = "1" ]; then
+    echo "pre-commit: SKIPPED (NOVA_SKIP_HOOKS=1) — nothing was checked" >&2
+    exit 0
+fi
+
+repo="$(git rev-parse --show-toplevel)"
+fail=0
+
+echo "pre-commit: frontend typecheck"
+if ! npm --prefix "$repo/frontend" run typecheck >/tmp/nova-hook-tsc.log 2>&1; then
+    echo "  TYPECHECK FAILED:" >&2
+    tail -20 /tmp/nova-hook-tsc.log >&2
+    fail=1
+fi
+
+echo "pre-commit: frontend unit tests"
+if ! npm --prefix "$repo/frontend" test >/tmp/nova-hook-vitest.log 2>&1; then
+    echo "  FRONTEND TESTS FAILED:" >&2
+    tail -30 /tmp/nova-hook-vitest.log >&2
+    fail=1
+fi
+
+exit $fail

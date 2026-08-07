@@ -38,3 +38,4 @@ backend/uv.lock
 # Coverage output. An artifact of running the suite, not a statement about it —
 # and it changes on every run, so tracking it makes every test run a diff.
 backend/.coverage
+frontend/coverage/
