@@ -2058,3 +2058,114 @@ See README for what works. This file is the ordered backlog.
     (see `memory.context`'s own note); and does the operator need to see that
     it happened. Answer those three in `docs/plans/` before writing code —
     this one is a containment decision wearing a retrieval bug's clothes.
+
+43. **Computer use — control the desktop, cross-platform — NEEDS A PLAN
+    (requested 2026-08-07)** — Jeremy: give her the ability to "do things on
+    the desktop, and throughout the machine" — mouse, keyboard, arbitrary
+    apps, not just the API surface she already has. Every OS he touches:
+    macOS, Linux, Windows, WSL on Windows, and "hopeful" for Android/iOS.
+    NOT STARTED. No code, no container, no spec doc yet — this entry is the
+    scoping, and the open questions below have to be answered by him before
+    one is written.
+
+    **Why this is not "add another MCP server" and gets its own entry
+    instead of folding into #19.** Every capability this repo has ever
+    granted an agent has a mechanical backstop that does not depend on the
+    model being honest: the goal gate reads a verb array, the sandbox reads
+    an exit code, `git-landing` refuses `main` at the string level. Computer
+    use has no equivalent. The "permission check" for a click IS a
+    screenshot the model is asked to interpret honestly, and the thing
+    deciding whether to click is the same model this repo has spent the
+    whole week watching invent session ids and call its own training data
+    "memory." Anthropic's own computer-use documentation says the tool can be
+    steered by instructions injected into what's on screen into downloading
+    and running malware — this is not a hypothetical, it is the vendor's own
+    warning about their own reference implementation. And unlike every other
+    capability here, computer use does not need a new exploit to defeat the
+    rest of the system: an agent that can click is an agent that can approve
+    its own consent card, click Approve on its own goal, or type into any
+    terminal window already open — the UI layer is where every mechanical
+    gate in this codebase currently BOTTOMS OUT, on the assumption that a
+    human is the one clicking.
+
+    **What exists (researched 2026-08-07, so this can be scoped instead of
+    guessed at):**
+    - **Anthropic's own reference implementation is the closest fit to how
+      this repo already contains things.** The `computer` tool (Messages
+      API) drives a screenshot/mouse/keyboard loop against a Linux desktop
+      running in Docker with X11 + VNC — a disposable, isolated desktop the
+      model gets and nobody's real session touches, exactly the
+      `inference-control` / `git-landing` split's shape: the dangerous
+      surface lives in one container that can do nothing else. This argues
+      for Linux (and by extension WSL, which already gets a Linux userspace)
+      as the honest v1, not parity across five platforms on day one.
+    - **Browser-only is a real, much smaller slice.** Playwright MCP
+      (Microsoft-maintained) gives an accessibility-tree-driven view of a
+      page rather than raw pixels — deterministic, no screenshot-guessing,
+      and scoped to one browser context that can be handed no cookies, no
+      saved passwords, no other tabs. If the actual jobs-to-be-done are
+      mostly "fill out a form nobody built an API for" or "click through a
+      web UI", this is a lower-risk wedge that shares almost none of the
+      full-desktop risk profile and could ship far sooner.
+    - **Per-OS desktop automation MCP servers exist and are a different
+      story on each platform, not one capability.** Windows: a UI Automation
+      API server (the same API screen readers use) can drive any app by
+      name. macOS: several community servers split between raw
+      screenshot+coordinate control and ones that read the real Accessibility
+      element tree (button/field by role, not by pixel guess) via AppleScript
+      / System Events — the latter is meaningfully more legible and more
+      auditable than coordinate-clicking. None of these are Anthropic-grade
+      reference implementations; none address containment; none give one
+      interface across OSes, so "cross-platform" today means picking a
+      different, separately-trusted third-party server per machine.
+    - **Mobile is a different ask than "desktop but smaller."** The MCP
+      servers that exist (mobile-mcp, mobile-device-mcp, and others) are
+      QA/scraping tooling built on ADB (Android, needs USB or wireless
+      debugging enabled) and WebDriverAgent (iOS, needs a dev-signed build or
+      a simulator) — they assume a paired development device, not "install
+      something and it controls your everyday phone." Matches Jeremy's own
+      framing as "hopeful" rather than a v1 requirement.
+
+    **Open questions — answer these before a spec doc exists, the same
+    discipline #42 is held to:**
+    1. **Isolated desktop she controls, or his real logged-in session?** These
+       are two different products. The containment pattern this whole repo
+       is built on says isolated, always — a VM/container desktop of her own,
+       nothing he is using interactively. If the actual want is "install and
+       configure a service on my desktop," that is answerable through an
+       isolated desktop plus the existing `redeploy_service` / coder
+       machinery in most cases without full computer use at all — worth
+       checking against a real job list before building the harder thing.
+    2. **What is the job list, concretely?** "Do things on the desktop and
+       throughout the machine" is a rationale, not a scope. #34's ideation
+       spec was rewritten around what already existed rather than what was
+       imagined; this needs the same pass — three to five real tasks Jeremy
+       actually wants done, because the isolation model, the OS priority and
+       the consent shape all depend on the answer.
+    3. **Per-platform containment story, honestly assessed per OS.** Linux
+       (and WSL) already fit Docker + Xvfb + VNC, the reference pattern.
+       macOS has no first-party "headless disposable Mac" the way Linux has
+       headless containers. Windows inside WSL is not a disposable Windows
+       sandbox — WSL runs BESIDE Windows, not inside a throwaway copy of it,
+       so "Windows" likely means a real VM or it means the operator's actual
+       desktop, and those are not the same decision. This probably forces an
+       explicit priority order rather than "all platforms," at least for v1.
+    4. **Is there any mechanical backstop at all, or is this the one
+       capability that runs on trust alone?** Worth answering plainly rather
+       than discovering it mid-build. Candidates worth evaluating: an
+       allow-list of apps/windows a session may ever see (never a browser
+       with his real cookies visible), a live view the operator can watch
+       (not just a post-hoc trace, because the trace only tells you what
+       already happened), a hard wall-clock and action-count budget like the
+       coding loop's, and refusing outright anything that resembles "open a
+       terminal" — since a terminal is every other containment boundary in
+       this codebase collapsed into one text field.
+    5. **Consent shape.** A card like `code_change.build`, a goal-scoped
+       budget like `goals`, or something new and tighter given #4's answer —
+       decide after #4, not before.
+
+    Playwright-MCP-only, Linux/WSL-only, is the smallest real slice on the
+    table and the one worth prototyping first if Jeremy wants to see
+    something rather than only read a plan. Full cross-platform desktop
+    control is the long pole and should not be started until 1–4 above have
+    real answers.
