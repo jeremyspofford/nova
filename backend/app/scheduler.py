@@ -271,9 +271,21 @@ async def tick():
                 try:
                     await notify.send(summary[:400] or f"{automation['name']} ran",
                                       title=automation["name"])
-                except Exception:
+                except Exception as e:                  # noqa: BLE001
                     log.exception("notify for automation %s failed",
                                   automation["name"])
+                    # HER JOURNAL, NOT JUST DOCKER LOGS (Jeremy, 2026-08-07).
+                    # A notify:true automation exists to reach him; a push
+                    # that died only in container logs is a reminder that
+                    # never happened as far as any later reader can tell.
+                    try:
+                        await memory.write(
+                            f"Automation '{automation['name']}' ran but its "
+                            f"notification FAILED to send ({e!r}) — the "
+                            f"operator was never told.",
+                            type="journal", source_type="automation")
+                    except Exception:
+                        log.exception("could not journal the notify failure")
             # failures land in the journal too — Nova's own memory must hold
             # a trace of her automations breaking, not just docker logs
             if not ok and outcome != "auto_disabled":
@@ -304,7 +316,13 @@ async def tick():
                 # case notifications exist for (roadmap #21). Best-effort: a
                 # no-op unless notifications are configured, never blocks the tick.
                 try:
-                    from app import notify
+                    # NO local import here. `notify` is a module-level
+                    # import, and a `from app import notify` inside this
+                    # function made the name local to ALL of tick() — so the
+                    # reminder-delivery branch above, which runs first, died
+                    # with UnboundLocalError on the first real morning. The
+                    # ByteByteGo reminder ran, its push crashed, and the
+                    # operator got nothing.
                     await notify.send(
                         f"'{automation['name']}' turned itself off after 5 "
                         f"straight failures. Last error: {summary[:200]}",
