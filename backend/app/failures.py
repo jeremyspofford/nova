@@ -612,6 +612,19 @@ async def _backup_clause() -> str:
     try:
         from app import backup_service
         head = (await backup_service.freshness()).get("headline") or ""
+        # The drill and the off-machine copy fail the same way backups do —
+        # by NOT happening. An auto-disabled drill notified once, five weeks
+        # ago; a broken offsite mount breaks silently. Both are standing
+        # facts only a reader can carry, so they ride the same clause.
+        drill_head = (await backup_service.drill_state()).get("headline") or ""
+        off = backup_service.offsite_state()
+        off_head = ""
+        if off["configured"] and not off["ok"]:
+            off_head = "the off-machine bundle folder is not writable"
+        elif off["configured"] and off.get("newest_synced") is False:
+            off_head = ("the newest bundle has not reached the off-machine "
+                        "folder")
+        head = ". ".join(h for h in (head, drill_head, off_head) if h)
     except Exception:  # noqa: BLE001 — a prompt block never breaks a turn
         log.debug("backup freshness unavailable", exc_info=True)
         return ""

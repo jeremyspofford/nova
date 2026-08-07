@@ -129,6 +129,28 @@ async def _maybe_backup() -> None:
                                      lead="Nova's scheduled backup crashed")
         return
     _prune_bundles()
+    # The off-machine copy, AFTER retention so it never copies a bundle the
+    # prune is about to delete. Its failure never fails the backup — the
+    # local bundle exists — but it goes in her journal, and offsite_state
+    # keeps the gap standing in the failure nudge until a later pass heals.
+    try:
+        from app import backup_service
+        off = await asyncio.to_thread(backup_service.offsite_sync)
+        if off.get("copied"):
+            log.info("off-machine copy: %s", ", ".join(off["copied"]))
+        for err in off.get("errors", []):
+            log.error("off-machine copy failed: %s", err)
+        if off.get("errors"):
+            try:
+                await memory.write(
+                    f"The off-machine backup copy FAILED: "
+                    f"{'; '.join(off['errors'])[:300]} — bundles exist only "
+                    f"on this machine until this heals.",
+                    type="journal", source_type="automation")
+            except Exception:
+                log.exception("could not journal the offsite failure")
+    except Exception:  # noqa: BLE001 — never the backup's problem
+        log.exception("off-machine sync crashed")
 
 
 def _prune_bundles() -> None:
@@ -144,15 +166,59 @@ def _prune_bundles() -> None:
             log.exception("could not prune %s", old["path"])
 
 
+# ── mechanical automations ────────────────────────────────────────────────
+#
+# A row whose `handler` names an entry here is run as CODE, never handed to
+# an agent. This exists for jobs where the outcome must be a fact — the
+# weekly restore drill proves a bundle restores, and an agent that declined,
+# narrated, or summarised would leave the operator a cheerful sentence and
+# no proof. Same reasoning as _maybe_backup below, but as a REAL schedule
+# row: the operator can see it, move it to another night, toggle notify —
+# and record_run, the run history, auto-disable and notify:true delivery all
+# work unchanged because the scheduler cannot tell the difference after
+# run_one returns.
+#
+# The column is written only by migrations (it is not in
+# automations.UPDATABLE), so neither a model nor a stray PATCH can point the
+# scheduler at code or quietly turn a mechanical job back into a prompt.
+
+
+async def _restore_drill(automation: dict) -> tuple[bool, str]:
+    from app import backup_service
+    return await backup_service.drill(automation)
+
+
+MECHANICAL_HANDLERS: dict = {
+    "restore_drill": _restore_drill,
+}
+
+
 async def run_one(automation: dict) -> tuple[bool, str]:
     """Execute a single automation. Returns (ok, summary)."""
-    agent = await agent_registry.get_agent_by_name(automation["agent_name"])
-    if not agent or not agent["enabled"]:
-        return False, f"agent '{automation['agent_name']}' not found or disabled"
-
     # per-automation override for legitimately long jobs; NULL = global default
     timeout = (automation.get("timeout_seconds")
                or settings_store.get("automations.run_timeout_seconds"))
+
+    if automation.get("handler"):
+        fn = MECHANICAL_HANDLERS.get(automation["handler"])
+        if fn is None:
+            # NEVER fall through to the agent path: a mechanical row's
+            # instruction is documentation, and handing it to a model would
+            # run the exact theatre the handler column exists to prevent.
+            return False, (f"mechanical handler {automation['handler']!r} is "
+                           f"not registered in this build — the run did not "
+                           f"happen")
+        try:
+            return await asyncio.wait_for(fn(automation), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False, f"timed out after {timeout}s"
+        except Exception as e:  # noqa: BLE001 — a crashed drill is a FAILED run
+            log.exception("mechanical automation %s crashed", automation["name"])
+            return False, f"crashed: {e}"[:500]
+
+    agent = await agent_registry.get_agent_by_name(automation["agent_name"])
+    if not agent or not agent["enabled"]:
+        return False, f"agent '{automation['agent_name']}' not found or disabled"
     final, errors = "", []
 
     async def consume():
@@ -224,6 +290,10 @@ async def tick():
     await sysmon.maybe_retire_instances() # self-limits to daily
     from app import secret_store
     await secret_store.maybe_nudge_rotation()  # self-limits to daily
+    from app import backup_passphrase
+    # the standing "record your backup passphrase off-machine" card — one
+    # per passphrase, self-limits to daily, silent forever once decided
+    await backup_passphrase.maybe_nag()
     from app import failures
     await failures.maybe_raise()         # self-limits to 6h, opt-in, deduped
     await sysmon.maybe_evaluate_alerts() # de-dupes via open alert rows
@@ -269,20 +339,28 @@ async def tick():
             # duplicate push is a far smaller failure than a silent one.
             if automation.get("notify"):
                 try:
-                    await notify.send(summary[:400] or f"{automation['name']} ran",
-                                      title=automation["name"])
+                    sent = await notify.send(
+                        summary[:400] or f"{automation['name']} ran",
+                        title=automation["name"])
                 except Exception as e:                  # noqa: BLE001
                     log.exception("notify for automation %s failed",
                                   automation["name"])
+                    sent = {"ok": False, "error": repr(e)}
+                if not sent.get("ok"):
                     # HER JOURNAL, NOT JUST DOCKER LOGS (Jeremy, 2026-08-07).
                     # A notify:true automation exists to reach him; a push
                     # that died only in container logs is a reminder that
                     # never happened as far as any later reader can tell.
+                    # And notify.send NEVER RAISES for the common failures —
+                    # notifications off, provider unconfigured, ntfy down all
+                    # come back as ok:false — so checking only for exceptions
+                    # journalled the rare failure and dropped the likely one.
                     try:
                         await memory.write(
                             f"Automation '{automation['name']}' ran but its "
-                            f"notification FAILED to send ({e!r}) — the "
-                            f"operator was never told.",
+                            f"notification did NOT go out "
+                            f"({sent.get('error') or 'notify reported not ok'}) "
+                            f"— the operator was never told.",
                             type="journal", source_type="automation")
                     except Exception:
                         log.exception("could not journal the notify failure")

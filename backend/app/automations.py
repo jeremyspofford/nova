@@ -63,13 +63,20 @@ async def _auto_description(instruction: str) -> str:
 _FIELDS = ("id", "name", "description", "instruction", "agent_name",
            "interval_minutes", "timeout_seconds", "enabled", "is_system",
            "consecutive_failures", "last_run_at", "next_run_at", "last_status",
-           "last_summary", "created_at", "schedule", "notify")
+           "last_summary", "created_at", "schedule", "notify", "handler")
 
 # Public because the HTTP route filters an incoming body against it before
 # calling update(). A second copy in the router would be the scopes.py lesson
 # again — that list was duplicated by hand and the duplicate drifted within
 # an hour — and here the drift would be silent: a field the router let
 # through and this set did not would simply not be written.
+#
+# `handler` is DELIBERATELY absent. A handler row is a mechanical automation
+# — the scheduler runs code, never an agent — and the column is written only
+# by migrations, because a model (or a hurried operator) that could set it
+# would be pointing the scheduler at arbitrary registered code, and one that
+# could CLEAR it would silently hand a mechanical job's instruction text to
+# an agent as a prompt.
 UPDATABLE = {"description", "instruction", "agent_name", "interval_minutes",
              "timeout_seconds", "enabled", "schedule", "notify"}
 

@@ -27,6 +27,7 @@ under a running server is torn, and a torn PGDATA restores as a corrupt
 cluster rather than as an error.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -50,6 +51,45 @@ DB_MEMBER = "db.sql"
 # rather than half-reading it.
 BUNDLE_VERSION = 1
 
+# The ENCRYPTED bundle is an outer, uncompressed tar around the exact
+# archive this module has always written. Uncompressed and partly cleartext
+# on purpose — this is the bootstrap answer, not an oversight:
+#
+#   nova_restore.py   the standalone restore script, CLEAR, because a script
+#                     sealed inside what it decrypts can never run
+#   README.txt        one paragraph for whoever finds this file in a drawer
+#   meta.json         advisory listing facts (when, how many members), so
+#                     the Settings card can list bundles WITHOUT the key
+#   payload.enc       the real bundle (tar.gz, manifest first), AES-GCM
+#
+# meta.json is unauthenticated by construction; anything that matters is
+# re-read from the authenticated manifest inside the payload.
+OUTER_META = "meta.json"
+OUTER_PAYLOAD = "payload.enc"
+OUTER_SCRIPT = "nova_restore.py"
+OUTER_README = "README.txt"
+
+_README = """\
+This is an encrypted Nova backup bundle.
+
+To restore it — on any machine with python3, even one with no Nova, no
+Docker and no network — extract this tar and run:
+
+    python3 nova_restore.py <this bundle file>
+
+It will ask for the backup passphrase, decrypt and VERIFY everything, and
+print the exact commands that finish the job. The passphrase is not in this
+file, on purpose: it is whatever the operator recorded off-machine when
+this backup system was set up.
+
+One caution: this README and nova_restore.py are the bundle's CLEARTEXT
+parts — the passphrase authenticates the payload, but nothing can
+authenticate the script that checks it. If this file reached you through
+storage you do not fully trust, take nova_restore.py from the Nova
+repository (github.com/jeremyspofford/nova, scripts/) instead of running
+the copy in the bundle.
+"""
+
 
 class SnapshotRefused(Exception):
     """Coverage is incomplete, or a source could not be read. No bundle."""
@@ -63,10 +103,16 @@ class Member:
     kind: str          # "tree" | "file" | "db"
     bytes: int
     sha256: str
+    restore_to: str = ""   # where it belongs, relative to the repo root —
+                           # "data/memory", ".env", "volume:nova_state" —
+                           # written HERE because only the writer knows the
+                           # container/host mapping; the standalone script
+                           # obeys it instead of hardcoding paths
 
     def as_dict(self) -> dict:
         return {"path": self.path, "origin": self.origin, "kind": self.kind,
-                "bytes": self.bytes, "sha256": self.sha256}
+                "bytes": self.bytes, "sha256": self.sha256,
+                "restore_to": self.restore_to}
 
 
 def _sha256_file(path: Path, chunk: int = 1 << 20) -> tuple[str, int]:
@@ -114,19 +160,39 @@ def dump_database(dsn: str, out: Path, pg_dump: str = "pg_dump") -> None:
 def create(coverage: dict, *, out_dir: Path, dsn: str,
            volume_paths: Optional[dict[str, str]] = None,
            now: Optional[Callable[[], float]] = None,
-           pg_dump: str = "pg_dump") -> dict:
+           pg_dump: str = "pg_dump",
+           passphrase: Optional[str] = None,
+           restore_script: Optional[Path] = None,
+           root_prefix: str = "") -> dict:
     """Build one bundle. Returns the manifest.
 
     `volume_paths` maps a named volume to a path where the runner can read
     its contents. A volume classified for inclusion with no path here is a
     REFUSAL, not a silent omission — that is the whole reason the mapping is
     passed in rather than guessed.
+
+    With a `passphrase`, the output is an ENCRYPTED bundle (an outer tar
+    carrying the standalone restore script beside an AES-GCM payload), and
+    `restore_script` becomes mandatory: a bundle that does not carry its own
+    way back is refused, because the machine it will be opened on is by
+    definition one where this repo may not exist yet. `root_prefix` is what
+    the writer strips from origins to stamp each member's `restore_to`.
+    Without a passphrase the classic plaintext .tar.gz is written — that
+    path stays for tests and for reading history, not for new snapshots.
     """
     if not coverage.get("may_snapshot"):
         raise SnapshotRefused(
             "coverage is incomplete, so no bundle is produced: "
             + "; ".join(f"[{r['code']}] {r['subject']}"
                         for r in coverage.get("refusals", [])))
+    if passphrase is not None:
+        if not passphrase:
+            raise SnapshotRefused("an empty passphrase is not a passphrase")
+        if not restore_script or not Path(restore_script).is_file():
+            raise SnapshotRefused(
+                f"the standalone restore script is missing "
+                f"({restore_script}) — an encrypted bundle must carry its "
+                f"own way back, and one that cannot is not written")
 
     volume_paths = volume_paths or {}
     stamp = time.strftime("%Y%m%dT%H%M%SZ",
@@ -139,16 +205,28 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
     # restored WITH THE STATE IT WAS ABOUT TO REPLACE, the restore then
     # "succeeded", and the rollback silently did nothing. A backup system
     # that can destroy a backup is worse than none.
-    final = out_dir / f"nova-backup-{stamp}.tar.gz"
+    suffix = ".tar" if passphrase else ".tar.gz"
+    final = out_dir / f"nova-backup-{stamp}{suffix}"
     n = 1
     while final.exists():
-        final = out_dir / f"nova-backup-{stamp}-{n}.tar.gz"
+        final = out_dir / f"nova-backup-{stamp}-{n}{suffix}"
         n += 1
     partial = final.with_suffix(final.suffix + ".part")
 
+    def _restore_to(kind: str, name: str) -> str:
+        if kind == "volume":
+            return f"volume:{name}"
+        if root_prefix and name.startswith(root_prefix.rstrip("/") + "/"):
+            return name[len(root_prefix.rstrip("/")):].lstrip("/")
+        return name
+
     members: list[Member] = []
     with tempfile.TemporaryDirectory(prefix="nova-snapshot-") as tmp:
-        staging = Path(tmp)
+        # staging is a SUBDIR so the inner archive and the encrypted payload
+        # can live beside it without archiving themselves — the output
+        # directory backing itself up is a bug this module has already had.
+        staging = Path(tmp) / "staging"
+        staging.mkdir()
 
         # 1. the database FIRST. pg_dump is a consistent snapshot, and doing
         #    it first means the files copied after are never older than it —
@@ -158,7 +236,8 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
         db_path = staging / DB_MEMBER
         dump_database(dsn, db_path, pg_dump=pg_dump)
         digest, size = _sha256_file(db_path)
-        members.append(Member(DB_MEMBER, dsn.split("@")[-1], "db", size, digest))
+        members.append(Member(DB_MEMBER, dsn.split("@")[-1], "db", size,
+                              digest, restore_to="database"))
 
         # 2. everything coverage says to include
         for entry in coverage["entries"]:
@@ -177,6 +256,7 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
                 origin, member_dir = src, f"volumes/{name}"
             else:
                 origin, member_dir = name, "files/" + name.lstrip("/")
+            dest_hint = _restore_to(kind, name)
 
             srcp = Path(origin)
             if not srcp.exists():
@@ -188,12 +268,14 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
                 shutil.copytree(srcp, dest, symlinks=True,
                                 ignore_dangling_symlinks=True)
                 digest, size = _sha256_tree(dest)
-                members.append(Member(member_dir, origin, "tree", size, digest))
+                members.append(Member(member_dir, origin, "tree", size,
+                                      digest, restore_to=dest_hint))
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(srcp, dest)
                 digest, size = _sha256_file(dest)
-                members.append(Member(member_dir, origin, "file", size, digest))
+                members.append(Member(member_dir, origin, "file", size,
+                                      digest, restore_to=dest_hint))
 
         manifest = {
             "bundle_version": BUNDLE_VERSION,
@@ -208,8 +290,12 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
         }
         (staging / MANIFEST).write_text(json.dumps(manifest, indent=2))
 
-        # 3. archive under .part, so nothing incomplete is ever listable
-        with tarfile.open(partial, "w:gz") as tar:
+        # 3. archive, so nothing incomplete is ever listable: the plaintext
+        #    path writes straight to the .part name; the encrypted path
+        #    builds the inner archive in the tempdir, because the only thing
+        #    allowed to appear in out_dir is the finished OUTER bundle.
+        inner = (Path(tmp) / "inner.tar.gz") if passphrase else partial
+        with tarfile.open(inner, "w:gz") as tar:
             # THE MANIFEST GOES FIRST, and the order is load-bearing rather
             # than tidy. A gzip stream cannot be seeked: reading a member
             # means decompressing everything before it. Sorted alphabetically
@@ -220,25 +306,77 @@ def create(coverage: dict, *, out_dir: Path, dsn: str,
             for item in sorted(staging.iterdir()):
                 if item.name != MANIFEST:
                     tar.add(item, arcname=item.name)
+        # the copied trees have served their purpose; give the ~200 MB back
+        # before verification doubles the footprint again
+        shutil.rmtree(staging)
 
-    # 4. verify the ARTIFACT before it gets its real name
-    try:
-        problems = verify(partial)
-    except Exception as e:  # noqa: BLE001 — see verify(); belt and braces
-        problems = [f"verification itself failed: {type(e).__name__}: {e}"]
-    if problems:
-        # the .part goes FIRST. If verification failed, this file is the
-        # thing we must not leave lying around — an unverified archive with
-        # a plausible name is what someone reaches for after a disk dies.
-        partial.unlink(missing_ok=True)
-        raise SnapshotRefused(
-            "the bundle failed its own verification and was discarded: "
-            + "; ".join(problems))
+        # 4. verify the ARTIFACT before it goes any further
+        try:
+            problems = verify(inner)
+        except Exception as e:  # noqa: BLE001 — see verify(); belt and braces
+            problems = [f"verification itself failed: {type(e).__name__}: {e}"]
+        if problems:
+            # the .part goes FIRST. If verification failed, this file is the
+            # thing we must not leave lying around — an unverified archive
+            # with a plausible name is what someone reaches for after a disk
+            # dies.
+            partial.unlink(missing_ok=True)
+            raise SnapshotRefused(
+                "the bundle failed its own verification and was discarded: "
+                + "; ".join(problems))
+
+        if passphrase:
+            # 5. seal it, wrap it, and prove the WRAPPED artifact — the
+            #    round trip below re-decrypts and re-verifies, so "it
+            #    encrypts" is never taken on faith from the writer.
+            from app import backup_crypto
+            payload = Path(tmp) / OUTER_PAYLOAD
+            backup_crypto.encrypt_file(inner, payload, passphrase)
+            from app.backup_passphrase import fingerprint as _fingerprint
+            meta = {
+                "outer_version": 1,
+                "encrypted": True,
+                "created_at": stamp,
+                "bundle_version": BUNDLE_VERSION,
+                "members": len(members),
+                "included": [m.origin for m in members],
+                "excluded": [e["name"] for e in manifest["excluded"]],
+                "bytes_inner": inner.stat().st_size,
+                # WHICH passphrase seals this file — a truncated hash, not a
+                # hint at the value. Without it, a rotated passphrase makes
+                # every older bundle fail with the deliberately ambiguous
+                # "wrong passphrase or corrupt", and nothing can tell the
+                # operator that the paper in the drawer from March is the
+                # right key for this one.
+                "passphrase_fingerprint": _fingerprint(passphrase),
+            }
+            meta_path = Path(tmp) / OUTER_META
+            meta_path.write_text(json.dumps(meta, indent=2))
+            readme = Path(tmp) / OUTER_README
+            readme.write_text(_README)
+            with tarfile.open(partial, "w") as tar:
+                tar.add(readme, arcname=OUTER_README)
+                tar.add(meta_path, arcname=OUTER_META)
+                tar.add(Path(restore_script), arcname=OUTER_SCRIPT)
+                tar.add(payload, arcname=OUTER_PAYLOAD)
+            try:
+                problems = verify_bundle(partial, passphrase)
+            except Exception as e:  # noqa: BLE001 — same rule as verify()
+                problems = [f"round-trip verification itself failed: "
+                            f"{type(e).__name__}: {e}"]
+            if problems:
+                partial.unlink(missing_ok=True)
+                raise SnapshotRefused(
+                    "the encrypted bundle failed its round-trip verification "
+                    "and was discarded: " + "; ".join(problems))
+            manifest["encrypted"] = True
+
     os.replace(partial, final)      # atomic: it appears complete or not at all
     manifest["path"] = str(final)
     manifest["bytes"] = final.stat().st_size
-    log.info("backup written: %s (%.1f MB, %d members)",
-             final, manifest["bytes"] / 1e6, len(members))
+    log.info("backup written: %s (%.1f MB, %d members%s)",
+             final, manifest["bytes"] / 1e6, len(members),
+             ", encrypted" if passphrase else "")
     return manifest
 
 
@@ -287,4 +425,76 @@ def verify(bundle: Path) -> list[str]:
         # neither TarError nor OSError, so a narrower catch turned "this
         # backup is corrupt" into a crash — and a crash is not a verdict.
         problems.append(f"the bundle could not be read: {type(e).__name__}: {e}")
+    return problems
+
+
+# ── the encrypted (outer) format ─────────────────────────────────────────────
+
+def is_outer_bundle(path: Path) -> bool:
+    """An encrypted bundle, told apart by CONTENT, not filename: gzip's two
+    magic bytes say legacy, anything else is opened as an outer tar."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(2) == b"\x1f\x8b":
+                return False
+        with tarfile.open(path, "r:") as tar:
+            return OUTER_PAYLOAD in tar.getnames()
+    except Exception:  # noqa: BLE001 — unreadable is "not an outer bundle"
+        return False
+
+
+def read_outer_meta(path: Path) -> dict:
+    """The cleartext advisory listing facts. UNAUTHENTICATED — good enough
+    to render a list row, never good enough to decide a restore."""
+    with tarfile.open(path, "r:") as tar:
+        fh = tar.extractfile(OUTER_META)
+        return json.loads(fh.read().decode())
+
+
+@contextlib.contextmanager
+def open_inner(bundle: Path, passphrase: Optional[str] = None):
+    """Yield a path to the plaintext inner archive, whichever format the
+    bundle is. For an encrypted bundle the decrypted copy lives in a
+    tempdir that is REMOVED on exit, so plaintext credentials never outlive
+    the operation that needed them."""
+    if not is_outer_bundle(bundle):
+        yield bundle
+        return
+    from app import backup_crypto
+    if not passphrase:
+        raise backup_crypto.CryptoError(
+            f"{bundle.name} is encrypted and no passphrase was available")
+    with tempfile.TemporaryDirectory(prefix="nova-bundle-inner-") as tmp:
+        enc = Path(tmp) / OUTER_PAYLOAD
+        with tarfile.open(bundle, "r:") as tar:
+            fh = tar.extractfile(OUTER_PAYLOAD)
+            with open(enc, "wb") as out:
+                shutil.copyfileobj(fh, out)
+        inner = Path(tmp) / "inner.tar.gz"
+        backup_crypto.decrypt_file(enc, inner, passphrase)
+        enc.unlink()
+        yield inner
+
+
+def verify_bundle(bundle: Path, passphrase: Optional[str] = None) -> list[str]:
+    """`verify`, for either format. For an encrypted bundle this is the full
+    round trip — decrypt with the passphrase, then re-hash every member —
+    because an encrypted archive that decrypts to garbage and a plaintext
+    archive that was never checked are the same lie at different layers."""
+    if not is_outer_bundle(bundle):
+        return verify(bundle)
+    problems: list[str] = []
+    try:
+        with tarfile.open(bundle, "r:") as tar:
+            names = tar.getnames()
+        for required in (OUTER_PAYLOAD, OUTER_SCRIPT, OUTER_META):
+            if required not in names:
+                problems.append(f"no {required} in the outer bundle")
+        if problems:
+            return problems
+        with open_inner(bundle, passphrase) as inner:
+            problems = verify(inner)
+    except Exception as e:  # noqa: BLE001 — same rule as verify()
+        problems.append(f"the bundle could not be read: "
+                        f"{type(e).__name__}: {e}")
     return problems

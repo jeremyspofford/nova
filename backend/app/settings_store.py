@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 # offers a provider that notify.send() reports as unconfigured, never a crash.
 _NOTIFY_PROVIDERS = ["ntfy", "webpush", "webhook"]
 
+# DERIVED, unlike the list above: backup_passphrase has no app imports at
+# module level, so there is no cycle to dodge — a new passphrase source
+# registers itself and appears in the Settings dropdown with no edit here.
+from app.backup_passphrase import SOURCES as _PASSPHRASE_SOURCES  # noqa: E402
+
 SETTING_DEFS: list[dict] = [
     # ── Context ──────────────────────────────────────────────────────────
     # No prompt-budget settings here either. They were absolute token counts
@@ -157,21 +162,46 @@ SETTING_DEFS: list[dict] = [
                      "only after it has been read back and verified, and a "
                      "run that cannot account for every store refuses "
                      "rather than producing a partial one.")},
-    {"key": "backups.include_secrets", "type": "boolean", "default": False,
+    {"key": "backups.include_secrets", "type": "boolean", "default": True,
      "section": "Backups", "label": "Include credentials in backups",
-     "description": ("OFF by default. A backup exists to be copied somewhere "
-                     "else, and a bundle carrying .env and the secrets master "
-                     "key is as sensitive as those keys — anywhere you put it "
-                     "inherits that. Left off, the bundle restores your data "
-                     "but cannot open the database or decrypt stored secrets "
-                     "without you supplying the credentials, so keep a copy "
-                     "of .env and the master key somewhere safe and separate.")},
+     "description": ("ON by default since bundles became encrypted "
+                     "(2026-08-07): the goal is disaster recovery — a new "
+                     "machine, the bundle, the passphrase, and Nova comes "
+                     "back whole — and a bundle without .env and the secrets "
+                     "master key cannot do that. Encryption is what makes a "
+                     "complete bundle safe to copy; the passphrase is what "
+                     "you must keep OFF this machine. Turn this off only if "
+                     "you keep credentials somewhere else and accept "
+                     "supplying them by hand at restore time.")},
+    {"key": "backups.passphrase_source", "type": "enum", "default": "local",
+     "options": sorted(_PASSPHRASE_SOURCES),
+     "section": "Backups", "label": "Backup passphrase source",
+     "description": ("Where Nova gets the passphrase that encrypts every "
+                     "bundle. 'local' keeps it in her own secret store — "
+                     "which lives INSIDE the bundle, so record the "
+                     "passphrase off this machine (the card in your inbox "
+                     "stands until you confirm). Future sources (a secrets "
+                     "manager, an MCP server) register in "
+                     "backup_passphrase.SOURCES and appear here by "
+                     "themselves.")},
     {"key": "backups.keep", "type": "number", "default": 7,
      "min": 1, "max": 365, "section": "Backups",
      "label": "Keep this many backups",
      "description": ("Older bundles are deleted after a NEW one has been "
                      "written and verified — never before, so a failed "
                      "backup can never leave you with fewer than you had.")},
+    {"key": "backups.offsite_dir", "type": "string", "default": "",
+     "allow_empty": True, "section": "Backups",
+     "label": "Off-machine bundle folder",
+     "description": ("A folder that SURVIVES this machine — a NAS or USB "
+                     "mount. Mount it into the backend service in "
+                     "docker-compose.yml (e.g. /mnt/nas/nova:/offsite) and "
+                     "put the container path here (/offsite). Every "
+                     "verified bundle is copied there and re-hashed after "
+                     "the copy; the weekly drill says so when the newest "
+                     "bundle has not arrived. Empty = off, and bundles "
+                     "exist only on this machine — which is not disaster "
+                     "recovery.")},
     {"key": "attachments.ocr_enabled", "type": "boolean", "default": True,
      "section": "Attachments", "label": "Read scans and photos with OCR",
      "description": ("When an attached PDF has no text layer — a scan — read "
@@ -681,7 +711,10 @@ SETTING_DEFS: list[dict] = [
      "section": "Notifications", "label": "ntfy · custom server URL",
      "description": ("Only used when the server above is set to custom "
                      "(e.g. https://ntfy.example.com).")},
-    {"key": "notify.ntfy.topic", "type": "string", "default": "",
+    # `secret: True` is the machine-readable half of the description below:
+    # no shape rule can know a plain word is a credential, so diagnose masks
+    # any def that declares it before the value reaches a model.
+    {"key": "notify.ntfy.topic", "type": "string", "default": "", "secret": True,
      "section": "Notifications", "label": "ntfy · topic",
      "description": ("The topic to publish to and subscribe to in the ntfy app. "
                      "On a public/shared server the topic name IS the only "

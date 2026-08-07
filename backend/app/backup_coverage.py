@@ -352,6 +352,11 @@ SEGMENT_POLICY: dict[str, tuple[str, str]] = {
     "node_modules": (EXCLUDE_REDOWNLOAD, "installable from the lockfile"),
     ".ruff_cache": (EXCLUDE_EPHEMERAL, "a linter cache; regenerates on use"),
     ".pytest_cache": (EXCLUDE_EPHEMERAL, "a test-runner cache"),
+    # coverage.py's data file — a test-run artifact, name owned by the tool.
+    # Refused the first live encrypted snapshot on 2026-08-07, which is the
+    # module doing its job: an unknown file appeared and nothing guessed.
+    ".coverage": (EXCLUDE_EPHEMERAL, "coverage.py's measurement data; a "
+                                     "test-run artifact that regenerates"),
 }
 
 
@@ -617,11 +622,43 @@ def prune_nested(entries: list[Entry]) -> list[Entry]:
 
 def report(inventory: Iterable[dict], *, git_status, ignored_paths=(),
            readable=None, self_service="backup-runner",
-           project_dir: str = "", include_secrets: bool = False) -> dict:
-    """The whole coverage answer, including whether a snapshot may proceed."""
+           project_dir: str = "", include_secrets: bool = False,
+           offsite_dir: str = "") -> dict:
+    """The whole coverage answer, including whether a snapshot may proceed.
+
+    `offsite_dir` is the live value of the off-machine bundle target, and
+    matching it here is what keeps that mount out of the bundle by
+    DERIVATION rather than by a list entry someone writes when they mount
+    it: the same nesting argument as data/backups, one level removed.
+    The setting names the CONTAINER path, but a bind entry is named by its
+    HOST source, so the match goes through `mounted_at` — both exact, both
+    read from the live compose file, no fuzzy matching (this module's
+    standing bargain: a rendering mismatch refuses loudly instead of
+    guessing).
+    """
+    inventory = list(inventory)
     entries, refusals = classify(inventory, git_status=git_status,
                                  self_service=self_service,
                                  project_dir=project_dir)
+    if offsite_dir:
+        off = offsite_dir.rstrip("/")
+        offsite_names = {i["name"] for i in inventory
+                         if str(i.get("mounted_at", "")).rstrip("/") == off}
+        settled = set()
+        for e in entries:
+            if e.name.rstrip("/") == off or e.name in offsite_names:
+                e.disposition = EXCLUDE_DECLINED
+                e.reason = (
+                    "the OFF-MACHINE bundle store (backups.offsite_dir). "
+                    "Archiving the place bundles are copied to puts every "
+                    "backup inside the next one — the data/backups argument, "
+                    "one mount further out.")
+                settled.add(f"{e.kind}:{e.name}")
+        # classify() has already turned "a bind outside the project" into an
+        # R1 refusal; the setting IS the classification, so that refusal is
+        # answered, not outstanding. Dropped by exact subject — every other
+        # refusal stands.
+        refusals = [r for r in refusals if r.subject not in settled]
     entries = entries + host_state_entries(ignored_paths, project_dir)
     entries = prune_nested(entries)
     if not include_secrets:
@@ -629,13 +666,14 @@ def report(inventory: Iterable[dict], *, git_status, ignored_paths=(),
             if e.included and is_secret(e, project_dir):
                 e.disposition = EXCLUDE_DECLINED
                 e.reason = (
-                    "CREDENTIALS, held out so this bundle is safe to copy off "
-                    "the machine. The cost: a restore from it cannot open the "
-                    "database or decrypt any stored secret on its own — keep "
-                    "your .env and the master key somewhere separate, and "
-                    "supply them at restore time. Turn on Settings → Backups "
-                    "→ 'include credentials' to embed them, which makes every "
-                    "copy of this bundle as sensitive as the keys themselves.")
+                    "CREDENTIALS, held out because Settings → Backups → "
+                    "'include credentials' is off. The cost: a restore from "
+                    "this bundle cannot open the database or decrypt any "
+                    "stored secret on its own — you supply .env and the "
+                    "master key by hand at restore time. Bundles are "
+                    "encrypted either way, so the default (on) is the one "
+                    "that can actually recover a dead machine; off is for "
+                    "keeping credentials in a separate system on purpose.")
     if readable is not None:
         refusals += check_reachable(entries, readable)
     refusals += check_uncovered_host_state(ignored_paths, entries, project_dir)

@@ -174,6 +174,14 @@ export function AutomationsTab() {
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-stone-100 truncate">{displayName(a.name)}</span>
                   {a.is_system && <span className="text-[10px] px-1 rounded bg-stone-700 text-stone-400 shrink-0">system</span>}
+                  {a.handler && (
+                    <span
+                      className="text-[10px] px-1 rounded bg-teal-900/60 text-teal-400 shrink-0"
+                      title="Runs as backend code on this schedule — no agent is involved, so nothing can decline or misreport it."
+                    >
+                      mechanical
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
                   {(

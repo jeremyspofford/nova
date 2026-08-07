@@ -174,12 +174,21 @@ def apply_bundle(bundle: Path, *, admin_dsn: str, target_db: str,
                  volume_paths: Optional[dict[str, str]] = None,
                  psql: str = "psql", pg_restore: str = "pg_restore",
                  pg_dump: str = "pg_dump",
-                 now: Optional[Callable[[], float]] = None) -> dict:
+                 now: Optional[Callable[[], float]] = None,
+                 passphrase: Optional[str] = None,
+                 restore_script: Optional[Path] = None,
+                 root_prefix: str = "") -> dict:
     """Replace the live database and files with a bundle's contents.
 
     `file_targets` maps a bundle member path to where it should land, so the
     caller — not this module — decides what "live" means. That is what lets
     the whole path be exercised against throwaway directories.
+
+    `bundle` is the INNER (plaintext) archive — a caller holding an
+    encrypted bundle unwraps it first via backup_snapshot.open_inner. The
+    `passphrase`/`restore_script`/`root_prefix` trio is forwarded to the
+    SAFETY snapshot, so the way back is protected the same way the way
+    forward was.
     """
     if confirm != CONFIRM_PHRASE:
         raise RestoreRefused(
@@ -205,7 +214,9 @@ def apply_bundle(bundle: Path, *, admin_dsn: str, target_db: str,
         safety = bs.create(coverage, out_dir=snapshot_dir,
                            dsn=_dsn_for(admin_dsn, target_db),
                            volume_paths=volume_paths, pg_dump=pg_dump,
-                           now=now)
+                           now=now, passphrase=passphrase,
+                           restore_script=restore_script,
+                           root_prefix=root_prefix)
     except bs.SnapshotRefused as e:
         raise RestoreRefused(
             f"refusing to restore because the safety snapshot failed, which "

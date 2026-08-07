@@ -113,34 +113,69 @@ access and volume access. Two options (Decisions §4):
 2. **Cloud target (rclone).** Configure a remote (test against MinIO/B2), push
    + pull bundles, retention. **Verify:** back up to the remote, wipe locally,
    restore straight from the remote.
+   **2a SHIPPED 2026-08-07 — the PATH half.** `backups.offsite_dir` points
+   at a mount that survives the machine (NAS/USB); verified bundles are
+   copied there behind each snapshot, re-hashed on both sides, pruned to
+   `backups.keep`; the mount is coverage-excluded by derivation from the
+   live compose file + setting. The weekly drill and the failure nudge
+   carry the gap (unconfigured / stale / broken) as standing facts.
+   **2b (rclone cloud) waits on the operator supplying a remote** — noted
+   2026-08-07, Jeremy: "I don't have a remote location to store yet."
 3. **Factory reset + scheduling.** Typed-confirm factory reset (with pre-reset
    snapshot) and a scheduled daily backup. **Verify:** reset returns a clean
    first-run app; the schedule produces a dated bundle.
 4. **Polish.** Include-model-weights option, encrypted bundles (passphrase),
    backup size/count on the Storage card, restore-into-newer-schema migration
    path.
-5. **Restore drill (added 2026-07-24).** A backup that has never been
-   restored is a hope, not a backup. Quarterly (seeded automation +
-   runbook): restore the latest bundle into a throwaway scratch compose
-   project, boot it, run a smoke chat turn, tear down; journal the
-   outcome and notify on failure. Reuses the stack verbs from
-   `coding-team-pipeline.md` once those exist; until then the runbook is
-   manual. **Verify:** the drill restores yesterday's bundle into a
-   scratch stack that answers one chat turn, then cleans up.
+5. **Restore drill (added 2026-07-24; SHIPPED 2026-08-07 as weekly).**
+   A backup that has never been restored is a hope, not a backup.
+   **Built:** a weekly MECHANICAL automation (`weekly-restore-drill`,
+   migration 112 — Sundays 03:00, `notify: true`) that restores the
+   newest bundle into a scratch database `nova_verify_<8hex>`, verifies
+   the whole chain — passphrase source answers, payload decrypts and
+   authenticates, archive verifies, dump restores, migration gate passes
+   — drops the scratch, and reports. `automations.handler` runs it as
+   code (`backup_service.drill`); no agent is in the loop, so nothing
+   can decline or narrate it, and the scheduler's own `notify:true`
+   delivery carries a failure to the operator's phone.
+   *The old note here — "reuses the stack verbs from
+   coding-team-pipeline.md once those exist" — was STALE:* the mechanism
+   now exists as inference-control's `/sandbox/check` (built 2026-08-06,
+   `server.py:_sandbox`), which already builds, boots and tears down a
+   scratch compose stack. It cannot be reused for a bundle drill AS IS —
+   it is hardcoded to the coder flow (worktree + git-landing override),
+   holds one global `nova-sandbox` slot, and its import step asserts the
+   credential tables are EMPTY, which a real bundle fails by design. The
+   fuller boot-the-stack drill is therefore a follow-on: a
+   `/sandbox/restore-drill` verb reusing `_sandbox`'s compose plumbing
+   with the bundle restore in place of `_import_production_data` — no
+   longer blocked on #33.
 
 ## Decisions (defaults chosen; phase 1 can start)
 
 1. **Cloud mechanism** — **rclone** (universal, one config, 50+ backends;
    default) vs a native S3 SDK (S3-compatible only) vs SFTP/WebDAV only.
-2. **Secrets key in the bundle** — **excluded by default**; turning it on makes
-   the bundle as sensitive as the secrets, so pair it with an **optional
-   passphrase-encrypted bundle** (phase 4). Excluded = a restore on a new host
-   needs the same `NOVA_SECRET_KEY` to read encrypted secrets (loud warning on
-   restore). Default: exclude, warn.
+2. **Secrets key in the bundle** — ~~excluded by default~~ **REVERSED
+   2026-08-02 (Jeremy), built 2026-08-07**: the goal is disaster recovery,
+   and a bundle that cannot bring up a working system does not meet it. So
+   the bundle is **complete by default** (.env, `/state/secret.key` inside
+   `nova_state`, tailscale state) and **always encrypted** — AES-256-GCM
+   per chunk over the whole archive, key from scrypt over a passphrase
+   (`backup_crypto.py`, format `NOVAENC1`). A snapshot with no resolvable
+   passphrase REFUSES rather than writing cleartext credentials. The
+   passphrase comes from a **resolver seam** (`backup_passphrase.SOURCES`,
+   `backups.passphrase_source` — `local` today, a secrets manager later),
+   and a standing inbox card nags until the operator confirms an
+   off-machine copy. The bundle is an outer tar carrying the standalone
+   `scripts/nova_restore.py` (python3-only, ctypes/OpenSSL fallback when
+   `cryptography` is absent) beside the encrypted payload, because `.env`
+   is INSIDE the bundle and the stack cannot start without it — restore on
+   a fresh machine cannot go through Nova.
 3. **Model weights** — **excluded by default** (re-downloadable); opt-in for a
    complete offline bundle.
 4. **Runner** — **backup sidecar** (default, isolated fixed-verb executor) vs
-   in-backend. 
+   in-backend. *(As built through phase 1: in-backend, with the pg client
+   pinned to the server major — see `test_pg_client_version.py`.)*
 
 ## Traps / risks
 

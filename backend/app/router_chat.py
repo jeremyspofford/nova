@@ -98,18 +98,54 @@ async def list_backups():
                            "refusals": [{"code": "SCAN_FAILED",
                                          "subject": "coverage",
                                          "detail": str(e)}]}
+    try:
+        # which passphrase source, whether one exists yet, and whether the
+        # operator has confirmed recording it off-machine — never the value
+        out["encryption"] = await bsvc.encryption_state()
+    except Exception:  # noqa: BLE001
+        log.exception("backup encryption state read failed")
+        out["encryption"] = {"state": "unknown", "source": None,
+                             "fingerprint": None, "card_id": None}
+    try:
+        out["offsite"] = bsvc.offsite_state()
+    except Exception:  # noqa: BLE001
+        log.exception("backup offsite state read failed")
+        out["offsite"] = {"configured": False, "dir": "", "ok": False,
+                          "bundles": 0, "newest_synced": None,
+                          "problem": "state unavailable"}
     return out
 
 
 @router.post("/api/v1/backups")
 async def create_backup():
+    # Every outcome below is written to `backup_attempts` in the exact shape
+    # the scheduler writes, because that history is the ONLY thing
+    # backup_service.freshness() and the FACTS clause read: before this,
+    # "Back up now" recorded nothing, so a manual backup after a failed
+    # scheduled one left the model being told the last attempt failed.
+    # Deliberately NOT marked as manual — migration 089 has no provenance
+    # column, and `reason` is the dedupe key, so a "manual:" prefix would
+    # make the scheduler's next identical refusal read as news and re-notify
+    # a standing condition (the exact storm that table exists to stop).
     from app import backup_service as bsvc, backup_snapshot as bs
     try:
-        return await bsvc.snapshot()
+        manifest = await bsvc.snapshot()
     except bs.SnapshotRefused as e:
         # 409, not 500: nothing is broken. Something is unaccounted for, and
         # the operator is the one who can classify it.
+        await bsvc.record_attempt("refused", reason=str(e))
         raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — recorded, then the 500 stands
+        await bsvc.record_attempt("error", reason=str(e)[:500])
+        raise
+    await bsvc.record_attempt("ok", bundle=manifest["path"])
+    # the off-machine copy rides behind the response — hashing 170 MB twice
+    # is not something the "back up now" button should sit on. Idempotent
+    # with the scheduler's own pass; a failure here stands via offsite_state.
+    from app import bg
+    import asyncio as _aio
+    bg.spawn(_aio.to_thread(bsvc.offsite_sync), name="backup-offsite-sync")
+    return manifest
 
 
 @router.post("/api/v1/backups/{name}/verify")
@@ -2887,6 +2923,27 @@ async def secret_usage_endpoint(name: str):
 @router.delete("/api/v1/secrets/{name}")
 async def delete_secret_endpoint(name: str):
     from app import secret_store
+    # The backup passphrase is not like other secrets: `used_by` scans MCP
+    # config, which never references it, so this delete would report
+    # "unused" while orphaning every encrypted bundle on disk — and the
+    # next scheduled snapshot would silently REGENERATE a fresh passphrase,
+    # making the loss invisible until the day a restore needs the old one.
+    # Refused while sealed bundles exist; the refusal names them.
+    from app import backup_passphrase, backup_service
+    if name == backup_passphrase.SECRET_NAME:
+        from pathlib import Path as _Path
+        sealed = [_Path(b["path"]).name for b in backup_service.bundles()
+                  if b.get("encrypted")]
+        if sealed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{name}' seals {len(sealed)} backup bundle(s) "
+                       f"({', '.join(sealed[:3])}"
+                       f"{'…' if len(sealed) > 3 else ''}). Deleting it "
+                       f"would leave them unopenable, and the next "
+                       f"scheduled backup would quietly mint a new "
+                       f"passphrase over the loss. Delete or move those "
+                       f"bundles first if you really mean it.")
     used = await secret_store.used_by(name)
     if not await secret_store.delete(name):
         raise HTTPException(status_code=404, detail="secret not found")

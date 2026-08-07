@@ -87,6 +87,15 @@ class SecretError(RuntimeError):
     swallowed — a silently-empty credential is a worse bug than a loud one."""
 
 
+class SecretMissing(SecretError):
+    """No row with this name — definitively ABSENT, as distinct from present
+    but unreadable. Get-or-create callers must key on THIS and never on the
+    base class: `put` upserts, so treating "could not decrypt" (the signature
+    of a changed master key) as absence would overwrite a row whose value
+    still exists and is still needed — backup_passphrase nearly rotated the
+    passphrase sealing every existing bundle exactly that way."""
+
+
 def _stored_key() -> Optional[bytes]:
     """The persisted master key, or None when there is no usable one.
 
@@ -275,7 +284,7 @@ async def reveal(name: str) -> str:
     async with db.acquire() as conn:
         r = await conn.fetchrow("SELECT * FROM secrets WHERE name = $1", name)
     if not r:
-        raise SecretError(f"no secret named '{name}'")
+        raise SecretMissing(f"no secret named '{name}'")
     if r["source"] != "builtin":
         # fetched live from the holder — Nova stores the reference, never
         # the value, so this is a read-through rather than a lookup

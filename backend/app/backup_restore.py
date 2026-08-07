@@ -39,7 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app.backup_snapshot import DB_MEMBER, MANIFEST, verify
+from app.backup_snapshot import (DB_MEMBER, MANIFEST, is_outer_bundle,
+                                 read_outer_meta, verify)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,8 @@ class BundleInfo:
     excluded: list
     readable: bool
     problem: Optional[str] = None
+    encrypted: bool = False
+    passphrase_fingerprint: Optional[str] = None
 
     def as_dict(self) -> dict:
         return self.__dict__
@@ -96,6 +99,24 @@ def list_bundles(directory: Path) -> list[dict]:
             # never listed: an unfinished bundle must not look restorable
             continue
         try:
+            if is_outer_bundle(p):
+                # An encrypted bundle lists WITHOUT the passphrase, from its
+                # cleartext advisory meta — a listing that needed the key
+                # would put a KDF on a screen that shows several bundles.
+                # Advisory only: anything that decides a restore is re-read
+                # from the authenticated manifest inside.
+                meta = read_outer_meta(p)
+                out.append(BundleInfo(
+                    path=str(p), bytes=p.stat().st_size,
+                    created_at=meta.get("created_at", "?"),
+                    bundle_version=meta.get("bundle_version", 0),
+                    members=int(meta.get("members", 0)),
+                    included=list(meta.get("included", [])),
+                    excluded=list(meta.get("excluded", [])),
+                    readable=True, encrypted=True,
+                    passphrase_fingerprint=meta.get(
+                        "passphrase_fingerprint")).as_dict())
+                continue
             with tarfile.open(p, "r:*") as tar:
                 fh = tar.extractfile(MANIFEST)
                 man = json.loads(fh.read().decode())

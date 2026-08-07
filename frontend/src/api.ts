@@ -1338,6 +1338,9 @@ export interface Automation {
   timeout_seconds: number | null;
   enabled: boolean;
   is_system: boolean;
+  /** Set = mechanical: the scheduler runs backend code, no agent involved.
+   *  Written only by migrations; the instruction text is documentation. */
+  handler?: string | null;
   consecutive_failures: number;
   last_run_at: string | null;
   next_run_at: string | null;
@@ -1814,7 +1817,25 @@ export async function forgetJournalEntry(date: string, sha256: string, reason: s
 export interface BackupBundle {
   path: string; bytes: number; created_at: string; bundle_version: number;
   members: number; included: string[]; excluded: string[];
-  readable: boolean; problem?: string | null;
+  readable: boolean; problem?: string | null; encrypted?: boolean;
+  /** Which passphrase seals this file (truncated hash). A row whose
+   *  fingerprint differs from the CURRENT one only opens with the
+   *  passphrase recorded when it was made — rotation orphans silently
+   *  without this. */
+  passphrase_fingerprint?: string | null;
+}
+
+/** The passphrase story, never the passphrase. `state` is derived from the
+ *  standing inbox card: 'confirmed' means the operator approved "I recorded
+ *  it off-machine"; 'declined' means he dismissed the reminder and owns the
+ *  risk; 'unset' means no passphrase exists yet (it is generated at the
+ *  first encrypted backup). */
+export interface BackupEncryption {
+  state: 'unset' | 'unconfirmed' | 'confirmed' | 'declined' | 'unknown';
+  source: string | null;
+  fingerprint: string | null;
+  card_id: string | null;
+  secret_name?: string;
 }
 
 /** One persistent location and whether it is in the bundle. `reason` is
@@ -1826,10 +1847,20 @@ export interface CoverageEntry {
   included: boolean;
 }
 
+/** The off-machine copy target (backups.offsite_dir). `newest_synced` is
+ *  the fact that matters: the newest local bundle has arrived there. null =
+ *  no local bundles to judge by. */
+export interface BackupOffsite {
+  configured: boolean; dir: string; ok: boolean; bundles: number;
+  newest_synced: boolean | null; problem: string;
+}
+
 export interface BackupsResponse {
   bundles: BackupBundle[];
   store_ok: boolean;
   store_error: string;
+  encryption: BackupEncryption;
+  offsite: BackupOffsite;
   coverage: {
     entries: CoverageEntry[];
     refusals: { code: string; subject: string; detail: string }[];
@@ -1853,7 +1884,8 @@ export async function createBackup():
 
 export async function verifyBackup(name: string):
     Promise<{ scratch: string; tables: number; rows: number;
-              missing_tables: string[]; restored_ok: boolean }> {
+              missing_tables?: string[]; restored_ok: boolean;
+              encrypted?: boolean; migration_refusal?: string }> {
   const r = await apiFetch(`${API_URL}/api/v1/backups/${encodeURIComponent(name)}/verify`,
                            { method: 'POST' });
   if (!r.ok) throw new Error(await errorDetail(r) ?? 'Verify failed');

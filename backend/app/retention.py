@@ -60,7 +60,14 @@ _SWEEPS = [
      "  AND NOT EXISTS (SELECT 1 FROM action_runs ar "
      "                  WHERE ar.recommendation_id = recommendations.id "
      "                    AND ar.status IN ('queued', 'running'))"
-     "  AND (dedupe_key IS NULL OR dedupe_key NOT LIKE 'failure:%')"),
+     # 'backup-passphrase:%' is exempt like 'failure:%', and for a harder
+     # reason: the APPROVED row IS the operator's "I recorded the passphrase
+     # off-machine" attestation — backup_passphrase.confirmation() reads it,
+     # and maybe_nag() re-raises when no row exists. Sweeping it at 30 days
+     # silently reverted 'confirmed' to 'unconfirmed' and re-armed the nag
+     # forever, on a 30-day beat nobody would connect to retention.
+     "  AND (dedupe_key IS NULL OR (dedupe_key NOT LIKE 'failure:%' "
+     "       AND dedupe_key NOT LIKE 'backup-passphrase:%'))"),
 ]
 
 

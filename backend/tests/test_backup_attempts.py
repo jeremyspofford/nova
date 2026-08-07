@@ -79,6 +79,66 @@ async def main() -> int:
                   not await backup_service.record_attempt("refused", reason="z"))
         finally:
             db.acquire = real
+
+        print("\n5. a manual 'Back up now' is a recorded attempt")
+        # POST /api/v1/backups used to call snapshot() and write NOTHING, so
+        # after a manual backup freshness() — and the FACTS line built from
+        # it — kept reporting whatever the last scheduled attempt said.
+        from app import backup_snapshot, bg, router_chat
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM backup_attempts")
+        real_snapshot = backup_service.snapshot
+        real_spawn = bg.spawn
+
+        async def fake_snapshot():
+            return {"path": "/x/manual.tar.gz", "bytes": 1}
+
+        backup_service.snapshot = fake_snapshot
+        # swallow the offsite-sync coroutine: this test is about bookkeeping,
+        # not about copying a bundle off-machine
+        bg.spawn = lambda coro, *, name=None: coro.close()
+        try:
+            await router_chat.create_backup()
+            last = await backup_service.last_attempt()
+            check("a manual success lands as the scheduler's own ok shape",
+                  bool(last) and last["outcome"] == "ok"
+                  and last["bundle"] == "/x/manual.tar.gz", str(last))
+
+            async def refusing_snapshot():
+                raise backup_snapshot.SnapshotRefused("[R5] some/path")
+
+            backup_service.snapshot = refusing_snapshot
+            raised = None
+            try:
+                await router_chat.create_backup()
+            except Exception as e:  # noqa: BLE001
+                raised = e
+            check("a refusal still reaches the operator as a 409",
+                  getattr(raised, "status_code", None) == 409, repr(raised))
+            last = await backup_service.last_attempt()
+            check("...and is on the record with its reason, so the next "
+                  "identical scheduled refusal dedupes against it",
+                  bool(last) and last["outcome"] == "refused"
+                  and last["reason"] == "[R5] some/path", str(last))
+
+            async def crashing_snapshot():
+                raise RuntimeError("disk on fire")
+
+            backup_service.snapshot = crashing_snapshot
+            raised = None
+            try:
+                await router_chat.create_backup()
+            except RuntimeError as e:
+                raised = e
+            check("a crash still raises — the 500 stands",
+                  raised is not None, repr(raised))
+            last = await backup_service.last_attempt()
+            check("...and is on the record as an error",
+                  bool(last) and last["outcome"] == "error"
+                  and last["reason"] == "disk on fire", str(last))
+        finally:
+            backup_service.snapshot = real_snapshot
+            bg.spawn = real_spawn
     finally:
         async with db.acquire() as conn:
             await conn.execute("DELETE FROM backup_attempts")

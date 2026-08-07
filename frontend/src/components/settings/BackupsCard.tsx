@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  BackupBundle, BackupsResponse, createBackup, getBackups, verifyBackup,
+  BackupBundle, BackupsResponse, createBackup, decideRecCard, getBackups,
+  revealSecret, verifyBackup,
 } from '../../api';
 import { CardsSkeleton } from '../ui';
 
@@ -43,6 +44,7 @@ export function BackupsCard() {
   const [status, setStatus] = useState('');
   const [showCoverage, setShowCoverage] = useState(false);
   const [verified, setVerified] = useState<Record<string, string>>({});
+  const [phrase, setPhrase] = useState<string | null>(null);
 
   async function load() {
     try { setData(await getBackups()); } catch (e) { setStatus(String(e)); }
@@ -66,17 +68,36 @@ export function BackupsCard() {
     setBusy(name); setStatus('');
     try {
       const r = await verifyBackup(name);
+      // Three ways restored_ok comes back false: the migration gate refused
+      // (missing_tables is EMPTY then, so "missing " alone named no reason),
+      // tables are structurally absent, or an old backend sent neither field.
       setVerified(v => ({ ...v, [name]: r.restored_ok
         ? `restores: ${r.tables} tables, ${r.rows.toLocaleString()} rows`
-        : `DID NOT RESTORE — missing ${r.missing_tables.join(', ')}` }));
+        : `DID NOT RESTORE — ${r.migration_refusal
+          ?? (r.missing_tables?.length
+            ? `missing ${r.missing_tables.join(', ')}`
+            : 'no reason reported')}` }));
     } catch (e) {
       setVerified(v => ({ ...v, [name]: e instanceof Error ? e.message : String(e) }));
     }
     setBusy('');
   }
 
-  if (!data) return <CardsSkeleton n={1} />;
+  if (!data) {
+    // load() fails into status, but this branch renders first — without the
+    // check a failed getBackups() was a skeleton forever, error invisible.
+    if (status) return (
+      <div className="rounded-lg border border-stone-700 bg-stone-800/50 p-3 space-y-2">
+        <div className="text-sm text-stone-200">Backups</div>
+        <div className="rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
+          {status}
+        </div>
+      </div>
+    );
+    return <CardsSkeleton n={1} />;
+  }
   const cov = data.coverage;
+  const enc = data.encryption;
   const blocked = !data.store_ok || !cov.may_snapshot;
 
   return (
@@ -102,6 +123,81 @@ export function BackupsCard() {
       {!data.store_ok && (
         <div className="rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
           {data.store_error}
+        </div>
+      )}
+
+      {/* The passphrase panel. Bundles are encrypted; the passphrase Nova
+          holds is stored INSIDE what it encrypts, so until the operator
+          confirms an off-machine copy, this stays amber and a card stands
+          in the inbox. Confirming here IS deciding that card — one fact,
+          one place. */}
+      {enc && enc.state !== 'unknown' && (
+        <div className={`rounded border p-2 space-y-1.5 ${
+          enc.state === 'confirmed'
+            ? 'border-stone-700/60 bg-stone-900/40'
+            : 'border-amber-900 bg-amber-950/30'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-stone-300">
+              Backups are encrypted
+              {enc.state === 'unset'
+                ? ' — the passphrase is generated at the first backup.'
+                : ` (passphrase ${enc.fingerprint ?? '?'}, source: ${enc.source}).`}
+            </div>
+            {enc.state !== 'unset' && (
+              <button
+                onClick={() => void (async () => {
+                  if (phrase) { setPhrase(null); return; }
+                  try { setPhrase(await revealSecret(enc.secret_name ?? 'backup-passphrase')); }
+                  catch (e) { setStatus(e instanceof Error ? e.message : String(e)); }
+                })()}
+                className="shrink-0 text-[11px] px-2 py-0.5 rounded border border-stone-600 text-stone-400 hover:text-stone-200"
+              >
+                {phrase ? 'hide' : 'reveal'}
+              </button>
+            )}
+          </div>
+          {phrase && (
+            <div className="text-xs font-mono text-stone-200 bg-stone-950/60 rounded px-2 py-1 break-all select-all">
+              {phrase}
+            </div>
+          )}
+          {enc.state === 'unconfirmed' && (
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] text-amber-400/90">
+                Nova&apos;s copy lives inside the bundles it opens. Write the
+                passphrase down somewhere that is not this machine — then
+                confirm.
+              </div>
+              {enc.card_id && (
+                <button
+                  onClick={() => void (async () => {
+                    try {
+                      await decideRecCard(enc.card_id!, 'approve');
+                      setStatus('Recorded — thank you. The reminder is gone.');
+                      await load();
+                    } catch (e) {
+                      setStatus(e instanceof Error ? e.message : String(e));
+                    }
+                  })()}
+                  className="shrink-0 text-[11px] px-2 py-0.5 rounded bg-teal-700 hover:bg-teal-600 text-white"
+                >
+                  I recorded it off-machine
+                </button>
+              )}
+            </div>
+          )}
+          {enc.state === 'declined' && (
+            <div className="text-[11px] text-stone-500">
+              You dismissed the off-machine reminder. If this machine dies
+              with the only copy, the bundles die with it.
+            </div>
+          )}
+          {enc.state === 'confirmed' && (
+            <div className="text-[11px] text-teal-500">
+              Off-machine copy confirmed. A restore needs only a bundle and
+              this passphrase — <span className="font-mono">python3 nova_restore.py &lt;bundle&gt;</span>.
+            </div>
+          )}
         </div>
       )}
 
@@ -159,6 +255,16 @@ export function BackupsCard() {
                   <div className="text-xs text-stone-300">{fmtStamp(b.created_at)}</div>
                   <div className="text-[11px] font-mono text-stone-500">
                     {fmtBytes(b.bytes)} · {b.members} parts
+                    {b.encrypted && (
+                      <span className="text-teal-600"> · encrypted</span>
+                    )}
+                    {b.passphrase_fingerprint && enc?.fingerprint
+                      && b.passphrase_fingerprint !== enc.fingerprint && (
+                      <span
+                        className="text-amber-400"
+                        title="Sealed with a DIFFERENT passphrase than the current one — it only opens with the passphrase recorded when it was made."
+                      > · older passphrase {b.passphrase_fingerprint}</span>
+                    )}
                     {!b.readable && (
                       <span className="text-red-400"> · UNREADABLE: {b.problem}</span>
                     )}
@@ -188,11 +294,25 @@ export function BackupsCard() {
       </div>
 
       {status && <div className="text-xs text-stone-400">{status}</div>}
-      <div className="text-[11px] text-stone-600">
-        Bundles live in <span className="font-mono">data/backups</span>. Copy one
-        off this machine — a backup that only exists here does not survive the
-        thing it is protecting against.
-      </div>
+      {data.offsite?.configured ? (
+        <div className={`text-[11px] ${
+          !data.offsite.ok || data.offsite.newest_synced === false
+            ? 'text-amber-400' : 'text-stone-500'}`}>
+          Off-machine copy: <span className="font-mono">{data.offsite.dir}</span>
+          {' '}— {data.offsite.ok
+            ? (data.offsite.newest_synced === false
+              ? 'the newest bundle has NOT arrived yet'
+              : `${data.offsite.bundles} bundle${data.offsite.bundles === 1 ? '' : 's'}, up to date`)
+            : data.offsite.problem}
+        </div>
+      ) : (
+        <div className="text-[11px] text-stone-600">
+          Bundles live in <span className="font-mono">data/backups</span> on
+          this machine only. Mount a folder that survives it (NAS/USB) into
+          the backend and name it in “Off-machine bundle folder” below —
+          every verified bundle is then copied and re-checked there.
+        </div>
+      )}
     </div>
   );
 }
