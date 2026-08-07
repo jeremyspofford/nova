@@ -455,6 +455,13 @@ See README for what works. This file is the ordered backlog.
 > regression, not new work: 8 real documents are wrongly rogue, fresh
 > installs cluster into nothing, and `test_identity.py::test_tag_edges` is
 > red on a clean checkout.
+>
+> **Amended 2026-08-07 (Jeremy):** **#44 is NEXT** — the repo-review
+> remediation. The review already fixed 12 confirmed defects and #37 is
+> long shipped; what #44 carries is the verified remainder, led by two
+> security holes (unauthenticated git-landing and inference-control on
+> the compose network). Findings + fix plan:
+> `docs/plans/repo-review-2026-08-07.md`.
 
 1. **Voice — talking to and hearing Nova (decided 2026-07-14; CORE ARC
    SHIPPED — status corrected 2026-07-17)** — full spec + phase status in
@@ -1682,6 +1689,62 @@ See README for what works. This file is the ordered backlog.
     Build order: encryption format + passphrase resolver → standalone restore
     script → the drill.
 
+    **ALL THREE BUILT 2026-08-07 (uncommitted), live-verified end to end.**
+    `backup_crypto.py` (NOVAENC1: chunked AES-256-GCM + scrypt; header,
+    chunk position and a final-chunk flag all authenticated, so truncation
+    and reordering refuse instead of yielding a shorter archive);
+    `backup_passphrase.py` (the resolver seam — `SOURCES` registry,
+    `backups.passphrase_source` setting whose options are DERIVED from the
+    registry; `local` generates a 160-bit passphrase into the secret store
+    on first use, and a standing inbox card nags until the operator
+    confirms an off-machine copy — deciding the card IS the
+    acknowledgment); `scripts/nova_restore.py` (standalone, python3-only,
+    ctypes/OpenSSL fallback when `cryptography` is absent, committed AND
+    written into every bundle — the bundle is an outer tar with the script
+    and a cleartext advisory meta.json beside the encrypted payload, so it
+    lists without the key and restores without the repo); the weekly drill
+    (migration 112: `automations.handler` = mechanical rows the scheduler
+    runs as CODE — the agent path is never consulted, the column is not in
+    UPDATABLE; `weekly-restore-drill` Sundays 03:00, notify:true, restores
+    the newest bundle into `nova_verify_<8hex>` through the FULL chain
+    including decryption, and drops it). Credential exclusion FLIPPED to
+    complete-by-default; a snapshot that cannot resolve a passphrase
+    refuses rather than writing cleartext credentials. Live-verified: a
+    170 MB encrypted bundle over 11 tiers including .env, the master key
+    and the wake corpus; verify-restore through the API (37 tables, 31,389
+    rows, migration gate ok); the standalone script run on the HOST with
+    no `cryptography` (ctypes path) reproduced .env and secret.key
+    byte-identical; the drill fired from the real scheduler. The first
+    live snapshot was REFUSED by R5_UNCOVERED_HOST_STATE over an
+    unclassified `backend/.coverage` — the derived-coverage tripwire doing
+    its job; classified ephemeral.
+
+    **Phase 2a BUILT 2026-08-07 (same session, uncommitted): the
+    off-machine PATH target.** `backups.offsite_dir` names a mount that
+    survives this machine; every verified bundle is copied there behind the
+    snapshot (temp+rename, RE-HASHED both sides after the copy), pruned to
+    `backups.keep`, and the mount itself is excluded from coverage by
+    DERIVATION (matched through the live compose `mounted_at` — unset, the
+    same mount refuses loudly as unclassified). The gap is LOUD everywhere
+    it matters: the weekly drill push notes an unconfigured folder and
+    CAUTIONS on a stale or broken one, and the failure nudge now carries a
+    disabled/never-run drill and a stale offsite as standing facts — they
+    all fail by NOT happening, which the census cannot count.
+    Live-verified: 7 bundles synced to a scratch target, newest_synced
+    true, coverage green.
+    **WAITING ON JEREMY (his call, later):** pick the destination — mount
+    a NAS/USB path into the backend service in docker-compose.yml (e.g.
+    `/mnt/nas/nova-backups:/offsite`) and set Settings → Backups →
+    "Off-machine bundle folder" to `/offsite`. Until then bundles exist
+    only on this machine and the weekly drill says so. The CLOUD half
+    (rclone remote) stays unbuilt on purpose: it needs an account and
+    credentials only he can supply.
+
+    Still open here: rclone cloud targets (phase 2b, waiting on a remote),
+    factory reset (phase 3), the boot-a-stack drill variant (see the plan
+    doc — a `/sandbox/restore-drill` verb on inference-control, no longer
+    blocked on #33).
+
 32. **Secrets management (promoted from the discussion backlog 2026-07-24;
     spec → `docs/plans/secrets-management.md`; architecture LOCKED: built-in
     encrypted store first)** — encrypted `secrets` table (AES-GCM,
@@ -2169,3 +2232,37 @@ See README for what works. This file is the ordered backlog.
     something rather than only read a plan. Full cross-platform desktop
     control is the long pole and should not be started until 1–4 above have
     real answers.
+
+44. **Repo-review remediation (2026-08-07) — NEXT UP.** The full-repo
+    review + desktop/mobile user-test pass is written up in
+    `docs/plans/repo-review-2026-08-07.md`: 12 confirmed defects were
+    fixed the same day (uncommitted, each with a regression test), and a
+    coverage-gated test infrastructure now exists (backend floor 54%,
+    frontend vitest floor, e2e navigation suites for BOTH viewports,
+    `.githooks/` pre-commit + pre-push). What remains is the doc's
+    "needs a decision" list, in its order:
+
+    1. **Sidecar auth** — git-landing (the only read-write repo mount)
+       and inference-control (docker socket = host root) accept
+       unauthenticated requests from any compose container; chained,
+       that is compose-network → host root. Fix is the bearer-token
+       pattern mcp-runner already uses (fails closed, one env var each).
+    2. **Media SSRF redirect hole** — yt-dlp follows redirects past the
+       one-shot guard; per-hop validation inside the media worker (the
+       fetch_url standard) or an egress proxy.
+    3. **Event-loop blocking NAS I/O** — `offsite_state()`/`backups()`
+       stat a network mount synchronously on the chat/turn path
+       (measured: 7.3s `GET /api/v1/backups`).
+    4. The verified-plausible defects: eval-slot races, chat turn-lock
+       leak, ingest worker not leader-gated, /clear vs in-flight
+       compaction, dispatch-group rules gap, backup-lane loose ends
+       (silent drill verdict, unsalted passphrase fingerprint,
+       restore-script cleartext cleanup), `.env.example` default
+       Postgres password.
+    5. The ~100 prioritized test gaps — start with
+       `consents.validate_and_use` (zero tests on the consent burn),
+       `leader.py` (zero tests), and the auth middleware driven through
+       real ASGI requests.
+
+    Items 3–5 need no design input and can run as a fix batch; 1–2 are
+    each a one-sentence decision (both recommended) and an afternoon.
