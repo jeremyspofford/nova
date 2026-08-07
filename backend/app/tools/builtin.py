@@ -2021,19 +2021,39 @@ async def _propose_goal(args, ctx):
 
 
 async def _list_goals(args, ctx):
-    """What she is currently pre-approved to do, and how much is left."""
+    """What she is pre-approved to do, and what she is working towards.
+
+    TWO LISTS, because they answer two different questions and merging them
+    would make both useless. `pre_approved` is "what will not be refused right
+    now" — the question this tool was built for. `tracked` is "what does he
+    want built" — goals that authorise NOTHING, which is what an approved idea
+    becomes (migration 110).
+
+    The second list is why phase I3 works at all: without it the goal an
+    approved idea created is invisible here, so "work on goal X" has no id to
+    put on a build card and no way to find one.
+    """
     from app import goals
     live = await goals.active()
+    tracked = [g for g in await goals.list_all(limit=50)
+               if not g["authorises"] and g["status"] in ("proposed", "active")]
+    out = {
+        "pre_approved": [
+            {"id": g["id"], "title": g["title"], "target": g["target"],
+             "verbs": g["approved_verbs"],
+             "actions_left": g["max_actions"] - g["actions_used"],
+             "expires_at": g["expires_at"]} for g in live],
+        "tracked": [
+            {"id": g["id"], "title": g["title"],
+             "description": (g["description"] or "")[:400],
+             "status": g["status"]} for g in tracked],
+    }
     if not live:
-        return _j({"active_goals": [],
-                   "note": ("Nothing is pre-approved. Actions that create "
-                            "capability will be refused until a goal is "
-                            "approved — call propose_goal.")})
-    return _j({"active_goals": [
-        {"id": g["id"], "title": g["title"], "target": g["target"],
-         "pre_approved": g["approved_verbs"],
-         "actions_left": g["max_actions"] - g["actions_used"],
-         "expires_at": g["expires_at"]} for g in live]})
+        out["note"] = ("Nothing is pre-approved. Actions that create "
+                       "capability will be refused until a goal is approved — "
+                       "call propose_goal. The `tracked` goals below authorise "
+                       "nothing on their own.")
+    return _j(out)
 
 
 async def _manage_tool_hosts(args, ctx):
@@ -3324,9 +3344,14 @@ BUILTIN_TOOLS: dict[str, dict] = {
     },
     "list_goals": {
         "name": "list_goals",
-        "description": ("What the operator has already pre-approved you to "
-                        "do, and how many actions are left on each. Check "
-                        "this before saying you cannot do something."),
+        "description": (
+            "Two lists. `pre_approved`: what the operator has already "
+            "authorised you to do and how many actions are left on each — "
+            "check this before saying you cannot do something. `tracked`: what "
+            "he wants built, which authorises NOTHING by itself. When he asks "
+            "you to work on a goal, find it in `tracked`, draft the task from "
+            "its description, and raise a code_change.build card carrying its "
+            "goal_id; he approves the build separately."),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "reads_only": True,
         "execute": _list_goals,

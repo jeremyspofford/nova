@@ -2740,8 +2740,17 @@ async def push_subscriptions():
 
 @router.get("/api/v1/goals")
 async def list_goals_endpoint(limit: int = 50):
+    """Goals, each carrying the coding work done under it.
+
+    Joined here rather than left to the client: "did anything come of that
+    idea?" is the question the list exists to answer, and a UI that had to
+    fetch per row would answer it one goal at a time or not at all.
+    """
     from app import goals
-    return await goals.list_all(limit=limit)
+    rows = await goals.list_all(limit=limit)
+    for g in rows:
+        g["sessions"] = await goals.sessions_for(g["id"])
+    return rows
 
 
 @router.post("/api/v1/goals", status_code=201)

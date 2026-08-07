@@ -93,7 +93,8 @@ async def delete_workspace(name: str) -> bool:
 
 async def start(workspace: str, task: str, *, mode: str = "default",
                 budget_s: int = 0, requested_by: str | None = None,
-                continue_from: str | None = None) -> dict:
+                continue_from: str | None = None,
+                goal_id: str | None = None) -> dict:
     """Kick off one coding task. Returns immediately — sessions run minutes.
 
     The row is written BEFORE the broker is called and updated after, so a
@@ -137,10 +138,12 @@ async def start(workspace: str, task: str, *, mode: str = "default",
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO coding_sessions
-                   (workspace_id, task, mode, requested_by, continued_from)
-               VALUES ($1, $2, $3, $4, $5::uuid) RETURNING *""",
+                   (workspace_id, task, mode, requested_by, continued_from,
+                    goal_id)
+               VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid) RETURNING *""",
             ws["id"], task, mode, requested_by,
-            str(continue_from) if continue_from else None)
+            str(continue_from) if continue_from else None,
+            str(goal_id) if goal_id else None)
     sid = row["id"]
 
     try:
@@ -280,6 +283,7 @@ def _shape(row: dict) -> dict:
             "task": row["task"], "branch": row["branch"],
             "commit": row["commit_sha"], "diffstat": row["diffstat"],
             "error": row["error"], "workspace": row.get("workspace"),
+            "goal_id": (str(row["goal_id"]) if row.get("goal_id") else None),
             "continued_from": (str(row["continued_from"])
                                if row.get("continued_from") else None),
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None}

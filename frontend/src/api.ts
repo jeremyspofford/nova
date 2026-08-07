@@ -1282,6 +1282,18 @@ export interface Goal {
   created_by: string | null;
   proposed_by: string | null;
   source_recommendation_id: string | null;
+  sessions?: GoalSession[];
+}
+
+/** Coding work done under a goal — what came of it. */
+export interface GoalSession {
+  session_id: string;
+  state: string;
+  branch: string | null;
+  commit: string | null;
+  sandbox: string | null;
+  review: string | null;
+  created_at: string;
 }
 
 export async function getGoals(): Promise<Goal[]> {

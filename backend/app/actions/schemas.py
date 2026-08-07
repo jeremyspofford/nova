@@ -20,7 +20,8 @@ a prompt tweak. That is the whole point of the file existing.
 """
 
 import re
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal, Optional, Union
+from uuid import UUID
 
 from pydantic import (BaseModel, ConfigDict, Field, StringConstraints,
                       field_validator)
@@ -194,6 +195,19 @@ class CodeChangeBuild(_Action):
     task: Annotated[str, StringConstraints(min_length=20, max_length=4000)]
     attempts: Annotated[int, Field(ge=1, le=5)] = 3
     why: Annotated[str, StringConstraints(max_length=280)]
+    #: Which goal this serves — ROADMAP #34 phase I3. A LABEL and nothing
+    #: more: it names the work, it does not authorise it. The build is still
+    #: approved on this card and the landing is still a second one, whatever
+    #: verbs the goal happens to pre-approve — `goals.spend` matches on a
+    #: verb, and neither building nor landing is a verb a goal can carry.
+    #:
+    #: A uuid rather than a title, because a title is a string the model can
+    #: invent and a uuid is one preflight can look up. An id that resolves to
+    #: no goal blocks the card rather than labelling it with a fiction.
+    #: Plain UUID, not UUID4: the version nibble is a fact about how the id
+    #: was generated, not about whether it names a goal, and preflight's
+    #: lookup is the check that matters.
+    goal_id: Optional[UUID] = None
 
 
 ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy, CodeChangeLand,

@@ -318,7 +318,8 @@ async def _step_build(doc, rec, ctx) -> dict:
 
         started_r = await coder.start(
             doc.workspace, retry_task(doc.task, history, resume_from),
-            requested_by="code_change.build", continue_from=resume_from)
+            requested_by="code_change.build", continue_from=resume_from,
+            goal_id=str(doc.goal_id) if doc.goal_id else None)
         if started_r.get("status") == "error":
             return {"status": "error",
                     "detail": f"attempt {attempt} could not start: "
@@ -384,6 +385,12 @@ def describe_build(doc) -> str:
         f"    Budget      {int(_LOOP_BUDGET_S / 60)} minutes for the whole "
         f"loop, then it stops and reports what it tried",
         f"    Why         {doc.why}",
+        # "Which goal is this for" is the first question about a build he did
+        # not type himself. The ID here and the TITLE in preflight's detail
+        # line, because `describe` is pure — it has the document and no
+        # database, so it cannot resolve a name. Preflight can, does, and puts
+        # it where he reads it: `for the goal "<title>"`.
+        *([f"    Goal        {doc.goal_id}"] if doc.goal_id else []),
         "    Task        " + (doc.task[:300]
                               + ("…" if len(doc.task) > 300 else "")),
         "    Result      a VERIFIED session, not a branch. Putting it in your "
@@ -413,12 +420,30 @@ async def preflight_build(doc, *, operator: bool = False
         return ("blocked",
                 f"no enabled workspace named {doc.workspace!r}. "
                 f"Available: {', '.join(names) or '(none)'}", None)
+    # A GOAL THAT DOES NOT EXIST IS NOT A LABEL, IT IS A FICTION. The id is
+    # the model's to supply, so it is the model's to get wrong — and a card
+    # saying "for goal <uuid>" that resolves to nothing is worse than a card
+    # with no goal at all, because it reads as traceability.
+    goal = None
+    if doc.goal_id:
+        from app import goals as _goals
+        goal = await _goals.get(str(doc.goal_id))
+        if not goal:
+            return ("blocked",
+                    f"no goal {doc.goal_id} — this build says it serves one "
+                    f"that does not exist. Check Library → Goals.", None)
+
     st = await coder.repo_status()
     if st.get("error"):
         return ("blocked",
                 f"the landing sidecar is unreachable ({st['error']}) — the "
                 f"sandbox check stages its work through it, so nothing could "
                 f"be verified", None)
+    if goal:
+        return ("ready",
+                (f"ready: up to {doc.attempts} attempts against "
+                 f"{doc.workspace} at {st.get('head')}, each verified by the "
+                 f"boot gate — for the goal \"{goal['title']}\""), None)
     return ("ready",
             (f"ready: up to {doc.attempts} attempts against {doc.workspace} "
              f"at {st.get('head')}, each verified by the boot gate"), None)

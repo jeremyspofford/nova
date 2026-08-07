@@ -415,6 +415,29 @@ async def create(title: str, *, description: str = "", target: str = "",
     return _row(r)
 
 
+async def sessions_for(goal_id: str) -> list[dict]:
+    """The coding work done under this goal — what came of it.
+
+    The answer to "I approved that idea weeks ago, did anything happen?"
+    Read from `coding_sessions.goal_id` (migration 111) rather than inferred
+    from titles, so a renamed goal keeps its history.
+    """
+    try:
+        gid = uuid_mod.UUID(str(goal_id))
+    except ValueError:
+        return []
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, state, branch, commit_sha, sandbox_status, "
+            "       review_status, created_at "
+            "  FROM coding_sessions WHERE goal_id = $1 "
+            " ORDER BY created_at DESC LIMIT 20", gid)
+    return [{"session_id": str(r["id"]), "state": r["state"],
+             "branch": r["branch"], "commit": r["commit_sha"],
+             "sandbox": r["sandbox_status"], "review": r["review_status"],
+             "created_at": str(r["created_at"])} for r in rows]
+
+
 async def from_recommendation(rec_id: str) -> Optional[dict]:
     """The goal an idea card produced, if it produced one."""
     try:

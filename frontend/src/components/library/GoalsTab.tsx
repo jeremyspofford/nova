@@ -155,6 +155,29 @@ export function GoalsTab() {
                     className="text-xs text-stone-500 hover:text-red-400">delete</button>
                 </div>
               </div>
+              {/* WHAT CAME OF IT. A goal with no work under it looks the
+                  same as one that was quietly abandoned, and the difference
+                  is the only thing worth knowing weeks later. */}
+              {!!g.sessions?.length && (
+                <div className="mt-2 space-y-1">
+                  {g.sessions.map(s => (
+                    <div key={s.session_id} className="flex items-center gap-2 text-[11px]">
+                      <span className="text-stone-500">{s.branch || 'no branch'}</span>
+                      <span className={s.state === 'done' ? 'text-stone-400' : 'text-amber-400'}>{s.state}</span>
+                      {s.sandbox && (
+                        <span className={s.sandbox === 'ok' ? 'text-teal-400' : 'text-red-400'}>
+                          sandbox {s.sandbox}
+                        </span>
+                      )}
+                      {s.review && (
+                        <span className={s.review === 'pass' ? 'text-teal-400' : 'text-amber-400'}>
+                          review {s.review}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {g.description && (
                 <pre className="mt-2 text-xs text-stone-400 whitespace-pre-wrap font-sans">{g.description}</pre>
               )}
