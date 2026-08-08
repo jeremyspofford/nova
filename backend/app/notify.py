@@ -27,6 +27,23 @@ HONEST RECEIPTS (the operator-visible-outcomes lesson: "accepted by transport"
 message — never that it reached the operator's device. `send()` reports
 acceptance (with an id when the backend returns one) and never claims delivery;
 every caller must relay it the same way.
+
+IT LANDS IN THE CONVERSATION FIRST (migration 125). Jeremy, 2026-08-07:
+"Notifications should be in chat, not just the notifications bell." So
+`send()` RECORDS before it delivers — `notifications.record` writes the one
+row the push is generated from and the transcript pointer that renders it —
+and the delivery outcome is written back onto that same row. Three
+consequences, all deliberate:
+
+  * a notification whose transport is disabled, unconfigured or broken is
+    still in the conversation, saying so. That is the whole point: the
+    channel that failed is the one that used to be the only record.
+  * the push's click URL is the deep link to that row, so the tap carries
+    which notification was tapped instead of dumping the operator on /chat.
+  * two callers raising the same news inside `DEDUPE_WINDOW_S` produce ONE
+    notification (the heartbeat raises an inbox card, whose ping and whose
+    own push are the same sentence). The duplicate is counted on the
+    original, not dropped on the floor.
 """
 
 import logging
@@ -189,12 +206,14 @@ def active_provider() -> Optional[Provider]:
     return _PROVIDERS.get(settings_store.get("notify.provider"))
 
 
-async def send(message: str, *, title: Optional[str] = None,
-               priority: Optional[str] = None, tags: Optional[list[str]] = None,
-               click: Optional[str] = None) -> dict:
-    """Publish a notification through the active provider. Returns
-    {ok, id?, error?, provider?} — never raises. Reports provider/server
-    ACCEPTANCE, not device delivery."""
+async def _deliver(message: str, *, title: Optional[str], priority: Optional[str],
+                   tags: Optional[list[str]], click: Optional[str]) -> dict:
+    """The transport half, unchanged: pick the provider and hand it the text.
+
+    Split out of `send` so the record half below reads as what it is — every
+    return here is an outcome that gets written onto the notification row,
+    including the three refusals that never touch a network.
+    """
     if not settings_store.get("notify.enabled"):
         return {"ok": False, "error": "notifications are disabled "
                 "(Settings -> Notifications)"}
@@ -210,4 +229,132 @@ async def send(message: str, *, title: Optional[str] = None,
     result = await provider.send(message, title=title, priority=prio,
                                  tags=tags, click=click)
     result["provider"] = provider.key
+    return result
+
+
+async def send(message: str, *, title: Optional[str] = None,
+               priority: Optional[str] = None, tags: Optional[list[str]] = None,
+               click: Optional[str] = None,
+               kind: str = "alert", source: Optional[str] = None,
+               recommendation_id: Optional[str] = None,
+               dedupe_key: Optional[str] = None,
+               record: bool = True) -> dict:
+    """Record the notification, then publish it through the active provider.
+
+    Returns {ok, id?, error?, provider?, notification_id?, in_chat?, deduped,
+    state?, delivery_label?, confirmed?} — never raises. `ok` still means the
+    provider ACCEPTED the message and nothing more; `notifications.confirmed()`
+    is the only thing in this codebase that answers whether it reached a person.
+
+    `deduped` IS ALWAYS PRESENT AND EVERY CALLER MUST READ IT. When it is
+    True the provider was never asked — this call published nothing — and
+    `ok`/`state`/`delivery_label` describe the EARLIER notification this one
+    was folded onto. A caller that checks only `ok` will report a send that
+    did not happen, which is exactly the false success this module's
+    docstring spends four paragraphs on.
+
+    RECORD FIRST, DELIVER SECOND. The order is the feature. Every refusal
+    above — disabled, no provider, misconfigured — used to return a dict to a
+    caller that mostly logged it, and the operator learned nothing. Now the
+    news is already in his conversation with the reason attached before the
+    transport is even asked.
+
+    `record=False` is for notifications that would be absurd in the
+    transcript: the "Nova replied" nudge, whose whole content is that the
+    reply directly above it exists.
+    """
+    from app import notifications
+
+    if not record:
+        # `deduped` is stated even here, so the key is genuinely always
+        # present and a caller reading it never has to know which branch it
+        # came from. Nothing is recorded, so nothing can be a repeat.
+        return {**await _deliver(message, title=title, priority=priority,
+                                 tags=tags, click=click), "deduped": False}
+
+    # ANTI-NAG, before anything is written. Derived from the news itself.
+    fp = (dedupe_key or "").strip() or notifications.fingerprint(message)
+    try:
+        prior = await notifications.find_repeat(fp)
+    except Exception:                                        # noqa: BLE001
+        log.exception("the notification dedupe lookup failed")
+        prior = None
+    if prior is not None:
+        await notifications.note_repeat(prior["id"])
+        log.info("notification deduped onto %s (%s repeats)",
+                 prior["id"], prior["repeats"] + 1)
+        # NOTHING WAS PUBLISHED BY THIS CALL, and the dict has to say so out
+        # loud. `deduped` used to be the only sign, and no caller read it —
+        # so a suppressed notification came back with ok:True and every
+        # caller relayed it as a send that happened. That is the
+        # "never report success you did not check" failure, one layer down:
+        # `ok` here is a fact about an EARLIER push. The state and the label
+        # ride along so a caller can say which one, and how it went.
+        return {"ok": prior["state"] in ("accepted", "opened"),
+                "deduped": True, "notification_id": prior["id"],
+                # explicitly None: there is no transport id for a call that
+                # never reached a transport, and an absent key reads the same
+                # as a provider that returned nothing.
+                "id": None,
+                "in_chat": bool(prior["message_id"]),
+                "provider": prior["provider"],
+                "state": prior["state"],
+                "delivery_label": prior["delivery_label"],
+                "confirmed": prior["confirmed"],
+                "repeats": prior["repeats"] + 1,
+                "first_raised_at": prior["created_at"],
+                "error": None if prior["state"] in ("accepted", "opened")
+                else f"already raised and {prior['delivery_label']}"}
+
+    try:
+        rec = await notifications.record(
+            message, title=title, kind=kind, source=source, click_url=click,
+            tags=tags, priority=priority, recommendation_id=recommendation_id,
+            dedupe_key=dedupe_key)
+    except Exception as e:                                   # noqa: BLE001
+        # The record is what makes this visible at all, so a failure here is
+        # reported rather than swallowed — but the push still goes out,
+        # because the operator being told beats bookkeeping. The returned
+        # dict says the conversation half did not happen.
+        log.exception("the notification could not be recorded")
+        out = await _deliver(message, title=title, priority=priority,
+                             tags=tags, click=click)
+        out["in_chat"] = False
+        out["record_error"] = f"not recorded in the conversation: {e}"
+        return out
+
+    note = rec["notification"]
+    nid = note["id"]
+    # The tap carries WHICH notification. This is the reported bug: the click
+    # URL was a bare page, so the app opened chat and the thing he tapped was
+    # nowhere. The caller's own destination is kept on the row and offered as
+    # a secondary link on the chat item.
+    result = await _deliver(message, title=title, priority=priority,
+                            tags=tags, click=notifications.deep_link(nid))
+    try:
+        if result.get("ok"):
+            row = await notifications.mark_accepted(
+                nid, provider=result.get("provider"), transport_id=result.get("id"))
+        else:
+            row = await notifications.mark_failed(
+                nid, provider=result.get("provider"),
+                error=str(result.get("error") or "the provider gave no reason"))
+        # READ BACK, never assume. The two marks only move a row out of
+        # 'pending', so a row something else already touched returns None —
+        # and a caller told "accepted" by a dict while the row says otherwise
+        # is the drift this module exists to prevent. The row is the fact.
+        row = row or await notifications.get(nid)
+        if row:
+            result["state"] = row["state"]
+            result["delivery_label"] = row["delivery_label"]
+            result["confirmed"] = row["confirmed"]
+    except Exception:                                        # noqa: BLE001
+        log.exception("the notification outcome could not be written to %s", nid)
+        result["record_error"] = ("the delivery outcome was not written to the "
+                                  "notification row")
+    result["notification_id"] = nid
+    result["deduped"] = False
+    result["in_chat"] = rec["in_chat"]
+    if not rec["in_chat"] and rec.get("why"):
+        result["chat_error"] = rec["why"]
     return result

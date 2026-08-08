@@ -134,6 +134,62 @@ _sessions: dict[str, "Session"] = {}
 _lock = threading.Lock()
 
 
+#: Both spellings of "what this cost", as MEASURED off the wire rather than
+#: taken from the docs. The adapter streams `usage_update` frames shaped
+#: `{"sessionUpdate": "usage_update", "used": 52632, "size": 200000,
+#: "cost": {"amount": 3.17, "currency": "USD"}}` — cumulative for the session,
+#: so the last frame wins — and the phase-0 notes say the final prompt
+#: response carries an `inputTokens`/`outputTokens` block. A meter that only
+#: understood the documented spelling measured nothing for a week.
+_TOKEN_KEYS = {
+    "tokens_in": ("inputTokens", "input_tokens", "prompt_tokens",
+                  "promptTokens"),
+    "tokens_out": ("outputTokens", "output_tokens", "completion_tokens",
+                   "completionTokens"),
+    "cached_tokens": ("cachedReadTokens", "cached_read_tokens",
+                      "cached_tokens", "cachedTokens"),
+}
+
+
+def _usage_figures(node) -> dict:
+    """Every cost figure one update frame carries, normalized, possibly {}.
+
+    Recursive by key shape rather than by frame layout, because the figures
+    arrive nested differently per source: a streamed `usage_update` sits under
+    `params.update`, a final response block under `usage`. An empty dict IS
+    the answer for a frame that carries none — it must not count as a report.
+
+    `cost` maps to `usd` only when the frame says USD; an amount in a currency
+    this code does not recognise is dropped rather than mislabeled.
+    """
+    out: dict = {}
+    if isinstance(node, dict):
+        if node.get("sessionUpdate") == "usage_update":
+            if isinstance(node.get("used"), (int, float)):
+                out["context_used"] = int(node["used"])
+            if isinstance(node.get("size"), (int, float)):
+                out["context_size"] = int(node["size"])
+            cost = node.get("cost")
+            if (isinstance(cost, dict)
+                    and isinstance(cost.get("amount"), (int, float))
+                    and cost.get("currency", "USD") == "USD"):
+                out["usd"] = float(cost["amount"])
+        block = node.get("usage") if isinstance(node.get("usage"), dict) \
+            else node
+        for field, keys in _TOKEN_KEYS.items():
+            for k in keys:
+                v = block.get(k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    out[field] = int(v)
+                    break
+        for v in node.values():
+            out.update(_usage_figures(v))
+    elif isinstance(node, list):
+        for item in node:
+            out.update(_usage_figures(item))
+    return out
+
+
 #: ONE CLONE PER REPOSITORY, kept and fetched. Every session used to run its
 #: own `git clone`, so N tasks against one repo meant N copies of it on disk —
 #: minutes and hundreds of megabytes each, and N drifting views of `main`.
@@ -195,6 +251,16 @@ class Session:
         self.diffstat = ""
         self.commit = ""
         self.timed_out = False
+        #: What the agent has reported spending, per-key last-frame-wins —
+        #: the frames are cumulative for the session, so summing them would
+        #: multiply the cost by the number of times it was reported.
+        self.usage: dict = {}
+        self.usage_frames = 0
+        #: The pin THIS process was launched with, recorded per session
+        #: rather than read from .env at question time: the operator can
+        #: change the pin between sessions, and only the broker knows which
+        #: value its agent actually ran under.
+        self.model = os.environ.get("ANTHROPIC_MODEL", "")
         #: The trunk commit this session's work will be measured from. Set at
         #: clone time and never derived from HEAD, which on a resumed session
         #: is the previous attempt's tip.
@@ -305,9 +371,18 @@ class Session:
         self._git("config", "user.email", "nova@localhost")
         self._git("config", "user.name", "Nova")
 
+    def _saw(self, update: dict):
+        """One update, into the record AND the meter — a single path, so a
+        frame the snapshot can show is a frame the meter has counted."""
+        self.updates.append(update)
+        got = _usage_figures(update)
+        if got:
+            self.usage_frames += 1
+            self.usage.update(got)
+
     def _drive(self):
         self.acp = AcpSession(cwd=self.dir, mode=self.spec.mode,
-                              on_update=self.updates.append)
+                              on_update=self._saw)
         self.acp.initialize()
         self.acp.new_session()
         stop, err = self.acp.prompt(self.spec.task, deadline=self.deadline)
@@ -388,6 +463,14 @@ class Session:
             "commands": commands,
             "elapsed_s": round(time.time() - self.started, 1),
             "budget_s": self.budget_s,
+            # What this session has SPENT, aggregated from the ACP usage
+            # frames rather than left to fall out of the twelve-update tail
+            # window. None — not zeros — when no frame ever carried figures:
+            # the backend writes that to the ledger as unmetered, and a zero
+            # here would read as free.
+            "model": self.model,
+            "usage": ({**self.usage, "frames": self.usage_frames}
+                      if self.usage_frames else None),
             "tail": self.updates[-12:],
         }
 

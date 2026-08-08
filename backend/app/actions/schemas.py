@@ -210,6 +210,40 @@ class CodeChangeBuild(_Action):
     goal_id: Optional[UUID] = None
 
 
+class ModelAssign(_Action):
+    """Point an agent at a different model — by the operator's click, never
+    by a tool call.
+
+    `agents/registry._SYSTEM_PROTECTED` blocks any tool from setting `.model`
+    on an is_system agent, which is every real agent including main. That
+    guard is CORRECT and stays: which model answers the operator's turns is
+    the operator's decision. What was missing was any mechanical way to put
+    that decision in front of him — on 2026-08-07, asked for "the latest
+    DeepSeek flash", Nova spent 31 minutes describing UI steps (to an edit
+    mode that no longer exists) and he ended up inserting a malformed slug by
+    hand. This document is the missing half: the card names the agent and the
+    exact id, and Approve performs the same PATCH he does from Settings
+    (operator=True), after the id has been re-verified against the live
+    provider catalog (models_catalog.resolve_id — a '~' profile-URL form is
+    normalised to the real id or the card is blocked).
+
+    NOTE WHAT IS NOT HERE, as ever: no allowed_tools, no system_prompt, no
+    enabled, no fallback_model. Exactly one field of one agent moves, and the
+    schema cannot express touching anything else.
+    """
+
+    type: Literal["model.assign"]
+    agent: Annotated[str, StringConstraints(
+        pattern=r"^[a-z0-9][a-z0-9-]{0,38}$")]
+    # 'provider:id'. '~' is deliberately representable: the executor resolves
+    # it through the ONE canonicalisation rule, so a pasted profile-URL form
+    # becomes either the real id on the card or a blocked card that says why
+    # — refusing it here would just produce a less helpful error.
+    model: Annotated[str, StringConstraints(
+        pattern=r"^[A-Za-z0-9._-]{1,40}:[~A-Za-z0-9._/:+-]{1,160}$")]
+    why: Annotated[str, StringConstraints(max_length=280)]
+
+
 ActionDoc = Annotated[Union[McpServerAdd, HomeAssistantDeploy, CodeChangeLand,
-                            CodeChangeBuild],
+                            CodeChangeBuild, ModelAssign],
                       Field(discriminator="type")]

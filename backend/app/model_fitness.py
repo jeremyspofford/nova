@@ -37,6 +37,8 @@ from typing import Optional
 
 import httpx
 
+from app import degeneracy
+
 log = logging.getLogger(__name__)
 
 # Severity. `blocking` means the role cannot work at all — a tool-calling
@@ -292,6 +294,21 @@ async def assess(model: str, *, needs_tools: bool = False,
                           f"{ev['tasks_total']} on the '{ev['suite']}' suite"
                           f"{_when(ev)}. Failing: "
                           f"{', '.join(ev['failed_tasks'][:3])}."})
+
+    # BEHAVIOUR AGAIN, and this time from PRODUCTION rather than a suite. An
+    # eval score is a measurement of a model on tasks someone chose, taken on
+    # some past day; `model_health` is what the model did on the operator's
+    # own turns, this week. On 2026-08-07 the two disagreed completely — the
+    # model bound to `main` had never been graded at all and returned eight
+    # detector hits and a one-character reply in two hours, and every check
+    # above this line waved it through.
+    #
+    # Not gated on `needs_tools`: a completion that is not an answer is not an
+    # answer for a tool-free role either.
+    try:
+        findings += await degeneracy.fitness_findings(model)
+    except Exception:  # noqa: BLE001 — a fitness probe never decides by crashing
+        log.debug("degeneracy findings failed for %s", model, exc_info=True)
     return findings
 
 

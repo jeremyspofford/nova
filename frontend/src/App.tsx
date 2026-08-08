@@ -3,6 +3,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { AppShell } from './shell/AppShell';
 import { checkAuth, setAuthToken, type AuthState } from './api';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { GuestChat } from './pages/GuestChat';
 
 /** Token gate — shown only when the backend has NOVA_AUTH_TOKEN set and we
  *  don't hold the right one. Empty token backend-side = open (dev). */
@@ -12,7 +13,23 @@ export default function App() {
   const [error, setError] = useState('');
   const locked = auth === 'locked';
 
+  // THE GUEST SHELL, decided before anything else runs and outside the
+  // router on purpose (docs/plans/public-access-and-guests.md §3).
+  //
+  // `checkAuth()` probes GET /api/v1/settings, which a guest token is
+  // REFUSED on by design — so a guest arriving at the normal app would be
+  // told the token was wrong and shown the admin unlock box, which is both
+  // untrue and an invitation to guess. Guests get their own page, which asks
+  // the one route that can answer for them.
+  //
+  // This is a client-side branch and therefore not a control: it decides
+  // which UI to draw, never what anyone may do. Every permission on this
+  // page is enforced again in auth_middleware, and a guest who skips the
+  // page entirely gets exactly the same answers from the API.
+  const isGuest = window.location.pathname.startsWith('/guest');
+
   useEffect(() => {
+    if (isGuest) return;   // the guest page owns its own token handling
     // login-by-link: a token in the URL FRAGMENT (#token=…) — fragments
     // never cross the network or reach server logs. This is what the
     // phone-setup QR encodes, and it kills manual token entry entirely.
@@ -25,7 +42,7 @@ export default function App() {
     const onUnauthorized = () => setAuth('locked');
     window.addEventListener('nova:unauthorized', onUnauthorized);
     return () => window.removeEventListener('nova:unauthorized', onUnauthorized);
-  }, []);
+  }, [isGuest]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -40,6 +57,14 @@ export default function App() {
         ? "Couldn't reach Nova — is the backend running?"
         : 'That token was not accepted.');
     }
+  }
+
+  if (isGuest) {
+    return (
+      <ErrorBoundary label="Nova">
+        <GuestChat />
+      </ErrorBoundary>
+    );
   }
 
   if (auth === null) return <div className="w-full h-screen bg-stone-950" />;

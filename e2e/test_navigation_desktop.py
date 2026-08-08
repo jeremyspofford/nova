@@ -23,7 +23,7 @@ from playwright.sync_api import Page, expect
 SURFACES = [
     ("Vault", re.compile(r"her notes, their links", re.I)),
     ("Library", re.compile(r"^agents$", re.I)),
-    ("Activity", re.compile(r"background learning queue", re.I)),
+    ("Action log", re.compile(r"Ingestion queue", re.I)),
     ("Observability", re.compile(r"SERVICE HEALTH", re.I)),
     ("Settings", re.compile(r"Assistant name", re.I)),
 ]
@@ -49,6 +49,26 @@ def test_every_rail_surface_opens_by_click(app: Page):
         # own contract (`go` in Rail.tsx) — so each surface also proves it
         # can be left.
         app.get_by_label(label, exact=True).click()
+
+
+def test_ingest_queue_still_reachable_from_the_action_log(app: Page):
+    """The queue /activity used to BE is one click down, not gone.
+
+    2026-08-08 moved the Action log into the rail slot and the media ingest
+    queue behind its "Ingestion queue →" button (retry/dismiss are queue
+    controls, not log controls — the rationale is in AppShell.tsx). A moved
+    surface is a deleted surface unless a click still reaches it, so this
+    walks the whole path: rail → log → queue → back to the log.
+    """
+    app.get_by_label("Action log", exact=True).click()
+    app.get_by_text("Ingestion queue", exact=False).first.click()
+    expect(app.get_by_text(
+        re.compile(r"background learning queue", re.I)).first
+    ).to_be_visible(timeout=15_000)
+    app.go_back()
+    expect(app.get_by_text(
+        re.compile(r"Ingestion queue", re.I)).first
+    ).to_be_visible(timeout=15_000)
 
 
 def test_every_library_tab_is_clickable(app: Page):

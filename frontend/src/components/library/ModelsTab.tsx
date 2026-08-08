@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AgentInfo, ChainLink, CuratedModel, ModelInfo, createCuratedModel, deleteCuratedModel, getAgentModelChains, getAgents, getCuratedModels, getModels, patchCuratedModel, pullModel, uninstallModel, Provider, ProviderPreset, createProvider, deleteProvider, getProviders, getProviderPresets, patchProvider, testProvider, USE_CASES,
-  EvalSuite, EvalVerdict, EvalRun, EvalTask, getEvalSuites, getEvalRuns,
-  getEvalTasks, startEvalRun, EvalStandings, getEvalStandings,
+  EvalSuite, EvalVerdict, EvalRun, EvalRunTask, EvalTask, getEvalSuites,
+  getEvalRuns, getEvalRunDetail, getEvalTasks, startEvalRun, EvalStandings,
+  getEvalStandings, getAuthToken,
 } from '../../api';
+import { censusLine } from '../../observability';
 import { fmtDateTime } from '../../time';
 import { Toggle } from '../ui';
 import { probeLine } from './models-shared';
@@ -438,6 +441,154 @@ export function ModelsTab() {
  *  One run at a time is the backend's rule (a single `_running` guard), so the
  *  button disables itself while anything is going rather than collecting a
  *  409 the operator has to interpret. */
+/** Backend fields not yet in api.ts's types (that file belongs to another
+ *  lane); they ride along on the same JSON responses. Follow-up: fold these
+ *  into EvalStandings / EvalRun in api.ts and add a getEvalComparisons(). */
+type CoverageReset = {
+  suite: string;
+  version: number;
+  measured_versions: number[];
+  runs_voided: number;
+  last_measured: string | null;
+};
+type StandingsExtras = {
+  coverage_reset?: CoverageReset[];
+  rotation_enabled?: boolean;
+};
+/** Why an error run died — eval_runs writes detail->failure so a
+ *  VRAM-refused night stops rendering identically to a bad model. */
+type RunFailure = {
+  type: string;
+  message: string;
+  resource_refusal: boolean;
+  error_classes?: string[];
+} | null;
+/** The DERIVED reading of a run (migration 127), computed by
+ *  `eval_runs.outcome()` from how many of the suite's tasks were actually
+ *  graded — never from the status string.
+ *
+ *  It is not restated here on purpose. `failed` was worn both by a run that
+ *  graded all seven tasks and scored two (a measurement) and by one that died
+ *  at task 0 with no heartbeat (the harness), and this panel rendered both as
+ *  "did not finish". A TypeScript copy of the rule would start lying the day
+ *  the backend grows a case, and nothing would fail when it did — the same
+ *  argument that keeps `grades` server-side. */
+type RunOutcome = {
+  code: 'running' | 'measured' | 'partial' | 'unmeasured' | 'unknown';
+  measurement: boolean;
+  stalled: boolean;
+  label: string;
+  headline: string;
+  basis: string;
+  graded: number | null;
+  total: number;
+  passed: number;
+  resumes?: number;
+  failure_type?: string | null;
+  why?: string | null;
+  resource_refusal?: boolean;
+};
+/** Whether the operator was actually told this run finished, in notify.send's
+ *  own words. `confirmed` is the only key that means a device rendered it;
+ *  `state: 'accepted'` means a relay took the bytes and nothing more. */
+type RunAnnouncement = {
+  how: string;
+  confirmed: boolean;
+  state?: string | null;
+  in_chat?: boolean | null;
+  deduped?: boolean;
+  notification_id?: string | null;
+  backfilled?: boolean;
+} | null;
+/** Fields the backend sends that api.ts's EvalRun does not declare yet (that
+ *  file belongs to another lane). Same workaround as `failure` above. */
+type RunExtras = EvalRun & {
+  failure?: RunFailure;
+  outcome?: RunOutcome;
+  announcement?: RunAnnouncement;
+  task_index?: number | null;
+  resumes?: number | null;
+  stalled_for_s?: number | null;
+};
+type EvalComparison = {
+  id: string;
+  at: string;
+  suite: string;
+  suite_version: number;
+  current_suite_version: number | null;
+  repeat_count: number;
+  champion: string;
+  challenger: string;
+  tasks_total: number;
+  tasks_gradeable: number;
+  tasks_invalid: number;
+  champion_passed: number;
+  challenger_passed: number;
+  regressions: string[];
+  improvements: string[];
+};
+
+const failureOf = (r: EvalRun): RunFailure => (r as RunExtras).failure ?? null;
+const outcomeOf = (r: EvalRun): RunOutcome | null =>
+  (r as RunExtras).outcome ?? null;
+const announcementOf = (r: EvalRun): RunAnnouncement =>
+  (r as RunExtras).announcement ?? null;
+
+/** Colour by what the run MEANS, not by its status word. A measurement is a
+ *  result at any score; everything else is the harness, and amber is the
+ *  colour this panel already uses for "this is not about the model". */
+const outcomeTone = (o: RunOutcome): string =>
+  o.code === 'running' ? (o.stalled ? 'text-amber-400/90' : 'text-teal-400')
+    : !o.measurement ? 'text-amber-400/90'
+      : o.passed === o.total ? 'text-emerald-400'
+        : 'text-stone-300';
+
+/** The hover line: the sentence, what it rests on, and why it stopped. */
+const outcomeTitle = (o: RunOutcome): string =>
+  `${o.headline}. Basis: ${o.basis}.`
+  + (o.why ? ` Reason: ${o.why}${o.failure_type ? ` (${o.failure_type})` : ''}.` : '');
+
+/** Was the operator told, in the row's own words — never a tick. "accepted by
+ *  a relay" is not "he saw it", which is the whole of migration 125's
+ *  delivery contract and the reason nothing here renders a checkmark for it. */
+function DeliveryNote({ run }: { run: EvalRun }) {
+  const a = announcementOf(run);
+  if (run.status === 'running') return null;
+  if (!a) {
+    return (
+      <span className="text-amber-400/90"
+        title="This run reached a terminal state and no announcement has been recorded against it yet. eval_runs' backlog sweep retries these every 60s.">
+        not announced yet
+      </span>
+    );
+  }
+  if (a.backfilled) return null;   // predates the feature; says so on hover
+  return (
+    <span className={a.confirmed ? 'text-stone-500' : 'text-stone-600'}
+      title={`Told you: ${a.how}${a.in_chat === false ? ' — and it did NOT land in the conversation' : ''}`}>
+      {a.confirmed ? 'you opened it'
+        : a.state === 'failed' ? 'not delivered'
+          : a.in_chat ? 'in your chat' : 'told — receipt unproven'}
+    </span>
+  );
+}
+
+/** Same-origin authed fetch for the comparisons route. api.ts's apiFetch is
+ *  module-private and that file is another lane's; this duplicates only the
+ *  Authorization header. */
+async function fetchComparisons(): Promise<EvalComparison[]> {
+  const token = getAuthToken();
+  const r = await fetch('/api/v1/evals/comparisons', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!r.ok) {
+    const detail = await r.json().then(b => b?.detail).catch(() => null);
+    throw new Error(typeof detail === 'string' && detail
+      ? detail : `Failed to load comparisons (${r.status})`);
+  }
+  return (await r.json()).comparisons;
+}
+
 function EvalsPanel() {
   const [suites, setSuites] = useState<EvalSuite[] | null>(null);
   const [verdicts, setVerdicts] = useState<EvalVerdict[]>([]);
@@ -454,6 +605,25 @@ function EvalsPanel() {
   // with no fallback. An unreachable endpoint must not read as a verdict.
   const [standings, setStandings] = useState<EvalStandings | null>(null);
   const [standingsError, setStandingsError] = useState('');
+  // null is "not answered"; an empty array is "answered: none recorded".
+  const [comparisons, setComparisons] = useState<EvalComparison[] | null>(null);
+  const [comparisonsError, setComparisonsError] = useState('');
+
+  // The run the operator arrived here to look at: the finished-run
+  // notification's "Open" link is /library/models?run=<id>. Without this the
+  // link would drop him on the tab with the history collapsed, which is the
+  // same "it brings me to chat but doesn't show me what it was" complaint
+  // that migration 125 fixed one level up.
+  const [searchParams] = useSearchParams();
+  const focusRun = searchParams.get('run');
+  // The census over the whole history, from the same response as the page of
+  // runs — "12 failed" next to a page showing three is what stops a short
+  // list reading as a short history. Null until the endpoint answers.
+  const [census, setCensus] = useState<Record<string, number> | null>(null);
+  // Per-run task detail (migration 124), fetched on first expand and kept.
+  const [expandedRun, setExpandedRun] = useState<string | null>(focusRun);
+  const [runDetails, setRunDetails] = useState<
+    Record<string, (EvalRun & { tasks: EvalRunTask[] }) | 'loading' | 'error'>>({});
 
   const active = runs.find(r => r.status === 'running') || null;
 
@@ -465,12 +635,20 @@ function EvalsPanel() {
         setSuite(s => s || d.suites[0]?.suite || '');
       })
       .catch(e => { setSuites([]); setStatus(String(e)); });
-    getEvalRuns(12).then(setRuns).catch(() => {});
+    getEvalRuns(12)
+      .then(p => { setRuns(p.runs); setCensus(p.census); })
+      .catch(() => {});
     getEvalStandings()
       .then(s => { setStandings(s); setStandingsError(''); })
       .catch(e => {
         setStandings(null);
         setStandingsError(String(e instanceof Error ? e.message : e));
+      });
+    fetchComparisons()
+      .then(c => { setComparisons(c); setComparisonsError(''); })
+      .catch(e => {
+        setComparisons(null);
+        setComparisonsError(String(e instanceof Error ? e.message : e));
       });
   };
 
@@ -493,13 +671,36 @@ function EvalsPanel() {
   useEffect(() => {
     if (!active) return;
     const t = setInterval(() => {
-      getEvalRuns(8).then(rs => {
-        setRuns(rs);
-        if (!rs.some(r => r.status === 'running')) load();
+      getEvalRuns(8).then(p => {
+        setRuns(p.runs);
+        setCensus(p.census);
+        if (!p.runs.some(r => r.status === 'running')) load();
       }).catch(() => {});
     }, 5000);
     return () => clearInterval(t);
   }, [active?.id]);
+
+  /** Fetch a run's per-task record once; 'error' renders as its own row
+   *  rather than an eternal spinner. */
+  const ensureRunDetail = (id: string) => {
+    if (runDetails[id]) return;
+    setRunDetails(d => ({ ...d, [id]: 'loading' }));
+    getEvalRunDetail(id)
+      .then(det => setRunDetails(d => ({ ...d, [id]: det })))
+      .catch(() => setRunDetails(d => ({ ...d, [id]: 'error' })));
+  };
+
+  // The deep link opens its run expanded — same reasoning as `focusRun`
+  // opening the history: a push saying "1/7" must land on the seven.
+  useEffect(() => {
+    if (focusRun) ensureRunDetail(focusRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRun]);
+
+  const toggleRun = (id: string) => {
+    setExpandedRun(cur => (cur === id ? null : id));
+    ensureRunDetail(id);
+  };
 
   const chosen = suites?.find(s => s.suite === suite);
 
@@ -521,6 +722,11 @@ function EvalsPanel() {
   function verdictLine(v: EvalVerdict) {
     const s = suites?.find(x => x.suite === v.suite);
     const stale = v.suite_version != null && s && v.suite_version !== s.version;
+    // `status IN ('passed','failed')` is not the same question as "was this a
+    // measurement": a run killed at task 3 of 7 lands 'failed' with three
+    // tasks graded, and its 1/7 in a picker reads as a model that answered six
+    // questions wrongly. latest_verdicts now carries the derived reading.
+    const o = (v as EvalVerdict & { outcome?: RunOutcome }).outcome ?? null;
     return (
       <div key={`${v.agent_name}:${v.model}`}
         className="flex items-baseline justify-between gap-3 text-xs py-0.5">
@@ -542,6 +748,11 @@ function EvalsPanel() {
               ? `over ${v.repeat_count} runs`
               : 'one run — a draw'}
           </span>
+          {o && !o.measurement && (
+            <span className="text-amber-400/90" title={outcomeTitle(o)}>
+              {o.code === 'unknown' ? 'unverifiable' : 'incomplete — not a score'}
+            </span>
+          )}
           {v.suite_version == null && (
             <span className="text-stone-600" title="Recorded before the suite version was stored, so which tasks it graded is unknown.">
               unversioned
@@ -612,14 +823,52 @@ function EvalsPanel() {
           )}
           {status && <p className="text-[11px] text-amber-400/90">{status}</p>}
 
-          {active && (
-            <div className="text-xs text-stone-300 border border-stone-700 rounded p-2">
-              <span className="font-mono">{active.model}</span> on{' '}
-              <span className="font-mono">{active.suite}</span> — running
-              {active.repeat_count > 1 && `, ${active.repeat_count} repeats`}.
-              This page updates on its own.
-            </div>
-          )}
+          {/* WHILE IT RUNS, IT IS VISIBLE. This block used to say "running"
+              and nothing else for eight minutes — Jeremy watched one with no
+              feedback at all — while the row underneath it has carried a
+              per-task cursor since migration 124. "task 3 of 7" is the
+              difference between a progress bar and a spinner, and
+              "interrupted twice, resumed" is the difference between a slow
+              run and a broken one. */}
+          {active && (() => {
+            const o = outcomeOf(active);
+            const at = (active as RunExtras).task_index ?? 0;
+            const of_ = active.tasks_total ?? 0;
+            const pct = of_ > 0 ? Math.round((at / of_) * 100) : 0;
+            return (
+              <div className="text-xs text-stone-300 border border-stone-700 rounded p-2 space-y-1.5">
+                <div>
+                  <span className="font-mono">{active.model}</span> on{' '}
+                  <span className="font-mono">{active.suite}</span> —{' '}
+                  <span className={o ? outcomeTone(o) : 'text-teal-400'}>
+                    {o ? o.label : 'running'}
+                  </span>
+                  {active.repeat_count > 1 && `, ${active.repeat_count} repeats each`}.
+                </div>
+                {of_ > 0 && (
+                  <div className="h-1 rounded bg-stone-700 overflow-hidden">
+                    <div className="h-full bg-teal-600 transition-all"
+                      style={{ width: `${pct}%` }} />
+                  </div>
+                )}
+                {o?.stalled ? (
+                  <p className="text-[11px] text-amber-400/90">
+                    It has stopped reporting. Recovery picks it up at the task
+                    it reached — this is the harness, not the model, and it
+                    does not need a new run.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-stone-500">
+                    {of_ > 0
+                      ? `${of_ - at} task${of_ - at === 1 ? '' : 's'} to go. `
+                      : 'Loading the suite. '}
+                    This page updates on its own, and the result is sent to
+                    your chat when it lands — you do not have to sit here.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* WHAT IS ACTUALLY BEING TESTED. The panel shipped without this and
               the first question asked of it was "there's no indication of what
@@ -680,13 +929,43 @@ function EvalsPanel() {
             ) : standings === null ? (
               <p className="text-xs text-stone-500">Loading…</p>
             ) : !standings.comparable ? (
-              <p className="text-xs text-stone-500">
-                Not comparable yet — no suite has been graded against all{' '}
-                {standings.installed.length} installed local models at repeat{' '}
-                {standings.min_repeat} or more. {standings.missing.length}{' '}
-                pairing{standings.missing.length === 1 ? '' : 's'} still owed;
-                the nightly rotation is what pays them off.
-              </p>
+              <div className="space-y-1">
+                {/* AN EMPTY BOARD MUST SAY WHY IT IS EMPTY. Bumping a suite's
+                    version voids every recorded run of it — correctly — but
+                    the board it leaves used to look exactly like one where
+                    nothing had ever been measured. That is a reset wearing an
+                    absence's clothes, and ~48 nights of owed rotation were
+                    invisible behind it. */}
+                {((standings as EvalStandings & StandingsExtras).coverage_reset
+                  ?? []).length > 0 && (
+                  <p className="text-xs text-amber-400/90">
+                    Coverage reset by suite edit — this is not an empty
+                    history:{' '}
+                    {((standings as EvalStandings & StandingsExtras)
+                      .coverage_reset ?? []).map(cr =>
+                        `${cr.suite} is now v${cr.version} and every recorded `
+                        + `run predates it (${cr.runs_voided} run`
+                        + `${cr.runs_voided === 1 ? '' : 's'} voided`
+                        + (cr.measured_versions.length
+                          ? `, newest at v${cr.measured_versions[0]}` : '')
+                        + (cr.last_measured
+                          ? `, last measured ${fmtDateTime(cr.last_measured)}`
+                          : '')
+                        + ')'
+                      ).join('; ')}.
+                  </p>
+                )}
+                <p className="text-xs text-stone-500">
+                  Not comparable yet — no suite has been graded against all{' '}
+                  {standings.installed.length} installed local models at repeat{' '}
+                  {standings.min_repeat} or more. {standings.missing.length}{' '}
+                  pairing{standings.missing.length === 1 ? '' : 's'} still owed
+                  {(standings as EvalStandings & StandingsExtras)
+                    .rotation_enabled === false
+                    ? ' — and the nightly tournament is OFF (evals.tournament_every_hours), so nothing will pay them off until it is switched on or a run is started here.'
+                    : '; the nightly rotation is what pays them off.'}
+                </p>
+              </div>
             ) : (
               <>
                 <p className="text-[11px] text-stone-500 mb-1">
@@ -745,6 +1024,68 @@ function EvalsPanel() {
             )}
           </div>
 
+          {/* THE DURABLE PAIRWISE VERDICTS. The CLI printed a scoreboard and
+              persisted nothing, so "did the challenger beat the champion" was
+              answerable only by whoever was watching the terminal. These rows
+              are eval_comparisons; no Promote button on purpose — scores flip
+              run to run (2/7 then 3/7 on consecutive nights), and promotion
+              is a separate deliberate decision. */}
+          {(comparisonsError || (comparisons?.length ?? 0) > 0) && (
+            <div>
+              <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">
+                Champion vs challenger
+              </h4>
+              {comparisonsError ? (
+                <p className="text-xs text-amber-400/90">{comparisonsError}</p>
+              ) : (
+                (comparisons ?? []).map(c => {
+                  const stale = c.current_suite_version != null
+                    && c.suite_version !== c.current_suite_version;
+                  return (
+                    <div key={c.id}
+                      className="flex items-baseline justify-between gap-3 text-xs py-0.5">
+                      <span className="truncate">
+                        <span className="text-stone-500">{c.suite}</span>
+                        <span className="text-stone-600 mx-1">·</span>
+                        <span className="font-mono text-stone-400">
+                          {c.champion}
+                        </span>
+                        <span className="text-stone-600 mx-1">vs</span>
+                        <span className="font-mono text-stone-400">
+                          {c.challenger}
+                        </span>
+                      </span>
+                      <span className="flex items-baseline gap-2 shrink-0">
+                        <span className="text-stone-300"
+                          title={`Of ${c.tasks_total} tasks, ${c.tasks_gradeable} were gradeable for both sides${c.tasks_invalid ? `; ${c.tasks_invalid} invalid (a suite gap, neither model's score)` : ''}. A task counts only if it passed every one of ${c.repeat_count} repeat(s).`}>
+                          {c.champion_passed}–{c.challenger_passed}
+                          <span className="text-stone-500">
+                            {' '}of {c.tasks_gradeable}
+                          </span>
+                        </span>
+                        {c.regressions.length > 0 && (
+                          <span className="text-amber-400/90"
+                            title={`Challenger broke contracts the champion kept: ${c.regressions.join(', ')}`}>
+                            {c.regressions.length} regression{c.regressions.length === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {stale && (
+                          <span className="text-amber-400/90"
+                            title={`Recorded against suite v${c.suite_version}; it is now v${c.current_suite_version}. This verdict describes a different set of tasks.`}>
+                            suite moved
+                          </span>
+                        )}
+                        <span className="text-stone-600 tabular-nums">
+                          {fmtDateTime(c.at)}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
           <div>
             <h4 className="text-xs uppercase tracking-wide text-stone-500 mb-1">
               Latest verdict per model
@@ -766,14 +1107,32 @@ function EvalsPanel() {
               the same suite. A board showing only the newest number reads as
               settled when it is not. */}
           {runs.length > 0 && (
-            <details>
+            /* Opened by the deep link the finished-run notification carries
+               (/library/models?run=…), so "show me the detail" from a push
+               lands on the run it was about instead of a collapsed list. */
+            <details open={!!focusRun}>
               <summary className="text-xs uppercase tracking-wide text-stone-500 cursor-pointer hover:text-stone-400 list-none">
                 ▸ Run history ({runs.length})
+                {/* The census is over the WHOLE history (and ignores any
+                    status filter, zeros stated), so a page of twelve rows
+                    cannot read as twelve runs ever. */}
+                {census && (
+                  <span className="normal-case tracking-normal text-stone-600">
+                    {' '}— {censusLine(census)}
+                  </span>
+                )}
               </summary>
               <div className="mt-1.5 space-y-0.5">
-                {runs.map(r => (
-                  <div key={r.id}
-                    className="flex items-baseline justify-between gap-3 text-[11px]">
+                {runs.map(r => {
+                  const o = outcomeOf(r);
+                  return (
+                  <div key={r.id}>
+                  <div
+                    onClick={() => toggleRun(r.id)}
+                    title="Show the per-task record"
+                    className={`flex items-baseline justify-between gap-3 text-[11px] cursor-pointer hover:bg-stone-800/60 rounded ${
+                      focusRun === r.id
+                        ? 'ring-1 ring-teal-600/60 rounded px-1 -mx-1' : ''}`}>
                     <span className="truncate">
                       <span className="text-stone-500">{r.suite}</span>
                       {r.suite_version != null && (
@@ -783,11 +1142,35 @@ function EvalsPanel() {
                       <span className="font-mono text-stone-400">{r.model}</span>
                     </span>
                     <span className="flex items-baseline gap-2 shrink-0">
-                      {r.status === 'running' ? (
+                      {/* THE DERIVED READING, not the status word. A run that
+                          graded all seven tasks and scored two is a
+                          measurement; one that died at task 0 is the harness.
+                          Both were 'failed'/'error' and both rendered here as
+                          "did not finish", which is how a result Jeremy paid
+                          eight minutes for reached nobody. The fallback below
+                          is the pre-127 rendering, kept for a response that
+                          predates the field rather than crashing on it. */}
+                      {o ? (
+                        <>
+                          <span className={outcomeTone(o)} title={outcomeTitle(o)}>
+                            {o.label}
+                          </span>
+                          {o.measurement && r.repeat_count > 1 && (
+                            <span className="text-stone-600">×{r.repeat_count}</span>
+                          )}
+                          <DeliveryNote run={r} />
+                        </>
+                      ) : r.status === 'running' ? (
                         <span className="text-teal-400">running…</span>
                       ) : r.status === 'error' ? (
-                        <span className="text-amber-400/90" title={r.error || ''}>
-                          did not finish
+                        <span className="text-amber-400/90"
+                          title={(() => {
+                            const f = failureOf(r);
+                            return f ? `${f.type}: ${f.message}` : (r.error || '');
+                          })()}>
+                          {failureOf(r)?.resource_refusal
+                            ? 'refused — out of resources, not a verdict'
+                            : 'did not finish'}
                         </span>
                       ) : (
                         <>
@@ -805,19 +1188,120 @@ function EvalsPanel() {
                       </span>
                     </span>
                   </div>
-                ))}
+                  {/* THE PER-TASK RECORD (migration 124), which had zero
+                      consumers until here: which tasks passed, how many of
+                      the repeats each survived, and the grader's own
+                      CheckResult lines for the ones that did not. */}
+                  {expandedRun === r.id && (() => {
+                    const det = runDetails[r.id];
+                    if (!det || det === 'loading') {
+                      return <div className="pl-3 py-0.5 text-[11px] text-stone-500">Loading tasks…</div>;
+                    }
+                    if (det === 'error') {
+                      return (
+                        <div className="pl-3 py-0.5 text-[11px] text-amber-400/90">
+                          The per-task record could not be loaded.
+                        </div>
+                      );
+                    }
+                    if (!det.tasks?.length) {
+                      return (
+                        <div className="pl-3 py-0.5 text-[11px] text-stone-500">
+                          No per-task record — this run predates the per-task cursor.
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="ml-1.5 pl-2 py-0.5 border-l border-stone-700 space-y-0.5">
+                        {det.tasks.map(t => (
+                          <div key={t.task} className="text-[11px]">
+                            <div className="flex items-baseline justify-between gap-3">
+                              <span className="truncate font-mono text-stone-400">
+                                {t.task.startsWith(`${r.suite}/`)
+                                  ? t.task.slice(r.suite.length + 1) : t.task}
+                              </span>
+                              <span className="flex items-baseline gap-2 shrink-0">
+                                {!t.gradeable ? (
+                                  <span className="text-amber-400/90"
+                                    title="This task could not be graded — a harness gap, not a model verdict.">
+                                    ungradeable
+                                  </span>
+                                ) : (
+                                  <span className={t.passed ? 'text-emerald-400' : 'text-stone-300'}
+                                    title={`Passed ${t.runs_passed} of ${t.runs} repeat(s) — a task counts only if it passed every one.`}>
+                                    {t.passed ? 'passed' : `${t.runs_passed}/${t.runs} repeats`}
+                                  </span>
+                                )}
+                                {t.duration_s != null && (
+                                  <span className="text-stone-600">{t.duration_s}s</span>
+                                )}
+                              </span>
+                            </div>
+                            {t.errors.length > 0 && (
+                              <div className="text-amber-400/90 truncate" title={t.errors.join('\n')}>
+                                {t.errors[0]}
+                              </div>
+                            )}
+                            {!t.passed && t.contract_failures.length > 0 && (
+                              <details>
+                                <summary className="cursor-pointer text-stone-600 hover:text-stone-400">
+                                  {t.contract_failures.length} failed check{t.contract_failures.length === 1 ? '' : 's'}
+                                </summary>
+                                <ul className="pl-3 text-stone-500 font-mono">
+                                  {t.contract_failures.map((c, i) => (
+                                    <li key={i} className="truncate" title={c}>{c}</li>
+                                  ))}
+                                </ul>
+                              </details>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  </div>
+                  );
+                })}
               </div>
             </details>
           )}
 
-          {/* Only the MOST RECENT run, and only if it errored. Scanning the
-              last eight for any error surfaced a failure from hours earlier
-              in amber as though it had just happened — which is the same
-              absence-read-as-now mistake this whole lane is about. */}
-          {runs[0]?.status === 'error' && (
+          {/* Only the MOST RECENT run, and only if it did not measure
+              anything. Scanning the last eight for any error surfaced a
+              failure from hours earlier in amber as though it had just
+              happened — which is the same absence-read-as-now mistake this
+              whole lane is about.
+
+              The condition is the DERIVED one now, not `status === 'error'`.
+              A run killed at task 3 of 7 lands 'failed' with a partial score
+              and used to slip past this line wearing a number; a run that
+              graded everything and scored 2/7 is a result and must not be
+              in amber. */}
+          {runs[0] && runs[0].status !== 'running'
+            && outcomeOf(runs[0]) && !outcomeOf(runs[0])!.measurement && (
             <p className="text-[11px] text-amber-400/90">
-              Last run (<span className="font-mono">{runs[0].model}</span> on{' '}
-              {runs[0].suite}) did not finish: {runs[0].error}
+              Last run: {outcomeOf(runs[0])!.headline}.
+              {outcomeOf(runs[0])!.why ? ` ${outcomeOf(runs[0])!.why}` : ''}
+            </p>
+          )}
+          {/* ...and when it DID measure, say so and say whether you were
+              told. Jeremy's report was "I ran a model eval test, haven't seen
+              any update" about a run that had completed: the panel knowing
+              and him not knowing is the failure, so the delivery is on the
+              face of it rather than in a tooltip. Receipt is never claimed
+              from a transport — `confirmed` is the notification being opened
+              on a device, and nothing else prints as delivered. */}
+          {runs[0] && runs[0].status !== 'running'
+            && outcomeOf(runs[0])?.measurement && (
+            <p className="text-[11px] text-stone-500">
+              Last run: {outcomeOf(runs[0])!.headline} —{' '}
+              {outcomeOf(runs[0])!.basis}.{' '}
+              {(() => {
+                const a = announcementOf(runs[0]);
+                if (!a) return 'No announcement has been recorded for it yet.';
+                if (a.backfilled) return 'It predates result notifications, so nobody was told at the time.';
+                return `Told you: ${a.how}.`;
+              })()}
             </p>
           )}
         </>

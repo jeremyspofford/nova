@@ -8,9 +8,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import (db, http as http_pool, ingest_backfill, ingest_worker,
+from app import (db, guests, http as http_pool, ingest_backfill, ingest_worker,
                  leader, model_warmer, rules, scheduler, settings_store)
 from app.config import settings
+from app.guests import ROLE_GUEST, ROLE_OPERATOR
 from app.llm import providers
 from app.memory.memory import memory
 from app.router_chat import router as chat_router
@@ -398,10 +399,59 @@ async def auth_middleware(request: Request, call_next):
     Localhost trust is machine-level and never extends to a web page: a
     cross-site request always has to carry the token, however local its
     packets look — nor to a request that reached us under a name we do not
-    answer to, however local its packets look."""
+    answer to, however local its packets look.
+
+    SECOND IDENTITY (migration 118). A `novaguest_…` bearer names a row in
+    `guest_sessions`, and `guests.resolve` refuses one that is expired or
+    revoked mechanically — the time box is in the WHERE clause, not in a
+    branch here. A resolved guest gets `request.state.role = "guest"` and is
+    then gated to the guest-reachable routes, DEFAULT-DENY.
+
+    Those two halves are one change on purpose, and the plan says why: the
+    middleware is all-or-nothing by design, so a guest branch WITHOUT route
+    gating hands guests `GET /api/v1/auth/token` — which returns the admin
+    token — and `POST /api/v1/secrets/{name}/reveal`. A guest token that
+    reaches those routes IS an admin token.
+
+    The prefix also closes the quieter version of the same hole: a guest token
+    presented from this machine must never fall through to `trusted_local` and
+    be served as the operator. Claiming to be a guest is decided BEFORE
+    locality is consulted, so the worst a guest can do by moving closer to the
+    server is stay a guest.
+    """
+    request.state.role = ROLE_OPERATOR
+    request.state.guest = None
     token = settings.nova_auth_token
+    supplied = request.headers.get("authorization", "")
+    # OUTSIDE the `if token` guard deliberately. With NOVA_AUTH_TOKEN empty
+    # the install is open (dev), and "open" must still mean a guest token is
+    # read as a GUEST — an identity that resolves to fewer routes must never
+    # be widened by the absence of a password. The claim is judged before
+    # locality and before the admin compare, so every path into this function
+    # narrows for a guest and none of them widens.
+    if (request.url.path.startswith("/api/")
+            and supplied.startswith("Bearer ")
+            and guests.looks_like_guest_token(supplied[len("Bearer "):])):
+        guest = await guests.resolve(supplied[len("Bearer "):])
+        if guest is None:
+            log.warning("guest auth refused: path=%s host=%s (expired, "
+                        "revoked, or unknown token)",
+                        request.url.path, request.headers.get("host"))
+            return JSONResponse(
+                {"detail": "this guest link has expired or been revoked"},
+                status_code=401)
+        if not guests.route_is_guest_ok(app.router.routes, request.scope):
+            log.warning("guest %s (%s) refused on operator route %s %s",
+                        guest["id"], guest["label"],
+                        request.method, request.url.path)
+            return JSONResponse(
+                {"detail": "this is a guest session; that is not part of it"},
+                status_code=403)
+        request.state.role = ROLE_GUEST
+        request.state.guest = guest
+        await guests.touch(guest["id"])
+        return await call_next(request)
     if token and request.url.path.startswith("/api/"):
-        supplied = request.headers.get("authorization", "")
         authed = hmac.compare_digest(supplied, f"Bearer {token}")
         trusted_local = (settings.nova_trust_localhost
                          and _is_local(request)

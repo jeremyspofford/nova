@@ -172,6 +172,68 @@ def _print_rates(task_ref: str, runs: list[dict]) -> None:
             print(f"      {'✗' if count == n else '~'} {key}: failed in {shape}")
 
 
+async def _record_comparison(args: argparse.Namespace, tasks, pairs) -> str:
+    """Aggregate one whole-suite run into a durable eval_comparisons row.
+
+    The scoring rule is the same one eval_runs._execute applies to single
+    models, because the two numbers end up side by side: a task counts for a
+    side only if that side was gradeable AND passed the contract in EVERY
+    repeat — "passed once out of three" is not a property you can route work
+    on. Tasks with a suite gap (an invalid run) belong to neither model and
+    are carried as tasks_invalid; tasks either side never actually sat
+    (errored, timed out, empty answer) are outside tasks_gradeable.
+
+    Raises when it cannot persist — the caller says so and exits non-zero. A
+    scoreboard printed above a failed insert must not read as recorded.
+    """
+    from app import eval_runs
+
+    by_task: dict[str, list[dict]] = {}
+    for p in pairs:
+        by_task.setdefault(p["task"], []).append(p)
+
+    repeat = len(next(iter(by_task.values())))
+    gradeable = invalid = champ_passed = chall_passed = 0
+    regressions: list[str] = []
+    improvements: list[str] = []
+    breakdown: list[dict] = []
+    for ref, runs in by_task.items():
+        task_invalid = any(not r["champion"].valid or not r["challenger"].valid
+                           for r in runs)
+        task_gradeable = not task_invalid and all(
+            r["champion"].gradeable and r["challenger"].gradeable for r in runs)
+        champ_ok = task_gradeable and all(
+            r["champion_contract"].passed for r in runs)
+        chall_ok = task_gradeable and all(
+            r["challenger_contract"].passed for r in runs)
+        invalid += 1 if task_invalid else 0
+        gradeable += 1 if task_gradeable else 0
+        champ_passed += 1 if champ_ok else 0
+        chall_passed += 1 if chall_ok else 0
+        if champ_ok and not chall_ok:
+            regressions.append(ref)
+        elif chall_ok and not champ_ok:
+            improvements.append(ref)
+        breakdown.append({
+            "task": ref, "runs": len(runs),
+            "invalid": task_invalid, "gradeable": task_gradeable,
+            "champion_runs_passed": sum(
+                1 for r in runs if r["champion_contract"].passed
+                and r["champion"].gradeable),
+            "challenger_runs_passed": sum(
+                1 for r in runs if r["challenger_contract"].passed
+                and r["challenger"].gradeable)})
+
+    suite = tasks[0].suite
+    return await eval_runs.record_comparison(
+        suite=suite.name, suite_version=suite.version, repeat_count=repeat,
+        champion=args.champion, challenger=args.challenger,
+        tasks_total=len(by_task), tasks_gradeable=gradeable,
+        tasks_invalid=invalid, champion_passed=champ_passed,
+        challenger_passed=chall_passed, regressions=sorted(regressions),
+        improvements=sorted(improvements), detail={"tasks": breakdown})
+
+
 async def cmd_run(args: argparse.Namespace) -> int:
     tasks = suites.resolve(args.ref)
     if args.scratch_root:
@@ -190,6 +252,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
     await _bootstrap()
     pairs = []
     repeat = max(1, int(args.repeat))
+    recorded_id = record_error = None
     try:
         for task in tasks:
             print(f"\n=== {task.ref} — {task.title}")
@@ -213,6 +276,14 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 pairs.append(pair)
             if repeat > 1:
                 _print_rates(task.ref, task_runs)
+        # Persist the verdict WHILE the pool is still open. Only a whole-suite
+        # run: a single task is a probe, not a suite verdict, and recording it
+        # under the suite's name would let a one-task win read as the suite.
+        if "/" not in args.ref and pairs:
+            try:
+                recorded_id = await _record_comparison(args, tasks, pairs)
+            except Exception as e:  # noqa: BLE001 — said loudly below, exit 1
+                record_error = str(e)
     finally:
         await _shutdown()
 
@@ -256,11 +327,22 @@ async def cmd_run(args: argparse.Namespace) -> int:
             print("challenger broke contracts the champion kept: "
                   + ", ".join(regressions))
 
+    # The durable half. A scoreboard that only ever existed in a terminal is
+    # why no downstream card could ever be raised from a comparison.
+    if recorded_id:
+        print(f"\nverdict recorded: eval_comparisons {recorded_id} "
+              f"(GET /api/v1/evals/comparisons)")
+    elif record_error:
+        print(f"\nVERDICT NOT RECORDED: {record_error}")
+    elif "/" in args.ref:
+        print("\nnot recorded: a single-task run is a probe, not a suite "
+              "verdict — run the whole suite to record one")
+
     if args.keep:
         print(f"\nscratch kept at {scratch_root}")
     else:
         shutil.rmtree(scratch_root, ignore_errors=True)
-    return 1 if invalid else 0
+    return 1 if (invalid or record_error) else 0
 
 
 def main(argv: list[str]) -> int:

@@ -76,6 +76,8 @@ class FakeCoder:
         self.outcomes = list(outcomes)
         self.starts: list[dict] = []
         self.checked: list[str] = []
+        self.lanes: list[str] = []
+        self.charges: list[dict] = []
         self.delay = 0.0
 
     async def start(self, workspace, task, *, requested_by=None,
@@ -94,14 +96,21 @@ class FakeCoder:
             return {"state": "done", "commit": None}
         return {"state": "done", "commit": f"c0ffee{i}"}
 
-    async def sandbox_check(self, session_id):
+    async def sandbox_check(self, session_id, *, lane="operator"):
+        # `lane` is the SPEND BUDGET this check is charged to (ROADMAP #47
+        # rail 3), not a permission. Accepted here so the fake keeps the real
+        # signature — a stub that lags the thing it stands in for turns a
+        # green suite into a statement about the stub.
         if self.delay:
             await asyncio.sleep(self.delay)
         self.checked.append(session_id)
+        self.lanes.append(lane)
         i = [s["session"] for s in self.starts].index(session_id)
         kind, detail = self.outcomes[i]
         if kind == "green":
-            return {"status": "ok", "detail": "build, boot and suite all green"}
+            return {"status": "ok", "detail": "build, boot and suite all green",
+                    "eval": {"state": "unmeasured",
+                             "detail": "no floors are set"}}
         return {"status": "failed", "stage": "suite", "detail": detail}
 
 
@@ -114,7 +123,7 @@ class FakeCtx:
         self.records.append((name, status, detail))
 
 
-def _run(outcomes, doc=None, budget=None, delay=0.0):
+def _run(outcomes, doc=None, budget=None, delay=0.0, rec=None):
     """Drive `_step_build` against a fake coder. Returns (result, fake)."""
     import app.coder as real_coder
     fake = FakeCoder(outcomes)
@@ -125,14 +134,27 @@ def _run(outcomes, doc=None, budget=None, delay=0.0):
     saved_poll = cc._POLL_S
     for k in saved:
         setattr(real_coder, k, getattr(fake, k))
+    # THE LEDGER IS STUBBED, NOT DISABLED. `spend.record` writes one row per
+    # attempt (rail 3) and this suite runs with no database; it swallows its
+    # own failure by design, but it would log a stack trace per attempt and a
+    # clean run would read as broken. Recording the calls instead means the
+    # metering stays observable here rather than merely tolerated.
+    import app.spend as real_spend
+    saved_record = real_spend.record
+
+    async def _record(lane, kind, **kw):
+        fake.charges.append({"lane": lane, "kind": kind, **kw})
+        return {"id": None, "metered": bool(kw.get("usage"))}
+    real_spend.record = _record
     if budget is not None:
         cc._LOOP_BUDGET_S = budget
     cc._POLL_S = 0.0
     try:
-        out = asyncio.run(cc._step_build(doc or _doc(), {}, FakeCtx()))
+        out = asyncio.run(cc._step_build(doc or _doc(), rec or {}, FakeCtx()))
     finally:
         for k, v in saved.items():
             setattr(real_coder, k, v)
+        real_spend.record = saved_record
         cc._LOOP_BUDGET_S = saved_budget
         cc._POLL_S = saved_poll
     return out, fake
@@ -384,6 +406,56 @@ def test_the_broker_can_resume():
           "cheap, shares the object store, and keeps one view of main")
 
 
+def test_every_attempt_is_metered():
+    """Rail 3: what a pass cost is written down, whether or not it worked.
+
+    A meter that only counts successes measures the wrong thing — a failed
+    attempt burned the same tokens — and a build the OPERATOR asked for must
+    not be charged against the ceiling that bounds what happens while he is
+    not looking.
+    """
+    print("\n8. EVERY ATTEMPT IS METERED, AND CHARGED TO THE RIGHT BUDGET")
+    red = ("red", "2 failed")
+    _out, fake = _run([red, red, ("green", "")])
+    builds = [c for c in fake.charges if c["kind"] == "coding_session"]
+    check("8.1 one ledger entry per attempt, failures included",
+          len(builds) == 3, f"{len(builds)} entr(ies) for 3 attempts")
+    check("8.2 an operator-triggered build is NOT charged to the "
+          "self-improvement ceiling",
+          {c["lane"] for c in fake.charges} == {"operator"},
+          str({c["lane"] for c in fake.charges}))
+    check("8.3 a session the sidecar reported no usage for is recorded "
+          "UNMETERED, never as zero tokens",
+          all(c.get("usage") is None for c in builds),
+          "a zero would read as free")
+    checks_ = [c for c in fake.charges if c["kind"] == "sandbox_check"]
+    check("8.4 the sandbox check is charged too — it builds an image and "
+          "imports a production-sized database",
+          len(checks_) == 0 or all(c["lane"] == "operator" for c in checks_),
+          "the fake stands in for coder.sandbox_check, which does its own "
+          "recording in the real thing")
+    check("8.5 the boot gate is told which budget it is spending",
+          fake.lanes == ["operator"] * len(fake.lanes) and bool(fake.lanes),
+          str(fake.lanes))
+
+    # ...AND THOSE THREE ENTRIES ARE ONE PASS. The entries are per attempt on
+    # purpose; the ceiling the operator approved is written in PASSES ("at
+    # most 4 passes a day", migration 116). Without a run id on every row,
+    # `spend.today` counted these three as three passes and one retrying pass
+    # spent three quarters of his day. The run id is the only thing that can
+    # tell them apart — nothing downstream can reconstruct it.
+    _out2, fake2 = _run([red, red, ("green", "")],
+                        rec={"run_id": "11111111-1111-1111-1111-111111111111"})
+    builds2 = [c for c in fake2.charges if c["kind"] == "coding_session"]
+    check("8.6 every attempt carries the run it belongs to",
+          all(c.get("run_id") == "11111111-1111-1111-1111-111111111111"
+              for c in builds2) and len(builds2) == 3,
+          str([c.get("run_id") for c in builds2]))
+    check("8.7 …one run id across all three, so three attempts are one pass "
+          "against the ceiling he approved",
+          len({c.get("run_id") for c in builds2}) == 1)
+
+
 def main() -> int:
     test_retry_task()
     test_the_loop_loops()
@@ -392,6 +464,7 @@ def main() -> int:
     test_a_no_op_attempt()
     test_a_refusal_is_not_success()
     test_the_broker_can_resume()
+    test_every_attempt_is_metered()
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:8]))
         return 1

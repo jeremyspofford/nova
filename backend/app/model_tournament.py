@@ -165,7 +165,7 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
     confidently wrong, the same way a grounding check that eats good
     summaries gets switched off.
     """
-    from app import db, settings_store
+    from app import db, eval_runs, settings_store
     from app.evals import suites as suite_mod
 
     if min_repeat is None:
@@ -180,9 +180,17 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
         except Exception:  # noqa: BLE001 — one broken suite is not the fleet
             log.warning("standings: suite %s will not load", name)
 
+    # Whether anything will ever pay the owed pairings off. The panel says
+    # "the nightly rotation is what pays them off", and with the tournament
+    # switched off that sentence is a promise nothing keeps — derived from
+    # the same setting maybe_run() gates on, so it cannot drift from it.
+    rotation_enabled = float(
+        settings_store.get("evals.tournament_every_hours") or 0) > 0
+
     empty = {"min_repeat": min_repeat, "installed": installed,
              "basis": [], "comparable": False, "table": [],
-             "missing": [], "leader": None}
+             "missing": [], "leader": None,
+             "coverage_reset": [], "rotation_enabled": rotation_enabled}
     if not installed or not versions:
         return empty
 
@@ -200,8 +208,14 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
             # 2, 6 and 7 questions and the two that were never asked anything
             # came last at 0%. NULL is pre-migration-087 and unknowable, so
             # it is excluded rather than assumed complete.
-            "   AND tasks_gradeable IS NOT NULL "
-            "   AND tasks_gradeable = tasks_total AND tasks_total > 0 "
+            #
+            # THE CLAUSE IS NO LONGER TYPED HERE. It is the SQL half of
+            # `eval_runs.outcome()`'s MEASURED reading — the one that decides
+            # what the panel renders and what the finished-run notification
+            # says — and two copies of this predicate is how a run comes to
+            # be announced as a 2/7 measurement while the board silently
+            # refuses to rank it. One definition, both callers.
+            f"   AND {eval_runs.MEASURED_WHERE} "
             " ORDER BY started_at DESC", installed, min_repeat)
 
     # Newest row per (suite, model) that is actually comparable. The version
@@ -264,6 +278,32 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
             and ranked_rows[0]["passed"] > ranked_rows[1]["passed"]:
         leader = ranked_rows[0]["model"]
 
+    # SAY when an empty board is a RESET, not an absence. Bumping a suite's
+    # version voids every recorded run of it — deliberately, a score against
+    # v8 does not describe v12 — but the board it leaves behind used to look
+    # exactly like one where nothing had ever been measured: comparable=false,
+    # covered=[] for every model, ~48 nights of rotation silently re-owed.
+    # An empty board that cannot say WHY it is empty is the "fallback that
+    # reads as success" failure. Derived per suite from the same rows-vs-
+    # current-version comparison the basis uses, never from a maintained list.
+    coverage_reset = []
+    for s, current in sorted(versions.items()):
+        if any((s, m) in newest for m in installed):
+            continue                     # has coverage at the current version
+        stale = [r for r in rows if r["suite"] == s]
+        if not stale:
+            continue                     # never measured at all — a true absence
+        stale_versions = {r["suite_version"] for r in stale}
+        coverage_reset.append({
+            "suite": s,
+            "version": current,
+            # NULL suite_version rows are pre-086: measured, version unknown
+            "measured_versions": sorted(
+                (v for v in stale_versions if v is not None), reverse=True),
+            "runs_voided": len(stale),
+            "last_measured": max(r["started_at"] for r in stale),
+        })
+
     return {
         "min_repeat": min_repeat,
         "installed": installed,
@@ -274,6 +314,8 @@ async def standings(min_repeat: Optional[int] = None) -> dict:
                     for s in sorted(versions) for m in installed
                     if (s, m) not in newest],
         "leader": leader,
+        "coverage_reset": coverage_reset,
+        "rotation_enabled": rotation_enabled,
     }
 
 

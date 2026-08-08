@@ -187,6 +187,30 @@ def _push_one(sub_info: dict, payload: str, priv: str, urgency: str):
         return f"failed: {e}"
 
 
+def notification_id_from(url: Optional[str]) -> Optional[str]:
+    """The notification id a click URL carries, or None.
+
+    READ FROM THE URL rather than passed as its own argument, and that is
+    deliberate. The URL is the one channel that survives every path into the
+    app — a cold start, a `WindowClient.navigate`, a pasted link, an iOS
+    standalone PWA with no navigate at all — so it has to carry the id
+    regardless. A second parameter alongside it would be a copy that can
+    disagree with the link, and the whole defect being fixed here is an id
+    getting lost between the push and the client.
+
+    Tolerant by design: a caller with its own destination (/observability)
+    simply has no id, and that is not an error.
+    """
+    if not url or "notification=" not in url:
+        return None
+    from urllib.parse import parse_qs, urlparse
+    try:
+        values = parse_qs(urlparse(url).query).get("notification") or []
+    except ValueError:
+        return None
+    return values[0] if values and values[0] else None
+
+
 async def send_all(message: str, *, title: Optional[str], tags: Optional[list[str]],
                    url: Optional[str], priority: str) -> dict:
     """Fan the payload out to every subscribed device. Expired subscriptions
@@ -201,8 +225,17 @@ async def send_all(message: str, *, title: Optional[str], tags: Optional[list[st
         return {"total": 0, "sent": 0, "gone": 0, "failed": 0, "errors": []}
 
     _, priv = await ensure_vapid()
+    # `notification_id` and `tag` ride beside the URL for push-sw.js:
+    #   - the id so `notificationclick` can tell the app WHICH one was tapped
+    #     even on engines with no WindowClient.navigate (iOS standalone PWAs),
+    #     where focusing the existing window used to lose it entirely;
+    #   - the tag so a re-push of the same notification REPLACES the banner
+    #     instead of stacking a second copy on the lock screen.
+    nid = notification_id_from(url)
     payload = json.dumps({"title": title or "Nova", "body": message,
-                          "tags": tags or [], "url": url or "/"})
+                          "tags": tags or [], "url": url or "/",
+                          "notification_id": nid,
+                          "tag": f"nova-{nid}" if nid else None})
     urgency = _URGENCY.get(priority, "normal")
     results = await asyncio.gather(*(
         asyncio.to_thread(

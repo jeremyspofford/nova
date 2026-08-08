@@ -290,7 +290,13 @@ async def recommendations(mode: str = "hybrid") -> dict:
     cloud_ok = any(providers.is_configured(s) for s in providers.known_slugs())
 
     # pin guard checks the FULL catalog — validity means "the provider
-    # actually serves it", not "it's on the approved dropdown list"
+    # actually serves it", not "it's on the approved dropdown list".
+    # THE SAME TRUTH everywhere: catalog membership is also what
+    # model_chain._usable_cloud admits standbys by and what
+    # models_catalog.resolve_id gates every model-id WRITE with. Those used
+    # to disagree (the chain hardcoded a '~' refusal while this judged by
+    # membership), which is how a pinned pseudo-id could be flagged invalid
+    # here yet the disagreement stayed invisible until an outage.
     catalog = await models_catalog.list_models(full=True)
     catalog_ids = {m["id"] for m in catalog}
 

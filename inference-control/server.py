@@ -919,6 +919,66 @@ def _import_production_data(base: list, env: dict, record) -> bool:
     return True
 
 
+#: The one machine-readable line `backend/tests/eval_floor.py` prints. Parsed
+#: rather than inferred from the exit code alone, because "why" is the useful
+#: half and an exit code cannot carry it.
+_EVAL_MARKER = "EVAL_FLOOR_RESULT "
+#: Eval suites are model turns, so this is the slowest stage by far. Long
+#: enough for a real suite, bounded so a hung provider cannot hold the sandbox
+#: lock all night.
+_EVAL_TIMEOUT_S = 2400
+
+
+def _eval_floor(base: list, env: dict, steps: list) -> dict:
+    """Run the eval floor inside the candidate stack and read its verdict.
+
+    ROADMAP #47 rail 2. Returns `{"state": ok|below|unmeasured, "detail":...}`
+    and always appends a step, including on every failure path — a stage that
+    produced nothing is reported as `unmeasured` WITH the reason, never as
+    silence and never as a pass.
+
+    The three outcomes are kept apart on purpose. `below` is a verdict about
+    the change; `unmeasured` is a verdict about the machine; collapsing them
+    would let a missing API key read as a regression, or worse, the reverse.
+    """
+    try:
+        p = subprocess.run(
+            base + ["exec", "-T", "backend", "python", "tests/eval_floor.py"],
+            capture_output=True, text=True, timeout=_EVAL_TIMEOUT_S, env=env)
+        so, se = (p.stdout or "").strip(), (p.stderr or "").strip()
+        code = p.returncode
+    except subprocess.TimeoutExpired:
+        out = {"state": "unmeasured",
+               "detail": (f"the eval stage did not finish within "
+                          f"{_EVAL_TIMEOUT_S}s — nothing was measured")}
+        steps.append({"step": "eval-floor", "ok": False,
+                      "summary": out["detail"], "stdout": "", "stderr": ""})
+        return out
+
+    line = next((ln for ln in so.splitlines()
+                 if ln.startswith(_EVAL_MARKER)), "")
+    if line:
+        try:
+            out = json.loads(line[len(_EVAL_MARKER):])
+        except ValueError as e:
+            out = {"state": "unmeasured",
+                   "detail": f"the eval verdict line was unreadable: {e}"}
+    else:
+        # NO VERDICT IS NOT A PASS. The script prints the marker on every
+        # path it can reach, so its absence means the stage died before
+        # deciding anything — an import error, a missing file, a container
+        # that is not there. Saying "ok" here would be the fallback that reads
+        # as success this repo keeps deleting.
+        out = {"state": "unmeasured",
+               "detail": (f"the eval stage produced no verdict line (exit "
+                          f"{code}). stdout tail: {so[-400:] or '(empty)'} | "
+                          f"stderr tail: {se[-400:] or '(empty)'}")}
+    steps.append({"step": "eval-floor", "ok": out.get("state") == "ok",
+                  "summary": f"{out.get('state')}: {out.get('detail', '')}"[:1500],
+                  "stdout": so[-2500:], "stderr": se[-1200:]})
+    return out
+
+
 def _sandbox(slug: str, verb: str) -> dict:
     """Boot her candidate code in an isolated stack, and report three facts.
 
@@ -1085,8 +1145,36 @@ def _sandbox(slug: str, verb: str) -> dict:
         # --profile e2e because the service is opt-in; the sandbox is the one
         # place it should always run.
         ok = run("e2e", ["--profile", "e2e", "run", "--rm", "-T", "e2e"], 2400)
-        return {"status": "ok" if ok else "failed",
-                "stage": "complete" if ok else "e2e", "steps": steps}
+        if not ok:
+            return {"status": "failed", "stage": "e2e", "steps": steps}
+
+        # THE FIFTH VERDICT: did it get WORSE at being Nova? (ROADMAP #47 rail
+        # 2.) Everything above answers "does it work". A candidate can pass
+        # every unit test and every browser check and still answer worse, and
+        # nothing here could see that until this stage existed.
+        ev = _eval_floor(base, env, steps)
+        # A MEASURED REGRESSION IS A FAILED SANDBOX. Not a note on a card: the
+        # floor is the recorded best this suite has honestly reached, and
+        # dropping below it is the same class of fact as a failing test.
+        if ev["state"] == "below":
+            return {"status": "failed", "stage": "eval", "steps": steps,
+                    "eval": ev}
+        # 'unmeasured' does NOT fail the build/boot verdict, and the asymmetry
+        # is deliberate rather than lenient. This same verdict gates the
+        # OPERATOR'S landing card, and inside a sandbox the usual reason
+        # nothing can be measured is environmental — `llm_providers` is one of
+        # the four credential tables `_SANDBOX_EXCLUDE` holds out, so every
+        # cloud model reads as unconfigured in here, and the sandbox stack
+        # starts no ollama. Turning his pipeline red for that would be a gate
+        # failing on a fact about the machine rather than about his change.
+        #
+        # It is NOT rounded to a pass either: the verdict travels back with
+        # the result, `coder.sandbox_check` records it on the session, and
+        # `code_change` REFUSES an autonomous landing on anything but 'ok'.
+        # Never-checked is treated exactly like failed in the lane where
+        # nobody is reading the diff.
+        return {"status": "ok", "stage": "complete", "steps": steps,
+                "eval": ev}
     except subprocess.TimeoutExpired as e:
         steps.append({"step": "timeout", "ok": False, "output": str(e)[:400]})
         return {"status": "failed", "stage": "timeout", "steps": steps}

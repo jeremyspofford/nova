@@ -166,21 +166,53 @@ async def run() -> None:
     # manage_automations is BOTH actor and goal-scoped, so a MUTATING call is
     # refused on a clean turn too — by the goal gate, with different wording.
     # The point here is WHICH refusal fires, not that one does.
+    #
+    # EVERY PROBE RUNS UNDER AN EMPTY REPLAY FIXTURE, the same guard
+    # test_activity_log carries and for the same reason: the goal gate used
+    # to SPEND here. With a live operator goal covering manage_automations,
+    # the clean-turn write probe passed the gate, `goals.spend` atomically
+    # burned one real approved action, and the call went on toward the real
+    # executor — every pre-push run drained Jeremy's live goals and this
+    # check went red. Under fixtures the gate answers read-only (registry
+    # documents why), manage_automations is NEVER_EXECUTE so nothing can
+    # reach the real tool, and the goal budget is asserted untouched below.
     _FENCE = "outside source"
     _GOAL = "goal the operator has approved"
+    _EVAL = "not available during an eval run"
+    from app.tools import fixtures as tool_fixtures
+
+    async def probe(name, args, ctx):
+        with tool_fixtures.using(tool_fixtures.Fixtures.for_replay([])):
+            return await r.execute_tool(name, args, ctx)
+
+    async def actions_spent() -> int:
+        async with db.acquire() as conn:
+            return int(await conn.fetchval(
+                "SELECT COALESCE(sum(actions_used), 0) FROM goals"))
+
+    spent_before = await actions_spent()
     ctx = {"granted": ["manage_automations", "fetch_url"],
            "untrusted_context": False}
     # a name that does not exist, so if the gate ever stopped firing this
     # probe still cannot change anything
     write = {"action": "disable", "name": "__no-such-automation__"}
-    clean = await r.execute_tool("manage_automations", write, ctx)
-    check("on a CLEAN turn the fence stays silent (the goal gate answers)",
-          _FENCE not in clean and _GOAL in clean, clean[:70])
-    # ...and a READ is not capability creation, so NEITHER rail speaks. The
-    # gate matched on the tool name alone until 2026-08-04, which refused
-    # `list` exactly like `create` AND raised an approval card — so asking
-    # her what was scheduled put a decision in front of the operator.
-    read = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    clean = await probe("manage_automations", write, ctx)
+    # Either the goal gate refuses (no live goal covers the verb) or a live
+    # operator goal covers it and the gate passes — in which case the eval
+    # rail is what answers, because nothing real is reachable from a fixture
+    # run. Both are correct; what this check pins is that the FENCE said
+    # nothing on a clean turn.
+    check("on a CLEAN turn the fence stays silent (the goal gate or the "
+          "eval guard answers, never containment)",
+          _FENCE not in clean and (_GOAL in clean or _EVAL in clean),
+          clean[:70])
+    # ...and a READ is not capability creation, so neither the fence nor the
+    # goal gate speaks. The gate matched on the tool name alone until
+    # 2026-08-04, which refused `list` exactly like `create` AND raised an
+    # approval card — so asking her what was scheduled put a decision in
+    # front of the operator. (Under the fixture the eval rail still holds the
+    # call back — the assertion is about which RAILS spoke, not the result.)
+    read = await probe("manage_automations", {"action": "list"}, ctx)
     check("a READ action passes both rails on a clean turn — answering "
           "'what do I have scheduled?' is not a capability change",
           _FENCE not in read and _GOAL not in read, read[:70])
@@ -206,11 +238,11 @@ async def run() -> None:
     # Derived from scopes.READ_ACTIONS — the same default-deny table the
     # goal gate spends against — so a new verb, a renamed action or a typo
     # is still fenced.
-    tainted_read = await r.execute_tool("manage_automations", {"action": "list"}, ctx)
+    tainted_read = await probe("manage_automations", {"action": "list"}, ctx)
     check("a READ passes the fence even on a tainted turn — it creates no "
           "capability, and refusing it cost an approved task on 2026-08-04",
           _FENCE not in tainted_read, tainted_read[:80])
-    tainted = await r.execute_tool("manage_automations", write, ctx)
+    tainted = await probe("manage_automations", write, ctx)
     check("...but a WRITE is still refused once the turn is tainted — that "
           "is the whole containment invariant and it is unchanged",
           _FENCE in tainted, tainted[:80])
@@ -223,10 +255,16 @@ async def run() -> None:
           tainted[:80])
     # An unlisted action on a fenced verb is not a read. Default-deny is the
     # entire safety argument for the carve-out above, so it gets a probe.
-    unknown = await r.execute_tool("manage_automations", {"action": "frobnicate"}, ctx)
+    unknown = await probe("manage_automations", {"action": "frobnicate"}, ctx)
     check("an action absent from READ_ACTIONS is still fenced — the "
           "carve-out is a named allowlist, not a guess",
           _FENCE in unknown, unknown[:80])
+    # THE SPEND TRIPWIRE. The whole section must leave the operator's goal
+    # budgets exactly as it found them — a suite that charges a live approval
+    # per run drains a real grant with nobody the wiser.
+    check("the probes spent NOTHING from the live goals",
+          await actions_spent() == spent_before,
+          f"before={spent_before} after={await actions_spent()}")
 
     print("8. a dispatch cannot launder the taint")
     # dispatch_to_agent is runner-inlined and never reaches execute_tool, so

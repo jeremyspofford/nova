@@ -67,6 +67,8 @@
     "list_egress",
     "list_goals",
     "list_memory",
+    "list_models",
+    "list_recent_actions",
     "list_secret_names",
     "list_skills",
     "list_workloads",
@@ -99,9 +101,13 @@
     "search_memory"
   ],
   "model-manager": [
+    "eval_results",
     "list_models",
+    "manage_curated_models",
     "pull_model",
+    "raise_recommendation",
     "recommend_models",
+    "run_eval",
     "search_memory",
     "web_search"
   ],

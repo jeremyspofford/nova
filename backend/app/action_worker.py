@@ -15,6 +15,27 @@ once when the run was enqueued. Dismiss a card while its run is still queued
 and the run never starts. The only writer of those two columns is
 `recommendations.decide()`, which sits behind the authenticated operator API
 and is not reachable by any agent.
+
+TWO LANES, NOT ONE WIDENED ONE (ROADMAP #47 rail 4, migration 116). Jeremy
+removed the approval click from the self-improvement loop on 2026-08-07. The
+check above is NOT deleted; a second lane was added beside it, keyed on
+`action_runs.lane`:
+
+    lane='operator'  rec.decided_by = 'operator'      — a person read it
+    lane='goal'      rec.decided_by = 'goal' AND the goal named by
+                     `action_runs.goal_id` is STILL active and still carries
+                     `improve_self`
+
+Three things follow, and each is why it is two lanes rather than a looser
+predicate. The operator's lane cannot be reached by anything the loop does.
+The two are distinguishable in the audit trail forever, so "who authorised
+this run" is a column rather than an inference. And revoking the goal —
+closing it, pausing it, letting it expire — stops the loop at the next claim
+without touching the code that runs approved work.
+
+The goal is re-read at claim time for exactly the reason the operator's
+approval is: an authority that was true when the run was enqueued is not
+evidence that it is true now.
 """
 
 import asyncio
@@ -31,6 +52,8 @@ MAX_ORPHANS = 2
 
 
 async def claim_next() -> Optional[dict]:
+    from app import goals
+
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """UPDATE action_runs
@@ -48,12 +71,163 @@ async def claim_next() -> Optional[dict]:
                            -- never starts again.
                            OR (r0.status = 'blocked' AND r0.answer IS NOT NULL))
                       AND rec.status = 'approved'
-                      AND rec.decided_by = 'operator'
+                      AND (
+                          -- LANE 1, unchanged and not widened: a person read
+                          -- the card and pressed approve.
+                          (r0.lane = 'operator'
+                           AND rec.decided_by = 'operator')
+                          -- LANE 2: a standing goal authorised it, and that
+                          -- goal is still live RIGHT NOW. Closing, pausing or
+                          -- letting it expire stops the loop here — the run
+                          -- simply stops being claimable, which is why
+                          -- revocation needs no code path of its own.
+                          --
+                          -- Deliberately NOT re-checking `actions_used <
+                          -- max_actions`: the action was charged atomically
+                          -- when the run was enqueued, so requiring headroom
+                          -- again would strand the last action of every goal.
+                          OR (r0.lane = 'goal'
+                              AND rec.decided_by = 'goal'
+                              AND EXISTS (
+                                  SELECT 1 FROM goals g
+                                   WHERE g.id = r0.goal_id
+                                     AND g.status = 'active'
+                                     AND $1 = ANY(g.approved_verbs)
+                                     AND (g.expires_at IS NULL
+                                          OR g.expires_at > now())))
+                      )
                     ORDER BY r0.created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1)
-               RETURNING *""")
+               RETURNING *""", goals.IMPROVE_SELF)
     return dict(row) if row else None
+
+
+def pass_dedupe_key(goal: dict, refunds: int) -> str:
+    """The one dedupe key a charge's card may wear. Pure, so the arithmetic
+    that stopped the collision is pinned by tests without a database.
+
+    `actions_used + refunds` is the number of charges the goal has EVER made:
+    spending increments the first term and a refund moves one unit from the
+    first to the second, so the sum never repeats and never goes down. Keyed
+    on `actions_used` alone it DID repeat — a pass that died on a provider
+    wall handed its action back, the next tick's charge re-used the same
+    number, and the key collided with the previous pass's already-decided
+    card. See the comment at the call site for what that cost.
+    """
+    return (f"improve:{goal['id']}:"
+            f"{int(goal.get('actions_used') or 0) + int(refunds or 0)}")
+
+
+async def enqueue_goal_run(goal: dict, action: dict, *, title: str, body: str,
+                           source: str) -> dict:
+    """Create the card AND the run for one goal-authorised pass.
+
+    THE ORDER IS THE CONTROL. The card is written first as an ordinary,
+    undecided recommendation and its plan is preflighted exactly as the
+    operator's would be. Only a plan that comes back `ready` is flipped to
+    `approved by 'goal'` and given a run; anything else stays a NEW CARD and
+    the operator finds it in his inbox. So the autonomous lane can only ever
+    execute plans that passed the same check his do, and its failure mode is
+    "he has something to look at", never "nothing happened".
+
+    The caller must ALREADY have charged the goal (`goals.spend_standing`) and
+    already have been cleared by `spend.may_start`. Both are deliberately not
+    done here: this function's job is to be the only writer of a `lane='goal'`
+    row, and a function that both authorises and enqueues is one an argument
+    can talk into doing the second without the first.
+
+    Returns `{"status": ..., "recommendation": id, "run": id|None, "detail"}`.
+    """
+    from app import actions, goals as _goals, recommendations
+
+    # The door in, before anything is written: a plan that does not typecheck
+    # must not become a card at all. `recommendations.create` calls this too;
+    # doing it here as well means a malformed plan raises to the caller with
+    # the field name rather than turning into a card that says "invalid".
+    doc = actions.parse(action)
+
+    # KEYED ON THE CHARGE, not on the plan and not on `actions_used` alone.
+    # Three readings were wrong in turn: no key at all means the heartbeat
+    # stacks a card every thirty minutes; a key derived from the action means
+    # the SECOND pass under a goal collides with the first; and `actions_used`
+    # alone stops being the pass number the moment a refund exists — a pass
+    # that died on a provider wall handed its action back, the next tick's
+    # charge re-used the same number, `create` returned the previous pass's
+    # already-decided card, the status flip below found nothing 'new', and the
+    # action charged moments earlier was burnt with nothing to show and no
+    # refund (there is no run to make one idempotent). MEASURED 2026-08-08:
+    # eight of the goal's twenty actions went that way in one night.
+    #
+    # `actions_used + refunds` counts charges EVER made, which never repeats —
+    # see `pass_dedupe_key`. The heartbeat still cannot stack cards for one
+    # pass: only a tick that charged reaches this function, and its busy check
+    # refuses a second pass while one is in flight.
+    async with db.acquire() as conn:
+        refunds = await conn.fetchval(
+            "SELECT count(*) FROM goal_action_refunds WHERE goal_id = $1::uuid",
+            str(goal["id"]))
+    rec = await recommendations.create(
+        "code_change", title, body, source=source, action=action,
+        dedupe_key=pass_dedupe_key(goal, refunds))
+    rec_id = rec["id"]
+
+    # PREFLIGHT SYNCHRONOUSLY AND WAIT FOR IT. `create` already spawned one in
+    # the background; this second call is not redundant, it is the one whose
+    # answer this function is allowed to read. Reading the row instead would
+    # be racing a background task, and the losing side of that race is a run
+    # enqueued against an unchecked plan.
+    checked = await actions.preflight(rec_id)
+    state = (checked or {}).get("action_state")
+    detail = (checked or {}).get("action_detail") or ""
+    if state != "ready":
+        return {"status": "card", "recommendation": rec_id, "run": None,
+                "detail": (f"the plan did not preflight ready ({state}) — it "
+                           f"is in the inbox for you instead: {detail}"[:600])}
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            # THE GOAL, RE-ASSERTED IN THE SAME STATEMENT THAT APPROVES. The
+            # caller charged it a moment ago; between then and now the
+            # operator may have closed it, and a run enqueued under a revoked
+            # goal would sit claimable-looking in his inbox forever.
+            live = await conn.fetchval(
+                "SELECT 1 FROM goals WHERE id = $1::uuid AND status = 'active' "
+                "  AND $2 = ANY(approved_verbs) "
+                "  AND (expires_at IS NULL OR expires_at > now())",
+                str(goal["id"]), _goals.IMPROVE_SELF)
+            if not live:
+                return {"status": "card", "recommendation": rec_id, "run": None,
+                        "detail": ("the goal stopped being live between "
+                                   "charging it and enqueueing — the plan is "
+                                   "an ordinary card in your inbox")}
+            r = await conn.fetchrow(
+                "UPDATE recommendations SET status = 'approved', "
+                "  decided_at = now(), decided_by = 'goal' "
+                " WHERE id = $1::uuid AND status = 'new' RETURNING id", rec_id)
+            if r is None:
+                # He got there first (approved, dismissed or snoozed it). His
+                # decision wins; this lane does not overwrite one.
+                return {"status": "card", "recommendation": rec_id,
+                        "run": None,
+                        "detail": "the card was already decided — left alone"}
+            run = await conn.fetchrow(
+                "INSERT INTO action_runs (recommendation_id, action, "
+                "  action_type, lane, goal_id) "
+                "VALUES ($1::uuid, $2::jsonb, $3, 'goal', $4::uuid) "
+                "ON CONFLICT DO NOTHING RETURNING id",
+                rec_id, json.dumps(action), doc.type, str(goal["id"]))
+    if run is None:
+        # The partial unique indexes refused it: either this card already has
+        # a live run, or another improvement run is still in flight. Both are
+        # the database saying "one at a time", which is what it is for.
+        return {"status": "busy", "recommendation": rec_id, "run": None,
+                "detail": ("another improvement run is already queued or "
+                           "running — this pass was not started")}
+    log.info("Goal-lane run %s enqueued for goal %s (%s)",
+             run["id"], goal["id"], doc.type)
+    return {"status": "queued", "recommendation": rec_id,
+            "run": str(run["id"]), "detail": detail[:400]}
 
 
 async def append_step(run_id, name: str, status: str, detail: str = "") -> None:
@@ -208,7 +382,18 @@ async def _process(run: dict) -> None:
             rec = await conn.fetchrow(
                 "SELECT id, action_tools FROM recommendations WHERE id = $1", rec_id)
         tools = rec["action_tools"] if rec else None
+        # WHICH AUTHORITY STARTED THIS, handed to the executor. `code_change`
+        # needs it and nothing else can supply it honestly: the tripwire
+        # REFUSES an autonomous landing that touches the files enforcing the
+        # boundaries, and lets an operator-approved one through because he
+        # read the diff. Read off the claimed ROW rather than passed in by a
+        # caller, so there is no argument an executor can be given that makes
+        # a goal-lane run look like an operator-approved one.
         rec_dict = {"id": str(rec_id),
+                    "lane": run.get("lane") or "operator",
+                    "goal_id": (str(run["goal_id"])
+                                if run.get("goal_id") else None),
+                    "run_id": str(run_id),
                     "action_tools": json.loads(tools) if isinstance(tools, str) else tools}
 
         # PER-ACTION where it declares one, because a single number cannot
@@ -237,7 +422,13 @@ async def _process(run: dict) -> None:
             raise RuntimeError(refused)
         await _finish(run_id, "succeeded", result=result)
         log.info("Action run %s succeeded: %s", run_id, doc.type)
-        summary = "installed"
+        # "installed" was the only word this ever said, and it stopped being
+        # true the moment a run could succeed by DECLINING to act — an
+        # autonomous change held back for the operator finished cleanly and
+        # told him it was installed. An executor that knows better says so in
+        # `summary`; everything else keeps the old word.
+        summary = str((result or {}).get("summary") or "installed") \
+            if isinstance(result, dict) else "installed"
     except NeedAnswer as q:
         # NOT a failure and NOT the end. The run keeps its cursor and its
         # recommendation; it is waiting on a person, which is a state this

@@ -201,13 +201,77 @@ _COMPLETION_TOKEN_COMPILED = [(re.compile(v, re.IGNORECASE), toks)
 _TOKEN_SPLIT = re.compile(r"[a-z0-9]+")
 
 
+def refused_note(refused) -> Optional[str]:
+    """The operator-visible line naming tool calls that were REFUSED.
+
+    NO VOCABULARY, AND THAT IS THE WHOLE POINT. Every other arm in this module
+    matches phrases, so each one is a maintained list of ways to say "I did
+    it" and is permanently one phrasing behind. This arm reads no text at all
+    — it reports a fact the turn already holds — so it catches a claim nobody
+    has thought of yet, in any language, including silence.
+
+    MEASURED 2026-08-07, the incident that produced it. Asked to fix a
+    malformed row in the model pool, Nova called `manage_curated_models{add}`
+    and `manage_curated_models{disable}`. The goal gate refused both. Her
+    reply ended "correct row in, bad row retired, and it'll be selectable" —
+    and the row was untouched, still enabled, still carrying the wrong tier.
+
+    Nothing caught it, for two independent reasons:
+
+    1. `_could_have_done` treated a call that RAN AND WAS REFUSED as evidence
+       the claim could be true. It is evidence of the opposite.
+    2. Her phrasing matched no `_COMPLETION_PATTERNS` entry — there is no "I
+       added", no "Saved.". It is a bare assertion of resulting state, and no
+       list of verbs was ever going to have it.
+
+    (1) is fixed by a contract on the caller. (2) cannot be fixed by adding a
+    pattern, because the next phrasing will be different again. This function
+    is the answer to (2): if a call was refused, the operator is told so,
+    whatever the reply says.
+
+    Returns None when nothing was refused, so a clean turn is untouched.
+    """
+    items = [str(r).strip() for r in (refused or ()) if str(r).strip()]
+    if not items:
+        return None
+    # Deduplicated but COUNTED — two refusals of one tool is a model retrying
+    # a wall, which reads differently from one refusal it accepted.
+    seen: dict[str, int] = {}
+    for name in items:
+        seen[name] = seen.get(name, 0) + 1
+    listed = ", ".join(
+        f"{name}{f' ({n}x)' if n > 1 else ''}" for name, n in sorted(seen.items()))
+    n = len(items)
+    return (f"[{n} tool call{'s' if n != 1 else ''} "
+            f"{'were' if n != 1 else 'was'} refused this turn and changed "
+            f"nothing: {listed}. Anything above describing that work as done "
+            f"is not accurate.]")
+
+
 def _could_have_done(claim: str, called_tools) -> bool:
-    """Did any tool called this turn plausibly perform `claim`?
+    """Did any tool that SUCCEEDED this turn plausibly perform `claim`?
 
     Fails OPEN — an unrecognised claim verb, or no token list matching it,
     counts as satisfied. A false accusation is appended to the reply and read
     aloud, so it costs more than a missed catch; that is the same trade every
     detector in this family makes.
+
+    WHAT `called_tools` MUST CONTAIN, and why it is worth a paragraph.
+    MEASURED 2026-08-07: asked to fix a malformed model row, Nova called
+    `manage_curated_models` twice — `add`, then `disable`. Both were REFUSED
+    by the goal gate, so nothing changed anywhere. Her reply ended "correct
+    row in, bad row retired, and it'll be selectable". The row was untouched,
+    still enabled, still carrying the wrong tier.
+
+    This arm did not catch it, and the reason is exact: the caller passed
+    every tool NAME it had dispatched, and `manage_curated_models`'s tokens
+    satisfy a claim about managing a model — so a REFUSED call stood as
+    evidence that the claim could be true. A tool that ran and was refused is
+    not evidence of having done anything; it is evidence of the opposite.
+
+    So callers must pass the tools that SUCCEEDED, never every tool
+    attempted. That is a contract this module cannot enforce alone, which is
+    why it is stated here and pinned by `test_refused_claim.py`.
     """
     names = set()
     for n in called_tools or ():

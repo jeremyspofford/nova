@@ -7,6 +7,7 @@ import { SettingsPage } from '../components/settings/SettingsPage';
 import { LibraryPage } from '../components/library/LibraryPage';
 import { ObservabilityOverlay } from '../components/ObservabilityOverlay';
 import { ActivityPage } from '../components/IngestionPanel';
+import { ActionLogPage } from '../components/ActionLog';
 import { VaultPage } from '../vault/VaultPage';
 import { Rail } from './Rail';
 
@@ -75,7 +76,15 @@ export function AppShell() {
           <Route path="/vault" element={<VaultPage onClose={home} />} />
           <Route path="/vault/:root/*" element={<VaultPage onClose={home} />} />
           <Route path="/observability" element={<ObservabilityOverlay onClose={home} />} />
-          <Route path="/activity" element={<ActivityPage onClose={home} />} />
+          {/* /activity is the ACTION LOG — what she did and what she was
+              refused. It used to be the media ingest queue alone, which is
+              the surface Jeremy said "doesn't help me at all": no tool call,
+              refusal, config change or coding session ever appeared on it.
+              That queue is intact one level down, because retry/dismiss are
+              queue controls and do not belong on a log. */}
+          <Route path="/activity" element={<ActionLogPage onClose={home} />} />
+          <Route path="/activity/ingest"
+            element={<ActivityPage onClose={() => navigate('/activity')} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

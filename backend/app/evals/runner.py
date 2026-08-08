@@ -122,6 +122,20 @@ class RunResult:
         return (self.valid and not self.errors and not self.timed_out
                 and bool(self.final.strip()))
 
+    @property
+    def error_classes(self) -> list[str]:
+        """The machine-readable classes of every LLM failure in this run.
+
+        Read from the SPANS, not from the error events: run_agent drops
+        `error_class` when it yields the final error to its consumer
+        (agents/runner.py keeps it only on the llm_call span), so the trace
+        is the one place the class survives. This is what lets eval_runs
+        tell a resource refusal — `prompt_too_long` from the VRAM-sized
+        window guard — from a model that is bad, without matching strings.
+        """
+        return sorted({s["detail"]["error_class"] for s in self.spans
+                       if (s.get("detail") or {}).get("error_class")})
+
 
 # ── toolset ──────────────────────────────────────────────────────────────
 

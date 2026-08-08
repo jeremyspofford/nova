@@ -46,9 +46,10 @@ from app import db
 from app.actions import code_change as _code_change
 from app.actions import home_assistant as _home_assistant
 from app.actions import mcp_server as _mcp_server
+from app.actions import model_assign as _model_assign
 from app.actions.schemas import (ActionDoc, CodeChangeBuild,
                                  CodeChangeLand, HomeAssistantDeploy,
-                                 McpServerAdd)
+                                 McpServerAdd, ModelAssign)
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +138,19 @@ _TYPES: dict[str, Spec] = {
         # One call, genuinely: git-landing applies the whole patch or leaves
         # the repo untouched, so there is no partial state to resume from.
         execute=_code_change.execute,
+    ),
+    "model.assign": Spec(
+        model=ModelAssign,
+        # The operator's own route for the same effect — the PATCH he
+        # performed by hand at 18:36:57 on 2026-08-07. `assert_routes_exist()`
+        # resolves this at boot, which is what keeps the executor legal: she
+        # reaches nothing here he cannot already reach from Settings.
+        operator_route="patch_agent_endpoint",
+        describe=_model_assign.describe,
+        preflight=_model_assign.preflight,
+        # One UPDATE, genuinely: it lands or it does not, and the row is
+        # read back either way. Nothing for steps to resume.
+        execute=_model_assign.execute,
     ),
     "code_change.build": Spec(
         model=CodeChangeBuild,
@@ -358,6 +372,7 @@ _MODULES = {
     "home_assistant.deploy": _home_assistant,
     "code_change.land": _code_change,
     "code_change.build": _code_change,
+    "model.assign": _model_assign,
 }
 
 

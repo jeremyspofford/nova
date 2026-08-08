@@ -2286,3 +2286,151 @@ See README for what works. This file is the ordered backlog.
     fingerprint pattern), and puts the checklist in Library → Files.
     Three phases in the spec; three DECIDE items for Jeremy (default on?,
     delivery channel, checklist seed).
+
+46. **She makes a model available herself (2026-08-07) — BUILDING.** The
+    friction Jeremy hit head-on: he asked "can you get the latest DeepSeek
+    flash llm available" and got 31 minutes of instructions to click. She
+    was mechanically right — NO agent in this system can write to
+    `curated_models`, `llm_providers`, `secrets`, or any `is_system`
+    agent's `model` column. Catalog *discovery* already works and the
+    model was already in her live catalog; every write path was
+    operator-only. He inserted the row by hand at 18:36:36 and repointed
+    `main` at it 21 seconds later, with `tool_tier=C, roles={}`.
+    **CORRECTION, checked against the live catalog after I asserted the
+    opposite twice: the id he pasted is FINE.**
+    `~vendor/model-latest` is OpenRouter's floating-alias convention and
+    the live catalog serves eleven of them
+    (`~anthropic/claude-fable-latest`, `~openai/gpt-latest`, …); the
+    de-tilded spelling of his does not exist at all. What was actually
+    wrong was only the metadata — column defaults instead of researched
+    values — plus a silent disagreement between two modules, where
+    `model_chain._usable_cloud` hardcoded a `'~' in model` test that
+    barred every floating alias, his own chat model included, from ever
+    being a standby. SHIPPED: `manage_curated_models` (granted to
+    `model-manager`, catalog-verified at write so an id the provider does
+    not serve is refused), a `model.assign` typed recommendation action so
+    a card performs the PATCH `_SYSTEM_PROTECTED` correctly forbids a
+    tool from making, `list_models` granted to `main` so she can answer
+    from fact instead of dispatch hearsay, `raise_recommendation` to
+    `model-manager`, `capability_events` on curated writes, and ONE rule
+    for the `~` alias — today `model_recs`' pin guard accepts it while
+    `model_chain._usable_cloud` silently excludes it from every standby
+    chain.
+
+47. **Autonomous improvement — continuous, unapproved (2026-08-07) —
+    BUILDING.** Spec: `docs/plans/autonomous-improvement.md`. Jeremy:
+    "that needs to be a continuous ongoing process that I don't even
+    think about or approve. She just needs to do it, score improvements,
+    and if it's degrading, roll it back and try something else." **This
+    lifts the operator-merge lock recorded in five places** (
+    `self-improvement.md` invariant 1, `coding-team-pipeline.md`,
+    `capability-acquisition.md` phase 5, `self-improvement-loop.md`
+    "What stays his", and `action_worker.claim_next`'s
+    `rec.decided_by = 'operator'` SQL) — his reversal, in his own words,
+    recorded so the next session reading those docs does not re-impose
+    it. The pipeline is ~80% built already; what is missing is the
+    trigger and the reversal. Six rails, in build order: protected-paths
+    tripwire (diff-derived, and its own source is in its own list —
+    a loop that can edit its brakes has none), eval floor as a fifth
+    sandbox stage, a token/spend ceiling that refuses to start a pass, a
+    second `claim_next` lane authorised by a standing goal rather than a
+    click, research→score with mechanical inputs and a different-model
+    judge, then auto-merge and a rollback watcher living in
+    `inference-control` (a watcher inside the backend dies with the bad
+    deploy it exists to catch).
+
+48. **Managing machines — linux, windows, macos (2026-08-07) — SPEC'D,
+    one DECIDE open.** Spec: `docs/plans/machine-management.md`. Answers
+    #43's "NEEDS A PLAN". Nothing exists today: the only ssh-shaped code
+    in the repo is the verifier that catches her *claiming* she can do
+    this. Verdict: the transport is not the decision — the control is a
+    per-machine VERB ALLOW-LIST resolved to argv by a sidecar, because no
+    line of code can refuse `rm -rf /` from free text (the same
+    conclusion `workloads.py` reached when it withheld `pods/exec`). SSH
+    as the v1 transport for Linux/macOS, swappable, per-host daemon as
+    the end state, Windows via its optional OpenSSH Server feature.
+    Build order: `machines` registry (operator-only writes) → a
+    `machine-control` sidecar shipping the shared-bearer pattern from its
+    first commit → read verbs only → then the write verb wired into
+    every existing containment. **DECIDE (Jeremy):** name three to five
+    real jobs you want done on a real machine. "Restart a service on my
+    desktop" and "run anything" are different containment problems and
+    the design hangs off which one this is.
+
+49. **Public access and time-boxed guests (2026-08-07) — SPEC'D.** Spec:
+    `docs/plans/public-access-and-guests.md`. Jeremy wants her to deploy
+    herself via Cloudflare, keep it to him, and hand out short-lived
+    guest access limited to specific models. Cloudflare exists only as
+    prose in the README. "Signing into Cloudflare" needs almost no new
+    code — a stored zone-scoped token plus `manage_tool_hosts` plus an
+    `http_call` tool are all live already; what is missing is the tunnel
+    lifecycle as fixed sidecar verbs. **Guests are the real build**, and
+    the load-bearing constraint is that the guest token branch and
+    route-role gating must land in ONE change: the middleware is
+    all-or-nothing today, so a guest token that reaches
+    `/api/v1/auth/token` (which returns the *admin* token) or
+    `/api/v1/secrets/{name}/reveal` is an admin token. Model restriction
+    is enforced in `model_chain`, never in the guest's prompt. Two traps
+    waiting: nginx's Host allowlist 444s any new hostname, and
+    `NOVA_TRUST_LOCALHOST` defaults true — a *host-side* cloudflared
+    makes every internet request look local, i.e. tokenless.
+
+50. **A coding session's state is known, not assumed (2026-08-07) —
+    BUILT, uncommitted, live-verified.** Session 6d085e4f ran
+    `ls /workspaces/`, hit a permission error, and its row read `running`
+    with one recorded command for 40+ minutes while Nova reported it as
+    still going. **It turned out not to be dead** — on the reconciler's
+    first live tick the broker answered `done`. It had been fine all
+    along; nothing was polling it, so its state was merely unknown. That
+    is the finding: judging from the row would have declared a completed
+    session dead, and the refresh-before-judge ordering was proven on its
+    first run against real data.
+    `updated_at` could not answer this — `refresh` writes on every poll,
+    so it measures attention, not progress. Migration 121 adds a
+    `progress_fingerprint` derived from what the broker reports actually
+    changing (state, commit, diffstat, command/denial COUNTS — contents
+    would compare a growing prefix to itself) and a `progress_at` that
+    moves only when it does. `coder.reconcile_stalled()` runs as a
+    mechanical automation every 5 minutes and polls each live session
+    BEFORE judging it, so "stalled" always follows a live check; an
+    unreachable broker is a FAILED run, never a comfortable "0 stalled".
+    Also: `delegate_coding_task` now prepends repo facts READ live — the
+    real migrations directory, the next free number from the directory
+    listing, the real table names from `pg_tables` — because the task she
+    authored that day specified an Alembic migration against a
+    `models_catalog` table in `backend/migrations/`, all three wrong, and
+    her own maintainer had read the right files minutes earlier.
+
+51. **Reliability & visibility batch (2026-08-07 evening) — BUILT,
+    uncommitted, live-verified.** Five problems Jeremy hit in one
+    session, all fixed and suite-green (99/99):
+    - **A degrading model passed as a reply.** deepseek-v4-flash-latest
+      returned "8" (2 completion tokens/32k prompt), a Chinese
+      pseudo-system block, and echoed-back input — all `status=ok`,
+      because failover fires on errors and garbage is not one.
+      `degeneracy.py` makes it a FAILURE that retries once on the standby;
+      signals are mechanical and the expected scripts are DERIVED from the
+      conversation (no hardcoded language). `model_health` records it.
+    - **The eval loop couldn't survive a reload.** Evals ran in-process
+      under `--reload`; every `.py` edit killed them ("no heartbeat for
+      90s"). Rebuilt on the durable-worker pattern (claim + per-task
+      cursor + resume); live-verified surviving a real mid-run reload.
+    - **A finished eval never reached him.** `status=failed` conflated "the
+      model scored 2/7" with "the harness crashed". Now DERIVED from
+      whether tasks were graded: measured / partial / unmeasured, each
+      with a plain headline, plus a completion notification.
+    - **No action log.** `Library → Action log` derives a chronological,
+      plain-language log from what's already recorded, refusals
+      first-class with reasons, filterable by outcome.
+    - **Notifications didn't land in chat.** A delivered notification is
+      now a `role=notification` message that POINTS at the same record
+      (DB CHECK), and the tapped id survives the service-worker round trip.
+    - **A billing wall retried forever.** The self-improvement loop hit a
+      402 (key monthly limit < requested max_tokens) and retried it 12
+      times across 4 passes. `provider_errors.classify` makes 401/402/403
+      terminal (surviving the ACP JSON-RPC envelope) while 429/5xx still
+      retry; a billing-aborted pass spends no goal action; one adaptive
+      retry at the provider's OWN stated affordable token count is
+      allowed, never a guess. Key ids in `/keys/<hex>` URLs are scrubbed
+      from every persisted place. **Blocked on Jeremy: raise the
+      OpenRouter key's monthly limit for the loop to land anything.**

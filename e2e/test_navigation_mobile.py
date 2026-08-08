@@ -15,13 +15,13 @@ import re
 from playwright.sync_api import Page, expect
 
 #: Menu item → copy that proves the page rendered CONTENT, where the page
-#: has any fixed copy at all. Activity's is None: on the phone its blurb
-#: stays on the desktop panel and the body is pure install data, so the
-#: heading (asserted for every page below) is all that is stable.
+#: has any fixed copy at all. The Action log's is None: on the phone its
+#: body is pure install data (rows of what she did), so the heading
+#: (asserted for every page below) is all that is stable.
 MENU_PAGES = [
     ("Vault", re.compile(r"New note", re.I)),
     ("Library", re.compile(r"What she is working towards", re.I)),
-    ("Activity", None),
+    ("Action log", None),
     ("Observability", re.compile(r"SERVICE HEALTH", re.I)),
     ("Settings", re.compile(r"Operator", re.I)),
 ]

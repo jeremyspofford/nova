@@ -55,6 +55,13 @@ LOCAL = [
 TOOLED = {"name": "main", "model": "ollama:ornith:9b", "allowed_tools": None}
 TOOLLESS = {"name": "voice", "model": "ollama:ornith:9b", "allowed_tools": []}
 
+# What the providers actually serve — the single validity truth (see
+# models_catalog.resolve_id). The '~' curated row above is deliberately NOT
+# in it: the provider never listed that id, which is the whole incident.
+CATALOG = {"openrouter:anthropic/claude-haiku-4.5",
+           "openrouter:z-ai/glm-5.2",
+           "openrouter:someone/chat-only"}
+
 
 def check(label, cond, detail=""):
     print(f"  {'PASS' if cond else 'FAIL'}  {label}" + (f"   [{detail}]" if detail else ""))
@@ -67,6 +74,14 @@ async def main() -> int:
     llm_router.effective_model = lambda m: m
     providers.is_configured = lambda slug: slug == "openrouter"
     providers.get = lambda slug: {"last_ok": True}
+
+    # injected like `curated` and `local_rank`: a derivation asserted against
+    # whatever the install's live catalog happens to hold asserts nothing
+    saved_ids = mc._catalog_ids
+
+    async def _ids():
+        return set(CATALOG)
+    mc._catalog_ids = _ids
     try:
         print("1. a local agent crosses to the cloud")
         got = await mc.cross_tier_standby(TOOLED, curated=CURATED, local_rank=LOCAL)
@@ -106,6 +121,49 @@ async def main() -> int:
         got = await mc.cross_tier_standby(TOOLED, curated=[], local_rank=[])
         check("nothing available -> None, never an invented name",
               got is None, str(got))
+
+        print("3b. catalog membership is THE validity rule — the same truth "
+              "as the pin guard and the write gate")
+        # a curated id the provider stopped serving is refused, tilde or not
+
+        async def _ids_no_haiku():
+            return set(CATALOG) - {"openrouter:anthropic/claude-haiku-4.5"}
+        mc._catalog_ids = _ids_no_haiku
+        got = await mc.cross_tier_standby(TOOLED, curated=CURATED, local_rank=LOCAL)
+        check("an id absent from the live catalog is not offered, however "
+              "plausible it looks", got == "openrouter:z-ai/glm-5.2", str(got))
+
+        # degraded: no catalog at all -> only the known paste-artifact shape
+        # ('~author/model') is refused; a failing turn keeps its standby
+
+        async def _ids_down():
+            return None
+        mc._catalog_ids = _ids_down
+        got = await mc.cross_tier_standby(TOOLED, curated=CURATED, local_rank=LOCAL)
+        check("catalog unreadable -> membership unknowable, the chain still "
+              "offers a standby rather than dying with the catalog",
+              got == "openrouter:anthropic/claude-haiku-4.5", str(got))
+        check("...but the '~' paste-artifact shape stays refused even then",
+              "~" not in str(got))
+
+        # degraded PARTIALLY: the realistic cloud-side blip. The provider's
+        # /models fetch fails (models_catalog yields nothing for it) while
+        # ollama's /api/tags answers, so the set arrives non-empty but with
+        # zero entries for the cloud slug. Membership must be unknowable for
+        # that slug — judging by global membership would refuse every cloud
+        # standby because a catalog fetch failed, the exact outage the chain
+        # exists to survive.
+
+        async def _ids_partial():
+            return {"ollama:qwen3:14b", "ollama:qwen3:8b", "ollama:ornith:9b"}
+        mc._catalog_ids = _ids_partial
+        got = await mc.cross_tier_standby(TOOLED, curated=CURATED, local_rank=LOCAL)
+        check("a slug with zero catalog entries is unknowable, not empty — an "
+              "ollama-only read never refuses every cloud standby",
+              got == "openrouter:anthropic/claude-haiku-4.5", str(got))
+        check("...and the '~' paste-artifact shape stays refused even then",
+              "~" not in str(got))
+        mc._catalog_ids = _ids
 
         print("4. the chain, in order")
         chain = await mc.chain(
@@ -163,6 +221,7 @@ async def main() -> int:
     finally:
         (llm_router.effective_model, providers.is_configured,
          providers.get) = saved
+        mc._catalog_ids = saved_ids
 
     print()
     if FAILURES:

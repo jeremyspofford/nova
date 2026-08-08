@@ -330,7 +330,18 @@ async def due() -> list[dict]:
             "ORDER BY next_run_at")]
 
 
-_RUNS_KEPT = 50  # per-automation history retention
+#: Run history survives by AGE, not by row count. The old rule — newest 50
+#: rows per automation — made retention a function of cadence: coding-session
+#: -reconcile fires every 5 minutes, so its whole history was ~4.3 hours,
+#: while the activity log's 7d and 30d windows read the table and claimed
+#: `complete: true` over weeks it could not see. The heartbeat's overnight
+#: audit trail pruned away within a day the same way. 30 days matches the
+#: longest window the activity log offers; activity_log.retention_days()
+#: reads this constant, so the two cannot disagree about the horizon.
+RUNS_KEPT_DAYS = 30
+
+#: Page cap for `list_runs` — a display limit, not retention.
+_RUNS_PAGE = 50
 
 
 async def record_run(automation_id: str, status: str, summary: str,
@@ -361,11 +372,13 @@ async def record_run(automation_id: str, status: str, summary: str,
                VALUES ($1, $2, $3, $4, $5)""",
             aid, status, summary[:1000], started,
             max((now - started).total_seconds(), 0.0))
+        # Whole-table on purpose: age is the rule, so scoping the sweep to
+        # this automation would leave a disabled automation's rows immortal.
+        # `automation_runs_recent_idx` (started_at DESC) serves the range.
         await conn.execute(
-            """DELETE FROM automation_runs
-               WHERE automation_id = $1 AND id NOT IN (
-                   SELECT id FROM automation_runs WHERE automation_id = $1
-                   ORDER BY started_at DESC LIMIT $2)""", aid, _RUNS_KEPT)
+            "DELETE FROM automation_runs "
+            " WHERE started_at < now() - make_interval(days => $1)",
+            RUNS_KEPT_DAYS)
         if failed:
             row = await conn.fetchrow(
                 """UPDATE automations
@@ -421,7 +434,7 @@ async def list_runs(automation_id: str, limit: int = 20) -> list[dict]:
             """SELECT id, status, summary, started_at, duration_seconds
                FROM automation_runs WHERE automation_id = $1
                ORDER BY started_at DESC LIMIT $2""",
-            uuid.UUID(automation_id), min(max(limit, 1), _RUNS_KEPT))
+            uuid.UUID(automation_id), min(max(limit, 1), _RUNS_PAGE))
     return [{"id": str(r["id"]), "status": r["status"], "summary": r["summary"],
              "started_at": r["started_at"].isoformat(),
              "duration_seconds": round(r["duration_seconds"], 1)} for r in rows]

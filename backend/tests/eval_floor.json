@@ -1,0 +1,4 @@
+{
+  "_comment": "Eval floors — ROADMAP #47 rail 2. Fraction of gradeable tasks a suite must pass. A RATCHET: raised by `python tests/eval_floor.py --ratchet` after an honest measurement, and lowered ONLY by hand, in a commit that says why. EMPTY ON PURPOSE: no score here has been measured yet, and a floor invented rather than measured is a gate calibrated against nothing. Until it is seeded the stage reports `unmeasured`, which is NOT a pass — the autonomous landing gate refuses on it and an operator-approved landing is unaffected.",
+  "suites": {}
+}

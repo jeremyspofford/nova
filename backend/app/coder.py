@@ -37,7 +37,16 @@ log = logging.getLogger(__name__)
 
 _TIMEOUT_S = 30.0
 #: Broker states that will never change again — refresh stops polling at these.
-TERMINAL = frozenset({"done", "failed", "killed"})
+#: `stalled` is one of them: it is written only after a live poll found no
+#: progress for the whole window, and a session that resumed would have moved
+#: its fingerprint before the reconciler ever looked.
+TERMINAL = frozenset({"done", "failed", "killed", "stalled"})
+
+#: How long a session may report no PROGRESS before it is called stalled.
+#: Not a wall clock on the session — the broker owns that (`budget_s`) and a
+#: long compile is not a death. This is the window in which a live agent
+#: always does *something*: a command, a denial, a commit, a state change.
+_STALL_AFTER_S = 900.0
 
 
 def configured() -> bool:
@@ -91,10 +100,71 @@ async def delete_workspace(name: str) -> bool:
 
 # --- sessions --------------------------------------------------------------
 
+#: Where migrations live, relative to the repo root. The backend runs them
+#: from here at startup, so this is the same fact the runner uses rather than
+#: a second copy of it.
+_MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
+
+
+async def _repo_facts() -> str:
+    """Facts about THIS repo, read live, prepended to every delegated task.
+
+    MEASURED 2026-08-07. Asked to add a model to the catalogue, Nova wrote a
+    task instructing the coder to "create an Alembic migration" against "the
+    models_catalog table" in "backend/migrations/". All three are wrong: the
+    system is plain SQL in `backend/app/migrations/` and the table is
+    `curated_models`. Her own maintainer dispatch had read
+    `018_curated_models.sql` minutes earlier; the finding did not survive
+    into the task she authored. The coder burned its session running `ls`
+    against directories that do not exist.
+
+    So the facts ride along with every task, and they are READ, not written
+    down: the next migration number comes from the directory, the table names
+    come from the database. A hardcoded list here would be wrong the first
+    time either changes, and wrong in the same confident tone.
+
+    This does not make the task text trustworthy — it makes it accurate. The
+    controls that decide what the coder may do are all at the broker.
+    """
+    try:
+        nums = [int(m.group(1))
+                for f in os.listdir(_MIGRATIONS_DIR)
+                if (m := re.match(r"(\d+)_.*\.sql$", f))]
+        next_num = f"{max(nums) + 1:03d}" if nums else "001"
+    except OSError as e:
+        log.warning("repo facts: cannot read migrations dir: %s", e)
+        next_num = "(unknown — list backend/app/migrations/ yourself)"
+
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+                "ORDER BY tablename")
+        tables = ", ".join(r["tablename"] for r in rows)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("repo facts: cannot list tables: %s", e)
+        tables = "(unknown — query pg_tables yourself before naming one)"
+
+    return (
+        "## Facts about this repository (read from the live system just now)\n"
+        "\n"
+        "- Database migrations are PLAIN SQL files in `backend/app/migrations/`,\n"
+        "  named `NNN_snake_case_description.sql`, run in numeric order by the\n"
+        f"  backend at startup. The next free number is **{next_num}**.\n"
+        "- There is NO Alembic in this project. No `env.py`, no `versions/`\n"
+        "  directory, no revision graph. Do not create one.\n"
+        f"- The tables that exist are: {tables}.\n"
+        "  If the task names a table not in that list, the task is wrong —\n"
+        "  say so and stop rather than creating it.\n"
+        "\n"
+        "## The task\n\n")
+
+
 async def start(workspace: str, task: str, *, mode: str = "default",
                 budget_s: int = 0, requested_by: str | None = None,
                 continue_from: str | None = None,
-                goal_id: str | None = None) -> dict:
+                goal_id: str | None = None,
+                max_tokens: int = 0) -> dict:
     """Kick off one coding task. Returns immediately — sessions run minutes.
 
     The row is written BEFORE the broker is called and updated after, so a
@@ -106,6 +176,13 @@ async def start(workspace: str, task: str, *, mode: str = "default",
     is resolved here, and an unresolvable one is an ERROR rather than a
     fresh start — a "resumed" session that quietly began from the trunk is
     the false premise the whole parameter exists to remove.
+
+    `max_tokens` caps the coding agent's completion budget for this session.
+    It exists for exactly one caller: the 402 whose text states the budget the
+    key can actually afford (`provider_errors.token_budget`). It is REFUSED
+    unless the sidecar's own schema carries the field — see `broker_supports`
+    — because sending a cap to a broker that ignores it would produce a
+    "smaller retry" that is byte-for-byte the call that just failed.
     """
     if not configured():
         return {"status": "error",
@@ -135,12 +212,32 @@ async def start(workspace: str, task: str, *, mode: str = "default",
                                f"clone to continue from")}
         resume_broker_id = prev["broker_session_id"]
 
+    if max_tokens:
+        supported = await broker_supports("max_tokens")
+        if supported is not True:
+            return {"status": "error",
+                    "detail": (
+                        f"cannot start a session capped at {max_tokens:,} "
+                        f"tokens: " + (
+                            "the coder sidecar's /session schema has no "
+                            "max_tokens field, so the cap would be silently "
+                            "ignored and the retry would be the same call "
+                            "that just failed"
+                            if supported is False else
+                            "the coder sidecar's schema could not be read, so "
+                            "there is no way to know whether the cap would be "
+                            "applied"))}
+
+    # The stored task is what the coder is actually given, facts and all —
+    # so the row explains the session rather than describing a different one.
+    task = (await _repo_facts()) + task
+
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO coding_sessions
                    (workspace_id, task, mode, requested_by, continued_from,
-                    goal_id)
-               VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid) RETURNING *""",
+                    goal_id, progress_at)
+               VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, now()) RETURNING *""",
             ws["id"], task, mode, requested_by,
             str(continue_from) if continue_from else None,
             str(goal_id) if goal_id else None)
@@ -153,6 +250,7 @@ async def start(workspace: str, task: str, *, mode: str = "default",
                 json={"repo": ws["git_url"], "task": task, "mode": mode,
                       "budget_s": budget_s,
                       "continue_from": resume_broker_id,
+                      **({"max_tokens": int(max_tokens)} if max_tokens else {}),
                       # What the patch is measured from. The workspace's own
                       # trunk, never a guess: `sandbox_check` and `land` both
                       # apply the result to it.
@@ -204,11 +302,20 @@ async def refresh(session_id: str) -> dict:
         return {**_shape(dict(row)), "detail": _detail(resp)}
 
     b = resp.json()
+    usage = snapshot_usage(b)
     await _update(row["id"], state=b.get("state"), branch=b.get("branch"),
                   commit_sha=b.get("commit") or None,
                   diffstat=b.get("diffstat") or None, error=b.get("error"),
                   denials=json.dumps(b.get("denials") or []),
-                  commands=json.dumps(b.get("commands") or []))
+                  commands=json.dumps(b.get("commands") or []),
+                  # None fields are dropped by _update, so an unmeasured poll
+                  # leaves NULLs standing rather than overwriting a figure a
+                  # previous poll persisted — and never writes a zero.
+                  model=(str(b.get("model") or "").strip() or None),
+                  tokens_in=(usage or {}).get("tokens_in"),
+                  tokens_out=(usage or {}).get("tokens_out"),
+                  usd=(usage or {}).get("usd"))
+    await _note_progress(row["id"], row.get("progress_fingerprint"), b)
     # CAPTURE THE PATCH THE MOMENT IT EXISTS, because the broker keeps its
     # sessions in a process-local dict and a restart empties it. Three
     # genuinely finished sessions were found unlandable that way — commit and
@@ -227,6 +334,110 @@ async def refresh(session_id: str) -> dict:
     # persisted columns — so the list endpoint carries it too, and it survives
     # a sidecar restart. Only the live-only extras are added here.
     return out
+
+
+def _fingerprint(body: dict) -> str:
+    """What "this session did something" looks like, as one comparable value.
+
+    COUNTS, not contents, for `commands` and `denials`: the broker returns
+    the whole list every poll, so comparing contents would be comparing a
+    growing prefix to itself and any change would register — including none.
+    The count moves exactly when a new one arrives.
+    """
+    return "|".join(str(x) for x in (
+        body.get("state") or "",
+        body.get("commit") or "",
+        body.get("diffstat") or "",
+        len(body.get("commands") or []),
+        len(body.get("denials") or []),
+    ))
+
+
+async def _note_progress(sid, previous: str | None, body: dict) -> None:
+    """Move the progress clock only when the fingerprint actually moved."""
+    now = _fingerprint(body)
+    if now == (previous or ""):
+        return
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE coding_sessions SET progress_fingerprint = $2, "
+            "progress_at = now() WHERE id = $1", sid, now)
+
+
+async def reconcile_stalled() -> tuple[bool, str]:
+    """Refresh every live session, then mark the ones that stopped moving.
+
+    THE ORDER IS THE POINT. Each session is polled against the broker FIRST,
+    so `stalled` always follows a live check. Judging from the row alone
+    would report "we stopped looking at it" as "it died" — and a status that
+    is wrong in the reassuring direction is the failure this whole module's
+    docstring is about.
+
+    Returns the `(ok, summary)` shape the scheduler's mechanical handlers
+    use. A broker that cannot be reached is a FAILED run, not a quiet zero:
+    an unreachable broker is precisely when sessions are most likely to be
+    dead, and reporting "0 stalled" then would be the fallback-that-reads-as
+    -success this codebase keeps finding.
+    """
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id FROM coding_sessions WHERE state IS NULL "
+            "OR state <> ALL($1::text[])", list(TERMINAL))
+    if not rows:
+        return True, "no live coding sessions"
+
+    # Order matters: an install with the coder profile switched off has
+    # nothing to reconcile and should not fail five times and auto-disable
+    # itself. But sessions that are still 'running' with no broker to ask
+    # about them are exactly the rows this job exists for, and calling that
+    # a clean run would be the reassuring-untruth this module keeps finding.
+    if not configured():
+        return False, (
+            f"{len(rows)} coding session(s) are still marked live, but "
+            f"delegation is not configured — there is no broker to ask, so "
+            f"their real state is unknown rather than fine")
+
+    checked, stalled, unreachable = 0, [], 0
+    for r in rows:
+        try:
+            await refresh(str(r["id"]))
+            checked += 1
+        except Exception as e:                               # noqa: BLE001
+            log.warning("reconcile: refresh of %s failed: %s", r["id"], e)
+            unreachable += 1
+            continue
+
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id, state, commands, error,
+                          EXTRACT(EPOCH FROM (now() - COALESCE(
+                              progress_at, updated_at, created_at))) AS still_s
+                     FROM coding_sessions WHERE id = $1""", r["id"])
+        if not row or row["state"] in TERMINAL:
+            continue
+        if float(row["still_s"] or 0) < _STALL_AFTER_S:
+            continue
+
+        # The last evidence goes into the error text, because "stalled" with
+        # nothing attached sends the next reader back to the database.
+        cmds = row["commands"]
+        if isinstance(cmds, str):
+            try:
+                cmds = json.loads(cmds)
+            except ValueError:
+                cmds = []
+        last = (cmds or [])[-1] if cmds else None
+        why = (f"no progress for {int(float(row['still_s']) / 60)} minutes; "
+               f"last activity: {last or 'none recorded'}")
+        await _update(row["id"], state="stalled",
+                      error=(row["error"] or why)[:400])
+        stalled.append(str(row["id"]))
+        log.warning("coding session %s marked stalled — %s", row["id"], why)
+
+    summary = (f"checked {checked} live session(s); "
+               f"{len(stalled)} stalled" +
+               (f"; {unreachable} unreachable" if unreachable else ""))
+    return unreachable == 0, summary
 
 
 async def kill(session_id: str) -> dict:
@@ -258,7 +469,135 @@ async def recent(limit: int = 20) -> list[dict]:
     return [_shape(dict(r)) for r in rows]
 
 
+# --- what the sidecar can actually be asked for -----------------------------
+#
+# DERIVED FROM THE SIDECAR'S OWN SCHEMA, never from a version number or a
+# constant here. The broker is a separate image on its own rebuild cycle, and
+# the backend regularly runs against one built weeks earlier — a capability
+# list maintained on this side would be a statement about the source tree
+# rather than about the process actually answering.
+#
+# FastAPI publishes the request model at /openapi.json, unauthenticated (the
+# broker's token guard is per route). So "does it accept this field" is a
+# question with a mechanical answer, and `None` — could not read it — is
+# deliberately NOT the same value as `False`.
+
+_SCHEMA_TTL_S = 300.0
+_schema_cache: dict = {}
+
+
+async def broker_supports(field: str) -> Optional[bool]:
+    """Does the sidecar's /session request model carry `field`?
+
+    True / False / None-for-unknown. Callers must treat None as a refusal:
+    "I could not find out" and "yes" are the two answers this codebase keeps
+    finding collapsed into one.
+    """
+    import time
+    cached = _schema_cache.get("props")
+    if cached is None or time.monotonic() - _schema_cache.get("at", 0) > _SCHEMA_TTL_S:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(f"{settings.coder_url}/openapi.json")
+            if r.status_code != 200:
+                return None
+            schemas = ((r.json() or {}).get("components") or {}).get("schemas") or {}
+            props = (schemas.get("StartSession") or {}).get("properties") or {}
+            if not props:
+                # An empty property set is not "it supports nothing" — it is a
+                # schema we failed to find. Saying so beats answering False.
+                return None
+            _schema_cache.update({"props": set(props), "at": time.monotonic()})
+            cached = _schema_cache["props"]
+        except (httpx.HTTPError, ValueError, AttributeError) as e:
+            log.warning("could not read the coder sidecar's schema: %s", e)
+            return None
+    return field in cached
+
+
+# --- what one broker snapshot says a session cost ---------------------------
+
+#: The streamed usage frame, as observed live on 2026-08-08: cumulative for
+#: the session (`cost.amount` was $3.17 after an hour of work, not per-frame),
+#: nested under `params.update`, and spelled in none of the token-key
+#: spellings `spend.usage_from_updates` reads. That mismatch is why every
+#: ledger entry ever written was unmetered while the dollars sat in plain
+#: sight in the update stream.
+_TAIL_USAGE_PATH = ("params", "update")
+
+
+def _tail_usage(tail) -> Optional[dict]:
+    """Cost figures dug out of an OLD sidecar's 12-update tail, or None.
+
+    Exists only for version skew: a rebuilt broker aggregates its own frames
+    and this function never runs for it. Until the operator rebuilds, the
+    tail is the only place the figures survive, and the LAST frame wins for
+    the same reason as everywhere else — the numbers are cumulative.
+    """
+    found = None
+    for u in tail if isinstance(tail, (list, tuple)) else ():
+        node = u
+        for key in _TAIL_USAGE_PATH:
+            node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or node.get("sessionUpdate") != "usage_update":
+            continue
+        got: dict = {}
+        cost = node.get("cost")
+        if (isinstance(cost, dict)
+                and isinstance(cost.get("amount"), (int, float))
+                and cost.get("currency", "USD") == "USD"):
+            got["usd"] = float(cost["amount"])
+        if isinstance(node.get("used"), (int, float)):
+            got["context_used"] = int(node["used"])
+        if got:
+            found = {**(found or {}), **got}
+    return found
+
+
+def snapshot_usage(b: dict) -> Optional[dict]:
+    """What one broker snapshot says the session cost, normalized, or None.
+
+    Tolerates BOTH sidecar generations, because the broker is a baked image
+    on its own rebuild cycle and the backend regularly runs against one built
+    weeks earlier: a rebuilt broker carries an aggregated `usage` block, an
+    older one only the tail. None is the honest answer when neither reports —
+    the caller records the entry unmetered rather than as zero.
+    """
+    from app import spend
+    u = b.get("usage")
+    if isinstance(u, dict) and u:
+        return u
+    return (spend.usage_from_updates(b.get("tail"))
+            or _tail_usage(b.get("tail")))
+
+
 # --- helpers ---------------------------------------------------------------
+
+def session_fault(error: str | None) -> Optional[dict]:
+    """What KIND of failure a session's error text is, if it is one at all.
+
+    Derived at read time rather than stored, so a classifier that learns a new
+    provider shape reclassifies every session ever recorded — including the
+    twelve from 2026-08-07 — instead of only the ones written after the
+    change. It rides on `_shape`, so `check_coding_session` tells her "this
+    was a billing wall, retrying cannot help" rather than handing her a
+    JSON-RPC envelope to interpret.
+    """
+    if not (error or "").strip():
+        return None
+    from app import provider_errors
+    fault = provider_errors.classify(error)
+    if fault.kind == provider_errors.UNKNOWN:
+        return None
+    out = fault.as_dict()
+    # `detail` is the provider's sentence and the row's own `error` column is
+    # already that sentence — carrying it twice doubles the size of a listing
+    # of ten sessions for nothing.
+    out.pop("detail", None)
+    if fault.terminal:
+        out["operator_note"] = fault.operator_note()
+    return out
+
 
 def _detail(resp: httpx.Response) -> str:
     try:
@@ -276,13 +615,23 @@ def _shape(row: dict) -> dict:
             except ValueError:
                 return []
         return v or []
+    # NULL columns stay ABSENT from the dict rather than becoming zeros: a
+    # session nothing measured has usage None, and the ledger records it as
+    # unmetered. Migration 130.
+    cost = {k: int(row[k]) for k in ("tokens_in", "tokens_out")
+            if row.get(k) is not None}
+    if row.get("usd") is not None:
+        cost["usd"] = float(row["usd"])
     return {"session_id": str(row["id"]), "state": row["state"],
+            "model": row.get("model"), "usage": cost or None,
             "denials": _blob("denials"), "commands": _blob("commands"),
             "review": (f"git -C <clone> diff {row['commit_sha'][:12]}~1.."
                        f"{row['commit_sha'][:12]}") if row.get("commit_sha") else None,
             "task": row["task"], "branch": row["branch"],
             "commit": row["commit_sha"], "diffstat": row["diffstat"],
-            "error": row["error"], "workspace": row.get("workspace"),
+            "error": row["error"], "fault": session_fault(row.get("error")),
+            "workspace": row.get("workspace"),
+            "eval": row.get("eval_status"),
             "goal_id": (str(row["goal_id"]) if row.get("goal_id") else None),
             "continued_from": (str(row["continued_from"])
                                if row.get("continued_from") else None),
@@ -466,8 +815,13 @@ async def repo_status() -> dict:
 _LANDING_URL = os.environ.get("NOVA_GIT_LANDING_URL", "http://git-landing:9912")
 
 
-async def sandbox_check(session_id: str) -> dict:
+async def sandbox_check(session_id: str, *, lane: str = "operator") -> dict:
     """Build and boot this session's work in a stack of its own, and record it.
+
+    `lane` is the spend ledger's budget, not a permission. It defaults to
+    `operator` so a check the operator asked for is never charged against the
+    self-improvement ceiling — a loop that could exhaust its own budget by
+    him pressing a button would be a control measuring the wrong thing.
 
     `docs/plans/sandbox-instance.md` phase 3. Minutes, not seconds: it builds
     an image, starts postgres and a backend, waits for `/health` — which is
@@ -528,16 +882,45 @@ async def sandbox_check(session_id: str) -> dict:
     detail = (f"{out.get('stage') or 'unknown'}: "
               f"{(failing.get('summary') or out.get('error') or '')[:900]}"
               if not ok else "build, boot and suite all green")
+
+    # THE EVAL FLOOR'S VERDICT, recorded beside the boot gate's (rail 2). It
+    # is written on EVERY path, including the ones where the sandbox died
+    # before the stage could run — because the alternative is leaving whatever
+    # a previous check wrote, and a stale `ok` on a session that has since been
+    # re-run is the exact shape `sandbox_verdict` refuses to trust.
+    ev = out.get("eval") if isinstance(out.get("eval"), dict) else None
+    if ev is None:
+        ev = {"state": "unmeasured",
+              "detail": (f"the sandbox stopped at the "
+                         f"{out.get('stage') or 'unknown'} stage, before the "
+                         f"eval floor could run")}
     async with db.acquire() as conn:
         await conn.execute(
             "UPDATE coding_sessions SET sandbox_status = $2, "
             "sandbox_commit = $3, sandbox_detail = $4, sandbox_at = now(), "
+            "eval_status = $5, eval_commit = $3, eval_detail = $6, "
+            "eval_scores = $7::jsonb, eval_at = now(), "
             "updated_at = now() WHERE id = $1::uuid",
-            session_id, "ok" if ok else "failed", commit, detail)
-    log.info("sandbox check %s: %s (%s)", session_id, out.get("status"),
-             out.get("stage"))
+            session_id, "ok" if ok else "failed", commit, detail,
+            str(ev.get("state") or "unmeasured"),
+            str(ev.get("detail") or "")[:2000],
+            json.dumps(ev.get("scores") or {}))
+    log.info("sandbox check %s: %s (%s), eval %s", session_id,
+             out.get("status"), out.get("stage"), ev.get("state"))
+
+    # The pass's other real cost. Unmetered — nothing in the compose stack
+    # reports what a build and a prod-sized import consumed — and recorded as
+    # such rather than as zero, so `spend.today` can say how much of the day
+    # it could not see.
+    from app import spend as _spend
+    await _spend.record(lane, _spend.KIND_SANDBOX,
+                        session_id=session_id,
+                        detail={"stage": out.get("stage"),
+                                "status": out.get("status"),
+                                "eval": ev.get("state")})
+
     return {"status": "ok" if ok else "failed", "commit": commit,
-            "stage": out.get("stage"), "detail": detail,
+            "stage": out.get("stage"), "detail": detail, "eval": ev,
             "steps": [{"step": s.get("step"), "ok": s.get("ok")}
                       for s in (out.get("steps") or [])]}
 
@@ -559,6 +942,41 @@ async def sandbox_verdict(session_id: str) -> dict:
                            f"{(row['commit_sha'] or '')[:10]}")}
     return {"state": row["sandbox_status"], "detail": row["sandbox_detail"],
             "at": row["sandbox_at"].isoformat() if row["sandbox_at"] else None}
+
+
+async def eval_verdict(session_id: str) -> dict:
+    """Did this work get WORSE at being Nova? The recorded answer (rail 2).
+
+    Same shape and the same staleness rule as `sandbox_verdict`, for the same
+    reason: a score that outlived the commit it was about is worse than no
+    score. States are `never` | `stale` | `ok` | `below` | `unmeasured`, and
+    only `ok` clears the autonomous landing gate — `unmeasured` is not a pass,
+    it is the honest report of a stage that ran and could not measure.
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT commit_sha, eval_status, eval_commit, eval_detail, "
+            "       eval_scores, eval_at FROM coding_sessions "
+            " WHERE id = $1::uuid", session_id)
+    if row is None:
+        return {"state": "unknown", "detail": "no such session"}
+    if not row["eval_status"]:
+        return {"state": "never",
+                "detail": "the eval floor has never been run on this work"}
+    if row["eval_commit"] != row["commit_sha"]:
+        return {"state": "stale",
+                "detail": (f"the floor was measured on "
+                           f"{(row['eval_commit'] or '')[:10]} and the session "
+                           f"is now at {(row['commit_sha'] or '')[:10]}")}
+    scores = row["eval_scores"]
+    if isinstance(scores, str):
+        try:
+            scores = json.loads(scores)
+        except ValueError:
+            scores = {}
+    return {"state": row["eval_status"], "detail": row["eval_detail"],
+            "scores": scores or {},
+            "at": row["eval_at"].isoformat() if row["eval_at"] else None}
 
 
 # --- a second model reads it ------------------------------------------------

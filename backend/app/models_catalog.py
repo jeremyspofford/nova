@@ -112,6 +112,153 @@ def invalidate():
     _cache["at"] = 0.0
 
 
+# ── id canonicalisation: THE one rule for every model-id write path ───────
+#
+# Born from a real failure (2026-08-07): asked for "the latest DeepSeek
+# flash", Nova had no way to touch the curated table, so the operator
+# inserted the row by hand and repointed `main` at it 21 seconds later.
+#
+# THE ID HE PASTED WAS FINE, and the first version of this comment said
+# otherwise. 'openrouter:~deepseek/deepseek-v4-flash-latest' is a real
+# OpenRouter id — one of eleven `~vendor/model-latest` FLOATING ALIASES the
+# live catalog serves — and the de-tilded spelling of it does not exist.
+# Checked against the running catalog, after asserting the opposite.
+#
+# What was actually wrong was smaller and more interesting: the row carried
+# column defaults (tool_tier C, roles {}) rather than researched values, and
+# two modules disagreed silently about the id — `model_chain` refused ANY '~'
+# id from standby chains on the theory that the shape was untrustworthy,
+# while the pin guard judged by catalog membership. That hardcoded shape test
+# quietly barred every floating alias in the catalog, including the operator's
+# own chat model, from ever backing anything up.
+#
+# One rule, applied wherever a model id is written (curated add, agents.model
+# via the tool layer, the model.assign executor): the id must resolve against
+# the LIVE provider catalog. A '~author/model' form whose canonical form is
+# in the catalog is NORMALISED to it; anything a listable provider does not
+# serve is REFUSED. Membership is the single truth — the same set the pin
+# guard (model_recs) and the standby derivation (model_chain) read.
+
+def canonical_form(model: str) -> str:
+    """Strip the '~' prefix from each path segment of the id.
+
+    NOT an artifact — see `resolve_id`. OpenRouter uses `~vendor/model-latest`
+    for floating aliases and serves eleven of them. This is the de-tilded
+    SPELLING, offered as a candidate when the tilde form is not listed; it is
+    never assumed to be the more correct one.
+
+    Pure and syntactic — it says what the id WOULD be, never whether it
+    exists. Only `resolve_id` may promote the answer to a fact.
+    """
+    slug, sep, rest = model.partition(":")
+    if not sep:
+        return model
+    rest = "/".join(p[1:] if p.startswith("~") else p
+                    for p in rest.split("/"))
+    return f"{slug}:{rest}"
+
+
+async def resolve_id(model: str, *, strict: bool = True
+                     ) -> tuple[str | None, str]:
+    """Canonicalise a 'provider:id' against the live catalog.
+
+    WHAT '~' ACTUALLY IS — corrected 2026-08-07 against the live catalog,
+    because the first version of this module (and the report that prompted
+    it) both had it wrong. `~author/model-latest` is NOT a profile-URL
+    artifact pasted out of a search result. It is OpenRouter's own convention
+    for a FLOATING ALIAS, and the live catalog serves eleven of them:
+    `~anthropic/claude-fable-latest`, `~openai/gpt-latest`,
+    `~google/gemini-pro-latest`, `~deepseek/deepseek-v4-flash-latest` and so
+    on. The de-tilded spelling of that last one does not exist at all.
+
+    This does not change the RULE — membership decides, so a '~' id the
+    catalog lists is accepted and one it does not is refused — but it does
+    change what the refusals should say, and it is why treating '~' as a
+    shape to distrust (which `model_chain` did, and which cost every floating
+    alias its place in the standby chain) was wrong rather than merely
+    strict.
+
+    `strict` governs ONE case: a listable provider whose catalog cannot be
+    read right now. Strict refuses, because writing an id nothing checked is
+    what this function exists to prevent. The OPERATOR's own path passes
+    strict=False, and the reason is recovery: with strict everywhere, an
+    OpenRouter outage would stop Jeremy changing his model — including
+    changing it AWAY from the model that is failing. An escape hatch that
+    depends on the thing being escaped is not an escape hatch. A model absent
+    from a catalog that READ fine is still refused either way; only "I could
+    not look" softens.
+
+    Returns (canonical_id, why). canonical_id is None when the id cannot be
+    used, and `why` then names exactly what was tried — the text is surfaced
+    verbatim to whoever asked (tool result, 422 detail, blocked card).
+
+    The rule, per provider class:
+      * ollama — ids name models to pull, which the catalog only lists once
+        installed; accepted as typed ('~' still refused: the artifact shape
+        is never a local tag), verified later by pull/probe.
+      * a provider that cannot list (no key, or no catalog endpoint) — a
+        plain id is accepted UNVERIFIED and says so; a '~' form is refused,
+        because nothing could ever confirm either spelling.
+      * a listable provider — membership decides. In the catalog: accepted.
+        '~' form whose canonical form is in the catalog: normalised. Absent,
+        or the catalog unreadable right now: REFUSED, because writing an id
+        nothing has checked is the exact failure this function exists for.
+    """
+    model = (model or "").strip()
+    if ":" not in model:
+        return None, ("model must be '<provider>:<id>', e.g. "
+                      "'openrouter:deepseek/deepseek-v4-flash-latest' or "
+                      "'ollama:qwen3:8b'")
+    slug = model.split(":", 1)[0]
+    canonical = canonical_form(model)
+
+    if slug == "ollama":
+        if canonical != model:
+            return None, (f"'{model}' contains '~' — a hosted provider's "
+                          f"floating-alias prefix, never a local model tag")
+        return model, ("local model — existence is verified at pull/probe "
+                       "time, not against a catalog")
+
+    from app.llm import providers
+    if slug not in providers.known_slugs():
+        return None, (f"unknown provider '{slug}' — register it in Settings "
+                      f"→ Models → Providers first")
+    row = providers.get(slug) or {}
+    if not row.get("catalog_path") or not providers.is_configured(slug):
+        if canonical != model:
+            return None, (f"'{model}' contains '~' — a floating-alias "
+                          f"prefix — and provider '{slug}' cannot list its "
+                          f"catalog to confirm any spelling. Use the exact "
+                          f"API id.")
+        return model, (f"provider '{slug}' cannot list its models (no key or "
+                       f"no catalog endpoint) — id taken as given, UNVERIFIED")
+
+    ids = {m["id"] for m in await list_models(full=True)
+           if m.get("provider") == slug}
+    if not ids:
+        if not strict:
+            return model, (f"could not read provider '{slug}'s catalog just "
+                           f"now, so '{model}' is UNVERIFIED — accepted "
+                           f"because you asked for it directly and you must "
+                           f"be able to change models while a provider is "
+                           f"down")
+        return None, (f"could not read provider '{slug}'s catalog just now, "
+                      f"so '{model}' cannot be verified — refusing rather "
+                      f"than writing an id nothing has checked. Try again "
+                      f"shortly.")
+    if model in ids:
+        return model, f"listed by '{slug}'"
+    if canonical != model and canonical in ids:
+        return canonical, (f"normalised '{model}' → '{canonical}' — the "
+                           f"'~author/model' form is the provider's "
+                           f"floating-alias prefix, and this catalog lists "
+                           f"the id without it")
+    tried = (f" (also tried '{canonical}')" if canonical != model else "")
+    return None, (f"'{model}' is not served by '{slug}' ({len(ids)} models "
+                  f"listed){tried}. Use list_models with full=true to find "
+                  f"the exact id.")
+
+
 # ── background pulls (only Ollama exposes a pull API; LM Studio / llama.cpp
 #    / vLLM manage their own downloads — future named-endpoint backends will
 #    surface as list-only) ─────────────────────────────────────────────────

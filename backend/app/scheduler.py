@@ -196,9 +196,18 @@ async def _heartbeat(automation: dict) -> tuple[bool, str]:
     return await heartbeat.beat(automation)
 
 
+async def _coder_reconcile(automation: dict) -> tuple[bool, str]:
+    # Mechanical for the reason the handler column exists: "has this session
+    # died" has an answer in the broker, and an agent asked to judge it would
+    # produce a sentence instead of a check.
+    from app import coder
+    return await coder.reconcile_stalled()
+
+
 MECHANICAL_HANDLERS: dict = {
     "restore_drill": _restore_drill,
     "heartbeat": _heartbeat,
+    "coder_reconcile": _coder_reconcile,
 }
 
 
@@ -355,7 +364,26 @@ async def tick():
                     log.exception("notify for automation %s failed",
                                   automation["name"])
                     sent = {"ok": False, "error": repr(e)}
-                if not sent.get("ok"):
+                if sent.get("deduped"):
+                    # SUPPRESSED IS NOT SENT. notify.send folds identical news
+                    # onto a notification raised minutes ago and returns
+                    # ok:True for it — the provider was never asked by THIS
+                    # run. A frequent automation with a stable summary hits
+                    # this every tick, and reading only `ok` would leave the
+                    # journal saying each of those runs notified him. It is
+                    # not a failure (he did get that alert), so it is recorded
+                    # rather than journalled as one.
+                    try:
+                        await memory.write(
+                            f"Automation '{automation['name']}' ran and its "
+                            f"notification was NOT published again — the "
+                            f"identical alert was already raised moments ago "
+                            f"(notification {sent.get('notification_id')}, "
+                            f"{sent.get('delivery_label') or 'state unknown'}).",
+                            type="journal", source_type="automation")
+                    except Exception:
+                        log.exception("could not journal the deduped notify")
+                elif not sent.get("ok"):
                     # HER JOURNAL, NOT JUST DOCKER LOGS (Jeremy, 2026-08-07).
                     # A notify:true automation exists to reach him; a push
                     # that died only in container logs is a reminder that

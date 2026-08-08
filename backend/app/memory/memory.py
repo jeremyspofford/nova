@@ -14,13 +14,14 @@ import contextvars
 import functools
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
 from app import timefmt
 from app.config import settings
 from app.memory import links, provenance
-from app.memory.index import BM25Index
+from app.memory.index import DUP_CONTAINMENT, BM25Index
 from app.memory.store import OkfStore
 from app.memory.tagtiers import SEED_FLOOR, TagTiers
 
@@ -186,7 +187,9 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         self.index.upsert(doc_id, fm.get("title", doc_id), body,
                           doc_type, priority, mtime, origin=origin,
                           description=str(fm.get("description") or ""),
-                          tags=self.store.extract_tags(fm))
+                          tags=self.store.extract_tags(fm),
+                          links=[links.key(t) for t in
+                                 self.store.extract_links(body) if links.key(t)])
 
     # ── writes ───────────────────────────────────────────────────────────
 
@@ -486,6 +489,105 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
                     superseded.add(by_title[source])
         return [r for r in results if r[0] not in superseded]
 
+    def _ranked(self, query: str, top_k: int,
+                origins: Optional[set[str]]) -> list[tuple[str, float]]:
+        """One retrieval, ranked and de-redundified.
+
+        Over-fetch, then collapse each video onto its summary, then drop
+        near-copies, then trim. Fetching top_k and collapsing after would
+        silently shrink the retrieved set on exactly the queries where
+        collapsing helps most. Order matters between the two dedupe passes:
+        the title collapse prefers the summary BY DESIGN even when the
+        transcript outranks it, so it must run before the rank-order
+        near-copy pass gets to award the slot to whichever scored higher.
+        """
+        results = self.index.search(query, type_filter={"topic", "journal", "source"},
+                                    top_k=top_k * 2, origins=origins)
+        return self.index.dedupe(self._collapse_to_summaries(results))[:top_k]
+
+    # One-hop graph expansion (never more): BM25 seeds the set, and the
+    # already-computed edges — [[wikilinks]] riding on the index, plus shared
+    # SPECIFIC subject tags — pull in a bounded number of neighbours.
+    _NEIGHBOUR_LIMIT = 2
+    #: a neighbour was not asked for by the query; it never outranks a seed
+    _NEIGHBOUR_SCORE_FACTOR = 0.5
+
+    def _expand_one_hop(self, results: list[tuple[str, float]],
+                        origins: Optional[set[str]]) -> list[tuple[str, float]]:
+        """Append up to _NEIGHBOUR_LIMIT graph neighbours of the seed hits.
+
+        Everything here is DERIVED from the live index — no file reads, no
+        maintained edge list. Three rails, each load-bearing:
+
+          * tagtiers decides which tags may connect. Structural tags never
+            bridge (the Bear-Mountain/zoo incident), and ENTITY tags are
+            excluded too even though they bridge in the graph: a channel tag
+            names silo membership, and subjects.py measured that this corpus
+            is four channel silos whose internal affinity exceeds chance —
+            expanding along membership would pull an arbitrary sibling video,
+            which is exactly the walk-in-circles failure the measurement
+            warns about. Wikilinks and shared SUBJECT tags survive.
+          * the `origins` trust filter applies to neighbours exactly as it
+            does to hits. Expansion is a second door into the prompt, and a
+            door that bypassed the actor fence would be a prompt-injection
+            channel dressed as a feature.
+          * a neighbour that merely restates a kept doc (summary collapse,
+            near-copy containment) is dropped, not appended.
+        """
+        if not results:
+            return results
+        have = {i for i, _ in results}
+        tiers = self._tag_tiers()
+        # title-key -> doc_id, from the index alone; sorted so a duplicate
+        # title resolves the same way every call
+        by_title: dict[str, str] = {}
+        for doc_id, meta in sorted(self.index.docs.items()):
+            k = links.key(str(meta.get("title") or ""))
+            if k:
+                by_title.setdefault(k, doc_id)
+        # (seed rank, edge kind, doc_id) — deterministic preference order:
+        # a better-ranked seed's neighbours first; links outrank shared tags.
+        candidates: list[tuple[int, int, str]] = []
+        for rank, (doc_id, _score) in enumerate(results):
+            meta = self.index.docs.get(doc_id) or {}
+            if meta.get("type") not in _MEMORY_BODY_TYPES:
+                continue                     # journals/skills are not nodes
+            my_key = links.key(str(meta.get("title") or ""))
+            my_tags = {str(t).lower() for t in (meta.get("tags") or [])
+                       if tiers.bridges(t) and not tiers.is_entity(t)}
+            for k in meta.get("links") or []:        # outgoing [[wikilinks]]
+                target = by_title.get(k)
+                if target:
+                    candidates.append((rank, 0, target))
+            for other_id, om in sorted(self.index.docs.items()):
+                if other_id == doc_id or om.get("type") not in _MEMORY_BODY_TYPES:
+                    continue
+                if my_key and my_key in (om.get("links") or []):
+                    candidates.append((rank, 1, other_id))   # incoming link
+                elif my_tags and my_tags & {str(t).lower()
+                                            for t in (om.get("tags") or [])}:
+                    candidates.append((rank, 2, other_id))   # shared subject
+        floor = min(s for _, s in results) * self._NEIGHBOUR_SCORE_FACTOR
+        out = list(results)
+        for _rank, _kind, doc_id in sorted(candidates):
+            if len(out) - len(results) >= self._NEIGHBOUR_LIMIT:
+                break
+            if doc_id in have:
+                continue
+            meta = self.index.docs.get(doc_id) or {}
+            if origins is not None and meta.get(
+                    "origin", provenance.THIRD_PARTY) not in origins:
+                continue                     # the trust filter has no back door
+            trial = out + [(doc_id, floor)]
+            if not any(i == doc_id for i, _ in self._collapse_to_summaries(trial)):
+                continue     # its own summary/transcript is already in the set
+            if any(self.index.containment(doc_id, kept) >= DUP_CONTAINMENT
+                   for kept, _ in out):
+                continue                     # restates a kept doc
+            out = trial
+            have.add(doc_id)
+        return out
+
     async def context(self, query: str, max_chars: Optional[int] = None,
                       origins: Optional[set[str]] = None) -> dict:
         """Relevant memories (topics + journals; skills are retrieved separately)."""
@@ -498,34 +600,49 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
         # would either fire constantly or mean nothing. Third-party material
         # stays reachable, but only when she deliberately goes and gets it.
         top_k = settings.memory_context_top_k
-        # Over-fetch, then collapse each video onto its summary, then trim.
-        # Fetching top_k and collapsing after would silently shrink the
-        # retrieved set on exactly the queries where collapsing helps most.
-        results = self.index.search(query, type_filter={"topic", "journal", "source"},
-                                    top_k=top_k * 2, origins=origins)
-        results = self._collapse_to_summaries(results)[:top_k]
+        seeds = self._ranked(query, top_k, origins)
+        results = self._expand_one_hop(seeds, origins)
         lines, ids = self._snippets(results, max_chars, _SNIPPET_CHARS, query)
         text = "\n\n".join(lines)
-        # HOW MANY NOTES THE TRUST FILTER TOOK AWAY. Nothing used to say, and
-        # the consequence is measurable: main is an actor-holder, so a stored
+        # WHAT THE TRUST FILTER TOOK AWAY. Nothing used to say, and the
+        # consequence is measurable: main is an actor-holder, so a stored
         # note with a source_url is invisible to it here, and asked "what is
         # GLM-5.2 costing right now" it answered from the model's own weights
         # while calling that "memory" — with the real note, price and date, in
         # its own store the whole time. It had no way to know the note existed
         # and no reason to reach for `search_memory`.
         #
-        # A COUNT, and deliberately nothing else. Titles and snippets are the
-        # third-party text this filter exists to keep out of the prompt, so
-        # naming them would reopen the channel to say it is closed. A number is
-        # a fact about her own store that carries none of its content.
+        # A count plus MECHANICAL per-hit metadata (tier, kind, age, size,
+        # rank score) — and deliberately never titles, ids or snippets. Those
+        # are uploader-authored text: the frontmatter flattener stops a title
+        # forging provenance lines, but a title is still one line of prose an
+        # outside author chose, and the catalogue rail (builtin.py) already
+        # treats listing third-party titles as tainting the turn. Surfacing
+        # them here UNtainted, on every matching actor turn, would be a
+        # standing injection channel — reopening the door to describe what is
+        # behind it. Numbers and dates carry no authored content, and with
+        # the withheld hits' scores next to the shown hits' best score, "is
+        # the answer probably in there" is finally a question she can weigh
+        # before spending the taint on search_memory.
         suppressed = 0
+        withheld: list[dict] = []
         if origins is not None:
-            unfiltered = self.index.search(
-                query, type_filter={"topic", "journal", "source"},
-                top_k=top_k * 2)
             kept = {i for i, _ in results}
-            suppressed = len({i for i, _ in self._collapse_to_summaries(
-                unfiltered)[:top_k]} - kept)
+            hidden = [(i, s) for i, s in self._ranked(query, top_k, None)
+                      if i not in kept]
+            suppressed = len(hidden)
+            now = time.time()
+            for doc_id, score in hidden:
+                meta = self.index.docs.get(doc_id) or {}
+                mtime = meta.get("mtime") or 0
+                withheld.append({
+                    "kind": meta.get("type"),
+                    "origin": meta.get("origin", provenance.THIRD_PARTY),
+                    "age_days": (max(0, int((now - mtime) / 86400))
+                                 if mtime else None),
+                    "chars": meta.get("chars"),
+                    "score": round(score, 2),
+                })
         # The origin mix of what was actually RETRIEVED — not of the corpus.
         # Phase 2 turns `untrusted` into a refusal at execute_tool; phase 1
         # only has to make it true and available.
@@ -538,6 +655,8 @@ I am the sum of what I've learned and the tools I've grown. This file is my cent
             "memory_ids": ids,
             "origins": origins,
             "suppressed": suppressed,
+            "withheld": withheld,
+            "shown_top_score": round(results[0][1], 2) if results else 0.0,
             "untrusted": any(provenance.blocks_actors(o) for o in origins),
         }
 

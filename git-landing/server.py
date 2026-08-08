@@ -155,15 +155,27 @@ def _git(*args, check=True, cwd=REPO) -> str:
 
 
 def _status() -> dict:
-    """What the repo looks like right now. Read-only."""
+    """What the repo looks like right now. Read-only.
+
+    `dirty_files`/`dirty_sample` exist so a refusal upstream can NAME the
+    operator's own uncommitted tree instead of saying only "dirty": the
+    self-improvement preflight reads this before charging a pass, and a
+    reason he can act on ("commit or stash these") is the difference between
+    a wall and a mystery. Paths only, never content — this route stays cheap
+    and says nothing `git status` would not.
+    """
     try:
         branch = _git("rev-parse", "--abbrev-ref", "HEAD").strip()
-        dirty = bool(_git("status", "--porcelain").strip())
+        changed = [ln for ln in
+                   _git("status", "--porcelain").strip().splitlines()
+                   if ln.strip()]
         head = _git("rev-parse", "--short", "HEAD").strip()
         branches = [b.strip().lstrip("* ").strip()
                     for b in _git("branch", "--list", "nova/*").splitlines()
                     if b.strip()]
-        return {"branch": branch, "head": head, "dirty": dirty,
+        return {"branch": branch, "head": head, "dirty": bool(changed),
+                "dirty_files": len(changed),
+                "dirty_sample": [ln[3:].strip() for ln in changed[:5]],
                 "nova_branches": branches, "repo": REPO}
     except Exception as e:                       # noqa: BLE001
         return {"error": str(e)[:300], "repo": REPO}

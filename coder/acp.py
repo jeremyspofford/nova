@@ -397,7 +397,17 @@ class AcpSession:
             return None, None
         if r.get("error") is not None:
             return None, str(r["error"])[:400]
-        return (r.get("result") or {}).get("stopReason"), None
+        result = r.get("result") or {}
+        # The turn's terminal usage block (inputTokens/outputTokens — phase 0,
+        # plan section 3) arrives on the RESPONSE, which never passes through
+        # `_pump`'s notification path — so it is fed to `on_update` here, where
+        # the broker's meter and the snapshot tail both see it. Dropping it
+        # was how "the protocol does carry cost data" coexisted with every
+        # ledger entry being unmetered.
+        if isinstance(result, dict) and isinstance(result.get("usage"), dict):
+            self.on_update({"method": "session/prompt#response",
+                            "usage": result["usage"]})
+        return result.get("stopReason") if isinstance(result, dict) else None, None
 
     def close(self):
         self._closed = True

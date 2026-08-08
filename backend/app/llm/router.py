@@ -26,7 +26,10 @@ def effective_model(model: str) -> str:
     slug = model.split(":", 1)[0]
     if slug == "ollama":
         return model
-    if not providers.is_configured(slug):
+    refusal = _refusing(slug)
+    if not providers.is_configured(slug) or refusal:
+        why = (f"refused every call for {refusal['reason']} reasons "
+               f"(HTTP {refusal['status']})" if refusal else "is not configured")
         from app import settings_store
         name = str(settings_store.get("inference.local_fallback_model") or "").strip()
         if not name:
@@ -34,17 +37,92 @@ def effective_model(model: str) -> str:
             # which no provider can serve — the call then failed on a name the
             # operator never chose and cannot find in any binding. Returning
             # the model UNCHANGED makes the failure name their real setting.
-            log.warning("provider %r is not configured and no local fallback "
-                        "is set; leaving %s unchanged", slug, model)
+            log.warning("provider %r %s and no local fallback is set; leaving "
+                        "%s unchanged", slug, why, model)
             return model
         # A local name carries its own colon ("qwen3:8b" — a TAG separator,
         # not a provider prefix), so the prefix is added by name, never by
         # testing for ":". The setting is ollama-scoped by definition; a value
         # that already carries the prefix is used as-is rather than doubled.
         fallback = name if name.startswith("ollama:") else f"ollama:{name}"
-        log.info("provider '%s' not configured; %s -> %s", slug, model, fallback)
+        log.info("provider '%s' %s; %s -> %s", slug, why, model, fallback)
         return fallback
     return model
+
+
+def _refusing(slug: str) -> Optional[dict]:
+    """Has this provider just refused for billing/credential reasons?
+
+    THE FAILURE THIS EXISTS FOR, measured 2026-07-28 and again 2026-08-07: a
+    key that is out of money refuses EVERY model it serves, and the fallback
+    chain in `agents/runner` walks models — so one wall becomes one refusal
+    per link, each one billed the same nothing and each one logged as if that
+    particular model were unavailable. Nothing in that loop can tell "this
+    model is down" from "this account is".
+
+    Reusing the not-configured branch above is the point: a provider that
+    refuses the key IS unconfigured for the next ten minutes, and this
+    codebase already knows exactly what to do about that — go local. The
+    breaker lives in `provider_errors`, times itself out, and clears the
+    moment the provider row changes (a rotated key is a different credential).
+
+    Never raises: a routing decision must not depend on a circuit breaker
+    being healthy.
+    """
+    try:
+        from app import provider_errors
+        row = providers.get(slug) or {}
+        return provider_errors.refusing(
+            slug, provider_version=str(row.get("updated_at") or ""))
+    except Exception:                                        # noqa: BLE001
+        log.debug("could not read the provider breaker", exc_info=True)
+        return None
+
+
+def note_provider_failure(model: str, event: dict) -> None:
+    """Record a terminal provider refusal against the provider, not the model.
+
+    Called on the error event of a cloud call. Only a TERMINAL fault — a key
+    that is wrong, refused or out of money — arms the breaker; a 429 or a 5xx
+    is exactly the case the fallback chain is for and is left alone.
+
+    AND NOT A 402 THAT NAMED A SMALLER BUDGET. OpenRouter's "requires more
+    credits, OR FEWER max_tokens" is a statement about the size of THIS
+    request against what is left, not about the account being dead: the very
+    next, smaller turn can succeed. Taking the provider out of service on it
+    would move every ordinary chat turn onto a local model for ten minutes
+    over one oversized request. The distinction is the provider's own — it
+    only volunteers an affordable figure when there is one — so this is read
+    off the message rather than guessed at from the status.
+    """
+    slug = model.split(":", 1)[0]
+    if not slug or slug == "ollama":
+        return
+    try:
+        from app import provider_errors
+        fault = provider_errors.classify(event.get("error"),
+                                         status=event.get("status_code"))
+        if not fault.terminal:
+            return
+        if fault.adaptable:
+            event["provider_fault"] = fault.as_dict()
+            event["provider"] = slug
+            log.warning("provider %r refused a request of %s tokens with %s "
+                        "affordable — this request was too big, the key is "
+                        "not dead", slug, fault.requested_tokens,
+                        fault.affordable_tokens)
+            return
+        row = providers.get(slug) or {}
+        provider_errors.note_refusal(
+            slug, fault, provider_version=str(row.get("updated_at") or ""))
+        # Carried on the event so a caller that surfaces the failure can say
+        # WHICH refusal it was. The `error_class` is untouched on purpose:
+        # the chain must still be free to reach a local model, which is the
+        # whole reason a cloud budget running out is survivable here.
+        event["provider_fault"] = fault.as_dict()
+        event["provider"] = slug
+    except Exception:                                        # noqa: BLE001
+        log.debug("could not classify a provider failure", exc_info=True)
 
 
 def is_local(model: str) -> bool:
@@ -301,4 +379,10 @@ async def stream_chat(messages: list, model: str,
     # turn ledger; providers that don't support it simply omit the event
     async for event in client.stream(messages, model_name, tools,
                                      include_usage=True):
+        if event.get("type") == "error":
+            # WHERE THE BILLING WALL BECOMES A FACT. Every cloud call in the
+            # app comes through here, so this is the one place that sees a
+            # provider refuse a credential, and it is upstream of every retry
+            # loop that would otherwise ask the same key again.
+            note_provider_failure(target, event)
         yield event

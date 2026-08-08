@@ -525,11 +525,47 @@ export interface ChatAttachment {
   data?: string;
 }
 
+/** A notification as the transcript renders it (backend migration 125).
+ *
+ *  The chat item reads THIS, never a copy: the message row it hangs off
+ *  carries no text of its own (the DB refuses one that does), so what the
+ *  push was built from and what chat shows are the same record.
+ *
+ *  There is deliberately no `delivered` field. `state` is
+ *  pending → accepted (a relay took it) → opened (a client rendered it), and
+ *  `confirmed` is true for exactly one of those — acceptance by a transport
+ *  is not receipt by a person. */
+export interface ChatNotification {
+  id: string;
+  kind: string;
+  title: string | null;
+  body: string;
+  /** Where the RAISER wanted a tap to go (an inbox, a page). The push's own
+   *  link is the deep link to this notification; this is offered as a
+   *  secondary link on the card. */
+  click_url: string | null;
+  tags: string[];
+  source?: string | null;
+  recommendation_id: string | null;
+  state: 'pending' | 'accepted' | 'failed' | 'opened';
+  confirmed: boolean;
+  /** One line, rendered by the backend so the UI and the record cannot
+   *  disagree about what happened to it. */
+  delivery_label: string;
+  provider?: string | null;
+  error?: string | null;
+  repeats?: number;
+  created_at?: string | null;
+  opened_at?: string | null;
+}
+
 export interface StoredMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'notification';
   content: string;
   created_at: string;
+  /** Present on role='notification' rows — the hydrated record. */
+  notification?: ChatNotification;
   tool_calls?: { kind: Activity['kind']; name: string; agent?: string } | null;
   trace?: TraceSummary | null;
   /** On role='tool' rows: the turn that ran it. Lets the transcript file an
@@ -556,6 +592,42 @@ export async function getMessages(conversationId: string,
   const q = before ? `?before=${encodeURIComponent(before)}` : '';
   const r = await apiFetch(`${API_URL}/api/v1/conversations/${conversationId}/messages${q}`);
   if (!r.ok) throw new Error('Failed to load messages');
+  return r.json();
+}
+
+/** One notification by the id a push carried. Answers even when the item is
+ *  older than the transcript page in hand — which is the case the client
+ *  cannot solve on its own. */
+export async function getNotification(id: string): Promise<ChatNotification> {
+  const r = await apiFetch(`${API_URL}/api/v1/notifications/${id}`);
+  if (!r.ok) throw new Error(`Notification ${id} could not be loaded`);
+  return r.json();
+}
+
+/** The most recent notifications, newest first.
+ *
+ *  The chat panel polls this so a notification that arrived through a channel
+ *  with no client callback (ntfy, a webhook, or a push the browser never
+ *  showed) still turns up in the transcript without a reload. */
+export async function listNotifications(limit = 10): Promise<ChatNotification[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/notifications?limit=${limit}`);
+  if (!r.ok) throw new Error('Failed to load notifications');
+  return (await r.json()).notifications ?? [];
+}
+
+/** Tell the server this notification is ON SCREEN.
+ *
+ *  The only call in the app that may move a notification to `opened`, which
+ *  is the only state meaning it reached a person. Everything upstream knows
+ *  only that a relay accepted some bytes. */
+export async function openNotification(id: string,
+                                       via = 'chat'): Promise<ChatNotification> {
+  const r = await apiFetch(`${API_URL}/api/v1/notifications/${id}/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ via }),
+  });
+  if (!r.ok) throw new Error(`Notification ${id} could not be marked open`);
   return r.json();
 }
 
@@ -593,15 +665,16 @@ export async function getTrace(id: string): Promise<TraceDetail> {
   return r.json();
 }
 
-/** Recent turns across all sources — evals, chat, automations, compaction. */
+/** Recent turns across all sources — evals, chat, automations, compaction,
+ *  heartbeat. */
 export interface TraceListItem {
   id: string;
   /** Hand-maintained against the CHECK constraint in migration 050, so it is
-   *  documentation and not a guarantee — the endpoint does not filter by
-   *  source, and a value missing from here reaches the UI as an unstyled
-   *  badge. Anything keyed by it needs a fallback. `eval` is the busiest of
-   *  the four by a wide margin (1625 rows against chat's 392). */
-  source: 'eval' | 'chat' | 'automation' | 'compaction';
+   *  documentation and not a guarantee — a value missing from here reaches
+   *  the UI as an unstyled badge. Anything keyed by it needs a fallback.
+   *  `eval` is the busiest of the five by a wide margin (1625 rows against
+   *  chat's 392). */
+  source: 'eval' | 'chat' | 'automation' | 'compaction' | 'heartbeat';
   automation: string | null;
   model: string | null;
   status: string;
@@ -610,11 +683,135 @@ export interface TraceListItem {
   tools: number;
   dispatches: number;
   llm_calls: number;
+  /** llm_call token sums for the whole trace. 0 with llm_calls > 0 means the
+   *  spans carried no usage figures, not that the turn was free. */
+  prompt_tokens: number;
+  completion_tokens: number;
+  tokens: number;
 }
 
-export async function getTraces(limit = 50): Promise<TraceListItem[]> {
-  const r = await apiFetch(`${API_URL}/api/v1/traces?limit=${limit}`);
-  if (!r.ok) throw new Error('Failed to load traces');
+export interface TraceFilters {
+  limit?: number;
+  source?: string | null;
+  status?: 'ok' | 'error' | 'cancelled' | null;
+  window?: '1h' | '6h' | '24h' | '7d' | null;
+}
+
+export async function getTraces(filters: TraceFilters = {}): Promise<TraceListItem[]> {
+  const q = new URLSearchParams();
+  q.set('limit', String(filters.limit ?? 50));
+  if (filters.source) q.set('source', filters.source);
+  if (filters.status) q.set('status', filters.status);
+  if (filters.window) q.set('window', filters.window);
+  const r = await apiFetch(`${API_URL}/api/v1/traces?${q}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load traces');
+  return r.json();
+}
+
+// ── Action log (backend/app/activity_log.py) ──────────────────────────────
+//
+// "She cannot be silent on her actions." One chronological log of what she
+// did and what she was refused, derived from the records the system already
+// writes. The Turn Inspector answers "what happened inside THIS turn"; this
+// answers "what has she been doing", which nothing did.
+
+/** Outcomes are open on purpose. The backend derives them and can grow one
+ *  (a new terminal coding state, say) without a frontend release — and the
+ *  lesson from `TraceListItem.source` is that a closed union here becomes a
+ *  literal "undefined" class string on the day it drifts. Anything keyed by
+ *  this MUST have a fallback. */
+export type ActionOutcome =
+  | 'ok' | 'refused' | 'failed' | 'running' | 'stalled' | 'waiting' | 'skipped'
+  | (string & {});
+
+export interface ActionRow {
+  id: string;
+  /** null only on a meta row: a source the backend could not read at all. */
+  at: string | null;
+  kind: string;
+  actor: string;
+  /** plain language, derived from scopes.consequences / the tool's own description */
+  title: string;
+  outcome: ActionOutcome;
+  /** the arguments that matter, already redacted and capped backend-side */
+  detail: string;
+  /** why it was refused or how it failed — short */
+  reason: string | null;
+  /** the same, long form, for the expanded row */
+  reason_full: string | null;
+  trace_id: string | null;
+  graded: boolean;
+  tool?: string | null;
+  gate?: string | null;
+  source?: string | null;
+  state?: string | null;
+  tainted_turn?: boolean;
+}
+
+export interface ActionLog {
+  window: string;
+  since: string;
+  /** meta rows (a source that could not be read) come FIRST and are extra —
+   *  they are not counted in `returned` and never fall off a full page. */
+  rows: ActionRow[];
+  /** activity rows on this page, excluding meta notices */
+  returned: number;
+  /** how many matched the filter in the WHOLE window — an aggregate query,
+   *  not a tally of the page, so it does not move when `limit` does. */
+  matched: number;
+  limit: number;
+  offset: number;
+  /** the deepest `offset + limit` the backend will merge in order */
+  max_span: number;
+  /** false whenever this page is not the whole of what matched: rows past the
+   *  limit, an offset past the newest, a capped source with rows newer than
+   *  the cut, or a source that could not be read at all. The page SAYS so. */
+  complete: boolean;
+  /** sources that filled their per-source ceiling — paging/narrowing helps */
+  capped_sources: string[];
+  /** sources that THREW. Distinct from capped: "narrow the window" is useless
+   *  advice for a source that crashed, and saying it was a lie. */
+  unreadable_sources: string[];
+  /** whole-window totals by outcome, from their own aggregate queries */
+  counts: Record<string, number>;
+  /** false when a counter could not answer — `counts` is then a floor */
+  counts_complete: boolean;
+  include_graded: boolean;
+  problem_outcomes: string[];
+}
+
+export interface ActionFacets {
+  window: string;
+  windows: string[];
+  agents: { name: string; count: number }[];
+  kinds: string[];
+  /** graded eval-replay tool calls set aside by the default filter, named
+   *  rather than silently dropped */
+  graded_excluded: number;
+}
+
+export async function getActionLog(params: {
+  window?: string; limit?: number; offset?: number; agent?: string | null;
+  outcome?: string | null; kinds?: string[] | null; graded?: boolean;
+} = {}): Promise<ActionLog> {
+  const q = new URLSearchParams();
+  if (params.window) q.set('window', params.window);
+  if (params.limit) q.set('limit', String(params.limit));
+  if (params.offset) q.set('offset', String(params.offset));
+  if (params.agent) q.set('agent', params.agent);
+  if (params.outcome) q.set('outcome', params.outcome);
+  if (params.kinds?.length) q.set('kinds', params.kinds.join(','));
+  if (params.graded) q.set('graded', 'true');
+  const r = await apiFetch(`${API_URL}/api/v1/activity/log?${q}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load the action log');
+  return r.json();
+}
+
+export async function getActionFacets(window = '24h', graded = false): Promise<ActionFacets> {
+  const q = new URLSearchParams({ window });
+  if (graded) q.set('graded', 'true');
+  const r = await apiFetch(`${API_URL}/api/v1/activity/facets?${q}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load filters');
   return r.json();
 }
 
@@ -670,10 +867,182 @@ export interface ObservabilitySummary {
   est_cost: number; cost_partial: boolean;
   by_model: ModelCost[];
   sources: Record<string, number>;
+  /** Eval replays are excluded by default — a suite run 1944 times in 7d
+   *  drowned the error rate the board exists to show (0.041 → 0.013). The
+   *  count says what was set aside rather than pretending it never ran. */
+  include_evals: boolean;
+  eval_turns_excluded: number;
 }
-export async function getObservabilitySummary(window = '24h'): Promise<ObservabilitySummary> {
-  const r = await apiFetch(`${API_URL}/api/v1/observability/summary?window=${window}`);
+export async function getObservabilitySummary(
+  window = '24h', includeEvals = false,
+): Promise<ObservabilitySummary> {
+  const q = includeEvals ? '&include_evals=true' : '';
+  const r = await apiFetch(`${API_URL}/api/v1/observability/summary?window=${window}${q}`);
   if (!r.ok) throw new Error('Failed to load observability summary');
+  return r.json();
+}
+
+// ── spend: the improve lane's ledger, ceilings and preflight ──────────────
+//
+// One card answers "why did no pass start" without reading backend logs:
+// today's spend against the three ceilings, the escalating wall backoff as a
+// time, and a read-only preview of the next heartbeat tick's gates.
+
+export interface SpendCeilings {
+  lane: string;
+  max_passes: number;
+  max_tokens: number;
+  max_usd: number;
+  updated_at: string | null;
+  updated_by: string;
+}
+
+export interface SpendToday {
+  lane: string;
+  passes: number;
+  attempts: number;
+  entries: number;
+  /** Ledger rows with no token figures. They sum as 0, so this count is the
+   *  honesty flag: totals with unmetered > 0 are a floor, not a measurement. */
+  unmetered: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens: number;
+  usd: number;
+}
+
+export interface SpendRefusal {
+  id: string;
+  run_id: string | null;
+  goal_id: string | null;
+  at: string;
+  wall: string;
+  reason: string | null;
+  status: number | string | null;
+  operator_note: string | null;
+}
+
+export interface SpendHold {
+  held: boolean;
+  wall: 'provider' | 'dirty_repo' | 'ceiling' | null;
+  streak: number;
+  since: string | null;
+  cooldown_s: number | null;
+  held_until: string | null;
+  /** spend.active_wall's full sentence — the backend's words, never restated. */
+  reason: string | null;
+  /** Newest provider refusal ever, present even when the hold expired. */
+  last_refusal: SpendRefusal | null;
+}
+
+export interface SpendCheck {
+  check: 'goal' | 'busy' | 'wall' | 'ceiling' | 'host_repo';
+  ok: boolean;
+  note: string;
+}
+
+/** Read-only preview of the next heartbeat tick — nothing is charged. */
+export interface SpendImprovePreview {
+  would_start: boolean;
+  reason: string;
+  /** Always all five, in tick order. */
+  checks: SpendCheck[];
+}
+
+export interface SpendGoal {
+  id: string;
+  title: string;
+  status: string;
+  actions_used: number;
+  max_actions: number;
+  activated_at: string | null;
+  expires_at: string | null;
+  refunds: number;
+  last_refund_at: string | null;
+  last_refund_reason: string | null;
+}
+
+export interface SpendEntry {
+  id: string;
+  day: string;
+  lane: string;
+  kind: 'coding_session' | 'sandbox_check' | 'review' | 'provider_refusal';
+  model: string;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  usd: number | null;
+  metered: boolean;
+  session_id: string | null;
+  run_id: string | null;
+  goal_id: string | null;
+  created_at: string;
+  /** Only on kind=provider_refusal rows. */
+  operator_note?: string | null;
+  wall?: string;
+  refusal_reason?: string | null;
+}
+
+export interface SpendOverview {
+  lane: string;
+  /** null with `ceilings_error` set when the row is unreadable — distinct
+   *  from "no ceilings", which cannot happen on a migrated install. */
+  ceilings: SpendCeilings | null;
+  ceilings_error: string | null;
+  today: SpendToday;
+  hold: SpendHold;
+  improve: SpendImprovePreview;
+  goals: SpendGoal[];
+  entries: SpendEntry[];
+}
+
+export async function getSpend(lane = 'improve', entriesLimit = 50): Promise<SpendOverview> {
+  const r = await apiFetch(
+    `${API_URL}/api/v1/spend?lane=${encodeURIComponent(lane)}&entries_limit=${entriesLimit}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load spend');
+  return r.json();
+}
+
+/** Raise or lower the lane's ceilings. Omitted keys stay unchanged; the
+ *  backend refuses non-numbers, negatives and an empty patch (422). */
+export async function patchSpendCeilings(patch: {
+  lane?: string; max_passes?: number; max_tokens?: number; max_usd?: number;
+}): Promise<SpendCeilings> {
+  const r = await apiFetch(`${API_URL}/api/v1/spend/ceilings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? `Failed to set ceilings (${r.status})`);
+  return r.json();
+}
+
+export interface SpendTokensRow {
+  day: string;
+  source: string;
+  model: string;
+  calls: number;
+  /** Spans with NO token figures — they sum as 0, so the count is the
+   *  honesty flag on this row's totals. */
+  unmetered_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  tokens: number;
+}
+
+export interface SpendTokensRollup {
+  days: number;
+  /** day DESC then prompt DESC; day×source×model grain over llm_call spans. */
+  rows: SpendTokensRow[];
+  totals: {
+    calls: number; unmetered_calls: number;
+    prompt_tokens: number; completion_tokens: number; tokens: number;
+  };
+  by_source: Record<string, { calls: number; prompt_tokens: number; completion_tokens: number }>;
+}
+
+export async function getSpendTokens(days = 7): Promise<SpendTokensRollup> {
+  const r = await apiFetch(`${API_URL}/api/v1/spend/tokens?days=${days}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load token rollup');
   return r.json();
 }
 
@@ -1597,10 +1966,44 @@ export async function getEvalSuites(): Promise<{ suites: EvalSuite[]; verdicts: 
   return r.json();
 }
 
-export async function getEvalRuns(limit = 8): Promise<EvalRun[]> {
-  const r = await apiFetch(`${API_URL}/api/v1/evals/runs?limit=${limit}`);
-  if (!r.ok) throw new Error('Failed to load eval runs');
-  return (await r.json()).runs;
+/** The runs page. `census` counts by status over agent+window and
+ *  deliberately IGNORES the status filter — zeros are stated, never absent —
+ *  so a page filtered to `failed` still says how many passed. */
+export interface EvalRunsPage {
+  runs: EvalRun[];
+  census: Record<string, number>;
+  window: string | null;
+}
+
+export async function getEvalRuns(limit = 8, opts: {
+  agent?: string; status?: string; window?: '1h' | '6h' | '24h' | '7d';
+} = {}): Promise<EvalRunsPage> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (opts.agent) q.set('agent', opts.agent);
+  if (opts.status) q.set('status', opts.status);
+  if (opts.window) q.set('window', opts.window);
+  const r = await apiFetch(`${API_URL}/api/v1/evals/runs?${q}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load eval runs');
+  return r.json();
+}
+
+/** One graded task inside a run — the per-task cursor migration 124 stores.
+ *  `contract_failures` are the grader's own CheckResult lines, verbatim. */
+export interface EvalRunTask {
+  task: string;
+  runs: number;
+  runs_passed: number;
+  passed: boolean;
+  gradeable: boolean;
+  duration_s: number | null;
+  errors: string[];
+  contract_failures: string[];
+}
+
+export async function getEvalRunDetail(id: string): Promise<EvalRun & { tasks: EvalRunTask[] }> {
+  const r = await apiFetch(`${API_URL}/api/v1/evals/runs/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'Failed to load the run');
+  return r.json();
 }
 
 /** "If you had to keep one local model, which one" — across suites, not one.
@@ -2325,4 +2728,82 @@ export async function startCoderSession(body: {
 export async function killCoderSession(id: string): Promise<void> {
   const r = await apiFetch(`${API_URL}/api/v1/coder/sessions/${id}/kill`, { method: 'POST' });
   if (!r.ok) throw new Error('Failed to stop session');
+}
+
+// ── guests (docs/plans/public-access-and-guests.md §3, migration 118) ──────
+//
+// Two audiences behind one client. The `guest*` calls are what a guest link's
+// own page uses; the `*Guest*` calls are the operator's minting console and
+// are refused (403) to a guest token by the backend's default-deny route
+// gate — nothing here is what makes that true, which is the point.
+
+export interface GuestSessionRow {
+  id: string;
+  label: string;
+  created_by: string;
+  created_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_seen: string | null;
+  allowed_models: string[];
+  selected_model: string | null;
+  live?: boolean;
+  /** Present ONLY in the mint response. There is no endpoint that can show
+   *  it again — the backend stores a sha256 and nothing else. */
+  token?: string;
+}
+
+/** What this guest link is, read from the session rather than from anything
+ *  the browser holds — so the page cannot show a longer expiry or a wider
+ *  model list than the backend will enforce. */
+export async function guestSession(): Promise<{
+  label: string; expires_at: string | null;
+  allowed_models: string[]; model: string;
+}> {
+  const r = await apiFetch(`${API_URL}/api/v1/guest/session`);
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'this link is not valid');
+  return r.json();
+}
+
+/** Switch between the models this session was granted. A model outside the
+ *  allowlist is refused server-side; there is deliberately no client-side
+ *  filter doing the real work. */
+export async function pickGuestModel(model: string): Promise<{ model: string }> {
+  const r = await apiFetch(`${API_URL}/api/v1/guest/model`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'that model is not available here');
+  return r.json();
+}
+
+export async function listGuests(): Promise<GuestSessionRow[]> {
+  const r = await apiFetch(`${API_URL}/api/v1/guests`);
+  if (!r.ok) throw new Error('Failed to load guest links');
+  return (await r.json()).guests;
+}
+
+export async function mintGuest(label: string, minutes: number,
+                                allowedModels: string[]): Promise<GuestSessionRow> {
+  const r = await apiFetch(`${API_URL}/api/v1/guests`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, minutes, allowed_models: allowedModels }),
+  });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'could not create the link');
+  return r.json();
+}
+
+/** Revoke access AND wipe the guest's sandbox memory. The backend re-reads
+ *  the directory afterwards and 500s if the files survived, so a resolved
+ *  promise here means the wipe was verified — not merely attempted. */
+export async function revokeGuest(id: string): Promise<GuestSessionRow> {
+  const r = await apiFetch(`${API_URL}/api/v1/guests/${id}/revoke`, { method: 'POST' });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'revoke failed');
+  return r.json();
+}
+
+/** Delete outright: the session row, their conversation, and their notes. */
+export async function deleteGuest(id: string): Promise<void> {
+  const r = await apiFetch(`${API_URL}/api/v1/guests/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await errorDetail(r) ?? 'delete failed');
 }

@@ -87,6 +87,18 @@ _URL_PARAM = re.compile(
 # is often the only clue about which account was used
 _URL_USERINFO = re.compile(r"(://[^/\s:@]+:)[^/\s@]+(@)")
 
+# A credential IDENTIFIER sitting in a URL PATH segment, not a query param —
+# `.../keys/10788e94091aa6...` or `.../api-keys/<uuid>`. Provider consoles put
+# the key id in the path so it can be linked to, and providers helpfully echo
+# that link inside error bodies ("adjust the key's limit at ...") — which is
+# how an OpenRouter key id reached `spend_ledger.detail`, `action_runs.error`
+# and a goal refund reason all at once (repo review 2026-08-07). The `/keys/`
+# anchor and a 16+ char segment keep it off innocent paths; the console URL
+# stays readable so the operator still knows where to go, only the id is
+# masked — structure kept, value removed, like every other rule here.
+_URL_KEY_PATH = re.compile(
+    r"(/(?:api[-_]?)?keys?/)[A-Za-z0-9][A-Za-z0-9._-]{15,}", re.IGNORECASE)
+
 
 # `"api_key": "hunter2"` / `token=abc` sitting inside a STRING rather than a
 # parsed dict — an unparseable argument blob, a provider error body echoing
@@ -134,6 +146,7 @@ def scrub_text(text: str, limit: int | None = None) -> str:
         return ""
     out = _URL_USERINFO.sub(rf"\1{MASK}\2", text)
     out = _URL_PARAM.sub(rf"\1{MASK}", out)
+    out = _URL_KEY_PATH.sub(rf"\1{MASK}", out)
     # SHAPES FIRST. The assignment rule is greedy about "the token after the
     # colon", so running it first on `Authorization: Bearer abc123` masked
     # the word "Bearer" and left the key — the rule meant to catch more

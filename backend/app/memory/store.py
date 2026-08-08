@@ -122,7 +122,6 @@ class OkfStore:
         fm = dict(metadata or {})
         fm.setdefault("type", concept_type)
         fm.setdefault("title", title)
-        fm["timestamp"] = datetime.now(timezone.utc).isoformat()
 
         if doc_id:
             pinned = (self.base_dir / doc_id).resolve()
@@ -141,7 +140,8 @@ class OkfStore:
             # In-place updates preserve frontmatter keys the caller doesn't
             # set: data-level markers (maintained_by, about, hand-added keys)
             # must survive a REFRESH, not just an append.
-            existing, _body = self.parse_frontmatter(path.read_text())
+            raw = path.read_text()
+            existing, _body = self.parse_frontmatter(raw)
             fm = {**existing, **fm}
             # ORIGIN IS MONOTONE — the same law append_concept states below.
             # A caller-wins merge is right for hand-added keys and wrong for
@@ -162,7 +162,32 @@ class OkfStore:
                 if provenance.lower_of(provenance.tier(prior_st),
                                        new_tier) != new_tier:
                     fm["source_type"] = prior_st
+            # THE CHURN GUARD. `timestamp` used to be restamped before this
+            # branch, so an update that changed NOTHING still rewrote the
+            # file — measured 2026-08-05, a no-op save rewrote 203 of 214
+            # topics and moved the corpus's mtime forward 8.9 days on
+            # average. That poisons every consumer of recency: the index's
+            # mtime, "learned <date>" in retrieval snippets, memory_usage's
+            # changed_in_window, and the graph's fresh flares all read churn
+            # as knowledge. Byte-compare the WOULD-BE file (with the prior
+            # timestamp kept) against what is on disk: identical means
+            # nothing is written and both timestamp and mtime survive. The
+            # comparison is against real bytes, not a "did the caller pass
+            # the same args" guess, so a change to any frontmatter key or one
+            # character of body still writes.
+            # Trailing newlines are normalized out of the comparison: 70 of
+            # the 263 live topics (every older summary) end without one, and
+            # a refresh that "changes" only the final byte would restamp all
+            # of them — the exact churn this guard exists to stop.
+            if existing.get("timestamp"):
+                candidate = f"{self.render_frontmatter(fm)}\n\n{content}\n"
+                if candidate.rstrip("\n") == raw.rstrip("\n"):
+                    log.info("Memory write: %s unchanged — nothing written, "
+                             "timestamp preserved", rel)
+                    return str(rel)
+            fm["timestamp"] = datetime.now(timezone.utc).isoformat()
         else:
+            fm["timestamp"] = datetime.now(timezone.utc).isoformat()
             subdir = TYPE_DIRS.get(concept_type, "topics")
             path = self.base_dir / subdir / f"{_slugify(title)}.md"
             if path.exists() and not replace:

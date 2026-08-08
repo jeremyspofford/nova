@@ -103,10 +103,26 @@ class _Turn:
         return False
 
 
-def _stub_beat_env(reply, *, push_ok=True, card_raises=False, hours="",
-                   calls=None):
+def _stub_beat_env(reply, *, push_ok=True, push_deduped=False,
+                   card_raises=False, hours="",
+                   calls=None, improve=(False, "no live goal authorises "
+                                               "self-improvement"),
+                   improve_raises=False):
     """Wire beat()'s collaborators to stubs, recording what got called."""
     calls = calls if calls is not None else {}
+
+    # THE IMPROVEMENT CLOCK IS STUBBED, NOT SILENCED (ROADMAP #47 rail 4).
+    # `beat` runs `improve_tick` before anything else, and the real one talks
+    # to the database this suite deliberately does not have. Stubbing it keeps
+    # the beat's own contract under test AND makes the tick's two guarantees
+    # checkable here: its outcome always rides in the summary, and it can
+    # never fail the beat.
+    async def improve_tick():
+        calls.setdefault("improve", []).append(True)
+        if improve_raises:
+            raise RuntimeError("the ledger is gone")
+        return improve
+    heartbeat.improve_tick = improve_tick
 
     async def get_agent(name):
         return {"name": "main", "enabled": True, "model": "ollama:qwen3:8b"}
@@ -117,7 +133,15 @@ def _stub_beat_env(reply, *, push_ok=True, card_raises=False, hours="",
 
     async def send(message, **kw):
         calls.setdefault("notify", []).append(message)
-        return {"ok": True} if push_ok else {"ok": False, "error": "no provider"}
+        if push_deduped:
+            # what notify.send returns when it folded this text onto an
+            # identical notification raised minutes ago: ok is True and the
+            # provider was NEVER ASKED.
+            return {"ok": True, "deduped": True,
+                    "notification_id": "n-1",
+                    "delivery_label": "accepted by webpush — not confirmed received"}
+        return ({"ok": True, "deduped": False} if push_ok
+                else {"ok": False, "deduped": False, "error": "no provider"})
 
     async def create(kind, title, body, **kw):
         if card_raises:
@@ -142,6 +166,7 @@ _orig = (heartbeat.agent_registry.get_agent_by_name,
          heartbeat.agent_runner.run_agent, heartbeat.notify.send,
          heartbeat.recommendations.create, heartbeat.trace.turn,
          heartbeat.settings_store.get)
+_orig_tick = heartbeat.improve_tick
 _orig_read = heartbeat.read_checklist
 heartbeat.read_checklist = lambda: "- watch the oven\n"
 try:
@@ -166,6 +191,22 @@ try:
           calls["cards"][0][2].startswith("heartbeat:"))
     check("...and the summary says notified", summary.startswith("notified"), summary)
 
+    # A DEDUPED PUSH IS NOT A PUSH THIS BEAT MADE. notify.send returns ok:True
+    # when it suppressed the send, and the summary read "notified (push, card)"
+    # for a beat whose provider was never asked — a delivery recorded in the
+    # automation history that did not happen.
+    calls = _stub_beat_env("The garage door has been open for two hours.",
+                           push_deduped=True)
+    ok, summary = asyncio.run(heartbeat.beat(row))
+    check("a deduped push is never summarised as a plain 'push'",
+          "(push," not in summary and "push)" not in summary, summary)
+    check("...it says the beat published nothing",
+          "not published by this beat" in summary, summary)
+    check("...and gives the earlier notification's real state",
+          "not confirmed received" in summary, summary)
+    check("...while the beat still counts as delivered — he did get that alert",
+          ok, f"ok={ok} {summary}")
+
     calls = _stub_beat_env("Something is wrong.", push_ok=False, card_raises=True)
     ok, summary = asyncio.run(heartbeat.beat(row))
     check("BOTH channels failing is a FAILED run, not quiet success",
@@ -183,12 +224,33 @@ try:
     ok, summary = asyncio.run(heartbeat.beat(row))
     check("outside active hours: quiet WITHOUT running the agent",
           ok and "active hours" in summary and not calls.get("ran"), summary)
+    check("...but the improvement clock still ticked — active hours govern "
+          "when she may INTERRUPT him, not when a machine may work",
+          calls.get("improve") == [True], str(calls.get("improve")))
+    check("...and the reason it did nothing is in the run history",
+          "no live goal" in summary, summary)
+
+    print("4b. the improvement clock rides along and can never break the beat")
+    calls = _stub_beat_env("HEARTBEAT_OK",
+                           improve=(True, "improvement pass started (run ab12)"))
+    ok, summary = asyncio.run(heartbeat.beat(row))
+    check("a started pass is visible in the beat's summary",
+          ok and "improvement pass started" in summary, summary)
+
+    calls = _stub_beat_env("HEARTBEAT_OK", improve_raises=True)
+    ok, summary = asyncio.run(heartbeat.beat(row))
+    check("a tick that RAISES does not fail the beat — a red heartbeat "
+          "auto-disables the automation that also does the checking",
+          ok is True, summary)
+    check("...and it says so rather than swallowing it",
+          "improve: FAILED" in summary and "ledger is gone" in summary, summary)
 finally:
     (heartbeat.agent_registry.get_agent_by_name,
      heartbeat.agent_runner.run_agent, heartbeat.notify.send,
      heartbeat.recommendations.create, heartbeat.trace.turn,
      heartbeat.settings_store.get) = _orig
     heartbeat.read_checklist = _orig_read
+    heartbeat.improve_tick = _orig_tick
 
 print("5. the scheduler actually knows the handler")
 from app import scheduler  # noqa: E402

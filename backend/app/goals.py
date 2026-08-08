@@ -317,6 +317,155 @@ async def spend(verb: str, *, agent_name: Optional[str] = None) -> Optional[dict
     return _row(r) if r else None
 
 
+#: Verbs an unattended LANE may spend, as opposed to an agent.
+#:
+#: The membership test `spend_standing` runs, and it is deliberately a
+#: hardcoded set rather than "anything in GOAL_SCOPED_TOOLS": every other verb
+#: there names a TOOL, and a tool call must stay bound to the agent the
+#: operator approved it for (the 2026-08-04 leak `spend`'s docstring records).
+#: These name no tool at all, so there is no agent to bind to — the spender is
+#: a scheduler tick, and binding it to a name would only mean the loop stops
+#: working when the goal was proposed from a different place.
+#:
+#: `tests/test_improvement_lane.py` asserts every entry here names nothing in
+#: `BUILTIN_TOOLS`, so a future tool cannot quietly acquire an agent-free
+#: spending path by reusing one of these names.
+#: The self-improvement lane's verb. ONE definition — `scopes.py` offers it,
+#: `action_worker.claim_next` re-checks it in SQL and the heartbeat spends it,
+#: and a string literal in any of those three would be the drift `scopes.py`'s
+#: whole docstring is about.
+IMPROVE_SELF = "improve_self"
+
+STANDING_VERBS = frozenset({IMPROVE_SELF})
+
+
+async def spend_standing(verb: str, *, lane: str) -> Optional[dict]:
+    """Charge one pre-approved action for an unattended lane, or return None.
+
+    Same atomic UPDATE as `spend`, same `FOR UPDATE SKIP LOCKED`, same
+    read-time expiry and budget filters — the ONLY difference is that
+    `proposed_by` is not part of the match, because the spender is not an
+    agent and has no name to match against.
+
+    REFUSES ANY VERB THAT NAMES A TOOL. Without that line this would be a
+    general-purpose way around the agent binding: pass `manage_agents` and a
+    goal the operator approved for one agent becomes spendable by a scheduler.
+    So the widening is scoped to verbs that no `execute_tool` path can ever
+    reach, and the refusal is a ValueError rather than a None, because a
+    caller asking for the wrong thing deserves to fail loudly rather than to
+    read "no goal covers this".
+    """
+    if verb not in STANDING_VERBS:
+        raise ValueError(
+            f"{verb!r} is not a standing-lane verb — it names a tool, and a "
+            f"goal approved for an agent must not be spendable by a scheduler. "
+            f"Standing verbs: {', '.join(sorted(STANDING_VERBS))}")
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            """UPDATE goals SET actions_used = actions_used + 1,
+                                updated_at = now()
+                WHERE id = (
+                  SELECT id FROM goals
+                   WHERE status = 'active'
+                     AND $1 = ANY(approved_verbs)
+                     AND actions_used < max_actions
+                     AND (expires_at IS NULL OR expires_at > now())
+                   ORDER BY activated_at
+                   LIMIT 1 FOR UPDATE SKIP LOCKED)
+            RETURNING *""", verb)
+    if r:
+        log.info("Standing goal action spent: %s by lane %s on '%s' (%d/%d)",
+                 verb, lane, r["title"], r["actions_used"], r["max_actions"])
+    return _row(r) if r else None
+
+
+async def refund_action(goal_id: str, *, run_id: Optional[str],
+                        reason: str, lane: str = "goal") -> dict:
+    """Give back one action a pass never got to use. Exactly once per run.
+
+    MEASURED 2026-08-07. Four self-improvement passes died on an HTTP 402 from
+    the model provider — twelve coding sessions that never ran a line of work —
+    and each one had already charged a goal action before it found out. The
+    goal's budget is the operator's statement of how much unattended work he
+    wants; spending it on a provider refusing to be paid measures nothing.
+
+    NARROW ON PURPOSE. This is not a general "undo": the caller must have
+    established that the pass produced NO work, and the only caller today is
+    the terminal-provider-refusal path in `actions/code_change`. A refund that
+    could be reached from a failure which HAD done work would turn the action
+    ceiling into a suggestion.
+
+    EXACTLY ONCE, AND MECHANICALLY SO. `goal_action_refunds` has the run id as
+    its primary key, the insert is `ON CONFLICT DO NOTHING`, and the decrement
+    only happens in the transaction where the insert actually took a row. A
+    retried or duplicated run therefore cannot hand the budget back twice —
+    which is the shape that turns a ceiling into free credit.
+
+    A RUN ID IS REQUIRED for exactly that reason. Without one there is nothing
+    to make the refund idempotent, so it is REFUSED and says so rather than
+    guessing; an unrefunded action is a small loss, and a repeatable refund is
+    an unbounded one.
+    """
+    if not goal_id:
+        return {"refunded": False, "detail": "no goal to refund"}
+    if not run_id:
+        return {"refunded": False,
+                "detail": ("refused to refund a goal action with no run id — "
+                           "nothing would stop it being refunded twice")}
+    try:
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                claimed = await conn.fetchval(
+                    """INSERT INTO goal_action_refunds
+                           (run_id, goal_id, lane, reason)
+                       VALUES ($1::uuid, $2::uuid, $3, $4)
+                       ON CONFLICT (run_id) DO NOTHING
+                    RETURNING run_id""",
+                    str(run_id), str(goal_id), lane, reason[:500])
+                if claimed is None:
+                    return {"refunded": False,
+                            "detail": "this run's action was already refunded"}
+                r = await conn.fetchrow(
+                    """UPDATE goals
+                          SET actions_used = greatest(actions_used - 1, 0),
+                              updated_at = now()
+                        WHERE id = $1::uuid
+                    RETURNING title, actions_used, max_actions""",
+                    str(goal_id))
+                if r is None:
+                    # The refund row would otherwise record a refund that never
+                    # happened. Rolling back is what keeps the ledger true.
+                    raise ValueError(f"no goal {goal_id} to refund")
+    except Exception as e:                                   # noqa: BLE001
+        log.exception("could not refund a goal action")
+        return {"refunded": False, "detail": f"the refund failed: {e}"}
+    log.info("refunded one action on goal '%s' (%d/%d used) — %s",
+             r["title"], r["actions_used"], r["max_actions"], reason[:120])
+    return {"refunded": True, "title": r["title"],
+            "actions_used": r["actions_used"], "max_actions": r["max_actions"],
+            "detail": (f"the goal action was given back — "
+                       f"{r['actions_used']} of {r['max_actions']} used")}
+
+
+async def standing_for(verb: str) -> Optional[dict]:
+    """The live goal a standing lane WOULD spend, without charging it.
+
+    Read-only, and it exists so a refusal can say which of the several
+    possible reasons applies. "No goal covers this" and "the goal is out of
+    actions" send the operator to completely different places.
+    """
+    if verb not in STANDING_VERBS:
+        raise ValueError(f"{verb!r} is not a standing-lane verb")
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            """SELECT * FROM goals
+                WHERE status = 'active' AND $1 = ANY(approved_verbs)
+                  AND actions_used < max_actions
+                  AND (expires_at IS NULL OR expires_at > now())
+                ORDER BY activated_at LIMIT 1""", verb)
+    return _row(r) if r else None
+
+
 async def active() -> list[dict]:
     """Live goals, newest first. Read-only — never charges.
 

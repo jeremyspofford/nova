@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getSettings, SettingDef } from '../../api';
 import { SettingsTab } from './SettingsTab';
 import { StorageCard, PhoneSetupCard } from './cards';
+import { GuestAccessCard } from './guests';
 import { CardsSkeleton, NavList, NavRow, OverlayScrim, Surface } from '../ui';
 import { useIsMobile } from '../../shell/useIsMobile';
 
@@ -17,6 +18,9 @@ const ORDER = ['Operator', 'Appearance', 'Voice', 'Context', 'Inference',
                'Backups',
                'Agents', 'MCP', 'Notifications', 'Observability'];
 const SYSTEM = 'Storage & phone';  // static cards, not backend defs
+// Guest links are not a setting — they are rows with a lifetime — so they get
+// their own static section rather than a toggle under someone else's heading.
+const GUESTS = 'Guest access';
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
@@ -37,12 +41,13 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
       return (ia === -1 ? ORDER.length : ia) - (ib === -1 ? ORDER.length : ib);
     });
-  const nav = [...sections, SYSTEM];
+  const nav = [...sections, GUESTS, SYSTEM];
   const found = nav.find(s => slug(s) === section);
   const active = found ?? nav[0];
 
   const body = (
     !loaded ? <CardsSkeleton n={3} />
+      : active === GUESTS ? <GuestAccessCard />
       : active === SYSTEM ? (
         <div className="space-y-5">
           <StorageCard />

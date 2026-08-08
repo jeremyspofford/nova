@@ -13,16 +13,19 @@ import json
 import logging
 import time
 import uuid
+from contextlib import AsyncExitStack
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from app import automations, bg, commands, compaction, consents, conversations, db, recommendations, rules, settings_store, trace, voiceprints
+from app import activity_log, automations, bg, commands, compaction, consents, conversations, db, guests, recommendations, rules, settings_store, trace, voiceprints
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
+from app.guests import guest_ok
 from app.tools import registry as tool_registry
 from app.config import settings
 from app.llm.router import effective_model
+from app.memory import memory as memory_mod
 from app.memory.memory import memory
 from app.schemas import ChatRequest
 
@@ -481,16 +484,39 @@ def _turn_lock(conversation_id: str) -> asyncio.Lock:
 
 
 @router.post("/api/v1/chat/stream")
-async def chat_stream(request: ChatRequest):
+@guest_ok
+async def chat_stream(request: ChatRequest, http: Request):
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="message is empty")
 
-    conversation = await conversations.get_or_create_active_conversation()
+    # The one route a time-boxed guest can reach. `http.state.guest` is set by
+    # auth_middleware from a hash lookup — never from the payload, which is
+    # why `ChatRequest` grew no field for it.
+    guest = getattr(http.state, "guest", None)
+
+    if guest is not None:
+        # Their own conversation row, pinned by migration 118 so it can never
+        # become the operator's active one, and cascade-deleted with the
+        # session. Without this a guest turn would land in Jeremy's chat and
+        # they would be reading it back on their next request.
+        conversation = await guests.conversation_for(guest)
+    else:
+        conversation = await conversations.get_or_create_active_conversation()
     conversation_id = conversation["id"]
 
     main_agent = await agent_registry.get_agent_by_name("main")
     if not main_agent:
         raise HTTPException(status_code=500, detail="main agent missing from registry")
+
+    if guest is not None:
+        # The model this session named, not whatever `main` points at today.
+        # Stated here and CHECKED AGAIN in the runner immediately before every
+        # request leaves — including a fallback's — because this line is a
+        # binding and that one is the control.
+        try:
+            main_agent = {**main_agent, "model": guests.session_model(guest)}
+        except guests.ModelNotAllowed as e:
+            raise HTTPException(status_code=409, detail=str(e))
 
     # Voice-initiated turns: (1) may answer with a dedicated model (Settings →
     # Voice → "Voice reply model"); (2) get the brevity block appended at the
@@ -512,6 +538,14 @@ async def chat_stream(request: ChatRequest):
                            "persona_notes": prof.get("persona_notes")}
             else:
                 speaker = {"id": None, "name": "unknown voice", "role": "unknown"}
+    if guest is not None:
+        # A typed guest turn wears the SAME tier the voice channel uses, so
+        # the family clamp in runner.py applies to it unchanged rather than a
+        # second restriction system existing beside it. run_agent sets this
+        # itself from the session; it is set here too so the journal entry is
+        # authored by the guest and not by "User".
+        speaker = {"id": guest["id"], "name": guest.get("label") or "guest",
+                   "role": "guest"}
 
     voice_suffix = None
     if request.source == "voice":
@@ -717,7 +751,8 @@ async def chat_stream(request: ChatRequest):
                 conversation_summary=conversation.get("summary"),
                 system_suffix=voice_suffix, speaker=speaker,
                 history_count=len(replayed),
-                conversation_id=conversation_id)
+                conversation_id=conversation_id,
+                guest=guest)
             try:
                 async for event in events:
                     etype = event["type"]
@@ -914,14 +949,24 @@ async def chat_stream(request: ChatRequest):
             # long turns push "Nova replied" when they finish — the device
             # itself suppresses it while the app is on screen (push-sw.js),
             # so it only lands when the operator walked away
+            # A stranger's turn does not buzz the operator's phone.
+            # `notify.send` goes to HIS subscriptions, so a guest link that
+            # could reach it is a nuisance vector with a bearer token attached.
             try:
                 from datetime import datetime, timezone
                 min_secs = int(settings_store.get("notify.push_reply_min_secs") or 0)
+                if guest is not None:
+                    min_secs = float("inf")
                 secs = (datetime.now(timezone.utc) - turn.started_at).total_seconds()
                 if secs >= min_secs:
                     from app import notify
+                    # record=False: this one must NOT become a transcript row.
+                    # Its entire content is "the reply directly above this
+                    # exists", so a notification card under it would be the
+                    # conversation telling the operator about itself.
                     bg.spawn(notify.send(
-                        final_text[:120], title="Nova replied", click="/chat"))
+                        final_text[:120], title="Nova replied", click="/chat",
+                        record=False))
             except Exception:
                 log.exception("reply-push scheduling failed")
 
@@ -936,11 +981,25 @@ async def chat_stream(request: ChatRequest):
         and the aclose() Starlette performs on client disconnect — and that
         third one is the path that matters, since disconnect is how turns
         actually end here.
+
+        IT IS ALSO WHERE A GUEST'S MEMORY IS BOUND. `memory.sandbox` sets a
+        contextvar, so binding it around the whole streamed turn redirects
+        every reader and writer inside it — prompt assembly, search_memory,
+        write_memory, the end-of-turn journal, and the fire-and-forget tasks
+        spawned along the way, which copy the context. There is no flag to
+        check and no call site to remember: the guest's store IS the store
+        for the duration, and Jeremy's is unreachable from here rather than
+        merely not asked for.
         """
+        stack = AsyncExitStack()
         try:
+            if guest is not None:
+                stack.enter_context(
+                    memory_mod.sandbox(await guests.store_for(guest)))
             async for chunk in generate():
                 yield chunk
         finally:
+            await stack.aclose()
             if _held:
                 _lock.release()
 
@@ -950,12 +1009,25 @@ async def chat_stream(request: ChatRequest):
 
 
 @router.get("/api/v1/conversations/active")
-async def get_active_conversation():
+@guest_ok
+async def get_active_conversation(http: Request):
+    """Whose conversation is "active" depends on who is asking.
+
+    A guest asking gets THEIR row — never the operator's. The alternative was
+    not "the guest sees nothing": this endpoint returns the id the client then
+    fetches messages by, so answering with Jeremy's id would hand a guest the
+    key to his transcript on the first request their UI makes.
+    """
+    guest = getattr(http.state, "guest", None)
+    if guest is not None:
+        return await guests.conversation_for(guest)
     return await conversations.get_or_create_active_conversation()
 
 
 @router.get("/api/v1/conversations/{conversation_id}/messages")
-async def get_messages(conversation_id: str, before: str | None = None,
+@guest_ok
+async def get_messages(conversation_id: str, http: Request,
+                       before: str | None = None,
                        limit: int = 100):
     """User/assistant turns plus the persisted activity trail (tool rows) —
     the UI shows past turns' actions as a dim, collapsible trace. Assistant
@@ -981,14 +1053,27 @@ async def get_messages(conversation_id: str, before: str | None = None,
     `has_more` says whether older turns exist beyond this page and `before`
     walks back through them. A window that just ends is indistinguishable
     from a conversation that started there — which is how 17 unreachable
-    messages went unnoticed until someone went looking for one of them."""
+    messages went unnoticed until someone went looking for one of them.
+
+    A GUEST MAY ONLY READ THEIR OWN. The id is chosen by the caller, so route
+    gating alone would leave the operator's whole transcript one pasted uuid
+    away — the same hole as the route allowlist, one layer in. Asked of the
+    database (`conversations.guest_id`), not of anything the client sent."""
+    guest = getattr(http.state, "guest", None)
+    if guest is not None and not await guests.owns_conversation(
+            guest, conversation_id):
+        raise HTTPException(status_code=403,
+                            detail="that conversation is not yours")
     limit = max(1, min(500, limit))
     # Asking for one extra row IS the has_more test — cheaper than a separate
     # COUNT(*), and it cannot disagree with the page the way a count taken at
     # a different instant can.
+    # 'notification' joins the transcript budget (migration 125): a
+    # notification IS a turn in the conversation now, in order, not a thing
+    # you go and look for in a bell menu.
     page = await conversations.load_history(
-        conversation_id, limit=limit + 1, roles=("user", "assistant"),
-        before=before)
+        conversation_id, limit=limit + 1,
+        roles=("user", "assistant", "notification"), before=before)
     has_more = len(page) > limit
     history = page[-limit:] if has_more else page
     # Bounded by the transcript, not by a count of its own: activity older
@@ -1009,6 +1094,7 @@ async def get_messages(conversation_id: str, before: str | None = None,
                          key=lambda m: (m["created_at"] or "", m["id"]))
     out = []
     trace_ids: dict[str, list[dict]] = {}   # trace_id -> messages wearing it
+    notification_rows: list[tuple[dict, str]] = []   # (row, notification id)
     for m in history:
         if m["role"] in ("user", "assistant") and m["content"]:
             row = {"id": m["id"], "role": m["role"], "content": m["content"],
@@ -1047,6 +1133,36 @@ async def get_messages(conversation_id: str, before: str | None = None,
             out.append({"id": m["id"], "role": "tool", "content": m["content"] or "",
                         "created_at": m["created_at"], "tool_calls": tc,
                         "trace_id": (tmeta or {}).get("trace_id")})
+        elif m["role"] == "notification":
+            # A POINTER, hydrated below. The row carries no text of its own —
+            # migration 125 refuses one that does — so the transcript and the
+            # push are reading the same record and cannot drift apart.
+            nid = conversations.notification_id_of(m)
+            if nid:
+                notification_rows.append(({"id": m["id"], "role": "notification",
+                                           "content": "",
+                                           "created_at": m["created_at"]}, nid))
+                out.append(notification_rows[-1][0])
+    if notification_rows:
+        from app import notifications as notifications_mod
+        hydrated = await notifications_mod.by_ids([n for _, n in notification_rows])
+        for row, nid in notification_rows:
+            note = hydrated.get(nid)
+            if note is None:
+                # Say so rather than rendering an empty bubble. A pointer with
+                # nothing behind it is a real fault (a purged row, a restore
+                # that dropped the table) and the operator seeing a blank is
+                # how it would go unnoticed.
+                row["notification"] = {
+                    "id": nid, "title": "Notification unavailable",
+                    "body": "This notification's record is missing — its text "
+                            "cannot be shown.",
+                    "state": "failed", "confirmed": False,
+                    "delivery_label": "the notification record is missing",
+                    "tags": [], "kind": "alert", "click_url": None,
+                    "recommendation_id": None}
+            else:
+                row["notification"] = note
     if trace_ids:
         async with db.acquire() as conn:
             rows = await conn.fetch(
@@ -1071,12 +1187,131 @@ async def get_messages(conversation_id: str, before: str | None = None,
     return {"messages": out, "has_more": has_more, "oldest": oldest}
 
 
+# ── guests (docs/plans/public-access-and-guests.md §3, migration 118) ──────
+#
+# Two surfaces with opposite audiences, and only the first two routes carry
+# @guest_ok. Everything below them is operator-only BY DEFAULT — main.py's
+# gate denies any route that is not marked, so nothing here had to be listed
+# as forbidden and nothing added later will be forbidden by omission.
+
+
+@router.get("/api/v1/guest/session")
+@guest_ok
+async def guest_session(http: Request):
+    """What this guest link is: its label, when it dies, what it may run.
+
+    Read from the SESSION, not from anything the client holds, so a guest
+    cannot be shown a longer expiry or a wider model list than the one the
+    backend will actually enforce.
+    """
+    guest = getattr(http.state, "guest", None)
+    if guest is None:
+        raise HTTPException(status_code=403, detail="not a guest session")
+    return {"label": guest["label"], "expires_at": guest["expires_at"],
+            "allowed_models": guest["allowed_models"],
+            "model": guests.session_model(guest)}
+
+
+@router.post("/api/v1/guest/model")
+@guest_ok
+async def guest_pick_model(body: dict, http: Request):
+    """Switch this session between the models it was granted.
+
+    `guests.select_model` puts `AND $2 = ANY (allowed_models)` in the UPDATE,
+    so a model outside the list changes zero rows and raises — it does not
+    quietly fall back to an allowed one, which would let a guest believe they
+    had switched to something they had not.
+    """
+    guest = getattr(http.state, "guest", None)
+    if guest is None:
+        raise HTTPException(status_code=403, detail="not a guest session")
+    try:
+        row = await guests.select_model(guest["id"], str(body.get("model") or ""))
+    except guests.ModelNotAllowed as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"model": row["selected_model"],
+            "allowed_models": row["allowed_models"]}
+
+
+@router.get("/api/v1/guests")
+async def list_guests():
+    return {"guests": await guests.list_all()}
+
+
+@router.post("/api/v1/guests", status_code=201)
+async def create_guest(body: dict):
+    """Mint a time-boxed link. The token is in this response and NOWHERE else.
+
+    Only the sha256 is stored, so there is no endpoint that can show it again
+    — the operator copies it now or mints another. Same shape as the secrets
+    store, for the same reason: a credential you can re-read is a credential
+    a screenshot leaks.
+    """
+    try:
+        row = await guests.mint(
+            str(body.get("label") or ""),
+            minutes=body.get("minutes"),
+            allowed_models=list(body.get("allowed_models") or []))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return row
+
+
+@router.post("/api/v1/guests/{guest_id}/revoke")
+async def revoke_guest(guest_id: str):
+    """Revoke access AND wipe the sandbox memory, in that order.
+
+    Jeremy's sentence names revocation and deletion as the same event: "a
+    sandbox memory that gets wiped when I remove the guest access for that
+    user". `guests.revoke` kills the credential first so that a failed wipe
+    leaves a dead session with files on disk rather than a live session the
+    operator believes is dead — and a failed wipe RAISES, so this returns a
+    500 naming the directory instead of a cheerful 200.
+    """
+    try:
+        row = await guests.revoke(guest_id)
+    except guests.WipeFailed as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="no such guest session")
+    if not row:
+        raise HTTPException(status_code=404, detail="no such guest session")
+    return row
+
+
+@router.delete("/api/v1/guests/{guest_id}")
+async def delete_guest(guest_id: str):
+    """Delete the session outright: row, conversation (FK cascade), files."""
+    try:
+        return await guests.delete(guest_id)
+    except guests.WipeFailed as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except LookupError:
+        raise HTTPException(status_code=404, detail="no such guest session")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="no such guest session")
+
+
 @router.get("/api/v1/traces")
-async def list_traces(limit: int = 50):
+async def list_traces(limit: int = 50, source: str | None = None,
+                      status: str | None = None, window: str | None = None):
     """Recent turn traces across ALL sources (chat, automations,
     compaction) — the Settings → Observability "Recent turns" list.
-    Automations show up here with no chat message to click."""
+    Automations show up here with no chat message to click.
+
+    `source`/`status` filter on the trace's own columns; `window` takes the
+    same names as /api/v1/observability/summary (one definition, imported
+    from it). Token sums ride on each row so a 2M-token eval turn and a
+    300-token chat turn stop rendering identically."""
+    from app import router_system
     limit = max(1, min(200, limit))
+    interval = None
+    if window is not None:
+        if window not in router_system._WINDOWS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"window must be one of {list(router_system._WINDOWS)}")
+        interval = router_system._WINDOWS[window]
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """SELECT t.id, t.source, t.automation, t.model, t.status,
@@ -1084,20 +1319,35 @@ async def list_traces(limit: int = 50):
                       extract(epoch FROM t.finished_at - t.started_at) AS secs,
                       count(s.id) FILTER (WHERE s.kind = 'tool')     AS tools,
                       count(s.id) FILTER (WHERE s.kind = 'dispatch') AS dispatches,
-                      count(s.id) FILTER (WHERE s.kind = 'llm_call') AS llm_calls
+                      count(s.id) FILTER (WHERE s.kind = 'llm_call') AS llm_calls,
+                      sum(coalesce((s.detail->>'prompt_tokens')::numeric, 0))
+                          FILTER (WHERE s.kind = 'llm_call') AS prompt_tokens,
+                      sum(coalesce((s.detail->>'completion_tokens')::numeric, 0))
+                          FILTER (WHERE s.kind = 'llm_call') AS completion_tokens
                FROM turn_traces t
                LEFT JOIN turn_spans s ON s.trace_id = t.id
+               WHERE ($2::text IS NULL OR t.source = $2)
+                 AND ($3::text IS NULL OR t.status = $3)
+                 AND ($4::interval IS NULL OR t.started_at > now() - $4::interval)
                GROUP BY t.id
                ORDER BY t.started_at DESC
-               LIMIT $1""", limit)
-    return [{
-        "id": str(r["id"]), "source": r["source"], "automation": r["automation"],
-        "model": r["model"], "status": r["status"],
-        "started_at": r["started_at"].isoformat(),
-        "secs": round(float(r["secs"]), 2) if r["secs"] is not None else None,
-        "tools": r["tools"], "dispatches": r["dispatches"],
-        "llm_calls": r["llm_calls"],
-    } for r in rows]
+               LIMIT $1""", limit, source, status, interval)
+    out = []
+    for r in rows:
+        prompt = int(r["prompt_tokens"] or 0)
+        completion = int(r["completion_tokens"] or 0)
+        out.append({
+            "id": str(r["id"]), "source": r["source"],
+            "automation": r["automation"],
+            "model": r["model"], "status": r["status"],
+            "started_at": r["started_at"].isoformat(),
+            "secs": round(float(r["secs"]), 2) if r["secs"] is not None else None,
+            "tools": r["tools"], "dispatches": r["dispatches"],
+            "llm_calls": r["llm_calls"],
+            "prompt_tokens": prompt, "completion_tokens": completion,
+            "tokens": prompt + completion,
+        })
+    return out
 
 
 @router.get("/api/v1/traces/{trace_id}")
@@ -1190,6 +1440,24 @@ async def patch_agent_endpoint(agent_id: str, body: dict):
     if "model" in allowed and ":" not in str(allowed["model"]):
         raise HTTPException(status_code=422,
                             detail="model must be 'openrouter:<id>' or 'ollama:<name>'")
+    # CANONICALISE HERE TOO — this is the route the malformed id came in on.
+    # On 2026-08-07 the operator pasted `openrouter:~deepseek/deepseek-v4-
+    # flash-latest` (the openrouter.ai profile-URL form, out of a search
+    # result) straight through this PATCH, and `main` has been running on an
+    # id nothing checked ever since. The tool layer resolves ids; a rule that
+    # only the model has to obey is not a rule, so the human path resolves
+    # them too.
+    if "model" in allowed:
+        from app import models_catalog
+        # strict=False: an id the catalog positively does not serve is still
+        # refused, but "I could not read the catalog" must not lock him out
+        # of changing models — the moment he most needs this route is when a
+        # provider is down, and that is exactly when a strict check fails.
+        canonical, why = await models_catalog.resolve_id(
+            str(allowed["model"]), strict=False)
+        if not canonical:
+            raise HTTPException(status_code=422, detail=why)
+        allowed["model"] = canonical
     if allowed.get("fallback_model"):
         # "" and null both mean "no standby of my own, use the chain" and are
         # normalised to NULL by the trigger; anything else must be addressable
@@ -2117,9 +2385,88 @@ async def evals_run(body: dict):
 
 
 @router.get("/api/v1/evals/runs")
-async def evals_runs(agent: str | None = None, limit: int = 20):
+async def evals_runs(agent: str | None = None, status: str | None = None,
+                     window: str | None = None, limit: int = 20):
+    """Recent eval runs, filterable, with a status census over the window.
+
+    The census is the headline the 12-row list was hiding: 177 errors and 78
+    failures with 0 passes reads as "the harness is broken", and no surface
+    said it. It deliberately ignores the `status` filter — narrowing the list
+    to errors must not make the census report a world that is all errors —
+    and its keys come from GROUP BY, seeded with the four statuses migration
+    060 names so a zero is stated rather than absent.
+
+    The list query lives here rather than in `eval_runs.recent` because the
+    filters are this route's own surface; the derived readings it shares
+    (`_GRADED_SQL`, `outcome`) stay imported from eval_runs so this list and
+    every other surface cannot disagree about what a run measured."""
+    from app import eval_runs, router_system
+    interval = None
+    if window is not None:
+        if window not in router_system._WINDOWS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"window must be one of {list(router_system._WINDOWS)}")
+        interval = router_system._WINDOWS[window]
+    limit = max(1, min(int(limit), 100))
+    where = ("WHERE ($1::text IS NULL OR agent_name = $1) "
+             "  AND ($2::text IS NULL OR status = $2) "
+             "  AND ($3::interval IS NULL OR started_at > now() - $3::interval)")
+    sql = ("SELECT id, suite, agent_name, model, status, started_at, "
+           "       finished_at, tasks_total, tasks_passed, tokens_in, "
+           "       tokens_out, duration_s, error, repeat_count, suite_version, "
+           "       task_index, resumes, announced_at, announcement, "
+           f"      {eval_runs._GRADED_SQL}, "
+           "       detail->'failure' AS failure, "
+           "       CASE WHEN status = 'running' THEN round(extract(epoch FROM "
+           "            now() - COALESCE((detail->>'heartbeat')::timestamptz, "
+           "                             started_at))) END AS stalled_for_s "
+           "  FROM eval_runs " + where +
+           " ORDER BY started_at DESC LIMIT $4")
+    async with db.acquire() as conn:
+        rows = [dict(r) for r in await conn.fetch(
+            sql, agent, status, interval, limit)]
+        census_rows = await conn.fetch(
+            "SELECT status, count(*) AS n FROM eval_runs "
+            "WHERE ($1::text IS NULL OR agent_name = $1) "
+            "  AND ($2::interval IS NULL OR started_at > now() - $2::interval) "
+            "GROUP BY status", agent, interval)
+    for r in rows:
+        if isinstance(r.get("failure"), str):
+            try:
+                r["failure"] = json.loads(r["failure"])
+            except ValueError:
+                r["failure"] = None
+        r["announcement"] = eval_runs._as_dict(r.get("announcement")) or None
+        r["outcome"] = eval_runs.outcome(r)
+    census = {"running": 0, "passed": 0, "failed": 0, "error": 0}
+    for c in census_rows:
+        census[c["status"]] = int(c["n"])
+    return {"runs": rows, "census": census, "window": window}
+
+
+@router.get("/api/v1/evals/runs/{run_id}")
+async def evals_run_detail(run_id: str):
+    """One run, task by task, and whether it is stuck.
+
+    A run used to be a black box between "started" and a verdict, which is
+    survivable at three minutes and not at forty-six — and 175 rows in this
+    table died inside that window with tasks_total=0, having kept nothing.
+    Since migration 124 the cursor is persisted per task, so this reports
+    real progress; `stalled` is the SAME predicate the recovery uses rather
+    than a second definition typed into a UI, so a run cannot read healthy
+    here and dead there.
+    """
     from app import eval_runs
-    return {"runs": await eval_runs.recent(agent, min(limit, 100))}
+    try:
+        row = await eval_runs.progress(run_id)
+    except Exception:  # noqa: BLE001 — a malformed uuid is a 404, not a 500
+        raise HTTPException(status_code=404,
+                            detail=f"no eval run with id {run_id!r}") from None
+    if not row:
+        raise HTTPException(status_code=404,
+                            detail=f"no eval run with id {run_id!r}")
+    return row
 
 
 @router.get("/api/v1/evals/standings")
@@ -2127,11 +2474,31 @@ async def evals_standings():
     """If you had to keep one local model, which one — from recorded runs.
 
     Reads only; it starts nothing and invokes no model. The shape carries its
-    own caveats (`basis`, `missing`, `min_repeat`) because the number on its
+    own caveats (`basis`, `missing`, `min_repeat`, and `coverage_reset` when
+    a suite edit has voided every recorded run) because the number on its
     own is the thing that gets over-read — see model_tournament.standings.
     """
     from app import model_tournament
     return await model_tournament.standings()
+
+
+@router.get("/api/v1/evals/comparisons")
+async def evals_comparisons(suite: str | None = None, limit: int = 20):
+    """Recorded champion-vs-challenger verdicts, newest first.
+
+    Reads only. The rows come from `python -m app.evals run` (the CLI is the
+    only writer); each carries its suite version and the current one, so a
+    verdict recorded before the suite moved says so instead of wearing a
+    bare score. A 503 here means migration 120 has not run yet — said
+    plainly rather than returned as an empty list, because "nothing
+    recorded" and "nowhere to record" must never read the same.
+    """
+    from app import eval_runs
+    try:
+        return {"comparisons": await eval_runs.comparisons(
+            suite, min(int(limit), 100))}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from None
 
 
 @router.get("/api/v1/models/fitness")
@@ -2162,11 +2529,25 @@ async def notify_test():
     """Send a real test notification through the configured provider, so the
     operator can confirm setup from Settings. Returns notify.send's honest
     result verbatim ({ok, id?, error?, provider?}) — server ACCEPTANCE, not
-    proof it reached the device."""
+    proof it reached the device.
+
+    It lands in the conversation like any other notification (migration 125),
+    which makes the test worth more than it was: tapping the banner should
+    land on THIS item in chat, and if it does, the whole deep-link path is
+    proven end to end rather than just the transport.
+
+    `dedupe_key` is a timestamp so pressing the button twice really does send
+    twice — the content fingerprint would otherwise collapse the second press
+    into the first, and a test button that silently does nothing is worse
+    than no test button."""
+    from datetime import datetime, timezone
+
     from app import notify
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return await notify.send(
         "Test notification from Nova — if this reached you, notifications are wired up.",
-        title="Nova test", tags=["bell"])
+        title="Nova test", tags=["bell"], kind="test", source="settings",
+        dedupe_key=f"notify-test:{stamp}")
 
 
 @router.get("/api/v1/notify/reachability")
@@ -2607,6 +2988,64 @@ async def decide_consent_endpoint(consent_id: str, body: dict):
     return row
 
 
+# ── ACTIVITY: the action log (app/activity_log.py) ───────────────────────────
+#    ONE chronological answer to "what has she actually done, and what
+#    happened" — including, first-class, the things she was REFUSED. A read
+#    model over turn_spans / capability_events / coding_sessions /
+#    automation_runs / action_runs / consents / ingest_jobs; it writes nothing
+#    and owns no table, so it can never drift from the records it describes.
+
+@router.get("/api/v1/activity/log")
+async def activity_log_endpoint(
+        window: str = activity_log.DEFAULT_WINDOW,
+        limit: int = activity_log.DEFAULT_LIMIT,
+        offset: int = 0,
+        agent: str | None = None,
+        outcome: str | None = None,
+        kinds: str | None = None,
+        graded: bool = False):
+    """The action log, newest first.
+
+    `outcome` is 'problems' (refusals, failures and stalls — the default view
+    on the page) or one exact outcome. `kinds` is a comma-separated subset of
+    activity_log.SOURCES. `graded=true` includes eval-replay tool calls, which
+    are excluded by default because four in five tool spans on a live install
+    are graded replays and a page that is mostly simulation is a page nobody
+    reads — the count set aside is reported by /facets, so the default is a
+    stated choice rather than a silence.
+
+    `offset` pages OLDER inside the same window. It exists because the page
+    used to drop everything past `limit` while reporting `complete: true` —
+    383 matched, 150 returned, and no parameter that could reach the other
+    233. Paging deeper than activity_log.MAX_SPAN is a 422, not a clamp: a
+    clamped offset returns the wrong page and looks like the right one.
+
+    A bad window/outcome/kind is a 422, never a silently-substituted default:
+    a filter that quietly widens itself answers a question the operator did
+    not ask and looks exactly like an answer to the one he did.
+    """
+    try:
+        return await activity_log.fetch(
+            window=window, limit=limit, offset=offset,
+            agent=agent, outcome=outcome,
+            kinds=[k.strip() for k in kinds.split(",") if k.strip()]
+            if kinds else None,
+            include_graded=graded)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/api/v1/activity/facets")
+async def activity_facets_endpoint(
+        window: str = activity_log.DEFAULT_WINDOW, graded: bool = False):
+    """The filter options, derived from what is in the window right now —
+    never a maintained list of agent names."""
+    try:
+        return await activity_log.facets(window, include_graded=graded)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 # ── ingestion queue: the durable background ingest lane (migration 041) ──────
 #    follow_source / poll only ENQUEUE; ingest_worker drains this. These
 #    endpoints are the operator's live, per-item view of that work — the
@@ -2764,6 +3203,66 @@ async def push_subscriptions():
     """Device list for Settings -> Notifications."""
     from app import push
     return {"devices": await push.list_subscriptions()}
+
+
+# ── notifications in the conversation (migration 125) ─────────────────────
+#
+# Jeremy, 2026-08-07: "I get push notifications from the PWA but when I click
+# on it, it brings me to chat but doesn't show me what the push notification
+# was." These three routes are the client half of the fix: the tap carries a
+# notification id, the app resolves it here, and confirming it is on screen
+# is the ONLY thing in this codebase that may say a notification reached a
+# person. Operator-only — main.py denies any route not marked @guest_ok.
+
+
+@router.get("/api/v1/notifications/{notification_id}")
+async def get_notification(notification_id: str):
+    """One notification, by the id a push carried.
+
+    The deep-link's data source. It answers even when the notification is
+    older than the transcript page the client happens to be holding, which is
+    the case the client cannot solve on its own — a push about something from
+    last week must still show that something.
+    """
+    from app import notifications
+    note = await notifications.get(notification_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="no such notification")
+    return note
+
+
+@router.post("/api/v1/notifications/{notification_id}/open")
+async def open_notification(notification_id: str, body: dict | None = None):
+    """The client says it PUT THIS IN FRONT OF A PERSON.
+
+    The single writer of `state='opened'`, and the reason it is a route
+    rather than a flag set during delivery: everything upstream of here knows
+    only that a relay accepted some bytes. Acceptance is not receipt — this
+    repo has relearned that enough times to make it structural — so the one
+    state that means receipt is only reachable from a client that rendered
+    the thing.
+
+    Also retires the linked inbox card from 'new' to 'seen', so news read in
+    the conversation stops badging the bell.
+    """
+    from app import notifications
+    via = str((body or {}).get("via") or "chat")[:40]
+    note = await notifications.mark_opened(notification_id, via=via)
+    if note is None:
+        raise HTTPException(status_code=404, detail="no such notification")
+    return note
+
+
+@router.get("/api/v1/notifications")
+async def list_notifications(limit: int = 50):
+    """Recent notifications and what actually became of each one.
+
+    The diagnostic surface for "did that reach me?" — every row carries its
+    own honest state, and `confirmed` is true only where a client said it
+    rendered it.
+    """
+    from app import notifications
+    return {"notifications": await notifications.recent(limit)}
 
 
 # ── goals: the operator's own list ──────────────────────────────────────────

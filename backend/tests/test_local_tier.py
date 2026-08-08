@@ -164,6 +164,19 @@ async def test_fallback_decision():
              "roles": ["chat", "tools"], "is_system": True},
         ]
     model_chain._curated = _fake_curated
+
+    # ...and the catalog-membership input, pinned for the same reason the
+    # curated rows are. Since the write paths gained catalog verification
+    # (models_catalog.resolve_id), _usable_cloud judges validity by
+    # membership in this set — unpinned, it reads the install's live
+    # catalog, which in a bare test process is ollama-only and refuses
+    # every cloud row for the wrong reason.
+    saved_ids = model_chain._catalog_ids
+
+    async def _fake_ids():
+        return {"openrouter:anthropic/claude-haiku-4.5",
+                "openrouter:z-ai/glm-5.2"}
+    model_chain._catalog_ids = _fake_ids
     providers.is_configured = lambda slug: slug == "openrouter"
     providers.get = lambda slug: {"last_ok": True}
 
@@ -318,6 +331,7 @@ async def test_fallback_decision():
         agent_registry.get_agent_by_name = saved_get
         llm_router.effective_model = saved_effective
         model_chain._curated = saved_curated
+        model_chain._catalog_ids = saved_ids
         providers.is_configured = saved_configured
         providers.get = saved_provider_get
 

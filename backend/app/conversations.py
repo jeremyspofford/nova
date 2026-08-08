@@ -32,6 +32,55 @@ async def get_or_create_active_conversation() -> dict:
                 "summary": None, "summary_upto": None}
 
 
+async def operator_conversation_id() -> Optional[str]:
+    """The OPERATOR's conversation — never a guest's. Created if absent.
+
+    `get_or_create_active_conversation` above takes the newest conversation
+    row of any kind, and migration 118 gave guests their own rows. That is
+    fine for the chat endpoint, which resolves a guest through
+    `guests.conversation_for` before it ever gets here — but it is not fine
+    for anything that PUSHES content in from the outside. A notification
+    posted into the newest row would eventually land Nova's private alerts in
+    a stranger's transcript, on nothing more than the timing of when the
+    guest link was last opened.
+
+    So the filter is asked of the database (`guest_id IS NULL`) rather than
+    inferred from ordering. Returns None only if the insert itself fails, and
+    then it raises rather than returning a conversation that is not the
+    operator's.
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id FROM conversations WHERE guest_id IS NULL "
+            "ORDER BY created_at DESC LIMIT 1")
+        if row:
+            return str(row["id"])
+        conversation_id = uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO conversations (id, title) VALUES ($1, $2)",
+            conversation_id, "Nova")
+        return str(conversation_id)
+
+
+def notification_id_of(message: dict) -> Optional[str]:
+    """The notification a role='notification' transcript row points at.
+
+    A helper rather than an inline `metadata.get` because the pointer is the
+    ONLY thing that row carries — migration 125 forbids it from holding the
+    text — so every reader has to resolve it the same way or render nothing.
+    """
+    if message.get("role") != "notification":
+        return None
+    meta = message.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta or "{}")
+        except ValueError:
+            meta = {}
+    nid = (meta or {}).get("notification_id")
+    return str(nid) if nid else None
+
+
 async def set_summary(conversation_id: str, summary: str, upto):
     """Persist the rolling summary and its watermark (upto: datetime)."""
     async with db.acquire() as conn:

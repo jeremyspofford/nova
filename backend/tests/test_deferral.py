@@ -258,8 +258,22 @@ def test_invariants():
     # 24 since 2026-08-06: `list_past_ideas` joined it, the ideator's dedupe
     # ledger (ROADMAP #34). It reads `recommendations` where kind = 'idea' and
     # returns titles and statuses; raising one is a different tool entirely.
+    # 25 since 2026-08-07 (migration 124): `eval_results` joined it. It reads
+    # recorded model measurements — standings, recent runs, one run's live
+    # cursor — and every query behind it is a SELECT. Its sibling `run_eval`
+    # deliberately did NOT get the flag: it inserts an eval_runs row and
+    # spends real tokens and GPU time, which is the distinction this set is
+    # for. That split is why they are two tools rather than one with a mode.
+    # 26 since 2026-08-08 (migration 129): `list_recent_actions` joined it,
+    # the action-ledger read migration 123 named as its follow-up. It wraps
+    # `activity_log.fetch` — a READ MODEL that owns no table and has no write
+    # path by design (its module docstring) — so every query behind it is a
+    # SELECT over records other code already wrote. It exists so "what have
+    # you done?" is answered from the ledger, not the transcript.
     check("the declared read-only set is the expected size",
-          len(ro) == 24, str(len(ro)))
+          len(ro) == 26, str(len(ro)))
+    check("run_eval did NOT sneak in — starting a measurement is not reading "
+          "one", "run_eval" not in ro)
     check("check_coding_session is not in it — it writes a session state",
           "check_coding_session" not in ro)
 

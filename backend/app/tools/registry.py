@@ -5,6 +5,7 @@ tools. allowed_tools = NULL means "all builtins". DB tools are data
 (execution_type='http_call'), so creating one takes effect immediately.
 """
 
+import contextvars
 import json
 import logging
 import time
@@ -19,6 +20,37 @@ from app.tools.http_executor import execute_http_tool
 log = logging.getLogger(__name__)
 
 BUILTIN_TOOLS = builtin.BUILTIN_TOOLS
+
+#: Which gate refused the current `execute_tool` call, in `gate_refusing`'s
+#: vocabulary. A contextvar rather than a return value because every caller
+#: of execute_tool expects a bare string, and rather than a ctx key because
+#: the parallel batch runs many calls against ONE ctx dict — a contextvar is
+#: copied per task, so concurrent refusals cannot read each other's gate.
+#:
+#: This is the recorded fact activity_log's docstring asks for: until now a
+#: refusal reached the span as `detail.error` alone, so classifying WHICH
+#: gate refused meant text-matching the sentence — and a reworded gate went
+#: quietly stale. Cleared at the top of every call; read by `refused_by()`
+#: immediately after the call returns, in the same task.
+_refused_by: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "tool_gate_refused_by", default=None)
+
+
+def refused_by() -> Optional[str]:
+    """The gate that refused the most recent execute_tool call in this
+    context, or None if it ran (or failed for a non-gate reason)."""
+    return _refused_by.get()
+
+
+def _refuse(gate: str, message: str) -> str:
+    """Return a refusal string with WHICH gate recorded beside it.
+
+    The string is for the model; the gate id is for the record. Every gate
+    branch in execute_tool returns through here so the two cannot diverge —
+    a refusal that names no gate is exactly the guessing game this removes.
+    """
+    _refused_by.set(gate)
+    return message
 
 
 async def _load_db_tools() -> dict[str, dict]:
@@ -447,6 +479,11 @@ ACTOR_TOOLS = frozenset({
     # merge is why it is ALLOWED to be goal-scoped, not why it is safe on
     # untrusted text.
     "delegate_coding_task",
+    # Which models the system is permitted to run on. `model-manager` holds
+    # `web_search`, so "a page she just read talks her into adding a model to
+    # the approved pool" is exactly the shape this set refuses — and a model
+    # in the pool is a model an agent can be pointed at.
+    "manage_curated_models",
 })
 
 
@@ -762,6 +799,9 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     """
     # the model answers with the wire name it was given
     name = canonical_name(name)
+    # Cleared per call, so a gate recorded for the PREVIOUS call in this task
+    # can never be read as this one's.
+    _refused_by.set(None)
     granted = ctx.get("granted")
     if granted is not None and name not in granted:
         # GRANTED BUT NOT LOADED IS NOT UNGRANTED. `granted` is built from the
@@ -786,12 +826,14 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
         restricted, named, wildcards = _granted_mcp_tools(agent)
         if restricted and _mcp_granted(name, named, wildcards):
             server = name.split("/", 1)[0].split(":", 1)[-1]
-            return (f"Error: '{name}' IS granted to you but is not loaded this "
-                    f"turn — its server's tools are lazy. Call "
-                    f"find_mcp_tools(query='{server}') first; the match becomes "
-                    f"callable immediately, in this same turn, then re-issue "
-                    f"this call. Do not report this as a missing capability.")
-        return f"Error: tool '{name}' is not granted to this agent"
+            return _refuse("grant", (
+                f"Error: '{name}' IS granted to you but is not loaded this "
+                f"turn — its server's tools are lazy. Call "
+                f"find_mcp_tools(query='{server}') first; the match becomes "
+                f"callable immediately, in this same turn, then re-issue "
+                f"this call. Do not report this as a missing capability."))
+        return _refuse("grant",
+                       f"Error: tool '{name}' is not granted to this agent")
 
     # THE CONTAINMENT INVARIANT (docs/plans/capability-and-containment.md):
     # no turn may both hold untrusted-origin text in its context and execute
@@ -812,12 +854,13 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     if ctx.get("untrusted_context") and is_actor(
             name, await _load_db_tools(), await _read_only_servers(),
             args=args):
-        return (f"Error: '{name}' changes what this system can do, and this "
-                f"turn is holding text from an outside source (a fetched "
-                f"page, a transcript, or an earlier conversation). Refused "
-                f"mechanically — untrusted text must not be able to reach a "
-                f"tool like this. Tell the operator what you would have done "
-                f"and let them decide.")
+        return _refuse("containment", (
+            f"Error: '{name}' changes what this system can do, and this "
+            f"turn is holding text from an outside source (a fetched "
+            f"page, a transcript, or an earlier conversation). Refused "
+            f"mechanically — untrusted text must not be able to reach a "
+            f"tool like this. Tell the operator what you would have done "
+            f"and let them decide."))
 
     # THE GOAL GATE. Verbs that CREATE capability run only against a standing
     # approval — an active goal whose approved_verbs contain this one, spent
@@ -838,7 +881,22 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
     # decision — while raising a card asking for one. Default-deny lives in
     # scopes.needs_goal, so anything unrecognised is still gated.
     if needs_goal(name, args) and settings_store.get("autonomy.goal_scoped_actions"):
-        goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
+        if fixtures.active() is not None:
+            # A GRADED RUN MUST NOT BURN A REAL APPROVAL. Every goal-scoped
+            # verb is NEVER_EXECUTE under fixtures, so the tool below this
+            # gate will not run — a spend here records an action that never
+            # happened, against a budget the operator granted for real work.
+            # Measured: every pre-push suite run drained one action from a
+            # live goal covering manage_automations. So the gate's question
+            # is answered READ-ONLY, with `spend`'s own match (verb, budget,
+            # expiry, and the proposed-by binding) minus the charge.
+            goal = next(
+                (g for g in await goals.active()
+                 if name in (g.get("approved_verbs") or ())
+                 and g.get("proposed_by") in (None, ctx.get("agent_name"))),
+                None)
+        else:
+            goal = await goals.spend(name, agent_name=ctx.get("agent_name"))
         if not goal:
             # THE GATE RAISES THE CARD ITSELF. It used to return a string
             # asking the model to call `propose_goal`, which is a prompt doing
@@ -890,7 +948,7 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
                         "plainly rather than implying someone was asked. You "
                         "can call propose_goal with a clear title and finish "
                         "line instead.")
-            return (
+            return _refuse("goal", (
                 f"Error: '{name}' changes what this system can do, so it runs "
                 f"only under a goal the operator has approved. No active goal "
                 f"currently pre-approves '{name}' (one may have expired or "
@@ -899,9 +957,13 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
                 f"and that it is waiting on them. Do NOT retry this call. If "
                 f"the work needs several of these verbs together, call "
                 f"propose_goal once with all of them and a checkable finish "
-                f"line — one card for the whole job beats one per refusal.")
-        ctx.setdefault("goals_spent", []).append(
-            {"id": goal["id"], "title": goal["title"], "verb": name})
+                f"line — one card for the whole job beats one per refusal."))
+        if fixtures.active() is None:
+            # Recorded only when something was actually charged — a graded
+            # run's read-only pass spent nothing, and `goals_spent` is what
+            # downstream writes into the capability record as "under goal X".
+            ctx.setdefault("goals_spent", []).append(
+                {"id": goal["id"], "title": goal["title"], "verb": name})
 
     # guardrails — fail-open on engine errors, never on rule matches
     try:
@@ -912,8 +974,9 @@ async def execute_tool(name: str, args: dict, ctx: dict) -> str:
             if action == "block":
                 log.warning("Rule '%s' BLOCKED %s by agent %s",
                             rule["name"], name, ctx.get("agent_name"))
-                return (f"Blocked by rule '{rule['name']}': "
-                        f"{rule['description'] or 'no description'}")
+                return _refuse("rule", (
+                    f"Blocked by rule '{rule['name']}': "
+                    f"{rule['description'] or 'no description'}"))
             log.warning("Rule '%s' warned on %s by agent %s",
                         rule["name"], name, ctx.get("agent_name"))
     except Exception:

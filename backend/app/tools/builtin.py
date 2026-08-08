@@ -15,7 +15,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from app import capability_events, db, durability, tagging
+from app import activity_log, capability_events, curated_models, db, durability, tagging
 from app.tools import scopes
 from app.agents import registry as agent_registry
 from app.memory import provenance
@@ -312,6 +312,89 @@ async def _list_capability_changes(args, ctx):
         limit=limit, hours=int(hours) if hours else None))
 
 
+#: The most rows one ledger page hands a model. activity_log's own MAX_LIMIT
+#: (300) is sized for a browser tab; a transcript is smaller, and the char
+#: trim below is what actually fits the page to THIS turn's window.
+_ACTION_ROWS_CAP = 60
+
+
+async def _list_recent_actions(args, ctx):
+    """What she actually did, read from the ledger instead of remembered.
+
+    Wraps `activity_log.fetch` — the read model over records the system
+    already writes (tool spans, automation runs, coding sessions, config
+    changes, consents, ingest jobs). The reason this is a TOOL and not a
+    memory habit is the forged-receipt failure class: she has claimed refused
+    calls as done, quoted a diffstat nobody produced, and invented a session
+    id. A reply is a claim; these rows are what the gates and workers
+    recorded, refusals included, with the refusing gate's reason attached.
+
+    Truncation is never silent: the page carries `matched` (whole-window
+    total from fetch's own aggregate queries) next to `shown`, and a note
+    says CAPPED whenever they differ.
+    """
+    window = str(args.get("window") or activity_log.DEFAULT_WINDOW).strip()
+    kind = str(args.get("kind") or "").strip().lower() or None
+    outcome = str(args.get("outcome") or "").strip().lower() or None
+    try:
+        got = await activity_log.fetch(
+            window=window, limit=_ACTION_ROWS_CAP,
+            kinds=[kind] if kind else None, outcome=outcome)
+    except ValueError as e:
+        # fetch's refusals name the accepted windows/sources/outcomes —
+        # better correction than any list restated (and rotting) here.
+        return f"Error: {e}"
+
+    rows = []
+    for r in got["rows"]:
+        if r["kind"] == "meta":
+            continue           # an unreadable source; said in notes below
+        row = {"at": r["at"].strftime("%Y-%m-%d %H:%M") if r["at"] else None,
+               "kind": r["kind"], "actor": r["actor"],
+               "outcome": r["outcome"], "did": r["title"]}
+        if r.get("detail"):
+            row["detail"] = r["detail"]
+        if r.get("reason"):
+            row["reason"] = r["reason"]
+        rows.append(row)
+
+    # Fit the page to the turn's real context window, oldest rows first —
+    # rows are newest-first, so cutting the tail keeps the recent actions the
+    # question is about. `shown` below is recomputed AFTER this, so the cut
+    # can never masquerade as the whole answer.
+    budget = _turn_chars(ctx, _CATALOGUE_FRACTION)
+    while len(rows) > 5 and len(_j(rows)) > budget:
+        del rows[max(5, len(rows) - 10):]
+
+    out = {
+        "window": got["window"],
+        "matched": got["matched"],
+        "shown": len(rows),
+        # Whole-window outcome totals from fetch's aggregate queries — they
+        # do not move when the page is cut, which is what makes "82 problems"
+        # a fact about the window rather than about this page.
+        "counts": got["counts"],
+        "rows": rows,
+    }
+    notes = []
+    if len(rows) < got["matched"]:
+        notes.append(
+            f"CAPPED: the newest {len(rows)} of {got['matched']} matching "
+            f"actions are shown. The counts are whole-window totals; narrow "
+            f"with window/kind/outcome to see the rest as rows.")
+    if got.get("unreadable_sources"):
+        notes.append(
+            "MISSING, not empty — these sources could not be read, so this "
+            "page is not the whole record: "
+            + ", ".join(got["unreadable_sources"]))
+    if not got.get("counts_complete", True):
+        notes.append("The counts are a FLOOR, not a total — a source could "
+                     "not be counted.")
+    if notes:
+        out["notes"] = notes
+    return _j(out)
+
+
 async def _diagnose(args, ctx):
     """Look at her own configuration and failures, instead of guessing.
 
@@ -479,6 +562,14 @@ async def _manage_agents(args, ctx):
         model = args.get("model") or settings.default_model
         if ":" not in model:
             model = f"openrouter:{model}"
+        # THE ONE canonicalisation rule, same as every other agents.model
+        # write path: the id must resolve against the live provider catalog
+        # (a '~' profile-URL form is normalised or refused) — see
+        # models_catalog.resolve_id and the 2026-08-07 incident it names.
+        from app import models_catalog
+        model, why = await models_catalog.resolve_id(model)
+        if model is None:
+            return f"Error: {why}"
         tools = args.get("allowed_tools") or ["search_memory", "write_memory"]
         escalating = await _escalating_grants(tools, ctx)
         if escalating:
@@ -519,6 +610,15 @@ async def _manage_agents(args, ctx):
             updates = {k: v for k, v in args.items()
                        if k in ("description", "system_prompt", "model",
                                 "allowed_tools", "routing_keywords", "enabled")}
+            if "model" in updates:
+                # same rule as create: catalog-resolved or refused, so the
+                # tilde-slug shape can never be written from a tool call
+                from app import models_catalog
+                canonical, why = await models_catalog.resolve_id(
+                    str(updates["model"] or ""))
+                if canonical is None:
+                    return f"Error: {why}"
+                updates["model"] = canonical
             if "allowed_tools" in updates:
                 escalating = await _escalating_grants(updates["allowed_tools"], ctx)
                 if escalating:
@@ -1345,6 +1445,103 @@ async def _recommend_models(args, ctx):
     })
 
 
+async def _manage_curated_models(args, ctx):
+    """The approved model pool. Built for the 2026-08-07 failure: asked for
+    "the latest DeepSeek flash", NO agent could write the curated table, so
+    Nova spent 31 minutes describing UI steps (to an edit mode that no
+    longer exists) and the operator hand-inserted a malformed slug.
+
+    The gate and the audit both live in `curated_models` itself, not here:
+    `create` refuses an id the live provider catalog does not resolve, and
+    every write records a capability_events row. This function is only the
+    tool-shaped door to that module."""
+    action = (args.get("action") or "").lower()
+    actor = ctx.get("agent_name") or "an agent"
+
+    if action == "list":
+        rows = await curated_models.list_all()
+        return _j({
+            "models": [{k: r[k] for k in
+                        ("id", "model", "provider", "tool_tier", "speed",
+                         "roles", "use_cases", "enabled", "is_system",
+                         "notes")}
+                       for r in rows],
+            "note": ("Enabled cloud rows are the APPROVED set: what "
+                     "dropdowns offer, what recommendations draw from, and "
+                     "what standby chains may route to. System rows can be "
+                     "toggled but not rewritten."),
+        })
+
+    if action == "add":
+        model = (args.get("model") or "").strip()
+        provider = (args.get("provider") or "").strip() \
+            or model.split(":", 1)[0]
+        if not model:
+            return "Error: model is required ('<provider>:<id>')"
+        fields = {k: args[k] for k in curated_models._EDIT_FIELDS
+                  if k in args}
+        try:
+            # create() resolves the id against the live provider catalog and
+            # REFUSES what it cannot verify — report ITS answer, never an
+            # intention. row["model"] may differ from what was asked: a '~'
+            # profile-URL form is normalised to the canonical id.
+            row = await curated_models.create(model=model, provider=provider,
+                                              actor=actor, **fields)
+        except ValueError as e:
+            return f"Error: {e}"
+        except Exception as e:  # duplicate model etc.
+            return f"Error: {e}"
+        out = {"status": "added", "id": row["id"], "model": row["model"],
+               "enabled": row["enabled"]}
+        if row["model"] != model:
+            out["normalised_from"] = model
+        if not row["roles"]:
+            out["note"] = ("roles is empty, so nothing will recommend this "
+                           "model or use it as a standby — update the row "
+                           "with the roles it can hold (e.g. chat, tools).")
+        out["next"] = ("Adding a row approves the model for the pool; it "
+                       "assigns nothing. To put an agent on it, raise a "
+                       "recommendation with action "
+                       "{\"type\": \"model.assign\"} — the operator's "
+                       "approval performs the assignment.")
+        return _j(out)
+
+    if action in ("update", "enable", "disable"):
+        ident = (args.get("row_id") or args.get("model") or "").strip()
+        if not ident:
+            return "Error: row_id (or the exact model id) is required"
+        row = None
+        for r in await curated_models.list_all():
+            if r["id"] == ident or r["model"] == ident:
+                row = r
+                break
+        if not row:
+            return f"Error: no curated row matches '{ident}'"
+        if action == "update":
+            fields = {k: args[k] for k in curated_models._EDIT_FIELDS
+                      if k in args}
+            if not fields:
+                return ("Error: nothing to update — send one of: "
+                        + ", ".join(sorted(curated_models._EDIT_FIELDS)))
+        else:
+            fields = {"enabled": action == "enable"}
+        try:
+            result = await curated_models.update(row["id"], actor=actor,
+                                                 **fields)
+        except ValueError as e:
+            return f"Error: {e}"
+        if result == "is_system":
+            return (f"Error: '{row['model']}' is a seeded system row — it "
+                    f"can be enabled/disabled but not rewritten")
+        if result != "updated":
+            return f"Error: {result}"
+        return _j({"status": "updated", "model": row["model"],
+                   "changed": sorted(fields)})
+
+    return ("Error: unknown action "
+            f"'{action}' (use list/add/update/enable/disable)")
+
+
 async def _pull_model(args, ctx):
     from app import models_catalog
     name = (args.get("name") or "").strip()
@@ -1356,6 +1553,95 @@ async def _pull_model(args, ctx):
                 f"LM Studio, llama.cpp, and vLLM manage their own model "
                 f"downloads. Only 'ollama' supports pulling from Nova.")
     return await models_catalog.start_pull(name)
+
+
+# ── measuring a model (model-manager agent, migration 124) ──────────────
+#
+# Until migration 124 NO agent could measure a model. That is a hole under the
+# self-improvement loop, whose eval floor gates on scores nothing she can
+# produce, and it is why "run an eval" was an operator-only button.
+#
+# Two tools rather than one with a mode, so `reads_only` can be honest about
+# each: starting a run writes a row and spends real tokens and GPU; reading
+# standings does neither, and the deferral guard and the parallel-tool fence
+# both key off that flag.
+
+async def _run_eval(args, ctx):
+    from app import eval_runs
+    suite = str(args.get("suite") or "").strip()
+    model = str(args.get("model") or "").strip()
+    if not suite or not model:
+        return "Error: suite and model are both required"
+    raw = args.get("repeat")
+    try:
+        repeat = 1 if raw is None else int(raw)
+    except (TypeError, ValueError):
+        return "Error: repeat must be an integer"
+    if not 1 <= repeat <= eval_runs.MAX_REPEAT:
+        return f"Error: repeat must be between 1 and {eval_runs.MAX_REPEAT}"
+    try:
+        started = await eval_runs.start(suite, model, repeat)
+    except FileNotFoundError:
+        from app.evals import suites as suite_mod
+        return (f"Error: no suite named {suite!r} — the suites are: "
+                + ", ".join(sorted(suite_mod.list_suites())))
+    except ValueError as e:
+        # An eval already running, or a model whose provider is not
+        # configured. Both are mechanical refusals with the reason in them;
+        # neither is something to try again immediately.
+        return f"Error: {e}"
+    # NO SCORE HERE, and that is deliberate rather than a limitation. A suite
+    # is minutes of wall clock; a tool that blocked on it would time out the
+    # turn, and one that guessed would be the thing this repo keeps catching
+    # itself doing. The id and the measured estimate are what is true now.
+    started["cost"] = await eval_runs.estimate(suite)
+    started["next"] = (f"nothing is measured yet. Read it back with "
+                       f"eval_results{{\"action\": \"run\", \"run_id\": "
+                       f"\"{started['id']}\"}} — it reports task N of M while "
+                       f"it goes, and survives a backend restart by resuming "
+                       f"at the task it reached.")
+    return _j(started)
+
+
+async def _eval_results(args, ctx):
+    from app import eval_runs, model_tournament
+    action = (args.get("action") or "standings").strip().lower()
+
+    if action == "run":
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            return "Error: run_id is required for action 'run'"
+        try:
+            row = await eval_runs.progress(run_id)
+        except Exception as e:  # noqa: BLE001 — a malformed uuid is not a crash
+            return f"Error: {run_id!r} is not a run id ({e})"
+        if not row:
+            return f"Error: no eval run with id {run_id}"
+        return _j(row)
+
+    if action == "recent":
+        limit = min(int(args.get("limit") or 10), 50)
+        return _j({"runs": await eval_runs.recent(
+            (args.get("agent") or "").strip() or None, limit)})
+
+    if action == "standings":
+        table = await model_tournament.standings()
+        # The caveats travel WITH the number, because the number on its own is
+        # what gets over-read — a board can be empty because nothing has been
+        # measured or because a suite version bump voided everything, and
+        # those are different facts. Derived in standings(); restated here
+        # only as prose keyed off what it returned.
+        table["reading"] = (
+            "a model is ranked only if it was measured across the whole "
+            "basis; 'missing' is what is still owed. leader=null with "
+            "comparable=true means a tie, not an error."
+            if table.get("comparable") else
+            f"not comparable yet — {len(table.get('missing') or [])} "
+            f"pairing(s) still owed before any model can be ranked. Do not "
+            f"name a best model from this.")
+        return _j(table)
+
+    return f"Error: unknown action '{action}' (use standings/recent/run)"
 
 
 # ── guardrail rules (guardian agent only) ───────────────────────────────
@@ -2302,6 +2588,19 @@ async def _notify_operator(args, ctx):
     devices" — while the push that arrived came from the PWA. Jeremy caught it
     because he could see which app buzzed. A hardcoded name in a tool result is
     a lie the model cannot detect.
+
+    RETURNS THE RECORD, NOT JUST THE TRANSPORT (migration 125). `notification_id`
+    names the row the push was generated from, `in_chat` says whether it also
+    landed in the operator's transcript, and `delivery` is that row's own
+    honest line ("accepted by webpush — not confirmed received" /
+    "opened on your device"). `id` used to be the transport's id ("1/1
+    devices") under a name that reads like a record id; it is `transport_id`
+    now, so the two cannot be confused.
+
+    AND `status` CAN BE "deduped". notify.send suppresses identical news
+    inside its window WITHOUT asking the provider — that call publishes
+    nothing, and saying "accepted" for it would be a report of a send that
+    never happened.
     """
     from app import notify
     message = (args.get("message") or "").strip()
@@ -2312,17 +2611,52 @@ async def _notify_operator(args, ctx):
     result = await notify.send(
         message, title=(args.get("title") or "").strip() or None,
         priority=priority, tags=tags)
+
+    # Every branch below carries the notification id and the row's own
+    # delivery line, because "did that notification reach me?" is a question
+    # about a record, not about this call's return value. Without the id the
+    # model has nothing to name and can only repeat whatever this note said.
+    base = {"notification_id": result.get("notification_id"),
+            "in_chat": result.get("in_chat"),
+            "delivery": result.get("delivery_label")}
+    if result.get("chat_error") or result.get("record_error"):
+        base["chat_error"] = result.get("chat_error") or result.get("record_error")
+
+    # A DUPLICATE IS NOT A SEND, and it is checked before `ok` because for a
+    # deduped call `ok` is a fact about an EARLIER push. notify.send collapses
+    # identical news inside its window without asking the provider at all, so
+    # the old "Accepted — this confirms it was PUBLISHED" note was a claim
+    # about bytes that never moved. (CLAUDE.md: never report success you did
+    # not check.)
+    if result.get("deduped"):
+        label = result.get("delivery_label") or "in an unknown state"
+        return _j({**base, "status": "deduped",
+                   "repeats": result.get("repeats"),
+                   "first_raised_at": result.get("first_raised_at"),
+                   "provider": result.get("provider"),
+                   "note": ("NOTHING WAS PUBLISHED BY THIS CALL. This exact "
+                            "message was already raised moments ago, so it was "
+                            "folded onto that notification instead of buzzing "
+                            f"the operator a second time. That one is: {label}. "
+                            "Do NOT say you just sent a notification — say it "
+                            "was already raised, and give that delivery state "
+                            "if they ask.")})
+
     if not result["ok"]:
-        return _j({"status": "not_sent", "error": result["error"],
+        return _j({**base, "status": "not_sent", "error": result["error"],
                    "note": ("The notification did NOT go out. Tell the operator "
                             "plainly (they may need to enable/configure "
-                            "notifications in Settings).")})
+                            "notifications in Settings). It IS in their chat "
+                            "transcript saying why, if in_chat is true.")})
     via = result.get("provider") or "the notification provider"
-    return _j({"status": "accepted", "id": result.get("id"), "provider": via,
+    return _j({**base, "status": "accepted", "transport_id": result.get("id"),
+               "provider": via,
                "note": (f"Accepted by {via} — this confirms it was PUBLISHED, "
                         f"not that it reached the operator's device. Say you "
                         f"sent it and name {via} if you name anything; don't "
-                        f"claim they have seen it.")})
+                        f"claim they have seen it. `delivery` above is the "
+                        f"row's own words; only 'opened on your device' means "
+                        f"it was seen.")})
 
 
 async def _manage_rules(args, ctx):
@@ -2723,6 +3057,36 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "reads_only": True,
         "execute": _list_capability_changes,
     },
+    "list_recent_actions": {
+        "name": "list_recent_actions",
+        "description": (
+            "What you have ACTUALLY done recently — the action ledger, built "
+            "from the records the system writes as things happen: tool calls "
+            "(including the ones a gate REFUSED, with the reason), scheduled "
+            "runs, coding sessions, config changes, consents and ingestion, "
+            "newest first with whole-window outcome totals. Answer 'what "
+            "have you done today?' from THIS, never from the conversation: "
+            "a reply is a claim, this ledger is the record, and it holds the "
+            "refusals you may remember as work done. Graded eval replays are "
+            "excluded."),
+        "parameters": {"type": "object", "properties": {
+            "window": {"type": "string",
+                       "enum": list(activity_log.WINDOWS),
+                       "description": ("How far back "
+                                       f"(default {activity_log.DEFAULT_WINDOW})")},
+            "kind": {"type": "string",
+                     "enum": sorted(activity_log.SOURCES),
+                     "description": "Only one source of actions"},
+            "outcome": {"type": "string",
+                        "description": ("'problems' for refusals, failures "
+                                        "and stalls only, or one exact "
+                                        "outcome such as 'ok' or 'refused'; "
+                                        "a wrong value is refused with the "
+                                        "full list")},
+        }},
+        "reads_only": True,
+        "execute": _list_recent_actions,
+    },
     "list_skills": {
         "name": "list_skills",
         "description": ("Every skill you have, by name and description. Use "
@@ -2929,6 +3293,40 @@ BUILTIN_TOOLS: dict[str, dict] = {
         "reads_only": True,
         "execute": _recommend_models,
     },
+    "manage_curated_models": {
+        "name": "manage_curated_models",
+        "description": (
+            "The approved model pool (the curated table). 'list' shows every "
+            "row — enabled cloud rows are what dropdowns, recommendations "
+            "and standby chains may use. 'add' verifies the id against the "
+            "LIVE provider catalog and refuses ids the provider does not "
+            "serve (a '~author/model' profile-URL form is normalised to the "
+            "real id when one exists — report the id the result names, not "
+            "the one you sent). 'update' edits the knowledge fields of a "
+            "non-system row; enable/disable toggles any row. Adding a row "
+            "approves a model, it assigns nothing — propose an assignment "
+            "with raise_recommendation action {\"type\": \"model.assign\"}."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["list", "add", "update", "enable", "disable"]},
+            "model": {"type": "string",
+                      "description": "'<provider>:<id>', e.g. "
+                                     "'openrouter:deepseek/deepseek-v4-flash-latest'"
+                                     " — also accepted as the identifier for "
+                                     "update/enable/disable"},
+            "provider": {"type": "string",
+                         "description": "for 'add'; defaults to the id's own "
+                                        "prefix"},
+            "row_id": {"type": "string",
+                       "description": "for update/enable/disable (from "
+                                      "'list')"},
+            # DERIVED from curated_models' own validation tuples — the same
+            # source `_validate` enforces, so this schema cannot advertise a
+            # value the write path refuses. See curated_models.edit_field_schema.
+            **curated_models.edit_field_schema(),
+        }, "required": ["action"]},
+        "execute": _manage_curated_models,
+    },
     "pull_model": {
         "name": "pull_model",
         "description": ("Download a new local model in the background (Ollama library "
@@ -2941,6 +3339,58 @@ BUILTIN_TOOLS: dict[str, dict] = {
                         "description": "Target backend (default ollama — the only pull-capable one)"},
         }, "required": ["name"]},
         "execute": _pull_model,
+    },
+    "run_eval": {
+        "name": "run_eval",
+        "description": (
+            "Measure a model: run one eval suite's real agent tasks against "
+            "it and grade them mechanically. Returns a run id IMMEDIATELY and "
+            "no score — a suite is minutes of wall clock and real tokens. "
+            "Read progress and the verdict back with eval_results{action: "
+            "'run', run_id}. Only one eval runs at a time; a second start is "
+            "refused naming the run holding the slot. A run survives a "
+            "backend restart (it resumes at the task it reached), so "
+            "'running, task 3 of 7' is progress, not a fault. Never report a "
+            "score you have not read back."),
+        "parameters": {"type": "object", "properties": {
+            "suite": {"type": "string",
+                      "description": "suite name — eval_results{action: "
+                                     "'standings'} lists what exists"},
+            "model": {"type": "string",
+                      "description": "'<provider>:<id>', e.g. 'ollama:qwen3:8b'. "
+                                     "It must resolve to ITSELF: a model whose "
+                                     "provider is not configured is refused "
+                                     "rather than silently grading the fallback"},
+            "repeat": {"type": "integer",
+                       "description": "runs per task (default 1, max 10). A "
+                                      "task passes only if it passed EVERY "
+                                      "repeat — one draw is not a measurement"},
+        }, "required": ["suite", "model"]},
+        # NOT reads_only: it inserts a row and spends tokens and GPU.
+        "execute": _run_eval,
+    },
+    "eval_results": {
+        "name": "eval_results",
+        "description": (
+            "Read recorded model measurements. 'standings' ranks local models "
+            "across the suites and says what is still owed instead of "
+            "inventing a winner; 'recent' lists recent runs; 'run' reports "
+            "one run task by task, including whether it is stuck. A run with "
+            "status 'error' was the HARNESS or the machine failing and is "
+            "NEVER a verdict on the model — read detail.failure.type. Only "
+            "'passed'/'failed' carry a score."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["standings", "recent", "run"],
+                       "description": "default 'standings'"},
+            "run_id": {"type": "string", "description": "for 'run'"},
+            "agent": {"type": "string",
+                      "description": "for 'recent': filter to one agent"},
+            "limit": {"type": "integer",
+                      "description": "for 'recent' (default 10, max 50)"},
+        }},
+        "reads_only": True,
+        "execute": _eval_results,
     },
     "manage_rules": {
         "name": "manage_rules",

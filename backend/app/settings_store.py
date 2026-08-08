@@ -667,7 +667,10 @@ SETTING_DEFS: list[dict] = [
                      "— nothing the main agent lacks, and never dispatch. "
                      "Changing Nova (rules, automations, skills, settings, "
                      "memory writes) stays operator-only regardless. Mind "
-                     "that MCP servers vary in power — grant deliberately.")},
+                     "that MCP servers vary in power — grant deliberately. "
+                     "VOICES ONLY: guest links (Settings → Guests) carry "
+                     "their own fixed toolset and are not widened by "
+                     "anything set here.")},
     # ── Notifications (roadmap #21) ──────────────────────────────────────
     # The only way Nova reaches you when the app is closed. Provider-based
     # (app/notify.py): ntfy is the batteries-included default (keyless,

@@ -6,6 +6,7 @@ import {
   ResourceHistory, ServiceHealth, SystemResources,
 } from '../api';
 import { RecentTurns } from './RecentTurns';
+import { SpendCard } from './SpendCard';
 import { CardsSkeleton, Surface } from './ui';
 
 /** The Observability board (docs/plans/observability-board.md, phase 1) — a
@@ -130,6 +131,7 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<ServiceHealth[] | null>(null);
   const [summary, setSummary] = useState<ObservabilitySummary | null>(null);
   const [window, setWindow] = useState<(typeof WINDOWS)[number]>('24h');
+  const [includeEvals, setIncludeEvals] = useState(false);
   const [hist, setHist] = useState<ResourceHistory | null>(null);
   const [histWin, setHistWin] = useState<HistWindow>('24h');
   const [fleet, setFleet] = useState<FleetInstance[] | null>(null);
@@ -154,8 +156,9 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    getObservabilitySummary(window).then(setSummary).catch(e => setErr(String(e)));
-  }, [window]);
+    getObservabilitySummary(window, includeEvals)
+      .then(setSummary).catch(e => setErr(String(e)));
+  }, [window, includeEvals]);
 
   // history: samples land ~1/min, so refresh slowly; refetch on window change
   useEffect(() => {
@@ -488,6 +491,23 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
                     {Object.entries(summary.sources).map(([k, v]) => `${v} ${k}`).join(' · ')}
                   </span>
                 </div>
+                {/* Eval replays are set aside by default — a nightly suite ran
+                    1944 turns in 7d and its scripted failures drowned the
+                    error rate. Excluded is not deleted: the count says so, and
+                    one click folds them back in. */}
+                {(summary.eval_turns_excluded > 0 || summary.include_evals) && (
+                  <div className="text-[11px] text-stone-500 mb-2">
+                    {summary.include_evals
+                      ? 'Eval turns included.'
+                      : `${summary.eval_turns_excluded} eval turn${
+                        summary.eval_turns_excluded === 1 ? '' : 's'} excluded.`}
+                    {' '}
+                    <button onClick={() => setIncludeEvals(v => !v)}
+                      className="text-stone-500 underline hover:text-teal-400">
+                      {summary.include_evals ? 'exclude evals' : 'include them'}
+                    </button>
+                  </div>
+                )}
                 {summary.by_model.length > 0 && (
                   <div className="rounded-lg border border-stone-700/70 overflow-x-auto nice-scroll mb-3">
                     <table className="w-full min-w-[26rem] text-[11px]">
@@ -520,6 +540,9 @@ export function ObservabilityOverlay({ onClose }: { onClose: () => void }) {
             )}
             <RecentTurns />
           </section>
+
+          {/* Spend — the improve lane's ledger, ceilings and preflight */}
+          <SpendCard />
           </>}
       </>
     </Surface>

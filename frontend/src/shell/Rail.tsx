@@ -2,6 +2,7 @@ import { ReactNode, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { plainMode, setPlainMode } from './plainMode';
 import { useIngestSummary } from '../components/IngestionPanel';
+import { useActionProblems } from '../components/ActionLog';
 
 /** The utility rail. The canvas is the app — these items open utility
  *  surfaces over it, and the Nova mark always leads back home. Collapsed
@@ -91,13 +92,20 @@ export function Rail() {
   const { pathname } = useLocation();
   const { summary } = useIngestSummary(false);
 
+  const problems = useActionProblems();
+
   const counts = summary?.counts ?? {};
   const ingestActive = (counts.running ?? 0) + (counts.queued ?? 0);
-  const ingestFailed = counts.failed ?? 0;
-  const ingestBadge = ingestActive > 0 ? (
+  // The Action log's badge is about ACTIONS: something refused, failed or
+  // stalled in the last hour. Live ingest work still pulses, because that is
+  // work in flight and the log shows it — but a refusal now lights the rail,
+  // which is the whole point of the surface it leads to.
+  const actionBadge = (problems ?? 0) > 0 ? (
+    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px] rounded-full bg-amber-500 text-stone-950 text-[9px] font-semibold leading-[14px] text-center">
+      {problems! > 9 ? '9+' : problems}
+    </span>
+  ) : ingestActive > 0 ? (
     <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-  ) : ingestFailed > 0 ? (
-    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />
   ) : undefined;
 
   const at = (p: string) => pathname === p || pathname.startsWith(p + '/');
@@ -149,8 +157,8 @@ export function Rail() {
           active={at('/vault')} onClick={() => go('/vault')} />
         <RailItem icon={ICONS.library} label="Library" expanded={expanded}
           active={at('/library')} onClick={() => go('/library')} />
-        <RailItem icon={ICONS.activity} label="Activity" expanded={expanded}
-          active={at('/activity')} onClick={() => go('/activity')} badge={ingestBadge} />
+        <RailItem icon={ICONS.activity} label="Action log" expanded={expanded}
+          active={at('/activity')} onClick={() => go('/activity')} badge={actionBadge} />
         <RailItem icon={ICONS.observability} label="Observability" expanded={expanded}
           active={at('/observability')} onClick={() => go('/observability')} />
       </nav>

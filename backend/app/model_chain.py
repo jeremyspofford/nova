@@ -74,16 +74,40 @@ def standby_setting() -> str:
     return name if name.startswith("ollama:") else f"ollama:{name}"
 
 
-def _usable_cloud(row: dict, want_tools: bool) -> bool:
-    """Is this curated row something we could actually route a turn to?"""
+def _usable_cloud(row: dict, want_tools: bool,
+                  catalog_ids: Optional[set] = None) -> bool:
+    """Is this curated row something we could actually route a turn to?
+
+    `catalog_ids` is the full live catalog (models_catalog), and membership
+    in it is THE validity truth — the same set the pin guard in model_recs
+    judges `current_valid` by. This used to be a hardcoded `"~" in model`
+    refusal, which disagreed silently with that guard: two modules answering
+    "does this id resolve?" from different evidence. Now the write paths
+    refuse or normalise unresolvable ids (models_catalog.resolve_id) and this
+    reads the same catalog they checked against.
+
+    Membership is judged PER SLUG: it only decides for a provider that
+    contributed at least one catalog entry. This runs while a turn is
+    already failing, and the realistic outage is PARTIAL — a cloud
+    provider's /models fetch times out (models_catalog logs and yields
+    nothing for it) while ollama's /api/tags answers, so the set arrives
+    non-empty but cloud-blind. Judging such a row by global membership
+    would refuse every cloud standby because a catalog fetch failed —
+    recreating the outage the chain exists to survive. For any slug with
+    zero entries (or when the whole catalog is None/empty), membership is
+    unknowable and only the one id shape KNOWN to be a paste artifact
+    ('~author/model', the 2026-08-07 incident) is still refused: a standby
+    that 404s is worse than no standby, it consumes the last link and the
+    turn still dies.
+    """
     model = str(row.get("model") or "")
     slug = model.split(":", 1)[0]
     if not model or slug == "ollama":
         return False
-    # A pseudo-id the operator typed ("openrouter:~anthropic/claude-opus-latest")
-    # has no evidence it resolves at the provider. A standby that 404s is worse
-    # than no standby: it consumes the last link and the turn still dies.
-    if "~" in model:
+    if catalog_ids and any(i.split(":", 1)[0] == slug for i in catalog_ids):
+        if model not in catalog_ids:
+            return False
+    elif "~" in model:
         return False
     if not providers.is_configured(slug):
         return False
@@ -110,7 +134,8 @@ async def cross_tier_standby(agent: dict, *, curated=None,
         want_tools = needs_tools(agent)
         if llm_router.is_local(llm_router.effective_model(agent.get("model") or "")):
             rows = curated if curated is not None else await _curated()
-            usable = [r for r in rows if _usable_cloud(r, want_tools)]
+            ids = await _catalog_ids()
+            usable = [r for r in rows if _usable_cloud(r, want_tools, ids)]
             if not usable:
                 return None
             usable.sort(key=lambda r: (
@@ -141,6 +166,28 @@ async def cross_tier_standby(agent: dict, *, curated=None,
 async def _curated():
     from app import curated_models
     return await curated_models.list_all(enabled_only=True)
+
+
+async def _catalog_ids() -> Optional[set]:
+    """The full live catalog's ids, or None when nothing could be read.
+
+    None and empty are the same fact here — "membership is unknowable right
+    now" — and so, per slug, is a non-empty set with no entries for a row's
+    provider (`_usable_cloud` reads absence of a SLUG as "that provider's
+    catalog was unreadable", not "it serves nothing"); in each case it
+    degrades to refusing only the known paste-artifact shape. Module-level
+    so tests inject it the way they inject `_curated`; cached upstream
+    (models_catalog, 5 min), so the failing-turn path pays one dict
+    comprehension, not a fetch per row.
+    """
+    try:
+        from app import models_catalog
+        models = await models_catalog.list_models(full=True)
+    except Exception:  # noqa: BLE001 — this runs on a turn already failing
+        log.warning("catalog unavailable while deriving a standby; falling "
+                    "back to the '~'-shape refusal", exc_info=True)
+        return None
+    return {m["id"] for m in models} or None
 
 
 async def _rank_local():

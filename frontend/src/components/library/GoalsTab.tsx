@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Goal, createGoal, deleteGoal, getGoals, patchGoal } from '../../api';
+import {
+  Goal, SpendGoal, createGoal, deleteGoal, getGoals, getSpend, patchGoal,
+} from '../../api';
+import { refundLine } from '../../observability';
 import { fmtDateTime } from '../../time';
 import { CardsSkeleton } from '../ui';
 
@@ -65,10 +68,20 @@ export function GoalsTab() {
   const [form, setForm] = useState({ title: '', description: '' });
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', description: '' });
+  // Refund counts per goal, from the spend ledger. actions_used alone lies by
+  // omission: a goal at 13/20 that was refunded 9 times has ATTEMPTED 22
+  // passes, and the wall doing the refunding is the reason nothing ships.
+  // Keyed by id; goals outside the improve lane simply have no row here.
+  const [spendGoals, setSpendGoals] = useState<Record<string, SpendGoal>>({});
 
   const load = () => getGoals().then(setRows).catch(e => setStatus(String(e)))
     .finally(() => setLoaded(true));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    getSpend('improve', 1)
+      .then(s => setSpendGoals(Object.fromEntries(s.goals.map(g => [g.id, g]))))
+      .catch(() => {});
+  }, []);
 
   async function save(id: string, patch: Partial<Goal>) {
     try {
@@ -133,6 +146,17 @@ export function GoalsTab() {
                 <div className="min-w-0">
                   <div className="text-sm text-stone-200">{g.title}</div>
                   <div className="mt-1"><Verbs goal={g} /></div>
+                  {/* Under the counter: what the counter cannot say. The full
+                      refund reason (the provider's own sentence) rides on the
+                      title rather than the row — it runs to whole paragraphs. */}
+                  {spendGoals[g.id] && refundLine(spendGoals[g.id]) && (
+                    <div className="mt-0.5 text-[11px] text-amber-400/90"
+                      title={spendGoals[g.id].last_refund_reason ?? undefined}>
+                      {refundLine(spendGoals[g.id])}
+                      {spendGoals[g.id].last_refund_at &&
+                        ` · last ${fmtDateTime(spendGoals[g.id].last_refund_at!)}`}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <select

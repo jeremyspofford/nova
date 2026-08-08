@@ -108,9 +108,32 @@ async def list_pending(conversation_id: Optional[str] = None) -> list[dict]:
             list(_DECIDE_TTL_MIN.keys()), list(_DECIDE_TTL_MIN.values()),
             DECIDE_TTL_MIN)
         if conversation_id:
+            # ...OR BELONGS TO NO CONVERSATION AT ALL.
+            #
+            # A card raised by a MIGRATION, the scheduler or the heartbeat has
+            # no chat to be raised in — there was no turn. Filtering strictly
+            # on the id therefore made every system-raised card a real,
+            # pending, undecidable row: it existed, it blocked the capability
+            # it gated, and it appeared nowhere.
+            #
+            # MEASURED 2026-08-07, and it is the SECOND time this hole has
+            # been found from a different direction. In July every
+            # AGENT-raised card had a NULL conversation_id for want of the id
+            # being threaded down (see runner.py's ctx["conversation_id"]);
+            # that was fixed at the writer. This is the same hole at the
+            # reader, and it cannot be fixed at the writer, because a
+            # migration genuinely has no conversation to name. Migration 116's
+            # "Turn on the self-improvement loop?" sat pending and invisible
+            # while the operator looked for it.
+            #
+            # NULL is not "some other conversation" — it is "addressed to the
+            # operator, not to a chat", so it belongs in whichever one he is
+            # reading. That makes an undisplayable pending card impossible by
+            # construction rather than by remembering to pass an argument.
             rows = await conn.fetch(
                 "SELECT * FROM consents WHERE status = 'pending' "
-                "AND conversation_id = $1 ORDER BY created_at",
+                "AND (conversation_id = $1 OR conversation_id IS NULL) "
+                "ORDER BY created_at",
                 uuid_mod.UUID(conversation_id))
         else:
             rows = await conn.fetch(

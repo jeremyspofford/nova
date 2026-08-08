@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
-  SettingDef, getNotifyReachability, getNotifyService, notifyServiceAction,
-  getPushPubkey, listPushDevices, subscribePush, unsubscribePush,
-  urlB64ToUint8Array,
+  SettingDef, getNotifyReachability, getNotifyService, listNotifications,
+  notifyServiceAction, getPushPubkey, listPushDevices, subscribePush,
+  unsubscribePush, urlB64ToUint8Array,
 } from '../../api';
-import type { NotifyReachability, NotifyService, PushDevice } from '../../api';
+import type { ChatNotification, NotifyReachability, NotifyService, PushDevice } from '../../api';
+import { NOTIFICATION_STATES, stateCounts } from '../../observability';
+import { fmtDateTime } from '../../time';
 
 /** A human name for this device, good enough to tell rows apart. */
 function deviceLabel(): string {
@@ -284,6 +286,135 @@ export function NotificationsReachability() {
         </div>
       ) : (
         <div className="mt-2 text-xs text-stone-500">{loading ? 'checking…' : 'unavailable'}</div>
+      )}
+    </div>
+  );
+}
+
+const STATE_CHIP: Record<string, string> = {
+  pending: 'border-amber-800 text-amber-400',
+  accepted: 'border-stone-600 text-stone-400',
+  opened: 'border-teal-800 text-teal-400',
+  failed: 'border-red-900 text-red-400',
+};
+
+/** What actually became of each notification — the delivery history.
+ *
+ *  The rows have existed since migration 125 and NOTHING rendered them: on
+ *  this install 121 of 176 are `failed` and the only symptom was silence.
+ *  Every row carries its own `delivery_label`, one line the backend already
+ *  wrote so the UI and the record cannot disagree — this table shows it
+ *  rather than restating the state machine. `opened` is the only state that
+ *  means a person saw it; `accepted` means a relay took some bytes. */
+export function NotificationDeliveryHistory() {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<ChatNotification[] | null>(null);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState<string | null>(null);
+
+  const load = () => {
+    listNotifications(200)
+      .then(r => { setRows(r); setError(''); })
+      .catch(e => setError(String(e)));
+  };
+  useEffect(() => { if (open && rows === null) load(); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [open]);
+
+  const counts = rows ? stateCounts(rows) : null;
+  const shown = (rows ?? []).filter(r => !filter || r.state === filter);
+
+  return (
+    <div className="rounded-lg border border-stone-700/70 bg-stone-800/40">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 text-left">
+        <span>
+          <span className="text-sm text-stone-200">Delivery history</span>
+          <span className="block text-xs text-stone-500">
+            Every notification and what became of it — the diagnostic surface
+            for &ldquo;did that reach me?&rdquo;
+          </span>
+        </span>
+        <span className="text-stone-500 text-xs shrink-0 ml-3">{open ? 'hide' : 'show'}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-stone-700/70 px-3 py-2 space-y-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <button onClick={() => setFilter(null)}
+              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                filter === null ? 'bg-teal-700/50 text-teal-200' : 'text-stone-500 hover:text-stone-300'}`}>
+              all{rows ? ` (${rows.length})` : ''}
+            </button>
+            {NOTIFICATION_STATES.map(s => (
+              <button key={s} onClick={() => setFilter(f => (f === s ? null : s))}
+                className={`px-1.5 py-0.5 rounded text-[10px] ${
+                  filter === s ? 'bg-teal-700/50 text-teal-200'
+                    : s === 'failed' && (counts?.failed ?? 0) > 0
+                      ? 'text-red-400 hover:text-red-300'
+                      : 'text-stone-500 hover:text-stone-300'}`}>
+                {s}{counts ? ` (${counts[s]})` : ''}
+              </button>
+            ))}
+            <button onClick={load}
+              className="ml-auto text-[11px] text-stone-500 hover:text-teal-400">
+              refresh
+            </button>
+          </div>
+          {error && <div className="text-xs text-red-400">{error}</div>}
+          {rows === null && !error && <div className="text-xs text-stone-500">Loading…</div>}
+          {rows !== null && shown.length === 0 && (
+            <div className="text-xs text-stone-500">
+              {filter ? `Nothing in state ${filter}.` : 'No notifications yet.'}
+            </div>
+          )}
+          {shown.length > 0 && (
+            <div className="rounded-lg border border-stone-700/70 overflow-x-auto nice-scroll max-h-80 overflow-y-auto">
+              <table className="w-full min-w-[34rem] text-[11px]">
+                <thead className="text-stone-500 bg-stone-800/40 sticky top-0">
+                  <tr>
+                    <th className="text-left font-normal px-3 py-1.5">when</th>
+                    <th className="text-left font-normal px-3 py-1.5">kind</th>
+                    <th className="text-left font-normal px-3 py-1.5">what</th>
+                    <th className="text-left font-normal px-3 py-1.5">state</th>
+                    <th className="text-left font-normal px-3 py-1.5">what became of it</th>
+                  </tr>
+                </thead>
+                <tbody className="text-stone-300">
+                  {shown.map(n => (
+                    <tr key={n.id} className="border-t border-stone-800 align-top">
+                      <td className="px-3 py-1 font-mono text-stone-500 whitespace-nowrap">
+                        {n.created_at ? fmtDateTime(n.created_at) : '—'}
+                      </td>
+                      <td className="px-3 py-1 text-stone-400">{n.kind}</td>
+                      <td className="px-3 py-1 max-w-[16rem]">
+                        <span className="block truncate" title={n.body}>
+                          {n.title || n.body}
+                        </span>
+                      </td>
+                      <td className="px-3 py-1">
+                        <span className={`inline-block px-1.5 py-0.5 rounded border font-mono ${
+                          STATE_CHIP[n.state] ?? 'border-stone-600 text-stone-400'}`}>
+                          {n.state}
+                        </span>
+                        {(n.repeats ?? 0) > 1 && (
+                          <span className="text-stone-600 ml-1">×{n.repeats}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1 text-stone-500 max-w-[18rem]">
+                        <span className="block truncate"
+                          title={n.error ? `${n.delivery_label} — ${n.error}` : n.delivery_label}>
+                          {n.delivery_label}
+                          {n.provider && <span className="text-stone-600"> · {n.provider}</span>}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

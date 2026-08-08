@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
+  ChatNotification,
   Consent,
   ModelInfo,
   RecCard,
@@ -14,9 +15,12 @@ import {
   getAgents,
   getMessages,
   getModels,
+  getNotification,
   getPendingConsents,
   getRecCards,
   listCommands,
+  listNotifications,
+  openNotification,
   patchAgent,
   preflightRecCard,
   rerunRecAction,
@@ -38,6 +42,7 @@ import { useAssistantName } from '../useAssistantName';
 import { groupModels } from '../models';
 import { BackButton, NavList, NavRow } from '../components/ui';
 import { useSheetHistory } from '../shell/useSheetHistory';
+import { fmtDateTime } from '../time';
 
 /** An attachment as the message list shows it — preview only exists for
  *  images picked this session (history rows come back name-only). */
@@ -64,6 +69,14 @@ type Item =
   // a slash command's own reply — neither the operator nor Nova said it,
   // so it must not look like either
   | { id: string; kind: 'note'; content: string }
+  /** Something Nova pushed to the operator's devices, IN the transcript
+   *  (backend migration 125). Jeremy, 2026-08-07: "Notifications should be in
+   *  chat, not just the notifications bell."
+   *
+   *  It carries the notification RECORD, not a copy of its text — the message
+   *  row behind it stores no content at all, so what the push was built from
+   *  and what this renders are the same row. */
+  | { id: string; kind: 'notification'; notification: ChatNotification }
   | { id: string; kind: 'consent'; consent: Consent; decided?: 'approve' | 'deny' };
 
 type ConsentItem = Extract<Item, { kind: 'consent' }>;
@@ -273,8 +286,89 @@ function RecPlan({ rec, onTest, onRerun, testing, error }: {
   );
 }
 
+/** How a notification's delivery is allowed to LOOK.
+ *
+ *  There is no green tick for `accepted`, and that is the whole point.
+ *  "Accepted by transport" means a relay took the bytes; the operator reading
+ *  a checkmark for that has been told something nobody knows. Only `opened` —
+ *  which only a client that rendered the item can set — gets the confident
+ *  treatment.
+ *
+ *  Colour and glyph are derived from `state`; the WORDS come from the
+ *  backend's `delivery_label`, so the UI cannot describe a delivery
+ *  differently from the record. */
+const DELIVERY_STYLE: Record<ChatNotification['state'], { tone: string; glyph: string }> = {
+  opened: { tone: 'text-teal-400', glyph: '✓' },
+  accepted: { tone: 'text-stone-400', glyph: '↗' },
+  failed: { tone: 'text-amber-400', glyph: '⚠' },
+  pending: { tone: 'text-stone-500', glyph: '⋯' },
+};
+
+function NotificationItem({ item, highlighted }:
+                          { item: Extract<Item, { kind: 'notification' }>;
+                            highlighted?: boolean }) {
+  const n = item.notification;
+  const style = DELIVERY_STYLE[n.state] ?? DELIVERY_STYLE.pending;
+  return (
+    <div
+      id={`notification-${n.id}`}
+      // scroll-margin so a deep-linked item lands BELOW the sticky header
+      // rather than under it; the iOS safe-area inset is part of that header's
+      // height, so it is part of this too (iOS reports a top inset of 0 while
+      // drawing full-bleed, hence the var with its own fallback).
+      style={{ scrollMarginTop: 'calc(4.5rem + var(--nova-safe-top, 0px))' }}
+      className={`text-sm rounded-lg px-3 py-2.5 space-y-1.5 border transition-colors duration-500 ${
+        highlighted
+          ? 'border-teal-500 bg-teal-950/40 ring-1 ring-teal-500/50'
+          : 'border-stone-700 bg-stone-900/60'}`}
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="text-[11px] uppercase tracking-wide text-teal-300/80 shrink-0">
+          Notification
+        </span>
+        {n.tags.length > 0 && (
+          <span className="text-[10px] text-stone-500 font-mono truncate">
+            {n.tags.join(' · ')}
+          </span>
+        )}
+      </div>
+      {n.title && <div className="text-stone-100 font-medium">{n.title}</div>}
+      <div className="text-stone-300 whitespace-pre-wrap break-words">{n.body}</div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* WHEN it fired, on every card. A deep-linked notification older than
+            the loaded page is appended to the end of the transcript rather
+            than paged back to, so without a stamp it would read as having
+            just happened. */}
+        {n.created_at && (
+          <span className="text-[11px] text-stone-500 font-mono">
+            {fmtDateTime(n.created_at)}
+          </span>
+        )}
+        <span className={`text-[11px] ${style.tone}`}>
+          {style.glyph} {n.delivery_label}
+          {typeof n.repeats === 'number' && n.repeats > 0
+            && ` · raised ${n.repeats + 1}×`}
+        </span>
+        {n.click_url && (
+          <a href={n.click_url}
+             className="text-[11px] text-teal-400 hover:text-teal-300 underline underline-offset-2">
+            Open
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function renderItem(item: Item, onInspect?: (traceId: string) => void,
-                    onConsent?: OnConsent, mobile?: boolean) {
+                    onConsent?: OnConsent, mobile?: boolean,
+                    highlightId?: string | null) {
+  if (item.kind === 'notification') {
+    return (
+      <NotificationItem key={item.id} item={item}
+        highlighted={!!highlightId && highlightId === item.notification.id} />
+    );
+  }
   if (item.kind === 'consent') {
     // an agent (via request_operator_confirmation) is asking the OPERATOR
     // to decide a guarded action — roadmap #29's card
@@ -531,7 +625,8 @@ const isTrail = (it: Item): it is ActivityItem =>
   && it.activity.kind !== 'service_claim';
 
 function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
-                       onConsent?: OnConsent, mobile?: boolean) {
+                       onConsent?: OnConsent, mobile?: boolean,
+                       highlightId?: string | null) {
   // BY TRACE WHERE THE ROW NAMES ONE. Grouping was purely positional — a run
   // of activity rows flushed against whatever message came next — so an
   // action was filed under whichever message happened to sit beside it. On a
@@ -575,7 +670,7 @@ function renderGrouped(items: Item[], onInspect?: (traceId: string) => void,
       const group = byTrace.get(item.trace.id);
       if (group) blocks.push(traceBlock(group));
     }
-    blocks.push(renderItem(item, onInspect, onConsent, mobile));
+    blocks.push(renderItem(item, onInspect, onConsent, mobile, highlightId));
   }
   flush();
   return blocks;
@@ -1785,6 +1880,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                                 || watchRef.current.includes(c.id)));
     } catch { /* best-effort */ }
   };
+  // THE BELL BADGE COUNTS WHAT HAS NOT BEEN SEEN, not what is still open.
+  //
+  // It was `recs.length`, which includes status 'seen' — so a card whose news
+  // the operator had already read in the conversation went on wearing an
+  // amber number until he decided it. That is the "don't double-notify" half
+  // of migration 125: opening a notification in chat flips its linked card
+  // 'new' -> 'seen' (backend, notifications.mark_opened), and this is the
+  // line that makes the flip visible. The card itself stays in the banner and
+  // the inbox — being read is not being decided.
+  const unseenRecs = recs.filter(r => r.status === 'new').length;
   const liveRun = (r: RecCard) =>
     r.run?.status === 'queued' || r.run?.status === 'running';
   const anyLive = recs.some(liveRun) || (inbox ?? []).some(liveRun);
@@ -1793,6 +1898,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
     // 3s while something is actually running, 60s otherwise
     const iv = setInterval(() => {
       void loadRecs();
+      // ride the same tick: a notification delivered by ntfy or a webhook has
+      // no client callback at all, so this poll is its only way in
+      void syncNotifications();
       if (inboxOpen) void loadInbox();
     }, anyLive ? 3000 : 60000);
     return () => clearInterval(iv);
@@ -1860,7 +1968,16 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
   // One mapper for both the first page and every "load earlier" page — two
   // copies of this drifted apart is exactly how a paged list starts
   // rendering older rows differently from newer ones.
-  const toItem = (m: StoredMessage): Item => m.role === 'tool'
+  const toItem = (m: StoredMessage): Item => m.role === 'notification'
+    // A row whose `notification` failed to hydrate has nothing to render and
+    // is dropped to an error line rather than an empty bubble — the backend
+    // only omits it when the record is genuinely gone, and a silent blank is
+    // how that would never get noticed.
+    ? (m.notification
+        ? { id: m.id, kind: 'notification', notification: m.notification }
+        : { id: m.id, kind: 'error',
+            content: 'A notification in this conversation could not be loaded.' })
+    : m.role === 'tool'
     ? {
         id: m.id, kind: 'activity', fromHistory: true, traceId: m.trace_id,
         activity: {
@@ -1876,6 +1993,209 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           ? { name: m.speaker.name, role: m.speaker.role } : undefined,
         attachments: m.attachments?.map(a => ({ kind: a.kind, name: a.name, mime: a.mime })) };
 
+  // ── a tapped push has to SHOW what was tapped ────────────────────────────
+  //
+  // Jeremy, 2026-08-07: "when I click on it, it brings me to chat but doesn't
+  // show me what the push notification was." Two arrival paths, because
+  // neither works on every engine:
+  //
+  //   * `?notification=<id>` in the URL — a cold start, an openWindow, or a
+  //     WindowClient.navigate from the service worker;
+  //   * a postMessage from push-sw.js — the ONLY path on an iOS standalone
+  //     PWA, where `navigate` does not exist and focusing the existing window
+  //     used to be the entire handler. That is where the id was being lost.
+  //
+  // Both funnel through revealNotification, so the two cannot behave
+  // differently.
+  //
+  // A THIRD PATH THAT IS NOT A TAP, and the distinction is the whole point:
+  // push-sw.js also posts `nova:notification-arrived` when a push lands while
+  // a window is visible and it suppressed the banner. That is a background
+  // event, not a person — it goes to `notificationArrived`, which renders and
+  // records nothing. For one commit it shared the tap's message type, so a
+  // heartbeat alert firing at a Nova window left open on a second monitor
+  // wrote "opened on your device" onto the row and dropped the bell badge,
+  // with nobody in the room. `openNotification` is reachable from
+  // revealNotification and from nowhere else.
+  const [highlightNotification, setHighlightNotification] = useState<string | null>(null);
+  const itemsRef = useRef<Item[]>([]);
+  useEffect(() => { itemsRef.current = items; });
+
+  /** Put a notification on screen. Claims NOTHING about it being read.
+   *
+   *  Split out of revealNotification because the two callers are different
+   *  events: a tap is a person, a push arriving while a window happens to be
+   *  visible is not. Returns whether the item is now in the list.
+   */
+  const ensureNotificationShown = async (id: string): Promise<boolean> => {
+    const have = itemsRef.current.some(
+      it => it.kind === 'notification' && it.notification.id === id);
+    if (have) return true;
+    // Older than the loaded page, or the transcript row never wrote. Fetch
+    // the record itself — the same row the push was generated from, so
+    // pulling it in cannot show anything different from what a reload
+    // would. Its own timestamp is on the card, so an old one appended to
+    // the end does not read as having just happened.
+    try {
+      const n = await getNotification(id);
+      setItems(prev => prev.some(
+        it => it.kind === 'notification' && it.notification.id === id)
+        ? prev
+        : [...prev, { id: `notification-${n.id}`, kind: 'notification', notification: n }]);
+      return true;
+    } catch (err) {
+      setItems(prev => [...prev, { id: uid(), kind: 'error',
+        content: `That notification could not be loaded: ${errText(err)}` }]);
+      return false;
+    }
+  };
+
+  /** A push landed while this window was visible, so the service worker
+   *  suppressed the banner and told us instead.
+   *
+   *  SHOWS IT AND STOPS. No `openNotification`, because nothing here is
+   *  evidence a person saw anything — the window may be on a second monitor
+   *  in an empty room. This used to share the tap path, and every such push
+   *  silently wrote "opened on your device" onto the row and dropped the bell
+   *  badge by one with no human involved.
+   */
+  const notificationArrived = async (id: string | null) => {
+    // No id (an older payload, or a push built before migration 125): the
+    // poll is the fallback and it is the same query, just later.
+    if (!id) { void syncNotifications(); return; }
+    await ensureNotificationShown(id);
+  };
+
+  /** The operator TAPPED this notification. */
+  const revealNotification = async (id: string) => {
+    if (!id) return;
+    setHighlightNotification(id);
+    if (!await ensureNotificationShown(id)) return;
+    // IT IS ON SCREEN, AND ONLY NOW MAY ANYTHING SAY SO. This is the single
+    // call in the app that can move a notification to `opened` — everything
+    // upstream knows only that a relay accepted some bytes. It also retires
+    // the linked inbox card from the bell, so one piece of news does not go
+    // on demanding attention in two places.
+    try {
+      const updated = await openNotification(id);
+      setItems(prev => prev.map(it =>
+        it.kind === 'notification' && it.notification.id === id
+          ? { ...it, notification: updated } : it));
+      void loadRecs();
+    } catch { /* the highlight already did the job that matters */ }
+  };
+
+  // SCROLL WHEN THE ELEMENT EXISTS, not one animation frame after the fetch.
+  // The old code appended the item and then asked for it by id inside a
+  // requestAnimationFrame, which can run before React commits — so
+  // getElementById returned null, the scroll silently did nothing, and the
+  // notification the operator tapped was somewhere off screen while the row
+  // was being marked opened anyway. Keyed on `items` so it fires on the
+  // render that actually contains it; the ref keeps it to once per target.
+  const scrolledToNotification = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightNotification) { scrolledToNotification.current = null; return; }
+    if (scrolledToNotification.current === highlightNotification) return;
+    const el = document.getElementById(`notification-${highlightNotification}`);
+    if (!el) return;
+    scrolledToNotification.current = highlightNotification;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlightNotification, items]);
+
+  // PARKED, NOT ACTED ON, until the transcript has loaded. The mount effect
+  // below REPLACES `items` wholesale, so revealing on arrival raced it and
+  // wiped a just-fetched notification straight off the screen — which looks
+  // exactly like the bug being fixed. Parking makes the order deterministic:
+  // history first, then the deep link.
+  const [pendingNotification, setPendingNotification] = useState<string | null>(null);
+  const [pendingArrivals, setPendingArrivals] = useState<string[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('notification');
+    if (id) {
+      params.delete('notification');
+      const qs = params.toString();
+      window.history.replaceState(null, '',
+        window.location.pathname + (qs ? `?${qs}` : ''));
+      setPendingNotification(id);
+    }
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data as { type?: string; id?: string } | null;
+      if (!d) return;
+      // A TAP. Only this one is allowed to reach revealNotification, which
+      // records `opened`.
+      if (d.type === 'nova:notification' && d.id) setPendingNotification(d.id);
+      // A push that landed while this window was visible. Same news, no
+      // human — it gets rendered and nothing is recorded. Parked like the
+      // deep link, for the same reason: the history load below replaces
+      // `items` wholesale and would wipe a just-appended arrival.
+      if (d.type === 'nova:notification-arrived') {
+        setPendingArrivals(prev => [...prev, d.id ?? '']);
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingNotification || !historyLoaded) return;
+    const id = pendingNotification;
+    setPendingNotification(null);
+    void revealNotification(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNotification, historyLoaded]);
+
+  useEffect(() => {
+    if (!pendingArrivals.length || !historyLoaded) return;
+    const ids = pendingArrivals;
+    setPendingArrivals([]);
+    void (async () => { for (const id of ids) await notificationArrived(id || null); })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingArrivals, historyLoaded]);
+
+  // The highlight is a POINTER, not a state the item is in. It has done its
+  // job once the operator's eye has landed, and a ring that never clears
+  // makes every later visit look like a fresh alert.
+  useEffect(() => {
+    if (!highlightNotification) return;
+    const t = window.setTimeout(() => setHighlightNotification(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [highlightNotification]);
+
+  // A notification delivered through a channel with NO client callback — ntfy,
+  // a webhook, a push the browser chose not to show, or nothing at all
+  // because notifications are switched off — still has to appear in the
+  // transcript. Web push postMessages the open window; everything else has
+  // only this poll.
+  //
+  // NEWER-THAN-THE-NEWEST only. Appending anything absent would drag an old
+  // notification (one that fell off the loaded page) to the bottom of the
+  // conversation and stamp it as just-happened.
+  // ISO-8601 in the same shape the backend stamps, so the string compare
+  // below is a time compare.
+  const mountedAt = useRef(new Date().toISOString().replace('T', ' '));
+  const syncNotifications = async () => {
+    try {
+      const latest = await listNotifications(10);
+      setItems(prev => {
+        const known = new Set(prev.filter(it => it.kind === 'notification')
+          .map(it => (it as Extract<Item, { kind: 'notification' }>).notification.id));
+        const newest = prev.reduce((acc, it) => it.kind === 'notification'
+          && it.notification.created_at && it.notification.created_at > acc
+          ? it.notification.created_at : acc, '');
+        const fresh = latest
+          .filter(n => !known.has(n.id)
+                       && (n.created_at ?? '') > (newest || mountedAt.current))
+          .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+        if (!fresh.length) return prev;
+        return [...prev, ...fresh.map((n): Item => ({
+          id: `notification-${n.id}`, kind: 'notification', notification: n }))];
+      });
+    } catch { /* best-effort, exactly like the recommendation poll */ }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -1888,6 +2208,11 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
         void loadConsents(conv.id);
       } catch (err) {
         setItems([{ id: uid(), kind: 'error', content: `Failed to load history: ${err}` }]);
+      } finally {
+        // Set even on failure: a deep link must still resolve when the
+        // transcript could not be fetched — the notification is then the one
+        // thing on screen, which is better than nothing on screen.
+        setHistoryLoaded(true);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2367,9 +2692,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
               <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
-            {recs.length > 0 && (
+            {unseenRecs > 0 && (
               <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-stone-950 text-[9px] font-semibold leading-[14px] text-center">
-                {recs.length}
+                {unseenRecs}
               </span>
             )}
           </button>
@@ -2395,9 +2720,9 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
               <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
-            {recs.length > 0 && (
+            {unseenRecs > 0 && (
               <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-stone-950 text-[9px] font-semibold leading-[14px] text-center">
-                {recs.length}
+                {unseenRecs}
               </span>
             )}
           </button>
@@ -2506,7 +2831,7 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
                   onClick={() => { setDrawerOpen(false); navigate('/vault'); }} />
                 <NavRow label="Library" note="Her agents, models, tools, rules and files"
                   onClick={() => { setDrawerOpen(false); navigate('/library'); }} />
-                <NavRow label="Activity" note="What she is ingesting in the background"
+                <NavRow label="Action log" note="What she did, and what she was refused"
                   onClick={() => { setDrawerOpen(false); navigate('/activity'); }} />
                 <NavRow label="Observability" note="Turns, traces and the health of the stack"
                   onClick={() => { setDrawerOpen(false); navigate('/observability'); }} />
@@ -2728,7 +3053,8 @@ export function ChatPanel({ width, onWidthChange, mobile, onShowBrain, settingsO
           </div>
         )}
 
-        {renderGrouped(items, setInspectTraceId, handleConsent, mobile)}
+        {renderGrouped(items, setInspectTraceId, handleConsent, mobile,
+                       highlightNotification)}
         <div ref={endRef} />
       </div>
 

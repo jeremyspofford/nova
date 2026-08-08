@@ -6,7 +6,7 @@ import { THEMES } from '../../brain/theme';
 import { ThemePreview } from '../ThemePreview';
 import { CardsSkeleton } from '../ui';
 import { SecretsCard } from './secrets';
-import { NtfyTopicField, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
+import { NtfyTopicField, NotificationDeliveryHistory, NotifyServiceControl, NotificationsReachability, NotificationsHelp, PushDeviceCard } from './notifications';
 import { HomeAssistantControl } from './home';
 import { VoiceField, ListenModeField, WakeWordField, HouseholdVoices, WakeLearning } from './voice';
 import { StorageCard, PhoneSetupCard } from './cards';
@@ -305,6 +305,7 @@ export function SettingsTab({ only, exclude, types, untitled }:
                     </div>
                   )}
                 </div>
+                <NotificationDeliveryHistory />
                 <NotificationsHelp defs={defs} />
               </div>
             )}

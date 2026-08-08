@@ -51,6 +51,31 @@ GOAL_SCOPED_TOOLS = frozenset({
     # goal buys the RUN, never the landing. The operator merging is untouched
     # by any approval given here.
     "delegate_coding_task",
+    # The approved model pool. An enabled curated row is what dropdowns
+    # offer, what recommendations draw from and what standby chains may
+    # route a failing turn to — capability in the plainest sense. It sits
+    # here rather than free because of what `pull_model` already knows: what
+    # may RUN a turn is the operator's decision, pre-authorisable by a goal
+    # he approved. The add path cannot invent an id — every write resolves
+    # against the live provider catalog (curated_models.create refuses what
+    # models_catalog.resolve_id cannot verify), which is the check the
+    # hand-typed 2026-08-07 tilde slug never met. Assigning a model to an
+    # agent is NOT this verb: that stays a model.assign card the operator
+    # clicks (agents/registry._SYSTEM_PROTECTED).
+    "manage_curated_models",
+    # THE ONLY VERB HERE THAT NAMES NO TOOL, and that is what makes it safe
+    # to spend without an agent attached. ROADMAP #47 rail 4: a goal carrying
+    # `improve_self` authorises the self-improvement LANE — the heartbeat
+    # starts one bounded coding pass at a time, `action_worker` claims it
+    # through a second lane that re-reads this goal at claim time, and
+    # revoking the goal stops the loop with no code change.
+    #
+    # Nothing in `builtin.BUILTIN_TOOLS` is called `improve_self` and
+    # `tests/test_improvement_lane.py` pins that, so `execute_tool` can never
+    # route a model's tool call through this verb: it is spendable only by
+    # `goals.spend_standing`, which is reached from the heartbeat's mechanical
+    # tick and from nowhere a model can talk to.
+    "improve_self",
 })
 
 
@@ -75,6 +100,11 @@ READ_ACTIONS: dict[str, frozenset[str]] = {
     "manage_automations": frozenset({"list", "runs"}),
     "manage_tools": frozenset({"list"}),
     "manage_tool_hosts": frozenset({"list"}),
+    # `list` is how she answers "which models are approved?" — enumeration,
+    # no capability created, so it must never raise an approval card (the
+    # 2026-08-04 measurement above is exactly the failure to avoid repeating
+    # with a new verb). add/update/enable/disable stay gated in full.
+    "manage_curated_models": frozenset({"list"}),
 }
 
 
@@ -131,6 +161,16 @@ def verb_list() -> str:
 # Ordered most-consequential first: a goal is described by the biggest thing
 # it can do, because that is what he is really being asked to weigh.
 _CONSEQUENCE: tuple[tuple[str, str], ...] = (
+    # First because it is the largest: this one buys a REPEATING loop rather
+    # than a set of one-off actions, and the operator weighing it is weighing
+    # "she changes her own code while I am not looking". Said in those words
+    # on purpose — a consequence line that undersells is a card that misleads.
+    ("improve_self", "run her self-improvement loop unattended: write a "
+                     "change, prove it in the sandbox, have a different model "
+                     "read it, and land it on a nova/ branch in your repo. "
+                     "Nothing merges to main, and a change touching the code "
+                     "that enforces these boundaries becomes a card for you "
+                     "instead of landing"),
     ("allow_host_egress", "let her workloads reach a machine on YOUR OWN "
                           "NETWORK (she must name the address)"),
     ("allow_internet_egress", "let her workloads reach the public internet "
@@ -139,6 +179,9 @@ _CONSEQUENCE: tuple[tuple[str, str], ...] = (
     ("manage_tool_hosts", "let her reach a new host on your network or the internet"),
     ("pull_model",        "download a model onto this machine"),
     ("manage_agents",     "create or change one of her agents"),
+    ("manage_curated_models", "add or change which models are approved for "
+                              "her agents to run on (assigning one to an "
+                              "agent stays a separate card you click)"),
     ("manage_tools",      "create or change one of her tools"),
     ("manage_automations", "schedule work that runs unattended"),
     ("delete_workload",   "tear down services she deployed"),
