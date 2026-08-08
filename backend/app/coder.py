@@ -30,7 +30,7 @@ from typing import Optional
 
 import httpx
 
-from app import db
+from app import db, sidecar_auth
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -782,7 +782,8 @@ async def land(patch_text: str, branch: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             r = await client.post(f"{url}/land",
-                                  json={"patch": patch_text, "branch": branch})
+                                  json={"patch": patch_text, "branch": branch},
+                                  headers=sidecar_auth.git_landing_headers())
     except httpx.HTTPError as e:
         return {"status": "error",
                 "detail": (f"the git-landing sidecar is unreachable ({e}). It "
@@ -804,7 +805,8 @@ async def repo_status() -> dict:
     url = os.environ.get("NOVA_GIT_LANDING_URL", "http://git-landing:9912")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{url}/status")
+            r = await client.get(f"{url}/status",
+                                 headers=sidecar_auth.git_landing_headers())
         return r.json()
     except (httpx.HTTPError, ValueError) as e:
         return {"error": f"the git-landing sidecar is unreachable: {e}"}
@@ -846,8 +848,10 @@ async def sandbox_check(session_id: str, *, lane: str = "operator") -> dict:
     branch = f"nova/{slug}"
 
     async def _post(url, payload, timeout):
+        # every _post here targets git-landing, so the token rides along
         async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(url, json=payload)
+            r = await c.post(url, json=payload,
+                             headers=sidecar_auth.git_landing_headers())
         try:
             return r.json()
         except ValueError:
@@ -868,7 +872,8 @@ async def sandbox_check(session_id: str, *, lane: str = "operator") -> dict:
         from app.config import settings as _s
         async with httpx.AsyncClient(timeout=3000.0) as c:
             r = await c.post(f"{_s.inference_control_url}/sandbox/check",
-                             json={"slug": slug})
+                             json={"slug": slug},
+                             headers=sidecar_auth.inference_control_headers())
         out = r.json()
     except (httpx.HTTPError, ValueError) as e:
         out = {"status": "failed", "stage": "unreachable", "steps": [],

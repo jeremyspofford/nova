@@ -24,7 +24,7 @@ import time
 
 import httpx
 
-from app import db, hardware, instances, settings_store
+from app import db, hardware, instances, settings_store, sidecar_auth
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -95,7 +95,8 @@ async def _sidecar(client: httpx.AsyncClient, path: str) -> dict | None:
     """One fixed-verb call to this instance's sidecar; None when it's absent
     or the ollama container is stopped (GPU verbs fail soft there)."""
     try:
-        r = await client.get(f"{settings.inference_control_url}{path}")
+        r = await client.get(f"{settings.inference_control_url}{path}",
+                             headers=sidecar_auth.inference_control_headers())
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -226,9 +227,16 @@ async def _probe(client: httpx.AsyncClient, name: str, base: str, path: str,
                  optional: bool) -> dict:
     t0 = time.monotonic()
     external = name in EXTERNAL_CHECKS
+    # Derived from the URL being called, not from the row's name: the one
+    # probed base that requires a bearer token is the docker-control sidecar.
+    headers = (sidecar_auth.inference_control_headers()
+               if base == settings.inference_control_url else {})
     try:
-        r = await client.get(f"{base}{path}")
-        ok = r.status_code < 500
+        r = await client.get(f"{base}{path}", headers=headers)
+        # 401/403 is a token mismatch: every data read from this sidecar is
+        # about to return None while a `< 500` check would still show green —
+        # the exact status-surface-that-lies this probe exists to prevent.
+        ok = r.status_code < 400
         return {"name": name, "ok": ok, "ms": round((time.monotonic() - t0) * 1000),
                 "optional": optional, "external": external}
     except Exception as e:

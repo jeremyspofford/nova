@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # Bundled-inference control sidecar (the only holder of the docker
     # socket; fixed-verb start/stop/status API, compose network only)
     inference_control_url: str = "http://inference-control:9911"
+    # Shared secret for it (ROADMAP #44 item 1 — the socket is root on the
+    # host, so the compose network must not be an implicit trust boundary).
+    # Sent by app/sidecar_auth.py on every call. Unset sends no header; the
+    # sidecar's own posture then applies (it accepts and LOGS that auth is
+    # unconfigured — see inference-control/server.py for why that differs
+    # from mcp-runner's refuse-all).
+    nova_inference_control_token: str = ""
     # The bundled ollama compose service, definitionally — status probes hit
     # this even when inference.ollama_url points at a host-run instance.
     bundled_ollama_url: str = "http://ollama:11434"
@@ -55,6 +62,12 @@ class Settings(BaseSettings):
     # credential IS the feature switch, so there is no flag left switched on
     # after the sidecar is gone.
     nova_coder_token: str = ""
+
+    # git-landing sidecar (the ONLY read-write holder of the host repo —
+    # /land can write branches into the operator's checkout). Same bearer
+    # shape as the sidecar tokens above, sent by app/sidecar_auth.py; the
+    # sidecar's URL env var lives in coder.py, its one client.
+    nova_git_landing_token: str = ""
 
     # Media ingestion worker (optional `media` compose profile): yt-dlp +
     # ffmpeg extraction, whisper fallback for caption-less audio and direct

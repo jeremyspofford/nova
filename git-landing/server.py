@@ -31,6 +31,7 @@ lands on a fresh branch off the current HEAD, and a conflict rolls the whole
 thing back.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -57,6 +58,42 @@ PORT = int(os.environ.get("PORT", "9912"))
 _BRANCH_OK = re.compile(r"^nova/[a-z0-9][a-z0-9._-]{0,60}$")
 
 _lock = threading.Lock()
+
+# ── auth (ROADMAP #44 item 1) ───────────────────────────────────────────────
+# Shared bearer token, the same shape mcp-runner carries: constant-time
+# compare, checked on every route except GET /health. The compose network is
+# not a trust boundary — until this existed, ANY container on it could POST
+# /land and write branches into the operator's repository.
+#
+# ONE deliberate difference from mcp-runner, stated because it is a decision
+# (the 2026-08-07 review filed the shape under "needs a decision"): mcp-runner
+# REFUSES everything when its token is unset, because an unconfigured exec
+# bridge has nothing legitimate to do. Here an unset NOVA_GIT_LANDING_TOKEN
+# ACCEPTS and logs, because refuse-all would turn an image rebuilt before
+# .env is wired into a dead landing path, a walled self-improvement loop and
+# a lying heartbeat — with no sentence anywhere saying why. The exception is
+# exactly one condition wide: the env var is absent. A CONFIGURED sidecar can
+# never be talked out of checking.
+_TOKEN = os.environ.get("NOVA_GIT_LANDING_TOKEN", "").strip()
+if not _TOKEN:
+    log.warning("NOVA_GIT_LANDING_TOKEN is unset — auth is NOT configured, "
+                "accepting unauthenticated requests from the compose "
+                "network. Generate a token (openssl rand -hex 32), set it in "
+                ".env, and recreate `backend` and `git-landing`.")
+
+
+def _authorized(header) -> bool:
+    """Whether this request may proceed. Fails closed whenever a token is
+    configured; the token-absent case is the one logged exception above."""
+    if not _TOKEN:
+        return True
+    presented = ""
+    if header and header.lower().startswith("bearer "):
+        presented = header[7:].strip()
+    # Bytes, not str: compare_digest in str mode demands ASCII, and header
+    # bytes 0x80-0xFF (latin-1-decoded by BaseHTTPRequestHandler) would raise
+    # instead of refusing — a dropped connection where a 401 belongs.
+    return hmac.compare_digest(presented.encode("utf-8"), _TOKEN.encode("utf-8"))
 
 
 def _serve_repo_readonly() -> None:
@@ -422,14 +459,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _refuse_unauth(self) -> bool:
+        """401 unless the request presents the shared token; True = refused.
+        GET /health is the only exempt route — a liveness probe must not
+        need a secret, and {"ok": true} arms nobody."""
+        if _authorized(self.headers.get("Authorization")):
+            return False
+        self._send(401, {"error": "unauthorized",
+                         "detail": ("this sidecar requires Authorization: "
+                                    "Bearer <NOVA_GIT_LANDING_TOKEN>")})
+        return True
+
     def do_GET(self):
-        if self.path == "/status":
-            return self._send(200, _status())
         if self.path == "/health":
             return self._send(200, {"ok": True, "repo": REPO})
+        if self._refuse_unauth():
+            return
+        if self.path == "/status":
+            return self._send(200, _status())
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self._refuse_unauth():
+            return
         if self.path not in ("/land", "/worktree", "/worktree/remove",
                              "/branch/remove"):
             return self._send(404, {"error": "not found"})

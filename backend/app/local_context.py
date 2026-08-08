@@ -216,10 +216,12 @@ async def _vram() -> Optional[dict]:
     ollama) is subtracted, and `ollama_held` is not. Every number is real
     bytes; see `_GIB` for why that needed saying.
     """
+    from app import sidecar_auth
     from app.config import settings
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.inference_control_url}/gpu-stats")
+            resp = await client.get(f"{settings.inference_control_url}/gpu-stats",
+                                    headers=sidecar_auth.inference_control_headers())
             resp.raise_for_status()
             gpus = resp.json().get("gpus") or []
     except Exception as exc:  # noqa: BLE001

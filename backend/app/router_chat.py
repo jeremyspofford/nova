@@ -18,7 +18,7 @@ from contextlib import AsyncExitStack
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from app import activity_log, automations, bg, commands, compaction, consents, conversations, db, guests, recommendations, rules, settings_store, trace, voiceprints
+from app import activity_log, automations, bg, commands, compaction, consents, conversations, db, guests, recommendations, rules, settings_store, sidecar_auth, trace, voiceprints
 from app.agents import registry as agent_registry
 from app.agents import runner as agent_runner
 from app.guests import guest_ok
@@ -2090,7 +2090,8 @@ async def bundled_inference_status():
 
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            resp = await client.get(f"{settings.inference_control_url}/status")
+            resp = await client.get(f"{settings.inference_control_url}/status",
+                                    headers=sidecar_auth.inference_control_headers())
             resp.raise_for_status()
             status = resp.json()
         except Exception as e:
@@ -2116,7 +2117,8 @@ async def bundled_inference_action(body: dict):
         raise HTTPException(status_code=422, detail="action must be 'start' or 'stop'")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{settings.inference_control_url}/{action}")
+            resp = await client.post(f"{settings.inference_control_url}/{action}",
+                                     headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502,
                             detail=f"inference-control sidecar unreachable: {e}")
@@ -2182,7 +2184,8 @@ async def set_models_dir(body: dict):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{settings.inference_control_url}/relocate")
+            resp = await client.post(f"{settings.inference_control_url}/relocate",
+                                     headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502,
                             detail=f"inference-control sidecar unreachable: {e}")
@@ -2614,7 +2617,8 @@ async def notify_reachability():
         route_ok, route_detail = None, "control sidecar unavailable — can't check the route"
         try:
             async with httpx.AsyncClient(timeout=8.0) as c:
-                r = await c.get(f"{settings.inference_control_url}/notify/status")
+                r = await c.get(f"{settings.inference_control_url}/notify/status",
+                                headers=sidecar_auth.inference_control_headers())
             if r.status_code == 200:
                 route_ok = bool(r.json().get("tailnet_route"))
                 route_detail = ("served on your tailnet at :8443" if route_ok
@@ -2656,7 +2660,8 @@ async def notify_service_status():
     import httpx
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.inference_control_url}/notify/status")
+            resp = await client.get(f"{settings.inference_control_url}/notify/status",
+                                    headers=sidecar_auth.inference_control_headers())
             resp.raise_for_status()
             status = resp.json()
     except Exception as e:  # noqa: BLE001
@@ -2696,7 +2701,8 @@ async def notify_service_action(body: dict):
     path = {"up": "/notify/up", "down": "/notify/down", "expose": "/notify/expose"}[action]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{settings.inference_control_url}{path}")
+            resp = await client.post(f"{settings.inference_control_url}{path}",
+                                     headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502,
                             detail=f"inference-control sidecar unreachable: {e}")
@@ -2801,7 +2807,8 @@ async def home_assistant_status():
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{settings.inference_control_url}/home/status")
+                f"{settings.inference_control_url}/home/status",
+                headers=sidecar_auth.inference_control_headers())
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPError as e:
@@ -2829,7 +2836,8 @@ async def home_assistant_control(body: dict):
     path = {"up": "/home/up", "down": "/home/down"}[action]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{settings.inference_control_url}{path}")
+            resp = await client.post(f"{settings.inference_control_url}{path}",
+                                     headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502,
                             detail=f"inference-control sidecar unreachable: {e}")

@@ -89,6 +89,14 @@ services:
       # as unavailable — the credential is the feature switch, so a stack
       # without the sidecar behaves exactly as before.
       NOVA_CODER_TOKEN: ${NOVA_CODER_TOKEN:-}
+      # Shared secrets for the two privileged sidecars (ROADMAP #44 item 1):
+      # git-landing holds the only read-write mount of this repo, and
+      # inference-control holds the docker socket. Every backend request to
+      # them carries the matching bearer token. Unset, no header is sent and
+      # the sidecars accept while LOGGING that auth is unconfigured — see
+      # their server.py for why that differs from mcp-runner's refuse-all.
+      NOVA_GIT_LANDING_TOKEN: ${NOVA_GIT_LANDING_TOKEN:-}
+      NOVA_INFERENCE_CONTROL_TOKEN: ${NOVA_INFERENCE_CONTROL_TOKEN:-}
       MEDIA_WORKER_URL: http://media:8500
       NTFY_BUILTIN_URL: http://ntfy:80
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -238,6 +246,13 @@ services:
       # compose with -f from any other directory handed this the WRONG root
       # — and everything the paragraph above warns about came back.
       NOVA_HOST_ROOT: ${NOVA_HOST_ROOT:-${PWD:-}}
+      # Bearer token every caller must present (ROADMAP #44 item 1). The
+      # socket above is root on the host, so the compose network must not be
+      # an implicit trust boundary. Unset = accept + log loudly, so an image
+      # rebuilt before .env is wired degrades visibly instead of blanking
+      # every status surface; set = every route but GET /health refuses
+      # without it.
+      NOVA_INFERENCE_CONTROL_TOKEN: ${NOVA_INFERENCE_CONTROL_TOKEN:-}
     restart: unless-stopped
     # The sandbox boot gate (docs/plans/sandbox-instance.md) runs a SECOND
     # compose project, `-p nova-sandbox`, from a worktree under .worktrees/.
@@ -328,6 +343,13 @@ services:
       GIT_AUTHOR_EMAIL: ${NOVA_GIT_AUTHOR_EMAIL:-nova@localhost}
       GIT_COMMITTER_NAME: ${NOVA_GIT_AUTHOR_NAME:-Nova}
       GIT_COMMITTER_EMAIL: ${NOVA_GIT_AUTHOR_EMAIL:-nova@localhost}
+      # Bearer token every caller must present (ROADMAP #44 item 1) — this is
+      # the only container that can write branches into the operator's repo,
+      # and /land used to answer any container on the compose network. Unset
+      # = accept + log loudly; set = every route but GET /health refuses
+      # without it. (:9418 below is the git protocol, read-only by
+      # construction — receive-pack is never enabled — and is not gated.)
+      NOVA_GIT_LANDING_TOKEN: ${NOVA_GIT_LANDING_TOKEN:-}
     volumes:
       # The ONLY read-write mount of the repo anywhere in this stack.
       - .:/repo

@@ -71,10 +71,12 @@ async def _containers(project: str) -> Optional[list[dict]]:
     services", which is the same shape of lie this module was written to stop.
     """
     import httpx
+    from app import sidecar_auth
     from app.config import settings
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{settings.inference_control_url}/containers")
+            r = await client.get(f"{settings.inference_control_url}/containers",
+                                 headers=sidecar_auth.inference_control_headers())
             r.raise_for_status()
             return r.json().get("containers") or []
     except Exception as e:  # noqa: BLE001

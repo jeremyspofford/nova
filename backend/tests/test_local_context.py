@@ -474,7 +474,9 @@ async def run() -> None:
                 async def __aexit__(self, *a):
                     return False
 
-                async def get(self, url):
+                async def get(self, url, **kw):
+                    # headers= arrived with sidecar auth; a stub stricter
+                    # than the real client fails the caller, not the code.
                     return _Resp()
 
             saved_client = httpx.AsyncClient

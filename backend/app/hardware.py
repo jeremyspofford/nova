@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app import db, settings_store
+from app import db, settings_store, sidecar_auth
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -64,7 +64,8 @@ async def _nvidia_runtime() -> bool | None:
     """True/False from the sidecar; None when the sidecar is absent."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.inference_control_url}/gpu")
+            resp = await client.get(f"{settings.inference_control_url}/gpu",
+                                    headers=sidecar_auth.inference_control_headers())
             resp.raise_for_status()
             return bool(resp.json().get("nvidia_runtime"))
     except Exception as e:
@@ -79,7 +80,8 @@ async def _gpu_details() -> dict:
     empty = {"gpu_name": None, "vram_total_gb": None}
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.get(f"{settings.inference_control_url}/vram")
+            resp = await client.get(f"{settings.inference_control_url}/vram",
+                                    headers=sidecar_auth.inference_control_headers())
             resp.raise_for_status()
             gpus = resp.json().get("gpus") or []
     except Exception as e:

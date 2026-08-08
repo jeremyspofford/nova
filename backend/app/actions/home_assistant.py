@@ -37,7 +37,7 @@ from typing import Optional
 import httpx
 
 from app import capability_events as ce
-from app import settings_store
+from app import settings_store, sidecar_auth
 from app.actions.schemas import HomeAssistantDeploy
 from app.task_steps import NeedAnswer
 from app.config import settings
@@ -219,7 +219,8 @@ async def preflight(doc: HomeAssistantDeploy, *, operator: bool = False
 
     try:
         async with httpx.AsyncClient(timeout=_CALL_TIMEOUT_S) as client:
-            r = await client.get(f"{settings.inference_control_url}/home/status")
+            r = await client.get(f"{settings.inference_control_url}/home/status",
+                                 headers=sidecar_auth.inference_control_headers())
         r.raise_for_status()
         state = r.json()
     except httpx.HTTPError as e:
@@ -253,7 +254,8 @@ async def _await_running(step) -> tuple[bool, str]:
         try:
             async with httpx.AsyncClient(timeout=_CALL_TIMEOUT_S) as client:
                 r = await client.get(
-                    f"{settings.inference_control_url}/home/status")
+                    f"{settings.inference_control_url}/home/status",
+                    headers=sidecar_auth.inference_control_headers())
             r.raise_for_status()
             state = r.json()
         except httpx.HTTPError as e:
@@ -360,7 +362,8 @@ async def _step_start(doc, rec, ctx) -> str:
     # (the docker-control sidecar) is the whole reason nothing started.
     try:
         async with httpx.AsyncClient(timeout=_CALL_TIMEOUT_S) as client:
-            r = await client.post(f"{settings.inference_control_url}/home/up")
+            r = await client.post(f"{settings.inference_control_url}/home/up",
+                                  headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         raise RuntimeError(
             f"the docker-control sidecar is unreachable ({e}) — nothing was "
@@ -403,7 +406,8 @@ async def _step_trust_proxy(doc, rec, ctx) -> str:
     if not outcome.startswith("trusted"):
         return outcome
     async with httpx.AsyncClient(timeout=_CALL_TIMEOUT_S) as client:
-        await client.post(f"{settings.inference_control_url}/home/up")
+        await client.post(f"{settings.inference_control_url}/home/up",
+                          headers=sidecar_auth.inference_control_headers())
     running, detail = await _await_running(ctx.record)
     if not running:
         raise RuntimeError(f"{outcome}, but the restart has not settled: {detail}")
@@ -420,7 +424,8 @@ async def _step_verify(doc, rec, ctx) -> dict:
     """
     async with httpx.AsyncClient(timeout=90.0) as client:
         r = await client.get(f"{settings.inference_control_url}/reachable",
-                             params={"service": "home-assistant"})
+                             params={"service": "home-assistant"},
+                             headers=sidecar_auth.inference_control_headers())
     data = r.json() if r.status_code == 200 else {}
     local = [x for x in (data.get("local") or []) if x.get("http_status")]
     routes = data.get("tailnet_routes") or []

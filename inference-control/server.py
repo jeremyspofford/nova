@@ -4,6 +4,7 @@ The socket is root-equivalent on the host, so the backend never mounts it.
 Instead this tiny service exposes a fixed set of endpoints on the
 compose-internal network (no published ports):
 
+    GET  /health     -> {ok}   (liveness; the only unauthenticated route)
     GET  /status     -> {present, running, state, op, error}
     GET  /gpu        -> {nvidia_runtime}   (docker info runtime check)
     GET  /vram       -> {gpus: [{name, vram_total_gb}]}   (nvidia-smi in ollama)
@@ -20,6 +21,7 @@ mounted docker-compose.yml, so operator edits to the ollama service (e.g. a
 GPU reservation block) are honored without duplicating config here.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -70,6 +72,43 @@ REPO_ROOT = os.environ.get("NOVA_REPO_ROOT", "/repo").strip()
 SERVICE = "ollama"                       # the toggle target (start/stop)
 OLLAMA_TARGET = "/root/.ollama"          # where ollama keeps its store
 PORT = 9911
+
+# ── auth (ROADMAP #44 item 1) ───────────────────────────────────────────────
+# Shared bearer token, the same shape mcp-runner carries: constant-time
+# compare, checked on every route except GET /health. This container holds
+# the docker socket — root on the host — and until this existed ANY container
+# on the compose network could POST /service/redeploy or /sandbox/check.
+#
+# ONE deliberate difference from mcp-runner, stated because it is a decision
+# (the 2026-08-07 review filed the shape under "needs a decision"): mcp-runner
+# REFUSES everything when its token is unset. Here an unset
+# NOVA_INFERENCE_CONTROL_TOKEN ACCEPTS and logs — refuse-all would blank
+# every status surface this install stands on (sysmon, service health, GPU
+# readings, the health strip) the moment an image is rebuilt before .env is
+# wired, and nothing on those boards would say why. The exception is exactly
+# one condition wide: the env var is absent. A CONFIGURED sidecar can never
+# be talked out of checking.
+_TOKEN = os.environ.get("NOVA_INFERENCE_CONTROL_TOKEN", "").strip()
+if not _TOKEN:
+    log.warning("NOVA_INFERENCE_CONTROL_TOKEN is unset — auth is NOT "
+                "configured, accepting unauthenticated requests from the "
+                "compose network. Generate a token (openssl rand -hex 32), "
+                "set it in .env, and recreate `backend` and "
+                "`inference-control`.")
+
+
+def _authorized(header) -> bool:
+    """Whether this request may proceed. Fails closed whenever a token is
+    configured; the token-absent case is the one logged exception above."""
+    if not _TOKEN:
+        return True
+    presented = ""
+    if header and header.lower().startswith("bearer "):
+        presented = header[7:].strip()
+    # Bytes, not str: compare_digest in str mode demands ASCII, and header
+    # bytes 0x80-0xFF (latin-1-decoded by BaseHTTPRequestHandler) would raise
+    # instead of refusing — a dropped connection where a 401 belongs.
+    return hmac.compare_digest(presented.encode("utf-8"), _TOKEN.encode("utf-8"))
 
 # Every model-bearing service the store spans, and how to relocate each: the
 # in-container store path, the subdir under $NOVA_MODELS_DIR it binds to, and
@@ -1562,7 +1601,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _refuse_unauth(self) -> bool:
+        """401 unless the request presents the shared token; True = refused.
+        GET /health is the only exempt route — a liveness probe must not
+        need a secret, and {"ok": true} arms nobody."""
+        if _authorized(self.headers.get("Authorization")):
+            return False
+        self._send(401, {"error": "unauthorized",
+                         "detail": ("this sidecar requires Authorization: "
+                                    "Bearer <NOVA_INFERENCE_CONTROL_TOKEN>")})
+        return True
+
     def do_GET(self):
+        if self.path == "/health":
+            # Liveness only, and the one unauthenticated route. Everything
+            # with content — container states, GPU readings, logs — sits
+            # behind the token like the verbs do.
+            return self._send(200, {"ok": True})
+        if self._refuse_unauth():
+            return
         if self.path == "/gpu":
             try:
                 return self._send(200, _gpu_info())
@@ -1646,6 +1703,8 @@ class Handler(BaseHTTPRequestHandler):
                          "models_dir": _models_dir()})
 
     def do_POST(self):
+        if self._refuse_unauth():
+            return
         if self.path == "/relocate":
             verb = "relocate"
         elif self.path in ("/start", "/stop"):

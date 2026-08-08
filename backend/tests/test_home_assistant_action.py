@@ -184,8 +184,10 @@ def test_preflight_reads_the_world():
     from app.config import settings as _s
 
     async def _live():
+        from app import sidecar_auth
         async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(f"{_s.inference_control_url}/home/status")
+            r = await c.get(f"{_s.inference_control_url}/home/status",
+                            headers=sidecar_auth.inference_control_headers())
         return r.json()
 
     live = _a.run(_live())

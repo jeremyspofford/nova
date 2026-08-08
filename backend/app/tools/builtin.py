@@ -15,7 +15,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from app import activity_log, capability_events, curated_models, db, durability, tagging
+from app import activity_log, capability_events, curated_models, db, durability, sidecar_auth, tagging
 from app.tools import scopes
 from app.agents import registry as agent_registry
 from app.memory import provenance
@@ -1869,7 +1869,8 @@ async def _service_logs(args, ctx):
         async with httpx.AsyncClient(timeout=45.0) as client:
             r = await client.get(
                 f"{settings.inference_control_url}/logs",
-                params={"service": service, "lines": lines})
+                params={"service": service, "lines": lines},
+                headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         return (f"Error: the docker-control sidecar is unreachable ({e}) — "
                 f"container logs cannot be read without it.")
@@ -1922,7 +1923,8 @@ async def _redeploy_service(args, ctx):
         async with httpx.AsyncClient(timeout=30.0 if detach else 3900.0) as client:
             r = await client.post(
                 f"{settings.inference_control_url}/service/redeploy",
-                json={"service": service, "detach": detach})
+                json={"service": service, "detach": detach},
+                headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         return (f"Error: the docker-control sidecar is unreachable ({e}) — "
                 f"nothing can be rebuilt without it.")
@@ -1979,7 +1981,8 @@ async def _watch_redeploy(window_s: float) -> None:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 r = await client.get(
-                    f"{settings.inference_control_url}/service/redeploy/last")
+                    f"{settings.inference_control_url}/service/redeploy/last",
+                    headers=sidecar_auth.inference_control_headers())
             out = r.json()
         except (httpx.HTTPError, ValueError):
             out = {}
@@ -2101,7 +2104,8 @@ async def _check_service_reachable(args, ctx):
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.get(f"{settings.inference_control_url}/reachable",
-                                 params={"service": service})
+                                 params={"service": service},
+                                 headers=sidecar_auth.inference_control_headers())
     except httpx.HTTPError as e:
         return (f"Error: the docker-control sidecar is unreachable ({e}) — "
                 f"reachability cannot be checked without it.")
