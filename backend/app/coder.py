@@ -692,8 +692,10 @@ _PROJECT_ENV = os.path.join(
 def _env_file_value(key: str, path: str | None = None) -> Optional[str]:
     """One variable out of the install's own .env, compose-style: KEY=VALUE,
     comments and blanks skipped, last assignment wins, optional quotes
-    stripped. None when the file or the key is absent — the caller decides
-    what absence means, and here it must round toward 'billed'."""
+    stripped. Docker Compose also accepts `export KEY=VALUE` and inline
+    comments on unquoted values, so those are handled too. None when the
+    file or the key is absent — the caller decides what absence means, and
+    here it must round toward 'billed'."""
     found = None
     try:
         with open(path or _PROJECT_ENV, encoding="utf-8") as f:
@@ -702,8 +704,29 @@ def _env_file_value(key: str, path: str | None = None) -> Optional[str]:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                if k.strip() == key:
-                    found = v.strip().strip("'\"")
+                k = k.strip()
+                # Docker Compose strips the `export` prefix silently.
+                if k.lower().startswith("export "):
+                    k = k[len("export "):].strip()
+                if k != key:
+                    continue
+                v = v.strip()
+                # Strip inline comments from unquoted values; quoted values
+                # may contain `#` legitimately (e.g. a URL fragment).
+                if len(v) >= 2 and v[0] in ("'", '"'):
+                    quote = v[0]
+                    end = v.find(quote, 1)
+                    if end != -1:
+                        v = v[1:end]
+                else:
+                    idx = v.find(" #")
+                    if idx == -1:
+                        idx = v.find("\t#")
+                    if idx != -1:
+                        v = v[:idx].rstrip()
+                    else:
+                        v = v.strip("'\"")
+                found = v
     except OSError:
         return None
     return found

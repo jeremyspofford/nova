@@ -620,6 +620,64 @@ def test_migration_130():
           "NOT NULL" not in body and "DEFAULT 0" not in body)
 
 
+def test_env_parser() -> None:
+    """_env_file_value handles compose-style .env: export prefix, inline comments."""
+    import tempfile
+    env = (
+        "# comment\n"
+        "SIMPLE=bar\n"
+        "export PREFIXED=qux\n"
+        "DUPED=http://first\n"
+        "export DUPED=http://second\n"
+        "COMMENT=value # this is ignored\n"
+        "EMPTY=\n"
+        "QUOTED='quoted value'\n"
+        'DOUBLE_QUOTED="double quoted"\n'
+        "HASH_URL=https://example.com/page#section\n"
+        "HASH_QUOTED='https://example.com/#fragment'\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write(env)
+        path = f.name
+
+    from app.coder import _env_file_value
+
+    assert _env_file_value("SIMPLE", path) == "bar"
+    assert _env_file_value("PREFIXED", path) == "qux"  # export stripped
+    assert _env_file_value("DUPED", path) == "http://second"  # last wins, export stripped
+    assert _env_file_value("COMMENT", path) == "value"  # inline comment removed
+    assert _env_file_value("EMPTY", path) == ""
+    assert _env_file_value("QUOTED", path) == "quoted value"
+    assert _env_file_value("DOUBLE_QUOTED", path) == "double quoted"
+    assert _env_file_value("HASH_URL", path) == "https://example.com/page#section"  # no space before #
+    assert _env_file_value("HASH_QUOTED", path) == "https://example.com/#fragment"  # quoted preserves #
+    assert _env_file_value("NONEXISTENT", path) is None
+
+    import os
+    os.unlink(path)
+
+
+def test_netloc_normalization() -> None:
+    """_netloc produces comparable host:port for endpoint matching."""
+    from app.coder import _netloc
+
+    # Basic cases
+    assert _netloc("http://ollama:11434") == "ollama:11434"
+    assert _netloc("HTTP://OLLAMA:11434/V1") == "ollama:11434"  # path ignored, lowercased
+
+    # Default ports applied
+    assert _netloc("http://host.docker.internal") == "host.docker.internal:80"
+    assert _netloc("https://openrouter.ai/api") == "openrouter.ai:443"
+
+    # Empty / None / malformed
+    assert _netloc("") == ""
+    assert _netloc(None) == ""  # type: ignore[arg-type]
+    assert _netloc("   ") == ""
+
+    # No scheme defaults to http
+    assert _netloc("ollama:11434") == "ollama:11434"
+
+
 def main() -> int:
     test_broker_aggregates()
     test_acp_forwards_response_usage()
@@ -628,6 +686,8 @@ def main() -> int:
     test_metered_derivation()
     test_loop_charges_real_figures()
     test_endpoint_kind()
+    test_env_parser()
+    test_netloc_normalization()
     test_loop_stamps_endpoint()
     test_ceilings_exclude_local()
     test_migration_130()
