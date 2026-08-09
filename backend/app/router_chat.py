@@ -2252,7 +2252,10 @@ async def patch_settings(changes: dict):
     applied = {}
     for key, value in changes.items():
         try:
-            await settings_store.set_value(key, value)
+            # This route sits behind the operator's bearer token, so
+            # "operator" is a fact here, not a default — agents never reach
+            # this endpoint, and settings_store refuses to assume it.
+            await settings_store.set_value(key, value, actor="operator")
             applied[key] = value
         except (KeyError, ValueError) as e:
             raise HTTPException(status_code=422, detail=str(e))

@@ -348,7 +348,12 @@ async def _step_timezone(doc, rec, ctx) -> str:
                 f"I couldn't find a timezone in {given.strip()[:60]!r} — I "
                 f"need the IANA name, like America/New_York or Europe/London. "
                 f"Which one is the house in?"))
-        await settings_store.set_value("home.timezone", cleaned)
+        # The operator ANSWERED the question, but the write is this module's:
+        # attributing it to "operator" would claim he opened Settings, when
+        # what happened is an action step keeping his chat answer. The module
+        # name is the honest actor for an internal backend write.
+        await settings_store.set_value("home.timezone", cleaned,
+                                       actor="actions.home_assistant")
     tz = write_timezone() or doc.timezone
     return f"timezone {tz}"
 

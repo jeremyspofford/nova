@@ -64,6 +64,16 @@ MEMORY = "memory"
 # would read "ingest_jobs 2" in the next turn's facts, take it for a fresh
 # failure, and spend the operator's budget again on the same two rows.
 INGEST = "ingest"
+# A runtime setting changing under the backend's feet. The incident this kind
+# exists for (2026-08-08/09): the `backups.every_hours` row VANISHED from the
+# settings table — nightly backups silently off — and nothing anywhere
+# recorded who or what removed it; the heartbeat's stale-backup complaint was
+# the only reason it was found at all. Config changes to agents, models and
+# automations already land here; a raw settings write was the one config
+# channel that left no trail. Every settings_store set/clear now records the
+# key, the actor, and the old and new values (masked when the key or value is
+# credential-shaped — see settings_store._audit_value).
+SETTING = "setting"
 # A service standing up or going down on the operator's own machine. This is
 # a capability change in the plainest sense the file has: after `home_up`
 # there is something running that was not running before, holding a port and

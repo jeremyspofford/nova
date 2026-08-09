@@ -8,9 +8,9 @@ config belongs to the app, not the deployment.
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
-from app import db
+from app import db, redact
 
 log = logging.getLogger(__name__)
 
@@ -807,15 +807,102 @@ def _validate(key: str, value: Any) -> Any:
     return value
 
 
-async def set_value(key: str, value: Any):
+async def set_value(key: str, value: Any, *, actor: Optional[str] = None):
+    """Write one setting. `actor` is WHO is writing — see `_audit`."""
     value = _validate(key, value)
+    old = _cache.get(key, _DEFS[key]["default"])
     async with db.acquire() as conn:
         await conn.execute(
             """INSERT INTO settings (key, value) VALUES ($1, $2)
                ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()""",
             key, json.dumps(value))
     _cache[key] = value
-    log.info("Setting changed: %s = %r", key, value)
+    # Through the same mask the audit row uses: the server log is as
+    # readable as any table, and a secret printed here is a secret leaked.
+    log.info("Setting changed: %s = %r (by %s)", key, _audit_value(key, value),
+             actor or "backend (unattributed)")
+    _audit(key, "set", old=old, new=value, actor=actor)
+
+
+async def clear_value(key: str, *, actor: Optional[str] = None):
+    """Remove the DB override; the registry default takes over immediately.
+
+    The only sanctioned way a settings row gets deleted. The 2026-08-08/09
+    incident was exactly this operation performed by NOBODY ANYONE COULD NAME:
+    `backups.every_hours` vanished from the table, nightly backups went
+    silently off, and the record of who removed it did not exist. A clear is a
+    capability change as surely as a set, so it leaves the same trail.
+    """
+    d = _DEFS.get(key)
+    if not d:
+        raise KeyError(f"unknown setting: {key}")
+    old = _cache.get(key, d["default"])
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM settings WHERE key = $1", key)
+    _cache[key] = d["default"]
+    log.info("Setting cleared: %s (default %r restored, by %s)", key,
+             d["default"], actor or "backend (unattributed)")
+    _audit(key, "cleared", old=old, new=d["default"], actor=actor)
+
+
+def _audit_value(key: str, value: Any) -> Any:
+    """A setting value as the audit trail may hold it.
+
+    Mask VALUES, keep STRUCTURE (redact.py's rule): the row always says the
+    key changed and whether it went from empty to something; what it never
+    holds is a credential. Three signals decide, none of them a fresh keyword
+    list:
+
+      * the def's own `secret: True` — the machine-readable flag diagnose
+        already masks by (notify.ntfy.topic: no shape rule can know a plain
+        word is a credential);
+      * `redact.SECRET_KEY` against the key name, with the settings
+        namespace's dots normalised to underscores first — the pattern says
+        `webhook[_-]?url` and the key says `notify.webhook.url`, and a
+        separator defeating the scrubber is how a Slack webhook (a URL whose
+        PATH is the password) would have landed in the log verbatim;
+      * `redact.scrub_value` over everything else, so a credential-SHAPED
+        value (an sk- key pasted into an innocently-named field) is masked by
+        the same machinery that masks it everywhere else, while `24` stays 24.
+
+    None/"" pass through unmasked: "was unset" is structure, not a secret,
+    and masking it would claim a value existed where none did.
+    """
+    if value in (None, ""):
+        return value
+    d = _DEFS.get(key) or {}
+    if d.get("secret") or redact.SECRET_KEY.search(key.replace(".", "_")):
+        return redact.MASK
+    return redact.scrub_value(value)
+
+
+def _audit(key: str, action: str, *, old: Any, new: Any,
+           actor: Optional[str]) -> None:
+    """Every settings write leaves a capability_events row.
+
+    ACTOR IS A FACT, NOT A DEFAULT. `capability_events.record` falls back to
+    "operator" for a missing actor, which is the right guess for the writers
+    it was built for and a LIE here — the write nobody can explain is the
+    whole incident. An unspecified actor is recorded as "backend
+    (unattributed)" so the attribution gap is visible instead of mislabeled
+    as a person.
+
+    Suppressed for a test process against the live DB (the
+    `notifications.test_context` guard, built 2026-08-08 for exactly this
+    class): a suite's settings churn is not the operator's config history,
+    and 139 junk rows in his real conversation is how that lesson was
+    learned. Skipped with the reason in the log, never silently.
+    """
+    from app import notifications
+    refused = notifications.test_context()
+    if refused:
+        log.info("settings audit row skipped — %s", refused)
+        return
+    from app import capability_events
+    capability_events.record(
+        capability_events.SETTING, key, action,
+        actor=(actor or "").strip() or "backend (unattributed)",
+        detail={"old": _audit_value(key, old), "new": _audit_value(key, new)})
 
 
 def is_integral(d: dict) -> bool:
