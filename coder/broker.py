@@ -261,6 +261,12 @@ class Session:
         #: change the pin between sessions, and only the broker knows which
         #: value its agent actually ran under.
         self.model = os.environ.get("ANTHROPIC_MODEL", "")
+        #: Same reasoning for WHERE the agent sent its calls: the backend
+        #: derives local-vs-billed from config at record time, but config can
+        #: diverge from a running container (.env edited, no recreate — the
+        #: documented trap). Only this process knows the endpoint its agent
+        #: actually launched with.
+        self.base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
         #: The trunk commit this session's work will be measured from. Set at
         #: clone time and never derived from HEAD, which on a resumed session
         #: is the previous attempt's tip.
@@ -469,6 +475,7 @@ class Session:
             # the backend writes that to the ledger as unmetered, and a zero
             # here would read as free.
             "model": self.model,
+            "base_url": self.base_url,
             "usage": ({**self.usage, "frames": self.usage_frames}
                       if self.usage_frames else None),
             "tail": self.updates[-12:],

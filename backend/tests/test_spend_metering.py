@@ -357,6 +357,252 @@ def test_loop_charges_real_figures():
     check("6.8 the pass still stops", out.get("status") == "error")
 
 
+# ── 7b. the endpoint stamp: LOCAL vs BILLED is derived, never declared ───────
+#
+# The SDK prices every frame off its own table whatever it is pointed at, so
+# on 2026-08-08 three passes against local ollama summed $10.87 of fictional
+# "usd" and tripped the real $10 ceiling — the improve lane sat blocked until
+# midnight by paper money. sdk_estimate vs provider_billed is unknowable per
+# frame; which ENDPOINT the coder points at is a fact, and it is derived by
+# comparing CODER_BASE_URL (resolved the way compose resolves it) against the
+# install's own local-inference endpoints.
+
+def _kind_with(url_env, project_env_text=None):
+    """endpoint_kind under a controlled env + a scratch project .env."""
+    import tempfile
+    saved_env = os.environ.pop("CODER_BASE_URL", None)
+    saved_path = coder._PROJECT_ENV
+    tmp = None
+    try:
+        if url_env is not None:
+            os.environ["CODER_BASE_URL"] = url_env
+        if project_env_text is not None:
+            tmp = tempfile.NamedTemporaryFile(
+                "w", suffix=".env", delete=False)
+            tmp.write(project_env_text)
+            tmp.close()
+            coder._PROJECT_ENV = tmp.name
+        else:
+            coder._PROJECT_ENV = "/nonexistent/.env"
+        return coder.endpoint_kind()
+    finally:
+        if url_env is not None:
+            os.environ.pop("CODER_BASE_URL", None)
+        if saved_env is not None:
+            os.environ["CODER_BASE_URL"] = saved_env
+        coder._PROJECT_ENV = saved_path
+        if tmp is not None:
+            os.unlink(tmp.name)
+
+
+def test_endpoint_kind():
+    print("\n7b. ENDPOINT PROVENANCE IS DERIVED FROM THE INSTALL'S OWN CONFIG")
+    from app.config import settings as cfg
+
+    got = _kind_with(cfg.bundled_ollama_url)
+    check("7b.1 the bundled ollama URL is local",
+          got["kind"] == "local" and got["url"] == cfg.bundled_ollama_url,
+          str(got))
+    got = _kind_with(cfg.bundled_ollama_url.rstrip("/") + "/v1")
+    check("7b.2 …including with a path — same host:port is the same server",
+          got["kind"] == "local", str(got))
+    got = _kind_with("https://openrouter.ai/api")
+    check("7b.3 OpenRouter is billed", got["kind"] == "billed", str(got))
+    got = _kind_with(None)
+    check("7b.4 no CODER_BASE_URL anywhere rounds toward BILLED — compose "
+          "then defaults the coder to a paid endpoint, and 'unknown' must "
+          "count against the ceilings, not slip past them",
+          got["kind"] == "billed" and got["url"] is None, str(got))
+    got = _kind_with(None,
+                     "# comment\nCODER_BASE_URL=https://openrouter.ai/api\n"
+                     f"CODER_BASE_URL={cfg.bundled_ollama_url}\n")
+    check("7b.5 with the env var unset the install's .env decides — the same "
+          "file compose interpolates, last assignment wins",
+          got["kind"] == "local" and got["url"] == cfg.bundled_ollama_url,
+          str(got))
+
+    # The settings-store half: the operator's runtime Ollama URL (Settings →
+    # Inference) is local too, hostname and all — nothing is hardcoded.
+    from app import settings_store
+    had = "inference.ollama_url" in settings_store._cache
+    saved = settings_store._cache.get("inference.ollama_url")
+    settings_store._cache["inference.ollama_url"] = \
+        "http://host.docker.internal:11434"
+    try:
+        got = _kind_with("http://host.docker.internal:11434/v1")
+    finally:
+        if had:
+            settings_store._cache["inference.ollama_url"] = saved
+        else:
+            settings_store._cache.pop("inference.ollama_url", None)
+    check("7b.6 a host-run Ollama the operator configured is local by "
+          "derivation, no code change", got["kind"] == "local", str(got))
+
+    # The broker-reported half: the container's own launch env outranks
+    # config read at record time, because .env can be edited without the
+    # container being recreated (the documented trap) — and the divergent
+    # direction that matters would stamp a real OpenRouter session 'local'.
+    saved_env = os.environ.pop("CODER_BASE_URL", None)
+    try:
+        os.environ["CODER_BASE_URL"] = cfg.bundled_ollama_url
+        got = coder.endpoint_kind(reported="https://openrouter.ai/api")
+        check("7b.7 a broker that says it launched against OpenRouter is "
+              "BILLED even while config says local — real spend cannot "
+              "escape the ceilings on a stale container",
+              got["kind"] == "billed"
+              and got["url"] == "https://openrouter.ai/api", str(got))
+        os.environ["CODER_BASE_URL"] = "https://openrouter.ai/api"
+        got = coder.endpoint_kind(reported=cfg.bundled_ollama_url)
+        check("7b.8 …and the reported URL wins in the other direction too — "
+              "the container cannot diverge from itself",
+              got["kind"] == "local", str(got))
+        got = coder.endpoint_kind(reported="")
+        check("7b.9 an old broker image reports nothing and config still "
+              "decides", got["kind"] == "billed", str(got))
+    finally:
+        if saved_env is not None:
+            os.environ["CODER_BASE_URL"] = saved_env
+        else:
+            os.environ.pop("CODER_BASE_URL", None)
+
+
+def test_loop_stamps_endpoint():
+    print("\n7c. EVERY LEDGER ROW THE CODER WRITES CARRIES THE STAMP")
+    from app.config import settings as cfg
+    saved = os.environ.pop("CODER_BASE_URL", None)
+    try:
+        os.environ["CODER_BASE_URL"] = cfg.bundled_ollama_url
+        _, charges = _drive_loop([
+            {"state": "done", "commit": "c0ffee", "model": "qwen3.6:27b",
+             "usage": {"tokens_in": 100, "tokens_out": 10, "usd": 1.58}}])
+        c = next((c for c in charges if c["kind"] == spend.KIND_BUILD), {})
+        d = c.get("detail") or {}
+        check("7c.1 a build against local ollama is stamped endpoint=local, "
+              "with the URL beside it",
+              d.get("endpoint") == "local"
+              and d.get("endpoint_url") == cfg.bundled_ollama_url, str(d))
+
+        wall = ('{"code": -32603, "message": "Internal error: API Error: 402 '
+                'This request requires more credits, or fewer max_tokens. You '
+                'requested up to 32000 tokens, but can only afford 15846."}')
+        _, charges = _drive_loop([
+            {"state": "failed", "error": wall, "usage": {"usd": 1.23}}])
+        r = next((c for c in charges if c["kind"] == spend.KIND_REFUSED), {})
+        check("7c.2 a refusal row is stamped too — its dollars join the same "
+              "sums", (r.get("detail") or {}).get("endpoint") == "local",
+              str(r.get("detail")))
+
+        os.environ["CODER_BASE_URL"] = "https://openrouter.ai/api"
+        _, charges = _drive_loop([
+            {"state": "done", "commit": "c0ffee",
+             "usage": {"tokens_in": 5, "tokens_out": 1, "usd": 0.02}}])
+        c = next((c for c in charges if c["kind"] == spend.KIND_BUILD), {})
+        check("7c.3 the same loop against OpenRouter stamps billed — the "
+              "stamp follows the config, not the code",
+              (c.get("detail") or {}).get("endpoint") == "billed",
+              str(c.get("detail")))
+    finally:
+        os.environ.pop("CODER_BASE_URL", None)
+        if saved is not None:
+            os.environ["CODER_BASE_URL"] = saved
+
+
+# ── 7d. the ceilings sum billed endpoints only — against the REAL SQL ────────
+
+def test_ceilings_exclude_local():
+    print("\n7d. LOCAL PLAY-MONEY CANNOT SPEND THE REAL CEILINGS")
+    from app import db
+
+    lane = f"test-{uuid.uuid4().hex[:12]}"
+    r1, r2, r3, r4 = (str(uuid.uuid4()) for _ in range(4))
+
+    async def _scenario():
+        out = {}
+        await db.init_pool()
+        try:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO spend_ceilings (lane, max_passes, max_tokens,"
+                    " max_usd, updated_by) VALUES ($1, 10, 2000000, 10.0,"
+                    " 'test')", lane)
+
+                async def row(kind, run, tin, tout, usd, detail):
+                    await conn.execute(
+                        "INSERT INTO spend_ledger (lane, kind, run_id, "
+                        "tokens_in, tokens_out, usd, metered, detail) VALUES "
+                        "($1,$2,$3::uuid,$4,$5,$6,true,$7::jsonb)",
+                        lane, kind, run, tin, tout, usd, detail)
+
+                # Oldest first: a refusal at the HEAD would arm the wall
+                # backoff and this section is about the ceilings.
+                await row(spend.KIND_REFUSED, None, None, None, 2.00,
+                          '{"endpoint": "local", "wall": "provider"}')
+                await row(spend.KIND_BUILD, r1, 1000, 100, 1.10,
+                          '{"endpoint": "billed"}')
+                await row(spend.KIND_BUILD, r2, 1000000, 5000, 9.50,
+                          '{"endpoint": "local"}')
+                # No stamp at all — a row from before the stamp existed.
+                await row(spend.KIND_BUILD, r3, None, None, 0.40, '{}')
+
+            out["today"] = await spend.today(lane)
+            out["ok"] = await spend.may_start(lane)
+
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO spend_ledger (lane, kind, run_id, usd, "
+                    "metered, detail) VALUES ($1,$2,$3::uuid,9.00,true,"
+                    "'{\"endpoint\": \"billed\"}'::jsonb)",
+                    lane, spend.KIND_BUILD, r4)
+            out["usd_wall"] = await spend.may_start(lane)
+
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "UPDATE spend_ceilings SET max_usd = 50, max_passes = 4 "
+                    "WHERE lane = $1", lane)
+            out["pass_wall"] = await spend.may_start(lane)
+            return out
+        finally:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM spend_ledger WHERE lane = $1", lane)
+                await conn.execute(
+                    "DELETE FROM spend_ceilings WHERE lane = $1", lane)
+            await db.close_pool()
+
+    out = asyncio.run(_scenario())
+    t = out["today"]
+    check("7d.1 usd sums billed rows only — and an UNSTAMPED row counts as "
+          "billed, because unknown rounds toward spending less",
+          abs(t["usd"] - 1.50) < 1e-9, str(t["usd"]))
+    check("7d.2 tokens sum billed rows only", t["tokens"] == 1100,
+          str(t["tokens"]))
+    check("7d.3 the local figures are REPORTED beside them, not dropped",
+          abs(t["local_usd"] - 11.50) < 1e-9 and t["local_tokens"] == 1005000
+          and t["local_entries"] == 2,
+          f"local_usd={t['local_usd']} local_tokens={t['local_tokens']}")
+    check("7d.4 passes count local and billed alike — the pass ceiling is "
+          "the GPU/attention throttle", t["passes"] == 3 and t["attempts"] == 3)
+    check("7d.5 every usd figure is labelled the SDK estimate it is",
+          t["usd_basis"] == "sdk_estimate")
+
+    allowed, why = out["ok"]
+    check("7d.6 $11.50 of local play-money does NOT spend the $10 ceiling",
+          allowed is True, why)
+    check("7d.7 …and the exclusion is SAID, with the numbers",
+          "not counted against the money ceilings" in why
+          and "$11.50" in why and "estimated, not billed" in why, why)
+
+    allowed, why = out["usd_wall"]
+    check("7d.8 billed dollars still spend it — $10.50 real is over $10",
+          allowed is False and "cost ceiling" in why, why)
+    check("7d.9 …with the local exclusion still visible in the refusal",
+          "not counted against the money ceilings" in why, why)
+
+    allowed, why = out["pass_wall"]
+    check("7d.10 the pass ceiling binds on local passes exactly as before",
+          allowed is False and "4" in why and "ceiling is spent" in why, why)
+
+
 # ── 7. migration 130 says what the columns mean ─────────────────────────────
 
 def test_migration_130():
@@ -381,6 +627,9 @@ def main() -> int:
     test_shape_carries_cost()
     test_metered_derivation()
     test_loop_charges_real_figures()
+    test_endpoint_kind()
+    test_loop_stamps_endpoint()
+    test_ceilings_exclude_local()
     test_migration_130()
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:8]))

@@ -293,7 +293,9 @@ def _day(**over):
     quietly answering a question `may_start` no longer asks."""
     base = {"lane": spend.LANE_IMPROVE, "passes": 0, "attempts": 0,
             "entries": 0, "unmetered": 0, "tokens_in": 0, "tokens_out": 0,
-            "tokens": 0, "usd": 0.0}
+            "tokens": 0, "usd": 0.0, "usd_basis": "sdk_estimate",
+            "local_entries": 0, "local_tokens_in": 0, "local_tokens_out": 0,
+            "local_tokens": 0, "local_usd": 0.0}
     base.update(over)
     return base
 

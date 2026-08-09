@@ -905,10 +905,21 @@ export interface SpendToday {
   /** Ledger rows with no token figures. They sum as 0, so this count is the
    *  honesty flag: totals with unmetered > 0 are a floor, not a measurement. */
   unmetered: number;
+  /** tokens/usd sum BILLED endpoints only; local-endpoint entries are the
+   *  local_* figures beside them — GPU time priced by the coding SDK's own
+   *  table, never a bill, and excluded from the money ceilings. */
   tokens_in: number;
   tokens_out: number;
   tokens: number;
   usd: number;
+  /** Always 'sdk_estimate': every usd figure is the coding SDK pricing its
+   *  own frames, not a provider invoice. */
+  usd_basis: string;
+  local_entries: number;
+  local_tokens_in: number;
+  local_tokens_out: number;
+  local_tokens: number;
+  local_usd: number;
 }
 
 export interface SpendRefusal {
@@ -976,6 +987,10 @@ export interface SpendEntry {
   run_id: string | null;
   goal_id: string | null;
   created_at: string;
+  /** Cost provenance: 'local' rows are SDK-estimated GPU time excluded from
+   *  the money ceilings; 'billed' hit a paid endpoint; null predates the
+   *  stamp (counted as billed — unknown rounds toward spending less). */
+  endpoint?: 'local' | 'billed' | null;
   /** Only on kind=provider_refusal rows. */
   operator_note?: string | null;
   wall?: string;

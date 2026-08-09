@@ -161,6 +161,17 @@ async def set_ceiling(lane: str = LANE_IMPROVE, *, updated_by: str = "operator",
 #: id and a run id incapable of colliding in that bucket key.
 #:
 #: `$3` is the run being EXCLUDED from the pass count — see `today()`.
+#:
+#: THE TOKEN/DOLLAR SUMS COUNT BILLED ENDPOINTS ONLY. The coder's cost frames
+#: come from the SDK's own price table whatever it is pointed at, so a session
+#: against local ollama streams dollars nobody will ever be billed — measured
+#: 2026-08-08, $10.87 of paper money tripped the real $10 ceiling and blocked
+#: the improve lane until midnight. Rows stamped `detail.endpoint = 'local'`
+#: (written by `code_change`, derived by `coder.endpoint_kind`) are summed
+#: SEPARATELY as `local_*` so the exclusion is visible, never silent. A row
+#: with no stamp counts as billed — unknown rounds toward spending less.
+#: `passes` and `attempts` keep counting every row: the pass ceiling is the
+#: throttle on GPU time and review attention, and local work spends both.
 _TODAY_SQL = """
     SELECT count(DISTINCT coalesce(run_id::text, 'row:' || id::text))
              FILTER (WHERE kind = $2
@@ -169,9 +180,22 @@ _TODAY_SQL = """
            count(*) FILTER (WHERE kind = $2)                      AS attempts,
            count(*)                                               AS entries,
            count(*) FILTER (WHERE NOT metered)                    AS unmetered,
-           coalesce(sum(tokens_in), 0)                            AS tokens_in,
-           coalesce(sum(tokens_out), 0)                           AS tokens_out,
-           coalesce(sum(usd), 0)                                  AS usd
+           coalesce(sum(tokens_in)
+             FILTER (WHERE detail->>'endpoint' IS DISTINCT FROM 'local'),
+             0)                                                   AS tokens_in,
+           coalesce(sum(tokens_out)
+             FILTER (WHERE detail->>'endpoint' IS DISTINCT FROM 'local'),
+             0)                                                   AS tokens_out,
+           coalesce(sum(usd)
+             FILTER (WHERE detail->>'endpoint' IS DISTINCT FROM 'local'),
+             0)                                                   AS usd,
+           count(*) FILTER (WHERE detail->>'endpoint' = 'local')  AS local_entries,
+           coalesce(sum(tokens_in)
+             FILTER (WHERE detail->>'endpoint' = 'local'), 0)     AS local_tokens_in,
+           coalesce(sum(tokens_out)
+             FILTER (WHERE detail->>'endpoint' = 'local'), 0)     AS local_tokens_out,
+           coalesce(sum(usd)
+             FILTER (WHERE detail->>'endpoint' = 'local'), 0)     AS local_usd
       FROM spend_ledger
      WHERE lane = $1 AND day = current_date"""
 
@@ -195,16 +219,28 @@ async def today(lane: str = LANE_IMPROVE, *,
     asking "is there still room for this pass", and counting the pass against
     itself would make the ceiling refuse the very run it just authorised. Its
     tokens and dollars stay in the totals, because they were really spent.
+
+    `tokens*` and `usd` are BILLED endpoints only; what a local endpoint
+    "cost" is reported beside them as `local_*` rather than dropped, because
+    an exclusion nobody can see is indistinguishable from an unmetered day.
+    Every usd figure here is the coding SDK's own estimate (`usd_basis`) —
+    it prices every model off its own table, so even the billed number is
+    what the SDK believes, not what the provider charged.
     """
     async with db.acquire() as conn:
         row = await conn.fetchrow(_TODAY_SQL, lane, KIND_BUILD,
                                   str(exclude_run) if exclude_run else None)
     tin, tout = int(row["tokens_in"]), int(row["tokens_out"])
+    ltin, ltout = int(row["local_tokens_in"]), int(row["local_tokens_out"])
     return {"lane": lane, "passes": int(row["passes"]),
             "attempts": int(row["attempts"]),
             "entries": int(row["entries"]), "unmetered": int(row["unmetered"]),
             "tokens_in": tin, "tokens_out": tout, "tokens": tin + tout,
-            "usd": float(row["usd"])}
+            "usd": float(row["usd"]), "usd_basis": "sdk_estimate",
+            "local_entries": int(row["local_entries"]),
+            "local_tokens_in": ltin, "local_tokens_out": ltout,
+            "local_tokens": ltin + ltout,
+            "local_usd": float(row["local_usd"])}
 
 
 #: The BASE wait after a terminal wall stops a pass, before another may start.
@@ -384,20 +420,29 @@ async def may_start(lane: str = LANE_IMPROVE, *,
     tries = spent["attempts"]
     ran = (f" ({tries} coding attempts across them)"
            if tries != spent["passes"] else "")
+    #: Also said in every message that cites a total: the token/dollar sums
+    #: above EXCLUDE local-endpoint entries, and an exclusion has to be
+    #: visible or "we spent $0.33" over a day of local work reads as a
+    #: mismeasurement rather than as the ceiling counting only real money.
+    loc = ""
+    if spent["local_entries"]:
+        loc = (f" (local: ${spent['local_usd']:.2f} and "
+               f"{spent['local_tokens']:,} tokens estimated, not billed — "
+               f"not counted against the money ceilings)")
 
     if spent["passes"] >= cap["max_passes"]:
         return False, (
             f"the daily ceiling is spent: {spent['passes']} pass(es) already "
             f"started today{ran} and the limit is {cap['max_passes']}. Nothing "
-            f"starts until tomorrow, or until you raise the ceiling.")
+            f"starts until tomorrow, or until you raise the ceiling.{loc}")
     if cap["max_tokens"] and spent["tokens"] >= cap["max_tokens"]:
         return False, (
             f"the daily token ceiling is spent: {spent['tokens']:,} measured "
-            f"today against a limit of {cap['max_tokens']:,}.")
+            f"today against a limit of {cap['max_tokens']:,}.{loc}")
     if cap["max_usd"] and spent["usd"] >= cap["max_usd"]:
         return False, (
             f"the daily cost ceiling is spent: ${spent['usd']:.2f} measured "
-            f"today against a limit of ${cap['max_usd']:.2f}.")
+            f"today against a limit of ${cap['max_usd']:.2f}.{loc}")
 
     note = ""
     if spent["unmetered"]:
@@ -410,7 +455,7 @@ async def may_start(lane: str = LANE_IMPROVE, *,
                 f"unmeasured, so the totals above understate the day)")
     return True, (f"pass {spent['passes'] + 1} of {cap['max_passes']} today"
                   f"{ran}; {spent['tokens']:,} tokens and ${spent['usd']:.2f} "
-                  f"measured so far{note}")
+                  f"measured so far{note}{loc}")
 
 
 async def record(lane: str, kind: str, *, usage: Optional[dict] = None,
@@ -456,11 +501,18 @@ async def record(lane: str, kind: str, *, usage: Optional[dict] = None,
 
 
 async def entries(lane: str = LANE_IMPROVE, limit: int = 50) -> list[dict]:
-    """The ledger, newest first — what the operator reads when he asks why."""
+    """The ledger, newest first — what the operator reads when he asks why.
+
+    `endpoint` is the row's cost-provenance stamp ('local' | 'billed' | None
+    for rows written before the stamp existed), pulled out of `detail` so the
+    UI can label a local row's dollars as the estimate they are without
+    shipping every row's whole detail blob.
+    """
     async with db.acquire() as conn:
         rows = await conn.fetch(
             "SELECT id, day, lane, kind, model, tokens_in, tokens_out, usd, "
-            "       metered, session_id, run_id, goal_id, created_at "
+            "       metered, session_id, run_id, goal_id, created_at, "
+            "       detail->>'endpoint' AS endpoint "
             "  FROM spend_ledger WHERE lane = $1 "
             " ORDER BY created_at DESC LIMIT $2", lane, max(1, min(limit, 500)))
     out = []

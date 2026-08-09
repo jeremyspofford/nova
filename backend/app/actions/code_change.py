@@ -357,7 +357,8 @@ def retry_task(task: str, history: list[str], resume_from: str | None) -> str:
 
 
 async def _record_wall(budget: str, doc, fault, *, attempt: int, run_id,
-                       session_id=None, usage=None, model="") -> bool:
+                       session_id=None, usage=None, model="",
+                       base_url: str | None = None) -> bool:
     """Write the refusal to the ledger — as a refusal, never as a build.
 
     `spend.KIND_REFUSED` is deliberately not `KIND_BUILD`: the pass and
@@ -379,7 +380,12 @@ async def _record_wall(budget: str, doc, fault, *, attempt: int, run_id,
     cannot verify its own result must FAIL and say why" rule, so the caller is
     told and says so to the operator.
     """
-    from app import spend
+    from app import coder, spend
+    # A refusal's usage still joins the day's token/dollar sums (it is the
+    # pass's only ledger row), so it carries the same endpoint stamp a build
+    # does — local play-money must not survive into the money ceilings by
+    # arriving on a refusal instead.
+    ep = coder.endpoint_kind(base_url)
     result = await spend.record(
         budget, spend.KIND_REFUSED, usage=usage,
         usd=(usage or {}).get("usd"), model=model,
@@ -391,6 +397,7 @@ async def _record_wall(budget: str, doc, fault, *, attempt: int, run_id,
         detail={"wall": spend.WALL_PROVIDER,
                 "attempt": attempt, "reason": fault.reason,
                 "status": fault.status,
+                "endpoint": ep["kind"], "endpoint_url": ep.get("url"),
                 "operator_note": fault.operator_note()})
     persisted = bool(result.get("id"))
     if not persisted:
@@ -575,7 +582,9 @@ async def _step_build(doc, rec, ctx) -> dict:
             armed = await _record_wall(budget, doc, fault, attempt=attempt,
                                        run_id=run_id, session_id=sid,
                                        usage=r.get("usage"),
-                                       model=str(r.get("model") or ""))
+                                       model=str(r.get("model") or ""),
+                                       base_url=str(r.get("base_url") or "")
+                                       or None)
             await ctx.record(f"attempt-{attempt}", "error",
                              fault.operator_note()[:400])
 
@@ -627,6 +636,14 @@ async def _step_build(doc, rec, ctx) -> dict:
         # empty the entry is written UNMETERED with NULL counts rather than
         # zeros; see spend.py for why that distinction is the whole point.
         usage = r.get("usage") or spend.usage_from_updates(r.get("tail"))
+        # WHERE THE MONEY WOULD GO, stamped per row and derived at write time
+        # (coder.endpoint_kind). The sidecar's dollar figures come from its
+        # own price table whatever the endpoint, so 'local' is the fact that
+        # lets spend.today keep GPU play-money out of the real ceilings —
+        # measured 2026-08-08, when $10.87 of fictional usd against ollama
+        # blocked the improve lane until midnight. The broker's own reported
+        # base_url outranks config here — see endpoint_kind's docstring.
+        ep = coder.endpoint_kind(str(r.get("base_url") or "") or None)
         await spend.record(
             budget, spend.KIND_BUILD, usage=usage,
             usd=(usage or {}).get("usd"),
@@ -634,6 +651,7 @@ async def _step_build(doc, rec, ctx) -> dict:
             run_id=run_id,
             goal_id=str(doc.goal_id) if doc.goal_id else None,
             detail={"attempt": attempt, "state": r.get("state"),
+                    "endpoint": ep["kind"], "endpoint_url": ep.get("url"),
                     "source": "session row" if r.get("usage")
                               else "acp tail" if usage else "not reported"})
         if r.get("state") != "done":

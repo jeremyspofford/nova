@@ -515,6 +515,110 @@ async def broker_supports(field: str) -> Optional[bool]:
     return field in cached
 
 
+# --- where the coder's model calls actually go -------------------------------
+#
+# The sidecar reports cost frames computed from ITS OWN price table — the SDK
+# believes every model is Claude, so a session against local ollama streams
+# dollar figures nobody will ever be billed. Measured 2026-08-08: three passes
+# of fictional "usd" summed to $10.87 and tripped the real $10 ceiling, and the
+# improve lane sat blocked until midnight by paper money. Whether one frame is
+# an estimate or a bill is unknowable; whether the ENDPOINT is local or billed
+# is a fact, and this section derives it so the ledger can carry it.
+
+#: Where compose reads `CODER_BASE_URL` from when it interpolates the coder's
+#: `ANTHROPIC_BASE_URL`. The backend's own environment does not carry the
+#: variable, but the project tree is mounted read-only at NOVA_PROJECT_DIR, so
+#: the SAME file compose resolves is readable here — derived, never a second
+#: copy someone maintains.
+_PROJECT_ENV = os.path.join(
+    os.environ.get("NOVA_PROJECT_DIR", "/app/project"), ".env")
+
+
+def _env_file_value(key: str, path: str | None = None) -> Optional[str]:
+    """One variable out of the install's own .env, compose-style: KEY=VALUE,
+    comments and blanks skipped, last assignment wins, optional quotes
+    stripped. None when the file or the key is absent — the caller decides
+    what absence means, and here it must round toward 'billed'."""
+    found = None
+    try:
+        with open(path or _PROJECT_ENV, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    found = v.strip().strip("'\"")
+    except OSError:
+        return None
+    return found
+
+
+def _netloc(url: str) -> str:
+    """host:port, lowercased, scheme defaults applied — the part of a URL two
+    endpoints must share to be the same server. Paths are ignored on purpose:
+    http://ollama:11434 and http://ollama:11434/v1 are one process."""
+    from urllib.parse import urlsplit
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if "://" not in u:
+        u = "http://" + u
+    s = urlsplit(u)
+    host = (s.hostname or "").lower()
+    if not host:
+        return ""
+    try:
+        port = s.port
+    except ValueError:
+        port = None
+    return f"{host}:{port or (443 if s.scheme == 'https' else 80)}"
+
+
+def endpoint_kind(reported: str | None = None) -> dict:
+    """Is the coder's model endpoint LOCAL inference or a BILLED provider?
+
+    `{"kind": "local" | "billed", "url": ...}` — stamped into every ledger row
+    the coder's costs reach, so `spend.today` can keep paper money out of the
+    real money ceilings.
+
+    DERIVED, both halves, on every call. The coder's endpoint is read the way
+    compose reads it (env first, then the install's .env); the local set is
+    the install's own local-inference endpoints — the runtime Ollama URL
+    (Settings → Inference) and the bundled compose service — never a
+    hardcoded hostname. Pointing the coder at host-run Ollama therefore stays
+    'local' by itself, and moving it back to OpenRouter flips the stamp with
+    no code change.
+
+    EVERY unknown rounds toward 'billed': an unreadable .env, an unset
+    variable (compose then defaults the coder to OpenRouter), a URL matching
+    nothing. Wrongly counting local play-money against the ceilings costs one
+    blocked day; wrongly exempting a real bill uncaps the card.
+
+    `reported` is the base URL the broker says its agent process launched
+    with (snapshot's base_url). When present it OUTRANKS the config
+    derivation: config read at record time can diverge from a container
+    created before the .env edit — the documented trap — and the divergent
+    direction that matters stamps a real OpenRouter session 'local'. The
+    container's own record cannot diverge from itself. An old broker image
+    reports nothing and falls back to config.
+    """
+    url = ((reported or "").strip()
+           or (os.environ.get("CODER_BASE_URL") or "").strip()
+           or _env_file_value("CODER_BASE_URL"))
+    if not url:
+        return {"kind": "billed", "url": None}
+    from app import settings_store
+    local = {_netloc(settings.bundled_ollama_url)}
+    try:
+        local.add(_netloc(str(settings_store.get("inference.ollama_url") or "")))
+    except KeyError:                     # the setting was renamed, not a fact
+        pass
+    local.discard("")
+    kind = "local" if _netloc(url) in local else "billed"
+    return {"kind": kind, "url": url}
+
+
 # --- what one broker snapshot says a session cost ---------------------------
 
 #: The streamed usage frame, as observed live on 2026-08-08: cumulative for
@@ -993,9 +1097,17 @@ _REVIEW_MAX_PATCH = 60_000
 
 
 def _coder_model() -> str:
-    """What model wrote the code, as the compose file configures it."""
-    return (os.environ.get("CODER_MODEL")
-            or "anthropic/claude-sonnet-4.6").strip()
+    """What model wrote the code, as the compose file configures it.
+
+    Resolved the way compose resolves it — backend env, then the install's
+    .env — because the backend's own environment does not carry CODER_MODEL:
+    reading only os.environ answered the compose fallback ("claude-sonnet")
+    while the coder actually ran a local tag, and the different-model review
+    check was comparing against the wrong name (observed 2026-08-09).
+    """
+    return ((os.environ.get("CODER_MODEL") or "").strip()
+            or (_env_file_value("CODER_MODEL") or "").strip()
+            or "anthropic/claude-sonnet-4.6")
 
 
 async def review(session_id: str) -> dict:

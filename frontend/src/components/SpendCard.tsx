@@ -174,11 +174,20 @@ export function SpendCard() {
       <div className="grid md:grid-cols-3 gap-x-6 gap-y-3 mb-3">
         <CeilingMeter label="Passes today" used={today.passes}
           max={ceilings?.max_passes ?? null} fmt={n => String(n)} />
-        <CeilingMeter label="Tokens today" used={today.tokens}
+        <CeilingMeter label="Tokens today (billed)" used={today.tokens}
           max={ceilings?.max_tokens ?? null} fmt={fmtTokens} />
-        <CeilingMeter label="Spend today" used={today.usd}
+        <CeilingMeter label="Spend today (billed, est.)" used={today.usd}
           max={ceilings?.max_usd ?? null} fmt={n => `$${n.toFixed(2)}`} />
       </div>
+      {today.local_entries > 0 && (
+        <p className="text-[11px] text-stone-500 mb-2">
+          Local endpoint: ${today.local_usd.toFixed(2)} and{' '}
+          {fmtTokens(today.local_tokens)} tokens estimated across{' '}
+          {today.local_entries} entr{today.local_entries === 1 ? 'y' : 'ies'} —
+          the SDK&apos;s own pricing, not a bill, so it is excluded from the
+          money ceilings above.
+        </p>
+      )}
       {today.unmetered > 0 && (
         <p className="text-[11px] text-amber-500/80 mb-2">
           {today.unmetered} of today&apos;s {today.entries} ledger entries carry
@@ -319,6 +328,12 @@ export function SpendCard() {
                   ? `${fmtTokens((e.tokens_in ?? 0) + (e.tokens_out ?? 0))} tok`
                   : e.kind === 'provider_refusal' ? (e.refusal_reason ?? '') : 'unmetered'}
                 {e.usd != null && e.usd > 0 && ` · $${e.usd.toFixed(4)}`}
+                {e.endpoint === 'local' && (
+                  <span className="text-stone-600"
+                    title="Local endpoint: the SDK's own price estimate, not a bill — excluded from the money ceilings">
+                    {' '}· local est.
+                  </span>
+                )}
               </span>
             </div>
           ))}
