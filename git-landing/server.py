@@ -246,8 +246,21 @@ def _land(patch: str, branch: str, base: str = "") -> dict:
         if started_on == branch:
             return {"status": "error",
                     "detail": f"already on {branch}; nothing to do"}
+        # IN A WORKTREE, NEVER THE MAIN TREE. The first version did
+        # `checkout -b` + `am` here and checked back out — correct in git
+        # terms, but the transient rewrite touched real files under the
+        # backend's dev bind mount, and uvicorn --reload RESTARTED THE
+        # BACKEND mid-pass: the sandbox gate killed the very process running
+        # the pass, the run was orphan-reset, and a finished attempt's commit
+        # (9f9899d9, 2026-08-09) was stranded behind a false "none green".
+        # A worktree under .worktrees/ (this repo's own policy, gitignored,
+        # outside every watched mount) creates the branch and applies the
+        # patch without the operator's working copy — or the backend's
+        # watcher — ever seeing a file change.
+        wt = os.path.join(REPO, ".worktrees",
+                          "landing-" + branch.split("/", 1)[1])
         try:
-            _git("checkout", "-b", branch, base or "HEAD")
+            _git("worktree", "add", wt, "-b", branch, base or "HEAD")
         except RuntimeError as e:
             return {"status": "error", "detail": f"could not create {branch}: {e}"}
 
@@ -255,23 +268,23 @@ def _land(patch: str, branch: str, base: str = "") -> dict:
         with open(patch_file, "w") as f:
             f.write(patch if patch.endswith("\n") else patch + "\n")
         try:
-            _git("am", "--3way", "--keep-cr", patch_file)
+            _git("am", "--3way", "--keep-cr", patch_file, cwd=wt)
         except RuntimeError as e:
-            # ABORT AND GO BACK. A half-applied patch on his machine is the
-            # outcome with no recovery story, so a conflict is a clean no-op
-            # plus a sentence saying so.
-            _git("am", "--abort", check=False)
-            _git("checkout", started_on, check=False)
+            # ABORT AND LEAVE NOTHING. A half-applied patch on his machine is
+            # the outcome with no recovery story, so a conflict is a clean
+            # no-op plus a sentence saying so.
+            _git("am", "--abort", check=False, cwd=wt)
+            _git("worktree", "remove", "--force", wt, check=False)
             _git("branch", "-D", branch, check=False)
             return {"status": "error",
                     "detail": (f"the patch did not apply cleanly and nothing "
-                               f"was changed — the repo is back on "
-                               f"{started_on}. {e}")}
-        head = _git("rev-parse", "--short", "HEAD").strip()
-        files = _git("diff", "--name-only", f"{started_on}..{branch}").split()
-        # Back to where he was. He asked for a branch, not a checkout switch
-        # under his feet while he is working.
-        _git("checkout", started_on, check=False)
+                               f"was changed — your working copy was never "
+                               f"touched. {e}")}
+        head = _git("rev-parse", "--short", "HEAD", cwd=wt).strip()
+        files = _git("diff", "--name-only",
+                     f"{started_on}..{branch}").split()
+        # The branch keeps the commit; the staging tree has done its job.
+        _git("worktree", "remove", wt, check=False)
         log.info("landed %s on %s (%s)", head, branch, ", ".join(files[:6]))
         return {"status": "ok", "branch": branch, "commit": head,
                 "files": files, "returned_to": started_on,

@@ -518,11 +518,13 @@ async def _step_build(doc, rec, ctx) -> dict:
 
     for attempt in range(1, doc.attempts + 1):
         if time.monotonic() > deadline:
-            return {"status": "error",
-                    "detail": (f"stopped after {attempt - 1} attempt(s): the "
-                               f"{int(_LOOP_BUDGET_S / 60)}-minute budget for "
-                               f"this build is spent. What was tried: "
-                               + " | ".join(history))}
+            detail = (f"stopped after {attempt - 1} attempt(s): the "
+                      f"{int(_LOOP_BUDGET_S / 60)}-minute budget for "
+                      f"this build is spent. What was tried: "
+                      + " | ".join(history))
+            if not work_done:
+                detail = await _flag_stranded_work(doc, run_id, detail, ctx)
+            return {"status": "error", "detail": detail}
 
         # THE MONEY CEILING, RE-CHECKED PER ATTEMPT (rail 3). The trigger
         # cleared one pass; an attempt is another coding agent, another image
@@ -665,10 +667,30 @@ async def _step_build(doc, rec, ctx) -> dict:
             # complete — it happened for real when the clone did not contain
             # the file being edited. A failed attempt, and `resume_from` stays
             # where it was: this session added nothing to resume from.
-            note = "finished without changing anything"
-            history.append(note)
-            await ctx.record(f"attempt-{attempt}", "error", note)
-            continue
+            #
+            # BUT A SNAPSHOT IS NOT A VERDICT (2026-08-09). This branch once
+            # judged straight off whatever dict the poll returned, and a
+            # racing writer persisting done-without-commit would have turned
+            # real work into "finished without changing anything" forever —
+            # the row is terminal after that, so nothing re-reads it. One
+            # authoritative re-read first: the row fresh, then the broker
+            # itself, and a commit found either place is recovered rather
+            # than denied (coder.confirm_no_work repairs the row too).
+            truth = await coder.confirm_no_work(sid)
+            if not truth.get("no_work"):
+                r = {**r, "state": "done", "commit": truth.get("commit"),
+                     "diffstat": truth.get("diffstat")}
+                await ctx.record(
+                    f"attempt-{attempt}", "ok",
+                    f"the first snapshot hid commit "
+                    f"{str(truth.get('commit'))[:10]} — recovered on re-read")
+            else:
+                note = "finished without changing anything"
+                if truth.get("checked") == "broker":
+                    note += " (confirmed against the broker)"
+                history.append(note)
+                await ctx.record(f"attempt-{attempt}", "error", note)
+                continue
 
         work_done = True
         await ctx.record(f"attempt-{attempt}", "ok",
@@ -693,9 +715,110 @@ async def _step_build(doc, rec, ctx) -> dict:
         # of the checkout the next agent opens.
         resume_from = sid
 
-    return {"status": "error",
-            "detail": (f"stopped after {doc.attempts} attempts, none green. "
-                       f"What was tried: " + " | ".join(history))}
+    detail = (f"stopped after {doc.attempts} attempts, none green. "
+              f"What was tried: " + " | ".join(history))
+    if not work_done:
+        detail = await _flag_stranded_work(doc, run_id, detail, ctx)
+    return {"status": "error", "detail": detail}
+
+
+# ── the stranded-work tripwire ───────────────────────────────────────────────
+#
+# MEASURED 2026-08-09. Attempt 1 of an improve pass committed 9f9899d9; the
+# sandbox gate materialized that patch in the LIVE working tree, the dev
+# reloader restarted the backend mid-check, `reset_orphans` requeued the run,
+# and the second execution — whose history and `resume_from` live only in this
+# process — ran three fresh sessions that genuinely changed nothing. The run
+# failed "none green" while a terminal-done session WITH a commit and a
+# captured patch sat right there. Verified work, invisible, behind a failure
+# report that read "nothing was done".
+#
+# This does not resurrect the pass (nothing durable links sessions to a run's
+# executions, and pretending otherwise would land code this execution never
+# watched being built). It makes the false claim impossible to make silently:
+# before a pass that produced no commit reports failure, it looks for terminal
+# sessions WITH commits created since the run began, and when one exists the
+# run's own error text says so, the log says so, and a notification reaches
+# the operator. A note, not a gate — it may over-report on a concurrently
+# running build of the same workspace, and saying too much beats hiding work.
+
+
+async def _stranded_sessions(run_id, workspace: str, goal_id) -> list[dict]:
+    """Terminal sessions WITH commits, created since this run began.
+
+    Scoped as tightly as the durable record allows: same workspace, started
+    by this executor (`requested_by`), inside the run's own lifetime, and —
+    for the goal lane — the same goal. Returns [] when there is no run row to
+    time-bound against, because an unbounded query would drag in every old
+    session ever built.
+    """
+    from app import coder, db
+
+    if not run_id:
+        return []
+    async with db.acquire() as conn:
+        run = await conn.fetchrow(
+            "SELECT created_at FROM action_runs WHERE id = $1::uuid",
+            str(run_id))
+        if not run:
+            return []
+        rows = await conn.fetch(
+            """SELECT s.id, s.commit_sha, s.state, s.sandbox_status
+                 FROM coding_sessions s
+                 JOIN workspaces w ON w.id = s.workspace_id
+                WHERE w.name = $1
+                  AND s.requested_by = 'code_change.build'
+                  AND s.commit_sha IS NOT NULL
+                  AND s.state = ANY($2::text[])
+                  AND s.created_at >= $3
+                  AND ($4::uuid IS NULL OR s.goal_id = $4::uuid)
+                ORDER BY s.created_at""",
+            workspace, list(coder.TERMINAL), run["created_at"],
+            str(goal_id) if goal_id else None)
+    return [dict(r) for r in rows]
+
+
+async def _flag_stranded_work(doc, run_id, detail: str, ctx) -> str:
+    """Amend a nothing-was-done failure that is not telling the whole truth.
+
+    Returns `detail`, extended with the stranded session when one exists —
+    the run's error text IS this string (`action_worker.refusal` carries it
+    into the row), so amending it here amends the durable record. Best-effort
+    on its own failures: a broken tripwire must not convert an honest failure
+    report into a crash.
+    """
+    try:
+        stranded = await _stranded_sessions(run_id, doc.workspace, doc.goal_id)
+    except Exception:                                        # noqa: BLE001
+        log.exception("the stranded-work check itself failed")
+        return detail
+    if not stranded:
+        return detail
+    s = stranded[0]
+    sid, sha = str(s["id"]), str(s["commit_sha"] or "")
+    note = (f" STRANDED WORK: this pass is NOT empty — coding session "
+            f"{sid[:8]} is terminal '{s['state']}' with commit {sha[:10]} "
+            f"(sandbox {s['sandbox_status'] or 'never checked'}), made under "
+            f"this run before it was re-executed. The work is preserved: "
+            f"check_coding_session {sid} to see it."
+            + (f" And {len(stranded) - 1} more like it."
+               if len(stranded) > 1 else ""))
+    log.warning("run %s failed claiming nothing was done, but %d committed "
+                "session(s) exist: %s", run_id, len(stranded),
+                [str(x["id"])[:8] for x in stranded])
+    await ctx.record("stranded-work", "error", note[:400])
+    try:
+        from app import notify
+        await notify.send(
+            (f"A build pass just failed reporting nothing was done, but "
+             f"session {sid[:8]} committed {sha[:10]} under the same run "
+             f"before a restart re-ran it. The work is preserved — ask me "
+             f"about coding session {sid[:8]}.")[:300],
+            title="Stranded coding work found", tags=["warning"],
+            dedupe_key=f"stranded-work:{sid}:{sha[:10]}")
+    except Exception:                                        # noqa: BLE001
+        log.exception("the stranded-work notification failed")
+    return detail + note
 
 
 # ── the autonomous half: what stands in for him reading the diff ─────────────

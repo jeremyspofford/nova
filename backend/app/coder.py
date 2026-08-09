@@ -22,6 +22,7 @@ back.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -41,6 +42,30 @@ _TIMEOUT_S = 30.0
 #: progress for the whole window, and a session that resumed would have moved
 #: its fingerprint before the reconciler ever looked.
 TERMINAL = frozenset({"done", "failed", "killed", "stalled"})
+
+# THE TERMINAL-DONE INVARIANT (2026-08-09, the improve pass that clobbered its
+# own runner). Because `refresh` stops polling terminal rows and `_update`
+# drops None fields, whatever is persisted alongside a terminal state is what
+# the row says FOREVER — a `done` written without the broker's finalize
+# results would leave commit_sha NULL and blind every later reader into
+# calling real work a no-op. So:
+#
+#   * a row may become terminal `done` only carrying the broker's own
+#     finalize results (commit/diffstat as the broker reports them at done);
+#   * a writer holding a `done` snapshot with no commit must RE-POLL before
+#     persisting it (`_confirm_done_snapshot` inside `refresh`);
+#   * any judgment that would brand a session "finished without changing
+#     anything" must go through `confirm_no_work`, which re-reads the row and
+#     then the broker itself before agreeing;
+#   * nothing may mark a live-broker session terminal without the broker's
+#     own testimony — `reconcile_stalled` counts a `stale` poll as
+#     UNREACHABLE, never as checked.
+#
+# The broker's own half is already closed: `Session.run` settles `done` only
+# after `_capture` recorded the commit, so its snapshot cannot read done with
+# the commit unrecorded (pinned by test_build_loop §7). The backend enforces
+# its half anyway, because it regularly runs against a sidecar image built
+# weeks earlier whose ordering is not a fact about the source tree.
 
 #: How long a session may report no PROGRESS before it is called stalled.
 #: Not a wall clock on the session — the broker owns that (`budget_s`) and a
@@ -276,7 +301,13 @@ async def start(workspace: str, task: str, *, mode: str = "default",
 
 
 async def refresh(session_id: str) -> dict:
-    """Poll the broker and write what it says into the row."""
+    """Poll the broker and write what it says into the row.
+
+    `stale: True` in the reply means the broker WAS NOT ACTUALLY ASKED — the
+    dict is the durable row plus the reason. Anything judging liveness off
+    this reply (the reconciler) must treat it as "could not look", never as
+    evidence about the session.
+    """
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM coding_sessions WHERE id = $1::uuid", session_id)
@@ -299,9 +330,22 @@ async def refresh(session_id: str) -> dict:
                       error="the coder sidecar restarted; this session is gone")
         return {**_shape(dict(row)), "state": "failed"}
     if resp.status_code >= 400:
-        return {**_shape(dict(row)), "detail": _detail(resp)}
+        # No snapshot was obtained, so this answer is the ROW, not the
+        # broker — `stale` says so, exactly as the unreachable branch does,
+        # and the reconciler refuses to judge liveness off it.
+        return {**_shape(dict(row)), "stale": True, "detail": _detail(resp)}
 
     b = resp.json()
+    # THE TERMINAL-DONE INVARIANT (see the note at TERMINAL). A `done`
+    # snapshot with no commit is either a genuine no-op or a poll that caught
+    # a broker mid-finalize — and this backend regularly runs against a
+    # sidecar image built weeks ago, so the current broker's write ordering
+    # is not a fact about the process answering. The write below is FINAL:
+    # the terminal short-circuit above never polls again, and `_update`
+    # dropping None would leave commit_sha NULL forever. One confirming
+    # re-read before that stands.
+    if b.get("state") == "done" and not b.get("commit"):
+        b = await _confirm_done_snapshot(row["broker_session_id"], b)
     usage = snapshot_usage(b)
     await _update(row["id"], state=b.get("state"), branch=b.get("branch"),
                   commit_sha=b.get("commit") or None,
@@ -334,6 +378,106 @@ async def refresh(session_id: str) -> dict:
     # persisted columns — so the list endpoint carries it too, and it survives
     # a sidecar restart. Only the live-only extras are added here.
     return out
+
+
+#: How long a `done`-without-commit snapshot is given to finish finalizing
+#: before the re-read that decides what the row will say forever. Paid only
+#: on that one transition, never on ordinary polls.
+_FINALIZE_GRACE_S = 1.5
+
+
+async def _confirm_done_snapshot(broker_session_id: str, first: dict) -> dict:
+    """One confirming re-read of a `done` snapshot that carries no commit.
+
+    The writer half of the terminal-done invariant: `refresh` must not
+    persist a terminal `done` unless it carries the broker's finalize
+    results, and a snapshot claiming done with nothing in it is the one shape
+    that could be a poll landing mid-finalize. The second answer wins when it
+    arrives; the first stands when the broker cannot be asked again, because
+    refusing to persist anything would leave the row non-terminal and the
+    next poll runs this exact check once more.
+    """
+    await asyncio.sleep(_FINALIZE_GRACE_S)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(
+                f"{settings.coder_url}/session/{broker_session_id}",
+                headers=_auth())
+        if resp.status_code != 200:
+            return first
+        second = resp.json() or {}
+    except (httpx.HTTPError, ValueError):
+        return first
+    if second.get("commit") and not first.get("commit"):
+        log.warning("session %s: the first 'done' snapshot carried no commit "
+                    "and the re-read does — a mid-finalize poll was caught "
+                    "before it could blind the row", broker_session_id)
+    return second
+
+
+async def confirm_no_work(session_id: str) -> dict:
+    """One authoritative re-read before anyone brands a session a no-op.
+
+    THE JUDGE'S HALF of the terminal-done invariant (2026-08-09). The improve
+    pass read "done, no commit" off a snapshot, said "finished without
+    changing anything", and the run failed "none green" — while a session
+    from the pass's first execution sat terminal-done WITH its commit. The
+    verdict is too consequential to rest on whatever dict the caller happens
+    to hold: this re-reads the ROW fresh, then asks the BROKER itself, and
+    only agrees the session did nothing when neither knows of a commit.
+
+    When the broker reports a commit the row does not carry — a racing writer
+    persisted a mid-judgment snapshot — the row is REPAIRED from the broker's
+    own finalize results before answering, so the blinding (`refresh`'s
+    terminal short-circuit over a NULL commit_sha) is undone rather than
+    survived.
+
+    Returns {"no_work": bool, "checked": "broker"|"row", ...}. `checked` says
+    who testified: "row" means the broker could not be asked and the durable
+    row is all there is. NEVER downgrades the row — a 404 here is not written
+    as `failed` (unlike `refresh`), because the caller may hold a terminal
+    row this function has no business rewriting.
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, broker_session_id, state, commit_sha, diffstat, patch "
+            "FROM coding_sessions WHERE id = $1::uuid", str(session_id))
+    if not row:
+        return {"no_work": True, "checked": "row", "detail": "no such session"}
+    if row["commit_sha"]:
+        return {"no_work": False, "checked": "row",
+                "commit": row["commit_sha"], "diffstat": row["diffstat"]}
+    if not row["broker_session_id"]:
+        return {"no_work": True, "checked": "row",
+                "detail": "the session never reached the broker"}
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(
+                f"{settings.coder_url}/session/{row['broker_session_id']}",
+                headers=_auth())
+    except httpx.HTTPError as e:
+        return {"no_work": True, "checked": "row",
+                "detail": f"the broker could not confirm it: {str(e)[:200]}"}
+    if resp.status_code != 200:
+        return {"no_work": True, "checked": "row", "detail": _detail(resp)}
+    try:
+        b = resp.json() or {}
+    except ValueError:
+        return {"no_work": True, "checked": "row",
+                "detail": "the broker's reply was unreadable"}
+    if not b.get("commit"):
+        return {"no_work": True, "checked": "broker",
+                "detail": f"the broker confirms: state {b.get('state')!r}, "
+                          f"no commit"}
+    await _update(row["id"], state=b.get("state"), commit_sha=b.get("commit"),
+                  diffstat=b.get("diffstat") or None)
+    if b.get("state") in TERMINAL and not row["patch"]:
+        await _capture_patch(row["id"], row["broker_session_id"])
+    log.warning("session %s: the row said no commit and the broker says %s — "
+                "repaired from the broker's own finalize results",
+                session_id, str(b.get("commit"))[:12])
+    return {"no_work": False, "checked": "broker",
+            "commit": b.get("commit"), "diffstat": b.get("diffstat")}
 
 
 def _fingerprint(body: dict) -> str:
@@ -400,12 +544,23 @@ async def reconcile_stalled() -> tuple[bool, str]:
     checked, stalled, unreachable = 0, [], 0
     for r in rows:
         try:
-            await refresh(str(r["id"]))
-            checked += 1
+            got = await refresh(str(r["id"]))
         except Exception as e:                               # noqa: BLE001
             log.warning("reconcile: refresh of %s failed: %s", r["id"], e)
             unreachable += 1
             continue
+        # A LIVE POLL, OR NO JUDGMENT AT ALL. `refresh` answers with the ROW
+        # and `stale: True` when the broker could not actually be asked — an
+        # unreachable sidecar, or an error reply carrying no snapshot. It
+        # does not raise for those, so counting the result as "checked" and
+        # then judging `progress_at` would mark a live-broker session
+        # TERMINAL (`stalled` — refresh never polls it again) with no broker
+        # testimony at all. "We could not look" is unreachable, never
+        # evidence of death.
+        if got.get("stale"):
+            unreachable += 1
+            continue
+        checked += 1
 
         async with db.acquire() as conn:
             row = await conn.fetchrow(

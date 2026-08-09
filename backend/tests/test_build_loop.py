@@ -72,10 +72,15 @@ class FakeCoder:
     """
 
     def __init__(self, outcomes):
-        #: one entry per attempt: ("green"|"red"|"nocommit"|"crash", detail)
+        #: one entry per attempt:
+        #: ("green"|"red"|"nocommit"|"crash"|"phantom", detail).
+        #: "phantom" is the raced snapshot: refresh says done-with-no-commit
+        #: while the broker's own record carries a commit — the writer that
+        #: persisted mid-judgment. The authoritative re-read must recover it.
         self.outcomes = list(outcomes)
         self.starts: list[dict] = []
         self.checked: list[str] = []
+        self.confirms: list[str] = []
         self.lanes: list[str] = []
         self.charges: list[dict] = []
         self.delay = 0.0
@@ -92,9 +97,22 @@ class FakeCoder:
         kind, _ = self.outcomes[i]
         if kind == "crash":
             return {"state": "failed", "error": "the agent returned an error"}
-        if kind == "nocommit":
+        if kind in ("nocommit", "phantom"):
             return {"state": "done", "commit": None}
         return {"state": "done", "commit": f"c0ffee{i}"}
+
+    async def confirm_no_work(self, session_id):
+        """The authoritative re-read. For a phantom the broker's own record
+        carries the commit the raced snapshot hid; for a genuine no-op it
+        confirms the nothing."""
+        self.confirms.append(session_id)
+        i = [s["session"] for s in self.starts].index(session_id)
+        kind, _ = self.outcomes[i]
+        if kind == "phantom":
+            return {"no_work": False, "checked": "broker",
+                    "commit": f"c0ffee{i}", "diffstat": "1 file changed"}
+        return {"no_work": True, "checked": "broker",
+                "detail": "the broker confirms: state 'done', no commit"}
 
     async def sandbox_check(self, session_id, *, lane="operator"):
         # `lane` is the SPEND BUDGET this check is charged to (ROADMAP #47
@@ -107,7 +125,7 @@ class FakeCoder:
         self.lanes.append(lane)
         i = [s["session"] for s in self.starts].index(session_id)
         kind, detail = self.outcomes[i]
-        if kind == "green":
+        if kind in ("green", "phantom"):
             return {"status": "ok", "detail": "build, boot and suite all green",
                     "eval": {"state": "unmeasured",
                              "detail": "no floors are set"}}
@@ -129,7 +147,8 @@ def _run(outcomes, doc=None, budget=None, delay=0.0, rec=None):
     fake = FakeCoder(outcomes)
     fake.delay = delay
     saved = {k: getattr(real_coder, k) for k in ("start", "refresh",
-                                                 "sandbox_check")}
+                                                 "sandbox_check",
+                                                 "confirm_no_work")}
     saved_budget = cc._LOOP_BUDGET_S
     saved_poll = cc._POLL_S
     for k in saved:
@@ -405,6 +424,24 @@ def test_the_broker_can_resume():
           "'worktree'" in checkout_src and "'add'" in checkout_src,
           "cheap, shares the object store, and keeps one view of main")
 
+    # THE BROKER'S HALF OF THE TERMINAL-DONE INVARIANT (2026-08-09). A
+    # snapshot must never read `done` with the commit unrecorded, and the
+    # only thing enforcing that broker-side is the order of two calls in
+    # `run()`: `_capture` records self.commit, THEN `_settle` writes done.
+    # Reversing them would reopen the mid-finalize window every poller sits
+    # on the other side of.
+    run_src = ""
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.FunctionDef) and node.name == "run"
+                and "_capture" in ast.unparse(node)):
+            run_src = ast.unparse(node)
+    cap = run_src.find("self._capture()")
+    done = run_src.find("else 'done'")
+    check("7.8 the broker finalizes BEFORE it reports done — state cannot "
+          "read 'done' with the commit unrecorded",
+          0 <= cap < done,
+          f"_capture at {cap}, settle-to-done at {done}")
+
 
 def test_every_attempt_is_metered():
     """Rail 3: what a pass cost is written down, whether or not it worked.
@@ -456,6 +493,106 @@ def test_every_attempt_is_metered():
           len({c.get("run_id") for c in builds2}) == 1)
 
 
+def test_a_raced_snapshot_is_not_a_no_op():
+    """Requirement (a) of the 2026-08-09 incident fix, replayed at the judge.
+
+    A writer persisting done-without-commit must not survive to a false
+    "finished without changing anything" verdict: the loop re-reads through
+    `coder.confirm_no_work` before branding ANY attempt a no-op, and a commit
+    the broker knows about is recovered rather than denied.
+    """
+    print("\n9. A RACED 'DONE, NO COMMIT' SNAPSHOT IS RE-READ, NEVER TRUSTED")
+    out, fake = _run([("phantom", "")])
+    check("9.1 the verdict waited for the authoritative re-read",
+          fake.confirms == [fake.starts[0]["session"]],
+          f"{len(fake.confirms)} re-read(s)")
+    check("9.2 the hidden commit was recovered — the attempt was "
+          "sandbox-checked instead of branded a no-op",
+          fake.checked == [fake.starts[0]["session"]])
+    check("9.3 …and the pass reports the recovered commit",
+          out.get("status") == "ok" and out.get("commit") == "c0ffee0",
+          str(out.get("detail"))[:60])
+    check("9.4 no attempt was called 'finished without changing anything'",
+          not any("finished without changing anything" in s["task"]
+                  for s in fake.starts[1:]),
+          "the false verdict is exactly what the re-read exists to prevent")
+
+    out2, fake2 = _run([("nocommit", ""), ("green", "")])
+    check("9.5 a GENUINE no-op is still re-read before the verdict",
+          fake2.confirms and fake2.confirms[0] == fake2.starts[0]["session"])
+    check("9.6 …and is still branded a no-op after the broker confirms it",
+          any("finished without changing anything" in s["task"]
+              for s in fake2.starts[1:]))
+
+
+def test_stranded_work_tripwire():
+    """Requirement (c): a run must not fail claiming nothing was done while a
+    terminal session WITH a commit sits under the same run — the 2026-08-09
+    end state, where execution 2 reported 'none green' over execution 1's
+    committed, patch-captured work."""
+    print("\n10. A FAILURE CLAIMING NOTHING WAS DONE CHECKS THE CLAIM FIRST")
+    from app import notify as real_notify
+
+    stranded_row = {"id": "491ce1c1-0000-0000-0000-000000000000",
+                    "commit_sha": "9f9899d9d7", "state": "done",
+                    "sandbox_status": None}
+    lookups: list[tuple] = []
+    sent: list[dict] = []
+
+    async def fake_stranded(run_id, workspace, goal_id):
+        lookups.append((run_id, workspace, goal_id))
+        return [dict(stranded_row)]
+
+    async def fake_send(text, **kw):
+        sent.append({"text": text, **kw})
+        return {"ok": True, "deduped": False}
+
+    saved_lookup, saved_send = cc._stranded_sessions, real_notify.send
+    cc._stranded_sessions = fake_stranded
+    real_notify.send = fake_send
+    run_id = "22222222-2222-2222-2222-222222222222"
+    try:
+        out, fake = _run([("nocommit", ""), ("nocommit", "")],
+                         doc=_doc(attempts=2), rec={"run_id": run_id})
+    finally:
+        cc._stranded_sessions = saved_lookup
+        real_notify.send = saved_send
+
+    detail = str(out.get("detail"))
+    check("10.1 the run still fails — the tripwire is a note, not a rescue",
+          out.get("status") == "error", detail[:60])
+    check("10.2 the lookup was scoped to THIS run",
+          lookups == [(run_id, "nova", None)], str(lookups))
+    check("10.3 the error text now names the stranded session and its commit",
+          "491ce1c1" in detail and "9f9899d9" in detail, detail[-120:])
+    check("10.4 …and says the work is preserved, with the never-run sandbox "
+          "stated rather than hidden",
+          "preserved" in detail and "never checked" in detail)
+    check("10.5 a notification reached the operator's channel",
+          len(sent) == 1 and "9f9899d9" in sent[0]["text"],
+          str(sent[:1])[:80])
+
+    # The other direction: an honest empty pass stays an honest empty pass.
+    async def none_stranded(run_id, workspace, goal_id):
+        return []
+    cc._stranded_sessions = none_stranded
+    real_notify.send = fake_send
+    sent.clear()
+    try:
+        out2, _fake2 = _run([("nocommit", "")], doc=_doc(attempts=1),
+                            rec={"run_id": run_id})
+    finally:
+        cc._stranded_sessions = saved_lookup
+        real_notify.send = saved_send
+    check("10.6 no stranded work — no note, no notification",
+          "STRANDED" not in str(out2.get("detail")) and not sent)
+
+    # And with no run id there is nothing to time-bound against: the REAL
+    # lookup must answer [] before touching a database this suite lacks.
+    check("10.7 the real lookup refuses an unbounded query",
+          asyncio.run(cc._stranded_sessions(None, "nova", None)) == [])
+
+
 def main() -> int:
     test_retry_task()
     test_the_loop_loops()
@@ -465,6 +602,8 @@ def main() -> int:
     test_a_refusal_is_not_success()
     test_the_broker_can_resume()
     test_every_attempt_is_metered()
+    test_a_raced_snapshot_is_not_a_no_op()
+    test_stranded_work_tripwire()
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): " + "; ".join(FAILURES[:8]))
         return 1
