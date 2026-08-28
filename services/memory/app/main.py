@@ -10,6 +10,8 @@ from pathlib import Path
 import asyncpg
 from fastapi import FastAPI
 
+from app.api import router as memory_router
+from app.api import warm_context
 from app.auth import bearer_auth_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -32,11 +34,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("migrations failed — refusing to start")
         raise
+    # Full rescan now rather than on the first /recall — see
+    # app.api.warm_context for why this makes "built by full rescan at
+    # startup" literally true in the running service.
+    warm_context()
     yield
 
 
 app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(bearer_auth_middleware)
+app.include_router(memory_router)
 
 
 @app.get("/health/live")
