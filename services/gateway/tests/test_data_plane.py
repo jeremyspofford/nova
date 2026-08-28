@@ -4,7 +4,12 @@ stated 502, and a failure mid-stream (after we already answered 200) is an
 OpenAI-shaped SSE error chunk, then the stream ends."""
 from __future__ import annotations
 
+import gzip
 import json
+
+from starlette.applications import Starlette
+from starlette.responses import Response as StarletteResponse
+from starlette.routing import Route
 
 from app import backends
 from tests.conftest import requires_db
@@ -162,3 +167,39 @@ async def test_models_unreachable_is_a_stated_502(client, pool, monkeypatch):
 
     assert resp.status_code == 502
     assert "error" in resp.json()
+
+
+async def test_a_gzipped_backend_response_is_relayed_with_content_encoding_intact(
+    client, pool, mount_backend
+):
+    """aiter_raw() hands us the backend's still-compressed wire bytes — if
+    we drop Content-Encoding on the way through (as a CDN-fronted
+    remote/cloud backend would send it), the caller has compressed bytes
+    and no way to know it. Forwarding the header is what makes them
+    decodable again — proven here by httpx's own automatic decompression
+    on the client side succeeding."""
+    original = {"choices": [{"message": {"content": "compressed ok"}}]}
+    compressed = gzip.compress(json.dumps(original).encode())
+
+    async def _completions(request):
+        return StarletteResponse(
+            content=compressed,
+            media_type="application/json",
+            headers={"content-encoding": "gzip"},
+        )
+
+    gzip_backend = Starlette(
+        routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
+    )
+    mount_backend("http://gzip.test", gzip_backend)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://gzip.test"})
+
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-encoding"] == "gzip"
+    # httpx transparently decodes .json()/.content using the Content-Encoding
+    # header it received — this only produces the right answer if that
+    # header actually made the trip; a dropped header here would leave raw
+    # gzip bytes that fail to parse as JSON.
+    assert resp.json() == original

@@ -23,6 +23,34 @@ logger = logging.getLogger("gateway")
 COMPLETIONS_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.0)
 MODELS_TIMEOUT = httpx.Timeout(10.0)
 
+# Headers a proxy must not relay verbatim — they describe THIS hop, not the
+# payload. Content-Encoding is deliberately NOT here: aiter_raw() yields the
+# upstream's still-compressed wire bytes, so the encoding header describing
+# them has to travel with them or the caller cannot decompress the body.
+_HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "upgrade",
+    "te",
+    "trailer",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+}
+
+
+def _forwardable_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
+    """Every upstream response header except the hop-by-hop ones — used
+    wherever we relay bytes we did not decode ourselves (aiter_raw), so
+    whatever the backend said about that body (content-type, and crucially
+    content-encoding) reaches the caller intact."""
+    return {
+        key: value
+        for key, value in upstream_headers.items()
+        if key.lower() not in _HOP_BY_HOP and not key.lower().startswith("proxy-")
+    }
+
 
 def _served_by_header(kind: str, model: str) -> dict[str, str]:
     return {"X-Nova-Served-By": f"{kind}:{model}"}
@@ -90,14 +118,11 @@ async def chat_completions(request: Request) -> Response:
 
     if upstream.status_code != 200:
         content = await upstream.aread()
+        headers = _forwardable_headers(upstream.headers)
+        headers.update(served_by)
         await upstream.aclose()
         await client.aclose()
-        return Response(
-            content=content,
-            status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type"),
-            headers=served_by,
-        )
+        return Response(content=content, status_code=upstream.status_code, headers=headers)
 
     async def relay():
         try:
@@ -111,9 +136,9 @@ async def chat_completions(request: Request) -> Response:
             await upstream.aclose()
             await client.aclose()
 
-    return StreamingResponse(
-        relay(), status_code=200, media_type=upstream.headers.get("content-type"), headers=served_by
-    )
+    relay_headers = _forwardable_headers(upstream.headers)
+    relay_headers.update(served_by)
+    return StreamingResponse(relay(), status_code=200, headers=relay_headers)
 
 
 @router.get("/v1/models")
