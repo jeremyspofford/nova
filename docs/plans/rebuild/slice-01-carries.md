@@ -17,8 +17,16 @@ lives in the SDD ledger for S1 while it exists, and in this file after.
   (memory learning); the weak-ranking test noted in T5's minors rides with
   it.
 - Small curated tiers are a qwen3-generation behind qwen3.5 — refresh when
-  pinning S2 models. rocm-smi/AMD detection absent (R23) — decide AMD
-  support in S2/S4.
+  pinning S2 models, and diversify beyond the single qwen family (owner
+  question 08-28); suggestions should become probe-informed ("verified on
+  your hardware" via /admin/probe stamps) rather than floor-table-only.
+  rocm-smi/AMD detection absent (R23) — decide AMD support in S2/S4.
+- **Wizard gap (08-28, owner hit it live): the model step offers models
+  that fit by VRAM floor but are PROVEN not to load** (qwen3.8:27b on the
+  24 GB 3090). The Ready step fails honestly, but only after an 18 GB
+  download. The model step should surface known won't-load evidence
+  (probe/verification stamps) BEFORE the pick — warn or gate, decided in
+  the S2 model work.
 - **Owner directive (08-28): SGLang must appear as an engine option IN THE
   ONBOARDING WIZARD** when its slice lands — bundled profile, live-verified
   like the other engine options, and the suggested engine for the
