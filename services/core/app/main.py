@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth_api, db, settings_store
+from app import auth_api, chat, conversations, db, settings_store
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -39,6 +39,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Let fired-and-forgotten work (memory ingest, interrupted turns)
+        # finish before the pool it needs disappears.
+        await chat.drain_background()
         await db.close_pool()
 
 
@@ -46,6 +49,8 @@ app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(identity_middleware)
 app.include_router(auth_api.router)
 app.include_router(settings_store.router)
+app.include_router(conversations.router)
+app.include_router(chat.router)
 
 
 @app.exception_handler(StarletteHTTPException)

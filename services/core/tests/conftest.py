@@ -7,15 +7,17 @@ a pass that proved nothing.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app import db
+from app import chat, db
 from app.main import MIGRATIONS_DIR, app
 from app.migrations_runner import run_migrations
+from tests import fakes
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", "")
 SKIP_REASON = "TEST_DATABASE_URL not set — no dockerized postgres available for this run"
@@ -57,6 +59,9 @@ async def pool(monkeypatch):
     try:
         yield p
     finally:
+        # Same order as the real shutdown: let fired-and-forgotten work land
+        # before the pool it needs goes away.
+        await asyncio.wait_for(chat.drain_background(), timeout=15)
         await db.close_pool()
 
 
@@ -77,3 +82,23 @@ async def owner_client(client):
     resp = await client.post("/api/v1/auth/register", json=OWNER)
     assert resp.status_code == 200, resp.text
     return client
+
+
+@pytest.fixture
+def mount_peers(monkeypatch):
+    """Point core's gateway/memory links at local ASGI fakes, by URL."""
+
+    def _mount(gateway=None, memory=None) -> None:
+        transports = {}
+        if gateway is not None:
+            monkeypatch.setenv("GATEWAY_URL", fakes.GATEWAY_URL)
+            monkeypatch.setenv("CORE_GATEWAY_TOKEN", fakes.GATEWAY_TOKEN)
+            transports[fakes.GATEWAY_URL] = fakes.StreamingASGITransport(gateway.app)
+        if memory is not None:
+            monkeypatch.setenv("MEMORY_URL", fakes.MEMORY_URL)
+            monkeypatch.setenv("CORE_MEMORY_TOKEN", fakes.MEMORY_TOKEN)
+            transports[fakes.MEMORY_URL] = fakes.StreamingASGITransport(memory.app)
+        app.state.peer_transports = transports
+
+    yield _mount
+    app.state.peer_transports = {}
