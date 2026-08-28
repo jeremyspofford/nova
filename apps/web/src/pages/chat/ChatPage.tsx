@@ -1,26 +1,21 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getActiveConversation, getMessages } from '../../lib/api'
-import { streamChat } from '../../lib/streamChat'
-import { chatReducer, emptyChat } from './chatReducer'
+import { useChatStore } from '../../stores/chat-store'
 import { ChatInput } from './ChatInput'
 import { ErrorBubble, MessageBubble } from './MessageBubble'
 
-let seq = 0
-const nextId = (prefix: string) => `${prefix}-${Date.now()}-${++seq}`
-
 /**
- * One conversation, streamed. The transcript itself lives in chatReducer —
- * this component is the wiring: load the active conversation, push stream
- * events into the reducer, keep the view scrolled.
+ * One conversation, streamed. The transcript and the send lifecycle both
+ * live in the chat store (stores/chat-store.tsx), mounted above the router
+ * so a turn survives this component unmounting — this component is the
+ * wiring: load the active conversation on mount, reconcile it into the
+ * store, keep the view scrolled.
  */
 export function ChatPage({ initialModel }: { initialModel?: string }) {
-  const [state, dispatch] = useReducer(chatReducer, undefined, emptyChat)
+  const { state, sendMessage, loadConversation } = useChatStore()
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
-  const conversationRef = useRef<string | null>(null)
-  conversationRef.current = state.conversationId
 
   useEffect(() => {
     let live = true
@@ -29,7 +24,11 @@ export function ChatPage({ initialModel }: { initialModel?: string }) {
         const conversation = await getActiveConversation()
         const messages = await getMessages(conversation.id)
         if (!live) return
-        dispatch({ type: 'loaded', conversationId: conversation.id, messages })
+        // Reconciled, never blindly loaded: if the store already lived
+        // through this conversation (a turn still streaming, or one that
+        // finished while this page was unmounted), its own rows are trusted
+        // over this fetch — see chatReducer's `reconcile` action.
+        loadConversation(conversation.id, messages)
       } catch (err) {
         // History is unreadable, but a turn can still be taken: core resolves
         // the active conversation itself when none is named.
@@ -41,11 +40,7 @@ export function ChatPage({ initialModel }: { initialModel?: string }) {
     return () => {
       live = false
     }
-  }, [])
-
-  useEffect(() => {
-    return () => abortRef.current?.abort()
-  }, [])
+  }, [loadConversation])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -54,25 +49,6 @@ export function ChatPage({ initialModel }: { initialModel?: string }) {
     // Do not yank the view away from someone reading further up.
     if (distanceFromBottom < 200) el.scrollTop = el.scrollHeight
   }, [state.rows])
-
-  const handleSubmit = useCallback(async (text: string) => {
-    const assistantId = nextId('a')
-    dispatch({ type: 'send', userId: nextId('u'), assistantId, text })
-
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      for await (const event of streamChat({
-        message: text,
-        conversationId: conversationRef.current,
-        signal: controller.signal,
-      })) {
-        dispatch({ type: 'event', event })
-      }
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null
-    }
-  }, [])
 
   const model = state.model || initialModel || ''
 
@@ -127,7 +103,7 @@ export function ChatPage({ initialModel }: { initialModel?: string }) {
 
       <div className="shrink-0 w-full px-2 md:px-8 pb-[max(env(safe-area-inset-bottom),0.5rem)] md:pb-4">
         <div className="mx-auto max-w-none md:max-w-3xl">
-          <ChatInput onSubmit={handleSubmit} disabled={state.streaming} />
+          <ChatInput onSubmit={sendMessage} disabled={state.streaming} />
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { ThemeProvider } from './stores/theme-store'
+import { ChatProvider } from './stores/chat-store'
 import { ToastProvider } from './components/ToastProvider'
 import { AuthProvider, useAuth } from './stores/auth-store'
 import { AppLayout } from './components/layout/AppLayout'
@@ -163,13 +164,18 @@ function Gate() {
 export default function App() {
   return (
     <ThemeProvider>
-      <ToastProvider>
-        <BrowserRouter>
-          <AuthProvider>
-            <Gate />
-          </AuthProvider>
-        </BrowserRouter>
-      </ToastProvider>
+      {/* Above the router, deliberately: a turn survives navigating between
+          routes (S1 carries #9, ruling S2-R4) only because this provider's
+          lifecycle is not tied to which route is mounted beneath it. */}
+      <ChatProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <AuthProvider>
+              <Gate />
+            </AuthProvider>
+          </BrowserRouter>
+        </ToastProvider>
+      </ChatProvider>
     </ThemeProvider>
   )
 }

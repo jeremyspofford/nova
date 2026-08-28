@@ -43,6 +43,11 @@ export type ChatAction =
     }
   | { type: 'send'; userId: string; assistantId: string; text: string }
   | { type: 'event'; event: StreamEvent }
+  | {
+      type: 'reconcile'
+      conversationId: string
+      messages: { id: string; role: string; content: string }[]
+    }
 
 export const NO_REPLY = 'the turn finished without a reply'
 
@@ -123,17 +128,41 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
   }
 }
 
+function fromFetchedMessages(
+  state: ChatState,
+  conversationId: string,
+  messages: { id: string; role: string; content: string }[],
+): ChatState {
+  return {
+    ...emptyChat(),
+    conversationId,
+    model: state.model,
+    rows: messages.map(m =>
+      message({ id: m.id, role: m.role === 'user' ? 'user' : 'assistant', text: m.content }),
+    ),
+  }
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case 'loaded':
-      return {
-        ...emptyChat(),
-        conversationId: action.conversationId,
-        model: state.model,
-        rows: action.messages.map(m =>
-          message({ id: m.id, role: m.role === 'user' ? 'user' : 'assistant', text: m.content }),
-        ),
-      }
+      return fromFetchedMessages(state, action.conversationId, action.messages)
+
+    case 'reconcile':
+      // The store survives navigation (S2-R4): if it already holds THIS
+      // conversation, it lived through whatever happened in real time —
+      // still streaming, or already resolved to its final rows — and a
+      // fetch taken on remount can only be stale or exactly caught up,
+      // never more current. Trusting it over the fetch is what keeps a
+      // mid-stream return showing the live partial (not a stale snapshot
+      // missing the in-flight reply) and a completed-while-away return
+      // showing the finished exchange exactly once (the fetch would repeat
+      // rows the store already has, and would silently drop a turn that
+      // failed client-side without ever reaching the database). Only a
+      // genuinely different — or first-ever — conversation replaces the
+      // rows, exactly like `loaded`.
+      if (state.conversationId === action.conversationId) return state
+      return fromFetchedMessages(state, action.conversationId, action.messages)
 
     case 'send':
       return {
