@@ -19,6 +19,12 @@ lives in the SDD ledger for S1 while it exists, and in this file after.
 - Small curated tiers are a qwen3-generation behind qwen3.5 — refresh when
   pinning S2 models. rocm-smi/AMD detection absent (R23) — decide AMD
   support in S2/S4.
+- **Owner directive (08-28): SGLang must appear as an engine option IN THE
+  ONBOARDING WIZARD** when its slice lands — bundled profile, live-verified
+  like the other engine options, and the suggested engine for the
+  ≥16-24 GB tiers per the roadmap tier table (R15 expires then). Scope it
+  with the 27B-on-24GB investigation, for which SGLang is the leading
+  candidate.
 
 ## Preconditions pinned to specific slices
 
