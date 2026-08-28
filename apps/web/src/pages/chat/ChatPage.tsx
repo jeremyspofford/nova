@@ -77,11 +77,22 @@ export function ChatPage({ initialModel }: { initialModel?: string }) {
   const model = state.model || initialModel || ''
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-root dark:bg-transparent">
+    <div
+      className="flex flex-col h-full min-h-0 bg-surface-root dark:bg-transparent"
+      data-testid="chat-page"
+      // The reducer's own flag, published on the surface. Anything asking
+      // "is the turn over" — a test, a future status indicator — reads the
+      // one value that decides it rather than inferring it from the text.
+      data-streaming={String(state.streaming)}
+    >
       <header className="shrink-0 flex items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle">
         <h1 className="text-h3 text-content-primary">Chat</h1>
         {model && (
-          <span className="font-mono text-micro text-content-tertiary truncate" title="serving model">
+          <span
+            className="font-mono text-micro text-content-tertiary truncate"
+            title="serving model"
+            data-testid="chat-model"
+          >
             {model}
           </span>
         )}

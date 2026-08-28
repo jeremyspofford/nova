@@ -15,7 +15,7 @@ function LoadingDots() {
 export const MessageBubble = memo(function MessageBubble({ row }: { row: MessageRow }) {
   if (row.role === 'user') {
     return (
-      <div className="flex justify-end">
+      <div className="flex justify-end" data-testid="message-user">
         <div className="max-w-[85%] md:max-w-[75%]">
           <div className="glass-card text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
             {row.text}
@@ -26,7 +26,7 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
   }
 
   return (
-    <div className="flex gap-3 items-start">
+    <div className="flex gap-3 items-start" data-testid="message-assistant">
       <div className="shrink-0 mt-0.5">
         <div className="h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold select-none bg-accent-dim text-accent">
           N
@@ -57,6 +57,7 @@ export function ErrorBubble({ row }: { row: ErrorRow }) {
   return (
     <div
       role="alert"
+      data-testid="message-error"
       className="flex items-start gap-2 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
     >
       <AlertTriangle size={15} className="shrink-0 mt-0.5" />

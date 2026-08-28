@@ -19,6 +19,7 @@
  */
 
 import { createLineBuffer } from './lineBuffer'
+import { statedReason } from './statedReason'
 
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string }
@@ -103,15 +104,8 @@ async function statedRefusal(response: Response): Promise<string> {
   } catch {
     /* an unreadable body still leaves us the status */
   }
-  try {
-    const parsed = JSON.parse(body)
-    const detail = parsed?.detail
-    if (typeof detail === 'string' && detail) return `the server refused the turn (${response.status}): ${detail}`
-  } catch {
-    /* not JSON — quote what came back */
-  }
-  const quoted = body ? `: ${quote(body)}` : ''
-  return `the server refused the turn (${response.status})${quoted}`
+  if (!body) return `the server refused the turn (${response.status})`
+  return `the server refused the turn (${response.status}): ${quote(statedReason(body, response.status))}`
 }
 
 export interface StreamChatOptions {

@@ -3,13 +3,14 @@
  * ever sees — nginx and the vite dev server both send /api there — so there
  * is no base URL to configure and no second origin to get wrong.
  *
- * A refusal keeps its stated reason. FastAPI puts it in `detail`; that string
- * is what the UI shows, because "something went wrong" is not a fact anyone
- * can act on.
+ * A refusal keeps its stated reason — see lib/statedReason.ts for where in a
+ * response that reason lives — because "something went wrong" is not a fact
+ * anyone can act on.
  */
 import type { Role } from './roles'
 import type { Person } from './gate'
 import { failureReason } from './streamChat'
+import { statedReason } from './statedReason'
 import { createLineBuffer } from './lineBuffer'
 
 /** The three backends core's PUT /inference/backend accepts. */
@@ -22,28 +23,6 @@ export class ApiError extends Error {
     this.name = 'ApiError'
     this.status = status
   }
-}
-
-function detailOf(body: string, status: number): string {
-  try {
-    const parsed = JSON.parse(body)
-    const detail = parsed?.detail
-    if (typeof detail === 'string' && detail) return detail
-    // 422s arrive as a list of field errors — join them rather than printing
-    // "[object Object]".
-    if (Array.isArray(detail)) {
-      const parts = detail
-        .map((d: { loc?: unknown[]; msg?: string }) =>
-          [Array.isArray(d.loc) ? d.loc.slice(1).join('.') : '', d.msg].filter(Boolean).join(': '),
-        )
-        .filter(Boolean)
-      if (parts.length) return parts.join('; ')
-    }
-  } catch {
-    /* not JSON — fall through to the raw body */
-  }
-  const trimmed = body.trim()
-  return trimmed ? trimmed.slice(0, 300) : `request failed with status ${status}`
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -61,7 +40,10 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
     throw new ApiError(0, `could not reach Nova — ${failureReason(err)}`)
   }
   if (!response.ok) {
-    throw new ApiError(response.status, detailOf(await response.text().catch(() => ''), response.status))
+    throw new ApiError(
+      response.status,
+      statedReason(await response.text().catch(() => ''), response.status),
+    )
   }
   return response
 }
