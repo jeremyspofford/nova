@@ -16,6 +16,12 @@
  * event, and a stream that stops without saying [DONE] becomes an
  * `interrupted` event, so the UI can keep the partial text and still say
  * plainly that the turn did not finish.
+ *
+ * Forward-compat (ruling S2-R6, amending S1's R20): a well-formed JSON frame
+ * whose keys are ALL outside {t, error, meta} is a future frame type, not a
+ * broken one, and is silently ignored — S2-T2 adds {"activity": {...}}
+ * through exactly this allowance. Malformed/non-JSON lines, and a KNOWN key
+ * with the wrong shape, remain error events.
  */
 
 import { createLineBuffer } from './lineBuffer'
@@ -42,7 +48,15 @@ export function failureReason(err: unknown): string {
   return String(err)
 }
 
-function frameToEvent(payload: string): StreamEvent {
+// The frame keys this client understands at all. Ruling S2-R6 (a deliberate
+// amendment of S1's R20): a well-formed JSON object whose keys are ALL
+// outside this set is a future frame type, not a broken one — S2-T2 adds
+// {"activity": {...}} through exactly this allowance. A key IN this set with
+// the wrong shape (caught below, before this check ever runs) is still a
+// contract violation and still an error.
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta'])
+
+function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
 
   let data: unknown
@@ -67,8 +81,14 @@ function frameToEvent(payload: string): StreamEvent {
       turnId: String(meta.turn_id ?? ''),
     }
   }
-  // A frame outside the contract is not a delta and not a success. Saying so
-  // is louder than dropping it, and the contract is pinned on both sides.
+  if (!Object.keys(obj).some(key => KNOWN_FRAME_KEYS.has(key))) {
+    // Every key here is one this client has never heard of — a future frame
+    // type, silently ignored rather than treated as broken.
+    return null
+  }
+  // A known key with the wrong shape (e.g. {"meta": "not an object"}) is a
+  // genuine contract violation, not an unknown frame type. Saying so is
+  // louder than dropping it, and the contract is pinned on both sides.
   return { type: 'error', reason: `unrecognised frame from the server: ${quote(payload)}` }
 }
 
@@ -76,7 +96,10 @@ function lineToEvents(line: string): StreamEvent[] {
   if (line.trim() === '') return []
   // SSE comment — proxies use these as keep-alives.
   if (line.startsWith(':')) return []
-  if (line.startsWith('data:')) return [frameToEvent(line.slice('data:'.length).trim())]
+  if (line.startsWith('data:')) {
+    const event = frameToEvent(line.slice('data:'.length).trim())
+    return event === null ? [] : [event]
+  }
   return [{ type: 'error', reason: `unexpected line from the server: ${quote(line)}` }]
 }
 

@@ -111,8 +111,27 @@ describe('createSseParser', () => {
     expect(events[0].type === 'error' && events[0].reason).toContain('502 Bad Gateway')
   })
 
-  it('reports a valid JSON frame that is not part of the contract', () => {
-    const events = parseAll(['data: {"surprise":1}\n\n'])
+  // Ruling S2-R6, a deliberate amendment of S1's R20 (which errored on ANY
+  // frame outside {t, error, meta}): a well-formed JSON object whose keys are
+  // ALL unknown is ignored rather than errored, so a future server can add
+  // new frame types (S2-T2's {"activity": {...}}) without breaking a client
+  // built before they existed. A frame carrying a KNOWN key with the wrong
+  // shape (the "malformed key" tests below) is still an error — this only
+  // covers keys this client has never heard of at all.
+  it('ignores a well-formed frame whose keys are all unknown, forward-compat', () => {
+    expect(parseAll(['data: {"surprise":1}\n\n'])).toEqual([])
+    expect(parseAll(['data: {"activity":{"tool":"get_time","status":"start"}}\n\n'])).toEqual([])
+    expect(parseAll(['data: {}\n\n'])).toEqual([])
+  })
+
+  it('still errors a frame carrying a known key with the wrong shape', () => {
+    const events = parseAll(['data: {"meta":"not an object"}\n\n'])
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('error')
+  })
+
+  it('still errors malformed/non-JSON lines — the amendment only covers well-formed unknowns', () => {
+    const events = parseAll(['data: not json at all\n\n'])
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe('error')
   })
