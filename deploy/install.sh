@@ -16,7 +16,13 @@ HARDWARE_JSON="$DATA_DIR/hardware.json"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
 GPU_COMPOSE_FILE="$DEPLOY_DIR/docker-compose.gpu.yml"
 
-SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN INSTANCE_SECRET"
+# INSTANCE_SECRET used to be generated here too. It is dead config — nothing
+# in any service reads it, sessions are DB-hashed random tokens — so it was
+# dropped (S2 seam-hygiene). A real operator's existing .env may still carry
+# a stale value from before this change; that line is left exactly where it
+# is rather than edited out, since touching a file this script did not need
+# to touch is its own kind of bug.
+SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN"
 # The bundled ollama joins this list only when it is actually being started —
 # see decide_inference.
 HEALTH_CHECKED_SERVICES="postgres core gateway memory web"
@@ -56,6 +62,19 @@ check_compose() {
     die "docker compose v2 not found — install the compose plugin"
   fi
   log "compose: present"
+}
+
+# Separated from check_openssl so a test can stub the seam without hiding the
+# real binary from PATH (same pattern as port_holder/ollama_answers_on_host).
+have_openssl() {
+  command -v openssl >/dev/null 2>&1
+}
+
+check_openssl() {
+  if ! have_openssl; then
+    die "openssl not found on PATH — install it (e.g. 'apt install openssl' on Debian/Ubuntu, 'brew install openssl' on macOS) — generate_secrets needs it to create this instance's tokens"
+  fi
+  log "openssl: present"
 }
 
 detect_disk_free_gb() {
@@ -291,6 +310,7 @@ decide_inference() {
 preflight() {
   check_docker
   check_compose
+  check_openssl
   check_disk
   check_ports
   decide_inference
@@ -438,6 +458,12 @@ generate_secrets() {
   for key in $SECRET_KEYS; do
     ensure_secret "$key"
   done
+  # Explicit, not incidental: set_env_value's mktemp+mv happens to leave 600
+  # behind whenever it actually rewrites the file, but an idempotent re-run
+  # where every key is already set never calls it at all — this is the one
+  # line that makes owner-only permissions true on every run, not just the
+  # ones that happened to generate something.
+  chmod 600 "$ENV_FILE"
 }
 
 # ---- bring-up + status ----------------------------------------------------

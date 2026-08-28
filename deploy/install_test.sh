@@ -238,5 +238,115 @@ case "${WIRED_OFF#*|}" in
   *) report 0 "bundled off: ollama is not health-checked" ;;
 esac
 
+# ── secrets: INSTANCE_SECRET is dead config, and .env is never world-readable ──
+# INSTANCE_SECRET is dropped from SECRET_KEYS (S2 seam-hygiene): nothing reads
+# it, so a fresh .env must not generate one, an idempotent re-run must not
+# require one, and a real operator's EXISTING .env carrying a stale value from
+# before this change must be left exactly as it was — never edited, never a
+# reason to fail.
+run_secrets() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    if [ -n "${1:-}" ]; then
+      cp "$ENV_EXAMPLE" "$ENV_FILE"
+      printf '%s\n' "$1" >> "$ENV_FILE"
+      chmod 644 "$ENV_FILE"
+    fi
+    generate_secrets >/dev/null 2>&1
+    perms="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE" 2>/dev/null)"
+    printf '%s|%s' "$perms" "$(cat "$ENV_FILE")"
+  )
+}
+
+FRESH_SECRETS="$(run_secrets)"
+FRESH_PERMS="${FRESH_SECRETS%%|*}"
+FRESH_BODY="${FRESH_SECRETS#*|}"
+case "$FRESH_PERMS" in
+  600) report 0 "fresh .env: written chmod 600" ;;
+  *) report 1 "fresh .env: written chmod 600" "got mode '$FRESH_PERMS'" ;;
+esac
+case "$FRESH_BODY" in
+  *INSTANCE_SECRET*) report 1 "fresh .env: no INSTANCE_SECRET generated" "$FRESH_BODY" ;;
+  *) report 0 "fresh .env: no INSTANCE_SECRET generated" ;;
+esac
+case "$FRESH_BODY" in
+  *"CORE_MEMORY_TOKEN="?*) report 0 "fresh .env: real secrets still generated" ;;
+  *) report 1 "fresh .env: real secrets still generated" "$FRESH_BODY" ;;
+esac
+
+# The realistic idempotent re-run: every real key is ALREADY populated, so
+# ensure_secret returns early for each one and never rewrites the file via
+# set_env_value at all. That path must chmod the file on its own — proving
+# this against a fully-populated .env is the only way to rule out the
+# unrelated side effect of set_env_value's own mktemp+mv (which happens to
+# leave 600 behind by accident whenever it actually runs).
+run_secrets_noop() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    {
+      printf 'POSTGRES_PASSWORD=already-set\n'
+      printf 'CORE_TOKEN=already-set\n'
+      printf 'CORE_GATEWAY_TOKEN=already-set\n'
+      printf 'CORE_MEMORY_TOKEN=already-set\n'
+    } > "$ENV_FILE"
+    chmod 644 "$ENV_FILE"
+    generate_secrets >/dev/null 2>&1
+    stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE" 2>/dev/null
+  )
+}
+NOOP_PERMS="$(run_secrets_noop)"
+case "$NOOP_PERMS" in
+  600) report 0 "idempotent re-run with nothing to generate: still chmod 600" ;;
+  *) report 1 "idempotent re-run with nothing to generate: still chmod 600" "got mode '$NOOP_PERMS'" ;;
+esac
+
+STALE_SECRETS="$(run_secrets "INSTANCE_SECRET=old-stale-value")"
+STALE_PERMS="${STALE_SECRETS%%|*}"
+STALE_BODY="${STALE_SECRETS#*|}"
+case "$STALE_PERMS" in
+  600) report 0 "existing .env with a stale INSTANCE_SECRET: still chmod 600" ;;
+  *) report 1 "existing .env with a stale INSTANCE_SECRET: still chmod 600" "got mode '$STALE_PERMS'" ;;
+esac
+case "$STALE_BODY" in
+  *"INSTANCE_SECRET=old-stale-value"*)
+    report 0 "existing .env: stale INSTANCE_SECRET left harmlessly in place" ;;
+  *)
+    report 1 "existing .env: stale INSTANCE_SECRET left harmlessly in place" "$STALE_BODY" ;;
+esac
+
+# ── preflight: openssl is required to generate secrets, so check for it ────
+run_openssl_check() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    OPENSSL_RC="$1"
+    have_openssl() { return "$OPENSSL_RC"; }
+    err="$(check_openssl 2>&1)"; code=$?
+    printf '%s|%s' "$code" "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+
+expect_case "openssl present: preflight passes" "$(run_openssl_check 0)" 0 "openssl: present"
+expect_case "openssl missing: refuses instead of failing later inside generate_secrets" \
+  "$(run_openssl_check 1)" 1 "openssl not found"
+expect_case "openssl missing: states a remedy" "$(run_openssl_check 1)" 1 "install"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

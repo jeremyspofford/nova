@@ -30,7 +30,6 @@ services:
       CORE_GATEWAY_TOKEN: ${CORE_GATEWAY_TOKEN}
       MEMORY_URL: http://memory:8002
       CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
-      INSTANCE_SECRET: ${INSTANCE_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
