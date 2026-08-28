@@ -46,6 +46,35 @@ async def test_an_unreachable_gateway_is_a_stated_502(
     assert "gateway" in resp.json()["error"].lower()
 
 
+# Percent- and plus-encoded pieces that must survive the hop untouched.
+RAW_QUERY = "refresh=true&model=qwen3%3A8b&note=a+b"
+
+
+@pytest.mark.parametrize(("method", "path", "gateway_path", "body"), ROUTES)
+async def test_a_query_string_reaches_the_gateway_byte_identical(
+    owner_client, mount_peers, method, path, gateway_path, body
+):
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.request(method, f"{path}?{RAW_QUERY}", json=body)
+
+    assert resp.status_code == 200
+    assert gateway.queries[-1] == RAW_QUERY.encode()
+
+
+async def test_pull_forwards_its_query_string_too(owner_client, mount_peers):
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.post(
+        f"/api/v1/models/pull?{RAW_QUERY}", json={"model": "qwen3:8b"}
+    )
+
+    assert resp.status_code == 200
+    assert gateway.queries[-1] == RAW_QUERY.encode()
+
+
 async def test_a_gateway_refusal_passes_through_with_its_reason(owner_client, mount_peers):
     mount_peers(
         gateway=FakeGateway(admin_status=502, admin_body={"error": "ollama did not answer"})

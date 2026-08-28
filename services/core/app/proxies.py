@@ -37,12 +37,25 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {"content-type": content_type} if content_type else {}
 
 
+def _target(request: Request, path: str) -> httpx.URL:
+    """The gateway path with this request's query string, byte for byte.
+
+    Passed as raw bytes rather than re-parsed parameters so that whatever
+    the browser sent — encodings included — is what the gateway sees.
+    """
+    query = request.scope.get("query_string") or b""
+    return httpx.URL(path, query=query) if query else httpx.URL(path)
+
+
 async def _forward(request: Request, method: str, path: str) -> Response:
     body = await request.body()
     try:
         async with peers.client(request.app, peers.GATEWAY, ADMIN_TIMEOUT) as client:
             upstream = await client.request(
-                method, path, content=body or None, headers=_forward_headers(request)
+                method,
+                _target(request, path),
+                content=body or None,
+                headers=_forward_headers(request),
             )
     except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
         raise _unreachable(exc) from exc
@@ -86,7 +99,10 @@ async def pull(request: Request) -> StreamingResponse:
         client = peers.client(request.app, peers.GATEWAY, PULL_TIMEOUT)
         upstream = await client.send(
             client.build_request(
-                "POST", "/admin/pull", content=body or None, headers=_forward_headers(request)
+                "POST",
+                _target(request, "/admin/pull"),
+                content=body or None,
+                headers=_forward_headers(request),
             ),
             stream=True,
         )

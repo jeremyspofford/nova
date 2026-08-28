@@ -130,6 +130,8 @@ class FakeGateway:
     admin_body: dict = field(default_factory=lambda: {"gpus": []})
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
+    # Raw query strings as they arrived, to prove nothing was re-encoded.
+    queries: list[bytes] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -147,6 +149,7 @@ class FakeGateway:
         raw = await request.body()
         body = json.loads(raw) if raw else None
         self.seen.append((request.url.path, body))
+        self.queries.append(request.scope["query_string"])
         return body
 
     async def _completions(self, request):

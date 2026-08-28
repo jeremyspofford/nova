@@ -328,6 +328,35 @@ async def test_a_disconnect_after_the_answer_lands_does_not_store_it_twice(
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
+async def test_a_failure_storing_the_reply_still_ends_the_stream_properly(
+    owner_client, pool, mount_peers
+):
+    """A truncated stream is indistinguishable from a dropped network — say it."""
+    hold = asyncio.Event()
+    gateway = FakeGateway(deltas=("almost there",), hold=hold)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client)
+
+    turn = asyncio.create_task(
+        owner_client.post("/api/v1/chat/stream", json={"message": "say something"})
+    )
+    # Once the turn is talking to the gateway, take its conversation away, so
+    # writing the assistant row hits a real foreign-key failure.
+    while not gateway.seen:
+        await asyncio.sleep(0.01)
+    await pool.execute("DELETE FROM conversations")
+    hold.set()
+
+    resp = await asyncio.wait_for(turn, timeout=10)
+    assert resp.status_code == 200
+    sent = frames(resp.text)
+    assert "meta" in sent[0]
+    assert [f["t"] for f in sent[1:-2]] == ["almost there"]
+    assert sent[-2]["error"]
+    assert sent[-1] == DONE
+    assert await pool.fetchval("SELECT status FROM turns") == "error"
+
+
 async def test_chat_needs_an_identity(client, mount_peers):
     mount_peers(gateway=FakeGateway(), memory=FakeMemory())
     resp = await client.post("/api/v1/chat/stream", json={"message": "hello"})

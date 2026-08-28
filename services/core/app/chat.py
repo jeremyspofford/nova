@@ -368,6 +368,14 @@ async def _turn_frames(
             )
         )
         raise
+    except Exception as exc:
+        # Anything unplanned — a database that refuses the assistant row, a
+        # bug in here — still owes the client the frame contract. A stream
+        # that simply stops looks exactly like a dropped connection.
+        logger.exception("chat turn %s failed unexpectedly", turn.id)
+        decided = "error"
+        yield _frame({"error": f"the turn failed — {peers.reason(exc)[:300]}"})
+        yield DONE_FRAME
     finally:
         if not disconnected:
             # Shielded: a client that vanishes during the close must not leave
