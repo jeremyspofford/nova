@@ -5,9 +5,11 @@
     "family": "27b",
     "params_b": 27,
     "min_vram_gb": 24,
-    "size_gb": 17.0,
-    "note": "pin: verify released slug at DoD walk",
-    "verify_at_walk": true
+    "size_gb": 18.0,
+    "note": "the top local pick; 256K context",
+    "verify_at_walk": false,
+    "verified_at": "2026-08-28",
+    "verified_url": "https://ollama.com/library/qwen3.8/tags"
   },
   {
     "slug": "qwen3:14b",
@@ -15,9 +17,11 @@
     "family": "14b",
     "params_b": 14,
     "min_vram_gb": 16,
-    "size_gb": 9.0,
+    "size_gb": 9.3,
     "note": "solid mid-tier local model",
-    "verify_at_walk": true
+    "verify_at_walk": false,
+    "verified_at": "2026-08-28",
+    "verified_url": "https://ollama.com/library/qwen3/tags"
   },
   {
     "slug": "qwen3:8b",
@@ -27,7 +31,9 @@
     "min_vram_gb": 10,
     "size_gb": 5.2,
     "note": "fast on modest GPUs",
-    "verify_at_walk": true
+    "verify_at_walk": false,
+    "verified_at": "2026-08-28",
+    "verified_url": "https://ollama.com/library/qwen3/tags"
   },
   {
     "slug": "qwen3:4b",
@@ -35,9 +41,11 @@
     "family": "4b",
     "params_b": 4,
     "min_vram_gb": 6,
-    "size_gb": 2.6,
+    "size_gb": 2.5,
     "note": "runs on small dedicated GPUs",
-    "verify_at_walk": true
+    "verify_at_walk": false,
+    "verified_at": "2026-08-28",
+    "verified_url": "https://ollama.com/library/qwen3/tags"
   },
   {
     "slug": "qwen3:1.7b",
@@ -47,6 +55,8 @@
     "min_vram_gb": 3,
     "size_gb": 1.4,
     "note": "smallest local option, CPU-friendly",
-    "verify_at_walk": true
+    "verify_at_walk": false,
+    "verified_at": "2026-08-28",
+    "verified_url": "https://ollama.com/library/qwen3/tags"
   }
 ]
