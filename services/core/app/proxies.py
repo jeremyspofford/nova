@@ -21,6 +21,16 @@ router = APIRouter(prefix="/api/v1", tags=["wizard"])
 logger = logging.getLogger("core")
 
 ADMIN_TIMEOUT = httpx.Timeout(5.0)
+# The gateway's own probe work is bounded by its own PROBE_TIMEOUT=30.0
+# (services/gateway/app/admin.py) plus a DB insert after — this has to
+# comfortably dominate that whole downstream budget, or a cold-model probe
+# the gateway is still legitimately working on times out here first and
+# gets reported as if the gateway itself were unreachable.
+PROBE_TIMEOUT = httpx.Timeout(35.0)
+# verify_live's own inner liveness check is httpx.Timeout(5.0)
+# (services/gateway/app/backends.py) plus a DB write after saving — same
+# reasoning, smaller downstream budget.
+BACKEND_PUT_TIMEOUT = httpx.Timeout(10.0)
 # A pull can spend minutes between progress lines, so only the connect
 # phase is bounded — a slow download is not a hang.
 PULL_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
@@ -29,6 +39,18 @@ PULL_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
 def _unreachable(exc: Exception) -> HTTPException:
     return HTTPException(
         status_code=502, detail=f"the gateway is unreachable — {peers.reason(exc)}"
+    )
+
+
+def _timed_out(path: str, timeout: httpx.Timeout) -> HTTPException:
+    """A ReadTimeout is not the same fact as an unreachable gateway — the
+    gateway answered the connection and may still be genuinely working (a
+    cold-model probe, a slow verify-then-save); naming the route and the
+    budget it was given says what actually happened instead of implying the
+    gateway is down."""
+    return HTTPException(
+        status_code=502,
+        detail=f"the gateway timed out — {path} did not answer within {timeout.read:g}s",
     )
 
 
@@ -47,16 +69,20 @@ def _target(request: Request, path: str) -> httpx.URL:
     return httpx.URL(path, query=query) if query else httpx.URL(path)
 
 
-async def _forward(request: Request, method: str, path: str) -> Response:
+async def _forward(
+    request: Request, method: str, path: str, *, timeout: httpx.Timeout = ADMIN_TIMEOUT
+) -> Response:
     body = await request.body()
     try:
-        async with peers.client(request.app, peers.GATEWAY, ADMIN_TIMEOUT) as client:
+        async with peers.client(request.app, peers.GATEWAY, timeout) as client:
             upstream = await client.request(
                 method,
                 _target(request, path),
                 content=body or None,
                 headers=_forward_headers(request),
             )
+    except httpx.ReadTimeout as exc:
+        raise _timed_out(path, timeout) from exc
     except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
         raise _unreachable(exc) from exc
     return Response(
@@ -78,7 +104,7 @@ async def suggest(request: Request) -> Response:
 
 @router.post("/models/probe")
 async def probe(request: Request) -> Response:
-    return await _forward(request, "POST", "/admin/probe")
+    return await _forward(request, "POST", "/admin/probe", timeout=PROBE_TIMEOUT)
 
 
 @router.get("/inference/backend")
@@ -88,7 +114,7 @@ async def get_backend(request: Request) -> Response:
 
 @router.put("/inference/backend")
 async def put_backend(request: Request) -> Response:
-    return await _forward(request, "PUT", "/admin/backend")
+    return await _forward(request, "PUT", "/admin/backend", timeout=BACKEND_PUT_TIMEOUT)
 
 
 @router.post("/models/pull")

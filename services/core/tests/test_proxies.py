@@ -1,8 +1,10 @@
 """Wizard passthroughs — the browser only ever talks to core (ruling R8)."""
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from app import proxies
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
@@ -124,3 +126,64 @@ async def test_the_proxies_need_an_identity(client, mount_peers, method, path, g
     mount_peers(gateway=FakeGateway())
     resp = await client.request(method, path, json=body)
     assert resp.status_code == 401
+
+
+async def test_a_slow_probe_succeeds_within_its_own_larger_budget(
+    owner_client, mount_peers, monkeypatch
+):
+    """The probe route's own work (a cold-model load through the gateway,
+    ruling: proxies.py timeouts must dominate the gateway's downstream
+    budget) can legitimately take longer than the generic admin timeout —
+    it must wait on its own PROBE_TIMEOUT, not the 5s one that bounds plain
+    hardware/suggest/backend-get calls."""
+    monkeypatch.setattr(proxies, "PROBE_TIMEOUT", httpx.Timeout(0.3))
+    gateway = FakeGateway(admin_body={"id": 1, "ok": True})
+    mount_peers(gateway=gateway, gateway_delay=0.15)
+
+    resp = await owner_client.post("/api/v1/models/probe", json={"model": "qwen3:8b"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"id": 1, "ok": True}
+
+
+async def test_a_probe_past_its_budget_times_out_naming_the_route_not_unreachable(
+    owner_client, mount_peers, monkeypatch
+):
+    monkeypatch.setattr(proxies, "PROBE_TIMEOUT", httpx.Timeout(0.05))
+    mount_peers(gateway=FakeGateway(), gateway_delay=0.2)
+
+    resp = await owner_client.post("/api/v1/models/probe", json={"model": "qwen3:8b"})
+
+    assert resp.status_code == 502
+    detail = resp.json()["error"].lower()
+    assert "timed out" in detail
+    assert "unreachable" not in detail
+    assert "/admin/probe" in detail
+
+
+async def test_a_slow_backend_put_succeeds_within_its_own_larger_budget(
+    owner_client, mount_peers, monkeypatch
+):
+    monkeypatch.setattr(proxies, "BACKEND_PUT_TIMEOUT", httpx.Timeout(0.3))
+    gateway = FakeGateway(admin_body={"kind": "ollama"})
+    mount_peers(gateway=gateway, gateway_delay=0.15)
+
+    resp = await owner_client.put("/api/v1/inference/backend", json={"kind": "ollama"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"kind": "ollama"}
+
+
+async def test_a_backend_put_past_its_budget_times_out_naming_the_route_not_unreachable(
+    owner_client, mount_peers, monkeypatch
+):
+    monkeypatch.setattr(proxies, "BACKEND_PUT_TIMEOUT", httpx.Timeout(0.05))
+    mount_peers(gateway=FakeGateway(), gateway_delay=0.2)
+
+    resp = await owner_client.put("/api/v1/inference/backend", json={"kind": "ollama"})
+
+    assert resp.status_code == 502
+    detail = resp.json()["error"].lower()
+    assert "timed out" in detail
+    assert "unreachable" not in detail
+    assert "/admin/backend" in detail

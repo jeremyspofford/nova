@@ -26,10 +26,25 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
     one hands each body chunk to the caller as the app sends it.
     """
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, *, delay: float = 0.0) -> None:
         self.app = app
+        # Simulates a slow peer: sleeps before doing anything else, honoring
+        # the caller's own read-timeout budget the same way a real socket
+        # would — if `delay` exceeds it, this raises httpx.ReadTimeout after
+        # waiting exactly that budget, rather than a real client timeout
+        # never firing because this transport (unlike httpx's own) does not
+        # otherwise enforce request.extensions["timeout"] at all.
+        self.delay = delay
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self.delay:
+            read_timeout = (request.extensions.get("timeout") or {}).get("read")
+            if read_timeout is not None and self.delay > read_timeout:
+                await asyncio.sleep(read_timeout)
+                raise httpx.ReadTimeout(
+                    f"simulated: no response within {read_timeout}s", request=request
+                )
+            await asyncio.sleep(self.delay)
         body = await request.aread()
         scope = {
             "type": "http",

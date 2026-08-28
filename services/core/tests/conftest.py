@@ -88,12 +88,14 @@ async def owner_client(client):
 def mount_peers(monkeypatch):
     """Point core's gateway/memory links at local ASGI fakes, by URL."""
 
-    def _mount(gateway=None, memory=None) -> None:
+    def _mount(gateway=None, memory=None, *, gateway_delay: float = 0.0) -> None:
         transports = {}
         if gateway is not None:
             monkeypatch.setenv("GATEWAY_URL", fakes.GATEWAY_URL)
             monkeypatch.setenv("CORE_GATEWAY_TOKEN", fakes.GATEWAY_TOKEN)
-            transports[fakes.GATEWAY_URL] = fakes.StreamingASGITransport(gateway.app)
+            transports[fakes.GATEWAY_URL] = fakes.StreamingASGITransport(
+                gateway.app, delay=gateway_delay
+            )
         if memory is not None:
             monkeypatch.setenv("MEMORY_URL", fakes.MEMORY_URL)
             monkeypatch.setenv("CORE_MEMORY_TOKEN", fakes.MEMORY_TOKEN)
