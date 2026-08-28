@@ -170,36 +170,54 @@ async def test_models_unreachable_is_a_stated_502(client, pool, monkeypatch):
     assert "error" in resp.json()
 
 
-async def test_a_streaming_relay_never_forwards_content_encoding(client, pool, mount_backend):
-    """The streaming/relay path (every 200 response goes through it, `stream`
-    request field or not) may have to append a plain-text SSE error chunk
-    after the upstream body already ended — see _STREAMING_EXCLUDE. Because
-    the response headers are already on the wire before we know whether that
-    will happen, Content-Encoding is withheld unconditionally, not only on
-    the runs that actually fail. aiter_raw() still relays the upstream's
-    exact wire bytes untouched (proven here by decompressing them by hand);
-    only the header claiming what those bytes are encoded as is dropped."""
-    original = {"choices": [{"message": {"content": "compressed ok"}}]}
-    compressed = gzip.compress(json.dumps(original).encode())
+async def test_a_compressing_backend_is_asked_for_identity_so_the_relay_reads_cleanly(
+    client, pool, mount_backend
+):
+    """Controller ruling R26: _STREAMING_EXCLUDE dropping Content-Encoding
+    (finding 1b) is only truthful if the backend was never invited to
+    compress in the first place — httpx's own default Accept-Encoding
+    ("gzip, deflate") would otherwise have a compressing backend hand back
+    still-compressed aiter_raw() bytes with the one header that says so now
+    stripped, and a real client reading this relay the ordinary way (no
+    manual decompression — that's not something a real caller does) gets
+    zero decodable SSE lines: an empty assistant reply with no error.
+
+    This fake behaves like a real, compliant backend: it compresses unless
+    told not to, exactly mirroring what a real cloud/remote provider would
+    do. Proving the full reply arrives therefore proves both halves at
+    once — Accept-Encoding: identity is actually sent, and honoring it is
+    what keeps this relay readable without ever needing content-encoding
+    on the way back."""
+    seen_accept_encoding = []
+    plain_body = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\ndata: [DONE]\n\n'
 
     async def _completions(request):
+        accept_encoding = request.headers.get("accept-encoding", "")
+        seen_accept_encoding.append(accept_encoding)
+        if "identity" in accept_encoding:
+            return StarletteResponse(content=plain_body, media_type="text/event-stream")
         return StarletteResponse(
-            content=compressed,
-            media_type="application/json",
+            content=gzip.compress(plain_body),
+            media_type="text/event-stream",
             headers={"content-encoding": "gzip"},
         )
 
-    gzip_backend = Starlette(
+    backend = Starlette(
         routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
     )
-    mount_backend("http://gzip.test", gzip_backend)
-    await backends.save_config(pool, {"kind": "remote", "url": "http://gzip.test"})
+    mount_backend("http://compressing.test", backend)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://compressing.test"})
 
-    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": True})
 
     assert resp.status_code == 200
-    assert "content-encoding" not in resp.headers
-    assert gzip.decompress(resp.content) == json.dumps(original).encode()
+    # Pinned, not incidental: the gateway must actually ask for identity.
+    assert seen_accept_encoding == ["identity"]
+    # Read the ordinary way — plain SSE parsing, no gzip.decompress anywhere
+    # in this test — and the full reply arrives intact.
+    frames = _sse_payloads(resp.content)
+    deltas = [f["choices"][0]["delta"]["content"] for f in frames if f != "[DONE]"]
+    assert deltas == ["hi"]
 
 
 async def test_a_mid_stream_failure_never_forwards_content_encoding(

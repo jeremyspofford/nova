@@ -41,13 +41,26 @@ def http_client(
     app.state.peer_transports keyed by base_url, so the exact client code
     under test (headers, streaming, error handling) runs against it with
     no socket anywhere. Nothing mounted means a real network transport.
+
+    Every call also declares Accept-Encoding: identity, overriding httpx's
+    own default ("gzip, deflate", sent unless told otherwise). data_plane.py
+    relays every byte a backend sends back completely as-is (aiter_raw())
+    and, on the branches where it cannot safely promise a caller-facing
+    Content-Encoding travels with them intact, drops that header rather
+    than trust it (see data_plane._STREAMING_EXCLUDE /
+    _BUFFERED_EXCLUDE) — both are only true at once if the backend is
+    never asked to compress the response in the first place. Without this,
+    a compressing backend's reply relays as still-compressed bytes with no
+    header saying so: core reads it line-by-line expecting SSE text, finds
+    none, and a real turn silently persists an empty assistant reply.
     """
     transports = getattr(app.state, "peer_transports", {})
+    merged_headers = {"Accept-Encoding": "identity", **(headers or {})}
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=timeout,
         transport=transports.get(base_url),
-        headers=headers or {},
+        headers=merged_headers,
     )
 
 

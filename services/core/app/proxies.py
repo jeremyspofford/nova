@@ -22,15 +22,19 @@ logger = logging.getLogger("core")
 
 ADMIN_TIMEOUT = httpx.Timeout(5.0)
 # The gateway's own probe work is bounded by its own PROBE_TIMEOUT=30.0
-# (services/gateway/app/admin.py) plus a DB insert after — this has to
-# comfortably dominate that whole downstream budget, or a cold-model probe
-# the gateway is still legitimately working on times out here first and
-# gets reported as if the gateway itself were unreachable.
-PROBE_TIMEOUT = httpx.Timeout(35.0)
+# (services/gateway/app/admin.py) plus a DB insert after — the READ side of
+# this has to comfortably dominate that whole downstream budget, or a
+# cold-model probe the gateway is still legitimately working on times out
+# here first and gets reported as if the gateway itself were unreachable.
+# Connect/write/pool stay at the same 5s as every other admin route: a
+# dead gateway (nothing answering the TCP connect at all) is a fast, cheap
+# fact, not something a 35s-wide flat timeout should make the wizard wait
+# out — only the "still answering, just slow" case needs the wide budget.
+PROBE_TIMEOUT = httpx.Timeout(connect=5.0, read=35.0, write=5.0, pool=5.0)
 # verify_live's own inner liveness check is httpx.Timeout(5.0)
 # (services/gateway/app/backends.py) plus a DB write after saving — same
-# reasoning, smaller downstream budget.
-BACKEND_PUT_TIMEOUT = httpx.Timeout(10.0)
+# reasoning, smaller downstream budget, same tight connect/write/pool.
+BACKEND_PUT_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 # A pull can spend minutes between progress lines, so only the connect
 # phase is bounded — a slow download is not a hang.
 PULL_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
@@ -48,9 +52,9 @@ def _timed_out(path: str, timeout: httpx.Timeout) -> HTTPException:
     cold-model probe, a slow verify-then-save); naming the route and the
     budget it was given says what actually happened instead of implying the
     gateway is down."""
+    budget = "an unbounded read" if timeout.read is None else f"{timeout.read:g}s"
     return HTTPException(
-        status_code=502,
-        detail=f"the gateway timed out — {path} did not answer within {timeout.read:g}s",
+        status_code=502, detail=f"the gateway timed out — {path} did not answer within {budget}"
     )
 
 
