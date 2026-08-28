@@ -89,3 +89,26 @@ async def test_run_migrations_empty_then_apply_and_rerun_is_noop(tmp_path, clean
     assert row is not None
 
     await run_migrations(TEST_DSN, tmp_path)  # re-run: applies nothing, does not raise
+
+
+@pytest.mark.skipif(not TEST_DSN, reason=_SKIP_REASON)
+async def test_run_migrations_catches_up_from_n_minus_1_to_n(tmp_path, clean_schema_migrations):
+    """The realistic deploy shape (S2 seam-hygiene: slice-01-carries.md): a
+    running instance already has every migration but the newest applied, and
+    a new release adds exactly one more. Empty-then-apply above cannot prove
+    this — it demonstrates the runner recognizes N-1 already-applied
+    migrations and applies ONLY the new Nth one, never re-running (or
+    skipping) anything."""
+    _touch(tmp_path, "001_init.sql")
+    _touch(tmp_path, "002_second.sql")
+    await run_migrations(TEST_DSN, tmp_path)  # instance is at N-1
+
+    _touch(tmp_path, "003_third.sql")  # the new release adds migration N
+    await run_migrations(TEST_DSN, tmp_path)
+
+    conn = await asyncpg.connect(TEST_DSN)
+    try:
+        rows = await conn.fetch("SELECT filename FROM schema_migrations ORDER BY filename")
+    finally:
+        await conn.close()
+    assert [r["filename"] for r in rows] == ["001_init.sql", "002_second.sql", "003_third.sql"]
