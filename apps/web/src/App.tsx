@@ -6,7 +6,7 @@ import { ToastProvider } from './components/ToastProvider'
 import { AuthProvider, useAuth } from './stores/auth-store'
 import { AppLayout } from './components/layout/AppLayout'
 import { Button } from './components/ui'
-import { gateOutcome } from './lib/gate'
+import { gateOutcome, type GateOutcome } from './lib/gate'
 import { getSettings, settingValue, type SettingDef } from './lib/api'
 import ComponentGallery from './pages/dev/ComponentGallery'
 import { Login } from './pages/Login'
@@ -66,17 +66,21 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
  */
 function Gate() {
   const { user, hasUsers, ready, unreachable, refresh } = useAuth()
-  const [settings, setSettings] = useState<SettingDef[] | null>(null)
+  // Keyed by person: "loaded" has to mean loaded FOR THIS PERSON, not loaded
+  // at some point. Whoever the settings were read for is the only browser
+  // they describe.
+  const [settings, setSettings] = useState<{ personId: string; defs: SettingDef[] } | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
-  // Only the FIRST evaluation is allowed to show a loading screen. Registering
-  // an owner mid-wizard makes the settings probe re-run, and blanking the
-  // screen there would unmount the wizard and restart it.
-  const settled = useRef(false)
+  // What is on screen right now. Only used to answer one question: is the
+  // wizard already up? If it is, waiting for a settings re-probe would tear
+  // it down mid-run; anywhere else, waiting is the honest thing to do.
+  const showing = useRef<GateOutcome | null>(null)
 
-  const loadSettings = useCallback(async () => {
+  const loadSettings = useCallback(async (personId: string) => {
     setSettingsError(null)
     try {
-      setSettings(await getSettings())
+      const defs = await getSettings()
+      setSettings({ personId, defs })
     } catch (err) {
       setSettings(null)
       setSettingsError(err instanceof Error ? err.message : String(err))
@@ -89,18 +93,18 @@ function Gate() {
       setSettingsError(null)
       return
     }
-    void loadSettings()
+    void loadSettings(user.id)
   }, [user, loadSettings])
 
   const retry = useCallback(() => {
     void refresh()
-    void loadSettings()
-  }, [refresh, loadSettings])
+    if (user) void loadSettings(user.id)
+  }, [refresh, loadSettings, user])
 
   const onboardingCompleted = useCallback(async () => {
     await refresh()
-    await loadSettings()
-  }, [refresh, loadSettings])
+    if (user) await loadSettings(user.id)
+  }, [refresh, loadSettings, user])
 
   if (!ready) return <Starting />
   if (unreachable) return <Unreachable reason={unreachable} onRetry={retry} />
@@ -112,16 +116,28 @@ function Gate() {
       />
     )
   }
-  // Signed in but the settings answer has not landed: waiting is honest,
-  // guessing "not onboarded" would flash the wizard at people who are done.
-  if (user && settings === null && !settled.current) return <Starting />
 
-  const outcome = gateOutcome({
-    hasUsers,
-    me: user,
-    onboardingCompleted: settings ? settingValue(settings, 'onboarding.completed', false) : null,
-  })
-  settled.current = true
+  const defs = user !== null && settings?.personId === user.id ? settings.defs : null
+
+  let outcome: GateOutcome
+  if (user !== null && defs === null) {
+    // Signed in, but this person's setup state has not landed. Guessing
+    // "unfinished" here put a returning owner in the wizard on every single
+    // login, hardware probe and all, on the way to /chat.
+    //
+    // The one exception is a wizard that is already running: an owner who has
+    // just registered triggers this same re-probe, and blanking the screen
+    // would unmount the wizard and restart it from the top.
+    if (showing.current !== 'onboarding') return <Starting />
+    outcome = 'onboarding'
+  } else {
+    outcome = gateOutcome({
+      hasUsers,
+      me: user,
+      onboardingCompleted: defs ? settingValue(defs, 'onboarding.completed', false) : null,
+    })
+  }
+  showing.current = outcome
 
   if (outcome === 'onboarding') {
     return (
@@ -141,7 +157,7 @@ function Gate() {
     )
   }
 
-  return <AppRoutes chatModel={settings ? settingValue(settings, 'chat.model', '') : ''} />
+  return <AppRoutes chatModel={defs ? settingValue(defs, 'chat.model', '') : ''} />
 }
 
 export default function App() {

@@ -153,7 +153,11 @@ export function OnboardingWizard({ onCompleted }: { onCompleted: () => void }) {
               engine={engine}
               model={model}
               modelConfigured={modelConfigured}
-              onBackToSetup={() => setStep('hardware')}
+              // Back to where this run began, NOT to a fixed step: on a fresh
+              // instance the account step sits between Welcome and Hardware
+              // and nothing reaches backwards to it, so landing on Hardware
+              // left the owner unable to ever create their account.
+              onBackToSetup={() => setStep(initialStep(hadUsersAtStart))}
               onFinish={onCompleted}
             />
           )}

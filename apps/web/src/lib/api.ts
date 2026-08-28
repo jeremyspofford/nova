@@ -10,6 +10,7 @@
 import type { Role } from './roles'
 import type { Person } from './gate'
 import { failureReason } from './streamChat'
+import { createLineBuffer } from './lineBuffer'
 
 /** The three backends core's PUT /inference/backend accepts. */
 export type EngineKind = 'ollama' | 'remote' | 'cloud'
@@ -228,10 +229,30 @@ export interface PullLine {
 }
 
 /**
+ * One line of the pull stream. A line that will not parse becomes an error
+ * object rather than being dropped: the download step decides it is finished
+ * by seeing `{"status":"success"}`, so a parser that quietly skipped a line it
+ * did not understand could turn a failed pull into a silent one.
+ */
+export function parsePullLine(line: string): PullLine {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    return { error: `unreadable progress line: ${line.slice(0, 200)}` }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { error: `unexpected progress line: ${line.slice(0, 200)}` }
+  }
+  return parsed as PullLine
+}
+
+/**
  * POST /api/v1/models/pull, yielding one parsed progress object per line.
- * A line that will not parse is yielded as an error object rather than
- * dropped — a pull that silently skipped its failure line would look like
- * it worked.
+ *
+ * Newline-delimited JSON, not SSE — no `data:` prefix and no terminator — so
+ * the framing is its own, but the chunk reassembly underneath is the same
+ * problem as the chat stream and uses the same tested buffer.
  */
 export async function* pullModel(
   model: string,
@@ -249,32 +270,18 @@ export async function* pullModel(
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  let buffer = ''
-
-  const linesOf = (chunk: string): PullLine[] => {
-    buffer += chunk
-    const parts = buffer.split('\n')
-    buffer = parts.pop() ?? ''
-    return parts
-      .filter(line => line.trim() !== '')
-      .map(line => {
-        try {
-          return JSON.parse(line) as PullLine
-        } catch {
-          return { error: `unreadable progress line: ${line.slice(0, 200)}` }
-        }
-      })
-  }
+  const lines = createLineBuffer()
+  const parsed = (batch: string[]) =>
+    batch.filter(line => line.trim() !== '').map(parsePullLine)
 
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      for (const line of linesOf(decoder.decode(value, { stream: true }))) yield line
+      for (const line of parsed(lines.push(decoder.decode(value, { stream: true })))) yield line
     }
-    if (buffer.trim() !== '') {
-      for (const line of linesOf('\n')) yield line
-    }
+    // A stream that ended without a final newline still owes us its last line.
+    for (const line of parsed(lines.flush())) yield line
   } finally {
     reader.cancel().catch(() => {})
   }

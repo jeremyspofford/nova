@@ -18,6 +18,8 @@
  * plainly that the turn did not finish.
  */
 
+import { createLineBuffer } from './lineBuffer'
+
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string }
   | { type: 'delta'; text: string }
@@ -69,8 +71,7 @@ function frameToEvent(payload: string): StreamEvent {
   return { type: 'error', reason: `unrecognised frame from the server: ${quote(payload)}` }
 }
 
-function lineToEvents(raw: string): StreamEvent[] {
-  const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+function lineToEvents(line: string): StreamEvent[] {
   if (line.trim() === '') return []
   // SSE comment — proxies use these as keep-alives.
   if (line.startsWith(':')) return []
@@ -86,21 +87,12 @@ export interface SseParser {
 }
 
 export function createSseParser(): SseParser {
-  let buffer = ''
+  // Chunk reassembly is shared with the model pull — see lib/lineBuffer.ts.
+  // Only the interpretation of a finished line is SSE-specific.
+  const lines = createLineBuffer()
   return {
-    push(chunk: string): StreamEvent[] {
-      buffer += chunk
-      const lines = buffer.split('\n')
-      // The last element is either '' (chunk ended on a newline) or a partial
-      // line; either way it belongs to the next chunk, not to this batch.
-      buffer = lines.pop() ?? ''
-      return lines.flatMap(lineToEvents)
-    },
-    flush(): StreamEvent[] {
-      const tail = buffer
-      buffer = ''
-      return lineToEvents(tail)
-    },
+    push: (chunk: string) => lines.push(chunk).flatMap(lineToEvents),
+    flush: () => lines.flush().flatMap(lineToEvents),
   }
 }
 

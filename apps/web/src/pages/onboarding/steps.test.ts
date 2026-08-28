@@ -43,6 +43,23 @@ describe('initialStep', () => {
   })
 })
 
+describe('skipping to Ready and coming back', () => {
+  it('can still reach the account step on a fresh instance', () => {
+    const steps = wizardSteps({ hasUsers: false, engine: null })
+    // Where "Back to setup" lands after a skip.
+    const landing = initialStep(false)
+    expect(landing).toBe('welcome')
+    // The account step lives past it, so it is reachable going forward.
+    expect(nextStep(steps, landing)).toBe('account')
+  })
+
+  it('does not send a returning run back through Welcome', () => {
+    const landing = initialStep(true)
+    expect(landing).toBe('hardware')
+    expect(wizardSteps({ hasUsers: true, engine: null })).not.toContain('account')
+  })
+})
+
 describe('nextStep / prevStep', () => {
   const ollama = wizardSteps({ hasUsers: false, engine: 'ollama' })
   const cloud = wizardSteps({ hasUsers: false, engine: 'cloud' })

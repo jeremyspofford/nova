@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import * as ui from './components/ui'
 
-type Route = { status?: number; body?: unknown }
+type Route = { status?: number; body?: unknown; hold?: Promise<void> }
 
 /** Answer the gate's three probes with whatever this test needs. */
 function mockApi(routes: Record<string, Route>) {
@@ -11,6 +11,9 @@ function mockApi(routes: Record<string, Route>) {
     const url = String(input)
     const match = Object.keys(routes).find(path => url.startsWith(path))
     const route = match ? routes[match] : { status: 404, body: { detail: 'not mocked' } }
+    // A held route lets a test observe the window where an answer has been
+    // asked for but has not arrived — which is where gate bugs live.
+    if (route.hold) await route.hold
     const status = route.status ?? 200
     return {
       ok: status < 400,
@@ -21,6 +24,15 @@ function mockApi(routes: Record<string, Route>) {
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+/** A promise the test resolves by hand. */
+function gateOpener() {
+  let open = () => {}
+  const promise = new Promise<void>(resolve => {
+    open = resolve
+  })
+  return { promise, open: () => open() }
 }
 
 afterEach(() => {
@@ -79,6 +91,75 @@ describe('App gate', () => {
     render(<App />)
     await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
     expect(screen.getByText('qwen3:4b')).toBeDefined()
+  })
+
+  // The daily path for a returning owner. Between login() setting the person
+  // and the settings probe answering there is a commit where the setup state
+  // is unknown — treating unknown as "not onboarded" there mounted the wizard,
+  // fired its hardware probe, and rewrote the URL to /onboarding on the way to
+  // /chat.
+  it('never flashes the wizard between signing in and the app', async () => {
+    // The settings answer is held open so the gap between "this browser is
+    // now somebody" and "we know whether setup finished" is a real, visible
+    // state instead of a commit that flickers past.
+    const settingsAnswer = gateOpener()
+    const fetchMock = mockApi({
+      '/api/v1/auth/state': { body: { has_users: true } },
+      '/api/v1/auth/me': { status: 401, body: { detail: 'no identity' } },
+      '/api/v1/auth/login': { body: { person: { id: 'p1', name: 'Ada', role: 'owner' } } },
+      '/api/v1/settings': {
+        hold: settingsAnswer.promise,
+        body: {
+          settings: [
+            { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true },
+            { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:4b' },
+          ],
+        },
+      },
+      '/api/v1/conversations/active': { body: { id: 'c1', title: null, created_at: '' } },
+      '/api/v1/conversations/c1/messages': { body: { messages: [] } },
+      '/api/v1/system/hardware': { body: { gpus: [], ram_mb: 32768, disk_free_gb: 900 } },
+    })
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Sign in to this instance')).toBeDefined())
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Ada' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2hunter2' } })
+    fireEvent.click(screen.getByText('Sign in'))
+
+    // While the setup state is unknown the gate waits. It must not decide
+    // "unknown means unfinished" and put a returning owner in the wizard.
+    await waitFor(() => expect(screen.getByText('Starting Nova…')).toBeDefined())
+    expect(screen.queryByText('Engine')).toBeNull()
+    expect(screen.queryByText('What this machine has')).toBeNull()
+
+    settingsAnswer.open()
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    // HardwareDetection asks for this the moment it mounts, so never having
+    // asked is a second proof the wizard was never on screen.
+    const asked = fetchMock.mock.calls.map(call => String(call[0]))
+    expect(asked.some(url => url.includes('/api/v1/system/hardware'))).toBe(false)
+  })
+
+  it('leaves a way back to the account step after setup is skipped', async () => {
+    mockApi({
+      '/api/v1/auth/state': { body: { has_users: false } },
+      '/api/v1/system/hardware': { body: { gpus: [], ram_mb: 32768, disk_free_gb: 900 } },
+    })
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Welcome to Nova')).toBeDefined())
+
+    fireEvent.click(screen.getByText('Skip setup'))
+    await waitFor(() => expect(screen.getByText('No model configured')).toBeDefined())
+
+    // On a fresh instance the account step sits between Welcome and Hardware.
+    // Landing on Hardware would strand the owner: no route reaches backwards
+    // to CreateAccount, so the account could never be made and every later
+    // call would 401.
+    fireEvent.click(screen.getByText('Back to setup'))
+    await waitFor(() => expect(screen.getByText('Welcome to Nova')).toBeDefined())
+    fireEvent.click(screen.getByText('Get started'))
+    await waitFor(() => expect(screen.getByText('Create your owner account')).toBeDefined())
   })
 
   it('keeps the wizard running when the owner is registered mid-flow', async () => {

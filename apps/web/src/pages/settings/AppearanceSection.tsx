@@ -142,7 +142,7 @@ export function AppearanceSection({
     customLightAccent, setCustomLightAccent,
     customDarkAccent, setCustomDarkAccent,
     fontScale, setFontScale,
-    activePreset,
+    mode, activePreset,
   } = useTheme()
 
   const [saving, setSaving] = useState(false)
@@ -166,7 +166,11 @@ export function AppearanceSection({
   const reset = () => {
     setMessage(null)
     if (!themePresets[storedPreset]) return
-    if (modePreference === 'light') setLightPreset(storedPreset)
+    // `dirty` compares against activePreset, which follows the RESOLVED mode.
+    // Branching on the preference instead meant that under 'system' with a
+    // light OS this wrote the dark preset: the visible preset never moved,
+    // dirty never cleared, and the button silently did nothing.
+    if (mode === 'light') setLightPreset(storedPreset)
     else setDarkPreset(storedPreset)
   }
 
@@ -216,7 +220,7 @@ export function AppearanceSection({
         <label className="mb-2 block text-caption font-medium text-content-secondary">
           Light theme
         </label>
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <div role="group" aria-label="Light theme presets" className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {presets.map(([key, preset]) => (
             <PresetCard
               key={key}
@@ -236,7 +240,7 @@ export function AppearanceSection({
         <label className="mb-2 block text-caption font-medium text-content-secondary">
           Dark theme
         </label>
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <div role="group" aria-label="Dark theme presets" className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {presets.map(([key, preset]) => (
             <PresetCard
               key={key}
