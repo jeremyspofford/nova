@@ -44,10 +44,12 @@ def _forwardable_headers(
     upstream_headers: httpx.Headers, *, exclude: frozenset[str] = frozenset()
 ) -> dict[str, str]:
     """Every upstream response header except the hop-by-hop ones (plus any
-    caller-specified exclusions) — used wherever we relay bytes we did not
-    decode ourselves (aiter_raw), so whatever the backend said about that
-    body (content-type, and crucially content-encoding) reaches the caller
-    intact."""
+    caller-specified exclusions) — used both where we relay bytes we did not
+    decode ourselves (aiter_raw, so content-type and content-encoding must
+    ride along untouched) and where we relay bytes we DID decode (aread() on
+    the non-200 branch), where the caller-specified exclusions exist
+    precisely to drop the headers that describe the pre-decode body rather
+    than the one we are actually sending."""
     skip = _HOP_BY_HOP | exclude
     return {
         key: value
@@ -56,14 +58,34 @@ def _forwardable_headers(
     }
 
 
+# The non-200 branch fully buffers the body via upstream.aread(), which
+# httpx transparently DEcompresses according to whatever Content-Encoding
+# the backend sent — the bytes handed to Response() are already plain.
+# Forwarding the original Content-Encoding here would tell the caller to
+# decompress already-decompressed bytes (core's own aread() on the relay
+# raises DecodingError doing exactly that, which is how a provider's plain
+# "invalid api key" 401 turned into an opaque "could not reach the gateway"
+# for the operator). Content-Length is equally false once the body has been
+# re-framed by decompression. Both are dropped so Starlette computes the one
+# number and one (lack of) encoding that are actually true for the bytes we
+# send.
+_BUFFERED_EXCLUDE = frozenset({"content-encoding", "content-length"})
+
 # The streaming/relay path may append an SSE error chunk AFTER the upstream
 # body has already ended (a mid-stream failure) — bytes relay() can still
 # hand the client even though the upstream declared how many there would
-# be. Forwarding that Content-Length would then be a lie: declared length
-# stops matching bytes actually sent, an HTTP framing violation (the
-# non-200 branch is exempt — it fully buffers content first, so its
-# Content-Length, if forwarded, always matches exactly what is sent).
-_STREAMING_EXCLUDE = frozenset({"content-length"})
+# be, or what encoding they were in. Forwarding that Content-Length would
+# then be a lie: declared length stops matching bytes actually sent, an HTTP
+# framing violation. Forwarding Content-Encoding is the same lie in a
+# different shape — our appended chunk is always plain UTF-8 JSON, never
+# whatever compression the upstream used, so a compressed body plus our
+# plain-text tail decodes as neither (a corrupt tail). Because headers are
+# already on the wire before we know whether a failure will happen, both
+# are dropped unconditionally rather than only when a failure actually
+# occurs (the non-200 branch is exempt from both — it fully buffers content
+# first, so nothing is ever appended to it after the fact; see
+# _BUFFERED_EXCLUDE above).
+_STREAMING_EXCLUDE = frozenset({"content-length", "content-encoding"})
 
 
 def _served_by_header(kind: str, model: str) -> dict[str, str]:
@@ -132,7 +154,7 @@ async def chat_completions(request: Request) -> Response:
 
     if upstream.status_code != 200:
         content = await upstream.aread()
-        headers = _forwardable_headers(upstream.headers)
+        headers = _forwardable_headers(upstream.headers, exclude=_BUFFERED_EXCLUDE)
         headers.update(served_by)
         await upstream.aclose()
         await client.aclose()

@@ -170,15 +170,15 @@ async def test_models_unreachable_is_a_stated_502(client, pool, monkeypatch):
     assert "error" in resp.json()
 
 
-async def test_a_gzipped_backend_response_is_relayed_with_content_encoding_intact(
-    client, pool, mount_backend
-):
-    """aiter_raw() hands us the backend's still-compressed wire bytes — if
-    we drop Content-Encoding on the way through (as a CDN-fronted
-    remote/cloud backend would send it), the caller has compressed bytes
-    and no way to know it. Forwarding the header is what makes them
-    decodable again — proven here by httpx's own automatic decompression
-    on the client side succeeding."""
+async def test_a_streaming_relay_never_forwards_content_encoding(client, pool, mount_backend):
+    """The streaming/relay path (every 200 response goes through it, `stream`
+    request field or not) may have to append a plain-text SSE error chunk
+    after the upstream body already ended — see _STREAMING_EXCLUDE. Because
+    the response headers are already on the wire before we know whether that
+    will happen, Content-Encoding is withheld unconditionally, not only on
+    the runs that actually fail. aiter_raw() still relays the upstream's
+    exact wire bytes untouched (proven here by decompressing them by hand);
+    only the header claiming what those bytes are encoded as is dropped."""
     original = {"choices": [{"message": {"content": "compressed ok"}}]}
     compressed = gzip.compress(json.dumps(original).encode())
 
@@ -198,12 +198,82 @@ async def test_a_gzipped_backend_response_is_relayed_with_content_encoding_intac
     resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
 
     assert resp.status_code == 200
-    assert resp.headers["content-encoding"] == "gzip"
-    # httpx transparently decodes .json()/.content using the Content-Encoding
-    # header it received — this only produces the right answer if that
-    # header actually made the trip; a dropped header here would leave raw
-    # gzip bytes that fail to parse as JSON.
-    assert resp.json() == original
+    assert "content-encoding" not in resp.headers
+    assert gzip.decompress(resp.content) == json.dumps(original).encode()
+
+
+async def test_a_mid_stream_failure_never_forwards_content_encoding(
+    client, pool, mount_backend
+):
+    """A gzip-declared stream that dies partway gets our plain-text SSE
+    error chunk appended after its (still-compressed) bytes — a client that
+    trusted a forwarded Content-Encoding: gzip would try to gunzip a
+    compressed-then-plain-text body and get a corrupt tail (controller
+    ruling R25). The header must never ride along on this path, mid-stream
+    failure or not."""
+
+    async def _completions(request):
+        async def gen():
+            yield gzip.compress(b'{"choices": [{"delta"')
+            raise RuntimeError("simulated mid-transfer drop")
+
+        return StarletteStreamingResponse(
+            gen(), media_type="application/json", headers={"content-encoding": "gzip"}
+        )
+
+    backend = Starlette(
+        routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
+    )
+    mount_backend("http://gzip-fail.test", backend)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://gzip-fail.test"})
+
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+
+    assert resp.status_code == 200  # headers were already sent as success
+    assert "content-encoding" not in resp.headers
+    assert b'"error"' in resp.content
+
+
+async def test_a_gzipped_non_200_backend_response_relays_the_bare_error_uncorrupted(
+    client, pool, mount_backend
+):
+    """Reproduces the real failure: a cloud backend's 401 arrives
+    gzip-compressed. The non-200 branch buffers it with upstream.aread(),
+    which httpx decompresses before we ever see the bytes — relaying the
+    original Content-Encoding/Content-Length would describe a body that no
+    longer exists. Left unfixed, core's own aread() on this relay raises
+    DecodingError trying to gunzip already-plain JSON, and the operator sees
+    "could not reach the gateway" instead of the provider's actual refusal.
+    Both headers must be dropped so the relayed body reads as exactly what
+    it is: plain JSON, at its real length."""
+    original_error = {"error": {"message": "invalid api key"}}
+    compressed = gzip.compress(json.dumps(original_error).encode())
+
+    async def _completions(request):
+        return StarletteResponse(
+            content=compressed,
+            status_code=401,
+            media_type="application/json",
+            headers={"content-encoding": "gzip", "content-length": str(len(compressed))},
+        )
+
+    backend = Starlette(
+        routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
+    )
+    mount_backend("http://cloud-401.test", backend)
+    await backends.save_config(
+        pool, {"kind": "cloud", "url": "http://cloud-401.test", "api_key": "sk-x", "model": "m"}
+    )
+
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+
+    assert resp.status_code == 401
+    assert "content-encoding" not in resp.headers
+    # No stale length either: Starlette computes it fresh from the real body.
+    assert int(resp.headers["content-length"]) == len(resp.content)
+    # The client can read this the ordinary way — no second decode, no
+    # DecodingError — and gets the provider's actual stated refusal.
+    assert resp.json() == original_error
 
 
 async def test_a_declared_content_length_is_never_forwarded_on_the_streaming_path(
