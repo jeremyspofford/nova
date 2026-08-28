@@ -79,6 +79,14 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
                 await chunks.put(None)
 
         task = asyncio.create_task(run())
+        # Never leave an exception unretrieved — it would print during
+        # teardown. `stream()` below also explicitly awaits `task` on the
+        # natural end-of-queue path to convert a driven-app exception into
+        # the real network-failure shape callers must handle, but an early
+        # `.aclose()` (GeneratorExit before that point) only calls
+        # `task.cancel()`, which is a no-op once the task has already
+        # finished — this callback is what retrieves it in that case.
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
         await started.wait()
         if "status" not in head:
             await task  # the app died before responding; let the test see why

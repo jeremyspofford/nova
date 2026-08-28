@@ -220,6 +220,50 @@ async def test_a_compressing_backend_is_asked_for_identity_so_the_relay_reads_cl
     assert deltas == ["hi"]
 
 
+async def test_a_backend_that_compresses_despite_identity_gets_a_stated_error_never_garbage(
+    client, pool, mount_backend
+):
+    """S2 seam-hygiene (slice-01-carries.md): a backend that ignores the
+    identity Accept-Encoding request entirely — unlike the compliant fake
+    above, which only compresses when NOT asked for identity — used to get
+    its Content-Encoding header silently stripped (defense-in-depth) while
+    its still-compressed aiter_raw() bytes relayed through unchanged. A real
+    client reading that the ordinary way gets undecodable binary where it
+    expected SSE text: zero decodable lines, an empty assistant reply with
+    no error anywhere. The fix: detect the violation before relaying any of
+    those bytes, and answer with a single OpenAI-shaped SSE error frame
+    naming the offending backend and the encoding it used, then end."""
+    plain_body = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\ndata: [DONE]\n\n'
+
+    async def _completions(request):
+        # A non-compliant backend: compresses unconditionally, never even
+        # looking at Accept-Encoding.
+        return StarletteResponse(
+            content=gzip.compress(plain_body),
+            media_type="text/event-stream",
+            headers={"content-encoding": "gzip"},
+        )
+
+    backend = Starlette(
+        routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
+    )
+    mount_backend("http://noncompliant.test", backend)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://noncompliant.test"})
+
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": True})
+
+    assert resp.status_code == 200  # headers already sent as success
+    assert "content-encoding" not in resp.headers
+    frames = _sse_payloads(resp.content)
+    # Exactly the stated error, never any of the raw compressed bytes
+    # decoded (or mis-decoded) as if they were plain SSE deltas.
+    assert len(frames) == 1
+    assert frames[0] != "[DONE]"
+    message = frames[0]["error"]["message"]
+    assert "noncompliant.test" in message
+    assert "gzip" in message
+
+
 async def test_a_mid_stream_failure_never_forwards_content_encoding(
     client, pool, mount_backend
 ):

@@ -160,6 +160,33 @@ async def chat_completions(request: Request) -> Response:
         await client.aclose()
         return Response(content=content, status_code=upstream.status_code, headers=headers)
 
+    # Every call asks for Accept-Encoding: identity (backends.http_client) so
+    # aiter_raw() below can relay wire bytes straight through as plain text.
+    # A backend that ignores that request and compresses anyway breaks that
+    # assumption outright: relaying its still-compressed bytes with the
+    # encoding header stripped (the old defense-in-depth) hands the client
+    # undecodable binary with nothing saying so — zero readable SSE lines,
+    # which looks exactly like an empty, silent reply. Caught here, before a
+    # single byte is relayed, and reported the same way a mid-stream failure
+    # is: an OpenAI-shaped SSE error frame, then the stream ends.
+    content_encoding = upstream.headers.get("content-encoding", "").strip().lower()
+    if content_encoding and content_encoding != "identity":
+        await upstream.aclose()
+        await client.aclose()
+        message = (
+            f"the backend at {base_url} ignored the identity encoding request and "
+            f"compressed its reply ({content_encoding}) — refusing to relay undecodable "
+            "bytes as text"
+        )
+        logger.warning("chat completion stream refused: %s", message)
+
+        async def relay_violation():
+            yield _sse_error_chunk(message)
+
+        relay_headers = _forwardable_headers(upstream.headers, exclude=_STREAMING_EXCLUDE)
+        relay_headers.update(served_by)
+        return StreamingResponse(relay_violation(), status_code=200, headers=relay_headers)
+
     async def relay():
         try:
             async for chunk in upstream.aiter_raw():
