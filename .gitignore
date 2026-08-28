@@ -39,3 +39,11 @@ backend/uv.lock
 # and it changes on every run, so tracking it makes every test run a diff.
 backend/.coverage
 frontend/coverage/
+
+# e2e run artifacts: traces, the HTML report, and the signed-in browser state
+# scenario 1 saves for the scenarios after it. The screenshot BASELINES under
+# tests/e2e/__screenshots__/ are deliberately NOT ignored — they are what the
+# next run diffs against.
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/.auth/

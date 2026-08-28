@@ -1,0 +1,58 @@
+# The e2e runner as a service on the stack's own network.
+#
+# Used as an overlay on deploy/docker-compose.yml, so compose's project
+# directory is deploy/ and every relative path below is written from there
+# (`..` is the repo root) — the same convention the base file already uses for
+# its ../data mount.
+#
+#   docker compose -f deploy/docker-compose.yml -f tests/e2e/docker-compose.e2e.yml \
+#     --profile e2e run --rm e2e
+#
+# The image is Microsoft's playwright image, not node:alpine: it ships the
+# browsers and their system libraries, which alpine does not, and the tag is
+# pinned to the same version as @playwright/test in package.json.
+
+services:
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.62.1-noble
+    profiles: ["e2e"]
+    working_dir: /work/tests/e2e
+    # As the invoking user, not root: everything this run writes (node_modules,
+    # traces, the screenshot baselines) lands in the bind-mounted repo, and
+    # root-owned artifacts in a working tree are a mess to undo. Override on a
+    # host whose user is not 1000:1000.
+    user: "${NOVA_E2E_UID:-1000}:${NOVA_E2E_GID:-1000}"
+    # …which then needs the docker group to reach the socket below.
+    group_add:
+      - "${NOVA_E2E_DOCKER_GID:-1001}"
+    # In-container the browser talks to nginx directly on the compose network;
+    # there is no published port in the path at all.
+    environment:
+      NOVA_E2E_BASE_URL: http://web:80
+      NOVA_E2E_MEMORY_URL: http://memory:8002
+      NOVA_E2E_PROJECT: nova
+      CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
+      NOVA_E2E_MODEL: ${NOVA_E2E_MODEL:-qwen3:1.7b}
+      NOVA_E2E_OWNER_NAME: ${NOVA_E2E_OWNER_NAME:-Jeremy}
+      NOVA_E2E_OWNER_PASSWORD: ${NOVA_E2E_OWNER_PASSWORD:-nova-s1-walk}
+      # The image's HOME is /root, which the non-root user above cannot write.
+      # npm and playwright both want a writable one.
+      HOME: /tmp
+      # Deliberately NOT CI=1. Playwright refuses to write a missing screenshot
+      # baseline when it thinks it is on CI, whatever `updateSnapshots` says —
+      # so the first run of a new visual check failed for the sole reason that
+      # it was the first run. This suite is not CI (the CI job is `if: false`);
+      # it is a local walk, and a missing baseline should be created.
+    volumes:
+      - ..:/work
+      # Two scenarios have to control containers (restart the stack, stop the
+      # gateway). The suite talks to the engine API over this socket rather
+      # than shelling out, because there is no docker CLI in this image.
+      # It is a real privilege — that is why this service is behind a profile
+      # and never part of `up`.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - web
+      - core
+    command: >
+      sh -ec "npm ci --no-audit --no-fund && npx playwright test"

@@ -56,3 +56,34 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test -- --run
+
+  # DISABLED ON PURPOSE — needs a GPU-less profile decision, enable deliberately.
+  #
+  # The e2e walk pulls a model into the bundled ollama and waits for a real
+  # streamed reply. GitHub's hosted runners have no GPU, so on CPU this is
+  # either far past the job timeout or has to be cut down until it no longer
+  # proves the thing it exists to prove. A job that is red on every push helps
+  # nobody, and one trimmed into a fake green is worse. The suite runs locally
+  # with one command — see tests/e2e/README.md.
+  #
+  # To enable: decide the profile (a tiny CPU model? a hosted GPU runner? a
+  # remote-endpoint backend instead of the bundled one?), then drop `if: false`.
+  e2e:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bring the stack up
+        run: ./install
+      - name: Walk it
+        run: |
+          docker compose -f deploy/docker-compose.yml \
+            -f tests/e2e/docker-compose.e2e.yml \
+            --profile e2e run --rm e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-traces
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
