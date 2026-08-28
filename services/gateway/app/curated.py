@@ -1,8 +1,10 @@
 """Loads the curated model catalog — a static, in-repo JSON file.
 
-Every entry's slug needs live verification against the ollama library
-(Task 7's DoD walk); `verify_at_walk` marks that debt on each row rather
-than presenting a guess as a fact.
+Every slug in the file was checked against the live ollama library on
+2026-08-28 (base page and exact tag), so `verify_at_walk` is false on every
+row and each carries the `verified_url` it was checked against. The field
+stays in the schema because the debt it marks recurs: a slug added later
+starts life unverified, and test_curated.py refuses to let one ship that way.
 """
 from __future__ import annotations
 

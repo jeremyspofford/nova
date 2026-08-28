@@ -19,11 +19,15 @@ The stack has to be up first (`./install` from the repo root). Then, from the
 repo root:
 
 ```bash
-docker compose -f deploy/docker-compose.yml -f tests/e2e/docker-compose.e2e.yml \
+NOVA_E2E_OWNER_PASSWORD='choose-one' NOVA_E2E_MODEL=qwen3:8b \
+  docker compose -f deploy/docker-compose.yml -f tests/e2e/docker-compose.e2e.yml \
   --profile e2e run --rm e2e
 ```
 
-That is the documented command. It runs the browser inside Microsoft's
+That is the documented command. `NOVA_E2E_OWNER_PASSWORD` has no default and
+no fallback: scenario 1 creates the instance's one and only owner account, so
+the password it uses is the one that instance keeps. Compose refuses to start
+without it, and the suite checks again. It runs the browser inside Microsoft's
 playwright image, which already carries the browsers *and* their system
 libraries — so it needs nothing installed on the host and works on a machine
 where you cannot `apt-get`. The container runs as your uid, so traces,
@@ -49,7 +53,7 @@ The same suite runs against `http://127.0.0.1:3000` with no container:
 cd tests/e2e
 npm install
 npx playwright install --with-deps chromium   # needs root on Linux
-npm run e2e
+NOVA_E2E_OWNER_PASSWORD='choose-one' NOVA_E2E_MODEL=qwen3:8b npm run e2e
 ```
 
 `--with-deps` is the catch: on Linux the browser needs system libraries
@@ -59,8 +63,9 @@ container command above — it is why that one is the documented path.
 
 ## Configuration
 
-Everything is one environment variable with a host default. `deploy/.env` is
-read for the service tokens, so a host run needs nothing exported.
+Everything is one environment variable with a host default, except the owner
+password, which has none. `deploy/.env` is read for the service tokens, so a
+host run needs nothing else exported.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -68,25 +73,33 @@ read for the service tokens, so a host run needs nothing exported.
 | `NOVA_E2E_MEMORY_URL` | `http://127.0.0.1:8002` | |
 | `NOVA_E2E_MODEL` | `qwen3:1.7b` | **must be a slug the wizard actually offers on this host** |
 | `NOVA_E2E_OWNER_NAME` | `Jeremy` | the owner scenario 1 mints |
-| `NOVA_E2E_OWNER_PASSWORD` | `nova-s1-walk` | |
+| `NOVA_E2E_OWNER_PASSWORD` | **required, no default** | scenario 1 refuses to run without it — see below |
 | `NOVA_E2E_PROJECT` | `nova` | compose project the container control is scoped to |
 | `NOVA_E2E_PULL_TIMEOUT_MS` | 45 min | first pull of a large model |
 | `NOVA_E2E_REPLY_TIMEOUT_MS` | 6 min | cold model load plus generation |
 
 ### Picking `NOVA_E2E_MODEL`
 
-The model step only offers curated slugs for the VRAM tier the host lands in,
-and the tiers do not cascade — a 24 GB card is offered the 27B-class pin and
-nothing smaller. The default here is the smallest curated slug because CI
-speed is what the default is for; on a big-GPU box set it to what the wizard
-lists, e.g.
+The model step offers the curated slugs for the VRAM tier the host lands in,
+plus every smaller one — tiers cascade downwards but never upwards, so a
+24 GB card sees the 27B-class pin followed by the 14B, 8B, 4B and 1.7B, while
+a 10 GB card never sees anything above the 8B. The default here is the
+smallest curated slug because CI speed is what a default is for.
+
+A bigger card does not mean you should pick the biggest card's model. Being
+listed means it fits the tier table, not that it will load next to whatever
+else is on the card: on this box's RTX 3090, `qwen3.8:27b` installs and then
+ollama cannot start a runner for it at all (18 GB of weights plus a 32K KV
+cache, on a card a desktop had already taken 7.5 GB of). Pick something with
+headroom:
 
 ```bash
-NOVA_E2E_MODEL=qwen3.8:27b npm run e2e
+NOVA_E2E_MODEL=qwen3:8b npm run e2e
 ```
 
-Scenario 1 fails with the offered list in the message if the two disagree, so
-this is never a silent mismatch.
+Scenario 1 fails with the offered list in the message if the slug is not one
+the wizard lists, so a mismatch is never silent — but "offered" is not
+"loads", and only running it tells you which.
 
 ## Re-running scenario 1
 
