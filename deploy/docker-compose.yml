@@ -104,13 +104,34 @@ services:
       retries: 10
 
   ollama:
-    image: ollama/ollama
+    # PINNED, not `latest`. An untagged image is only pulled when it is absent,
+    # so a host that already had `ollama/ollama:latest` from months ago keeps
+    # running it — and the registry answers a current model's manifest with
+    # `412: requires a newer version of Ollama`, which reads as "this model is
+    # broken" rather than "this host is stale". That is exactly what happened
+    # on the first DoD walk (2026-08-28): a cached 0.31.2 could not pull
+    # qwen3.8:27b at all. Bump this deliberately.
+    image: ollama/ollama:0.33.1
     restart: unless-stopped
+    # The profile is kept so the container can be left out deliberately, but
+    # install.sh turns it on: the wizard's first and default engine is
+    # "Bundled Ollama", and core refuses to save an engine it cannot reach —
+    # so without this container running, the bundled path is filtered out of
+    # the wizard as dead and there is no local inference to choose at all.
     profiles: ["inference"]
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
       - v4_ollama:/root/.ollama
+    healthcheck:
+      # `ollama list` goes through the server's own API, so this is red until
+      # the server is actually accepting requests — which is the moment the
+      # gateway's liveness check would start passing too.
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
 volumes:
   v4_pgdata:

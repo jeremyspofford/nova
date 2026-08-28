@@ -1,0 +1,20 @@
+# GPU override for the bundled ollama container.
+#
+# Merged by install.sh ONLY when `docker info` reports the NVIDIA runtime — the
+# same fact it records as docker_gpu_runtime in data/hardware.json. Kept as a
+# separate file rather than folded into the base compose because a device
+# reservation on a host without the container toolkit makes `up` fail outright,
+# and a machine with no GPU has to keep working out of the box.
+#
+# Without this, a box with a 24 GB card runs its "local model" on the CPU and
+# nothing anywhere says so.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

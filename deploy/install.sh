@@ -14,10 +14,18 @@ ENV_EXAMPLE="$DEPLOY_DIR/.env.example"
 DATA_DIR="$REPO_ROOT/data"
 HARDWARE_JSON="$DATA_DIR/hardware.json"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
+GPU_COMPOSE_FILE="$DEPLOY_DIR/docker-compose.gpu.yml"
 
 SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN INSTANCE_SECRET"
-HEALTH_CHECKED_SERVICES="postgres core gateway memory web"
-REQUIRED_PORTS="3000 8000 8001 8002"
+HEALTH_CHECKED_SERVICES="postgres core gateway memory web ollama"
+REQUIRED_PORTS="3000 8000 8001 8002 11434"
+
+# Every `docker compose` call in this script goes through this array, so the
+# GPU override and the inference profile can never be applied to `up` and then
+# forgotten on `ps` — which would leave the health table reading a container
+# set that is not the one running. (Indexed arrays are bash 3.2; only
+# ASSOCIATIVE arrays are 4.0+, and there are none here.)
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -156,6 +164,25 @@ detect_hardware() {
 }
 JSON
   log "wrote $HARDWARE_JSON"
+
+  # The bundled ollama gets the cards only when the container runtime can
+  # actually hand them over. On a host with a GPU but no toolkit, say so
+  # rather than silently running a "local model" on the CPU.
+  if [ "$gpu_runtime" = "true" ]; then
+    COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" -f "$GPU_COMPOSE_FILE")
+    log "gpu: NVIDIA container runtime present — bundled ollama gets the GPU"
+  elif [ "$gpus_json" != "[]" ]; then
+    log "WARNING: a GPU was detected but docker has no NVIDIA runtime, so the bundled"
+    log "         ollama will run on the CPU. Install the NVIDIA Container Toolkit"
+    log "         (https://docs.nvidia.com/datacenter/cloud-native/) and re-run this."
+  else
+    log "gpu: none detected — bundled ollama will run on the CPU"
+  fi
+
+  # The wizard's default engine is the bundled ollama, and an engine that is
+  # not running is filtered out of the wizard as dead. Starting it is part of
+  # installing, not a separate step the operator has to know about.
+  COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile inference)
 }
 
 # ---- secrets --------------------------------------------------------------
@@ -212,21 +239,31 @@ generate_secrets() {
 # ---- bring-up + status ----------------------------------------------------
 
 compose_up() {
-  log "starting services (docker compose up -d --build)…"
-  docker compose -f "$COMPOSE_FILE" up -d --build
+  log "starting services (docker compose ${COMPOSE_ARGS[*]} up -d --build)…"
+  docker compose "${COMPOSE_ARGS[@]}" up -d --build
 }
 
 container_health() {
   local svc="$1" cid
-  cid="$(docker compose -f "$COMPOSE_FILE" ps -q "$svc" 2>/dev/null)"
+  cid="$(docker compose "${COMPOSE_ARGS[@]}" ps -q "$svc" 2>/dev/null)"
   [ -n "$cid" ] || { echo "missing"; return 0; }
   docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "unknown"
 }
 
 wait_for_health() {
-  local timeout=120 waited=0 svc all_healthy
+  # Pulling four base images and building three of them is the slow part and
+  # happens before this; what is waited on here is startup, migrations, and
+  # ollama opening its socket.
+  #
+  # Measured against the clock, not by counting sleeps: each poll also runs
+  # one `docker compose ps` per service, so a loop that added 2 per iteration
+  # took closer to eight minutes to reach a "240s" timeout. A stated timeout
+  # that is not the timeout is the same defect as a stated success that was
+  # never checked.
+  local timeout=240 started now svc all_healthy
+  started="$(date +%s)"
   log "waiting for services to become healthy (timeout ${timeout}s)…"
-  while [ "$waited" -lt "$timeout" ]; do
+  while :; do
     all_healthy=1
     for svc in $HEALTH_CHECKED_SERVICES; do
       if [ "$(container_health "$svc")" != "healthy" ]; then
@@ -236,10 +273,12 @@ wait_for_health() {
     if [ "$all_healthy" -eq 1 ]; then
       return 0
     fi
+    now="$(date +%s)"
+    if [ "$((now - started))" -ge "$timeout" ]; then
+      return 1
+    fi
     sleep 2
-    waited=$((waited + 2))
   done
-  return 1
 }
 
 unhealthy_services() {
