@@ -1,0 +1,25 @@
+name: rebuild-ci
+
+on:
+  push:
+    branches: ["rebuild/**"]
+  pull_request:
+    branches: ["rebuild/**"]
+
+jobs:
+  services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [core, gateway, memory]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
