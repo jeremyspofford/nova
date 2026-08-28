@@ -33,6 +33,15 @@ lives in the SDD ledger for S1 while it exists, and in this file after.
   limited context headroom; a second GPU consumer will contend") before
   the pick. Free-vs-installed VRAM accounting is part of this. S2 model
   work.
+- **BUG (08-28, owner hit live): an in-flight chat turn dies on SPA
+  navigation.** The SSE stream is component-scoped to ChatPage; navigating
+  to Settings unmounts it, the abort reads as a client disconnect
+  server-side (generation cancelled, only streamed partial persisted), and
+  the reply never reaches the operator. Fix in S2 (or sooner): stream
+  ownership lifted above the route so turns survive navigation, plus
+  message re-fetch on ChatPage remount so persisted partials with
+  interrupted markers render; e2e scenario: send → navigate away → return
+  → full reply present.
 - **Settings gaps (08-28, owner hit both live): no way to change the model
   after onboarding, and no way to re-run onboarding.** chat.model exists
   in SETTING_DEFS with no UI control (Settings ships only Appearance +
