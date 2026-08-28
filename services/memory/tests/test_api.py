@@ -188,7 +188,12 @@ async def test_forget_rejects_relative_traversal(monkeypatch, tmp_path):
             json={"person_id": "alice", "path": "people/alice/../bob/topics/x.md"},
         )
     assert resp.status_code == 400
-    assert "resolve" in resp.json()["detail"] or "escape" in resp.json()["detail"]
+    # S2 seam-hygiene (slice-01-carries.md): memory used to be the one service
+    # answering refusals as FastAPI's default {"detail": ...} while core and
+    # gateway both carry a {"error": ...} exception handler — an inconsistency
+    # across the three otherwise-identical services with no reason behind it.
+    # Deliberately updated to the shared convention.
+    assert "resolve" in resp.json()["error"] or "escape" in resp.json()["error"]
 
 
 async def test_forget_rejects_absolute_path(monkeypatch, tmp_path):

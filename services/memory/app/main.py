@@ -9,6 +9,8 @@ from pathlib import Path
 
 import asyncpg
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import router as memory_router
 from app.api import warm_context
@@ -44,6 +46,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(bearer_auth_middleware)
 app.include_router(memory_router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def stated_error(request, exc: StarletteHTTPException) -> JSONResponse:
+    """Every refusal in this service has the same shape: {"error": reason}.
+
+    Mirrors core's and gateway's handler (three-service convention) — memory
+    was the one service still answering FastAPI's default {"detail": ...}
+    for a plain HTTPException, an inconsistency the S2 seam-hygiene batch
+    closes (slice-01-carries.md).
+    """
+    return JSONResponse(
+        {"error": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None)
+    )
 
 
 @app.get("/health/live")
