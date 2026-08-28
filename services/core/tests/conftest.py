@@ -23,6 +23,7 @@ requires_db = pytest.mark.skipif(not TEST_DSN, reason=SKIP_REASON)
 
 SERVICE_TOKEN = "test-service-token"
 BASE_URL = "http://test"
+OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 
 # Truncation order is child-before-parent so CASCADE never surprises us.
 _TABLES = ("turn_spans", "turns", "messages", "conversations", "sessions", "settings", "people")
@@ -68,3 +69,11 @@ async def client(pool, monkeypatch):
     auth_api._LOGIN_FAILURES.clear()
     async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as c:
         yield c
+
+
+@pytest.fixture
+async def owner_client(client):
+    """A client carrying the registered owner's session cookie."""
+    resp = await client.post("/api/v1/auth/register", json=OWNER)
+    assert resp.status_code == 200, resp.text
+    return client

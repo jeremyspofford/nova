@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth_api, db
+from app import auth_api, db, settings_store
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(identity_middleware)
 app.include_router(auth_api.router)
+app.include_router(settings_store.router)
 
 
 @app.exception_handler(StarletteHTTPException)

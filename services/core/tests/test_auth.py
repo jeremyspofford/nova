@@ -7,11 +7,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app import auth_api, identity
 from app.main import app
-from tests.conftest import BASE_URL, SERVICE_TOKEN, requires_db
+from tests.conftest import BASE_URL, OWNER, SERVICE_TOKEN, requires_db
 
 pytestmark = requires_db
-
-OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 
 
 async def _register(client) -> None:
@@ -108,7 +106,7 @@ async def test_the_rate_limit_window_is_per_name(client):
     assert resp.status_code == 401
 
 
-async def test_expired_failures_fall_out_of_the_window(client, monkeypatch):
+async def test_expired_failures_fall_out_of_the_window(client):
     await _register(client)
     bad = {"name": "jeremy", "password": "wrong"}
     for _ in range(5):
