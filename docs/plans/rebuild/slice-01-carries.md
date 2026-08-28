@@ -6,11 +6,15 @@ lives in the SDD ledger for S1 while it exists, and in this file after.
 
 ## Roadmap-level findings (from the live DoD walk)
 
-- **qwen3.8:27b installs but never loads on the 24 GB RTX 3090 via ollama**
-  (runner timeout at 5 min). The 27B-on-24GB pin — the roadmap's central
-  bet — needs deliberate investigation in S2 (tool-loop stress) / S4
-  (evals): quantization choice, context size, engine (SGLang). The wizard
-  tier-cascade currently offers four working smaller models.
+- **CORRECTED 08-28 by the owner's live walk: qwen3.8:27b DOES load on the
+  24 GB RTX 3090 — at 22/24 GB, a tight fit.** T7's "never loads (5-min
+  runner timeout)" was conditions-bound: the probe ran with other models
+  resident, and our tiering reads INSTALLED VRAM, never FREE VRAM. Real
+  S2/S4 questions: root-cause the walk failure (free-VRAM accounting vs
+  probe timeout), measure effective context at 2 GB headroom, whether
+  SGLang serves the 27B with more room, and eviction/contention behavior.
+  The tool loop must be validated against this tight-fit reality, not just
+  "does it chat."
 - **BM25 recall returned hits=0 for the conversational DoD question**
   ("what did we talk about?") — the answer came from persisted postgres
   history. Recall relevance for conversational phrasings belongs to S13
@@ -21,12 +25,20 @@ lives in the SDD ledger for S1 while it exists, and in this file after.
   question 08-28); suggestions should become probe-informed ("verified on
   your hardware" via /admin/probe stamps) rather than floor-table-only.
   rocm-smi/AMD detection absent (R23) — decide AMD support in S2/S4.
-- **Wizard gap (08-28, owner hit it live): the model step offers models
-  that fit by VRAM floor but are PROVEN not to load** (qwen3.8:27b on the
-  24 GB 3090). The Ready step fails honestly, but only after an 18 GB
-  download. The model step should surface known won't-load evidence
-  (probe/verification stamps) BEFORE the pick — warn or gate, decided in
-  the S2 model work.
+- **Wizard gap (08-28, owner hit it live, refined by his walk): the model
+  step gives NO fit warning at all.** The roadmap tier table specified a
+  tight-fit warning for the 27B on 16-23 GB cards, but at exactly 24 GB it
+  is the top pick with zero caveat — and it loads at 22/24 GB. The model
+  step must state measured fit from probe stamps ("loads at 22/24 GB —
+  limited context headroom; a second GPU consumer will contend") before
+  the pick. Free-vs-installed VRAM accounting is part of this. S2 model
+  work.
+- **Settings gaps (08-28, owner hit both live): no way to change the model
+  after onboarding, and no way to re-run onboarding.** chat.model exists
+  in SETTING_DEFS with no UI control (Settings ships only Appearance +
+  Account in S1); v1 had a Setup-Wizard-re-run affordance as prior art.
+  Both belong to the S2 model/settings surface. Stopgap: PUT
+  /api/v1/settings with the bearer token.
 - **Owner directive (08-28): SGLang must appear as an engine option IN THE
   ONBOARDING WIZARD** when its slice lands — bundled profile, live-verified
   like the other engine options, and the suggested engine for the
