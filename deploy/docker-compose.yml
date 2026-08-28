@@ -84,6 +84,25 @@ services:
       timeout: 3s
       retries: 10
 
+  web:
+    build:
+      context: ../apps/web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    # Start ordering only, deliberately not `condition: service_healthy`: if
+    # core is sick the UI must still come up to say so, rather than leaving
+    # the operator with nothing at all to look at.
+    depends_on:
+      - core
+    healthcheck:
+      # Self-only — this asks nginx for the app shell and touches no other
+      # service, so a red `web` means nginx, never core.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   ollama:
     image: ollama/ollama
     restart: unless-stopped

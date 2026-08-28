@@ -16,7 +16,7 @@ HARDWARE_JSON="$DATA_DIR/hardware.json"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
 
 SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN INSTANCE_SECRET"
-HEALTH_CHECKED_SERVICES="postgres core gateway memory"
+HEALTH_CHECKED_SERVICES="postgres core gateway memory web"
 REQUIRED_PORTS="3000 8000 8001 8002"
 
 log() { printf '%s\n' "$*" >&2; }
@@ -276,7 +276,7 @@ cmd_install() {
   if [ -n "$unhealthy" ]; then
     die "unhealthy service(s):$unhealthy"
   fi
-  log "http://127.0.0.1:8000/status"
+  log "Nova is up. Open http://127.0.0.1:3000 to finish setup."
 }
 
 cmd_update() {
