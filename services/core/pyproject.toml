@@ -6,13 +6,14 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "asyncpg",
+    "httpx",
+    "argon2-cffi",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "httpx",
 ]
 
 [tool.uv]
