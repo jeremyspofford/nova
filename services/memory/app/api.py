@@ -48,13 +48,25 @@ def _build_context(root: Path) -> tuple[MemoryStore, BM25Index]:
     store = MemoryStore(root)
     index = BM25Index()
     for stored in store.iter_all():
-        index.upsert(
-            stored.rel_path,
-            title=stored.meta.get("title", ""),
-            kind=stored.meta.get("kind", "topic"),
-            created=stored.meta.get("created"),
-            body=stored.body,
-        )
+        # store.iter_all() only guarantees the YAML frontmatter block
+        # parsed as a mapping — it does not validate individual fields.
+        # A file with valid structure but a missing/unparseable
+        # `created` (hand-edited, corrupted, from a future schema) makes
+        # index.upsert()'s date coercion raise. That is exactly the same
+        # class of problem as a file that fails to parse at all: log it,
+        # name it, skip it, and keep the rest of the store intact —
+        # never let one bad file take down a full rescan (startup via
+        # warm_context(), or a request via the lazy path here).
+        try:
+            index.upsert(
+                stored.rel_path,
+                title=stored.meta.get("title", ""),
+                kind=stored.meta.get("kind", "topic"),
+                created=stored.meta.get("created"),
+                body=stored.body,
+            )
+        except ValueError as exc:
+            logger.warning("skipping unindexable memory file %s: %s", stored.rel_path, exc)
     return store, index
 
 

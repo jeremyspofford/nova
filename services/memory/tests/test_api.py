@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 from httpx import ASGITransport, AsyncClient
 
+from app import api
 from app.main import app
 from app.store import MemoryStore
 
@@ -36,6 +37,27 @@ def _fixture_store(tmp_path) -> MemoryStore:
     fixture files directly on disk (bypassing the HTTP API) before the
     API's context cache ever touches that root."""
     return MemoryStore(tmp_path / "root")
+
+
+def _write_bad_topic_missing_created(tmp_path, person_id: str, slug: str) -> str:
+    """A file with structurally-valid YAML frontmatter (parses fine as a
+    mapping) but no `created` field at all -- reproduces a hand-edited
+    or corrupted file that a naive rescan would previously choke on.
+    Returns its rel_path."""
+    topics_dir = tmp_path / "root" / "people" / person_id / "topics"
+    topics_dir.mkdir(parents=True, exist_ok=True)
+    (topics_dir / f"{slug}.md").write_text(
+        "---\n"
+        "id: bad-1\n"
+        f"owner: {person_id}\n"
+        "kind: topic\n"
+        "title: Bad note\n"
+        "tags: []\n"
+        "---\n"
+        "a stray note missing its created field\n",
+        encoding="utf-8",
+    )
+    return f"people/{person_id}/topics/{slug}.md"
 
 
 # -- 1. ingest -------------------------------------------------------------
@@ -283,6 +305,64 @@ async def test_restart_rescan_serves_recall_without_any_ingest_call(monkeypatch,
     results = resp.json()
     assert results
     assert results[0]["path"] == "people/alice/topics/coffee.md"
+
+
+# -- one bad file must not take down the rescan (review finding) -----------
+#
+# A file with valid frontmatter *structure* but a missing/unparseable
+# `created` field used to sail through store.iter_all() (which only
+# guards YAML-structure failures) and then blow up inside
+# index.upsert()'s date coercion, uncaught, inside _build_context()'s
+# loop -- crashing the eager rescan (main.py's warm_context() at
+# startup) and, separately, the very first request to touch a fresh
+# root (the lazy path in _context()). Both trigger points share the
+# same _build_context() loop, so one fix (a try/except around the
+# upsert call, logging the file by name and skipping it) covers both.
+
+
+async def test_warm_context_boots_over_one_bad_file_and_serves_recall(
+    monkeypatch, tmp_path, caplog
+):
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    store.write_topic("alice", "good", "Good note", "pour-over coffee notes")
+    bad_rel_path = _write_bad_topic_missing_created(tmp_path, "alice", "bad")
+
+    with caplog.at_level("WARNING"):
+        api.warm_context()  # must not raise
+
+    assert any(bad_rel_path in record.message for record in caplog.records)
+
+    async with _client() as client:
+        resp = await client.post(
+            "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
+        )
+    assert resp.status_code == 200
+    results = resp.json()
+    assert results
+    assert results[0]["path"] == "people/alice/topics/good.md"
+
+
+async def test_lazy_first_request_boots_over_one_bad_file_and_serves_recall(
+    monkeypatch, tmp_path, caplog
+):
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    store.write_topic("alice", "good", "Good note", "pour-over coffee notes")
+    bad_rel_path = _write_bad_topic_missing_created(tmp_path, "alice", "bad")
+
+    # No warm_context() call -- this /recall is the first thing to touch
+    # this root, so it drives the lazy _context() build path.
+    with caplog.at_level("WARNING"):
+        async with _client() as client:
+            resp = await client.post(
+                "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
+            )
+    assert resp.status_code == 200
+    results = resp.json()
+    assert results
+    assert results[0]["path"] == "people/alice/topics/good.md"
+    assert any(bad_rel_path in record.message for record in caplog.records)
 
 
 # -- 7. atomicity (end-to-end) -----------------------------------------------
