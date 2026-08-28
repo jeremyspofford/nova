@@ -232,20 +232,24 @@ async def _persist_assistant(pool: asyncpg.Pool, conversation_id: uuid.UUID, tex
     )
 
 
-async def _finalize_interrupted(
-    pool: asyncpg.Pool, turn: traces.Turn, conversation_id: uuid.UUID, text: str
+async def _finalize_after_disconnect(
+    pool: asyncpg.Pool,
+    turn: traces.Turn,
+    conversation_id: uuid.UUID,
+    text: str,
+    status: str,
 ) -> None:
-    """The client hung up: keep what streamed, and record that it was cut off.
+    """The client hung up: keep what streamed, and record how the turn ended.
 
     Runs as its own task because the request's scope is already cancelled —
-    awaiting anything there would be cancelled too.
+    awaiting anything there would be cancelled with it.
     """
     try:
         if text:
             await _persist_assistant(pool, conversation_id, text)
-        await traces.close_turn(pool, turn, "interrupted")
+        await traces.close_turn(pool, turn, status)
     except Exception:
-        logger.exception("could not close interrupted turn %s", turn.id)
+        logger.exception("could not close turn %s after a disconnect", turn.id)
 
 
 async def _turn_frames(
@@ -259,8 +263,12 @@ async def _turn_frames(
     model: str,
 ) -> AsyncIterator[str]:
     parts: list[str] = []
-    status = "error"
-    interrupted = False
+    # The outcome, once the turn has actually reached one. None means the
+    # turn is still in flight, which is what makes a disconnect "interrupted"
+    # rather than a verdict.
+    decided: str | None = None
+    persisted = False
+    disconnected = False
     try:
         yield _frame(
             {
@@ -324,6 +332,7 @@ async def _turn_frames(
 
         if failure is not None:
             logger.warning("chat turn %s failed: %s", turn.id, failure)
+            decided = "error"
             yield _frame({"error": failure})
             yield DONE_FRAME
             return
@@ -332,22 +341,37 @@ async def _turn_frames(
         if not text:
             # Zero deltas and no error at all: still a failure, said out loud.
             logger.warning("chat turn %s: %s", turn.id, EMPTY_REPLY)
+            decided = "error"
             yield _frame({"error": EMPTY_REPLY})
             yield DONE_FRAME
             return
 
         await _persist_assistant(pool, conversation_id, text)
+        persisted = True
         _queue_ingest(app, turn, person, conversation_id, {"user": message, "assistant": text})
-        status = "ok"
+        decided = "ok"
         yield DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
-        interrupted = True
-        _spawn(_finalize_interrupted(pool, turn, conversation_id, "".join(parts)))
+        disconnected = True
+        _spawn(
+            _finalize_after_disconnect(
+                pool,
+                turn,
+                conversation_id,
+                # Already stored means the work finished and only the tail of
+                # the stream was lost — storing it again would double the reply.
+                "" if persisted else "".join(parts),
+                decided or "interrupted",
+            )
+        )
         raise
     finally:
-        if not interrupted:
+        if not disconnected:
+            # Shielded: a client that vanishes during the close must not leave
+            # the turn's status NULL forever.
+            close = _spawn(traces.close_turn(pool, turn, decided or "error"))
             try:
-                await traces.close_turn(pool, turn, status)
+                await asyncio.shield(close)
             except Exception:
                 # A trace that cannot be written is reported, never swallowed.
                 logger.exception("could not close turn %s", turn.id)

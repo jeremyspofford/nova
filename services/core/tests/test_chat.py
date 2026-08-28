@@ -36,6 +36,29 @@ async def _say(client, message: str = "hello nova", **body) -> tuple[int, list]:
     return resp.status_code, frames(resp.text) if resp.status_code == 200 else resp.json()
 
 
+def _scope(cookie: str, content_length: int) -> dict:
+    """A raw ASGI scope, so a test can hang up the way a browser does."""
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "path": "/api/v1/chat/stream",
+        "raw_path": b"/api/v1/chat/stream",
+        "query_string": b"",
+        "root_path": "",
+        "scheme": "http",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(content_length).encode()),
+            (b"cookie", f"nova_session={cookie}".encode()),
+        ],
+        "client": ("127.0.0.1", 5000),
+        "server": ("test", 80),
+    }
+
+
 async def _spans(pool, turn_id) -> dict:
     rows = await pool.fetch(
         "SELECT kind, name, duration_ms, meta FROM turn_spans WHERE turn_id = $1", turn_id
@@ -261,27 +284,7 @@ async def test_a_disconnect_mid_stream_keeps_the_partial_text_and_says_interrupt
             if b'"t":' in chunk:
                 saw_delta.set()
 
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "POST",
-        "path": "/api/v1/chat/stream",
-        "raw_path": b"/api/v1/chat/stream",
-        "query_string": b"",
-        "root_path": "",
-        "scheme": "http",
-        "headers": [
-            (b"host", b"test"),
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(body)).encode()),
-            (b"cookie", f"nova_session={cookie}".encode()),
-        ],
-        "client": ("127.0.0.1", 5000),
-        "server": ("test", 80),
-    }
-
-    await asyncio.wait_for(app(scope, receive, send), timeout=10)
+    await asyncio.wait_for(app(_scope(cookie, len(body)), receive, send), timeout=10)
     hold.set()
     await asyncio.wait_for(chat.drain_background(), timeout=10)
 
@@ -291,6 +294,38 @@ async def test_a_disconnect_mid_stream_keeps_the_partial_text_and_says_interrupt
     assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == (
         "half an ans"
     )
+
+
+async def test_a_disconnect_after_the_answer_lands_does_not_store_it_twice(
+    owner_client, pool, mount_peers
+):
+    """The stream's tail was lost, not the work — one reply, and it counts."""
+    mount_peers(gateway=FakeGateway(deltas=("all done",)), memory=FakeMemory())
+    await _set_model(owner_client)
+
+    body = json.dumps({"message": "say something"}).encode()
+    cookie = owner_client.cookies["nova_session"]
+    saw_done = asyncio.Event()
+    request_sent = False
+
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await saw_done.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message) -> None:
+        if message["type"] == "http.response.body" and b"[DONE]" in message.get("body", b""):
+            saw_done.set()
+
+    await asyncio.wait_for(app(_scope(cookie, len(body)), receive, send), timeout=10)
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    assert await pool.fetchval("SELECT count(*) FROM messages WHERE role = 'assistant'") == 1
+    assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == "all done"
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
 async def test_chat_needs_an_identity(client, mount_peers):
