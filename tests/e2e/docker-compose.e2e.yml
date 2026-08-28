@@ -34,7 +34,11 @@ services:
       CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
       NOVA_E2E_MODEL: ${NOVA_E2E_MODEL:-qwen3:1.7b}
       NOVA_E2E_OWNER_NAME: ${NOVA_E2E_OWNER_NAME:-Jeremy}
-      NOVA_E2E_OWNER_PASSWORD: ${NOVA_E2E_OWNER_PASSWORD:-nova-s1-walk}
+      # No default, deliberately: this walk mints the instance's one and only
+      # owner and that password is the one it keeps. `:?` makes compose itself
+      # refuse, with the reason, before a container is created — the suite
+      # checks it again anyway.
+      NOVA_E2E_OWNER_PASSWORD: ${NOVA_E2E_OWNER_PASSWORD:?set NOVA_E2E_OWNER_PASSWORD — the e2e walk creates this instance's permanent owner account, so the password has to be yours (see tests/e2e/README.md)}
       # The image's HOME is /root, which the non-root user above cannot write.
       # npm and playwright both want a writable one.
       HOME: /tmp

@@ -20,6 +20,18 @@ test.describe.configure({ mode: 'serial' })
 test('fresh install: wizard walk ends in a real streamed reply', async ({ page }) => {
   test.setTimeout(config.pullTimeoutMs + 10 * 60 * 1000)
 
+  // ── a credential was chosen by a person, not by this repository ─────────
+  // Whatever password is used here becomes the instance's permanent owner
+  // credential, because core closes registration after the first account.
+  // There is no default for that, so refuse rather than invent one.
+  expect(
+    config.ownerPassword,
+    'NOVA_E2E_OWNER_PASSWORD is unset. This walk creates the instance\'s one and only owner ' +
+      'account, and that password is the one it keeps — so it has to be yours, not a default ' +
+      'committed to this repo. Set it and re-run, e.g. NOVA_E2E_OWNER_PASSWORD=... (see ' +
+      'tests/e2e/README.md).',
+  ).not.toBe('')
+
   // ── the instance really is fresh ────────────────────────────────────────
   const state = await page.request.get('/api/v1/auth/state')
   expect(state.ok(), `GET /api/v1/auth/state -> ${state.status()}`).toBeTruthy()

@@ -65,12 +65,19 @@ export const config = {
    */
   model: env('NOVA_E2E_MODEL', 'qwen3:1.7b'),
   /**
-   * The owner this walk mints. Registration closes after the first owner, so
-   * these are the credentials the instance keeps — they are printed by the
-   * suite and written into the report for the operator's own walk.
+   * The owner this walk mints. Registration closes after the FIRST owner, so
+   * whatever is used here is the credential that instance keeps, permanently,
+   * until somebody resets its database.
+   *
+   * The password therefore has no default and never will. A default would be
+   * a password committed to a public repository that silently becomes the
+   * real one on every machine that runs this suite without reading the
+   * README — and "the owner account of a self-hosted assistant" is the worst
+   * possible thing to hand a known credential. Unset means scenario 1
+   * refuses, with the reason.
    */
   ownerName: env('NOVA_E2E_OWNER_NAME', 'Jeremy'),
-  ownerPassword: env('NOVA_E2E_OWNER_PASSWORD', 'nova-s1-walk'),
+  ownerPassword: env('NOVA_E2E_OWNER_PASSWORD', ''),
   /** Where the signed-in browser state is parked between scenario files. */
   storageStatePath: resolve(E2E_DIR, '.auth/owner.json'),
   /** A first pull of an 18 GB model is minutes, not seconds. */
