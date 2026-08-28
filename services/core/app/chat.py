@@ -318,8 +318,11 @@ async def _turn_frames(
                             if error is not None:
                                 raise GatewayFailure(f"the gateway reported: {error}")
                             if usage is not None:
-                                span.meta["prompt_tokens"] = usage.get("prompt_tokens")
-                                span.meta["completion_tokens"] = usage.get("completion_tokens")
+                                # Only what the gateway actually reported —
+                                # a null token count is not a measurement.
+                                for field in ("prompt_tokens", "completion_tokens"):
+                                    if usage.get(field) is not None:
+                                        span.meta[field] = usage[field]
                             if delta:
                                 parts.append(delta)
                                 yield _frame({"t": delta})
