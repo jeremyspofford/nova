@@ -9,7 +9,10 @@ from pathlib import Path
 
 import asyncpg
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import admin, backends, data_plane, db
 from app.auth import bearer_auth_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -32,11 +35,26 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("migrations failed — refusing to start")
         raise
-    yield
+    pool = await db.init_pool()
+    await backends.ensure_default_row(pool)
+    try:
+        yield
+    finally:
+        await db.close_pool()
 
 
 app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(bearer_auth_middleware)
+app.include_router(data_plane.router)
+app.include_router(admin.router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def stated_error(request, exc: StarletteHTTPException) -> JSONResponse:
+    """Every refusal in this service has the same shape: {"error": reason}."""
+    return JSONResponse(
+        {"error": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None)
+    )
 
 
 @app.get("/health/live")

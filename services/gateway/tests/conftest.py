@@ -1,0 +1,86 @@
+"""Fixtures for the DB-backed gateway suites.
+
+Every gateway concern that touches postgres (backend_config, probes) needs
+a real one: TEST_DATABASE_URL, same contract as Task 1's migration test.
+Unset means skip with a stated reason — never a pass that proved nothing.
+"""
+from __future__ import annotations
+
+import os
+
+import asyncpg
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app import backends, db
+from app.main import MIGRATIONS_DIR, app
+from app.migrations_runner import run_migrations
+
+TEST_DSN = os.environ.get("TEST_DATABASE_URL", "")
+SKIP_REASON = "TEST_DATABASE_URL not set — no dockerized postgres available for this run"
+requires_db = pytest.mark.skipif(not TEST_DSN, reason=SKIP_REASON)
+
+SERVICE_TOKEN = "test-service-token"
+BASE_URL = "http://test"
+
+_TABLES = ("probes", "backend_config")
+
+_schema_built = False
+
+
+async def _build_schema() -> None:
+    """Drop anything this suite owns, then migrate from empty."""
+    conn = await asyncpg.connect(TEST_DSN)
+    try:
+        await conn.execute(f"DROP TABLE IF EXISTS {', '.join(_TABLES)} CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS schema_migrations")
+    finally:
+        await conn.close()
+    await run_migrations(TEST_DSN, MIGRATIONS_DIR)
+
+
+@pytest.fixture
+async def pool(monkeypatch):
+    """A live pool over a freshly truncated schema, with the default
+    backend_config row already in place (mirrors what lifespan does on a
+    real startup)."""
+    global _schema_built
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    if not _schema_built:
+        await _build_schema()
+        _schema_built = True
+    p = await db.init_pool()
+    await p.execute(f"TRUNCATE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
+    await backends.ensure_default_row(p)
+    try:
+        yield p
+    finally:
+        await db.close_pool()
+
+
+@pytest.fixture
+async def client(pool, monkeypatch):
+    """ASGI client with the service bearer configured (the normal state)."""
+    monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url=BASE_URL,
+        headers={"Authorization": f"Bearer {SERVICE_TOKEN}"},
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+def mount_backend():
+    """Point a base URL (an OLLAMA_URL value, or a remote/cloud config's
+    url) at a local ASGI fake — gateway's real outbound httpx client
+    reaches it via app.state.peer_transports, with no socket anywhere."""
+    from tests.fakes import StreamingASGITransport
+
+    def _mount(url: str, fake_app) -> None:
+        transports = dict(getattr(app.state, "peer_transports", {}))
+        transports[url] = StreamingASGITransport(fake_app)
+        app.state.peer_transports = transports
+
+    yield _mount
+    app.state.peer_transports = {}
