@@ -98,14 +98,92 @@ check_ports() {
   done
 }
 
-bundled_ollama_running() {
-  # Is the thing on the port this project's own ollama? Asked of compose
-  # rather than by matching container names, so it stays true if the project
-  # is ever renamed. Read-only; `-f "$COMPOSE_FILE"` explicitly, because
-  # COMPOSE_ARGS has not been finalised at preflight time.
+canonical_path() {
+  # Absolute, symlink-resolved path — for a file that may not exist on this
+  # filesystem at all. A compose config_files label can name a path from
+  # inside some other container (the v3 stack has containers labelled
+  # /compose/docker-compose.yml), and those must compare as themselves rather
+  # than blow up. Only the directory is resolved, and only when it exists.
+  local path="$1" dir base
+  dir="$(dirname "$path")"
+  base="$(basename "$path")"
+  if [ -d "$dir" ]; then
+    printf '%s/%s' "$(cd "$dir" && pwd -P)" "$base"
+  else
+    printf '%s' "$path"
+  fi
+}
+
+# THE SEAM. Prints the `com.docker.compose.project.config_files` label of
+# whatever container currently occupies this project's ollama service slot.
+#   exit 0 — a container is there; stdout is its label (possibly empty)
+#   exit 1 — no container occupies the slot
+#   exit 2 — docker could not be asked
+# Separated from the judgement below so the judgement can be tested against
+# fixture labels without a docker daemon.
+ollama_slot_config_files() {
   local cid
-  cid="$(docker compose -f "$COMPOSE_FILE" --profile inference ps -q ollama 2>/dev/null)"
-  [ -n "$cid" ]
+  cid="$(docker compose -f "$COMPOSE_FILE" --profile inference ps -q ollama 2>/dev/null)" || return 2
+  [ -n "$cid" ] || return 1
+  docker inspect --format \
+    '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid" 2>/dev/null \
+    || return 2
+}
+
+# Why the answer is what it is — set by bundled_ollama_running, printed by
+# decide_inference. An unexplained classification is not much better than a
+# wrong one.
+BUNDLED_OLLAMA_REASON=""
+
+# Is the container on the ollama slot OURS?
+#
+# "Project name plus service name" is not enough, by construction. The legacy
+# v3 stack at ~/workspace/nova ALSO declares `name: nova` and ALSO defines a
+# service called `ollama` behind `profiles: ["inference"]`, so
+# `compose ps -q ollama` matches either of them and cannot tell them apart.
+# That is not a hypothetical collision: `docker compose down` does not reach
+# a profiled service, so a v3 ollama surviving a v3 teardown and sitting on
+# :11434 is the documented normal case — and calling it "ours" would make
+# `up` silently recreate the v3 container, which is the exact opposite of the
+# refusal this whole path exists to produce.
+#
+# So the identity check is the config files the container was created from,
+# compared by resolved path against THIS repo's compose file.
+#   0 — ours
+#   1 — not ours (foreign, unlabelled, or nothing there)
+#   2 — could not be determined
+bundled_ollama_running() {
+  local labels rc entry want
+  labels="$(ollama_slot_config_files)" && rc=0 || rc=$?
+  case "$rc" in
+    1)
+      BUNDLED_OLLAMA_REASON="no container occupies this project's ollama slot"
+      return 1
+      ;;
+    2)
+      BUNDLED_OLLAMA_REASON="docker could not be asked which container holds the ollama slot"
+      return 2
+      ;;
+  esac
+  if [ -z "$labels" ]; then
+    BUNDLED_OLLAMA_REASON="the container on the ollama slot carries no compose config-files label"
+    return 1
+  fi
+
+  want="$(canonical_path "$COMPOSE_FILE")"
+  local OLDIFS="$IFS"
+  IFS=','
+  for entry in $labels; do
+    IFS="$OLDIFS"
+    if [ "$(canonical_path "$entry")" = "$want" ]; then
+      BUNDLED_OLLAMA_REASON="created from $want"
+      return 0
+    fi
+    IFS=','
+  done
+  IFS="$OLDIFS"
+  BUNDLED_OLLAMA_REASON="the container on the ollama slot was created from [$labels], not from $want"
+  return 1
 }
 
 ollama_answers_on_host() {
@@ -153,11 +231,24 @@ decide_inference() {
   # The commonest reason that port is busy is that WE are on it. This script
   # is documented as idempotent, and refusing to re-run because the container
   # from the last run is still up would be a worse bug than the one this
-  # function exists to fix.
-  if bundled_ollama_running; then
+  # function exists to fix. "We" is decided by which compose file the
+  # container was built from — see bundled_ollama_running.
+  local ours
+  bundled_ollama_running && ours=0 || ours=$?
+  if [ "$ours" -eq 0 ]; then
     BUNDLED_INFERENCE=1
     log "port $OLLAMA_PORT: held by this stack's own ollama — re-using it"
+    log "                  ($BUNDLED_OLLAMA_REASON)"
     return 0
+  fi
+  if [ "$ours" -eq 2 ]; then
+    # Distinct from "there is nothing of ours there": we do not know. Refusing
+    # is the safe direction, but the message must not claim more than it has.
+    log "ERROR: $BUNDLED_OLLAMA_REASON, so whether the listener on port"
+    log "       $OLLAMA_PORT belongs to this stack could not be established."
+    log "       Refusing rather than guessing — fix docker, or re-run with"
+    log "       NOVA_SKIP_INFERENCE=1 and use the wizard's Remote endpoint."
+    exit 1
   fi
 
   ollama_answers_on_host && rc=0 || rc=$?
@@ -171,11 +262,26 @@ decide_inference() {
     log "ERROR: port $OLLAMA_PORT is held by $holder — which did not answer as an ollama —"
     log "       and the bundled ollama publishes that port, so it cannot start."
   fi
+  # When a CONTAINER holds the slot but was built from someone else's compose
+  # file, say so and name it. The likeliest someone else is the legacy v3
+  # stack, which shares this project name and this service name, and whose
+  # ollama survives a plain `docker compose down` because down does not reach
+  # a profiled service.
+  if [ -n "$BUNDLED_OLLAMA_REASON" ] && [ "$BUNDLED_OLLAMA_REASON" != \
+       "no container occupies this project's ollama slot" ]; then
+    log "       The container on the ollama slot is not this stack's:"
+    log "       $BUNDLED_OLLAMA_REASON"
+  fi
   log ""
-  log "       Two ways forward:"
-  log "         1. Free the port (stop the host ollama, e.g. 'systemctl --user stop ollama'"
-  log "            or kill the process above), then re-run ./install."
-  log "         2. Keep it and skip the bundled engine:"
+  log "       Ways forward:"
+  log "         1. If that is the OLD v3 stack's ollama (it shares this project name and"
+  log "            survives a plain 'docker compose down', which does not reach a profiled"
+  log "            service):"
+  log "              docker stop nova-ollama-1"
+  log "            or, from the v3 tree:  docker compose --profile inference down"
+  log "         2. If it is a host ollama, stop it — e.g. 'systemctl --user stop ollama' —"
+  log "            or kill the process named above. Then re-run ./install."
+  log "         3. Keep whatever is there and skip the bundled engine:"
   log "              NOVA_SKIP_INFERENCE=1 ./install"
   log "            then pick 'Remote endpoint' in the wizard, pointing at"
   log "            http://host.docker.internal:$OLLAMA_PORT (or this host's LAN address)."

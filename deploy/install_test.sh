@@ -30,7 +30,12 @@ report() {
 #   $1 port_holder output ("" = free)
 #   $2 ollama_answers_on_host exit code (0 answers, 1 does not, 2 cannot tell)
 #   $3 value of NOVA_SKIP_INFERENCE
-#   $4 bundled_ollama_running exit code (0 = it is ours; default 1)
+#   $4 ollama_slot_config_files stdout (the compose config_files label)
+#   $5 ollama_slot_config_files exit code (0 container, 1 none, 2 docker error)
+#
+# Note what is stubbed: the SEAM, not bundled_ollama_running. Every case below
+# therefore runs the real ours/foreign judgement — the whole point of the
+# defect being fixed here was that a stubbed identity check proved nothing.
 run_decide() {
   (
     # shellcheck source=/dev/null
@@ -40,10 +45,11 @@ run_decide() {
     set +e
     port_holder() { printf '%s' "$1x" >/dev/null; printf '%s' "$HOLDER"; }
     ollama_answers_on_host() { return "$ANSWERS"; }
-    bundled_ollama_running() { return "$OURS"; }
+    ollama_slot_config_files() { printf '%s' "$SLOT_LABEL"; return "$SLOT_RC"; }
     HOLDER="$1"
     ANSWERS="$2"
-    OURS="${4:-1}"
+    SLOT_LABEL="${4:-}"
+    SLOT_RC="${5:-1}"
     if [ -n "$3" ]; then export NOVA_SKIP_INFERENCE="$3"; else unset NOVA_SKIP_INFERENCE; fi
 
     err="$(decide_inference 2>&1)" ; code=$?
@@ -76,7 +82,8 @@ HOST_OLLAMA="$(run_decide "ollama(4242)" 0 "")"
 expect_case "host ollama: refuses instead of warning" "$HOST_OLLAMA" 1 \
   "an ollama is already serving on 127.0.0.1:11434"
 expect_case "host ollama: names what holds the port" "$HOST_OLLAMA" 1 "ollama(4242)"
-expect_case "host ollama: offers freeing the port" "$HOST_OLLAMA" 1 "Free the port"
+expect_case "host ollama: offers stopping the host daemon" "$HOST_OLLAMA" 1 \
+  "systemctl --user stop ollama"
 expect_case "host ollama: offers the skip flag" "$HOST_OLLAMA" 1 \
   "NOVA_SKIP_INFERENCE=1 ./install"
 expect_case "host ollama: points at the wizard's remote option" "$HOST_OLLAMA" 1 \
@@ -85,8 +92,44 @@ expect_case "host ollama: points at the wizard's remote option" "$HOST_OLLAMA" 1
 # ── re-install: the port is busy because WE are on it ───────────────────────
 # install.sh is documented idempotent. Refusing to re-run because the last
 # run's own container is still up would be a worse bug than the one above.
+OURS_LABEL="$SCRIPT_DIR/docker-compose.yml,$SCRIPT_DIR/docker-compose.gpu.yml"
+V3_LABEL="/home/jeremy/workspace/nova/docker-compose.yml,/home/jeremy/workspace/nova/docker-compose.gpu.yml"
+
 expect_case "our own ollama: re-install proceeds instead of refusing" \
-  "$(run_decide "docker-proxy(1)" 0 "" 0)" 0 "held by this stack's own ollama"
+  "$(run_decide "docker-proxy(1)" 0 "" "$OURS_LABEL" 0)" 0 "held by this stack's own ollama"
+
+# ── the defect this round exists for ────────────────────────────────────────
+# v3 and v4 both declare `name: nova` and both define a service called
+# `ollama` behind profiles:["inference"], so a project+service match cannot
+# tell them apart — and `docker compose down` does not reach a profiled
+# service, so a surviving v3 ollama on :11434 is the documented normal case.
+# It must classify as FOREIGN and refuse.
+V3_LEFTOVER="$(run_decide "docker-proxy(1)" 0 "" "$V3_LABEL" 0)"
+expect_case "leftover v3 ollama: refuses instead of adopting it" "$V3_LEFTOVER" 1 \
+  "an ollama is already serving"
+expect_case "leftover v3 ollama: says the container is not ours" "$V3_LEFTOVER" 1 \
+  "is not this stack's"
+expect_case "leftover v3 ollama: quotes the foreign config files" "$V3_LEFTOVER" 1 \
+  "/home/jeremy/workspace/nova/docker-compose.yml"
+expect_case "leftover v3 ollama: names the v3 cleanup" "$V3_LEFTOVER" 1 \
+  "docker stop nova-ollama-1"
+expect_case "leftover v3 ollama: names the v3 tree teardown" "$V3_LEFTOVER" 1 \
+  "compose --profile inference down"
+
+# A v3 container created from inside a container carries a path that does not
+# exist on this filesystem. It must still compare as foreign, not explode.
+expect_case "foreign label naming a path that does not exist here" \
+  "$(run_decide "docker-proxy(1)" 0 "" "/compose/docker-compose.yml" 0)" 1 \
+  "is not this stack's"
+
+# A container with no compose label at all is not ours either.
+expect_case "unlabelled container on the slot is not adopted" \
+  "$(run_decide "docker-proxy(1)" 0 "" "" 0)" 1 "carries no compose config-files label"
+
+# "Cannot ask docker" is its own answer, distinct from "nothing is there".
+expect_case "docker error: refuses, and does not claim to know" \
+  "$(run_decide "docker-proxy(1)" 0 "" "" 2)" 1 \
+  "could not be established"
 
 # ── something else on the port is a different sentence ──────────────────────
 expect_case "foreign listener: says it did not answer as an ollama" \
@@ -99,6 +142,58 @@ expect_case "no curl or wget: does not claim to know what is there" \
 # ── the documented escape hatch ─────────────────────────────────────────────
 expect_case "NOVA_SKIP_INFERENCE=1: skips even with the port busy" \
   "$(run_decide "ollama(4242)" 0 "1")" 0 "bundled ollama skipped"
+
+# ── bundled_ollama_running, driven directly through fixture labels ──────────
+# Same real body as above, asserted on its own return code and stated reason
+# rather than through decide_inference's messages.
+#
+#   $1 seam stdout   $2 seam exit code   -> "<rc>|<reason>"
+run_ours_check() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    ollama_slot_config_files() { printf '%s' "$SLOT_LABEL"; return "$SLOT_RC"; }
+    SLOT_LABEL="$1"
+    SLOT_RC="$2"
+    bundled_ollama_running; rc=$?
+    printf '%s|%s' "$rc" "$BUNDLED_OLLAMA_REASON"
+  )
+}
+
+expect_ours() {
+  local name="$1" out="$2" want_rc="$3" want_text="$4"
+  local rc="${out%%|*}" reason="${out#*|}"
+  if [ "$rc" != "$want_rc" ]; then
+    report 1 "$name" "rc $rc, wanted $want_rc — reason: $reason"
+    return
+  fi
+  case "$reason" in
+    *"$want_text"*) report 0 "$name" ;;
+    *) report 1 "$name" "reason did not mention '$want_text' — reason: $reason" ;;
+  esac
+}
+
+expect_ours "ours: this repo's compose file is in the label" \
+  "$(run_ours_check "$OURS_LABEL" 0)" 0 "$SCRIPT_DIR/docker-compose.yml"
+expect_ours "ours: matches even when listed after other files" \
+  "$(run_ours_check "/somewhere/else.yml,$SCRIPT_DIR/docker-compose.yml" 0)" 0 "created from"
+expect_ours "ours: an unresolved but equivalent path still matches" \
+  "$(run_ours_check "$SCRIPT_DIR/../deploy/docker-compose.yml" 0)" 0 "created from"
+expect_ours "v3: same project and service, different compose file" \
+  "$(run_ours_check "$V3_LABEL" 0)" 1 "not from"
+expect_ours "v3: a config path that does not exist on this host" \
+  "$(run_ours_check "/compose/docker-compose.yml" 0)" 1 "not from"
+expect_ours "no label on the container" \
+  "$(run_ours_check "" 0)" 1 "no compose config-files label"
+expect_ours "no container occupies the slot" \
+  "$(run_ours_check "" 1)" 1 "no container occupies"
+expect_ours "docker could not be asked" \
+  "$(run_ours_check "" 2)" 2 "docker could not be asked"
+
+# A near-miss must not pass: same directory, different file.
+expect_ours "a sibling compose file is not this one" \
+  "$(run_ours_check "$SCRIPT_DIR/docker-compose.gpu.yml" 0)" 1 "not from"
 
 # ── the flag has to reach compose and the health table ──────────────────────
 # detect_hardware is the one place that appends the profile, so this exercises
