@@ -9,6 +9,7 @@ import json
 
 from starlette.applications import Starlette
 from starlette.responses import Response as StarletteResponse
+from starlette.responses import StreamingResponse as StarletteStreamingResponse
 from starlette.routing import Route
 
 from app import backends
@@ -203,3 +204,42 @@ async def test_a_gzipped_backend_response_is_relayed_with_content_encoding_intac
     # header actually made the trip; a dropped header here would leave raw
     # gzip bytes that fail to parse as JSON.
     assert resp.json() == original
+
+
+async def test_a_declared_content_length_is_never_forwarded_on_the_streaming_path(
+    client, pool, mount_backend
+):
+    """A non-streaming completion can carry a real Content-Length from the
+    backend. If relay() has to append an SSE error chunk after a
+    mid-transfer failure, bytes actually sent would then exceed that
+    declared length — an HTTP framing violation. The streaming/relay path
+    must never forward Content-Length, whatever the upstream declared."""
+    partial = b'{"choices": [{"delta"'
+    declared_length = len(partial) + 500  # a real but, after the drop, false promise
+
+    async def _completions(request):
+        async def gen():
+            yield partial
+            raise RuntimeError("simulated mid-transfer drop")
+
+        return StarletteStreamingResponse(
+            gen(),
+            media_type="application/json",
+            headers={"content-length": str(declared_length)},
+        )
+
+    backend = Starlette(
+        routes=[Route("/v1/chat/completions", _completions, methods=["POST"])]
+    )
+    mount_backend("http://cl.test", backend)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://cl.test"})
+
+    resp = await client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+
+    assert resp.status_code == 200
+    assert "content-length" not in resp.headers
+    # No framing desync: the client can still read past the partial body to
+    # the appended error chunk, rather than truncating or hanging at the
+    # (now-false) declared length.
+    assert partial in resp.content
+    assert b'"error"' in resp.content

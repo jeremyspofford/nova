@@ -40,16 +40,30 @@ _HOP_BY_HOP = {
 }
 
 
-def _forwardable_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
-    """Every upstream response header except the hop-by-hop ones — used
-    wherever we relay bytes we did not decode ourselves (aiter_raw), so
-    whatever the backend said about that body (content-type, and crucially
-    content-encoding) reaches the caller intact."""
+def _forwardable_headers(
+    upstream_headers: httpx.Headers, *, exclude: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Every upstream response header except the hop-by-hop ones (plus any
+    caller-specified exclusions) — used wherever we relay bytes we did not
+    decode ourselves (aiter_raw), so whatever the backend said about that
+    body (content-type, and crucially content-encoding) reaches the caller
+    intact."""
+    skip = _HOP_BY_HOP | exclude
     return {
         key: value
         for key, value in upstream_headers.items()
-        if key.lower() not in _HOP_BY_HOP and not key.lower().startswith("proxy-")
+        if key.lower() not in skip and not key.lower().startswith("proxy-")
     }
+
+
+# The streaming/relay path may append an SSE error chunk AFTER the upstream
+# body has already ended (a mid-stream failure) — bytes relay() can still
+# hand the client even though the upstream declared how many there would
+# be. Forwarding that Content-Length would then be a lie: declared length
+# stops matching bytes actually sent, an HTTP framing violation (the
+# non-200 branch is exempt — it fully buffers content first, so its
+# Content-Length, if forwarded, always matches exactly what is sent).
+_STREAMING_EXCLUDE = frozenset({"content-length"})
 
 
 def _served_by_header(kind: str, model: str) -> dict[str, str]:
@@ -136,7 +150,7 @@ async def chat_completions(request: Request) -> Response:
             await upstream.aclose()
             await client.aclose()
 
-    relay_headers = _forwardable_headers(upstream.headers)
+    relay_headers = _forwardable_headers(upstream.headers, exclude=_STREAMING_EXCLUDE)
     relay_headers.update(served_by)
     return StreamingResponse(relay(), status_code=200, headers=relay_headers)
 
