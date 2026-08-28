@@ -161,3 +161,41 @@ def test_http_client_falls_back_to_a_real_transport_when_nothing_is_mounted():
     app = FastAPI()
     client = backends.http_client(app, httpx.Timeout(1.0), base_url="http://ollama.test")
     assert not isinstance(client._transport, StreamingASGITransport)
+
+
+def _accept_encoding_values(client: httpx.AsyncClient) -> list[str]:
+    """Every header on this client whose name matches accept-encoding
+    case-insensitively — a dict-merge bug that keeps both casings as two
+    separate entries would leave more than one."""
+    return [v for k, v in client.headers.multi_items() if k.lower() == "accept-encoding"]
+
+
+def test_http_client_defaults_accept_encoding_to_identity_with_no_caller_headers():
+    app = FastAPI()
+    client = backends.http_client(app, httpx.Timeout(1.0), base_url="http://ollama.test")
+    assert _accept_encoding_values(client) == ["identity"]
+
+
+def test_http_client_caller_header_overrides_the_default_same_casing():
+    app = FastAPI()
+    client = backends.http_client(
+        app, httpx.Timeout(1.0), base_url="http://ollama.test",
+        headers={"Accept-Encoding": "gzip"},
+    )
+    assert _accept_encoding_values(client) == ["gzip"]
+
+
+def test_http_client_caller_header_overrides_the_default_different_casing():
+    """S2 seam-hygiene (slice-01-carries.md): the merge used to be a plain
+    dict spread, `{"Accept-Encoding": "identity", **headers}` — case-
+    sensitive, so a caller header spelled with different casing than the
+    default rode alongside it as a SECOND header instead of replacing it.
+    Dormant today (nothing calls http_client with its own accept-encoding
+    yet), but a caller header of any casing must genuinely override, not
+    duplicate."""
+    app = FastAPI()
+    client = backends.http_client(
+        app, httpx.Timeout(1.0), base_url="http://ollama.test",
+        headers={"accept-encoding": "gzip"},
+    )
+    assert _accept_encoding_values(client) == ["gzip"]

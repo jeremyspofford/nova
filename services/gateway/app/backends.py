@@ -32,6 +32,21 @@ def reason(exc: Exception) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
+def _merge_headers_case_insensitively(
+    default: dict[str, str], override: dict[str, str] | None
+) -> dict[str, str]:
+    """`override` replaces `default` by header NAME, ignoring case — a plain
+    dict spread (`{**default, **override}`) is case-sensitive, so a caller
+    header spelled with different casing than a default rides alongside it
+    as a second header instead of genuinely overriding it."""
+    merged = dict(default)
+    for key, value in (override or {}).items():
+        for existing in [k for k in merged if k.lower() == key.lower()]:
+            del merged[existing]
+        merged[key] = value
+    return merged
+
+
 def http_client(
     app, timeout: httpx.Timeout, *, base_url: str, headers: dict[str, str] | None = None
 ) -> httpx.AsyncClient:
@@ -55,7 +70,7 @@ def http_client(
     none, and a real turn silently persists an empty assistant reply.
     """
     transports = getattr(app.state, "peer_transports", {})
-    merged_headers = {"Accept-Encoding": "identity", **(headers or {})}
+    merged_headers = _merge_headers_case_insensitively({"Accept-Encoding": "identity"}, headers)
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=timeout,
