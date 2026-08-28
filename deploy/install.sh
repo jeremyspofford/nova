@@ -17,8 +17,17 @@ COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
 GPU_COMPOSE_FILE="$DEPLOY_DIR/docker-compose.gpu.yml"
 
 SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN INSTANCE_SECRET"
-HEALTH_CHECKED_SERVICES="postgres core gateway memory web ollama"
-REQUIRED_PORTS="3000 8000 8001 8002 11434"
+# The bundled ollama joins this list only when it is actually being started —
+# see decide_inference.
+HEALTH_CHECKED_SERVICES="postgres core gateway memory web"
+# Ports we WARN about: the services below are ours, so a busy port here is
+# almost always our own previous install, and a warning is the honest level.
+REQUIRED_PORTS="3000 8000 8001 8002"
+# The bundled ollama's port is NOT in that list, because a warning is the
+# wrong level for it: the container publishes it, so a busy port is a hard
+# failure a few seconds later. decide_inference refuses up front instead.
+OLLAMA_PORT=11434
+BUNDLED_INFERENCE=1
 
 # Every `docker compose` call in this script goes through this array, so the
 # GPU override and the inference profile can never be applied to `up` and then
@@ -89,11 +98,96 @@ check_ports() {
   done
 }
 
+bundled_ollama_running() {
+  # Is the thing on the port this project's own ollama? Asked of compose
+  # rather than by matching container names, so it stays true if the project
+  # is ever renamed. Read-only; `-f "$COMPOSE_FILE"` explicitly, because
+  # COMPOSE_ARGS has not been finalised at preflight time.
+  local cid
+  cid="$(docker compose -f "$COMPOSE_FILE" --profile inference ps -q ollama 2>/dev/null)"
+  [ -n "$cid" ]
+}
+
+ollama_answers_on_host() {
+  # Is the thing holding the port an ollama, or something else entirely? The
+  # remedy differs, so the message must not guess. No HTTP client available
+  # means "cannot tell", which is a different answer again.
+  local url="http://127.0.0.1:${OLLAMA_PORT}/api/version"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -m 3 "$url" >/dev/null 2>&1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null -T 3 "$url" >/dev/null 2>&1
+  else
+    return 2
+  fi
+}
+
+# The bundled ollama publishes 127.0.0.1:11434, so a host that already runs
+# its own ollama — Nova's PRIMARY user, per the product principles — cannot
+# start it. Before this, the installer logged "WARNING: port 11434 is already
+# in use" and then `docker compose up` died a few seconds later with a raw
+# "port is already allocated". A warning that is really a fatal is a lie about
+# severity, and the remedy was nowhere.
+#
+# So: refuse here, name what is holding the port, and give the two real ways
+# out. NOT "silently reuse the host ollama" — that would make the wizard's
+# "Bundled Ollama" card, which says in as many words "in the container that
+# shipped with Nova", describe something else. Nova already has an honest
+# route to a host engine: the wizard's Remote endpoint option.
+decide_inference() {
+  if [ "${NOVA_SKIP_INFERENCE:-}" = "1" ]; then
+    BUNDLED_INFERENCE=0
+    log "inference: bundled ollama skipped (NOVA_SKIP_INFERENCE=1)"
+    log "           choose 'Remote endpoint' in the wizard and point it at your own engine"
+    return 0
+  fi
+
+  local holder rc
+  holder="$(port_holder "$OLLAMA_PORT")"
+  if [ -z "$holder" ]; then
+    BUNDLED_INFERENCE=1
+    log "port $OLLAMA_PORT: free (bundled ollama will publish it)"
+    return 0
+  fi
+
+  # The commonest reason that port is busy is that WE are on it. This script
+  # is documented as idempotent, and refusing to re-run because the container
+  # from the last run is still up would be a worse bug than the one this
+  # function exists to fix.
+  if bundled_ollama_running; then
+    BUNDLED_INFERENCE=1
+    log "port $OLLAMA_PORT: held by this stack's own ollama — re-using it"
+    return 0
+  fi
+
+  ollama_answers_on_host && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    log "ERROR: an ollama is already serving on 127.0.0.1:$OLLAMA_PORT ($holder), and the"
+    log "       bundled one publishes that same port, so it cannot start."
+  elif [ "$rc" -eq 2 ]; then
+    log "ERROR: port $OLLAMA_PORT is held by $holder, and the bundled ollama publishes it."
+    log "       (No curl or wget here, so whether that is an ollama could not be checked.)"
+  else
+    log "ERROR: port $OLLAMA_PORT is held by $holder — which did not answer as an ollama —"
+    log "       and the bundled ollama publishes that port, so it cannot start."
+  fi
+  log ""
+  log "       Two ways forward:"
+  log "         1. Free the port (stop the host ollama, e.g. 'systemctl --user stop ollama'"
+  log "            or kill the process above), then re-run ./install."
+  log "         2. Keep it and skip the bundled engine:"
+  log "              NOVA_SKIP_INFERENCE=1 ./install"
+  log "            then pick 'Remote endpoint' in the wizard, pointing at"
+  log "            http://host.docker.internal:$OLLAMA_PORT (or this host's LAN address)."
+  exit 1
+}
+
 preflight() {
   check_docker
   check_compose
   check_disk
   check_ports
+  decide_inference
 }
 
 # ---- hardware detect ------------------------------------------------------
@@ -181,8 +275,12 @@ JSON
 
   # The wizard's default engine is the bundled ollama, and an engine that is
   # not running is filtered out of the wizard as dead. Starting it is part of
-  # installing, not a separate step the operator has to know about.
-  COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile inference)
+  # installing, not a separate step the operator has to know about — unless
+  # decide_inference established that this host is serving its own.
+  if [ "$BUNDLED_INFERENCE" -eq 1 ]; then
+    COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile inference)
+    HEALTH_CHECKED_SERVICES="$HEALTH_CHECKED_SERVICES ollama"
+  fi
 }
 
 # ---- secrets --------------------------------------------------------------
@@ -316,6 +414,9 @@ cmd_install() {
     die "unhealthy service(s):$unhealthy"
   fi
   log "Nova is up. Open http://127.0.0.1:3000 to finish setup."
+  if [ "$BUNDLED_INFERENCE" -eq 0 ]; then
+    log "No bundled engine is running — pick 'Remote endpoint' at the engine step."
+  fi
 }
 
 cmd_update() {

@@ -41,6 +41,17 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
 
+  # The installer is the real install path, so its decisions get a real suite.
+  # No docker and no network: install_test.sh sources install.sh (whose entry
+  # point is guarded) and stubs only what touches the outside world.
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n deploy/install.sh && bash -n deploy/install_test.sh
+      - run: shellcheck -S warning deploy/install.sh deploy/install_test.sh install
+      - run: ./deploy/install_test.sh
+
   web:
     runs-on: ubuntu-latest
     defaults:
