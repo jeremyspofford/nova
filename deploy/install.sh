@@ -113,19 +113,21 @@ detect_gpus_json() {
     echo "[]"
     return 0
   fi
+  # `nvidia-smi` output is one line per GPU. A previous version of this
+  # loop set IFS from `$(printf '\n')`, but command substitution strips
+  # the trailing newline, leaving IFS empty — with IFS empty, `for line in
+  # $lines` does not split at all, so a multi-GPU host produced one
+  # malformed JSON entry instead of one-per-GPU. `while read` line-at-a-
+  # time avoids IFS gymnastics entirely and handles any number of GPUs.
   local entries="" name vram esc_name
-  local old_ifs="$IFS"
-  IFS="$(printf '\n')"
-  for line in $lines; do
-    IFS="$old_ifs"
-    name="$(printf '%s' "$line" | cut -d',' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-    vram="$(printf '%s' "$line" | cut -d',' -f2 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  while IFS=',' read -r name vram; do
+    [ -n "$name" ] || continue
+    name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    vram="$(printf '%s' "$vram" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     esc_name="$(printf '%s' "$name" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
     if [ -n "$entries" ]; then entries="$entries,"; fi
     entries="${entries}{\"name\":\"${esc_name}\",\"vram_mb\":${vram}}"
-    IFS="$(printf '\n')"
-  done
-  IFS="$old_ifs"
+  done <<< "$lines"
   echo "[${entries}]"
 }
 
