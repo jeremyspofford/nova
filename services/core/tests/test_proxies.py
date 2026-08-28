@@ -187,3 +187,36 @@ async def test_a_backend_put_past_its_budget_times_out_naming_the_route_not_unre
     assert "timed out" in detail
     assert "unreachable" not in detail
     assert "/admin/backend" in detail
+
+
+# The two tests above monkeypatch these constants away to drive the dynamic
+# timing cases, which means a revert of the split timeout budgets themselves
+# (connect/write/pool tight at 5s, only read wide enough to dominate the
+# gateway's own downstream work) would not fail anything else in this file.
+# Pinned directly instead (S2 seam-hygiene: slice-01-carries.md "S2
+# follow-ups").
+def test_probe_timeout_shape_is_pinned():
+    assert proxies.PROBE_TIMEOUT.connect == 5.0
+    assert proxies.PROBE_TIMEOUT.read == 35.0
+    assert proxies.PROBE_TIMEOUT.write == 5.0
+    assert proxies.PROBE_TIMEOUT.pool == 5.0
+
+
+def test_backend_put_timeout_shape_is_pinned():
+    assert proxies.BACKEND_PUT_TIMEOUT.connect == 5.0
+    assert proxies.BACKEND_PUT_TIMEOUT.read == 10.0
+    assert proxies.BACKEND_PUT_TIMEOUT.write == 5.0
+    assert proxies.BACKEND_PUT_TIMEOUT.pool == 5.0
+
+
+def test_timed_out_states_an_unbounded_read_for_a_timeout_with_no_read_bound():
+    """PULL_TIMEOUT sets read=None on purpose (a slow download between
+    progress lines is not a hang), which means httpx can never actually
+    raise ReadTimeout against it — there is no bound left to exceed. That
+    makes _timed_out's `timeout.read is None` branch unreachable through any
+    real request; a direct call is the only way to prove the message it
+    would produce if it were ever wired to a bounded-differently timeout."""
+    exc = proxies._timed_out("/admin/pull", proxies.PULL_TIMEOUT)
+    assert exc.status_code == 502
+    assert "an unbounded read" in exc.detail
+    assert "/admin/pull" in exc.detail
