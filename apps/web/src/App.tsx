@@ -158,24 +158,32 @@ function Gate() {
     )
   }
 
-  return <AppRoutes chatModel={defs ? settingValue(defs, 'chat.model', '') : ''} />
+  // Scoped to the authenticated branch, not the whole app: it survives
+  // navigating between /chat and /settings (this branch does not unmount
+  // for that) but must NOT survive a sign-out or a different person
+  // signing in on the same tab — either of those swaps this branch out for
+  // the onboarding or login one instead, unmounting ChatProvider along with
+  // it, so a stream started by whoever was signed in before can never keep
+  // dispatching into a tab that now belongs to someone else. `personId` is
+  // also read directly by the store as a second, placement-independent
+  // guard — see stores/chat-store.tsx.
+  return (
+    <ChatProvider personId={user?.id ?? null}>
+      <AppRoutes chatModel={defs ? settingValue(defs, 'chat.model', '') : ''} />
+    </ChatProvider>
+  )
 }
 
 export default function App() {
   return (
     <ThemeProvider>
-      {/* Above the router, deliberately: a turn survives navigating between
-          routes (S1 carries #9, ruling S2-R4) only because this provider's
-          lifecycle is not tied to which route is mounted beneath it. */}
-      <ChatProvider>
-        <ToastProvider>
-          <BrowserRouter>
-            <AuthProvider>
-              <Gate />
-            </AuthProvider>
-          </BrowserRouter>
-        </ToastProvider>
-      </ChatProvider>
+      <ToastProvider>
+        <BrowserRouter>
+          <AuthProvider>
+            <Gate />
+          </AuthProvider>
+        </BrowserRouter>
+      </ToastProvider>
     </ThemeProvider>
   )
 }

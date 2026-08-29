@@ -116,13 +116,13 @@ describe('chatReducer — failure is never an assistant bubble', () => {
 })
 
 describe('chatReducer — reconciling a fetched history against a live store', () => {
-  // The store survives navigation (S2-R4): by the time ChatPage remounts,
-  // the store already lived through whatever happened to this conversation
-  // in real time — a fetch taken while away can only be stale or exactly
-  // caught up, never more current than what was actually streamed. So a
-  // reconcile against the SAME conversation the store already holds is a
-  // no-op; only a genuinely different (or first-ever) conversation replaces
-  // the rows, exactly like `loaded`.
+  // By the time ChatPage remounts, the store already lived through whatever
+  // happened to this conversation in real time — a fetch taken while away
+  // can only be stale or exactly caught up, never more current than what
+  // was actually streamed. So a reconcile against the SAME conversation the
+  // store already holds is a no-op; only a genuinely different (or
+  // first-ever) conversation replaces the rows, exactly like `loaded`. (The
+  // store surviving a route change at all is ruling S2-R4.)
 
   it('replaces empty/unseen state with the fetched history, like loaded', () => {
     const state = chatReducer(emptyChat(), {

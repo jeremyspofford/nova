@@ -48,6 +48,7 @@ export type ChatAction =
       conversationId: string
       messages: { id: string; role: string; content: string }[]
     }
+  | { type: 'reset' }
 
 export const NO_REPLY = 'the turn finished without a reply'
 
@@ -149,20 +150,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return fromFetchedMessages(state, action.conversationId, action.messages)
 
     case 'reconcile':
-      // The store survives navigation (S2-R4): if it already holds THIS
-      // conversation, it lived through whatever happened in real time —
-      // still streaming, or already resolved to its final rows — and a
-      // fetch taken on remount can only be stale or exactly caught up,
-      // never more current. Trusting it over the fetch is what keeps a
-      // mid-stream return showing the live partial (not a stale snapshot
-      // missing the in-flight reply) and a completed-while-away return
-      // showing the finished exchange exactly once (the fetch would repeat
-      // rows the store already has, and would silently drop a turn that
-      // failed client-side without ever reaching the database). Only a
-      // genuinely different — or first-ever — conversation replaces the
-      // rows, exactly like `loaded`.
+      // A page that just remounted always re-fetches history, but that
+      // fetch is only trusted when it names a DIFFERENT conversation (or
+      // this is the first load ever): if the store already holds the SAME
+      // conversation, it lived through whatever happened to it in real
+      // time — still streaming, or already resolved to its final rows —
+      // so the fetch can only be stale or exactly caught up, never more
+      // current. That is what makes a mid-stream remount show the live
+      // partial continuing (not a stale snapshot missing the in-flight
+      // reply) and a completed-while-away remount show the finished
+      // exchange exactly once (the fetch would repeat rows the store
+      // already has, and would silently drop a turn that failed
+      // client-side and so never reached the database). A genuinely
+      // different conversation still replaces the rows, exactly like
+      // `loaded`. (The store surviving a route change in the first place
+      // is ruling S2-R4.)
       if (state.conversationId === action.conversationId) return state
       return fromFetchedMessages(state, action.conversationId, action.messages)
+
+    case 'reset':
+      return emptyChat()
 
     case 'send':
       return {

@@ -4,15 +4,20 @@ import { ChatProvider, useChatStore } from './chat-store'
 import type { ChatState } from '../pages/chat/chatReducer'
 
 /**
- * The nav bug (S1 carries, S2-R4): the SSE stream used to be owned by
- * ChatPage, so navigating away unmounted it and aborted the fetch — the
- * server correctly read that as a disconnect and cancelled generation. The
- * fix lifts ownership into this store, mounted above the router, so a
- * consumer's unmount can never touch the request.
+ * The nav bug: the SSE stream used to be owned by ChatPage, so navigating
+ * away unmounted it and aborted the fetch — the server correctly read that
+ * as a disconnect and cancelled generation. The fix lifts ownership into
+ * this store, mounted at the authenticated-routes boundary (above the
+ * /chat <-> /settings swap, so it survives that navigation), so a page
+ * unmounting can never touch the request. (S1 carries #9, ruling S2-R4.)
  *
- * These tests drive a hand-controlled ReadableStream reader so a chunk can
- * be pushed AFTER the consumer that called sendMessage has unmounted —
- * proving the fetch and the accumulation both keep going regardless.
+ * The first block of tests below drives a hand-controlled ReadableStream
+ * reader so a chunk can be pushed AFTER the consumer that called
+ * sendMessage has unmounted — proving the fetch and the accumulation both
+ * keep going regardless. The second block (further down) proves the other
+ * side of the same boundary: the store must NOT survive a change of who is
+ * signed in, so a stream started by one person can never write into a
+ * transcript another person is now looking at.
  */
 
 function controlledStream() {
@@ -54,6 +59,25 @@ function controlledStream() {
 function fakeStreamingFetch(stream: ReturnType<typeof controlledStream>) {
   const seenSignals: (AbortSignal | undefined)[] = []
   const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+    seenSignals.push(init.signal ?? undefined)
+    return {
+      ok: true,
+      status: 200,
+      text: async () => '',
+      body: { getReader: () => stream.reader },
+    } as unknown as Response
+  })
+  return { fetchImpl, seenSignals }
+}
+
+/** One controlled stream per call, in order — for tests where two separate
+ * `sendMessage` calls (two separate people's turns) each need their own
+ * independently-controllable fake response. */
+function multiStreamFetch(streams: ReturnType<typeof controlledStream>[]) {
+  const seenSignals: (AbortSignal | undefined)[] = []
+  let next = 0
+  const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+    const stream = streams[next++]
     seenSignals.push(init.signal ?? undefined)
     return {
       ok: true,
@@ -191,5 +215,144 @@ describe('ChatProvider', () => {
     const assistantRows = finalState.rows.filter(r => r.kind === 'message' && r.role === 'assistant')
     expect(assistantRows).toHaveLength(1)
     expect(assistantRows[0].kind === 'message' && assistantRows[0].text).toBe('full reply')
+  })
+})
+
+/**
+ * The identity boundary: a browser tab is not one conversation, it is
+ * whoever is currently signed into it. Placing ChatProvider correctly (at
+ * the authenticated-routes boundary in App.tsx, so it unmounts on sign-out
+ * and remounts fresh on the next sign-in) is one line of defense; this
+ * store also carries its own guard, independent of where it happens to be
+ * mounted, in case a future refactor puts it somewhere that does not
+ * naturally unmount on identity change. `personId` is the signed-in
+ * person's id (or null, signed out): whenever it changes, the current
+ * in-flight request is aborted, the transcript is reset, and — the part
+ * an abort alone cannot guarantee, since one event already in flight can
+ * still land after `.abort()` is called — no event from a stream started
+ * under the previous identity is ever dispatched again, however late it
+ * arrives.
+ */
+describe('ChatProvider — the identity boundary (sign-out, or someone else signing in)', () => {
+  it('a stream still in flight when its owner signs out is aborted and stops updating the store', async () => {
+    const stream = controlledStream()
+    const { fetchImpl, seenSignals } = fakeStreamingFetch(stream)
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    const { rerender } = render(
+      <ChatProvider fetchImpl={fetchImpl} personId="person-a">
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    act(() => probe.store!.sendMessage('hello'))
+    await tick()
+    stream.push('data: {"t":"partial"}\n\n')
+    await tick()
+    expect(probe.store!.state.streaming).toBe(true)
+
+    // Signing out: personId goes from "person-a" to null.
+    rerender(
+      <ChatProvider fetchImpl={fetchImpl} personId={null}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    expect(seenSignals[0]?.aborted).toBe(true)
+    expect(probe.store!.state).toEqual({
+      rows: [],
+      streaming: false,
+      conversationId: null,
+      model: null,
+      pendingId: null,
+    })
+
+    // Whatever was already in flight when the abort fired must not land
+    // either, however late it arrives.
+    stream.push('data: {"t":"more from the old owner"}\n\n')
+    stream.push('data: {"error":"a stray failure from the old owner"}\n\n')
+    stream.push('data: [DONE]\n\n')
+    stream.end()
+    await tick()
+
+    expect(probe.store!.state.rows).toEqual([])
+  })
+
+  it("a second person signing in gets a clean transcript, immune to the first person's delayed frames", async () => {
+    const streamA = controlledStream()
+    const streamB = controlledStream()
+    const { fetchImpl } = multiStreamFetch([streamA, streamB])
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    const { rerender } = render(
+      <ChatProvider fetchImpl={fetchImpl} personId="person-a">
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    act(() => probe.store!.loadConversation('a-convo', []))
+    act(() => probe.store!.sendMessage("A's message"))
+    await tick()
+    streamA.push('data: {"t":"A is mid-reply"}\n\n')
+    await tick()
+
+    // A signs out mid-stream, then B signs in — both on the same tab.
+    rerender(
+      <ChatProvider fetchImpl={fetchImpl} personId={null}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    rerender(
+      <ChatProvider fetchImpl={fetchImpl} personId="person-b">
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    expect(probe.store!.state.rows).toEqual([])
+
+    act(() => probe.store!.loadConversation('b-convo', []))
+    act(() => probe.store!.sendMessage("B's message"))
+    await tick()
+
+    // (b) A delayed meta frame from A's abandoned stream must not rewrite
+    // conversationId back to A's conversation — which would send B's NEXT
+    // message into A's conversation, since sendMessage reads the
+    // conversationId fresh at send time.
+    streamA.push(
+      'data: {"meta":{"conversation_id":"a-convo","model":"m","turn_id":"a-turn"}}\n\n',
+    )
+    await tick()
+    expect(probe.store!.state.conversationId).toBe('b-convo')
+
+    // (c) A's delta/done, arriving after B's own turn has started, must
+    // never write into B's bubble (matched only by bare pendingId equality
+    // in the reducer, which the store-level guard has to prevent reaching
+    // at all).
+    streamA.push('data: {"t":"A leaked into B"}\n\n')
+    streamA.push('data: [DONE]\n\n')
+    streamA.end()
+    await tick()
+
+    const bAssistant = probe.store!.state.rows.find(
+      r => r.kind === 'message' && r.role === 'assistant',
+    )
+    expect(bAssistant && bAssistant.kind === 'message' && bAssistant.text).not.toContain(
+      'A leaked into B',
+    )
+    expect(probe.store!.state.streaming).toBe(true) // B's own turn is still genuinely open
+
+    // B's own stream still works normally throughout.
+    streamB.push('data: {"t":"hi, B"}\n\n')
+    streamB.push('data: [DONE]\n\n')
+    streamB.end()
+    await tick()
+
+    expect(probe.store!.state.streaming).toBe(false)
+    const finalAssistant = probe.store!.state.rows.find(
+      r => r.kind === 'message' && r.role === 'assistant',
+    )
+    expect(finalAssistant && finalAssistant.kind === 'message' && finalAssistant.text).toBe(
+      'hi, B',
+    )
+    expect(probe.store!.state.conversationId).toBe('b-convo')
   })
 })
