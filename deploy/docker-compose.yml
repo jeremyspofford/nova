@@ -30,6 +30,16 @@ services:
       CORE_GATEWAY_TOKEN: ${CORE_GATEWAY_TOKEN}
       MEMORY_URL: http://memory:8002
       CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
+      # Where the workspace tools may write, and the only place they may.
+      # Stated here rather than left to the code's default so the boundary
+      # is visible next to the mount that backs it.
+      WORKSPACE_ROOT: /data/workspace
+    volumes:
+      # Nova's own scratch space, on a volume of its own: not the memory
+      # store, not the repo, not the host. A file she writes lives here and
+      # survives a rebuild, and nothing outside this volume is reachable
+      # from a workspace tool.
+      - v4_workspace:/data/workspace
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,4 +146,5 @@ volumes:
   v4_pgdata:
   v4_models:
   v4_memdata:
+  v4_workspace:
   v4_ollama:
