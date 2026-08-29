@@ -216,38 +216,79 @@ class ToolCall:
 class ToolCallBuffer:
     """Assembles a round's tool calls out of whatever the backend emits.
 
-    OpenAI streams a call across several chunks keyed by `index`: the first
-    fragment carries the id and the function name, the rest carry more
-    argument text to concatenate. Other backends answer a streamed request
-    with one whole completion chunk, arguments already complete, sometimes
-    with no `index` at all. Both shapes accumulate here so the loop never
-    has to know which kind of backend answered.
+    Three shapes reach this, not two:
+
+      * OpenAI streams a call across several chunks keyed by `index` — the
+        first fragment carries the id and the function name, the rest carry
+        more argument text to concatenate;
+      * some backends answer a streamed request with one whole completion
+        chunk, arguments already complete and often with no `index` at all;
+      * an aggregating proxy in front of either can do BOTH — relay the
+        per-index deltas as they arrive and then append the finished call
+        in a trailing `message` chunk.
+
+    That third shape is why the id matters as a key and not just as a
+    field to copy. Treating the trailing restatement as a new call because
+    it names a function and carries no index would execute the tool twice
+    under one id: memory_save would write the note and a `-2` sibling, a
+    future non-idempotent tool would fire twice, and the two `role: tool`
+    messages sharing a `tool_call_id` are rejected outright by strict
+    backends.
     """
 
     def __init__(self) -> None:
         self._calls: dict[int, ToolCall] = {}
+        # id -> the key its call is filed under, so a later fragment that
+        # names the same id lands on the same call.
+        self._keys_by_id: dict[str, int] = {}
 
     def add(self, fragment: dict) -> None:
         function = fragment.get("function")
         function = function if isinstance(function, dict) else {}
         name = function.get("name") or ""
+        call_id = str(fragment["id"]) if fragment.get("id") else ""
 
         index = fragment.get("index")
-        if type(index) is not int:
-            # No index to key on: a fragment that names a function starts a
+        restated = False
+        if type(index) is int:
+            # The streaming contract. While an index is present it is
+            # authoritative, and argument text keyed by it concatenates —
+            # including when the backend also repeats the id on every
+            # delta, which some do.
+            key = index
+        elif call_id and call_id in self._keys_by_id:
+            # No index, and an id already in the buffer: this is the same
+            # call restated, not a second one.
+            key = self._keys_by_id[call_id]
+            restated = True
+        else:
+            # Nothing to key on: a fragment that names a function starts a
             # new call, and one carrying only argument text continues the
-            # newest — which is the only reading that keeps two un-indexed
-            # calls in one round from merging into one.
-            index = len(self._calls) if (name or not self._calls) else max(self._calls)
+            # newest — which is what keeps two genuinely distinct
+            # un-indexed calls in one round from merging into one.
+            key = len(self._calls) if (name or not self._calls) else max(self._calls)
 
-        call = self._calls.setdefault(index, ToolCall(id="", name="", arguments=""))
-        if fragment.get("id"):
-            call.id = str(fragment["id"])
+        call = self._calls.setdefault(key, ToolCall(id="", name="", arguments=""))
+        if call_id:
+            call.id = call_id
+            # setdefault, not assignment: the first key an id was seen on is
+            # the call it belongs to.
+            self._keys_by_id.setdefault(call_id, key)
         if name:
             call.name = name
+
         arguments = function.get("arguments")
         if isinstance(arguments, str):
-            call.arguments += arguments
+            if not restated:
+                call.arguments += arguments
+            elif arguments:
+                # A restatement is the backend's last word on this call, so
+                # it REPLACES what the deltas accumulated. Concatenating the
+                # two would produce arguments that parse as neither, and
+                # keeping the deltas would ignore a correction the backend
+                # had just made. An empty restatement says nothing and
+                # therefore changes nothing.
+                call.arguments = arguments
         elif isinstance(arguments, dict):
             # A backend that sends the arguments already parsed; re-encoded
             # so there is exactly one form downstream.
@@ -256,15 +297,25 @@ class ToolCallBuffer:
     def finished(self) -> list[ToolCall]:
         """The round's calls, in the order the model asked for them.
 
-        A call the backend gave no id gets one here, and the same id goes
-        on both the assistant message and its tool result — the pair has to
-        match, and OpenAI's shape has nowhere else to say which result
-        answers which call.
+        Every call leaves here with an id of its own. A call the backend
+        gave no id gets one, and so does a second call the backend gave an
+        id already in use — two calls really are two calls, and the same id
+        goes on both the assistant message and the tool result answering
+        it, so a collision would make the pairing ambiguous and be rejected
+        by strict backends besides.
         """
-        calls = [self._calls[index] for index in sorted(self._calls)]
+        calls = [self._calls[key] for key in sorted(self._calls)]
+        claimed = {call.id for call in calls if call.id}
+        issued: set[str] = set()
         for position, call in enumerate(calls, start=1):
-            if not call.id:
-                call.id = f"call_{position}"
+            if not call.id or call.id in issued:
+                candidate = f"call_{position}"
+                suffix = 0
+                while candidate in claimed or candidate in issued:
+                    suffix += 1
+                    candidate = f"call_{position}_{suffix}"
+                call.id = candidate
+            issued.add(call.id)
         return calls
 
 

@@ -657,3 +657,187 @@ async def test_a_call_with_a_flood_of_arguments_cannot_bloat_the_trace(
     assert isinstance(recorded, str)  # degraded to a clipped record, on purpose
     assert len(recorded) < chat.SPAN_ARGS_TOTAL_CHARS + 200
     assert "more chars" in recorded
+
+
+# -- the mixed shape: streamed deltas AND a trailing restatement -----------
+#
+# An aggregating proxy in front of a backend can do both at once: relay the
+# per-index deltas as they arrive AND append the finished call in a trailing
+# `message` chunk. Each half on its own is covered above; the combination is
+# the shape that made the same call look like two.
+
+
+def trailing_echo(call_id: str, name: str, arguments: dict) -> dict:
+    """The finished call restated after its deltas — no index, same id."""
+    return whole_call(call_id, name, arguments)
+
+
+async def test_a_streamed_call_repeated_in_a_trailing_chunk_runs_exactly_once(
+    owner_client, pool, mount_peers, workspace
+):
+    args = {"title": "Coffee order", "content": "flat white"}
+    memory = FakeMemory()
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                *streamed_call(0, "call_1", "memory_save", args),
+                trailing_echo("call_1", "memory_save", args),
+            ),
+            (text("saved it"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client)
+
+    # The tool is not required to be idempotent, so "once" is the property,
+    # not "the same answer twice".
+    assert len(memory.saves) == 1
+    assert memory.saves[0]["title"] == "Coffee order"
+    assert memory.saves[0]["content"] == "flat white"
+    assert activities(sent) == [("memory_save", "start"), ("memory_save", "ok")]
+
+    second = gateway.payloads[1]["messages"]
+    assistant = [m for m in second if m["role"] == "assistant"][-1]
+    assert len(assistant["tool_calls"]) == 1
+    tool_messages = [m for m in second if m["role"] == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "call_1"
+
+    spans = await _spans(pool, "tool")
+    assert len(spans) == 1
+
+
+async def test_a_trailing_restatement_replaces_the_streamed_arguments(
+    owner_client, pool, mount_peers, workspace
+):
+    """The restatement is the backend's final word on that call, so it wins.
+
+    Concatenating the two would produce arguments that parse as neither;
+    keeping the deltas would ignore a correction the backend just made.
+    """
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                *streamed_call(
+                    0,
+                    "call_1",
+                    "workspace_write_file",
+                    {"path": "streamed.md", "content": "from the deltas"},
+                ),
+                trailing_echo(
+                    "call_1",
+                    "workspace_write_file",
+                    {"path": "echoed.md", "content": "from the echo"},
+                ),
+            ),
+            (text("written"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+    assert activities(sent) == [("workspace_write_file", "start"), ("workspace_write_file", "ok")]
+    assert [p.name for p in workspace.iterdir()] == ["echoed.md"]
+    assert (workspace / "echoed.md").read_text(encoding="utf-8") == "from the echo"
+
+
+async def test_two_distinct_un_indexed_calls_still_both_run(
+    owner_client, pool, mount_peers, workspace
+):
+    """Two whole-call chunks with different ids are two calls, not one
+    restated — the property the id-keying must not break."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                whole_call("call_a", "workspace_write_file", {"path": "a.md", "content": "a"}),
+                whole_call("call_b", "workspace_write_file", {"path": "b.md", "content": "b"}),
+            ),
+            (text("both written"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+    assert activities(sent) == [
+        ("workspace_write_file", "start"),
+        ("workspace_write_file", "ok"),
+        ("workspace_write_file", "start"),
+        ("workspace_write_file", "ok"),
+    ]
+    assert sorted(p.name for p in workspace.iterdir()) == ["a.md", "b.md"]
+    tool_messages = [m for m in gateway.payloads[1]["messages"] if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["call_a", "call_b"]
+
+
+# -- the buffer on its own -------------------------------------------------
+
+
+def _buffered(*fragments: dict) -> list[tuple[str, str, str]]:
+    buffer = chat.ToolCallBuffer()
+    for fragment in fragments:
+        buffer.add(fragment)
+    return [(call.id, call.name, call.arguments) for call in buffer.finished()]
+
+
+def _fragment(*, index=None, call_id=None, name=None, arguments=None) -> dict:
+    function: dict = {}
+    if name is not None:
+        function["name"] = name
+    if arguments is not None:
+        function["arguments"] = arguments
+    fragment: dict = {"function": function}
+    if index is not None:
+        fragment["index"] = index
+    if call_id is not None:
+        fragment["id"] = call_id
+    return fragment
+
+
+def test_the_buffer_folds_a_trailing_echo_into_the_call_it_restates():
+    assert _buffered(
+        _fragment(index=0, call_id="a", name="get_time", arguments=""),
+        _fragment(index=0, arguments='{"x":'),
+        _fragment(index=0, arguments=" 1}"),
+        _fragment(call_id="a", name="get_time", arguments='{"x": 1}'),
+    ) == [("a", "get_time", '{"x": 1}')]
+
+
+def test_the_buffer_keeps_two_un_indexed_calls_with_no_ids_apart():
+    assert _buffered(
+        _fragment(name="get_time", arguments="{}"),
+        _fragment(name="workspace_list_files", arguments="{}"),
+    ) == [("call_1", "get_time", "{}"), ("call_2", "workspace_list_files", "{}")]
+
+
+def test_the_buffer_keeps_two_un_indexed_calls_with_distinct_ids_apart():
+    assert _buffered(
+        _fragment(call_id="a", name="get_time", arguments="{}"),
+        _fragment(call_id="b", name="get_time", arguments="{}"),
+    ) == [("a", "get_time", "{}"), ("b", "get_time", "{}")]
+
+
+def test_indexed_argument_fragments_still_concatenate_when_the_id_repeats():
+    """A backend that repeats the id on every indexed delta must not have
+    its arguments replaced fragment by fragment."""
+    assert _buffered(
+        _fragment(index=0, call_id="a", name="memory_save", arguments='{"ti'),
+        _fragment(index=0, call_id="a", arguments='tle": "x"}'),
+    ) == [("a", "memory_save", '{"title": "x"}')]
+
+
+def test_two_calls_a_backend_gave_the_same_id_do_not_share_a_tool_call_id():
+    """Two indexed calls really are two calls; a strict backend rejects two
+    tool results carrying one id, so the duplicate is re-minted."""
+    ids = [call_id for call_id, _name, _args in _buffered(
+        _fragment(index=0, call_id="dup", name="get_time", arguments="{}"),
+        _fragment(index=1, call_id="dup", name="get_time", arguments="{}"),
+    )]
+    assert len(set(ids)) == 2
+    assert ids[0] == "dup"
+
+
+def test_the_buffer_folds_a_whole_call_a_proxy_sent_twice():
+    """The same non-streamed call relayed twice is one call, not two."""
+    whole = _fragment(call_id="a", name="get_time", arguments="{}")
+    assert _buffered(whole, dict(whole)) == [("a", "get_time", "{}")]
