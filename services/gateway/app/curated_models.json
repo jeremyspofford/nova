@@ -4,7 +4,7 @@
     "label": "Qwen3.8 27B",
     "family": "27b",
     "params_b": 27,
-    "min_vram_gb": 24,
+    "min_vram_gb": 17,
     "size_gb": 18.0,
     "note": "the top local pick; 256K context",
     "verify_at_walk": false,

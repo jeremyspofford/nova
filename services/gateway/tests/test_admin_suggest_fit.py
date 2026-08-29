@@ -35,12 +35,16 @@ async def test_nothing_resident_free_equals_total_and_estimate_is_the_source(
 
     assert resp.status_code == 200
     body = resp.json()
-    # The 27B tier's top pick needs (estimate) 24GB out of exactly 24 free:
-    # zero headroom, still loads -> tight, not wont_fit.
+    # The 27B tier's top pick needs (estimate) 17GB out of 24 free: 7GB
+    # headroom is 29% of free, over the 25% tight line -> comfortable.
+    # (min_vram_gb was 24 — a card-tier floor mis-consumed as a load
+    # estimate; the repo's own measurement (tests/e2e/measurements/
+    # s2-two-model.json) put actual load at 16.2GB, so 17 is a realistic
+    # estimate with margin, still comfortably under measured+headroom.)
     top_fit = _fit_for(body, "qwen3.8:27b")
     assert top_fit == {
-        "verdict": "tight",
-        "needed_gb": 24.0,
+        "verdict": "comfortable",
+        "needed_gb": 17.0,
         "free_gb": 24.0,
         "total_gb": 24.0,
         "source": "estimated",
