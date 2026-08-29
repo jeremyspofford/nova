@@ -59,3 +59,13 @@ T3 DECISION + task-3-spike-report.md; task #8 open with flip conditions)
   Settings→Models UI, or set on request.
 - After rebuild, run POST /api/v1/models/probe for qwen3.8:27b (and 8b) so
   their verdicts flip to "verified on your hardware".
+
+## Probe-timeout finding (2026-08-29, controller, at the S2e rebuild)
+Probing qwen3:8b succeeded (9507 MB measured → verified). Probing
+qwen3.8:27b FAILED with ReadTimeout at 30s — the probe's 30s timeout is
+too short for a COLD load of a 27B (the model loads fine, just slowly from
+cold). Effect: large models can't get a "verified" badge on first probe;
+they show the (now-correct) estimate. Fix later: probe should warm/allow a
+longer load window for large models (or a two-phase load-then-measure), so
+verified fit is reachable for the flagship model. Not blocking — the 27B's
+corrected estimate (17GB → comfortable) is accurate.
