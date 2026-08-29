@@ -31,26 +31,30 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
 # Every read in this module starts from this projection: the turn's own
-# columns, plus its span counts pre-aggregated in a subquery rather than a
-# direct join — a direct join fans a turn out into one row per span, and
-# counting THAT with GROUP BY t.id is the same answer by a much easier path
-# to get subtly wrong (e.g. under a second join). One row in, one row out.
+# columns, plus its span counts. Each count is a scalar subquery
+# CORRELATED on t.id — scoped to exactly the turn(s) this query actually
+# returns — rather than a GROUP BY over the whole turn_spans table joined
+# in: the list query only ever returns up to MAX_LIMIT rows (bounded by
+# `turns_started_at_id`, migration 003) and the drill-in returns exactly
+# one, so a global aggregate would do wildly more work than either needs,
+# and would only get more wasteful as turn_spans grows. turn_spans_turn
+# (turn_id, started_at) — migration 002 — is what makes each lookup an
+# indexed scan rather than a table scan.
 _TURN_SELECT = """
     SELECT
         t.id, t.kind, t.model, t.status, t.started_at, t.conversation_id,
         CASE WHEN t.ended_at IS NULL THEN NULL
              ELSE (EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000)::bigint
         END AS duration_ms,
-        COALESCE(spans.tool_call_count, 0) AS tool_call_count,
-        COALESCE(spans.llm_round_count, 0) AS llm_round_count
+        COALESCE(
+            (SELECT count(*) FILTER (WHERE kind = 'tool')
+             FROM turn_spans WHERE turn_id = t.id), 0
+        ) AS tool_call_count,
+        COALESCE(
+            (SELECT count(*) FILTER (WHERE kind = 'llm_call')
+             FROM turn_spans WHERE turn_id = t.id), 0
+        ) AS llm_round_count
     FROM turns t
-    LEFT JOIN (
-        SELECT turn_id,
-               count(*) FILTER (WHERE kind = 'tool') AS tool_call_count,
-               count(*) FILTER (WHERE kind = 'llm_call') AS llm_round_count
-        FROM turn_spans
-        GROUP BY turn_id
-    ) spans ON spans.turn_id = t.id
 """
 
 
