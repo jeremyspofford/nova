@@ -138,3 +138,14 @@ claim BEFORE it reaches the operator.
 Coming back to the chat shows the beginning of the conversation, not the
 bottom / latest message. Must auto-scroll to the newest message on load/
 return. Folded into S2c (durable turn / chat-return work).
+
+## S2d honesty guard — SHIPPED (2026-08-29) + one carry
+The narration guard is live (guards.py, wired in chat.py, fail-open):
+catches unbacked/wrong-target file+fetch claims, 0 false positives across
+87 plausible honest replies + 5 adversarial sweeps, 375 core tests. Carry
+(Minor recall miss, deferred): a filename whose stem is a reported-speech
+homograph ("notes.md" → "notes") is dropped by _externally_attributed, so
+"I appended the line to notes.md" (unbacked) is NOT caught. Missed lie,
+not a false accusation (acceptable direction). Fix later: require the
+_REPORTED verb match to not be immediately followed by a filename
+extension.
