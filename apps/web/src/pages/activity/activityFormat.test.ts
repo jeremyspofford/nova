@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { statusBadge, viewArgs, formatMs, formatRelativeTime } from './activityFormat'
+import {
+  statusBadge,
+  viewArgs,
+  formatMs,
+  formatRelativeTime,
+  workspacePathFrom,
+  isWorkspacePathTool,
+} from './activityFormat'
 
 describe('statusBadge', () => {
   it('maps a NULL status to unfinished, neutral, pulsing — never coerced to ok/error', () => {
@@ -93,5 +100,42 @@ describe('formatRelativeTime', () => {
 
   it('falls back to a calendar date once it is more than a week old', () => {
     expect(formatRelativeTime('2026-08-01T12:00:00Z', now)).not.toMatch(/ago$/)
+  })
+})
+
+describe('isWorkspacePathTool', () => {
+  it('names the two workspace tools whose args carry a linkable path', () => {
+    expect(isWorkspacePathTool('workspace_write_file')).toBe(true)
+    expect(isWorkspacePathTool('workspace_read_file')).toBe(true)
+  })
+
+  it('excludes workspace_list_files and every other tool', () => {
+    expect(isWorkspacePathTool('workspace_list_files')).toBe(false)
+    expect(isWorkspacePathTool('get_time')).toBe(false)
+    expect(isWorkspacePathTool(null)).toBe(false)
+  })
+})
+
+describe('workspacePathFrom — the same polymorphic args_redacted quirk', () => {
+  it('extracts path from the object shape', () => {
+    expect(workspacePathFrom({ path: 'a.md', content: 'hi' })).toBe('a.md')
+  })
+
+  it('returns null for the clipped-string shape — nothing to parse a path out of', () => {
+    expect(workspacePathFrom('xxx… (+4800 more chars, 5000 total)')).toBeNull()
+  })
+
+  it('returns null when the object has no path field', () => {
+    expect(workspacePathFrom({ content: 'hi' })).toBeNull()
+  })
+
+  it('returns null for an empty or non-string path', () => {
+    expect(workspacePathFrom({ path: '' })).toBeNull()
+    expect(workspacePathFrom({ path: 42 })).toBeNull()
+  })
+
+  it('returns null for undefined/null args', () => {
+    expect(workspacePathFrom(undefined)).toBeNull()
+    expect(workspacePathFrom(null)).toBeNull()
   })
 })

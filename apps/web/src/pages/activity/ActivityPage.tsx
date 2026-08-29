@@ -11,7 +11,14 @@ import {
   type ActivityTurn,
   type ActivityTurnDetail,
 } from '../../lib/api'
-import { formatMs, formatRelativeTime, statusBadge, viewArgs } from './activityFormat'
+import {
+  formatMs,
+  formatRelativeTime,
+  isWorkspacePathTool,
+  statusBadge,
+  viewArgs,
+  workspacePathFrom,
+} from './activityFormat'
 
 /**
  * The operator's window into what Nova actually did — a read-only view
@@ -321,10 +328,28 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
     const failed = span.meta.ok === false
     const args = viewArgs(span.meta.args_redacted)
     const resultHead = typeof span.meta.result_head === 'string' ? span.meta.result_head : null
+    // Only the two file-scoped workspace tools carry a path worth opening,
+    // and only the object shape of args_redacted actually has one — the
+    // clipped-string shape (oversized/unparseable calls) has nothing to
+    // extract, so this is null there and no link renders. A plain <a>
+    // rather than a router <Link>: this drill-in has no Router context in
+    // its own tests, and a same-origin navigation to another route works
+    // fine as a normal anchor.
+    const workspacePath = isWorkspacePathTool(span.name)
+      ? workspacePathFrom(span.meta.args_redacted)
+      : null
     return (
       <div className="space-y-1.5 text-caption">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-content-primary">{span.name}</span>
+          {workspacePath && (
+            <a
+              href={`/files?path=${encodeURIComponent(workspacePath)}`}
+              className="font-mono text-micro text-accent hover:underline"
+            >
+              {workspacePath}
+            </a>
+          )}
           {ok && (
             <Badge color="success" size="sm">
               ok

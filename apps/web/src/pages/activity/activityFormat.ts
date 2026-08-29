@@ -52,6 +52,33 @@ export function viewArgs(value: unknown): ArgsView {
   return { kind: 'raw', text: JSON.stringify(value) }
 }
 
+/** The only two tools whose `path` argument names a file actually inside
+ * the workspace viewer (Files, apps/web/src/pages/files) — workspace_
+ * list_files takes an optional `path` too, but it names a directory to
+ * scope a listing by, not a single file to open, so it is deliberately
+ * excluded here. */
+const WORKSPACE_PATH_TOOLS = new Set(['workspace_write_file', 'workspace_read_file'])
+
+export function isWorkspacePathTool(name: string | null): boolean {
+  return name !== null && WORKSPACE_PATH_TOOLS.has(name)
+}
+
+/**
+ * meta.args_redacted's `path` field, when it is extractable — reads on the
+ * SAME polymorphic value viewArgs does (see its docstring for why the
+ * shape varies), but answers a narrower question: is there a path here to
+ * link to at all. The clipped-string shape (oversized/unparseable calls)
+ * carries no such field by construction, so a span in that shape simply
+ * has nothing to link — this returns null rather than guessing.
+ */
+export function workspacePathFrom(argsRedacted: unknown): string | null {
+  if (argsRedacted === null || typeof argsRedacted !== 'object' || Array.isArray(argsRedacted)) {
+    return null
+  }
+  const path = (argsRedacted as Record<string, unknown>).path
+  return typeof path === 'string' && path.trim() !== '' ? path : null
+}
+
 /** A span's duration_ms is either a real measurement or absent (never a
  * fake zero) — null stays null all the way to the caller, who renders it
  * as absent rather than "0ms". */

@@ -230,6 +230,100 @@ describe('ActivityPage — drill-in', () => {
   })
 })
 
+describe('ActivityPage — the workspace span-path link', () => {
+  it('links a workspace_write_file span whose args survived as the object shape', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], {
+      t1: detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'workspace_write_file',
+            started_at: new Date().toISOString(),
+            duration_ms: 15,
+            meta: {
+              ok: true,
+              args_redacted: { path: 'lists/groceries.md', content: 'hi' },
+              result_head: 'Wrote lists/groceries.md (2 bytes)',
+            },
+          },
+        ],
+      }),
+    })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+
+    const link = await within(panel).findByRole('link', { name: 'lists/groceries.md' })
+    expect(link.getAttribute('href')).toBe('/files?path=lists%2Fgroceries.md')
+  })
+
+  it('links a workspace_read_file span the same way', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], {
+      t1: detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'workspace_read_file',
+            started_at: new Date().toISOString(),
+            duration_ms: 3,
+            meta: { ok: true, args_redacted: { path: 'notes.md' }, result_head: 'hi' },
+          },
+        ],
+      }),
+    })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    expect(await within(panel).findByRole('link', { name: 'notes.md' })).toBeDefined()
+  })
+
+  it('renders no link when args_redacted degraded to the clipped-string shape', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], {
+      t1: detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'workspace_write_file',
+            started_at: new Date().toISOString(),
+            duration_ms: 3,
+            meta: {
+              ok: false,
+              args_redacted: 'xxx… (+4800 more chars, 5000 total)',
+              result_head: 'Error: too many keys — re-issue the call',
+            },
+          },
+        ],
+      }),
+    })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText('xxx… (+4800 more chars, 5000 total)')
+    expect(within(panel).queryByRole('link')).toBeNull()
+  })
+
+  it('renders no link for a tool that is not workspace-path-scoped', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], {
+      t1: detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'get_time',
+            started_at: new Date().toISOString(),
+            duration_ms: 3,
+            meta: { ok: true, args_redacted: {}, result_head: '14:02' },
+          },
+        ],
+      }),
+    })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText('get_time')
+    expect(within(panel).queryByRole('link')).toBeNull()
+  })
+})
+
 describe('ActivityPage — drill-in races', () => {
   // A row expanded and then abandoned (collapsed, or the operator jumps to
   // a different row) before its fetch resolves must not be stuck showing
