@@ -96,3 +96,17 @@ fine-tuning/LoRA (S19).
 SDD per task; T3 spike gates its own build; final whole-branch review;
 rebuild the real stack after review; owner walks; carries ->
 slice-02e-carries.md. Commits on rebuild/v4, never pushed.
+
+## T3 DECISION (owner, 2026-08-29): DEFER SGLang
+The spike recommended defer; the owner confirmed. SGLang is NOT bundled.
+Reasons (full report: .superpowers/.../task-3-spike-report.md, committed
+summary below): the 27B already runs well on ollama (S2); SGLang's edges
+are multi-user fleet features unused by a single-GPU household; it reserves
+VRAM for its lifetime so it cannot coexist with resident ollama on one
+24 GB card (switching engines would require a stack restart — worse than
+shipped); and it needs a second AWQ/GPTQ model artifact (GGUF+qwen3 flaky).
+Task #8 stays OPEN, deferred, with FLIP CONDITIONS: (a) multi-user/
+concurrent-turn need (S8); (b) a measured structured-output failure the
+narration guard / JSON-mode can't fix; (c) an easy, trust-verifiable AWQ/
+GPTQ quant of the pinned model. Ruling S1-R15 (ollama suggested
+everywhere) therefore STANDS until a flip condition is met.
