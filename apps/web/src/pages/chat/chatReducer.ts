@@ -60,6 +60,11 @@ export type ChatAction =
       conversationId: string
       messages: { id: string; role: string; content: string }[]
     }
+  | {
+      type: 'pollResolved'
+      conversationId: string
+      messages: { id: string; role: string; content: string }[]
+    }
   | { type: 'reset' }
 
 export const NO_REPLY = 'the turn finished without a reply'
@@ -200,6 +205,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // `loaded`. (The store surviving a route change in the first place
       // is ruling S2-R4.)
       if (state.conversationId === action.conversationId) return state
+      return fromFetchedMessages(state, action.conversationId, action.messages)
+
+    case 'pollResolved':
+      // A turn that finished SERVER-SIDE — one this store never streamed
+      // itself (the durable-turn case: the operator hard-refreshed mid-reply,
+      // so core finished the turn detached and persisted the full answer).
+      // ChatPage polls until core reports the turn done, then hands the
+      // fetched history here. Unlike `reconcile` (which distrusts a
+      // same-conversation fetch because the store lived through that turn in
+      // real time), this fetch IS authoritative: the store did NOT stream
+      // this turn, so the persisted rows are strictly more current than the
+      // pre-reply rows it is holding. It replaces them, resolving the pending
+      // reply into the SAME row set — no duplicate bubble. Two guards keep it
+      // from ever clobbering live local state:
+      //   - a stale poll naming a conversation we have since left is ignored;
+      //   - if the store is now streaming its OWN turn (the operator asked
+      //     something new while the poll was in flight), the live turn wins
+      //     and the poll result is dropped.
+      if (state.streaming) return state
+      if (state.conversationId !== action.conversationId) return state
       return fromFetchedMessages(state, action.conversationId, action.messages)
 
     case 'reset':

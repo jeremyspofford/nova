@@ -54,6 +54,21 @@ interface ChatStore {
     conversationId: string,
     messages: { id: string; role: string; content: string }[],
   ) => void
+  /**
+   * Resolve a turn that finished SERVER-SIDE — one this store never streamed
+   * (the durable-turn case: a hard refresh mid-reply, so core finished the
+   * turn detached and persisted the full answer). ChatPage's in-flight poll
+   * calls this with the now-complete history once core reports the turn done.
+   * Unlike loadConversation's reconcile, the fetched rows are authoritative
+   * here (the store did not live through this turn), so they replace the
+   * pre-reply rows — resolving the pending reply into the same set, never a
+   * duplicate. The reducer still drops it if the store has since started its
+   * own live turn or moved to another conversation.
+   */
+  resolveServerTurn: (
+    conversationId: string,
+    messages: { id: string; role: string; content: string }[],
+  ) => void
 }
 
 const ChatContext = createContext<ChatStore | null>(null)
@@ -147,8 +162,15 @@ export function ChatProvider({
     [],
   )
 
+  const resolveServerTurn = useCallback(
+    (conversationId: string, messages: { id: string; role: string; content: string }[]) => {
+      dispatch({ type: 'pollResolved', conversationId, messages })
+    },
+    [],
+  )
+
   return (
-    <ChatContext.Provider value={{ state, sendMessage, loadConversation }}>
+    <ChatContext.Provider value={{ state, sendMessage, loadConversation, resolveServerTurn }}>
       {children}
     </ChatContext.Provider>
   )

@@ -181,6 +181,12 @@ export interface Conversation {
   id: string
   title: string | null
   created_at: string
+  // True when this conversation's newest turn is still running server-side
+  // (turns.status NULL). A client returning after a hard refresh reads this
+  // to know a reply is still on its way and to poll for it, rather than
+  // showing a truncated answer — see services/core/app/conversations.py and
+  // ChatPage's in-flight poll. (S2c.)
+  pending_turn: boolean
 }
 
 export interface StoredMessage {

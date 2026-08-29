@@ -234,6 +234,84 @@ describe('chatReducer — reconciling a fetched history against a live store', (
   })
 })
 
+describe('chatReducer — resolving a turn that finished server-side (pollResolved)', () => {
+  // The durable-turn case (S2c): the operator hard-refreshed mid-reply, so
+  // core finished the turn detached and persisted the full answer. The fresh
+  // page loads history (only the user message so far), sees pending_turn, and
+  // polls; when core reports the turn done, ChatPage fetches the now-complete
+  // history and dispatches this. Because the store never streamed this turn,
+  // the fetch is authoritative — it replaces the rows, resolving the pending
+  // reply into the SAME set, never a duplicate.
+
+  it('replaces the pre-reply history with the finished reply, exactly once', () => {
+    // Fresh page after a hard refresh: history had only the user's message.
+    let state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hello' }],
+    })
+    expect(messages(state).map(m => m.role)).toEqual(['user'])
+
+    // The poll resolves: the assistant reply has landed in the DB.
+    state = chatReducer(state, {
+      type: 'pollResolved',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: 'hello' },
+        { id: 'a1', role: 'assistant', content: 'the full durable reply' },
+      ],
+    })
+
+    expect(messages(state).map(m => [m.role, m.text])).toEqual([
+      ['user', 'hello'],
+      ['assistant', 'the full durable reply'],
+    ])
+    // The assistant reply is a settled row, not a still-streaming one.
+    expect(messages(state)[1].streaming).toBe(false)
+    expect(state.streaming).toBe(false)
+  })
+
+  it('is dropped if the operator has since started their own live turn', () => {
+    let state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hello' }],
+    })
+    // A new live turn begins before the poll comes back.
+    state = chatReducer(state, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'wait, this' })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'live' } })
+    expect(state.streaming).toBe(true)
+
+    // The late poll result must not clobber the live turn.
+    state = chatReducer(state, {
+      type: 'pollResolved',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hello' }],
+    })
+
+    expect(state.streaming).toBe(true)
+    const live = messages(state).find(m => m.id === 'a2')
+    expect(live && live.text).toBe('live')
+  })
+
+  it('is dropped if it names a conversation the store has since left', () => {
+    const state = chatReducer(
+      chatReducer(emptyChat(), {
+        type: 'loaded',
+        conversationId: 'c2',
+        messages: [{ id: 'm1', role: 'user', content: 'current conversation' }],
+      }),
+      {
+        type: 'pollResolved',
+        conversationId: 'c1',
+        messages: [{ id: 'x', role: 'assistant', content: 'stale' }],
+      },
+    )
+    expect(state.conversationId).toBe('c2')
+    expect(messages(state).map(m => m.text)).toEqual(['current conversation'])
+  })
+})
+
 describe('chatReducer — live tool activity in the pending bubble', () => {
   // The chat store already tolerates {"activity":{tool,status}} frames
   // (streamChat's forward-compat); this is where they become something the
