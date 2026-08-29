@@ -62,13 +62,19 @@ def test_suggest_top_tier_leads_with_the_27b_then_offers_everything_smaller():
     step had no other card to click. A single-item "Pick a model" with no
     fallback is a dead end, so every tier now lists its recommendation first
     and then the smaller models that also fit.
+
+    Slice 2e diversified the catalog beyond qwen (gemma4:12b alongside
+    qwen3:14b, llama3.1:8b alongside qwen3:8b) — same family/tier bucket,
+    curated-file order, so each pair appears back to back.
     """
     result = suggest.suggest(_hw(24576), CURATED)
     assert result["tier"] == suggest.TIER_27B
     assert [m["slug"] for m in result["models"]] == [
         "qwen3.8:27b",
         "qwen3:14b",
+        "gemma4:12b",
         "qwen3:8b",
+        "llama3.1:8b",
         "qwen3:4b",
         "qwen3:1.7b",
     ]
@@ -87,16 +93,33 @@ def test_a_tier_never_offers_a_model_from_above_it():
     shown a 14B or a 27B, whatever the ordering logic does."""
     result = suggest.suggest(_hw(12 * 1024), CURATED)
     assert result["tier"] == suggest.TIER_8B
-    assert [m["slug"] for m in result["models"]] == ["qwen3:8b", "qwen3:4b", "qwen3:1.7b"]
+    assert [m["slug"] for m in result["models"]] == [
+        "qwen3:8b",
+        "llama3.1:8b",
+        "qwen3:4b",
+        "qwen3:1.7b",
+    ]
 
 
 def test_suggest_14b_tier_also_offers_the_27b_as_a_tight_fit_alternative():
     result = suggest.suggest(_hw(20 * 1024), CURATED)
     assert result["tier"] == suggest.TIER_14B
     slugs = [m["slug"] for m in result["models"]]
-    assert slugs == ["qwen3:14b", "qwen3.8:27b", "qwen3:8b", "qwen3:4b", "qwen3:1.7b"]
-    tight_fit_note = result["models"][1]["note"]
-    assert "tight" in tight_fit_note.lower()
+    assert slugs == [
+        "qwen3:14b",
+        "gemma4:12b",
+        "qwen3.8:27b",
+        "qwen3:8b",
+        "llama3.1:8b",
+        "qwen3:4b",
+        "qwen3:1.7b",
+    ]
+    # gemma4:12b is a same-tier PEER of qwen3:14b (both in this tier's
+    # primary families) — it gets no tight/lighter qualifier. Only the 27B,
+    # offered here as a tier-down alternative, is flagged tight.
+    assert "tight" not in result["models"][1]["note"].lower()
+    tight_fit_entry = next(m for m in result["models"] if m["slug"] == "qwen3.8:27b")
+    assert "tight" in tight_fit_entry["note"].lower()
 
 
 def test_suggest_bottom_tier_rationale_mentions_remote_or_cloud():
