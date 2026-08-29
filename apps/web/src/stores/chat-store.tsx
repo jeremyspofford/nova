@@ -69,6 +69,13 @@ interface ChatStore {
     conversationId: string,
     messages: { id: string; role: string; content: string }[],
   ) => void
+  /**
+   * Slice 2f Fix A: a successful Settings->Models switch calls this so the
+   * chat badge updates immediately, with no message sent — `state.model`
+   * is the single source ChatPage's badge and Settings' "current" marker
+   * both read (SettingsPage bridges the two: see its own docstring).
+   */
+  setModel: (model: string) => void
 }
 
 const ChatContext = createContext<ChatStore | null>(null)
@@ -169,8 +176,14 @@ export function ChatProvider({
     [],
   )
 
+  const setModel = useCallback((model: string) => {
+    dispatch({ type: 'modelSwitched', model })
+  }, [])
+
   return (
-    <ChatContext.Provider value={{ state, sendMessage, loadConversation, resolveServerTurn }}>
+    <ChatContext.Provider
+      value={{ state, sendMessage, loadConversation, resolveServerTurn, setModel }}
+    >
       {children}
     </ChatContext.Provider>
   )

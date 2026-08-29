@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Skeleton } from '../../components/ui'
 import { useAuth } from '../../stores/auth-store'
+import { useChatStore } from '../../stores/chat-store'
 import { getSettings, putSetting, settingValue, type SettingDef } from '../../lib/api'
 import { AppearanceSection } from './AppearanceSection'
 import { AccountSection } from './AccountSection'
@@ -13,10 +14,26 @@ import { ModelsSection } from './ModelsSection'
  *
  * S2e adds a third: Models. Its chat.model comes from the same settings
  * fetch this page already does for the appearance preset, rather than a
- * second GET /api/v1/settings.
+ * second GET /api/v1/settings — EXCEPT once a switch has happened, or a
+ * turn has run, in this session: see `chatModel` below.
+ *
+ * Slice 2f Fix A: switching the model here did not visibly take effect —
+ * neither the list's "Current" marker nor the chat badge moved without
+ * sending a message first. The chat badge's staleness was the real bug
+ * (ChatPage's pre-first-turn fallback reads a Gate settings snapshot this
+ * page's own PUT never touched); this page's own "Current" marker already
+ * followed its local `settings` echo correctly, but a switch made here and
+ * a switch's effect on chat were two different pieces of state that could
+ * silently disagree. The fix reads BOTH from `chat-store`'s `state.model` —
+ * the same store ChatPage already prefers over its Gate-derived
+ * `initialModel` — falling back to the settings-fetched value only for a
+ * session where neither a switch nor a turn has happened yet. `setModel`
+ * (called from `onModelChanged` below) is the one write path both surfaces
+ * now share.
  */
 export function SettingsPage() {
   const { refresh } = useAuth()
+  const { state: chatState, setModel } = useChatStore()
   const [settings, setSettings] = useState<SettingDef[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -27,7 +44,8 @@ export function SettingsPage() {
   }, [])
 
   const storedPreset = settings ? settingValue(settings, 'appearance.default_preset', 'default') : null
-  const chatModel = settings ? settingValue(settings, 'chat.model', '') : ''
+  const chatModel =
+    chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -74,7 +92,17 @@ export function SettingsPage() {
             />
             <ModelsSection
               chatModel={chatModel}
-              onModelChanged={model => updateSettingValue('chat.model', model)}
+              onModelChanged={model => {
+                // Both writes matter: the settings echo keeps this page's
+                // OWN state consistent with the PUT that just succeeded
+                // (harmless once `chatModel` above prefers chat-store, but
+                // cheap and correct), while `setModel` is what actually
+                // makes the switch visible — the Settings list's "Current"
+                // marker and the chat badge both re-render off it the
+                // instant this fires, with no message sent.
+                updateSettingValue('chat.model', model)
+                setModel(model)
+              }}
               onRerunSetup={handleRerunSetup}
             />
           </>

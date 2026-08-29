@@ -66,6 +66,7 @@ export type ChatAction =
       messages: { id: string; role: string; content: string }[]
     }
   | { type: 'reset' }
+  | { type: 'modelSwitched'; model: string }
 
 export const NO_REPLY = 'the turn finished without a reply'
 
@@ -229,6 +230,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case 'reset':
       return emptyChat()
+
+    // Slice 2f Fix A: a Settings->Models switch, not a server event — sets
+    // `model` DIRECTLY (never "action.model || state.model" the way the
+    // 'meta' event merges) because the switch itself is the new fact, and
+    // must win over whatever an earlier turn in this same conversation left
+    // behind. Everything else about the conversation in flight is untouched.
+    case 'modelSwitched':
+      return { ...state, model: action.model }
 
     case 'send':
       return {

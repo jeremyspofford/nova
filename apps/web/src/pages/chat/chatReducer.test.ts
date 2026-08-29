@@ -465,3 +465,36 @@ describe('chatReducer — a dropped connection', () => {
     expect(assistant.interrupted).toBe(true)
   })
 })
+
+// Slice 2f Fix A: a Settings->Models switch has to be visible in chat
+// immediately, with no message sent — but `model` otherwise only updates
+// from a server-confirmed turn (the 'meta' event above). `modelSwitched` is
+// the one other writer: it sets `model` directly (not "event.model ||
+// state.model" like 'meta' does), because the switch itself is the fact,
+// not a hint to merge with whatever was there before.
+describe('chatReducer — a Settings model switch (modelSwitched)', () => {
+  it('sets model directly, with no turn required', () => {
+    const state = chatReducer(emptyChat(), { type: 'modelSwitched', model: 'qwen3:14b' })
+    expect(state.model).toBe('qwen3:14b')
+  })
+
+  it('overrides a stale model left over from an earlier turn in this same conversation', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'meta', conversationId: 'c1', model: 'qwen3:8b', turnId: 't1' },
+    })
+    expect(state.model).toBe('qwen3:8b')
+
+    state = chatReducer(state, { type: 'modelSwitched', model: 'qwen3.8:27b' })
+    expect(state.model).toBe('qwen3.8:27b')
+  })
+
+  it('touches nothing else about the conversation in flight', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'partial' } })
+    state = chatReducer(state, { type: 'modelSwitched', model: 'qwen3:14b' })
+    expect(messages(state)[1].text).toBe('partial')
+    expect(state.streaming).toBe(true)
+  })
+})
