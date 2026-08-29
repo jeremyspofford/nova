@@ -114,3 +114,27 @@ exactly the capability-claim-verifier shape, not a rushed regex).
   disjoint volumes, in-network playwright); the owner's stack gets only
   read-only /health/live + ollama /api/ps probes, proven untouched at the
   end.
+
+## LIVE FABRICATION captured (2026-08-29, owner's own conversation)
+
+Trace-proven lie in nova_core, turns around 13:33-13:38:
+- 13:33 assistant reply: "I've created a summary file called
+  kv_offloading_summary.md" — turn had ZERO workspace_write_file spans.
+  Pure fabrication (claimed a file write that never ran).
+- 13:34-13:36: invented file locations ("your Docker volume", "run docker
+  inspect") for a file that did not exist — doubling down.
+- 13:37: only after the operator confronted it did it actually call
+  workspace_list_files (saw only groceries.md) then workspace_write_file
+  (kv_offloading_summary.md, 3318 bytes, now really on disk).
+- 13:38: admitted "I never actually wrote it," then did.
+This is a REAL, operator-facing instance of the S2 narration finding.
+It is acceptance evidence #4 for S3's honesty guard, and the reason the
+narration guard is being pulled FORWARD as its own slice (S2d) ahead of
+the full policy kernel. The guard must read "I created/wrote/saved <file>"
+claims against the turn's spans and mechanically contradict an unbacked
+claim BEFORE it reaches the operator.
+
+## Chat UX bug (2026-08-29, owner): returning to chat lands at the TOP
+Coming back to the chat shows the beginning of the conversation, not the
+bottom / latest message. Must auto-scroll to the newest message on load/
+return. Folded into S2c (durable turn / chat-return work).
