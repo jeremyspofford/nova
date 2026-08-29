@@ -262,6 +262,28 @@ describe('ModelsSection', () => {
     expect(within(extraCard).getByText('fit unknown')).toBeDefined()
   })
 
+  it('gives every card a slug-keyed testid, unambiguous even for the current model', async () => {
+    // qwen3:8b is both chatModel (rendered verbatim in the "Current chat
+    // model" line) AND a card slug — the exact ambiguity that made the e2e
+    // helper's old text-walk-to-ancestor locator resolve two elements and
+    // throw a strict-mode violation on every walk (scenario 1 always sets
+    // the current model). Confirms the slug text is genuinely duplicated on
+    // the page, then confirms the testid still picks exactly one card.
+    const api = fakeApi({ installed: ['qwen3:8b'] })
+    render(
+      <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('current-chat-model').textContent).toBe('qwen3:8b'))
+    expect(screen.getAllByText('qwen3:8b', { exact: true })).toHaveLength(2)
+
+    const currentCard = screen.getByTestId('model-card-qwen3:8b')
+    const otherCard = screen.getByTestId('model-card-qwen3:14b')
+    expect(currentCard).not.toBe(otherCard)
+    expect(within(currentCard).getByText('Current', { exact: true })).toBeDefined()
+    expect(within(otherCard).getByText('Available to pull', { exact: true })).toBeDefined()
+  })
+
   it('degrades honestly when the installed-models fetch fails: nothing is claimed installed, and the current model never shows as pullable', async () => {
     const api = fakeApi({ installedFails: true })
     render(

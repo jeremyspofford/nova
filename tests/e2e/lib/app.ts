@@ -125,18 +125,19 @@ export async function settingsMap(page: Page): Promise<Record<string, unknown>> 
 /**
  * Settings -> Models' per-model card, scoped by slug.
  *
- * ModelCard (apps/web/src/pages/settings/ModelsSection.tsx) carries no
- * data-testid of its own — the slug is the only thing on the card
- * guaranteed unique, rendered verbatim in its own <p>, so this locates that
- * exact text node and walks up to the card's root. `exact: true` matters:
- * curated slugs share prefixes (`qwen3:4b` is not a substring of
- * `qwen3:1.7b` or vice versa, but a loose match would still be one text
- * search away from picking up a neighbour on a longer catalog).
+ * ModelCard (apps/web/src/pages/settings/ModelsSection.tsx) carries
+ * `data-testid={`model-card-${slug}`}` on its root for exactly this reason.
+ * The previous approach — find the slug's text node, walk up to the
+ * nearest `.rounded-lg` ancestor — broke for the CURRENT model: its slug
+ * also renders in the "Current chat model" line above the list
+ * (`current-chat-model`), whose nearest `.rounded-lg` ancestor is the
+ * Section card wrapper, not this model's own card. That gave the locator
+ * two matches and threw a strict-mode violation on every walk, since
+ * scenario 1 always sets the current model via NOVA_E2E_MODEL. A
+ * testid keyed by slug is unambiguous regardless of what else on the page
+ * happens to render the same text.
  */
-export const modelCard = (page: Page, slug: string) =>
-  page
-    .getByText(slug, { exact: true })
-    .locator('xpath=ancestor::div[contains(@class, "rounded-lg")][1]')
+export const modelCard = (page: Page, slug: string) => page.getByTestId(`model-card-${slug}`)
 
 /**
  * Send a message and wait for the turn to settle.

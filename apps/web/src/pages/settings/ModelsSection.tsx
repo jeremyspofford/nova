@@ -112,7 +112,10 @@ function ModelCard({
     pull && pull.total > 0 ? Math.min(100, Math.round((pull.completed / pull.total) * 100)) : null
 
   return (
-    <div className="rounded-lg border border-border-subtle p-3 space-y-2">
+    <div
+      data-testid={`model-card-${model.slug}`}
+      className="rounded-lg border border-border-subtle p-3 space-y-2"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-compact font-medium text-content-primary truncate">{model.label}</p>
@@ -371,8 +374,9 @@ export function ModelsSection({
         },
         ...(backend.url ? [{ label: 'URL', value: backend.url }] : []),
         ...(backend.provider ? [{ label: 'Provider', value: backend.provider }] : []),
-        // Masked by core (mask_api_key) before it ever reaches the browser —
-        // this renders exactly what it was given, never the raw key.
+        // Masked by the gateway (backends.to_public) before it ever reaches
+        // the browser — core only proxies; this renders exactly what it was
+        // given, never the raw key.
         ...(backend.api_key ? [{ label: 'API key', value: backend.api_key }] : []),
       ]
     : []
