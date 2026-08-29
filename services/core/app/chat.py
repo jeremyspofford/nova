@@ -3,8 +3,15 @@
 Frame contract (each line is `data: <json>`):
     {"meta": {conversation_id, model, turn_id}}   exactly once, first
     {"t": "<delta>"}                              zero or more
+    {"activity": {"tool", "status"}}              zero or more, while tools run
     {"error": "<stated reason>"}                  at most one, on failure
     [DONE]                                        always last
+
+A turn is a loop, not a single call: the model is offered the tool
+registry, and whenever it answers with tool calls they are executed in the
+order it asked for, appended to the transcript, and the model is asked
+again. The loop is bounded by agents.max_tool_rounds and every exit is
+said out loud — a stated error, or a note that the rounds ran out.
 
 Recall is best-effort, the turn is not: a memory service that is down
 costs the turn its notes and nothing else. A gateway that fails is stated
@@ -17,6 +24,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import asyncpg
@@ -25,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import conversations, db, identity, peers, settings_store, traces
+from app import conversations, db, identity, peers, settings_store, tools, traces
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -41,6 +49,21 @@ INGEST_TIMEOUT = httpx.Timeout(10.0)
 GATEWAY_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.0)
 EMPTY_REPLY = "the model returned nothing"
 DONE_FRAME = "data: [DONE]\n\n"
+
+# How much of a tool call lands in its span. The result head is the
+# Activity page's evidence that the call did what it says; the argument
+# head keeps a 256 KB file body out of the trace. Both are heads, and both
+# say how much they left out.
+SPAN_RESULT_HEAD_CHARS = 500
+SPAN_ARG_HEAD_CHARS = 200
+SPAN_ARGS_TOTAL_CHARS = 2000
+
+# Words that suggest a gateway refusal was ABOUT the tools parameter. This
+# only ever adds a sentence in front of the backend's own words, never
+# replaces them, and it never changes what the loop does: a backend that
+# will not take tools makes the turn fail, because quietly retrying without
+# them would hide the fact that she has no hands on that model.
+_TOOL_SUPPORT_MARKERS = ("tool", "function_call", "functions")
 
 
 class GatewayFailure(RuntimeError):
@@ -94,12 +117,22 @@ def history_window(
     return kept
 
 
-def stable_system_prompt(model: str) -> str:
-    """The half that does not change from turn to turn."""
+def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
+    """The half that does not change from turn to turn.
+
+    The tool list is derived from the registry rather than written out
+    here, so a tool added to the toolset is named in the prompt by that
+    fact alone and cannot drift out of step with what is advertised.
+    """
     return (
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
         f"The model answering is {model or 'the gateway default'}. Be direct and concrete, "
-        "and say plainly when you do not know something."
+        "and say plainly when you do not know something.\n\n"
+        f"You can call these tools: {', '.join(tool_names)}. "
+        "Use one when it gets a real answer instead of a guess. "
+        "After writing a file, read it back before you say it worked. "
+        "When a tool answers with a line starting 'Error:', say plainly what failed "
+        "and do not claim the work was done."
     )
 
 
@@ -111,20 +144,27 @@ def volatile_system_prompt(snippets: Sequence[str]) -> str | None:
     return f"Relevant notes:\n{notes}\n\nCurrent time: {datetime.now(UTC).isoformat()}"
 
 
-def completion_payload(
+def base_messages(
     model: str, snippets: Sequence[str], history: Sequence[dict], message: str
-) -> dict:
-    messages = [{"role": "system", "content": stable_system_prompt(model)}]
+) -> list[dict]:
+    """The transcript the first round of the turn starts from."""
+    messages = [{"role": "system", "content": stable_system_prompt(model, tools.tool_names())}]
     volatile = volatile_system_prompt(snippets)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
     messages.append({"role": "user", "content": message})
-    payload: dict = {"messages": messages, "stream": True}
+    return messages
+
+
+def completion_payload(model: str, messages: Sequence[dict], advertised: Sequence[dict]) -> dict:
+    payload: dict = {"messages": list(messages), "stream": True}
     if model:
         # An empty chat.model means "whatever the gateway is configured for";
         # sending "" would ask for a model actually named "".
         payload["model"] = model
+    if advertised:
+        payload["tools"] = list(advertised)
     return payload
 
 
@@ -156,19 +196,163 @@ def _snippets(results: Iterable) -> list[str]:
     return snippets
 
 
-def _chunk_parts(data: dict) -> tuple[str, dict | None, str | None]:
-    """(delta text, usage, error) out of one OpenAI-shaped stream chunk."""
+# -- tool calls off the wire ------------------------------------------------
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str
+
+    def as_openai(self) -> dict:
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
+
+class ToolCallBuffer:
+    """Assembles a round's tool calls out of whatever the backend emits.
+
+    OpenAI streams a call across several chunks keyed by `index`: the first
+    fragment carries the id and the function name, the rest carry more
+    argument text to concatenate. Other backends answer a streamed request
+    with one whole completion chunk, arguments already complete, sometimes
+    with no `index` at all. Both shapes accumulate here so the loop never
+    has to know which kind of backend answered.
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[int, ToolCall] = {}
+
+    def add(self, fragment: dict) -> None:
+        function = fragment.get("function")
+        function = function if isinstance(function, dict) else {}
+        name = function.get("name") or ""
+
+        index = fragment.get("index")
+        if type(index) is not int:
+            # No index to key on: a fragment that names a function starts a
+            # new call, and one carrying only argument text continues the
+            # newest — which is the only reading that keeps two un-indexed
+            # calls in one round from merging into one.
+            index = len(self._calls) if (name or not self._calls) else max(self._calls)
+
+        call = self._calls.setdefault(index, ToolCall(id="", name="", arguments=""))
+        if fragment.get("id"):
+            call.id = str(fragment["id"])
+        if name:
+            call.name = name
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            call.arguments += arguments
+        elif isinstance(arguments, dict):
+            # A backend that sends the arguments already parsed; re-encoded
+            # so there is exactly one form downstream.
+            call.arguments = json.dumps(arguments)
+
+    def finished(self) -> list[ToolCall]:
+        """The round's calls, in the order the model asked for them.
+
+        A call the backend gave no id gets one here, and the same id goes
+        on both the assistant message and its tool result — the pair has to
+        match, and OpenAI's shape has nowhere else to say which result
+        answers which call.
+        """
+        calls = [self._calls[index] for index in sorted(self._calls)]
+        for position, call in enumerate(calls, start=1):
+            if not call.id:
+                call.id = f"call_{position}"
+        return calls
+
+
+def _chunk_parts(data: dict) -> tuple[str, dict | None, str | None, list[dict]]:
+    """(delta text, usage, error, tool-call fragments) out of one chunk."""
     error = data.get("error")
     if error is not None:
         message = error.get("message") if isinstance(error, dict) else str(error)
-        return "", None, message or "unspecified gateway error"
+        return "", None, message or "unspecified gateway error", []
     delta = ""
+    fragments: list[dict] = []
     for choice in data.get("choices") or []:
-        piece = (choice.get("delta") or {}).get("content")
+        # `delta` while streaming; `message` from a backend that answers a
+        # streamed request with one whole completion chunk instead.
+        payload = choice.get("delta") or choice.get("message") or {}
+        if not isinstance(payload, dict):
+            continue
+        piece = payload.get("content")
         if piece:
             delta += piece
+        calls = payload.get("tool_calls")
+        if isinstance(calls, list):
+            fragments.extend(item for item in calls if isinstance(item, dict))
     usage = data.get("usage")
-    return delta, usage if isinstance(usage, dict) else None, None
+    return delta, usage if isinstance(usage, dict) else None, None, fragments
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… (+{len(text) - limit} more chars, {len(text)} total)"
+
+
+def _redact(value: object) -> object:
+    """Trace-sized arguments: the same shape, long strings cut to a head.
+
+    Nothing is filtered by name — none of S2's tools take a credential —
+    so "redacted" here means "not the whole payload": a 256 KB file body
+    must not be copied into the turn's trace, and the Activity page needs
+    something a person can read at a glance.
+    """
+    if isinstance(value, dict):
+        return {key: _redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    if isinstance(value, str):
+        return _clip(value, SPAN_ARG_HEAD_CHARS)
+    return value
+
+
+def _span_arguments(raw: object) -> object:
+    """What the model actually sent, recorded whether or not it parsed."""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Unparseable arguments are exactly the case worth seeing in the
+            # trace, so the raw text is kept rather than dropped.
+            parsed = raw
+    else:
+        parsed = raw
+    return _bounded(_redact(parsed))
+
+
+def _bounded(redacted: object) -> object:
+    """A whole-record cap on top of the per-value one.
+
+    The model chooses how many arguments it sends, and they are recorded
+    BEFORE validation gets to refuse them — so a call with ten thousand
+    keys must not become a ten-thousand-key row in turn_spans. Past the
+    cap the record degrades to a clipped string that says how much was
+    left out, which is still evidence and is bounded.
+    """
+    encoded = json.dumps(redacted, default=str)
+    if len(encoded) <= SPAN_ARGS_TOTAL_CHARS:
+        return redacted
+    return _clip(encoded, SPAN_ARGS_TOTAL_CHARS)
+
+
+def _mentions_tools(reason: str) -> bool:
+    lowered = reason.lower()
+    return any(marker in lowered for marker in _TOOL_SUPPORT_MARKERS)
+
+
+# -- peers -----------------------------------------------------------------
 
 
 async def _recall(app, turn: traces.Turn, person: Person, query: str) -> list[str]:
@@ -252,6 +436,31 @@ async def _finalize_after_disconnect(
         logger.exception("could not close turn %s after a disconnect", turn.id)
 
 
+async def _run_tool(
+    turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall
+) -> tuple[str, bool]:
+    """One tool call, timed, recorded, and unable to raise.
+
+    dispatch() decides ok; nothing here reads the result text to work out
+    whether it worked, so the span and the activity frame say what actually
+    happened rather than what the prose looked like.
+    """
+    with turn.span("tool", call.name) as span:
+        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        # Pre-set, and overwritten the moment dispatch answers. A turn the
+        # client abandons mid-call still files this span on the way out, and
+        # it must read as "never finished" rather than as an untested
+        # success.
+        span.meta["ok"] = False
+        span.meta["result_head"] = "(the turn ended before this call returned)"
+        result, ok = await tools.dispatch(call.name, call.arguments, ctx)
+        span.meta["ok"] = ok
+        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        if not ok:
+            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+    return result, ok
+
+
 async def _turn_frames(
     app,
     pool: asyncpg.Pool,
@@ -261,7 +470,11 @@ async def _turn_frames(
     message: str,
     history: Sequence[dict],
     model: str,
+    max_tool_rounds: int,
 ) -> AsyncIterator[str]:
+    # Everything streamed to the client this turn, across every round, in
+    # order — this is what persists, so a reload shows exactly what was
+    # watched live.
     parts: list[str] = []
     # The outcome, once the turn has actually reached one. None means the
     # turn is still in flight, which is what makes a disconnect "interrupted"
@@ -281,68 +494,135 @@ async def _turn_frames(
         )
 
         snippets = await _recall(app, turn, person, message)
-        payload = completion_payload(model, snippets, history, message)
+        messages = base_messages(model, snippets, history, message)
+        advertised = tools.advertised_tools()
+        tool_ctx = tools.context_for(app, person)
 
+        # A round is one gateway call plus the tool calls it asks for. The
+        # cap counts gateway calls: reaching it with tools still pending
+        # ends the turn with the note below rather than executing work
+        # whose result nothing would ever read.
+        rounds_allowed = max(1, max_tool_rounds)
         failure: str | None = None
-        with turn.span("llm_call", model or None) as span:
-            span.meta["model"] = model
-            try:
-                async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
-                    async with client.stream(
-                        "POST", "/v1/chat/completions", json=payload
-                    ) as response:
-                        served_by = response.headers.get("x-nova-served-by")
-                        if served_by:
-                            span.meta["served_by"] = served_by
-                        if response.status_code != 200:
-                            detail = (await response.aread()).decode(errors="replace")[:400]
-                            raise GatewayFailure(
-                                f"the gateway refused the request "
-                                f"({response.status_code}): {detail}"
-                            )
-                        async for line in response.aiter_lines():
-                            line = line.strip()
-                            if not line.startswith("data:"):
-                                continue
-                            data = line[len("data:") :].strip()
-                            if data == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data)
-                            except json.JSONDecodeError:
-                                span.meta["malformed_chunks"] = (
-                                    span.meta.get("malformed_chunks", 0) + 1
+        out_of_rounds = False
+
+        for round_number in range(1, rounds_allowed + 1):
+            round_parts: list[str] = []
+            buffer = ToolCallBuffer()
+            with turn.span("llm_call", model or None) as span:
+                span.meta["model"] = model
+                span.meta["round"] = round_number
+                try:
+                    async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
+                        async with client.stream(
+                            "POST",
+                            "/v1/chat/completions",
+                            json=completion_payload(model, messages, advertised),
+                        ) as response:
+                            served_by = response.headers.get("x-nova-served-by")
+                            if served_by:
+                                span.meta["served_by"] = served_by
+                            if response.status_code != 200:
+                                detail = (await response.aread()).decode(errors="replace")[:400]
+                                raise GatewayFailure(
+                                    f"the gateway refused the request "
+                                    f"({response.status_code}): {detail}"
                                 )
-                                continue
-                            delta, usage, error = _chunk_parts(chunk)
-                            if error is not None:
-                                raise GatewayFailure(f"the gateway reported: {error}")
-                            if usage is not None:
-                                # Only what the gateway actually reported —
-                                # a null token count is not a measurement.
-                                for field in ("prompt_tokens", "completion_tokens"):
-                                    if usage.get(field) is not None:
-                                        span.meta[field] = usage[field]
-                            if delta:
-                                parts.append(delta)
-                                yield _frame({"t": delta})
-            except GatewayFailure as exc:
-                failure = str(exc)
-                span.meta["error"] = failure
-            except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
-                failure = f"could not reach the gateway — {peers.reason(exc)}"
-                span.meta["error"] = failure
+                            async for line in response.aiter_lines():
+                                line = line.strip()
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[len("data:") :].strip()
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                except json.JSONDecodeError:
+                                    span.meta["malformed_chunks"] = (
+                                        span.meta.get("malformed_chunks", 0) + 1
+                                    )
+                                    continue
+                                delta, usage, error, fragments = _chunk_parts(chunk)
+                                if error is not None:
+                                    raise GatewayFailure(f"the gateway reported: {error}")
+                                if usage is not None:
+                                    # Only what the gateway actually reported —
+                                    # a null token count is not a measurement.
+                                    for field in ("prompt_tokens", "completion_tokens"):
+                                        if usage.get(field) is not None:
+                                            span.meta[field] = usage[field]
+                                for fragment in fragments:
+                                    buffer.add(fragment)
+                                if delta:
+                                    parts.append(delta)
+                                    round_parts.append(delta)
+                                    yield _frame({"t": delta})
+                except GatewayFailure as exc:
+                    failure = str(exc)
+                    span.meta["error"] = failure
+                except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
+                    failure = f"could not reach the gateway — {peers.reason(exc)}"
+                    span.meta["error"] = failure
+                calls = buffer.finished()
+                span.meta["tool_calls"] = len(calls)
+
+            if failure is not None:
+                break
+            if not calls:
+                break
+            if round_number == rounds_allowed:
+                out_of_rounds = True
+                break
+
+            messages.append(
+                {
+                    # "" rather than null: a model that said nothing this
+                    # round still needs an assistant message to hang its
+                    # tool calls on, and not every backend accepts a null
+                    # content there.
+                    "role": "assistant",
+                    "content": "".join(round_parts),
+                    "tool_calls": [call.as_openai() for call in calls],
+                }
+            )
+            # Sequential, in the model's own order: concurrency is a later
+            # slice, and two tools writing the same file at once is not a
+            # problem worth having yet.
+            for call in calls:
+                yield _frame({"activity": {"tool": call.name, "status": "start"}})
+                result, ok = await _run_tool(turn, tool_ctx, call)
+                yield _frame({"activity": {"tool": call.name, "status": "ok" if ok else "error"}})
+                messages.append(
+                    {"role": "tool", "tool_call_id": call.id, "content": result}
+                )
 
         if failure is not None:
-            logger.warning("chat turn %s failed: %s", turn.id, failure)
+            stated = failure
+            if _mentions_tools(failure):
+                # Layered in front of the backend's own words, never
+                # instead of them — and the turn still fails, because a
+                # silent retry without tools would leave her looking
+                # capable while having no hands at all.
+                stated = f"the serving model/backend does not support tools — {failure}"
+            logger.warning("chat turn %s failed: %s", turn.id, stated)
             decided = "error"
-            yield _frame({"error": failure})
+            yield _frame({"error": stated})
             yield DONE_FRAME
             return
+
+        if out_of_rounds:
+            note = (
+                f"[stopped after {rounds_allowed} tool rounds without finishing]"
+            )
+            note = f"\n\n{note}" if parts else note
+            parts.append(note)
+            yield _frame({"t": note})
 
         text = "".join(parts)
         if not text:
             # Zero deltas and no error at all: still a failure, said out loud.
+            # The floor judges the whole turn, so a tool round that said
+            # nothing is fine as long as some round eventually did.
             logger.warning("chat turn %s: %s", turn.id, EMPTY_REPLY)
             decided = "error"
             yield _frame({"error": EMPTY_REPLY})
@@ -409,6 +689,11 @@ async def chat_stream(
         conversation_id,
         message,
     )
+    # user/assistant only, because that is all the messages table holds. A
+    # turn's tool calls and their results live in that turn's transcript and
+    # in its spans, and are deliberately not replayed into the next turn: a
+    # follow-up like "add milk to that list" works because she reads the
+    # file again, not because a stale copy of it is still in the prompt.
     history = history_window(
         await pool.fetch(
             "SELECT role, content FROM messages WHERE conversation_id = $1 AND id <> $2 "
@@ -420,11 +705,20 @@ async def chat_stream(
     )
 
     model = await settings_store.read_value(pool, "chat.model")
+    max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
     turn = await traces.open_turn(pool, conversation_id=conversation_id, model=model)
 
     return StreamingResponse(
         _turn_frames(
-            request.app, pool, turn, person, conversation_id, message, history, model
+            request.app,
+            pool,
+            turn,
+            person,
+            conversation_id,
+            message,
+            history,
+            model,
+            max_tool_rounds,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},

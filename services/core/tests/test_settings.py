@@ -5,7 +5,16 @@ from tests.conftest import requires_db
 
 pytestmark = requires_db
 
-S1_KEYS = {"onboarding.completed", "chat.model", "appearance.default_preset"}
+# Every key the registry defines, pinned so a setting cannot appear or
+# vanish unnoticed. It moved from three to four in S2: the tool loop needs
+# a round cap the operator can see and change (agents.max_tool_rounds),
+# which is also the first "int" setting the registry has ever had.
+KNOWN_KEYS = {
+    "onboarding.completed",
+    "chat.model",
+    "appearance.default_preset",
+    "agents.max_tool_rounds",
+}
 
 
 async def _by_key(client) -> dict:
@@ -16,7 +25,7 @@ async def _by_key(client) -> dict:
 
 async def test_every_def_is_listed_with_its_default_when_unset(owner_client):
     items = await _by_key(owner_client)
-    assert set(items) == S1_KEYS
+    assert set(items) == KNOWN_KEYS
     assert items["onboarding.completed"]["type"] == "bool"
     assert items["onboarding.completed"]["default"] is False
     assert items["onboarding.completed"]["value"] is False
@@ -77,3 +86,32 @@ async def test_a_string_setting_refuses_a_bool(owner_client):
 async def test_a_string_setting_refuses_null(owner_client):
     resp = await owner_client.put("/api/v1/settings", json={"key": "chat.model", "value": None})
     assert resp.status_code == 400
+
+
+async def test_an_int_setting_round_trips_as_a_number(owner_client, pool):
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": 3}
+    )
+    assert resp.status_code == 200
+    assert (await _by_key(owner_client))["agents.max_tool_rounds"]["value"] == 3
+    assert await pool.fetchval(
+        "SELECT value FROM settings WHERE key = 'agents.max_tool_rounds'"
+    ) == 3
+
+
+async def test_an_int_setting_refuses_a_bool(owner_client):
+    # python says True == 1; the type check here does not, so a checkbox
+    # wired to the wrong key cannot silently become "1 round".
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": True}
+    )
+    assert resp.status_code == 400
+    assert "int" in resp.json()["error"]
+
+
+async def test_an_int_setting_refuses_a_string_and_a_float(owner_client):
+    for value in ("6", 6.5):
+        resp = await owner_client.put(
+            "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": value}
+        )
+        assert resp.status_code == 400, value

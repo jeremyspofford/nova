@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 @dataclass(frozen=True)
 class SettingDef:
     key: str
-    type: str  # "bool" or "str"
+    type: str  # one of _PYTHON_TYPES below
     default: Any
     description: str
 
@@ -46,12 +46,23 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         default="default",
         description="Theme preset the web app starts on.",
     ),
+    SettingDef(
+        key="agents.max_tool_rounds",
+        type="int",
+        default=6,
+        description=(
+            "How many times one chat turn may call the model while it is still "
+            "asking for tools. Reaching the limit ends the turn with a note "
+            "saying so, never silently."
+        ),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
 
-# type(value) is checked exactly: python says True == 1, JSON does not.
-_PYTHON_TYPES: dict[str, type] = {"bool": bool, "str": str}
+# type(value) is checked exactly: python says True == 1, JSON does not — so
+# `int` here refuses `true` rather than storing it as 1.
+_PYTHON_TYPES: dict[str, type] = {"bool": bool, "str": str, "int": int}
 
 
 class SettingWrite(BaseModel):
