@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import activity, auth_api, chat, conversations, db, proxies, settings_store
+from app import activity, auth_api, chat, conversations, db, proxies, settings_store, workspace_api
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -53,6 +53,7 @@ app.include_router(conversations.router)
 app.include_router(chat.router)
 app.include_router(activity.router)
 app.include_router(proxies.router)
+app.include_router(workspace_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

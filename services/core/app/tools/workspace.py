@@ -141,6 +141,28 @@ async def read_file(args: dict, ctx: ToolContext) -> str:
     return f"{head}\n[truncated: file is {len(data)} bytes]"
 
 
+def iter_contained_files(root: Path, base: Path):
+    """Every real file under `base`, sorted, with symlinks refused rather
+    than followed. Not a string check: a symlink is skipped outright, and
+    every remaining candidate still has its realpath resolved and checked
+    against `root` before it is trusted, so a link cannot smuggle a file
+    from outside the root into the result. This is the second half of the
+    module's one gate (see the module docstring) — `_resolve_within`
+    contains a single caller-supplied path, this contains a directory
+    walk — and it is exported so a read-only consumer of the workspace
+    (the operator's Files viewer, app/workspace_api.py) can list it without
+    re-deriving the same check.
+    """
+    for path in sorted(base.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except (ValueError, OSError):
+            continue
+        yield path
+
+
 async def list_files(args: dict, ctx: ToolContext) -> str:
     root = ctx.workspace_root.resolve()
     requested = args.get("path") or ""
@@ -154,18 +176,9 @@ async def list_files(args: dict, ctx: ToolContext) -> str:
             return f"No files under {label} yet."
         raise ToolFailure(f"there is no directory at {requested!r} in the workspace")
 
-    entries: list[tuple[str, int]] = []
-    for path in sorted(base.rglob("*")):
-        # Symlinks are skipped outright rather than followed, and the
-        # realpath check below is the actual gate — a link cannot smuggle a
-        # file from outside the root into this listing.
-        if path.is_symlink() or not path.is_file():
-            continue
-        try:
-            path.resolve(strict=True).relative_to(root)
-        except (ValueError, OSError):
-            continue
-        entries.append((_display(root, path), path.stat().st_size))
+    entries: list[tuple[str, int]] = [
+        (_display(root, path), path.stat().st_size) for path in iter_contained_files(root, base)
+    ]
 
     if not entries:
         return f"No files under {label} yet."
