@@ -1,0 +1,50 @@
+"""What a tool IS, and what one is given when it runs.
+
+Kept in its own module so the executor modules (workspace, memory, web,
+util) and the registry that assembles them can both import these types
+without importing each other.
+"""
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+# Every failure a tool reports to the model starts with this, so a model
+# reading its own transcript can tell a refusal from an answer without
+# guessing at prose. Nothing downstream decides ok/failed by looking for
+# it — dispatch() returns that flag separately — but the model only ever
+# sees text, so the text has to say it too.
+ERROR_PREFIX = "Error: "
+
+
+class ToolFailure(Exception):
+    """A refusal an executor states on purpose: containment, a missing
+    file, an unreachable peer, a cap exceeded. dispatch() turns it into an
+    `Error: <reason>` result. Anything an executor raises that is NOT this
+    is a bug, and dispatch says so in different words — see dispatch()."""
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Everything an executor is allowed to know about the turn it serves.
+
+    `app` carries the outbound seams (peer links, and the by-URL transport
+    map tests mount local ASGI stand-ins on). `person` scopes the memory
+    tools — a tool never picks its own owner. `workspace_root` is resolved
+    once per turn so a single env read decides the boundary for every
+    filesystem call in that turn.
+    """
+
+    app: Any
+    person: Any
+    workspace_root: Path
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    parameters: dict  # JSON Schema, advertised verbatim and validated against
+    executor: Callable[[dict, ToolContext], Awaitable[str]]

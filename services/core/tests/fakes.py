@@ -119,6 +119,10 @@ GATEWAY_URL = "http://gateway.test"
 GATEWAY_TOKEN = "gateway-link-token"
 MEMORY_URL = "http://memory.test"
 MEMORY_TOKEN = "memory-link-token"
+# An outside origin for fetch_url's tests. Its host resolves to nothing
+# real; the suites that use it point tools.web.resolve_addresses at a
+# public-looking address so the SSRF guard runs for real and passes.
+WEB_ORIGIN = "http://public.test"
 
 
 def _bearer_ok(request, token: str) -> bool:
@@ -213,13 +217,16 @@ class FakeGateway:
 
 @dataclass
 class FakeMemory:
-    """/recall and /ingest, with every call recorded."""
+    """/recall, /ingest and /save, with every call recorded."""
 
     results: tuple[dict, ...] = ()
     recall_status: int = 200
     ingest_status: int = 200
+    save_status: int = 200
+    save_body: dict | None = None
     recalls: list[dict] = field(default_factory=list)
     ingests: list[dict] = field(default_factory=list)
+    saves: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.ingested = asyncio.Event()
@@ -227,8 +234,21 @@ class FakeMemory:
             routes=[
                 Route("/recall", self._recall, methods=["POST"]),
                 Route("/ingest", self._ingest, methods=["POST"]),
+                Route("/save", self._save, methods=["POST"]),
             ]
         )
+
+    async def _save(self, request):
+        body = await request.json()
+        self.saves.append(body)
+        if not _bearer_ok(request, MEMORY_TOKEN):
+            return JSONResponse({"error": "bad memory bearer"}, status_code=401)
+        if self.save_status != 200:
+            return JSONResponse({"error": "could not save"}, status_code=self.save_status)
+        if self.save_body is not None:
+            return JSONResponse(self.save_body)
+        slug = "-".join(str(body.get("title", "note")).lower().split())
+        return JSONResponse({"path": f"people/x/topics/{slug}.md", "saved": True})
 
     async def _recall(self, request):
         body = await request.json()
@@ -248,3 +268,150 @@ class FakeMemory:
         if self.ingest_status != 200:
             return Response(status_code=self.ingest_status)
         return JSONResponse({"path": "journals/today.md", "appended": True})
+
+
+@dataclass
+class FakeWeb:
+    """A public-looking web server for fetch_url: one page per behaviour.
+
+    Reached through the same by-URL transport map the peer fakes use, so
+    the tool's real code path runs — guard, redirect walk, caps, extraction
+    — without a socket.
+    """
+
+    big_bytes: int = 600 * 1024
+    requested: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(
+            routes=[
+                Route("/page.html", self._html),
+                Route("/plain.txt", self._plain),
+                Route("/data.json", self._json),
+                Route("/big.txt", self._big),
+                Route("/image.png", self._image),
+                Route("/gone", self._gone),
+                Route("/redirect", self._redirect),
+                Route("/redirect-to-private", self._redirect_private),
+                Route("/hop/{n:int}", self._hop),
+                Route("/redirect-without-location", self._redirect_no_location),
+                Route("/post-only", self._echo_method, methods=["GET", "POST"]),
+            ]
+        )
+
+    def _seen(self, request) -> None:
+        self.requested.append(request.url.path)
+
+    async def _html(self, request):
+        self._seen(request)
+        body = (
+            "<!doctype html><html><head><title>Tea</title>"
+            "<style>body { color: red }</style>"
+            "<script>var secret = 'do not read me'</script></head>"
+            "<body><!-- a comment --><h1>Tea &amp; biscuits</h1>"
+            "<p>Steep for <b>three</b> minutes.</p></body></html>"
+        )
+        return Response(body, media_type="text/html; charset=utf-8")
+
+    async def _plain(self, request):
+        self._seen(request)
+        return Response("just some text", media_type="text/plain")
+
+    async def _json(self, request):
+        self._seen(request)
+        return JSONResponse({"temperature_c": 21})
+
+    async def _big(self, request):
+        self._seen(request)
+        return Response("z" * self.big_bytes, media_type="text/plain")
+
+    async def _image(self, request):
+        self._seen(request)
+        return Response(b"\x89PNG\r\n", media_type="image/png")
+
+    async def _gone(self, request):
+        self._seen(request)
+        return Response("nothing here", status_code=404, media_type="text/plain")
+
+    async def _redirect(self, request):
+        self._seen(request)
+        return Response(status_code=302, headers={"location": "/page.html"})
+
+    async def _redirect_private(self, request):
+        self._seen(request)
+        return Response(status_code=302, headers={"location": "http://private.test/secret"})
+
+    async def _redirect_no_location(self, request):
+        self._seen(request)
+        return Response(status_code=302)
+
+    async def _hop(self, request):
+        self._seen(request)
+        n = int(request.path_params["n"])
+        return Response(status_code=302, headers={"location": f"/hop/{n + 1}"})
+
+    async def _echo_method(self, request):
+        self._seen(request)
+        return Response(request.method, media_type="text/plain")
+
+
+@dataclass
+class Refusal:
+    """A gateway round that answers with a status instead of a stream."""
+
+    status: int
+    body: dict
+
+
+@dataclass
+class ScriptedGateway:
+    """A completions endpoint that plays one scripted round per call.
+
+    Each entry in `rounds` is either the tuple of SSE chunk payloads that
+    round emits (verbatim, so a test can pin an exact wire shape) or a
+    Refusal. Running past the end of the script is a loud 500 rather than a
+    quiet empty round — a loop calling more times than the test expects
+    must fail the test, not pass it.
+    """
+
+    rounds: tuple = ()
+    served_by: str = "ollama:qwen3:8b"
+    seen: list[tuple[str, dict | None]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.calls = 0
+        self.app = Starlette(
+            routes=[Route("/v1/chat/completions", self._completions, methods=["POST"])]
+        )
+
+    @property
+    def payloads(self) -> list[dict]:
+        return [body for _path, body in self.seen if body is not None]
+
+    async def _completions(self, request):
+        raw = await request.body()
+        self.seen.append(("/v1/chat/completions", json.loads(raw) if raw else None))
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+
+        index = self.calls
+        self.calls += 1
+        if index >= len(self.rounds):
+            return JSONResponse(
+                {"error": {"message": f"the test script has no round {index + 1}"}},
+                status_code=500,
+            )
+        script = self.rounds[index]
+        if isinstance(script, Refusal):
+            return JSONResponse(script.body, status_code=script.status)
+
+        async def stream():
+            for chunk in script:
+                yield _sse(chunk)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"X-Nova-Served-By": self.served_by},
+        )
