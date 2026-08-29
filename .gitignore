@@ -47,3 +47,7 @@ frontend/coverage/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/e2e/.auth/
+
+# The isolated e2e stack: generated throwaway secrets for the nova-e2e
+# project (tests/e2e/isolated.sh). Never deploy/.env, never committed.
+tests/e2e/.isolated/

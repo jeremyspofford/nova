@@ -1,0 +1,32 @@
+# Puts the GPU back on the isolated stack's ollama, for the measurement run
+# only.
+#
+# docker-compose.isolated.yml drops every device reservation on purpose: the
+# functional walk must not contend with whatever else is on the one card in
+# this box. The two-model measurement is the opposite case — it exists to
+# record what an 8B and a 27B actually cost on the GPU — so it needs the
+# reservation back, and it is a separate file rather than a variable because
+# turning it on has to be a deliberate act with a check in front of it.
+#
+# The check, which this file cannot make for you: the other stack's ollama
+# must report an empty model list on /api/ps first. A resident model is not
+# something to evict; it is something to wait for.
+#
+#   docker compose -p nova-e2e \
+#     -f deploy/docker-compose.yml \
+#     -f tests/e2e/docker-compose.isolated.yml \
+#     -f tests/e2e/docker-compose.isolated-gpu.yml \
+#     --env-file <generated> --profile inference up -d ollama
+#
+# Order matters: this file must come AFTER the isolated overlay, whose
+# `deploy: !reset null` would otherwise erase what this one adds.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

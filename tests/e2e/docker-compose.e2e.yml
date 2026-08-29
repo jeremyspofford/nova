@@ -30,10 +30,24 @@ services:
     environment:
       NOVA_E2E_BASE_URL: http://web:80
       NOVA_E2E_MEMORY_URL: http://memory:8002
-      NOVA_E2E_PROJECT: nova
+      # NOVA_E2E_PROJECT is deliberately NOT set here. In this shape the
+      # suite is a service of the stack it walks, so lib/docker.ts reads the
+      # compose project off this container's own label — the stack it may
+      # stop and restart is the stack it belongs to, as a fact rather than a
+      # string somebody has to keep in step with the -p flag. It used to say
+      # `nova` literally, which is correct for exactly one project name and
+      # silently points at the wrong instance for every other.
       CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
       NOVA_E2E_MODEL: ${NOVA_E2E_MODEL:-qwen3:1.7b}
       NOVA_E2E_OWNER_NAME: ${NOVA_E2E_OWNER_NAME:-Jeremy}
+      # The two waits that change with the hardware, passed through with the
+      # same defaults lib/env.ts uses. On the isolated stack ollama is pinned
+      # to the CPU (docker-compose.isolated.yml), where a reply is minutes
+      # rather than seconds — and a timeout that fires on a model that was
+      # merely slow reads as a broken feature, which is the one thing this
+      # suite must never say.
+      NOVA_E2E_PULL_TIMEOUT_MS: ${NOVA_E2E_PULL_TIMEOUT_MS:-2700000}
+      NOVA_E2E_REPLY_TIMEOUT_MS: ${NOVA_E2E_REPLY_TIMEOUT_MS:-360000}
       # No default, deliberately: this walk mints the instance's one and only
       # owner and that password is the one it keeps. `:?` makes compose itself
       # refuse, with the reason, before a container is created — the suite

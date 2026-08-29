@@ -1,0 +1,66 @@
+# A second, fully isolated instance of the whole stack, for the e2e walk.
+#
+# The problem this solves: the suite is destructive by design. Scenario 1
+# mints the instance's one and only owner, scenario 3 restarts every
+# container, scenario 5 stops the gateway, and the tool scenarios write real
+# files into the workspace volume. None of that may happen to the instance
+# somebody actually uses — and "be careful" is not a control.
+#
+# So the walk runs as its own compose project:
+#
+#   docker compose -p nova-e2e \
+#     -f deploy/docker-compose.yml \
+#     -f tests/e2e/docker-compose.isolated.yml \
+#     -f tests/e2e/docker-compose.e2e.yml \
+#     --env-file <generated> --profile inference up -d --build
+#
+# The project name is the isolation. Compose prefixes volumes with it
+# (`nova-e2e_v4_pgdata`, never `nova_v4_pgdata`), names containers with it,
+# gives it a network of its own, and labels every container
+# `com.docker.compose.project=nova-e2e` — which is the label lib/docker.ts
+# scopes its start/stop/restart calls by, so the suite physically cannot
+# reach a container belonging to another project. `name: nova` in the base
+# file is overridden by the `-p` flag, deliberately: this overlay is only
+# ever correct WITH it, and `config` shows which name won before anything
+# is created.
+#
+# Two things this file changes, and nothing else:
+#
+#   1. every published host port is dropped. Two stacks cannot both hold
+#      127.0.0.1:3000, and an isolated stack that quietly took the port off
+#      the real one would be worse than a failure to start. The browser
+#      reaches this stack on the compose network (http://web:80) where no
+#      published port is involved at all — the same in-network path
+#      docker-compose.e2e.yml already uses.
+#
+#   2. the bundled ollama is pinned to the CPU. This box has one GPU and the
+#      other stack's model may be resident on it; a functional walk that
+#      evicts it, or that fails because 18GB is already spoken for, measures
+#      the neighbour rather than the code. `deploy: !reset null` drops any
+#      device reservation merged in from deploy/docker-compose.gpu.yml, so
+#      CPU here is enforced by this file rather than by remembering to leave
+#      that overlay off the command line.
+#
+# For the GPU measurement run (a deliberate, separately-checked step — see
+# docker-compose.isolated-gpu.yml) that second point is put back on top.
+
+services:
+  postgres:
+    ports: !reset []
+
+  core:
+    ports: !reset []
+
+  gateway:
+    ports: !reset []
+
+  memory:
+    ports: !reset []
+
+  web:
+    ports: !reset []
+
+  ollama:
+    ports: !reset []
+    # CPU-only. See note 2 above.
+    deploy: !reset null

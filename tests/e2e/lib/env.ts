@@ -54,7 +54,15 @@ export const config = {
   memoryUrl: env('NOVA_E2E_MEMORY_URL', 'http://127.0.0.1:8002'),
   /** core→memory bearer; memory refuses every request without it. */
   memoryToken: env('CORE_MEMORY_TOKEN', ''),
-  /** The compose project the stack runs under. */
+  /**
+   * The compose project the stack runs under — a HOST-run fallback only.
+   *
+   * When the suite runs as the stack's own `e2e` service (the documented
+   * shape) this value is not used: lib/docker.ts reads the project off the
+   * container's own compose label instead, and refuses outright if this is
+   * set to something else. Which containers a walk may stop and restart is
+   * too dangerous a fact to take from a default.
+   */
   project: env('NOVA_E2E_PROJECT', 'nova'),
   dockerSocket: env('NOVA_E2E_DOCKER_SOCKET', '/var/run/docker.sock'),
   /**
@@ -89,3 +97,12 @@ export const config = {
 /** The exact phrase scenario 2 plants and scenario 3 goes looking for. */
 export const MEMORY_FACT = 'My favorite color is teal-green, remember that.'
 export const MEMORY_NEEDLE = /teal|colou?r/i
+
+/**
+ * The file the tool-loop scenarios write, read back and add to.
+ *
+ * Here rather than exported from the scenario that creates it: importing one
+ * spec file from another runs its module body, which re-registers its
+ * `test()` calls under the importing file and quietly doubles the walk.
+ */
+export const GROCERIES = 'groceries.md'

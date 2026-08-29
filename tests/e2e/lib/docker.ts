@@ -10,6 +10,15 @@
  * Nothing here can touch a volume: the only verbs are list, inspect, start,
  * stop and restart, and every one of them is scoped by the compose project
  * label. A container outside the project is not addressable from this module.
+ *
+ * WHICH project is not taken on trust. When this suite runs as a service on
+ * the stack under test — the documented shape — the project is read off this
+ * very container's own compose label, so "the stack I may stop and restart"
+ * is the stack I am part of, as a fact rather than as a configuration
+ * anybody has to keep in step. An env var that disagrees is a refusal, not a
+ * preference: a walk that restarts somebody else's instance because a
+ * default said `nova` is the exact accident this file exists to make
+ * impossible.
  */
 import http from 'node:http'
 import { config } from './env'
@@ -123,16 +132,69 @@ export async function dockerAvailable(): Promise<boolean> {
   }
 }
 
-function filters(extra: Record<string, string[]> = {}): string {
-  const labels = [`com.docker.compose.project=${config.project}`]
+const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project'
+
+let projectPromise: Promise<string> | null = null
+
+/**
+ * The compose project every verb in this module is scoped to.
+ *
+ * In-container: this container's own `com.docker.compose.project` label,
+ * full stop. A container with no such label is not part of a compose project
+ * at all, and guessing one for it would be inventing the answer — so that is
+ * an error with the reason. An explicitly-set NOVA_E2E_PROJECT that names a
+ * different project is also an error: one of the two is wrong, and silently
+ * picking either would mean touching containers on somebody else's say-so.
+ *
+ * On the host there is no label to read, so the configured value stands.
+ */
+async function resolveProject(): Promise<string> {
+  const self = selfContainerIdPrefix()
+  if (!self) return config.project
+
+  const res = await request('GET', `/containers/${self}/json`, undefined, 15_000)
+  if (res.status !== 200) {
+    throw new Error(
+      `docker: could not inspect this suite's own container ${self} (${res.status}) — the ` +
+        'compose project it belongs to is what scopes every container verb here, so it cannot ' +
+        `be assumed: ${res.body.slice(0, 200)}`,
+    )
+  }
+  const derived = JSON.parse(res.body).Config?.Labels?.[COMPOSE_PROJECT_LABEL]
+  if (typeof derived !== 'string' || derived === '') {
+    throw new Error(
+      `docker: container ${self} carries no ${COMPOSE_PROJECT_LABEL} label, so which stack this ` +
+        'suite may stop and restart is unknown — run it as the `e2e` service of the stack under ' +
+        'test rather than as a bare container',
+    )
+  }
+  const declared = process.env.NOVA_E2E_PROJECT
+  if (declared && declared !== derived) {
+    throw new Error(
+      `docker: NOVA_E2E_PROJECT=${declared} but this suite is running inside compose project ` +
+        `${derived}. Refusing to act: one of those names a stack this walk has no business ` +
+        'restarting. Unset NOVA_E2E_PROJECT to use the project this container belongs to.',
+    )
+  }
+  return derived
+}
+
+export function projectName(): Promise<string> {
+  projectPromise ??= resolveProject()
+  return projectPromise
+}
+
+function filters(project: string, extra: Record<string, string[]> = {}): string {
+  const labels = [`${COMPOSE_PROJECT_LABEL}=${project}`]
   return encodeURIComponent(JSON.stringify({ label: labels, ...extra }))
 }
 
 /** Every container in the compose project, running or not. */
 export async function listProjectContainers(): Promise<ContainerInfo[]> {
-  const res = await request('GET', `/containers/json?all=true&filters=${filters()}`)
+  const project = await projectName()
+  const res = await request('GET', `/containers/json?all=true&filters=${filters(project)}`)
   if (res.status !== 200) {
-    throw new Error(`docker: listing project ${config.project} failed (${res.status}): ${res.body}`)
+    throw new Error(`docker: listing project ${project} failed (${res.status}): ${res.body}`)
   }
   return (JSON.parse(res.body) as Array<Record<string, any>>).map(c => ({
     id: c.Id as string,
@@ -143,10 +205,11 @@ export async function listProjectContainers(): Promise<ContainerInfo[]> {
 }
 
 export async function containerFor(service: string): Promise<ContainerInfo> {
+  const project = await projectName()
   const found = (await listProjectContainers()).filter(c => c.service === service)
   if (found.length !== 1) {
     throw new Error(
-      `docker: expected exactly one ${config.project}/${service} container, found ${found.length}` +
+      `docker: expected exactly one ${project}/${service} container, found ${found.length}` +
         ` (${found.map(c => c.name).join(', ') || 'none'})`,
     )
   }
