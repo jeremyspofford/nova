@@ -19,7 +19,19 @@
  * swap this scenario exercises (apps/web/src/stores/chat-store.tsx), so the
  * walk below — send, leave before the reply finishes, come back — must end
  * with the FULL reply on screen exactly once, never a partial, never
- * silence, and never two copies of it. (Ruling S2-R4.)
+ * silence, and never two copies of it.
+ *
+ * THE NAVIGATION HAS TO BE THE APP'S OWN. This file was authored without
+ * being run and used page.goto() for both hops, which is not the user
+ * gesture it describes: goto is a full browser navigation that discards the
+ * entire JavaScript context, store and all, so the fetch dies with the
+ * document and the server correctly records the turn as `interrupted`. No
+ * client-side fix can survive that, and nothing claims to — on the first
+ * isolated walk it failed for exactly that reason, with a turn showing
+ * status=interrupted and zero llm_call spans. What the store fix is about,
+ * and what a person actually does, is clicking a link in the sidebar: the
+ * router swaps the page, the document survives, and the stream keeps
+ * running. So this clicks.
  */
 import { expect, test } from '@playwright/test'
 import { assistantBubbles, userBubbles } from '../lib/app'
@@ -54,8 +66,11 @@ test('nav survival: send, navigate away before the reply finishes, return to the
 
   // Leave immediately — the earliest point a stream can still be in flight —
   // and confirm the page really changed before coming back. This is the
-  // moment the old bug aborted the fetch.
-  await page.goto('/settings')
+  // moment the old bug aborted the fetch. Through the sidebar link, so the
+  // document (and with it the stream store) survives the move; see the note
+  // at the top of this file about why goto() cannot test this.
+  await page.getByRole('link', { name: 'Settings' }).first().click()
+  await expect(page).toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 
   // Stay away long enough that a fast model could easily have finished the
@@ -64,7 +79,8 @@ test('nav survival: send, navigate away before the reply finishes, return to the
   // scenario does not control which one it lands on.
   await page.waitForTimeout(3000)
 
-  await page.goto('/chat')
+  await page.getByRole('link', { name: 'Chat' }).first().click()
+  await expect(page).toHaveURL(/\/chat$/)
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
 
   // Settle the same way lib/app.ts's sendMessage() does: data-streaming is

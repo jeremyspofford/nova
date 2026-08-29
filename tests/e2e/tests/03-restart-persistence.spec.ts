@@ -61,18 +61,21 @@ test('restart persistence: the conversation and the memory both survive', async 
   const outcome = await sendMessage(page, 'What did we talk about earlier?')
   expect(outcome.kind, `the turn did not produce a reply: ${outcome.text}`).toBe('reply')
   console.log(`[scenario 3] reply: ${outcome.text.replace(/\s+/g, ' ').slice(0, 300)}`)
-  expect(
-    outcome.text,
-    'the reply did not reference the earlier exchange at all',
-  ).toMatch(MEMORY_NEEDLE)
 
   // ── the ledger's own account of that turn, where it can be read ─────────
+  //
+  // Read BEFORE claim 3 is asserted, deliberately. Claim 3 is the one
+  // assertion in this file about what the MODEL did with what it was given,
+  // and when it fails the first question is always "was the turn wired up at
+  // all" — which is exactly what this span answers. Asserting first left
+  // that answer unprinted on the only run where it mattered.
   const span = await newestTurnRecallSpan()
+  let ledger = 'the turn ledger was not readable from this run shape'
   if (span.available) {
-    console.log(
-      `[scenario 3] turn ${span.turnId} status=${span.status} model=${span.model} ` +
-        `memory_recall span=${span.recallSpanFound} hits=${span.recallHits}`,
-    )
+    ledger =
+      `turn ${span.turnId} status=${span.status} model=${span.model} ` +
+      `memory_recall span=${span.recallSpanFound} hits=${span.recallHits}`
+    console.log(`[scenario 3] ${ledger}`)
     expect(span.status).toBe('ok')
     // Asserted: core really consulted memory on the turn that answered. How
     // many snippets came back is BM25's verdict on this particular question,
@@ -92,6 +95,14 @@ test('restart persistence: the conversation and the memory both survive', async 
   } else {
     console.log(`[scenario 3] turn-ledger check not run: ${span.reason}`)
   }
+
+  expect(
+    outcome.text,
+    'the reply did not reference the earlier exchange at all. Claims 1 and 2 above already ' +
+      'passed, so the transcript and the memory store both survived the restart and this is ' +
+      'about what the serving model made of them — a small model asked an open question often ' +
+      `answers it with a denial. Ledger for the answering turn: ${ledger}`,
+  ).toMatch(MEMORY_NEEDLE)
 
   console.log(
     `[scenario 3] docker health table:\n` +
