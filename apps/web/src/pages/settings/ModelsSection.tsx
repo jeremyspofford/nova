@@ -122,7 +122,7 @@ function ModelCard({
               Installed
             </Badge>
           )}
-          {!model.installed && (
+          {!model.isCurrent && !model.installed && (
             <Badge color="neutral" size="sm">
               Available to pull
             </Badge>
@@ -141,7 +141,12 @@ function ModelCard({
         </Button>
       )}
 
-      {!model.installed && !pulling && !pull?.done && (
+      {/* isCurrent excluded here too: the model the operator is actually
+          chatting with must never render as pullable just because
+          installed-detection came back false for it (a failed
+          getInstalledModels call, or a slug the gateway's list doesn't
+          happen to name) — chat.model already proves it is in use. */}
+      {!model.isCurrent && !model.installed && !pulling && !pull?.done && (
         <Button
           size="sm"
           variant="outline"

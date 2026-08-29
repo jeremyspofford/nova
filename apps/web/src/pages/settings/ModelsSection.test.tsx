@@ -207,7 +207,7 @@ describe('ModelsSection', () => {
     await waitFor(() => expect(screen.getByText('write refused')).toBeDefined())
   })
 
-  it('degrades honestly when the installed-models fetch fails: nothing is claimed installed', async () => {
+  it('degrades honestly when the installed-models fetch fails: nothing is claimed installed, and the current model never shows as pullable', async () => {
     const api = fakeApi({ installedFails: true })
     render(
       <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
@@ -217,5 +217,15 @@ describe('ModelsSection', () => {
     // qwen3:8b is chat.model, so it is still marked Current even though the
     // installed-fetch failed — but nothing else claims to be Installed.
     expect(screen.queryByText('Installed')).toBeNull()
+
+    // The bug this pins: "Current" and "Available to pull" (plus a live
+    // Pull button) must never both render on the model the operator is
+    // actually chatting with, no matter why installed-detection came back
+    // false for it — the badges are mutually exclusive by isCurrent, not
+    // independently true/false.
+    const currentCard = screen.getByText('Qwen3 8B').closest('div.rounded-lg') as HTMLElement
+    expect(within(currentCard).getByText('Current')).toBeDefined()
+    expect(within(currentCard).queryByText('Available to pull')).toBeNull()
+    expect(within(currentCard).queryByText('Pull')).toBeNull()
   })
 })
