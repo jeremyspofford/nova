@@ -689,7 +689,15 @@ async def _turn_frames(
         # remembers the corrected reply, never the lie. Derived from spans,
         # never the prompt (the prompt's honesty line still stands; this is
         # the enforcement).
-        correction = guards.narration_check(text, turn.spans)
+        try:
+            correction = guards.narration_check(text, turn.spans)
+        except Exception:
+            # Fail OPEN: a guard that crashes the reply is worse than the lie
+            # it might have caught. A matcher bug must never turn an honest
+            # turn into an error frame or lose the text — it is logged and the
+            # reply ships unchanged.
+            logger.exception("narration guard raised; shipping the reply uncorrected")
+            correction = None
         if correction is not None:
             with turn.span("guard", "narration") as span:
                 span.meta["claims"] = [

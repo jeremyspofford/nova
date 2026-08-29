@@ -26,20 +26,20 @@ Two properties make this safe to run on every turn:
     (text, spans) always yields the same verdict, so the guard cannot itself
     become a source of narration.
   * PRECISION-first (ruling S2d-R2). A wrongly-corrected honest reply would
-    make the guard the liar, which is worse than a missed lie. So the
-    matcher is a small set of explicit past-tense/perfect patterns; a
-    candidate is dropped the moment a modal, a future intent, a negation or
-    a question governs the verb; and "backed" is judged leniently — a
-    matching tool ran and its recorded target contains the named file, or a
-    matching tool ran and the claim named no file at all. When it cannot be
-    sure, it does not flag.
+    make the guard the liar, which is worse than a missed lie. So a claim is
+    only ever anchored to a REAL target — a filename token with a known
+    extension, or an http(s) URL. A bare noun ("I updated my notes", "the
+    document you pasted") is NEVER a claim; nor is a future/hedged form
+    ("I'll write it"), a negation ("could not create the file"), a question
+    ("would you like me to?"), or an action attributed to someone else ("you
+    saved notes.md"). When it cannot be sure, it does not flag.
 
 Backing is target-AWARE, not merely kind-aware: a claim that names a file is
 backed only if a matching tool actually touched a file of that name. That is
 what catches the model writing a NEW file while claiming it edited the named
 one — a real span exists, but not for the thing it said it did. Leniency
-runs the other way: an un-named claim, or a span whose target cannot be read
-(a memory note, a flooded-and-clipped argument record), counts as backed.
+runs the other way: a span whose target cannot be read (a memory note, a
+flooded-and-clipped argument record) counts as backing any claim of its kind.
 """
 from __future__ import annotations
 
@@ -83,23 +83,53 @@ _READ_VERB = re.compile(r"\b(?:read|checked|reviewed|opened|examined)\b", re.I)
 _FETCH_VERB = re.compile(
     r"\b(?:fetched|retrieved|downloaded|visited|accessed|read|pulled|looked)\b", re.I
 )
-# Presenting a specific file's contents as established fact is a knowledge
-# claim that only a read (or the write that produced it) can ground.
-_CONTENT_ASSERT = re.compile(
-    r"\b(?:contains|contents?\s+of|here\s+(?:are|is)\s+the\s+contents?"
-    r"|the\s+file\s+(?:says|reads))\b",
+# A file the claim is about: a real filename TOKEN — a name with a known
+# extension (so "e.g." and an end-of-sentence period never read as files),
+# optionally carrying path segments. A filename is the ONLY thing that anchors
+# a file claim. A bare noun is NOT enough: "I updated my notes on your
+# preferences", "the document you pasted", "I've saved a summary of the readme
+# below" are ordinary conversation, and flagging them would make the guard the
+# liar (ruling S2d-R2 — a false positive is worse than a missed lie).
+_FILENAME_RE = (
+    r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
+)
+_FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
+_URL = re.compile(r"https?://[^\s)>\]]+", re.I)
+
+# Presenting a NAMED file's contents as fact: "<file> contains/says/…". The
+# filename must anchor the verb, so an in-chat draft that names no file token
+# ("Here is the content of the file:", "The draft note contains three parts")
+# is never a claim — presenting proposed content in chat is honest.
+_CONTENT_CLAIM = re.compile(
+    r"\b(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
+    r"(?:contains?|says?|reads?|shows?|holds?|lists?|includes?)\b",
     re.I,
 )
 
-# A file the claim is about: a real filename token (known extensions only, so
-# "e.g." and an end-of-sentence period never read as files), or a file noun.
-_FILENAME = re.compile(
-    r"\b[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)\b",
+# The passive voice, where the filename is the subject and precedes the verb:
+# "<file> has been updated", "<file> was read". A negation ("was not updated")
+# or a future ("will be updated") breaks the auxiliary run and so never
+# matches — exactly the silence we want.
+_PASSIVE_CLAIM = re.compile(
+    r"\b(" + _FILENAME_RE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    r"(?P<verb>created|written|wrote|saved|updated|appended|added|overwritten"
+    r"|read|opened|reviewed|checked|examined)\b",
     re.I,
 )
-_FILE_NOUN = re.compile(r"\b(?:files?|documents?|docs?|notes?|memo|readme|markdown)\b", re.I)
-_URL = re.compile(r"https?://[^\s)>\]]+", re.I)
-_WEB_NOUN = re.compile(r"\b(?:url|links?|web\s?pages?|websites?|the\s+web|online)\b", re.I)
+_PASSIVE_READ_VERBS = frozenset({"read", "opened", "reviewed", "checked", "examined"})
+
+# A second/third-person subject immediately before a verb: the action is
+# ATTRIBUTED to someone else or reported ("you saved notes.md", "you mentioned
+# you saved …", "since you created the file"), so it is not Nova's own claim.
+# Kept tight — the pronoun must be the verb's subject, 0–1 words before it — so
+# a first-person claim with a second-person aside ("as you requested, I created
+# report.md") is NOT suppressed.
+_ATTRIBUTED = re.compile(r"\b(?:you|he|she|they|we)\b(?:\s+\w+){0,1}\s+$", re.I)
+
+# The maximum gap between an active verb and the file token it governs, so a
+# filename far from the verb (a different subject that merely shares the
+# clause) is not swept in as its object.
+_OBJECT_REACH = 80
 
 # Anything in the short window BEFORE a completed verb that turns an assertion
 # into a non-assertion: a modal or intent ("will", "can", "going to", "to"),
@@ -178,13 +208,16 @@ def _clauses(text: str):
 
 
 def _unblocked(clause: str, at: int) -> bool:
-    """True if no modal/intent/negation governs the verb at `at`."""
-    window = clause[max(0, at - _WINDOW) : at]
-    return _BLOCKER.search(window) is None
-
-
-def _filenames(clause: str) -> list[str]:
-    return [m.group(0) for m in _FILENAME.finditer(clause)]
+    """True if nothing turns the verb at `at` into a non-claim: no
+    modal/intent/negation in the short window before it, and no second/third-
+    person subject governing it (an attributed or reported action)."""
+    prefix = clause[:at]
+    window = prefix[-_WINDOW:]
+    if _BLOCKER.search(window) is not None:
+        return False
+    if _ATTRIBUTED.search(prefix) is not None:
+        return False
+    return True
 
 
 def _first_unblocked(clause: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
@@ -194,45 +227,50 @@ def _first_unblocked(clause: str, pattern: re.Pattern[str]) -> re.Match[str] | N
     return None
 
 
-def _claims_in(clause: str) -> list[tuple[str, str | None, str]]:
-    files = _filenames(clause)
+def _claims_in(clause: str) -> list[tuple[str, str, str]]:
+    """Every completed-action claim in one clause, each tied to a REAL target
+    (a filename token or a URL). A bare noun never qualifies, and an action
+    attributed to someone else is not a claim."""
+    claims: list[tuple[str, str, str]] = []
     urls = [m.group(0) for m in _URL.finditer(clause)]
-    has_file = bool(files) or _FILE_NOUN.search(clause) is not None
-    has_web = bool(urls) or _WEB_NOUN.search(clause) is not None
 
-    claims: list[tuple[str, str | None, str]] = []
-
-    # fetched/looked up a URL — a web object is required so "I looked it up"
-    # (which could be a memory search) is never mistaken for a fetch.
-    if has_web:
+    # fetched a URL — an explicit http(s) token is required, so "I looked it
+    # up" (which might be a memory search) is never read as a fetch.
+    if urls:
         m = _first_unblocked(clause, _FETCH_VERB)
         if m is not None:
-            claims.append(("fetched_url", urls[0] if urls else None, m.group(0)))
+            claims.append(("fetched_url", urls[0], m.group(0)))
 
-    # presented a specific file's contents as fact
-    if has_file:
-        m = _first_unblocked(clause, _CONTENT_ASSERT)
-        if m is not None:
-            claims.append(("file_contents", files[0] if files else None, m.group(0)))
+    # presented a named file's contents as fact: "<file> contains/says/…"
+    for cm in _CONTENT_CLAIM.finditer(clause):
+        if _unblocked(clause, cm.start(1)):
+            claims.append(("file_contents", cm.group(1), cm.group(0)))
 
-    # wrote/created/saved a file — one claim per named file, else one
-    # target-less claim that any write span will back.
-    if has_file:
-        m = _first_unblocked(clause, _WRITE_VERB)
-        if m is not None:
-            if files:
-                claims.extend(("wrote_file", name, m.group(0)) for name in files)
-            else:
-                claims.append(("wrote_file", None, m.group(0)))
+    # passive voice: "<file> has been updated", "<file> was read"
+    for pm in _PASSIVE_CLAIM.finditer(clause):
+        if _unblocked(clause, pm.start(1)):
+            verb = pm.group("verb").lower()
+            kind = "read_file" if verb in _PASSIVE_READ_VERBS else "wrote_file"
+            claims.append((kind, pm.group(1), pm.group(0)))
 
-    # read/checked a file (never when the object is a web page)
-    if has_file and not has_web:
-        m = _first_unblocked(clause, _READ_VERB)
-        if m is not None:
-            if files:
-                claims.extend(("read_file", name, m.group(0)) for name in files)
-            else:
-                claims.append(("read_file", None, m.group(0)))
+    # active voice: tie each file token to its NEAREST preceding unblocked
+    # action verb, within reach — so "I read a.md and wrote b.md" does not read
+    # as writing a.md, and a filename that is a different clause's subject is
+    # not swept in as an object.
+    actions: list[tuple[int, str, str]] = []
+    for m in _WRITE_VERB.finditer(clause):
+        if _unblocked(clause, m.start()):
+            actions.append((m.start(), "wrote_file", m.group(0)))
+    if not urls:
+        for m in _READ_VERB.finditer(clause):
+            if _unblocked(clause, m.start()):
+                actions.append((m.start(), "read_file", m.group(0)))
+    actions.sort()
+    for fm in _FILENAME.finditer(clause):
+        governing = [a for a in actions if 0 <= fm.start() - a[0] <= _OBJECT_REACH]
+        if governing:
+            _pos, kind, phrase = governing[-1]
+            claims.append((kind, fm.group(0), phrase))
 
     return claims
 

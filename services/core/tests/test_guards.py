@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app import guards
 
 # -- span stand-ins --------------------------------------------------------
@@ -233,3 +235,112 @@ def test_only_successful_spans_back_a_claim():
 def test_an_empty_reply_is_never_a_claim():
     assert guards.narration_check("", [other_span()]) is None
     assert guards.narration_check("   \n ", [other_span()]) is None
+
+
+# -- the false positives the review caught: figurative / in-chat file nouns --
+#
+# Every one of these is an HONEST, ordinary reply. The first cut flagged them
+# all because a bare noun (file/document/note/readme/markdown) counted as a
+# file. It must not: a claim is anchored ONLY by a real filename token. These
+# are permanent regression pins (ruling S2d-R2 — the expensive failure).
+
+REVIEWER_FALSE_POSITIVES = [
+    "I updated my notes on your preferences.",
+    "I've updated my understanding of the document.",
+    "I saved you the trouble of reformatting the document.",
+    "I've saved a summary of the readme below.",
+    "I've written a short note here in the chat for you.",
+    "I reviewed the document you pasted and it looks solid.",
+    "I read the readme you shared in chat",
+    "I checked the markdown formatting in your message.",
+    "The document you gave me contains three sections.",
+    "Here is the content of the file:",
+    "Here is the content I would write to the file:",
+]
+
+
+@pytest.mark.parametrize("reply", REVIEWER_FALSE_POSITIVES)
+def test_a_figurative_or_in_chat_file_noun_is_never_a_claim(reply):
+    # No spans at all: if any of these flagged, the guard would be the liar.
+    assert guards.narration_check(reply, []) is None
+
+
+# -- second/third-person attribution is not a self-claim -------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "You said you created the file.",
+        "Since you created the file, I left it alone.",
+        "You mentioned you saved notes.md.",
+        "He wrote config.yaml last week, not me.",
+        "They updated report.md before I joined.",
+    ],
+)
+def test_an_attributed_or_reported_action_is_not_flagged(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_first_person_claim_with_a_second_person_aside_still_flags():
+    """'as you requested' must not suppress the 'I created' that follows it."""
+    reply = "As you requested, I created report.md."
+    correction = guards.narration_check(reply, [])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction) == ["report.md"]
+
+
+# -- in-chat draft content is honest (IMPORTANT 3) -------------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Here is the content of the file:",
+        "Here is the content I would write to the file:",
+        "The draft note contains three sections you can review.",
+        "Here is what the file would contain once you approve.",
+    ],
+)
+def test_presenting_proposed_content_in_chat_is_not_a_claim(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+# -- multi-verb clauses tie each file to the right verb --------------------
+
+
+def test_read_one_file_and_wrote_another_backs_each_by_its_own_span():
+    reply = "I read config.yaml and wrote output.json from it."
+    spans = [
+        tool_span("workspace_read_file", path="config.yaml"),
+        tool_span("workspace_write_file", path="output.json"),
+    ]
+    assert guards.narration_check(reply, spans) is None
+
+
+def test_read_one_file_and_wrote_another_flags_only_the_unbacked_write():
+    reply = "I read config.yaml and wrote output.json from it."
+    spans = [tool_span("workspace_read_file", path="config.yaml")]  # no write span
+    correction = guards.narration_check(reply, spans)
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction) == ["output.json"]
+
+
+# -- the matcher never raises (chat.py fails open, but the guard is robust) --
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I created \\((((.md and [unbalanced",
+        "wrote " + "a." * 300 + "md",
+        "创建了 groceries.md 文件",  # non-ascii around a real token
+        "\n\n\n",
+        "contains contains contains .md .md",
+    ],
+)
+def test_the_matcher_never_raises_on_odd_input(reply):
+    # We do not care about the verdict here — only that it returns cleanly.
+    guards.narration_check(reply, [])

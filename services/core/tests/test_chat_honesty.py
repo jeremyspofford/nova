@@ -152,3 +152,26 @@ async def test_an_honest_write_turn_is_untouched_and_leaves_no_guard_span(
     assert [s["name"] for s in tool_spans] == ["workspace_write_file"]
     assert tool_spans[0]["meta"]["ok"] is True
     assert (workspace / "groceries.md").read_text(encoding="utf-8").count("\n") == 5
+
+
+async def test_a_guard_that_raises_ships_the_reply_uncorrected(
+    owner_client, pool, mount_peers, workspace, monkeypatch
+):
+    """Fail OPEN (IMPORTANT 4): a matcher bug must never turn an honest turn
+    into an error or lose its text — the reply ships unchanged, logged."""
+
+    def boom(reply_text, spans):
+        raise RuntimeError("matcher bug")
+
+    monkeypatch.setattr(guards, "narration_check", boom)
+    reply = "I've created a summary file called kv_offloading_summary.md."
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert not [f for f in sent if isinstance(f, dict) and "correction" in f]
+    assert not [f for f in sent if isinstance(f, dict) and "error" in f]
+    assert await _spans(pool, "guard") == []
+    assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == reply
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
