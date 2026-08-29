@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import conversations, db, identity, peers, settings_store, tools, traces
+from app import conversations, db, guards, identity, peers, settings_store, tools, traces
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -679,6 +679,26 @@ async def _turn_frames(
             yield _frame({"error": EMPTY_REPLY})
             yield DONE_FRAME
             return
+
+        # The honesty guard: a reply is a claim, the spans are the fact. A
+        # completed-action claim (created/read a file, fetched a URL) that no
+        # successful span backs is contradicted before it reaches the
+        # operator — appended to the text that persists AND streamed as its
+        # own frame, so the durable record and the screen both carry it. The
+        # correction rides the FINAL text on purpose: the ingest below then
+        # remembers the corrected reply, never the lie. Derived from spans,
+        # never the prompt (the prompt's honesty line still stands; this is
+        # the enforcement).
+        correction = guards.narration_check(text, turn.spans)
+        if correction is not None:
+            with turn.span("guard", "narration") as span:
+                span.meta["claims"] = [
+                    {"kind": claim.kind, "target": claim.target}
+                    for claim in correction.claims
+                ]
+                span.meta["backing_span"] = False
+            text = f"{text}\n\n{correction.text}"
+            yield _frame({"correction": correction.text})
 
         await _persist_assistant(pool, conversation_id, text)
         persisted = True
