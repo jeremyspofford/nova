@@ -137,6 +137,12 @@ class FakeOllama:
     probe_content: str = "hi there"
     vram_bytes: int | None = 5_000_000_000
     probe_model_name: str = "qwen3:8b"
+    # /api/ps's resident-model list for the free-VRAM calc (app/fit.py via
+    # admin.py). None means "fall back to the single vram_bytes/
+    # probe_model_name pair above" (existing probe tests' shape); an
+    # explicit list lets a test say exactly what's resident, including
+    # more than one model or none at all.
+    ps_models: list[dict] | None = None
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -197,9 +203,12 @@ class FakeOllama:
 
     async def _ps(self, request):
         await self._record(request)
-        models = []
-        if self.vram_bytes is not None:
-            models = [{"name": self.probe_model_name, "size_vram": self.vram_bytes}]
+        if self.ps_models is not None:
+            models = self.ps_models
+        else:
+            models = []
+            if self.vram_bytes is not None:
+                models = [{"name": self.probe_model_name, "size_vram": self.vram_bytes}]
         return JSONResponse({"models": models})
 
 

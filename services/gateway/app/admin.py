@@ -19,6 +19,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from app import backends, db
 from app import curated as curated_mod
+from app import fit as fit_mod
 from app import suggest as suggest_mod
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -34,6 +35,8 @@ MODELS_DIR = Path("/models")
 # is bounded, so a slow download is never mistaken for a hang.
 PULL_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
 PROBE_TIMEOUT = httpx.Timeout(30.0)
+# /api/ps is a cheap metadata read (no generation happens), unlike a probe.
+PS_TIMEOUT = httpx.Timeout(5.0)
 
 
 def _read_hardware() -> tuple[dict, str | None]:
@@ -61,10 +64,87 @@ async def hardware() -> dict:
     return data
 
 
+async def _resident_vram_mb(app, base_url: str) -> tuple[int | None, str | None]:
+    """(total MiB ollama's /api/ps reports resident, reason-if-unreadable).
+
+    Summed across EVERY model /api/ps names, not just one — free VRAM has
+    to account for whatever else ollama is holding, not just the model a
+    caller happens to be asking about.
+    """
+    client = backends.http_client(app, PS_TIMEOUT, base_url=base_url)
+    try:
+        async with client as c:
+            resp = await c.get("/api/ps")
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        return None, f"could not reach ollama's /api/ps — {backends.reason(exc)}"
+    total_mb = 0
+    for entry in resp.json().get("models", []):
+        size_vram = entry.get("size_vram")
+        if size_vram is not None:
+            total_mb += size_vram / (1024 * 1024)
+    return total_mb, None
+
+
+async def _free_and_total_vram_gb(
+    app, hardware: dict, config: dict
+) -> tuple[float | None, float | None, str | None]:
+    """(free_gb, total_gb, reason-if-free-is-unknown).
+
+    Ruling S2e-R2: free VRAM is the host's total (hardware.json, the
+    largest single GPU — ollama never shards across cards) minus whatever
+    ollama's OWN /api/ps says is resident right now — never installed-sum,
+    never a static floor. See app/fit.py's module docstring for why this
+    deliberately never reads nvidia_smi to do it.
+    """
+    total_gb = suggest_mod.largest_single_gpu_vram_gb(hardware)
+    if total_gb is None:
+        return None, None, "no GPU detected on this host"
+    if config["kind"] != "ollama":
+        return None, total_gb, (
+            f"the active backend is {config['kind']}, not local ollama — "
+            "free VRAM isn't observable"
+        )
+    base_url = backends.resolve_base_url(config)
+    if not base_url:
+        return None, total_gb, "OLLAMA_URL is unset — cannot read what's resident"
+    resident_mb, reason = await _resident_vram_mb(app, base_url)
+    if resident_mb is None:
+        return None, total_gb, reason
+    return total_gb - resident_mb / 1024, total_gb, None
+
+
+async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
+    """The newest OK probe row per slug — a failed probe (ok=false) never
+    counts as a measurement, and an older successful one loses to a newer
+    one for the same model."""
+    if not slugs:
+        return {}
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (model) model, vram_mb FROM probes "
+        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL "
+        "ORDER BY model, created_at DESC",
+        slugs,
+    )
+    return {row["model"]: dict(row) for row in rows}
+
+
 @router.get("/suggest")
-async def suggest_route() -> dict:
+async def suggest_route(request: Request) -> dict:
     data, _note = _read_hardware()
-    return suggest_mod.suggest(data, curated_mod.load_curated())
+    result = suggest_mod.suggest(data, curated_mod.load_curated())
+
+    pool = await db.get_pool()
+    config = await backends.read_config(pool)
+    free_gb, total_gb, reason = await _free_and_total_vram_gb(request.app, data, config)
+    probes_by_model = await _latest_probes(pool, [m["slug"] for m in result["models"]])
+
+    for model in result["models"]:
+        needed_gb, source = fit_mod.needed_gb_for(model, probes_by_model.get(model["slug"]))
+        model["fit"] = fit_mod.compute_fit(
+            needed_gb, free_gb, total_gb, source=source, reason=reason
+        )
+    return result
 
 
 def _preflight_line(model: str, curated_entries: list[dict]) -> dict:
