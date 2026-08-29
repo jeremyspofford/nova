@@ -17,11 +17,14 @@
  * `interrupted` event, so the UI can keep the partial text and still say
  * plainly that the turn did not finish.
  *
- * Forward-compat (ruling S2-R6, amending S1's R20): a well-formed JSON frame
- * whose keys are ALL outside {t, error, meta} is a future frame type, not a
- * broken one, and is silently ignored — S2-T2 adds {"activity": {...}}
- * through exactly this allowance. Malformed/non-JSON lines, and a KNOWN key
- * with the wrong shape, remain error events.
+ * Forward-compat: a well-formed JSON frame whose keys are ALL outside
+ * {t, error, meta} is a future frame type, not a broken one, and is
+ * silently ignored — this lets the server start sending a new frame shape
+ * later (e.g. one reporting a tool call's progress) without breaking a
+ * client built before that frame type existed. Malformed/non-JSON lines,
+ * and a KNOWN key with the wrong shape, still remain error events: the
+ * allowance only ever widens what counts as "not part of the contract
+ * yet", never what counts as broken. (Ruling S2-R6, amending S1's R20.)
  */
 
 import { createLineBuffer } from './lineBuffer'
@@ -48,12 +51,12 @@ export function failureReason(err: unknown): string {
   return String(err)
 }
 
-// The frame keys this client understands at all. Ruling S2-R6 (a deliberate
-// amendment of S1's R20): a well-formed JSON object whose keys are ALL
-// outside this set is a future frame type, not a broken one — S2-T2 adds
-// {"activity": {...}} through exactly this allowance. A key IN this set with
-// the wrong shape (caught below, before this check ever runs) is still a
-// contract violation and still an error.
+// The frame keys this client understands at all. A well-formed JSON object
+// whose keys are ALL outside this set is a future frame type the server may
+// start sending later — silently ignored so an older client does not break
+// the moment a newer server introduces one. A key IN this set with the
+// wrong shape (caught below, before this check ever runs) is still a
+// contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
 const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta'])
 
 function frameToEvent(payload: string): StreamEvent | null {

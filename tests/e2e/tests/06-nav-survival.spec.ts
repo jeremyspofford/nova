@@ -11,14 +11,15 @@
  * --list` (T1's verification), which the numbering (06, after 05) and this
  * file living in tests/e2e/tests/ both guarantee.
  *
- * The bug this proves fixed (S1 carries, owner hit it live, ruling S2-R4):
- * the SSE stream used to be owned by ChatPage, so navigating to Settings
- * unmounted it, aborted the fetch, and the server — correctly — read that as
- * a disconnect and cancelled generation. The fix lifts stream ownership into
- * a store mounted above the router (apps/web/src/stores/chat-store.tsx), so
- * the walk below — send, leave before the reply finishes, come back — must
- * end with the FULL reply on screen exactly once, never a partial, never
- * silence, and never two copies of it.
+ * The bug this proves fixed (S1 carries, owner hit it live): the SSE stream
+ * used to be owned by ChatPage, so navigating to Settings unmounted it,
+ * aborted the fetch, and the server — correctly — read that as a disconnect
+ * and cancelled generation. The fix lifts stream ownership into a store
+ * mounted at the authenticated-routes boundary, above the /chat <-> /settings
+ * swap this scenario exercises (apps/web/src/stores/chat-store.tsx), so the
+ * walk below — send, leave before the reply finishes, come back — must end
+ * with the FULL reply on screen exactly once, never a partial, never
+ * silence, and never two copies of it. (Ruling S2-R4.)
  */
 import { expect, test } from '@playwright/test'
 import { assistantBubbles, userBubbles } from '../lib/app'

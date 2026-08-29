@@ -28,14 +28,14 @@ def test_client_carries_the_bearer_token(monkeypatch):
 
 
 def test_client_defaults_accept_encoding_to_identity(monkeypatch):
-    """Mirror of gateway's R26 fix, one hop up: core's own pull relay
-    (proxies.py `pull()`) uses aiter_raw() to hand a browser the gateway's
-    raw wire bytes, exactly the same shape as gateway's backend relay. That
-    is only safe to read as text if nothing between here and there was ever
-    invited to compress it — dormant today (the gateway never compresses its
-    own responses), but latent the moment anyone adds gateway-side
-    compression. Pinned so a regression here fails loudly rather than
-    silently, the same way gateway's own default is pinned."""
+    """core's own pull relay (proxies.py `pull()`) uses aiter_raw() to hand a
+    browser the gateway's raw wire bytes, exactly the same shape as
+    gateway's backend relay. That is only safe to read as text if nothing
+    between here and there was ever invited to compress it — dormant today
+    (the gateway never compresses its own responses), but latent the moment
+    anyone adds gateway-side compression. Pinned so a regression here fails
+    loudly rather than silently, the same way gateway's own default is
+    pinned (one hop down, ruling R26)."""
     monkeypatch.setenv("GATEWAY_URL", "http://gateway.test")
     monkeypatch.setenv("CORE_GATEWAY_TOKEN", "tok")
     client = peers.client(_app(), peers.GATEWAY, httpx.Timeout(5.0))

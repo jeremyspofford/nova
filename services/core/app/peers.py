@@ -41,12 +41,13 @@ def client(app: FastAPI, link: Link, timeout: httpx.Timeout) -> httpx.AsyncClien
     transports = getattr(app.state, "peer_transports", {})
     return httpx.AsyncClient(
         base_url=url,
-        # Mirrors gateway's own Accept-Encoding: identity default (ruling
-        # R26). proxies.py's model-pull relay is aiter_raw() too — raw wire
-        # bytes handed straight to the browser — so it is only safe to read
-        # as text as long as nothing on this hop was ever invited to
-        # compress it. Dormant today (nothing between core and the gateway
+        # proxies.py's model-pull relay is aiter_raw() too — raw wire bytes
+        # handed straight to the browser — so it is only safe to read as
+        # text as long as nothing on this hop was ever invited to compress
+        # it. Dormant today (nothing between core and the gateway
         # compresses), latent the moment either side adds compression.
+        # Mirrors gateway's own Accept-Encoding: identity default (ruling
+        # R26).
         headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"},
         timeout=timeout,
         transport=transports.get(url),
