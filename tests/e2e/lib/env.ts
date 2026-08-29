@@ -62,8 +62,14 @@ export const config = {
    * container's own compose label instead, and refuses outright if this is
    * set to something else. Which containers a walk may stop and restart is
    * too dangerous a fact to take from a default.
+   *
+   * The default is the throwaway project, never `nova`. A default that names
+   * somebody's real instance is a loaded gun pointed at it by whichever code
+   * path forgets to set this — and `restartProject()` restarts every
+   * container in whatever it is given. A host run against another stack has
+   * to say so out loud.
    */
-  project: env('NOVA_E2E_PROJECT', 'nova'),
+  project: env('NOVA_E2E_PROJECT', 'nova-e2e'),
   dockerSocket: env('NOVA_E2E_DOCKER_SOCKET', '/var/run/docker.sock'),
   /**
    * The wizard's model. Defaults to the smallest curated slug so a CI-speed
@@ -96,7 +102,19 @@ export const config = {
 
 /** The exact phrase scenario 2 plants and scenario 3 goes looking for. */
 export const MEMORY_FACT = 'My favorite color is teal-green, remember that.'
-export const MEMORY_NEEDLE = /teal|colou?r/i
+/**
+ * The fact itself, and ONLY the fact.
+ *
+ * This used to be `/teal|colou?r/i`, which was defensible while scenario 3
+ * asked the open question "What did we talk about earlier?" — a reply that
+ * volunteered the word "colour" at least showed the topic had survived.
+ * It stopped being defensible the moment that question became "What colour
+ * did I tell you was my favourite?", because the question hands the answer
+ * its own needle: "I don't know what colour you told me" matches, and so
+ * does naming the wrong colour. An assertion that a wrong answer passes is
+ * not an assertion.
+ */
+export const MEMORY_NEEDLE = /teal/i
 
 /**
  * The file the tool-loop scenarios write, read back and add to.
