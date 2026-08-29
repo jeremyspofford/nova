@@ -112,15 +112,14 @@ describe('createSseParser', () => {
   })
 
   // A well-formed JSON object whose keys are ALL unknown is ignored rather
-  // than errored, so a future server can add a new frame type — e.g. one
-  // reporting a tool call's progress — without breaking a client built
-  // before it existed. A frame carrying a KNOWN key with the wrong shape
-  // (the "malformed key" tests below) is still an error — this only covers
-  // keys this client has never heard of at all. (Ruling S2-R6, amending
-  // S1's R20, which used to error on any frame outside {t, error, meta}.)
+  // than errored, so a future server can add a new frame type without
+  // breaking a client built before it existed. A frame carrying a KNOWN
+  // key with the wrong shape (the "malformed key" tests below) is still an
+  // error — this only covers keys this client has never heard of at all.
+  // (Ruling S2-R6, amending S1's R20, which used to error on any frame
+  // outside {t, error, meta}.)
   it('ignores a well-formed frame whose keys are all unknown, forward-compat', () => {
     expect(parseAll(['data: {"surprise":1}\n\n'])).toEqual([])
-    expect(parseAll(['data: {"activity":{"tool":"get_time","status":"start"}}\n\n'])).toEqual([])
     expect(parseAll(['data: {}\n\n'])).toEqual([])
   })
 
@@ -128,6 +127,31 @@ describe('createSseParser', () => {
     const events = parseAll(['data: {"meta":"not an object"}\n\n'])
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe('error')
+  })
+
+  // Task 2's tool loop emits {"activity":{tool,status}} while a round's
+  // tool calls run — S1's forward-compat above is what let an older client
+  // tolerate these before this client knew what they meant. Now it does:
+  // this is a KNOWN frame, not an unknown one, and status is whatever the
+  // server actually reported (chat.py only ever sends start/ok/error, but
+  // this parser does not invent a narrower type than the wire promises).
+  it('turns an activity frame into an activity event', () => {
+    expect(
+      parseAll(['data: {"activity":{"tool":"get_time","status":"start"}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'get_time', status: 'start' }])
+    expect(
+      parseAll(['data: {"activity":{"tool":"get_time","status":"ok"}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'get_time', status: 'ok' }])
+    expect(
+      parseAll(['data: {"activity":{"tool":"workspace_write_file","status":"error"}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'workspace_write_file', status: 'error' }])
+  })
+
+  it('errors an activity frame missing tool or status rather than dropping it silently', () => {
+    expect(parseAll(['data: {"activity":{"status":"start"}}\n\n'])[0].type).toBe('error')
+    expect(parseAll(['data: {"activity":{"tool":"get_time"}}\n\n'])[0].type).toBe('error')
+    expect(parseAll(['data: {"activity":"not an object"}\n\n'])[0].type).toBe('error')
+    expect(parseAll(['data: {"activity":null}\n\n'])[0].type).toBe('error')
   })
 
   it('still errors malformed/non-JSON lines — the amendment only covers well-formed unknowns', () => {

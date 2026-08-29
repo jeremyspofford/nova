@@ -9,6 +9,17 @@ import type { StreamEvent } from '../../lib/streamChat'
  * connection keeps whatever text really arrived and says it was cut off.
  */
 
+/** The pending bubble's transient tool-call indicator. `status` is
+ * whatever the server sent (chat.py only ever sends 'start' or 'error'
+ * through here — 'ok' resolves the call cleanly and clears this back to
+ * null instead of being a status worth showing), kept as `string` rather
+ * than a narrower literal so an unrecognised value still renders as
+ * something rather than being cast into a lie. Never persisted:
+ * reconciling from fetched history always starts a row at `null` (see
+ * `message()` below), because the durable record of what ran is the
+ * Activity page, not the chat transcript. */
+export type ActivityMarker = { tool: string; status: string } | null
+
 export type MessageRow = {
   kind: 'message'
   id: string
@@ -16,6 +27,7 @@ export type MessageRow = {
   text: string
   streaming: boolean
   interrupted: boolean
+  activity: ActivityMarker
 }
 
 export type ErrorRow = {
@@ -57,7 +69,7 @@ export function emptyChat(): ChatState {
 }
 
 function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role'] }): MessageRow {
-  return { kind: 'message', text: '', streaming: false, interrupted: false, ...row }
+  return { kind: 'message', text: '', streaming: false, interrupted: false, activity: null, ...row }
 }
 
 function withPending(state: ChatState, apply: (row: MessageRow) => MessageRow): ChatState {
@@ -82,7 +94,9 @@ function replacePendingWithError(state: ChatState, reason: string): ChatState {
   // actually said before it failed.
   const keptRows =
     pending && pending.text
-      ? state.rows.map(row => (row === pending ? { ...pending, streaming: false } : row))
+      ? state.rows.map(row =>
+          row === pending ? { ...pending, streaming: false, activity: null } : row,
+        )
       : state.rows.filter(row => row !== pending)
   return { ...state, rows: [...keptRows, errorRow], streaming: false, pendingId: null }
 }
@@ -100,6 +114,17 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
       if (state.pendingId === null) return state
       return withPending(state, row => ({ ...row, text: row.text + event.text }))
 
+    case 'activity':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({
+        ...row,
+        // 'ok' is not shown — it clears the line, same as it never
+        // happened, because a call that resolved cleanly is not something
+        // the pending bubble needs to keep saying. 'start' and 'error' are
+        // the two states someone reading the bubble actually needs.
+        activity: event.status === 'ok' ? null : { tool: event.tool, status: event.status },
+      }))
+
     case 'error':
       if (state.pendingId === null) {
         return {
@@ -115,13 +140,22 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
       const pending = pendingRow(state)
       // No text and no error frame: still a failure, said out loud.
       if (pending && !pending.text) return replacePendingWithError(state, NO_REPLY)
-      return { ...withPending(state, row => ({ ...row, streaming: false })), streaming: false, pendingId: null }
+      return {
+        ...withPending(state, row => ({ ...row, streaming: false, activity: null })),
+        streaming: false,
+        pendingId: null,
+      }
     }
 
     case 'interrupted': {
       if (state.pendingId === null) return { ...state, streaming: false }
       return {
-        ...withPending(state, row => ({ ...row, streaming: false, interrupted: true })),
+        ...withPending(state, row => ({
+          ...row,
+          streaming: false,
+          interrupted: true,
+          activity: null,
+        })),
         streaming: false,
         pendingId: null,
       }

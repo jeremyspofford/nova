@@ -1,6 +1,34 @@
 import { memo } from 'react'
-import { AlertTriangle, Unplug } from 'lucide-react'
+import { AlertTriangle, Loader2, Unplug } from 'lucide-react'
 import type { ErrorRow, MessageRow } from './chatReducer'
+
+/**
+ * The tool loop's transient progress line — {"activity":{tool,status}}
+ * frames (chat.py, forward-compat'd by streamChat.ts) turned into a
+ * subtle, in-place indicator on the bubble that is still streaming. It is
+ * never the durable record: nothing here is persisted, and the Activity
+ * page (task 3's other half) is where a tool call's actual result lives
+ * after the fact. 'ok' never reaches this component at all — the reducer
+ * clears the marker back to null the moment a call resolves cleanly.
+ */
+function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity']> }) {
+  const failed = activity.status === 'error'
+  return (
+    <p
+      data-testid="activity-line"
+      className={`mt-1.5 inline-flex items-center gap-1.5 text-caption ${
+        failed ? 'text-danger' : 'text-content-tertiary'
+      }`}
+    >
+      {failed ? (
+        <AlertTriangle size={12} className="shrink-0" />
+      ) : (
+        <Loader2 size={12} className="shrink-0 animate-spin" />
+      )}
+      {failed ? `${activity.tool} did not finish` : `using ${activity.tool}…`}
+    </p>
+  )
+}
 
 function LoadingDots() {
   return (
@@ -34,8 +62,9 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
       </div>
       <div className="flex-1 min-w-0 pb-1">
         <div className="text-body leading-relaxed text-content-primary whitespace-pre-wrap break-words">
-          {row.text ? row.text : row.streaming ? <LoadingDots /> : null}
+          {row.text ? row.text : row.streaming && !row.activity ? <LoadingDots /> : null}
         </div>
+        {row.activity && <ActivityLine activity={row.activity} />}
         {/* A cut-off turn keeps whatever really arrived and says it was cut
             off — the alternative is a truncated answer that reads complete. */}
         {row.interrupted && (

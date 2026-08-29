@@ -234,6 +234,105 @@ describe('chatReducer — reconciling a fetched history against a live store', (
   })
 })
 
+describe('chatReducer — live tool activity in the pending bubble', () => {
+  // The chat store already tolerates {"activity":{tool,status}} frames
+  // (streamChat's forward-compat); this is where they become something the
+  // pending bubble can show — a transient line, never persisted, cleared
+  // the moment the call resolves or the bubble itself finishes.
+
+  it('a start frame puts a transient activity marker on the pending row', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'workspace_write_file', status: 'start' },
+    })
+    expect(messages(state)[1].activity).toEqual({ tool: 'workspace_write_file', status: 'start' })
+  })
+
+  it('an ok frame clears the marker — the call resolved cleanly', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'get_time', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'get_time', status: 'ok' },
+    })
+    expect(messages(state)[1].activity).toBeNull()
+  })
+
+  it('an error frame replaces the marker with a stated failure, it does not clear', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'workspace_read_file', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'workspace_read_file', status: 'error' },
+    })
+    expect(messages(state)[1].activity).toEqual({ tool: 'workspace_read_file', status: 'error' })
+  })
+
+  it('a second call in the same round replaces the marker, one at a time', () => {
+    let state = started()
+    for (const status of ['start', 'ok'] as const) {
+      state = chatReducer(state, { type: 'event', event: { type: 'activity', tool: 'a', status } })
+    }
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'b', status: 'start' },
+    })
+    expect(messages(state)[1].activity).toEqual({ tool: 'b', status: 'start' })
+  })
+
+  it('is absent on a freshly opened bubble, before any activity frame arrives', () => {
+    const state = started()
+    expect(messages(state)[1].activity).toBeNull()
+  })
+
+  it('an activity frame is a no-op once the turn has no pending row', () => {
+    // Defensive: a frame that somehow arrives after [DONE] must not throw
+    // or resurrect a finished bubble.
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'get_time', status: 'start' },
+    })
+    expect(state.pendingId).toBeNull()
+  })
+
+  it('the marker is cleared once the bubble finishes, even after an error frame', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'still working' } })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'workspace_read_file', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'workspace_read_file', status: 'error' },
+    })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(messages(state)[1].activity).toBeNull()
+  })
+
+  it('the marker is cleared on an interrupted turn too', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'get_time', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'interrupted', reason: 'connection lost' },
+    })
+    expect(messages(state)[1].activity).toBeNull()
+  })
+})
+
 describe('chatReducer — a dropped connection', () => {
   it('keeps the partial text and marks it interrupted', () => {
     let state = started()

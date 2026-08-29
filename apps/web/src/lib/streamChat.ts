@@ -18,13 +18,18 @@
  * plainly that the turn did not finish.
  *
  * Forward-compat: a well-formed JSON frame whose keys are ALL outside
- * {t, error, meta} is a future frame type, not a broken one, and is
- * silently ignored — this lets the server start sending a new frame shape
- * later (e.g. one reporting a tool call's progress) without breaking a
- * client built before that frame type existed. Malformed/non-JSON lines,
- * and a KNOWN key with the wrong shape, still remain error events: the
- * allowance only ever widens what counts as "not part of the contract
- * yet", never what counts as broken. (Ruling S2-R6, amending S1's R20.)
+ * {t, error, meta, activity} is a future frame type, not a broken one, and
+ * is silently ignored — this lets the server start sending a new frame
+ * shape later without breaking a client built before that frame type
+ * existed. Malformed/non-JSON lines, and a KNOWN key with the wrong shape,
+ * still remain error events: the allowance only ever widens what counts as
+ * "not part of the contract yet", never what counts as broken.
+ * (Ruling S2-R6, amending S1's R20.)
+ *
+ * `activity` (S2 task 2/3) is exactly the frame type that comment used to
+ * gesture at as a hypothetical: `{"activity":{"tool":"<name>","status":
+ * "start"|"ok"|"error"}}`, sent once per tool call while a round's tools
+ * run. It graduates from "unknown, tolerated" to "known, understood" here.
  */
 
 import { createLineBuffer } from './lineBuffer'
@@ -33,6 +38,11 @@ import { statedReason } from './statedReason'
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string }
   | { type: 'delta'; text: string }
+  // status is whatever the server actually sent (chat.py only ever sends
+  // start/ok/error) — kept as `string` rather than a narrower literal
+  // union so a status this client has not seen yet is still a real event,
+  // not a type error waiting to happen.
+  | { type: 'activity'; tool: string; status: string }
   | { type: 'error'; reason: string }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
@@ -57,7 +67,7 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta'])
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity'])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -83,6 +93,15 @@ function frameToEvent(payload: string): StreamEvent | null {
       model: String(meta.model ?? ''),
       turnId: String(meta.turn_id ?? ''),
     }
+  }
+  if (obj.activity !== null && typeof obj.activity === 'object') {
+    const activity = obj.activity as Record<string, unknown>
+    if (typeof activity.tool === 'string' && typeof activity.status === 'string') {
+      return { type: 'activity', tool: activity.tool, status: activity.status }
+    }
+    // Falls through to the generic "known key, wrong shape" refusal below
+    // rather than being treated as an unknown frame — `activity` IS known,
+    // it just did not carry the two fields it promises.
   }
   if (!Object.keys(obj).some(key => KNOWN_FRAME_KEYS.has(key))) {
     // Every key here is one this client has never heard of — a future frame
