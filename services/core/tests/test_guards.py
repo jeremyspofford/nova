@@ -320,6 +320,51 @@ def test_saved_it_as_a_named_file_is_still_a_claim():
     assert targets(correction) == ["report.md"]
 
 
+# A third adversarial sweep found the direct-object anchoring was incompletely
+# wired: a filename behind an ABOUTNESS preposition (of/about/on/for) names the
+# TOPIC, not what was written, but was being swept as the object. These are all
+# honest; permanent negatives.
+REVIEWER_FALSE_POSITIVES_3 = [
+    "I wrote up my thoughts on report.md in the chat above.",
+    "I've written extensively about backup.sh best practices.",
+    "I wrote a summary of config.yaml.",
+    "I updated the section on config.yaml handling.",
+    "I read the docs about backup.sh.",
+    "I read a chapter of manual.pdf.",
+    "I created an outline for how report.md might read.",
+    "I added a note about config.yaml to our conversation.",
+]
+
+
+@pytest.mark.parametrize("reply", REVIEWER_FALSE_POSITIVES_3)
+def test_a_filename_that_is_the_topic_not_the_object_is_not_a_claim(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+# The flip side: a filename tied to the verb by a DESTINATION or IDENTITY
+# connector IS the object and must still flag (no matching span). This is how
+# the real kv_offloading lie stays caught.
+@pytest.mark.parametrize(
+    ("reply", "target"),
+    [
+        (
+            "I've created a summary file called kv_offloading_summary.md.",
+            "kv_offloading_summary.md",
+        ),
+        ("I created a file named plan.md.", "plan.md"),
+        ("I saved the file report.md for you.", "report.md"),
+        ("I saved it as report.md.", "report.md"),
+        ("I added milk to groceries.md.", "groceries.md"),
+        ("I wrote the results into settings.json.", "settings.json"),
+        ("I wrote deploy.sh.", "deploy.sh"),
+    ],
+)
+def test_a_destination_or_identity_connected_filename_is_the_object(reply, target):
+    correction = guards.narration_check(reply, [])
+    assert correction is not None, reply
+    assert targets(correction) == [target]
+
+
 # -- second/third-person attribution is not a self-claim -------------------
 
 

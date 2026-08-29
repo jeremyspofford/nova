@@ -158,8 +158,41 @@ _STOP_WORDS = frozenset(
      "they", "he", "she"}
 )
 _STOP_PUNCT = frozenset({";", ":", "-", "–", "—", "(", ")", "[", "]", "!", "?"})
-_DEST_PREP = frozenset({"to", "into", "onto", "in", "within", "at"})
 _OBJECT_MAX_TOKENS = 12
+
+# Whether a filename is the verb's OBJECT is grammatical, not positional. It
+# counts only when a DESTINATION or IDENTITY connector ties it to the verb;
+# behind an ABOUTNESS connector it names the TOPIC, not what was written, and
+# is clean. "wrote a summary of config.yaml" and "the docs about backup.sh"
+# are topics; "wrote to settings.json", "a file called X", "saved it as X",
+# and the immediate "wrote deploy.sh" are objects.
+_DEST_PREP = frozenset({"to", "into", "onto"})
+_IDENTITY_CONN = frozenset({"as", "called", "named", "titled", "labeled", "labelled"})
+# File-head nouns host an appositive filename ("the file X", "a note called
+# X") — the filename identifies WHAT was written, which is the kv_offloading
+# lie's exact shape. This is the ONLY place a bare file noun matters, and only
+# because a real filename is tied to it.
+_FILE_HEAD_NOUNS = frozenset(
+    {"file", "files", "document", "documents", "doc", "docs", "note", "notes",
+     "memo", "readme", "script", "scripts", "page", "pages", "copy", "version"}
+)
+# Aboutness / oblique connectors: the filename after one of these is the TOPIC.
+# "as" is IDENTITY (saved it AS report.md), never aboutness.
+_ABOUTNESS = frozenset({"of", "about", "on", "for", "regarding", "concerning", "upon", "re"})
+# Determiners, quantifiers, particles and common adjectives that merely modify
+# the object — they do not fill the object slot, so the walk stays "immediate".
+# Anything NOT here, and not a connector/boundary, is treated as a content noun
+# that DOES fill the slot (so a later filename is oblique unless a
+# destination/identity connector re-ties it).
+_DETERMINER_ADJ = frozenset(
+    {"a", "an", "the", "this", "that", "these", "those", "my", "your", "his",
+     "her", "its", "our", "their", "one", "another", "some", "any", "no",
+     "each", "every", "new", "old", "updated", "revised", "final", "first",
+     "second", "third", "latest", "initial", "complete", "entire", "whole",
+     "same", "short", "small", "brief", "quick", "simple", "plain", "draft",
+     "up", "back", "down", "out", "over", "here", "there", "above", "below",
+     "just", "also", "now", "then", "brand"}
+)
 
 # The filename is the SUBJECT of a passive/content claim, so its truth is
 # suppressed not by a first-person walk-back but by any sign the action belongs
@@ -289,15 +322,28 @@ def _first_person_subject(tokens: list[str], vi: int) -> bool:
 
 
 def _objects_of(tokens: list[str], vi: int) -> list[str]:
-    """The file tokens that are the DIRECT OBJECT (or destination) of the verb
-    at index `vi`, read left-to-right and stopping at the first clause
-    boundary. A conjunction/comma before any object, a finite verb starting a
-    new predicate ('config.yaml IS the file…'), a subordinator, or another
-    action verb all end the walk — so 'I updated my approach and config.yaml
-    is …' yields nothing (config.yaml is a new clause's subject), while 'I
-    added milk to groceries.md' and 'I saved a.md and b.md' yield their real
-    objects."""
+    """The file tokens that are the OBJECT of the completed verb at index `vi`.
+
+    Grammatical, not positional: a filename counts only when a DESTINATION or
+    IDENTITY connector ties it to the verb, never when an ABOUTNESS connector
+    makes it the topic. A small "governor" state carries what would tie the
+    NEXT filename:
+
+      immediate  — right after the verb, only determiners/adjectives passed
+                   ("wrote deploy.sh", "read config.yaml")
+      dest       — after to/into/onto ("added milk TO groceries.md")
+      identity   — after called/named/as or a file-head noun ("a file called
+                   X", "saved it AS report.md", "the file X")
+      oblique    — a non-file common noun has filled the direct-object slot
+                   ("a summary …"), so a later bare filename is not the object
+
+    An ABOUTNESS preposition (of/about/on/for/regarding/…) or a possessive
+    ends candidacy entirely — everything after it is topic. A conjunction/
+    comma before any object, a finite verb, a subordinator, or another action
+    verb also end the walk. A list conjunction AFTER an object continues the
+    list ("saved a.md and b.md")."""
     found: list[str] = []
+    governor = "immediate"
     steps = 0
     j = vi + 1
     while j < len(tokens) and steps < _OBJECT_MAX_TOKENS:
@@ -305,16 +351,40 @@ def _objects_of(tokens: list[str], vi: int) -> list[str]:
         low = tok.lower()
         name = _filename_at(tok)
         if name is not None:
-            found.append(name)
-        elif low in _ACTION_VERB_TOKENS:
-            break
-        elif low in _LIST_CONT:
-            # A list conjunction extends an object list ('a.md and b.md') but,
-            # before any object, marks the boundary of a new clause.
-            if not found:
+            # A possessive filename ("config.yaml's contents") is a topic.
+            if tok[len(name) :].startswith("'"):
                 break
-        elif tok in _STOP_PUNCT or low in _STOP_WORDS:
+            if governor in ("immediate", "dest", "identity"):
+                found.append(name)
+                governor = "list"
+                j += 1
+                steps += 1
+                continue
+            # governor == "oblique"/"list": a non-file noun already filled the
+            # object slot, so this filename is not what was written — stop.
             break
+        if low in _ACTION_VERB_TOKENS:
+            break
+        if low in _LIST_CONT:
+            if found:
+                governor = "immediate"  # a coordinated second object may follow
+                j += 1
+                steps += 1
+                continue
+            break
+        if tok in _STOP_PUNCT or low in _STOP_WORDS:
+            break
+        if low in _ABOUTNESS or tok == "'s":
+            break  # the filename after an aboutness connector is the topic
+        if low in _DEST_PREP:
+            governor = "dest"
+        elif low in _IDENTITY_CONN or low in _FILE_HEAD_NOUNS:
+            governor = "identity"
+        elif low in _DETERMINER_ADJ or low.endswith("ly"):
+            pass  # a modifier — the object slot is still open
+        else:
+            # a non-file common noun fills the direct-object slot
+            governor = "oblique"
         j += 1
         steps += 1
     return found
