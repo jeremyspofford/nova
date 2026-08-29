@@ -61,11 +61,20 @@ test('follow-up: "add oat milk to that list" really changes the file on disk', a
       describeToolSpans(spans),
   )
 
+  // ── the volume is the verdict ───────────────────────────────────────────
+  // Read before the span checks so a narrated update — the reply describing
+  // a file it never touched — is reported with both halves of the proof in
+  // one message: no tool ran, and the bytes on disk did not move.
+  const after = await readWorkspaceFile(GROCERIES)
+  console.log(`[scenario 9] ${GROCERIES} after:\n${after}`)
+
   const wrote = spansForTool(spans, 'workspace_write_file').some(s => s.meta.ok === true)
   expect(
     wrote,
-    `the reply claims the list was updated but no workspace_write_file succeeded on this turn:` +
-      `\n    ${describeToolSpans(spans)}`,
+    `the reply claims the list was updated but no workspace_write_file succeeded on this turn — ` +
+      `this is the narration case, work reported that never happened.\n  spans: ` +
+      `${describeToolSpans(spans)}\n  ${GROCERIES} on disk is ${after === before ? 'UNCHANGED' : 'changed'}:` +
+      `\n${after}`,
   ).toBe(true)
   // Whether she re-read the file first is her strategy, not a requirement —
   // core deliberately does not replay tool results into the next turn, so a
@@ -75,9 +84,6 @@ test('follow-up: "add oat milk to that list" really changes the file on disk', a
   const reread = spansForTool(spans, 'workspace_read_file').some(s => s.meta.ok === true)
   console.log(`[scenario 9] re-read the file before writing: ${reread}`)
 
-  // ── the volume is the verdict ───────────────────────────────────────────
-  const after = await readWorkspaceFile(GROCERIES)
-  console.log(`[scenario 9] ${GROCERIES} after:\n${after}`)
   expect(
     NEEDLE.test(after),
     `the reply said it was added, but ${GROCERIES} on the volume does not contain it.\n` +

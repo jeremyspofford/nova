@@ -143,6 +143,40 @@ Scenario 1 fails with the offered list in the message if the slug is not one
 the wizard lists, so a mismatch is never silent — but "offered" is not
 "loads", and only running it tells you which.
 
+### What the default model actually does to scenarios 9 and 10
+
+Measured over five full walks on 2026-08-29, `qwen3:1.7b` on the CPU:
+scenarios 1–8 passed every time; 9 and 10 did not. What went wrong in them
+was never the loop and never the checks — it was the model reporting work it
+had not done, and being caught:
+
+* it replied "the file `groceries.md` has been updated successfully" and
+  listed the new contents, having made **zero** tool calls, with the file on
+  disk unchanged;
+* it replied that `receipts/2019-invoice.md` "contains the following
+  content", inventing an amount, a date and a customer name, again with zero
+  tool calls, for a path that does not exist;
+* it created `oat_milk.md` instead of adding a line to the list it had just
+  been shown.
+
+Every one of those was caught by reading the turn ledger and the volume
+rather than the reply, which is the whole design of those scenarios. But it
+means a walk on the smallest curated model is not a pass/fail gate for
+anything above scenario 8: expect roughly two thirds of runs to be red there,
+for reasons that are about the model's honesty and not about this code. Use a
+larger model when the tool scenarios are what you are checking:
+
+```bash
+NOVA_E2E_MODEL=qwen3:8b tests/e2e/isolated.sh walk
+```
+
+`qwen3:8b` and `qwen3.8:27b` both passed scenario 7 on the GPU — see
+`measurements/s2-two-model.json` for their load times, VRAM and round counts.
+
+Nothing in the running system currently refuses a reply that claims a file
+operation no span records; the system prompt asks for that behaviour, and a
+prompt is a request.
+
 ## Re-running scenario 1
 
 Scenario 1 mints the instance's one and only owner (core closes registration

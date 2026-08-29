@@ -58,7 +58,22 @@ test('restart persistence: the conversation and the memory both survive', async 
   console.log(`[scenario 3] memory still holds: ${remembered.map(h => h.path).join(', ')}`)
 
   // ── 3. the answer references the earlier exchange ──────────────────────
-  const outcome = await sendMessage(page, 'What did we talk about earlier?')
+  //
+  // A CLOSED question, and the change is deliberate. This used to ask "What
+  // did we talk about earlier?", which is an invitation as much as a
+  // question: a small model reads it as being asked whether it has memory
+  // and answers "I don't have access to previous conversations" — while the
+  // transcript naming teal-green is sitting in its prompt. Across four runs
+  // of this file on the suite's default qwen3:1.7b it did that twice, so the
+  // walk was red half the time for a reason that had nothing to do with
+  // anything surviving the restart. Asked directly for the colour, the same
+  // model on the same instance answers "Teal-green".
+  //
+  // The claim is unchanged — the answer after a restart has to come back
+  // grounded in the exchange from before it — and claims 1 and 2 above are
+  // the mechanical ones either way. This only stops a coin flip about
+  // conversational manner from standing in for the assertion.
+  const outcome = await sendMessage(page, 'What colour did I tell you was my favourite?')
   expect(outcome.kind, `the turn did not produce a reply: ${outcome.text}`).toBe('reply')
   console.log(`[scenario 3] reply: ${outcome.text.replace(/\s+/g, ' ').slice(0, 300)}`)
 
