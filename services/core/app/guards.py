@@ -193,6 +193,18 @@ _DETERMINER_ADJ = frozenset(
      "up", "back", "down", "out", "over", "here", "there", "above", "below",
      "just", "also", "now", "then", "brand"}
 )
+# Prepositions and adverbs that can FOLLOW the verb's object without being the
+# noun it modifies — "created groceries.md WITH the items", "wrote deploy.sh
+# TODAY". A filename followed by one of these keeps its object status; a
+# filename followed by a bare content noun ("config.yaml parsing logic") does
+# not (it is a pre-nominal modifier).
+_PREP_ADVERB = frozenset(
+    {"with", "from", "by", "at", "in", "per", "via", "without", "within",
+     "after", "before", "during", "through", "under", "since", "until",
+     "against", "toward", "towards", "today", "tonight", "yesterday",
+     "tomorrow", "again", "once", "twice", "soon", "later", "earlier",
+     "still", "yet", "too", "instead", "successfully"}
+)
 
 # The filename is the SUBJECT of a passive/content claim, so its truth is
 # suppressed not by a first-person walk-back but by any sign the action belongs
@@ -321,13 +333,32 @@ def _first_person_subject(tokens: list[str], vi: int) -> bool:
     return False
 
 
+def _is_content_noun(token: str) -> bool:
+    """True if `token` is a bare common noun — none of the known grammatical
+    categories (a filename, a connector, a preposition/adverb, a determiner/
+    adjective, or a clause boundary). Used to spot the noun a pre-nominal
+    filename modifies ("config.yaml PARSING", "backup.sh DOCS")."""
+    low = token.lower()
+    if _filename_at(token) is not None:
+        return False
+    if token in _STOP_PUNCT or low in _STOP_WORDS or low in _LIST_CONT:
+        return False
+    if low in _ACTION_VERB_TOKENS or low in _ABOUTNESS or token == "'s":
+        return False
+    if low in _DEST_PREP or low in _IDENTITY_CONN or low in _PREP_ADVERB:
+        return False
+    if low in _DETERMINER_ADJ or low.endswith("ly"):
+        return False
+    return True
+
+
 def _objects_of(tokens: list[str], vi: int) -> list[str]:
     """The file tokens that are the OBJECT of the completed verb at index `vi`.
 
     Grammatical, not positional: a filename counts only when a DESTINATION or
-    IDENTITY connector ties it to the verb, never when an ABOUTNESS connector
-    makes it the topic. A small "governor" state carries what would tie the
-    NEXT filename:
+    IDENTITY connector ties it to the verb, never when it is the TOPIC (behind
+    an aboutness preposition) or a MODIFIER (in front of the noun it describes).
+    A small "governor" state carries what would tie the NEXT filename:
 
       immediate  — right after the verb, only determiners/adjectives passed
                    ("wrote deploy.sh", "read config.yaml")
@@ -338,10 +369,15 @@ def _objects_of(tokens: list[str], vi: int) -> list[str]:
                    ("a summary …"), so a later bare filename is not the object
 
     An ABOUTNESS preposition (of/about/on/for/regarding/…) or a possessive
-    ends candidacy entirely — everything after it is topic. A conjunction/
-    comma before any object, a finite verb, a subordinator, or another action
-    verb also end the walk. A list conjunction AFTER an object continues the
-    list ("saved a.md and b.md")."""
+    ends candidacy entirely — everything after it is topic. A filename
+    IMMEDIATELY FOLLOWED by a bare content noun is a pre-nominal modifier of
+    that noun ("the config.yaml PARSING logic", "the backup.sh DOCS"), the
+    mirror of the topic case, so it is demoted rather than taken as the object
+    — but a filename followed by a boundary, a preposition, or end-of-clause
+    ("created the file report.md.", "wrote deploy.sh") stays the object. A
+    conjunction/comma before any object, a finite verb, a subordinator, or
+    another action verb also end the walk. A list conjunction AFTER an object
+    continues the list ("saved a.md and b.md")."""
     found: list[str] = []
     governor = "immediate"
     steps = 0
@@ -354,6 +390,15 @@ def _objects_of(tokens: list[str], vi: int) -> list[str]:
             # A possessive filename ("config.yaml's contents") is a topic.
             if tok[len(name) :].startswith("'"):
                 break
+            # A filename that immediately modifies a following content noun
+            # ("config.yaml parsing logic") is not the object — demote it, the
+            # mirror of the aboutness case. End-of-clause, a boundary, or a
+            # preposition after it does NOT demote ("wrote deploy.sh").
+            if j + 1 < len(tokens) and _is_content_noun(tokens[j + 1]):
+                governor = "oblique"
+                j += 1
+                steps += 1
+                continue
             if governor in ("immediate", "dest", "identity"):
                 found.append(name)
                 governor = "list"

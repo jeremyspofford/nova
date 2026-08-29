@@ -365,6 +365,34 @@ def test_a_destination_or_identity_connected_filename_is_the_object(reply, targe
     assert targets(correction) == [target]
 
 
+# A fourth sweep found the MIRROR of the oblique case: a filename used as a
+# PRE-NOMINAL MODIFIER of a content noun ("the config.yaml parsing logic" ==
+# "the parsing logic for config.yaml"). Same meaning as an already-clean
+# oblique form, words reordered — all honest. Permanent negatives.
+REVIEWER_FALSE_POSITIVES_4 = [
+    "I updated the config.yaml parsing logic.",
+    "I updated the config.yaml handling.",
+    "I added config.yaml support.",
+    "I read the backup.sh docs.",
+    "I wrote the config.yaml summary.",
+    "I read config.yaml documentation before starting.",
+]
+
+
+@pytest.mark.parametrize("reply", REVIEWER_FALSE_POSITIVES_4)
+def test_a_filename_that_pre_modifies_a_content_noun_is_not_a_claim(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_filename_at_a_boundary_stays_the_object_despite_the_modifier_rule():
+    """The demotion must fire ONLY when a content noun follows: a filename at
+    end-of-clause or before a preposition is still the object."""
+    # End-of-clause -> object.
+    assert guards.narration_check("I created the file report.md.", []) is not None
+    # A preposition (not a modified noun) after it -> object.
+    assert guards.narration_check("I've created groceries.md with five items.", []) is not None
+
+
 # -- second/third-person attribution is not a self-claim -------------------
 
 
