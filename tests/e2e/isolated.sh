@@ -6,7 +6,7 @@
 #   tests/e2e/isolated.sh gpu     restart its ollama WITH the GPU (measurement)
 #   tests/e2e/isolated.sh cpu     restart its ollama back on the CPU
 #   tests/e2e/isolated.sh down    stop it and delete ITS volumes
-#   tests/e2e/isolated.sh dc ...  any compose subcommand, correctly scoped
+#   tests/e2e/isolated.sh dc ...  any compose subcommand (project/file flags refused)
 #
 # WHY THIS SCRIPT EXISTS. The suite is destructive on purpose: it mints the
 # instance's one and only owner, restarts every container, stops the gateway,
@@ -15,8 +15,16 @@
 # the two is a `-p nova-e2e` on a five-line command. A flag you have to
 # remember is not a control. This script is the control: every docker verb
 # below goes through one array that already carries the project name and the
-# overlay, so there is no shape of "run the e2e suite" that can land on
-# another project by being typed slightly wrong.
+# overlay.
+#
+# That array alone is NOT the whole of it, and saying it was is this file's
+# own first defect. Arguments given to `dc` are spliced in before the
+# subcommand — exactly where docker compose reads its global flags — so
+# `dc -p nova config` rendered `name: nova`, which made `dc -p nova down -v`
+# one spelling away from a real instance's volumes. The `dc` arm now refuses
+# -p/--project/-f/--file by shape. The other arms pass their arguments after
+# the subcommand, where compose rejects a global flag itself (checked, rather
+# than assumed: `up -p nova` dies with "unknown shorthand flag: 'p' in -p").
 #
 # The one thing it will not do for you: the two-model measurement needs the
 # GPU, and `gpu` here does not check whether another stack's model is resident
@@ -147,6 +155,31 @@ case "${1:-}" in
     ;;
   dc)
     shift
+    # The only arm that takes arbitrary compose arguments, and therefore the
+    # only one that has to be told what it may not say.
+    #
+    # compose_run splices these in BEFORE the subcommand, which is exactly
+    # where docker compose reads its global flags — so a `-p` here beats the
+    # `-p nova-e2e` in COMPOSE and every verb goes wherever it points.
+    # Demonstrated before this guard existed, with `config` so nothing ran:
+    # `isolated.sh dc -p nova config` rendered `name: nova`. That made
+    # `dc -p nova down -v` a spelling away from deleting a real instance's
+    # volumes, which falsified this file's own headline claim.
+    #
+    # The other arms pass their arguments AFTER the subcommand, where compose
+    # refuses a global flag outright, so they need nothing.
+    for arg in "$@"; do
+      case "$arg" in
+        -p|-p*|--project*|-f|-f*|--file*)
+          echo "isolated.sh dc: refusing ${arg}." >&2
+          echo "  The compose project and the compose files are what make this script safe" >&2
+          echo "  to run beside a real instance, and this argument redefines one of them" >&2
+          echo "  before the subcommand, where it wins. Edit the COMPOSE array above if you" >&2
+          echo "  genuinely mean a different stack." >&2
+          exit 2
+          ;;
+      esac
+    done
     compose_run "$@"
     ;;
   *)
