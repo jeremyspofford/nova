@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { Badge, Button, Input } from '../../../components/ui'
+import { Badge, Button, Input, ModelFitNotice } from '../../../components/ui'
 import { getSuggestion, putSetting, type Suggestion } from '../../../lib/api'
 import type { EngineKind } from '../steps'
 
@@ -141,6 +141,11 @@ export function PickModel({
                   <Badge color="neutral" size="sm" className="shrink-0">
                     {candidate.min_vram_gb} GB VRAM
                   </Badge>
+                </div>
+                {/* Before the pick, not after — the S1 wizard offered the
+                    27B on a 24GB card with no fit warning at all. */}
+                <div className="mt-2">
+                  <ModelFitNotice fit={candidate.fit} />
                 </div>
               </button>
             )
