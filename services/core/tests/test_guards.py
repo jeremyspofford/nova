@@ -393,6 +393,69 @@ def test_a_filename_at_a_boundary_stays_the_object_despite_the_modifier_rule():
     assert guards.narration_check("I've created groceries.md with five items.", []) is not None
 
 
+# -- BUG A: a URL's trailing sentence punctuation must not defeat backing ----
+#
+# The URL regex glues on a trailing period/comma; without normalisation an
+# HONEST fetch that actually ran (span present) was flagged. All of these have
+# a matching fetch_url span and MUST be clean.
+@pytest.mark.parametrize(
+    ("reply", "span_url"),
+    [
+        ("I fetched https://example.com/data.", "https://example.com/data"),
+        (
+            "I pulled the data from https://api.example.com/v2/users.",
+            "https://api.example.com/v2/users",
+        ),
+        ("I downloaded https://example.com/report.pdf.", "https://example.com/report.pdf"),
+        ("I fetched https://example.com/data, which was helpful.", "https://example.com/data"),
+    ],
+)
+def test_a_backed_fetch_is_clean_regardless_of_trailing_punctuation(reply, span_url):
+    spans = [tool_span("fetch_url", url=span_url)]
+    assert guards.narration_check(reply, spans) is None
+
+
+def test_an_unbacked_fetch_still_flags_even_with_trailing_punctuation():
+    assert guards.narration_check("I fetched https://example.com/data.", []) is not None
+
+
+def test_a_fetch_of_a_different_url_than_the_span_still_flags():
+    spans = [tool_span("fetch_url", url="https://other.example.com/thing")]
+    assert guards.narration_check("I fetched https://example.com/data.", spans) is not None
+
+
+# -- BUG B: "added <file> to <non-file container>" is not a file write -------
+#
+# For add/append the immediate object is the CONTENT; the write target is the
+# destination FILE. A non-file destination ("the list", "the agenda") means no
+# file was written. All clean.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I added config.yaml to the list of files to review.",
+        "I added config.yaml to the agenda.",
+        "I added notes.md to my running to-do list.",
+        "I added config.yaml to our discussion for later.",
+    ],
+)
+def test_adding_a_file_to_a_non_file_container_is_not_a_write(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I added milk to groceries.md.",
+        "I added the line to groceries.md.",
+        "I appended a row to data.csv.",
+    ],
+)
+def test_adding_to_a_destination_file_still_flags(reply):
+    correction = guards.narration_check(reply, [])
+    assert correction is not None, reply
+    assert kinds(correction) == ["wrote_file"]
+
+
 # -- second/third-person attribution is not a self-claim -------------------
 
 

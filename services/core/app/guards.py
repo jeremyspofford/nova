@@ -91,6 +91,15 @@ _FILENAME_RE = (
 )
 _FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
 _URL = re.compile(r"https?://[^\s)>\]]+", re.I)
+# Sentence punctuation the URL/whitespace regex glues onto the end of a token.
+# A URL captured mid-sentence ("…/data." or "…/data,") must be trimmed to its
+# real value, or a backed fetch would fail the substring test against the
+# span's clean URL and get wrongly flagged.
+_TRAILING_PUNCT = ".,;:!?)]}'\"`"
+
+
+def _strip_trailing_punct(text: str) -> str:
+    return text.rstrip(_TRAILING_PUNCT)
 
 # Presenting a NAMED file's contents as a DUMP: "<file> contains the following"
 # or "<file> says:/reads:". Only a content dump counts — a descriptive
@@ -126,6 +135,11 @@ _WRITE_VERB_TOKENS = frozenset(
 )
 _READ_VERB_TOKENS = frozenset({"read", "checked", "reviewed", "opened", "examined"})
 _ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS
+# add/append name the CONTENT as their immediate object and the file as a
+# destination ("added milk TO groceries.md"). The write target is therefore
+# the destination file, never the immediate object — "added config.yaml to the
+# list" writes no file, so it is not a claim.
+_ADD_VERB_TOKENS = frozenset({"added", "appended"})
 
 # A first-person subject governing a verb: "I", "I've", "I have <verb>", with an
 # adverb or a perfect auxiliary allowed to sit between. This is what an ACTIVE
@@ -435,6 +449,51 @@ def _objects_of(tokens: list[str], vi: int) -> list[str]:
     return found
 
 
+def _destination_file(tokens: list[str], vi: int) -> str | None:
+    """For add/append, the write target is the DESTINATION file — the filename
+    after to/into/onto — not the immediate object, which is the content added.
+
+    "added milk to groceries.md" -> groceries.md (a file) -> a write claim.
+    "added config.yaml to the list" -> "the list" is not a file -> no claim
+    (config.yaml is the content, not the target). No destination at all means
+    no file was written, so no claim."""
+    j = vi + 1
+    steps = 0
+    while j < len(tokens) and steps < _OBJECT_MAX_TOKENS:
+        tok = tokens[j]
+        low = tok.lower()
+        if low in _ACTION_VERB_TOKENS or tok in _STOP_PUNCT or low in _STOP_WORDS:
+            return None
+        if low in _LIST_CONT:
+            return None
+        if low in _DEST_PREP:
+            # Read the destination noun phrase: determiners/adjectives, then a
+            # filename (the destination is a file) or a non-file noun (not).
+            k = j + 1
+            inner = 0
+            while k < len(tokens) and inner < 6:
+                dest = tokens[k]
+                name = _filename_at(dest)
+                if name is not None:
+                    # A destination filename that pre-modifies a content noun
+                    # ("to groceries.md config") is a modifier, not the target.
+                    if k + 1 < len(tokens) and _is_content_noun(tokens[k + 1]):
+                        return None
+                    return name
+                dlow = dest.lower()
+                if dlow in _DETERMINER_ADJ or dlow in _FILE_HEAD_NOUNS or dlow.endswith("ly"):
+                    # determiners/adjectives and a file-head appositive ("the
+                    # file X") precede the destination filename.
+                    k += 1
+                    inner += 1
+                    continue
+                return None  # a non-file destination ("the list", "the agenda")
+            return None
+        j += 1
+        steps += 1
+    return None
+
+
 def _externally_attributed(clause: str) -> bool:
     """The action belongs to someone else or another time — a 'by <not me>'
     agent, a prior-time marker, or a reported-speech lead. Used for passive and
@@ -465,12 +524,20 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             continue
         if not _first_person_subject(tokens, vi):
             continue
+        if low in _ADD_VERB_TOKENS:
+            # The write target is the destination file, not the content added.
+            dest = _destination_file(tokens, vi)
+            if dest is not None:
+                claims.append(("wrote_file", dest, tok))
+            continue
         kind = "wrote_file" if low in _WRITE_VERB_TOKENS else "read_file"
         for name in _objects_of(tokens, vi):
             claims.append((kind, name, tok))
 
     # fetched a URL — I + fetch verb + an explicit http(s) token in the clause.
-    urls = [m.group(0) for m in _URL.finditer(clause)]
+    # Trailing sentence punctuation is trimmed so a backed fetch's target
+    # matches the span's clean URL ("…/data." -> "…/data").
+    urls = [_strip_trailing_punct(m.group(0)) for m in _URL.finditer(clause)]
     if urls:
         for vi, tok in enumerate(tokens):
             if tok.lower() in _FETCH_VERB_TOKENS and _first_person_subject(tokens, vi):
@@ -530,8 +597,13 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # file: kind-level presence is enough — do not flag on what we cannot see.
     if any(t is None for t in span_targets) or not target:
         return True
-    needle = target.rsplit("/", 1)[-1].lower()
-    return any(needle in (t or "").lower() for t in span_targets)
+    # Normalise both sides for trailing punctuation/whitespace, so an honest
+    # backed fetch is clean regardless of the sentence punctuation the URL
+    # was written with ("…/data." vs the span's "…/data").
+    needle = _strip_trailing_punct(target.strip()).rsplit("/", 1)[-1].lower()
+    return any(
+        needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets
+    )
 
 
 def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
