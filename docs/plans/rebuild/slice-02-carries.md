@@ -149,3 +149,9 @@ homograph ("notes.md" → "notes") is dropped by _externally_attributed, so
 not a false accusation (acceptable direction). Fix later: require the
 _REPORTED verb match to not be immediately followed by a filename
 extension.
+
+## S2 + 2b/2c/2d OWNER-VALIDATED (2026-08-29)
+Jeremy walked the rebuilt stack and confirmed all fixes work: Files
+viewer, honesty guard (correction on fabrication), durable turn (hard-
+refresh finishes the reply), scroll-to-newest. "All your fixes worked."
+Slice 2 and its addenda are DONE and validated in the running app.
