@@ -77,20 +77,37 @@ jobs:
   # nobody, and one trimmed into a fake green is worse. The suite runs locally
   # with one command — see tests/e2e/README.md.
   #
+  # Timing, measured on this project's own hardware so the decision is made
+  # against a number: the ten scenarios run in ~4.2 minutes end to end with
+  # qwen3:1.7b on the CPU, from a first-run instance including the 1.4 GB
+  # model pull. That is inside a hosted runner's budget; what is not yet
+  # decided is whether a 1.7B's answers are stable enough to gate a push on.
+  #
   # To enable: decide the profile (a tiny CPU model? a hosted GPU runner? a
   # remote-endpoint backend instead of the bundled one?), then drop `if: false`.
+  #
+  # There is deliberately no list of scenario files here. playwright's
+  # testDir glob picks up everything in tests/e2e/tests/, so a scenario added
+  # to the suite is inherited by this job the moment it exists — a list would
+  # be a second place to keep in step, and the one that silently skips new
+  # walks when somebody forgets.
   e2e:
     if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bring the stack up
-        run: ./install
+      # The isolated project, not `./install`: the walk mints an owner,
+      # restarts every container and stops the gateway, so it runs against a
+      # stack of its own with no published ports and its own volumes. On a
+      # throwaway runner that is merely tidy; on a machine with a real
+      # instance on it, it is the whole reason the script exists.
+      - name: Bring the isolated stack up
+        run: tests/e2e/isolated.sh up
       - name: Walk it
-        run: |
-          docker compose -f deploy/docker-compose.yml \
-            -f tests/e2e/docker-compose.e2e.yml \
-            --profile e2e run --rm e2e
+        run: tests/e2e/isolated.sh walk
+      - name: Tear it down
+        if: always()
+        run: tests/e2e/isolated.sh down
       - uses: actions/upload-artifact@v4
         if: always()
         with:
