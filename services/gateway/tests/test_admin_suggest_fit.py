@@ -5,6 +5,7 @@ the probes table all have to agree with what app/fit.py computes.
 from __future__ import annotations
 
 from app import admin, backends
+from app import curated as curated_mod
 from tests.conftest import requires_db
 from tests.fakes import FakeOllama
 
@@ -35,16 +36,17 @@ async def test_nothing_resident_free_equals_total_and_estimate_is_the_source(
 
     assert resp.status_code == 200
     body = resp.json()
-    # The 27B tier's top pick needs (estimate) 17GB out of 24 free: 7GB
-    # headroom is 29% of free, over the 25% tight line -> comfortable.
-    # (min_vram_gb was 24 — a card-tier floor mis-consumed as a load
-    # estimate; the repo's own measurement (tests/e2e/measurements/
-    # s2-two-model.json) put actual load at 16.2GB, so 17 is a realistic
-    # estimate with margin, still comfortably under measured+headroom.)
+    # Ruling S2f-R1 REVERSES the S2e 24->17 change: 17 was ollama's
+    # size_vram (WEIGHTS only). The 2026-08-29 walk measured the REAL total
+    # footprint (weights + KV@32K + compute buffers) at nvidia-smi
+    # ~22369/24576 MiB resident == ~22GB, so the curated estimate is
+    # re-anchored to 22. 2GB of headroom on 24 free is 8.3% — under the 25%
+    # tight line, which is the honest verdict: this model is a tight fit on
+    # a 24GB card even with nothing else running, not "comfortable".
     top_fit = _fit_for(body, "qwen3.8:27b")
     assert top_fit == {
-        "verdict": "comfortable",
-        "needed_gb": 17.0,
+        "verdict": "tight",
+        "needed_gb": 22.0,
         "free_gb": 24.0,
         "total_gb": 24.0,
         "source": "estimated",
@@ -52,26 +54,77 @@ async def test_nothing_resident_free_equals_total_and_estimate_is_the_source(
     }
 
 
-async def test_a_resident_model_reduces_free_vram_for_everything_else(
+async def test_a_resident_model_does_not_reduce_free_vram_for_a_switch_candidate(
     client, pool, monkeypatch, tmp_path, mount_backend
 ):
-    # 24GB card, a 4GB (4096 MiB) model already resident -> 20GB free.
+    """Ruling S2f-R2 ("the 8B won't fit" bug), reversing this test's old
+    premise: a switch EVICTS whatever is resident, so a resident model no
+    longer reduces `free_gb` for a candidate — free is the whole card.
+
+    24GB card, the 27B (17.4GB, the walk's own size_vram figure) already
+    resident: instantaneous free would have been 24 - 17.4 = 6.6GB, which
+    read every model >=8GB (including the 8B) as `wont_fit` — the exact bug
+    this ruling exists to fix.
+    """
     _write_hardware(monkeypatch, tmp_path, 24576)
     monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
-    fake = FakeOllama(ps_models=[{"name": "other:model", "size_vram": 4096 * 1024 * 1024}])
+    fake = FakeOllama(
+        ps_models=[{"name": "qwen3.8:27b", "size_vram": int(17.4 * 1024 * 1024 * 1024)}]
+    )
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama"})
 
     resp = await client.get("/admin/suggest")
 
     body = resp.json()
-    # qwen3:8b's estimate is 10GB; 20GB free leaves 10GB headroom (50% of
-    # free, comfortably over the 25% line).
+    # qwen3:8b's curated estimate is 10GB; eviction-aware free is the full
+    # 24GB, so 14GB headroom (58.3%) is comfortably over the 25% line.
     eight_b_fit = _fit_for(body, "qwen3:8b")
     assert eight_b_fit["verdict"] == "comfortable"
-    assert eight_b_fit["free_gb"] == 20.0
+    assert eight_b_fit["free_gb"] == 24.0
     assert eight_b_fit["needed_gb"] == 10.0
     assert eight_b_fit["source"] == "estimated"
+
+
+async def test_a_model_bigger_than_the_whole_card_still_wont_fit_even_after_eviction(
+    client, pool, monkeypatch, tmp_path, mount_backend
+):
+    """Eviction-aware free is still bounded by the card's real total — it
+    never invents headroom a switch cannot actually produce."""
+    _write_hardware(monkeypatch, tmp_path, 24576)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(
+        ps_models=[{"name": "qwen3.8:27b", "size_vram": int(17.4 * 1024 * 1024 * 1024)}]
+    )
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    # A hypothetical 30GB model — bigger than the 24GB card has, period.
+    await pool.execute(
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
+        "VALUES ('huge:70b', 'ollama', true, 100, 30720, NULL)"
+    )
+    curated = curated_mod.load_curated() + [
+        {
+            "slug": "huge:70b",
+            "label": "Huge 70B",
+            "family": "27b",
+            "params_b": 70,
+            "min_vram_gb": 40,
+            "size_gb": 40.0,
+            "note": "test-only fixture",
+            "verify_at_walk": False,
+            "verified_at": "2026-08-29",
+            "verified_url": "https://ollama.com/library/huge/tags",
+        }
+    ]
+    monkeypatch.setattr(curated_mod, "load_curated", lambda *a, **k: curated)
+
+    resp = await client.get("/admin/suggest")
+
+    fit = _fit_for(resp.json(), "huge:70b")
+    assert fit["verdict"] == "wont_fit"
+    assert fit["free_gb"] == 24.0
+    assert fit["needed_gb"] == 30.0
 
 
 async def test_a_probe_row_is_preferred_over_the_curated_estimate(

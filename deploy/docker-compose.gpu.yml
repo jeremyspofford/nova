@@ -1,4 +1,6 @@
-# GPU override for the bundled ollama container.
+# GPU override for the bundled ollama container, and (ruling S2f-R3) the
+# gateway container's own nvidia-smi access for POST /admin/probe's
+# before/after VRAM bracket.
 #
 # Merged by install.sh ONLY when `docker info` reports the NVIDIA runtime — the
 # same fact it records as docker_gpu_runtime in data/hardware.json. Kept as a
@@ -11,6 +13,27 @@
 
 services:
   ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # The probe's needed_gb has to be the model's REAL total VRAM footprint
+  # (weights + KV cache + compute buffers), not ollama's own /api/ps
+  # size_vram (weights only — the 17-vs-22 bug this ruling fixes). The only
+  # way to see the whole footprint is an nvidia-smi used-MiB snapshot taken
+  # immediately before the load and another immediately after — so THIS
+  # container needs the same device reservation ollama has, purely to run
+  # the `nvidia-smi` binary the nvidia container runtime injects (no CUDA
+  # libraries or ML workload run here — see app/admin.py's
+  # `_nvidia_smi_used_mb`). Without this override merged, the gateway has no
+  # GPU device at all and every probe's vram_mb degrades to None — a stated
+  # "could not be run", never a crash and never a guess (see
+  # `_nvidia_smi_used_mb`'s docstring).
+  gateway:
     deploy:
       resources:
         reservations:

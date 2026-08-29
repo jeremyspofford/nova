@@ -126,8 +126,47 @@ class TestNeededGbForModel:
 
     def test_falls_back_when_the_probe_row_has_no_vram_reading(self):
         # A remote/cloud probe succeeds but never learns a VRAM figure
-        # (admin.py's _ollama_reported_vram only runs for kind='ollama').
+        # (admin.py's _footprint_vram_mb bracket only runs for kind='ollama').
         model = {"slug": "some-model", "min_vram_gb": 10}
         needed_gb, source = fit.needed_gb_for(model, {"vram_mb": None})
         assert needed_gb == 10
         assert source == fit.SOURCE_ESTIMATED
+
+
+# (total_gb, resident table) -> expected free_gb. Ruling S2f-R2 ("the 8B
+# won't fit" bug): a local model switch EVICTS whatever ollama already has
+# resident, so a resident entry on this same engine is not a competitor for
+# a candidate's fit — it is given back to `total_gb`, not subtracted. Every
+# case below still passes the resident table THROUGH the sum (rather than
+# short-circuiting to `total_gb`), so a future non-swappable entry has a
+# real subtraction to land on instead of the whole mechanism being deleted
+# the day one exists.
+FREE_FOR_SWITCH_CASES = [
+    # Nothing resident: free is simply the whole card.
+    (24.0, [], 24.0),
+    # The exact walk scenario: a 17.4GB model (qwen3.8:27b, size_vram) is
+    # resident. Instantaneous free would be 24 - 17.4 = 6.6GB — too little
+    # for an 8B candidate, which is precisely the bug this ruling fixes.
+    # Eviction-aware free is the full 24GB: the resident model is swappable.
+    (24.0, [{"model": "qwen3.8:27b", "vram_mb": 17.4 * 1024}], 24.0),
+    # Two resident entries (a host where ollama loaded more than one model
+    # at once) are both swappable — the sum is fully reclaimed too.
+    (24.0, [{"vram_mb": 9508}, {"vram_mb": 4096}], 24.0),
+    # An entry explicitly marked non-swappable (nothing produces one today —
+    # see the module docstring — but the field is real, not a TODO) is the
+    # one case that DOES reduce free VRAM: a pinned 2GB model stays loaded
+    # through a switch, so only 22GB comes back.
+    (
+        24.0,
+        [
+            {"model": "qwen3.8:27b", "vram_mb": 17.4 * 1024, "swappable": True},
+            {"model": "pinned:2b", "vram_mb": 2048, "swappable": False},
+        ],
+        22.0,
+    ),
+]
+
+
+@pytest.mark.parametrize(("total_gb", "resident", "expected_free_gb"), FREE_FOR_SWITCH_CASES)
+def test_free_vram_gb_for_switch(total_gb, resident, expected_free_gb):
+    assert fit.free_vram_gb_for_switch(total_gb, resident) == pytest.approx(expected_free_gb)
