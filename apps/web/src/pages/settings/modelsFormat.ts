@@ -1,4 +1,4 @@
-import type { SuggestedModel } from '../../lib/api'
+import type { ModelFit, SuggestedModel } from '../../lib/api'
 
 /**
  * One row of the Settings -> Models list: a curated catalog entry, an
@@ -14,6 +14,11 @@ export interface MergedModel {
   installed: boolean
   curated: boolean
   isCurrent: boolean
+  /** From the gateway's GET /admin/suggest (slice-02e-model-surface T2).
+   * null for a model the curated catalog never covered — an installed-but-
+   * uncatalogued model, or chat.model given its own entry below — since
+   * there is no tier estimate or probe row to compute a verdict from. */
+  fit: ModelFit | null
 }
 
 /**
@@ -43,6 +48,7 @@ export function mergeModels(
       installed: installedSet.has(c.slug),
       curated: true,
       isCurrent: c.slug === chatModel,
+      fit: c.fit ?? null,
     })
   }
 
@@ -56,6 +62,7 @@ export function mergeModels(
       installed: true,
       curated: false,
       isCurrent: slug === chatModel,
+      fit: null,
     })
   }
 
@@ -68,6 +75,7 @@ export function mergeModels(
       installed: installedSet.has(chatModel),
       curated: false,
       isCurrent: true,
+      fit: null,
     })
   }
 

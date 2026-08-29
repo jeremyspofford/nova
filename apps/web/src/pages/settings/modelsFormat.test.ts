@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mergeModels } from './modelsFormat'
-import type { SuggestedModel } from '../../lib/api'
+import type { ModelFit, SuggestedModel } from '../../lib/api'
 
 function curated(overrides: Partial<SuggestedModel> = {}): SuggestedModel {
   return {
@@ -49,6 +49,27 @@ describe('mergeModels', () => {
   it('treats a null installed list (the fetch failed) as nothing confirmed installed', () => {
     const merged = mergeModels('qwen3:8b', null, [curated()])
     expect(merged[0]).toMatchObject({ installed: false, isCurrent: true })
+  })
+
+  it('carries the curated fit verdict through onto the merged entry', () => {
+    const modelFit: ModelFit = {
+      verdict: 'tight',
+      needed_gb: 22,
+      free_gb: 22,
+      total_gb: 24,
+      source: 'estimated',
+      reason: null,
+    }
+    const merged = mergeModels('qwen3:8b', ['qwen3:8b'], [curated({ fit: modelFit })])
+    expect(merged[0].fit).toEqual(modelFit)
+  })
+
+  it('gives a null fit to a model the curated catalog never covered', () => {
+    const merged = mergeModels('qwen3:8b', ['qwen3:8b', 'llama3.4:9b'], [curated()])
+    const extra = merged.find(m => m.slug === 'llama3.4:9b')
+    expect(extra?.fit).toBeNull()
+    const current = merged.find(m => m.slug === 'qwen3:8b')
+    expect(current?.fit).toBeNull()
   })
 
   it('sorts current first, then installed, then available to pull', () => {

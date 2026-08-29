@@ -1,7 +1,19 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { ModelsSection } from './ModelsSection'
-import type { BackendConfig, PullLine, Suggestion } from '../../lib/api'
+import type { BackendConfig, ModelFit, PullLine, Suggestion } from '../../lib/api'
+
+function fit(overrides: Partial<ModelFit> = {}): ModelFit {
+  return {
+    verdict: 'comfortable',
+    needed_gb: 5,
+    free_gb: 20,
+    total_gb: 24,
+    source: 'estimated',
+    reason: null,
+    ...overrides,
+  }
+}
 
 function suggestion(overrides: Partial<Suggestion> = {}): Suggestion {
   return {
@@ -205,6 +217,49 @@ describe('ModelsSection', () => {
     await waitFor(() => expect(screen.getByText('Re-run setup')).toBeDefined())
     fireEvent.click(screen.getByText('Re-run setup'))
     await waitFor(() => expect(screen.getByText('write refused')).toBeDefined())
+  })
+
+  it('renders a wont_fit verdict as a visible warning before the pick, and a tight fit as a caution', async () => {
+    const api = fakeApi({
+      installed: ['qwen3:8b'],
+      suggest: suggestion({
+        models: [
+          { slug: 'qwen3:8b', label: 'Qwen3 8B', params_b: 8, min_vram_gb: 10, note: '', fit: fit({ verdict: 'comfortable' }) },
+          {
+            slug: 'qwen3.8:27b',
+            label: 'Qwen3.8 27B',
+            params_b: 27,
+            min_vram_gb: 24,
+            note: '',
+            fit: fit({ verdict: 'wont_fit', needed_gb: 30, total_gb: 24, source: 'verified' }),
+          },
+        ],
+      }),
+    })
+    render(
+      <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
+    )
+
+    await waitFor(() => expect(screen.getByText('Qwen3.8 27B')).toBeDefined())
+    const card27b = screen.getByText('Qwen3.8 27B').closest('div.rounded-lg') as HTMLElement
+    const warning = within(card27b).getByRole('alert')
+    expect(warning.textContent).toContain("won't fit on this GPU")
+    expect(within(card27b).getByText('verified on your hardware')).toBeDefined()
+
+    const card8b = screen.getByText('Qwen3 8B').closest('div.rounded-lg') as HTMLElement
+    expect(within(card8b).getByText('comfortable')).toBeDefined()
+    expect(within(card8b).getByText('estimated')).toBeDefined()
+  })
+
+  it('shows "fit unknown" for a model the curated catalog does not cover', async () => {
+    const api = fakeApi({ installed: ['qwen3:8b', 'llama3.4:9b'] })
+    render(
+      <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
+    )
+
+    await waitFor(() => expect(screen.getAllByText('llama3.4:9b').length).toBeGreaterThan(0))
+    const extraCard = screen.getAllByText('llama3.4:9b')[0].closest('div.rounded-lg') as HTMLElement
+    expect(within(extraCard).getByText('fit unknown')).toBeDefined()
   })
 
   it('degrades honestly when the installed-models fetch fails: nothing is claimed installed, and the current model never shows as pullable', async () => {

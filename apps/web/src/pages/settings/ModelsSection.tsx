@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Cloud, Cpu, Download, RefreshCw, Server } from 'lucide-react'
-import { Badge, Button, DataList, ProgressBar, Section, Skeleton } from '../../components/ui'
+import {
+  Badge,
+  Button,
+  DataList,
+  ModelFitNotice,
+  ProgressBar,
+  Section,
+  Skeleton,
+} from '../../components/ui'
 import {
   getBackend as apiGetBackend,
   getInstalledModels as apiGetInstalledModels,
@@ -134,6 +142,8 @@ function ModelCard({
           )}
         </div>
       </div>
+
+      <ModelFitNotice fit={model.fit} />
 
       {!model.isCurrent && model.installed && (
         <Button size="sm" variant="secondary" loading={switching} onClick={onSelect}>
