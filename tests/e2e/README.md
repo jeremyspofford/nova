@@ -15,7 +15,7 @@ in file order in a single worker.
 | 6 | `06-nav-survival.spec.ts` | Send, click away to Settings mid-stream, click back: the full reply is on screen exactly once. The navigation is the app's own (a sidebar link) — a `goto` discards the JS context and no client-side fix survives that. |
 | 7 | `07-tool-loop.spec.ts` | The S2 definition of done: "create groceries.md with five items, then read it back". The file is cat'ed inside core's container, the ledger's spans are read back, and the byte count the write tool reported has to equal the file's real size. Also settles that the workspace volume arrives writable by the uid core runs as. |
 | 8 | `08-activity-page.spec.ts` | The tool turn is reachable by clicking Activity in the sidebar, its row carries the tool count, drilling in renders every span the API returned, and a streamed tool turn really carries `{"activity"}` frames on the wire. |
-| 9 | `09-follow-up.spec.ts` | "Add oat milk to that list" changes the file on disk — read off the volume afterwards, because the previous reply is in the prompt and a convincing "added it" costs the model nothing. |
+| 9 | `09-follow-up.spec.ts` | "Add dragon fruit vinegar to that list" changes the file on disk — read off the volume afterwards, because the previous reply is in the prompt and a convincing "added it" costs the model nothing. |
 | 10 | `10-tool-honest-failure.spec.ts` | A tool that refuses is recorded `ok=false`, shown as an error on the Activity page, and admitted in the reply — never narrated as a success. |
 
 ## Run it
@@ -89,13 +89,16 @@ report with `npx playwright show-report` from `tests/e2e`.
 
 The same suite runs against a stack whose ports ARE published (so not the
 isolated one, which publishes none) at `http://127.0.0.1:3000`, with no
-container:
+container. Set `NOVA_E2E_PROJECT` when you do: on the host there is no
+compose label to read, and the default names the throwaway project, so
+scenarios 3 and 5 would look for containers that are not there.
 
 ```bash
 cd tests/e2e
 npm install
 npx playwright install --with-deps chromium   # needs root on Linux
-NOVA_E2E_OWNER_PASSWORD='choose-one' NOVA_E2E_MODEL=qwen3:8b npm run e2e
+NOVA_E2E_OWNER_PASSWORD='choose-one' NOVA_E2E_MODEL=qwen3:8b \
+  NOVA_E2E_PROJECT=<that-project> npm run e2e
 ```
 
 `--with-deps` is the catch: on Linux the browser needs system libraries
@@ -116,7 +119,7 @@ host run needs nothing else exported.
 | `NOVA_E2E_MODEL` | `qwen3:1.7b` | **must be a slug the wizard actually offers on this host** |
 | `NOVA_E2E_OWNER_NAME` | `Jeremy` | the owner scenario 1 mints |
 | `NOVA_E2E_OWNER_PASSWORD` | **required, no default** | scenario 1 refuses to run without it — see below |
-| `NOVA_E2E_PROJECT` | `nova` | HOST runs only. In-container the project is read off the runner's own compose label and this is refused if it disagrees — which stack may be stopped and restarted is not a setting. |
+| `NOVA_E2E_PROJECT` | `nova-e2e` | HOST runs only. In-container the project is read off the runner's own compose label and this is refused if it disagrees — which stack may be stopped and restarted is not a setting. |
 | `NOVA_E2E_PULL_TIMEOUT_MS` | 45 min | first pull of a large model |
 | `NOVA_E2E_REPLY_TIMEOUT_MS` | 6 min | cold model load plus generation; raise it for a CPU-served model |
 
@@ -158,8 +161,8 @@ caught:
 * it replied that `receipts/2019-invoice.md` "contains the following
   content", inventing an amount, a date and a customer name, again with zero
   tool calls, for a path that does not exist;
-* it created `oat_milk.md` instead of adding a line to the list it had just
-  been shown.
+* it created a new file for the item instead of adding a line to the list it
+  had just been shown.
 
 Every one of those was caught by reading the turn ledger and the volume
 rather than the reply, which is the whole design of those scenarios. But it

@@ -8,13 +8,22 @@
  * the file on disk never changes. The only check that means anything is the
  * one that reads the volume afterwards, so that is what this does.
  *
- * WHY "oat milk" AND NOT "milk". The Slice 2 DoD phrases this step as "add
- * milk to that list", and on the first walk the five items the model chose
- * for groceries.md already included Milk. A check for /milk/ would then have
- * passed against a file nothing had touched — a green that proves nothing,
- * which is worse than a red. The needle is therefore something the first
- * list will not already contain, and the scenario refuses to run if it does
- * anyway rather than quietly testing nothing.
+ * WHY NOT "milk", AND WHY NOT "oat milk" EITHER. The Slice 2 DoD phrases
+ * this step as "add milk to that list", and on the first walk the five items
+ * the model had just chosen for groceries.md already included Milk. A check
+ * for /milk/ would then have passed against a file nothing had touched — a
+ * green that proves nothing, which is worse than a red.
+ *
+ * "Oat milk" was the first attempt at dodging that, and it dodged it for
+ * exactly as long as the model was small. On qwen3.8:27b — the model the
+ * README tells you to use for these scenarios — scenario 7's own five items
+ * came out as "Milk, Eggs, Bread, Apples, Oat Milk", so the precondition
+ * below would correctly abort the walk for a reason that has nothing to do
+ * with what is being tested. Anything a grocery list might plausibly contain
+ * on its own is disqualified. Dragon fruit vinegar is not a grocery.
+ *
+ * The precondition stays either way: if the item is somehow already in the
+ * file, this scenario proves nothing and says so instead of passing.
  */
 import { expect, test } from '@playwright/test'
 import { sendMessage } from '../lib/app'
@@ -30,9 +39,15 @@ import {
 
 test.use({ storageState: config.storageStatePath })
 
-const NEEDLE = /oat\s*-?\s*milk/i
+// The distinctive half, tolerant of how the model spaces or hyphenates it
+// ("dragonfruit", "dragon-fruit"). Tight enough that no grocery list reaches
+// it by accident, loose enough that a formatting choice is not a failure.
+const NEEDLE = /dragon\W*fruit/i
+const ADD_THIS = 'dragon fruit vinegar'
 
-test('follow-up: "add oat milk to that list" really changes the file on disk', async ({ page }) => {
+test('follow-up: "add dragon fruit vinegar to that list" really changes the file on disk', async ({
+  page,
+}) => {
   test.setTimeout(config.replyTimeoutMs * 2 + 5 * 60 * 1000)
 
   const before = await readWorkspaceFile(GROCERIES)
@@ -50,7 +65,7 @@ test('follow-up: "add oat milk to that list" really changes the file on disk', a
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
 
   const previousTurn = await newestTurnId(page)
-  const outcome = await sendMessage(page, 'add oat milk to that list', config.replyTimeoutMs * 2)
+  const outcome = await sendMessage(page, `add ${ADD_THIS} to that list`, config.replyTimeoutMs * 2)
   expect(outcome.kind, `the follow-up did not produce a reply: ${outcome.text}`).toBe('reply')
   console.log(`[scenario 9] reply: ${outcome.text.replace(/\s+/g, ' ').slice(0, 300)}`)
 
@@ -97,7 +112,7 @@ test('follow-up: "add oat milk to that list" really changes the file on disk', a
   // disk, proven by reading the volume. Whether the model chose to carry the
   // existing items across when it rewrote the file is the model's judgement
   // about the task, and on the first isolated walk qwen3:1.7b did not —
-  // it re-read the list and then wrote a file containing only "oat milk".
+  // it re-read the list and then wrote a file containing only the new item.
   // That is a real and unwelcome quality result, and it is stated in the
   // walk's output every run rather than turned into a plumbing failure that
   // a larger model would silently make disappear.
