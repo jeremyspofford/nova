@@ -39,8 +39,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Let fired-and-forgotten work (memory ingest, interrupted turns)
-        # finish before the pool it needs disappears.
+        # Let detached work (in-flight turns that outlived their browser,
+        # memory ingest, trace closes) finish before the pool it needs
+        # disappears.
         await chat.drain_background()
         await db.close_pool()
 

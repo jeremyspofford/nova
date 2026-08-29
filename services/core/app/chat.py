@@ -23,7 +23,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -75,8 +75,11 @@ class ChatRequest(BaseModel):
     conversation_id: uuid.UUID | None = None
 
 
-# Fire-and-forget work (memory ingest, closing an interrupted turn). Held so
-# it can be awaited at shutdown instead of vanishing with the event loop.
+# Detached work held so it can be awaited at shutdown instead of vanishing
+# with the event loop: each turn itself (_run_turn, so it finishes even after
+# the browser hangs up — the durable-turn slice), the memory ingest it
+# queues, and the trace close. drain_background() below is what shutdown and
+# the tests wait on.
 _BACKGROUND: set[asyncio.Task] = set()
 
 
@@ -467,26 +470,6 @@ async def _persist_assistant(pool: asyncpg.Pool, conversation_id: uuid.UUID, tex
     )
 
 
-async def _finalize_after_disconnect(
-    pool: asyncpg.Pool,
-    turn: traces.Turn,
-    conversation_id: uuid.UUID,
-    text: str,
-    status: str,
-) -> None:
-    """The client hung up: keep what streamed, and record how the turn ended.
-
-    Runs as its own task because the request's scope is already cancelled —
-    awaiting anything there would be cancelled with it.
-    """
-    try:
-        if text:
-            await _persist_assistant(pool, conversation_id, text)
-        await traces.close_turn(pool, turn, status)
-    except Exception:
-        logger.exception("could not close turn %s after a disconnect", turn.id)
-
-
 async def _run_tool(
     turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall
 ) -> tuple[str, bool]:
@@ -512,7 +495,7 @@ async def _run_tool(
     return result, ok
 
 
-async def _turn_frames(
+async def _run_turn(
     app,
     pool: asyncpg.Pool,
     turn: traces.Turn,
@@ -522,26 +505,47 @@ async def _turn_frames(
     history: Sequence[dict],
     model: str,
     max_tool_rounds: int,
-) -> AsyncIterator[str]:
+    emit: Callable[[str | None], None],
+) -> None:
+    """The whole turn, run to completion regardless of who is still watching.
+
+    This is the ONLY writer of the assistant message and the ONLY caller of
+    close_turn for this turn. It is spawned as a detached background task, so
+    a client that hangs up — a hard refresh, a closed tab — tears down only
+    the browser↔core SSE stream, never this: core↔gateway stays open and the
+    turn finishes server-side, persisting the COMPLETE reply with status
+    'ok', exactly as if the browser had stayed (ruling S2c-R1: with no
+    explicit Stop yet, every disconnect means "finish"). Because there is
+    exactly ONE path through here, the honesty guard, the persist, the ingest
+    and the atomic trace close all run identically whether or not the browser
+    stayed — there is no second "detached" path that could skip one, and no
+    second writer that could double-persist.
+
+    Frames go to `emit`, which hands them to whatever SSE consumer is still
+    attached (see `_stream_from_queue`); once the client is gone they are
+    simply dropped and the work finishes anyway. `emit(None)` is the
+    end-of-turn sentinel, sent LAST — after the atomic close — so a reader
+    that drains the stream has, by [DONE], seen a fully-recorded turn.
+    """
     # Everything streamed to the client this turn, across every round, in
     # order — this is what persists, so a reload shows exactly what was
     # watched live.
     parts: list[str] = []
     # The outcome, once the turn has actually reached one. None means the
-    # turn is still in flight, which is what makes a disconnect "interrupted"
-    # rather than a verdict.
+    # turn is still in flight; the finally below closes it as 'error' only if
+    # the coroutine is torn down (e.g. at shutdown) before deciding.
     decided: str | None = None
-    persisted = False
-    disconnected = False
     try:
-        yield _frame(
-            {
-                "meta": {
-                    "conversation_id": str(conversation_id),
-                    "model": model,
-                    "turn_id": str(turn.id),
+        emit(
+            _frame(
+                {
+                    "meta": {
+                        "conversation_id": str(conversation_id),
+                        "model": model,
+                        "turn_id": str(turn.id),
+                    }
                 }
-            }
+            )
         )
 
         snippets = await _recall(app, turn, person, message)
@@ -607,7 +611,7 @@ async def _turn_frames(
                                 if delta:
                                     parts.append(delta)
                                     round_parts.append(delta)
-                                    yield _frame({"t": delta})
+                                    emit(_frame({"t": delta}))
                 except GatewayFailure as exc:
                     failure = str(exc)
                     span.meta["error"] = failure
@@ -640,9 +644,9 @@ async def _turn_frames(
             # slice, and two tools writing the same file at once is not a
             # problem worth having yet.
             for call in calls:
-                yield _frame({"activity": {"tool": call.name, "status": "start"}})
+                emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
                 result, ok = await _run_tool(turn, tool_ctx, call)
-                yield _frame({"activity": {"tool": call.name, "status": "ok" if ok else "error"}})
+                emit(_frame({"activity": {"tool": call.name, "status": "ok" if ok else "error"}}))
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": result}
                 )
@@ -657,8 +661,8 @@ async def _turn_frames(
                 stated = f"the serving model/backend does not support tools — {failure}"
             logger.warning("chat turn %s failed: %s", turn.id, stated)
             decided = "error"
-            yield _frame({"error": stated})
-            yield DONE_FRAME
+            emit(_frame({"error": stated}))
+            emit(DONE_FRAME)
             return
 
         if out_of_rounds:
@@ -667,7 +671,7 @@ async def _turn_frames(
             )
             note = f"\n\n{note}" if parts else note
             parts.append(note)
-            yield _frame({"t": note})
+            emit(_frame({"t": note}))
 
         text = "".join(parts)
         if not text:
@@ -676,8 +680,8 @@ async def _turn_frames(
             # nothing is fine as long as some round eventually did.
             logger.warning("chat turn %s: %s", turn.id, EMPTY_REPLY)
             decided = "error"
-            yield _frame({"error": EMPTY_REPLY})
-            yield DONE_FRAME
+            emit(_frame({"error": EMPTY_REPLY}))
+            emit(DONE_FRAME)
             return
 
         # The honesty guard: a reply is a claim, the spans are the fact. A
@@ -706,46 +710,39 @@ async def _turn_frames(
                 ]
                 span.meta["backing_span"] = False
             text = f"{text}\n\n{correction.text}"
-            yield _frame({"correction": correction.text})
+            emit(_frame({"correction": correction.text}))
 
         await _persist_assistant(pool, conversation_id, text)
-        persisted = True
         _queue_ingest(app, turn, person, conversation_id, {"user": message, "assistant": text})
         decided = "ok"
-        yield DONE_FRAME
-    except (asyncio.CancelledError, GeneratorExit):
-        disconnected = True
-        _spawn(
-            _finalize_after_disconnect(
-                pool,
-                turn,
-                conversation_id,
-                # Already stored means the work finished and only the tail of
-                # the stream was lost — storing it again would double the reply.
-                "" if persisted else "".join(parts),
-                decided or "interrupted",
-            )
-        )
-        raise
+        emit(DONE_FRAME)
     except Exception as exc:
         # Anything unplanned — a database that refuses the assistant row, a
-        # bug in here — still owes the client the frame contract. A stream
-        # that simply stops looks exactly like a dropped connection.
+        # bug in here — still owes any attached client the frame contract, and
+        # still records the turn as failed. (A client disconnect is NOT caught
+        # here: it never reaches this coroutine, because the browser↔core SSE
+        # generator is what gets cancelled, not this detached task — so the
+        # turn simply runs on, which is the whole point of the slice.)
         logger.exception("chat turn %s failed unexpectedly", turn.id)
         decided = "error"
-        yield _frame({"error": f"the turn failed — {peers.reason(exc)[:300]}"})
-        yield DONE_FRAME
+        emit(_frame({"error": f"the turn failed — {peers.reason(exc)[:300]}"}))
+        emit(DONE_FRAME)
     finally:
-        if not disconnected:
-            # Shielded: a client that vanishes during the close must not leave
-            # the turn's status NULL forever.
-            close = _spawn(traces.close_turn(pool, turn, decided or "error"))
-            try:
-                await asyncio.shield(close)
-            except Exception:
-                # A trace that cannot be written is reported, never swallowed.
-                logger.exception("could not close turn %s", turn.id)
-                raise
+        # The atomic trace close, always — shielded so a cancellation during
+        # shutdown cannot leave the turn's status NULL forever. Then the
+        # sentinel, so the SSE consumer stops only AFTER the turn is on record:
+        # a reader that saw [DONE] can trust the trace is written and the reply
+        # persisted.
+        close = _spawn(traces.close_turn(pool, turn, decided or "error"))
+        try:
+            await asyncio.shield(close)
+        except Exception:
+            # A trace that cannot be written is reported, never swallowed —
+            # but in a detached task it must not re-raise (nothing would
+            # retrieve it), so it is logged and the sentinel still fires.
+            logger.exception("could not close turn %s", turn.id)
+        finally:
+            emit(None)
 
 
 @router.post("/stream")
@@ -787,8 +784,16 @@ async def chat_stream(
     max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
     turn = await traces.open_turn(pool, conversation_id=conversation_id, model=model)
 
-    return StreamingResponse(
-        _turn_frames(
+    # The turn runs as its own detached task; the response only FORWARDS the
+    # frames it produces (through this queue). Decoupling "does it finish" from
+    # "who is watching" is the whole slice: a client disconnect cancels the
+    # forwarder below, never the task, so the turn finishes and persists the
+    # full reply regardless. put_nowait onto an unbounded queue never blocks,
+    # so a detached completion is never stalled by an absent reader — the
+    # frames it emits after the client is gone are simply never read.
+    queue: asyncio.Queue = asyncio.Queue()
+    _spawn(
+        _run_turn(
             request.app,
             pool,
             turn,
@@ -798,7 +803,29 @@ async def chat_stream(
             history,
             model,
             max_tool_rounds,
-        ),
+            queue.put_nowait,
+        )
+    )
+
+    return StreamingResponse(
+        _stream_from_queue(queue),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:
+    """Forward a detached turn's frames to whoever is still reading.
+
+    Owns nothing. The turn runs in `_run_turn` as its own task, so a client
+    disconnect cancels ONLY this generator — a CancelledError/GeneratorExit at
+    the await below — and never the turn: the work runs on, finishes, and
+    persists. `None` is the end-of-turn sentinel `_run_turn` emits after the
+    atomic trace close, so draining this generator to its end means the turn
+    is fully on record.
+    """
+    while True:
+        frame = await queue.get()
+        if frame is None:
+            return
+        yield frame

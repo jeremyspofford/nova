@@ -145,6 +145,11 @@ class FakeGateway:
     # When set, the stream stalls here until the event fires — the "client
     # hung up while the model was still talking" case.
     hold: asyncio.Event | None = None
+    # Deltas emitted AFTER the hold releases — i.e. content the gateway sends
+    # once the browser has already disconnected. A durable turn must capture
+    # these too, so the persisted reply is the WHOLE answer, not the prefix
+    # that happened to arrive before the client left.
+    after_hold: tuple[str, ...] = ()
     admin_status: int = 200
     admin_body: dict = field(default_factory=lambda: {"gpus": []})
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
@@ -185,6 +190,8 @@ class FakeGateway:
                 yield _sse({"choices": [{"delta": {"content": delta}}]})
             if self.hold is not None:
                 await self.hold.wait()
+            for delta in self.after_hold:
+                yield _sse({"choices": [{"delta": {"content": delta}}]})
             if self.error_chunk is not None:
                 yield _sse({"error": {"message": self.error_chunk}})
             if self.usage is not None:
@@ -377,6 +384,12 @@ class ScriptedGateway:
     rounds: tuple = ()
     served_by: str = "ollama:qwen3:8b"
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
+    # When set, the round whose index is `hold_before` stalls before emitting
+    # anything until the event fires — so a test can hang up the client after
+    # an earlier round's tools have run but before this round answers, and
+    # prove the detached completion still finishes the remaining rounds.
+    hold: asyncio.Event | None = None
+    hold_before: int = 0
 
     def __post_init__(self) -> None:
         self.calls = 0
@@ -406,6 +419,8 @@ class ScriptedGateway:
             return JSONResponse(script.body, status_code=script.status)
 
         async def stream():
+            if self.hold is not None and index == self.hold_before:
+                await self.hold.wait()
             for chunk in script:
                 yield _sse(chunk)
             yield "data: [DONE]\n\n"

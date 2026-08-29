@@ -1,12 +1,14 @@
 """GET /api/v1/activity — the operator's read-only window into the turn
-ledger written by traces.py (see chat.py's `_turn_frames`, which is the
-only writer). Nothing here writes: the ledger is append-by-the-turn-path
-only, and this module exists to read it back, verbatim, never guessed at.
+ledger written by traces.py (see chat.py's `_run_turn`, which is the only
+writer). Nothing here writes: the ledger is append-by-the-turn-path only,
+and this module exists to read it back, verbatim, never guessed at.
 
-A turn's `status` stays NULL until traces.close_turn() runs, so a turn the
-client abandoned mid-flight is still NULL here forever — this module must
-never turn that NULL into "ok" or "error", because the whole point of the
-ledger is that an abandoned turn looks abandoned.
+A turn's `status` stays NULL until traces.close_turn() runs, so a turn still
+in flight (or one a crashed process left behind) is NULL here — this module
+must never turn that NULL into "ok" or "error", because the whole point of
+the ledger is that an unfinished turn looks unfinished. (Since S2c a client
+disconnect no longer abandons a turn: it finishes server-side and closes
+'ok', so a lingering NULL means genuinely still-running, not walked-away.)
 
 Cursor pagination orders newest-first by (started_at, id), not started_at
 alone: two turns can share a started_at value (same millisecond, or a test

@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from app import chat
+from app import chat, guards
 from app.main import app
 from tests.conftest import requires_db
-from tests.fakes import FakeGateway, FakeMemory
+from tests.fakes import FakeGateway, FakeMemory, ScriptedGateway
 
 pytestmark = requires_db
 
@@ -256,16 +256,104 @@ async def test_someone_elses_conversation_is_a_404(owner_client, pool, mount_pee
     assert await pool.fetchval("SELECT count(*) FROM turns") == 0
 
 
-async def test_a_disconnect_mid_stream_keeps_the_partial_text_and_says_interrupted(
+def _whole_call(call_id: str, name: str, arguments: dict) -> dict:
+    """A finished tool call in one completion chunk (the non-streaming shape),
+    enough to drive a second tool-loop round from this suite without pulling
+    in test_chat_tools' whole helper kit."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(arguments)},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+
+async def test_a_hard_refresh_mid_turn_finishes_server_side_with_the_full_reply(
     owner_client, pool, mount_peers
 ):
+    """The durable-turn fix: a client that hangs up mid-reply tears down only
+    the browser↔core stream. Core keeps draining the gateway — including the
+    content that arrives AFTER the disconnect — and persists the COMPLETE
+    answer with status 'ok', exactly as if the browser had stayed. (S2c.)"""
     hold = asyncio.Event()
-    mount_peers(gateway=FakeGateway(deltas=("half an ans",), hold=hold), memory=FakeMemory())
+    # "part one " streams before the client leaves; "part two." arrives only
+    # after the hold releases — i.e. after the browser is already gone.
+    mount_peers(
+        gateway=FakeGateway(deltas=("part one ",), after_hold=("part two.",), hold=hold),
+        memory=FakeMemory(),
+    )
     await _set_model(owner_client)
 
     body = json.dumps({"message": "tell me something long"}).encode()
     cookie = owner_client.cookies["nova_session"]
-    streamed: list[bytes] = []
+    saw_delta = asyncio.Event()
+    request_sent = False
+
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        # Hang up the instant the first delta reaches the wire — the model is
+        # still mid-answer, and "part two." has not been sent yet.
+        await saw_delta.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message) -> None:
+        if message["type"] == "http.response.body" and b'"t"' in message.get("body", b""):
+            saw_delta.set()
+
+    await asyncio.wait_for(app(_scope(cookie, len(body)), receive, send), timeout=10)
+    # The client is gone; release the rest of the gateway stream.
+    hold.set()
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    # Exactly one assistant row (exactly-one-writer: only the detached
+    # completion persists), and it is the WHOLE reply, not the pre-disconnect
+    # prefix.
+    assert await pool.fetchval("SELECT count(*) FROM messages WHERE role='assistant'") == 1
+    assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == (
+        "part one part two."
+    )
+    turn = await pool.fetchrow("SELECT id, status FROM turns")
+    assert turn["status"] == "ok"
+    # The trace is complete too — the llm_call span landed in the same atomic
+    # close the detached completion performed.
+    spans = await _spans(pool, turn["id"])
+    assert "llm_call" in spans
+
+
+async def test_the_detached_completion_still_runs_the_honesty_guard(
+    owner_client, pool, mount_peers
+):
+    """There is exactly ONE turn path, so the honesty guard runs on the final
+    text whether or not the browser stayed: a fabricated file-write claim that
+    arrives AFTER the client disconnects is still contradicted in the durable
+    reply."""
+    hold = asyncio.Event()
+    # The fabricated claim (no tool ever runs) arrives only after the client
+    # has gone — the exact case a detached path could otherwise skip the guard.
+    lie = "I've created a summary file called kv_offloading_summary.md."
+    mount_peers(
+        gateway=FakeGateway(deltas=("one moment ",), after_hold=(lie,), hold=hold),
+        memory=FakeMemory(),
+    )
+    await _set_model(owner_client)
+
+    body = json.dumps({"message": "summarize kv offloading to a file"}).encode()
+    cookie = owner_client.cookies["nova_session"]
     saw_delta = asyncio.Event()
     request_sent = False
 
@@ -278,22 +366,71 @@ async def test_a_disconnect_mid_stream_keeps_the_partial_text_and_says_interrupt
         return {"type": "http.disconnect"}
 
     async def send(message) -> None:
-        if message["type"] == "http.response.body":
-            chunk = message.get("body", b"")
-            streamed.append(chunk)
-            if b'"t":' in chunk:
-                saw_delta.set()
+        if message["type"] == "http.response.body" and b'"t"' in message.get("body", b""):
+            saw_delta.set()
 
     await asyncio.wait_for(app(_scope(cookie, len(body)), receive, send), timeout=10)
     hold.set()
     await asyncio.wait_for(chat.drain_background(), timeout=10)
 
-    assert any(b'"t": "half an ans"' in c or b'"t":"half an ans"' in c for c in streamed)
-    turn = await pool.fetchrow("SELECT id, status FROM turns")
-    assert turn["status"] == "interrupted"
-    assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == (
-        "half an ans"
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role='assistant'")
+    assert stored.endswith(guards.CORRECTION_TEXT)
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    turn_id = await pool.fetchval("SELECT id FROM turns")
+    spans = await _spans(pool, turn_id)
+    assert "guard" in spans and spans["guard"]["name"] == "narration"
+
+
+async def test_the_detached_completion_runs_the_remaining_tool_rounds(
+    owner_client, pool, mount_peers
+):
+    """Detaching is not "persist whatever streamed" — the tool loop's later
+    rounds still run after the client leaves, and their output is part of the
+    persisted reply."""
+    hold = asyncio.Event()
+    gateway = ScriptedGateway(
+        rounds=(
+            (_whole_call("c1", "get_time", {}),),  # round 0: ask for a tool
+            ({"choices": [{"delta": {"content": "the answer after the tool"}}]},),  # round 1
+        ),
+        hold=hold,
+        hold_before=1,  # stall round 1 until the client is gone
     )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client)
+
+    body = json.dumps({"message": "what time is it"}).encode()
+    cookie = owner_client.cookies["nova_session"]
+    saw_tool = asyncio.Event()
+    request_sent = False
+
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await saw_tool.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message) -> None:
+        # The tool's activity frame proves round 0 ran; hang up right after it,
+        # while round 1 is still held.
+        if message["type"] == "http.response.body" and b'"activity"' in message.get("body", b""):
+            saw_tool.set()
+
+    await asyncio.wait_for(app(_scope(cookie, len(body)), receive, send), timeout=10)
+    hold.set()  # let round 1 answer, now that the client is gone
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    assert await pool.fetchval("SELECT count(*) FROM messages WHERE role='assistant'") == 1
+    assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == (
+        "the answer after the tool"
+    )
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    turn_id = await pool.fetchval("SELECT id FROM turns")
+    spans = await _spans(pool, turn_id)
+    # The tool genuinely ran, and it ran as part of the detached completion.
+    assert "tool" in spans and spans["tool"]["name"] == "get_time"
 
 
 async def test_a_disconnect_after_the_answer_lands_does_not_store_it_twice(
