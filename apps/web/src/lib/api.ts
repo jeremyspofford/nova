@@ -135,12 +135,33 @@ export interface HardwareInfo {
 
 export const getHardware = () => apiGet<HardwareInfo>('/api/v1/system/hardware')
 
+/** comfortable/tight/wont_fit are only ever computed from a REAL free-VRAM
+ * reading; 'unknown' (with a stated reason) is what the gateway answers when
+ * it cannot determine one — never a guess. See services/gateway/app/fit.py. */
+export type FitVerdict = 'comfortable' | 'tight' | 'wont_fit' | 'unknown'
+
+/** 'verified' means a real POST /admin/probe measured this model's VRAM on
+ * THIS host; 'estimated' means the curated catalog's min_vram_gb floor. */
+export type FitSource = 'verified' | 'estimated'
+
+export interface ModelFit {
+  verdict: FitVerdict
+  needed_gb: number | null
+  free_gb: number | null
+  total_gb: number | null
+  source: FitSource
+  reason: string | null
+}
+
 export interface SuggestedModel {
   slug: string
   label: string
   params_b: number
   min_vram_gb: number
   note: string
+  /** Optional: older/test fixtures may omit it. A real gateway response
+   * always attaches one per model — see GET /admin/suggest in T2. */
+  fit?: ModelFit
 }
 
 export interface Suggestion {

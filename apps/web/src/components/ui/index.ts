@@ -19,6 +19,7 @@ export { PipelineStages } from './PipelineStages'
 export { Table } from './Table'
 export type { TableColumn } from './Table'
 export { DataList } from './DataList'
+export { ModelFitNotice } from './ModelFitNotice'
 
 // Layout components
 export { Card } from './Card'
