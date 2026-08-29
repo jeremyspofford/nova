@@ -41,6 +41,11 @@ _FRONTMATTER_START = "---\n"
 _FRONTMATTER_END = "\n---\n"
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 
+# How many same-slug notes one person may hold before create_topic gives up
+# and says so. A cap that is hit is a stated failure, never a silent
+# overwrite of note number one.
+MAX_SLUG_ATTEMPTS = 200
+
 
 class PathEscape(ValueError):
     """A path resolved outside the boundary it was required to stay in.
@@ -96,6 +101,29 @@ def _atomic_write(path: Path, content: str) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+
+def _atomic_create(path: Path, content: str) -> None:
+    """Write `content` to `path`, atomically, and only if nothing is there.
+
+    os.replace (what _atomic_write uses) happily clobbers an existing
+    file; os.link refuses one, and refuses it in the kernel rather than in
+    a check we ran a moment earlier — so "never overwrite" here is not a
+    look-before-you-leap race, it is the operation itself. The tmp file is
+    written and fsync'd first, so the name only ever appears once the
+    bytes are already durable.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(tmp_name, path)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
 
 
 def _parse(text: str) -> tuple[dict, str]:
@@ -217,6 +245,45 @@ class MemoryStore:
         }
         _atomic_write(path, _render(meta, "\n" + body.strip() + "\n"))
         return path
+
+    def create_topic(
+        self,
+        person_id: str,
+        title: str,
+        body: str,
+        *,
+        created: date | None = None,
+        tags: list[str] | None = None,
+    ) -> Path:
+        """Create a NEW topic note, never replacing one that already exists.
+
+        The slug comes from the title; a slug already taken gets a `-2`,
+        `-3`, … suffix. The loop is not a check-then-write race: each
+        attempt is an atomic create that fails outright if the name is
+        taken, so a name that appeared between two iterations is caught by
+        the create rather than missed by an earlier stat.
+        """
+        person_root = self.person_root(person_id)
+        base = slugify(title)
+        meta_template = {
+            "owner": person_id,
+            "kind": "topic",
+            "title": title,
+            "created": created or datetime.now(UTC).date(),
+            "tags": tags or [],
+        }
+        for attempt in range(1, MAX_SLUG_ATTEMPTS + 1):
+            slug = base if attempt == 1 else f"{base}-{attempt}"
+            path = _resolve_within(person_root, f"topics/{slug}.md")
+            meta = {"id": str(uuid.uuid4()), **meta_template}
+            try:
+                _atomic_create(path, _render(meta, "\n" + body.strip() + "\n"))
+            except FileExistsError:
+                continue
+            return path
+        raise FileExistsError(
+            f"{MAX_SLUG_ATTEMPTS} notes already share the slug {base!r} for {person_id}"
+        )
 
     # -- reading -------------------------------------------------------------
 

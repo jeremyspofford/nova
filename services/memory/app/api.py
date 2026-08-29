@@ -104,6 +104,12 @@ class RecallRequest(BaseModel):
     k: int = 5
 
 
+class SaveRequest(BaseModel):
+    person_id: str
+    title: str
+    content: str
+
+
 class ForgetRequest(BaseModel):
     person_id: str
     path: str
@@ -137,6 +143,55 @@ async def ingest(req: IngestRequest) -> dict:
         body=stored.body,
     )
     return {"path": stored.rel_path, "appended": True}
+
+
+@router.post("/save")
+async def save(req: SaveRequest) -> dict:
+    """Write one topic note for a person and confirm it landed.
+
+    This is what a caller uses to record something deliberately, as
+    opposed to /ingest's automatic journalling of an exchange. It never
+    replaces an existing note: a title whose slug is taken gets a
+    numbered sibling, because the caller asked to save something, not to
+    lose something.
+    """
+    store, index = _context()
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is empty — a note needs a name")
+    content = req.content.strip()
+    if not content:
+        # Nothing to write means nothing to verify, and a save that cannot
+        # be checked must not answer "saved".
+        raise HTTPException(status_code=400, detail="content is empty — there is nothing to save")
+
+    try:
+        abs_path = store.create_topic(req.person_id, title, content)
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write the note: {exc}") from None
+
+    # Verify mechanically before reporting success — re-read from disk and
+    # confirm the body is actually in the file, exactly as /ingest does.
+    if not abs_path.is_file():
+        raise HTTPException(status_code=500, detail="the save did not verify — no file on disk")
+    if content not in abs_path.read_text(encoding="utf-8"):
+        raise HTTPException(
+            status_code=500, detail="the save did not verify — the note's content is not in it"
+        )
+
+    stored = store.read(abs_path)
+    index.upsert(
+        stored.rel_path,
+        title=stored.meta.get("title", ""),
+        kind=stored.meta.get("kind", "topic"),
+        created=stored.meta.get("created"),
+        body=stored.body,
+    )
+    return {"path": stored.rel_path, "saved": True}
 
 
 @router.post("/recall")
