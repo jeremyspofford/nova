@@ -16,10 +16,13 @@
  * very container's own compose label, so "the stack I may stop and restart"
  * is the stack I am part of, as a fact rather than as a configuration
  * anybody has to keep in step. An env var that disagrees is a refusal, not a
- * preference: a walk that restarts somebody else's instance because a
- * default said `nova` is the exact accident this file exists to make
- * impossible.
+ * preference, and so is every uncertainty on the way there: there is no
+ * "when in doubt, use the configured default", because the default is a real
+ * stack somewhere and restartProject() restarts every container in whatever
+ * it is handed. A walk that restarts somebody else's instance is the exact
+ * accident this file exists to make impossible.
  */
+import { existsSync, readFileSync } from 'node:fs'
 import http from 'node:http'
 import { config } from './env'
 
@@ -132,51 +135,127 @@ export async function dockerAvailable(): Promise<boolean> {
   }
 }
 
-const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project'
+export const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project'
+export const CONTAINER_MARKER = '/.dockerenv'
 
 let projectPromise: Promise<string> | null = null
 
 /**
- * The compose project every verb in this module is scoped to.
+ * Is this process inside a container?
  *
- * In-container: this container's own `com.docker.compose.project` label,
- * full stop. A container with no such label is not part of a compose project
- * at all, and guessing one for it would be inventing the answer — so that is
- * an error with the reason. An explicitly-set NOVA_E2E_PROJECT that names a
- * different project is also an error: one of the two is wrong, and silently
- * picking either would mean touching containers on somebody else's say-so.
+ * Deliberately NOT inferred from the hostname. `selfContainerId()` below
+ * reads HOSTNAME because docker sets it to the container's short id, but
+ * that is a convention with two ordinary ways to break — a `hostname:` line
+ * on the service, or a CI runner exporting HOSTNAME=runner — and the old
+ * code used it for BOTH questions at once. Failing the "am I in a container"
+ * question then fell through to the configured project name, which is the
+ * single worst direction for this check to fail in: the suite would decide
+ * it was a host run, take the default, and scope `restartProject()` at
+ * whatever that named.
  *
- * On the host there is no label to read, so the configured value stands.
+ * `/.dockerenv` is a file the engine puts in every container it creates and
+ * nothing puts on a host. The compose overlay also sets
+ * NOVA_E2E_IN_CONTAINER=1, so the answer holds even on a runtime that does
+ * not write that file. Either is enough; neither can be true on a host by
+ * accident.
  */
-async function resolveProject(): Promise<string> {
-  const self = selfContainerIdPrefix()
-  if (!self) return config.project
+export function runningInContainer(
+  env: NodeJS.ProcessEnv = process.env,
+  markerExists: (path: string) => boolean = existsSync,
+): boolean {
+  if (env.NOVA_E2E_IN_CONTAINER === '1') return true
+  return markerExists(CONTAINER_MARKER)
+}
 
-  const res = await request('GET', `/containers/${self}/json`, undefined, 15_000)
-  if (res.status !== 200) {
+export interface ProjectFacts {
+  /** Whether this process is inside a container at all. */
+  inContainer: boolean
+  /** This container's id, or '' when it could not be established. */
+  selfId: string
+  /** The compose project label read off this container, if any. */
+  label: string | undefined
+  /** NOVA_E2E_PROJECT, only when it was set explicitly. */
+  declared: string | undefined
+  /** The configured value, used only for a host run. */
+  hostFallback: string
+}
+
+/**
+ * Which compose project this suite may act on, decided from facts.
+ *
+ * Pure and exported so the refusal paths can be tested without a docker
+ * daemon — the branches that matter here are the ones that must never
+ * silently return a project name, and a branch that only runs when
+ * something is already broken is exactly the branch nobody exercises by
+ * accident.
+ *
+ * Every uncertainty is a refusal. There is no "when in doubt, use the
+ * default", because the default is a real stack somewhere and
+ * `restartProject()` restarts every container in whatever it returns.
+ */
+export function decideProject(facts: ProjectFacts): string {
+  if (!facts.inContainer) {
+    return facts.declared || facts.hostFallback
+  }
+  if (!facts.selfId) {
     throw new Error(
-      `docker: could not inspect this suite's own container ${self} (${res.status}) — the ` +
-        'compose project it belongs to is what scopes every container verb here, so it cannot ' +
-        `be assumed: ${res.body.slice(0, 200)}`,
+      'docker: this suite is running inside a container but cannot establish which one — ' +
+        'HOSTNAME is not a container id and /proc/self/mountinfo carried none. The compose ' +
+        'project of THIS container is what scopes every start/stop/restart below, so it cannot ' +
+        'be guessed and the configured default must not stand in for it. Run the suite as the ' +
+        '`e2e` service of the stack under test, and do not override the service hostname.',
     )
   }
-  const derived = JSON.parse(res.body).Config?.Labels?.[COMPOSE_PROJECT_LABEL]
-  if (typeof derived !== 'string' || derived === '') {
+  if (typeof facts.label !== 'string' || facts.label === '') {
     throw new Error(
-      `docker: container ${self} carries no ${COMPOSE_PROJECT_LABEL} label, so which stack this ` +
-        'suite may stop and restart is unknown — run it as the `e2e` service of the stack under ' +
-        'test rather than as a bare container',
+      `docker: container ${facts.selfId} carries no ${COMPOSE_PROJECT_LABEL} label, so which ` +
+        'stack this suite may stop and restart is unknown — run it as the `e2e` service of the ' +
+        'stack under test rather than as a bare container',
     )
   }
-  const declared = process.env.NOVA_E2E_PROJECT
-  if (declared && declared !== derived) {
+  if (facts.declared && facts.declared !== facts.label) {
     throw new Error(
-      `docker: NOVA_E2E_PROJECT=${declared} but this suite is running inside compose project ` +
-        `${derived}. Refusing to act: one of those names a stack this walk has no business ` +
-        'restarting. Unset NOVA_E2E_PROJECT to use the project this container belongs to.',
+      `docker: NOVA_E2E_PROJECT=${facts.declared} but this suite is running inside compose ` +
+        `project ${facts.label}. Refusing to act: one of those names a stack this walk has no ` +
+        'business restarting. Unset NOVA_E2E_PROJECT to use the project this container ' +
+        'belongs to.',
     )
   }
-  return derived
+  return facts.label
+}
+
+async function resolveProject(): Promise<string> {
+  const inContainer = runningInContainer()
+  if (!inContainer) {
+    return decideProject({
+      inContainer,
+      selfId: '',
+      label: undefined,
+      declared: process.env.NOVA_E2E_PROJECT,
+      hostFallback: config.project,
+    })
+  }
+
+  const selfId = selfContainerId()
+  let label: string | undefined
+  if (selfId) {
+    const res = await request('GET', `/containers/${selfId}/json`, undefined, 15_000)
+    if (res.status !== 200) {
+      throw new Error(
+        `docker: could not inspect this suite's own container ${selfId} (${res.status}) — the ` +
+          'compose project it belongs to is what scopes every container verb here, so it cannot ' +
+          `be assumed: ${res.body.slice(0, 200)}`,
+      )
+    }
+    label = JSON.parse(res.body).Config?.Labels?.[COMPOSE_PROJECT_LABEL]
+  }
+  return decideProject({
+    inContainer,
+    selfId,
+    label,
+    declared: process.env.NOVA_E2E_PROJECT,
+    hostFallback: config.project,
+  })
 }
 
 export function projectName(): Promise<string> {
@@ -281,17 +360,32 @@ export async function waitForHealthy(services: string[], timeoutMs = 180_000): P
   }
 }
 
+const CONTAINER_ID = /\b[0-9a-f]{64}\b/
+
 /**
- * The container this process is running in, if it is running in one.
+ * WHICH container this process is in — asked only once
+ * `runningInContainer()` has already answered THAT it is in one.
  *
- * Docker sets the container's hostname to its own short id unless told
- * otherwise, and compose does not override it — so HOSTNAME identifies us.
- * A host run has a hostname that matches no container, which is the right
- * answer there too.
+ * HOSTNAME first, because docker sets it to the container's short id. When
+ * that has been overridden, /proc/self/mountinfo is the second source: the
+ * engine's overlay and container-specific bind mounts carry the full id in
+ * their host-side paths. An empty return here is not "we are on a host" —
+ * that question is already settled — it is "we are inside something and
+ * cannot say what", which decideProject() turns into a refusal.
  */
-function selfContainerIdPrefix(): string {
-  const hostname = process.env.HOSTNAME ?? ''
-  return /^[0-9a-f]{12,64}$/.test(hostname) ? hostname : ''
+export function selfContainerId(
+  env: NodeJS.ProcessEnv = process.env,
+  readMountinfo: () => string = () => {
+    try {
+      return readFileSync('/proc/self/mountinfo', 'utf8')
+    } catch {
+      return ''
+    }
+  },
+): string {
+  const hostname = env.HOSTNAME ?? ''
+  if (/^[0-9a-f]{12,64}$/.test(hostname)) return hostname
+  return CONTAINER_ID.exec(readMountinfo())?.[0] ?? ''
 }
 
 /**
@@ -303,7 +397,7 @@ function selfContainerIdPrefix(): string {
  * mid-scenario and looks exactly like the stack failing to come back.
  */
 export async function restartProject(): Promise<string[]> {
-  const self = selfContainerIdPrefix()
+  const self = selfContainerId()
   const running = (await listProjectContainers()).filter(
     c => c.state === 'running' && c.service !== 'e2e' && !(self && c.id.startsWith(self)),
   )

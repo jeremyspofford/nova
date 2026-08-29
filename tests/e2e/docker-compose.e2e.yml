@@ -30,6 +30,13 @@ services:
     environment:
       NOVA_E2E_BASE_URL: http://web:80
       NOVA_E2E_MEMORY_URL: http://memory:8002
+      # Stated, not sniffed. lib/docker.ts decides which compose project it
+      # may stop and restart, and the first half of that decision is "am I
+      # inside a container at all" — a question it used to answer from the
+      # HOSTNAME format, which a `hostname:` line here or a CI runner
+      # exporting HOSTNAME=runner would have silently answered "no", sending
+      # the suite to the configured default project instead of this one.
+      NOVA_E2E_IN_CONTAINER: "1"
       # NOVA_E2E_PROJECT is deliberately NOT set here. In this shape the
       # suite is a service of the stack it walks, so lib/docker.ts reads the
       # compose project off this container's own label — the stack it may
