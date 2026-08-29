@@ -20,6 +20,24 @@ def as_json(row: asyncpg.Record) -> dict:
     }
 
 
+async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bool:
+    """Is a turn for this conversation still running (status NULL, unclosed)?
+
+    Derived from the ledger, never a flag someone maintains: a turn opens with
+    status NULL and closes to 'ok'/'error' in traces.close_turn, so an
+    unclosed row IS an in-flight turn. Since S2c a client disconnect finishes
+    the turn server-side rather than abandoning it, so a NULL here means
+    genuinely still-generating — which is exactly what a reloaded client polls
+    on before rendering the finished reply.
+    """
+    return bool(
+        await pool.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM turns WHERE conversation_id = $1 AND status IS NULL)",
+            conversation_id,
+        )
+    )
+
+
 async def active_conversation(pool: asyncpg.Pool, person: Person) -> asyncpg.Record:
     """The person's active conversation, created on first ask."""
     row = await pool.fetchrow(
@@ -60,7 +78,15 @@ async def resolve(
 
 @router.get("/active")
 async def get_active(person: Person = Depends(identity.require_person)) -> dict:
-    return as_json(await active_conversation(await db.get_pool(), person))
+    pool = await db.get_pool()
+    conversation = await active_conversation(pool, person)
+    return {
+        **as_json(conversation),
+        # So a client returning after a hard refresh knows a turn is still
+        # finishing server-side and should poll for it, rather than showing a
+        # truncated reply (S2c). A just-created conversation has none.
+        "pending_turn": await has_pending_turn(pool, conversation["id"]),
+    }
 
 
 @router.get("/{conversation_id}/messages")

@@ -12,12 +12,34 @@ async def test_active_creates_one_then_reuses_it(owner_client, pool):
     first = await owner_client.get("/api/v1/conversations/active")
     assert first.status_code == 200
     body = first.json()
-    assert set(body) == {"id", "title", "created_at"}
+    # pending_turn joined the shape in S2c so a reloaded client can tell a
+    # turn is still finishing server-side and poll for it (see chat.py).
+    assert set(body) == {"id", "title", "created_at", "pending_turn"}
     assert body["created_at"]
+    # A brand-new conversation has no turn in flight.
+    assert body["pending_turn"] is False
 
     second = await owner_client.get("/api/v1/conversations/active")
     assert second.json()["id"] == body["id"]
     assert await pool.fetchval("SELECT count(*) FROM conversations") == 1
+
+
+async def test_active_reports_a_turn_still_in_flight(owner_client, pool):
+    """A turns row with status NULL is a turn still running — the flag a
+    reloaded client reads to know it should poll for the finishing reply."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+
+    # An open, not-yet-closed turn (status NULL), exactly as chat.py leaves it
+    # while the model is still answering.
+    turn_id = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id) VALUES ('chat', $1) RETURNING id",
+        uuid.UUID(conversation),
+    )
+    assert (await owner_client.get("/api/v1/conversations/active")).json()["pending_turn"] is True
+
+    # Once it closes, the flag clears — the reply has landed.
+    await pool.execute("UPDATE turns SET status = 'ok', ended_at = now() WHERE id = $1", turn_id)
+    assert (await owner_client.get("/api/v1/conversations/active")).json()["pending_turn"] is False
 
 
 async def test_messages_come_back_oldest_first(owner_client, pool):
