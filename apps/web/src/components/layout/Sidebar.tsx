@@ -2,6 +2,7 @@ import { useLocation, NavLink, useNavigate } from 'react-router-dom'
 import {
   MessageSquare,
   Activity,
+  FolderOpen,
   Settings,
   ChevronsLeft,
   ChevronsRight,
@@ -38,6 +39,7 @@ export const navSections: NavSection[] = [
     label: 'System',
     items: [
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
+      { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },

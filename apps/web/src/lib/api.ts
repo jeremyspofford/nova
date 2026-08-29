@@ -252,6 +252,46 @@ export async function getActivity(
 export const getActivityTurn = (turnId: string) =>
   apiGet<ActivityTurnDetail>(`/api/v1/activity/${turnId}`)
 
+// ── workspace files (read-only view over Nova's workspace volume) ───────
+
+export interface WorkspaceFileEntry {
+  path: string
+  size: number
+  modified: string
+}
+
+export interface WorkspaceFileListing {
+  files: WorkspaceFileEntry[]
+  total: number
+  truncated: boolean
+}
+
+export const getWorkspaceFiles = () =>
+  apiGet<WorkspaceFileListing>('/api/v1/workspace/files')
+
+export interface WorkspaceFileDetail {
+  path: string
+  size: number
+  modified: string
+  // Mutually exclusive with binary/too_large: text is the file's contents
+  // only when core actually decoded it as UTF-8 under the size cap — see
+  // services/core/app/workspace_api.py. Never a truncated fragment
+  // presented as the whole file.
+  text: string | null
+  binary: boolean
+  too_large: boolean
+}
+
+export const getWorkspaceFile = (path: string) =>
+  apiGet<WorkspaceFileDetail>(`/api/v1/workspace/file?path=${encodeURIComponent(path)}`)
+
+/** Not fetched through apiGet — this is handed straight to an <a href>,
+ * so the browser's own download machinery (and core's Content-Disposition
+ * header) does the work, same origin, same session cookie. */
+export function workspaceRawUrl(path: string): string {
+  return `/api/v1/workspace/raw?path=${encodeURIComponent(path)}`
+}
+
 // ── model pull (newline-delimited JSON, not SSE) ────────────────────────
 
 export interface PullLine {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { ThemeProvider } from './stores/theme-store'
 import { ChatProvider } from './stores/chat-store'
@@ -15,6 +15,7 @@ import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
 import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
+import { FilesPage } from './pages/files/FilesPage'
 
 function Centred({ children }: { children: React.ReactNode }) {
   return (
@@ -44,6 +45,19 @@ function Unreachable({ reason, onRetry }: { reason: string; onRetry: () => void 
   )
 }
 
+/**
+ * Reads ?path= off the URL and hands it to FilesPage as initialPath — the
+ * one seam FilesPage needs from routing, kept out of the component itself
+ * so it stays as unit-testable via props as ActivityPage is (see
+ * pages/files/FilesPage.tsx's docstring). This is how the Activity
+ * drill-in's span-path link (a plain <a href="/files?path=…">) actually
+ * opens the file it names.
+ */
+function FilesRoute() {
+  const [searchParams] = useSearchParams()
+  return <FilesPage initialPath={searchParams.get('path')} />
+}
+
 function AppRoutes({ chatModel }: { chatModel: string }) {
   const location = useLocation()
   // Chat owns the whole viewport so its input can pin to the bottom — on a
@@ -54,6 +68,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
       <Routes>
         <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
         <Route path="/activity" element={<ActivityPage />} />
+        <Route path="/files" element={<FilesRoute />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />

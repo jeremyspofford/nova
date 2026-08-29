@@ -5,6 +5,7 @@ import {
   Ellipsis,
   X,
   Activity,
+  FolderOpen,
   Settings,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -33,6 +34,7 @@ const moreItems: { label?: string; items: NavItem[] }[] = [
     label: 'System',
     items: [
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
+      { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },

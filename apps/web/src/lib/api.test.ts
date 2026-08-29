@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { parsePullLine, pullModel, getActivity, type PullLine } from './api'
+import {
+  parsePullLine,
+  pullModel,
+  getActivity,
+  getWorkspaceFiles,
+  getWorkspaceFile,
+  workspaceRawUrl,
+  type PullLine,
+} from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -91,6 +99,48 @@ describe('getActivity', () => {
   it('returns the turns array, not the wrapper object', async () => {
     stubJson({ turns: [{ id: 't1' }] })
     expect(await getActivity()).toEqual([{ id: 't1' }])
+  })
+})
+
+describe('getWorkspaceFiles / getWorkspaceFile / workspaceRawUrl', () => {
+  function stubJson(body: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+
+  it('fetches the listing from the fixed path', async () => {
+    stubJson({ files: [], total: 0, truncated: false })
+    await getWorkspaceFiles()
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/workspace/files')
+  })
+
+  it('returns the listing body verbatim', async () => {
+    const body = { files: [{ path: 'a.md', size: 5, modified: '2026-08-28T00:00:00Z' }], total: 1, truncated: false }
+    stubJson(body)
+    expect(await getWorkspaceFiles()).toEqual(body)
+  })
+
+  it('encodes the path query parameter for getWorkspaceFile', async () => {
+    stubJson({ path: 'lists/a.md', size: 1, modified: 'x', text: '1', binary: false, too_large: false })
+    await getWorkspaceFile('lists/a.md')
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/workspace/file?path=lists%2Fa.md')
+  })
+
+  it('builds the raw download url with the path encoded', () => {
+    expect(workspaceRawUrl('lists/a.md')).toBe('/api/v1/workspace/raw?path=lists%2Fa.md')
+  })
+
+  it('encodes characters that would otherwise break the query string', () => {
+    expect(workspaceRawUrl('a b&c.md')).toBe('/api/v1/workspace/raw?path=a%20b%26c.md')
   })
 })
 
