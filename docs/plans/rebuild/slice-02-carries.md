@@ -55,6 +55,23 @@ exactly the capability-claim-verifier shape, not a rushed regex).
   for the tool scenarios (it narrates); the suite should gate scenarios
   on model capability, or the model slice should pin a floor model.
 
+## Owner QA findings (2026-08-29, live walk of the rebuilt S2 stack)
+
+- **VERIFIED WORKING**: the tool loop end to end — Nova wrote
+  /data/workspace/groceries.md (real 57-byte file, correct content) and
+  the turn's tool spans appear in Activity. The nav-survival bug is
+  confirmed fixed.
+- **GAP (high value, near-term)**: the workspace is INVISIBLE in the app —
+  no way to view the files Nova creates or their locations. She can be
+  seen to have written a file (the span) but the file itself can't be
+  opened or browsed. Needs a Files/Workspace viewer (v1 had a Files
+  explorer; the roadmap's Library concept can hold it). This defeats half
+  the value of the tool loop — schedule it near-term (proposed as its own
+  small slice before/alongside S3, or S3's UI task).
+- **TESTING POLICY CHANGED**: no more isolated `nova-e2e` stacks; test
+  against the real stack, rebuild/reset freely (see memory
+  nova-v4-testing-policy). S2-R9's isolation apparatus is retired for S3+.
+
 ## UI / Activity carries
 
 - **Live activity line never commits to the DOM for fast filesystem
