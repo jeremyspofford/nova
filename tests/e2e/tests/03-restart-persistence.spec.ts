@@ -63,11 +63,12 @@ test('restart persistence: the conversation and the memory both survive', async 
   // did we talk about earlier?", which is an invitation as much as a
   // question: a small model reads it as being asked whether it has memory
   // and answers "I don't have access to previous conversations" — while the
-  // transcript naming teal-green is sitting in its prompt. Across four runs
+  // transcript naming teal-green is sitting in its prompt. Across five runs
   // of this file on the suite's default qwen3:1.7b it did that twice, so the
-  // walk was red half the time for a reason that had nothing to do with
+  // walk was red two runs in five for a reason that had nothing to do with
   // anything surviving the restart. Asked directly for the colour, the same
-  // model on the same instance answers "Teal-green".
+  // model on the same instance answers "Teal-green". Four runs of the
+  // question below, four answers naming it.
   //
   // The claim is unchanged — the answer after a restart has to come back
   // grounded in the exchange from before it — and claims 1 and 2 above are

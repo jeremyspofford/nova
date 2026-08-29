@@ -145,10 +145,12 @@ the wizard lists, so a mismatch is never silent — but "offered" is not
 
 ### What the default model actually does to scenarios 9 and 10
 
-Measured over five full walks on 2026-08-29, `qwen3:1.7b` on the CPU:
-scenarios 1–8 passed every time; 9 and 10 did not. What went wrong in them
-was never the loop and never the checks — it was the model reporting work it
-had not done, and being caught:
+Counted over the walks that ran these scenarios as they now stand — four full
+walks for 9, three for 10, on 2026-08-29 with `qwen3:1.7b` on the CPU.
+Scenarios 1–8 passed in every one of them. Scenario 9 passed 2 of 4 and
+scenario 10 passed 2 of 3, and what went wrong was never the loop and never
+the checks — it was the model reporting work it had not done, and being
+caught:
 
 * it replied "the file `groceries.md` has been updated successfully" and
   listed the new contents, having made **zero** tool calls, with the file on
@@ -162,9 +164,9 @@ had not done, and being caught:
 Every one of those was caught by reading the turn ledger and the volume
 rather than the reply, which is the whole design of those scenarios. But it
 means a walk on the smallest curated model is not a pass/fail gate for
-anything above scenario 8: expect roughly two thirds of runs to be red there,
-for reasons that are about the model's honesty and not about this code. Use a
-larger model when the tool scenarios are what you are checking:
+anything above scenario 8: half the walks were red in 9 or 10, for reasons
+that are about the model's honesty and not about this code. Use a larger
+model when the tool scenarios are what you are checking:
 
 ```bash
 NOVA_E2E_MODEL=qwen3:8b tests/e2e/isolated.sh walk
