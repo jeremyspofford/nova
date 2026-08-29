@@ -79,6 +79,14 @@ export const config = {
    */
   model: env('NOVA_E2E_MODEL', 'qwen3:1.7b'),
   /**
+   * The change-model scenario's switch target (S2e-T4, scenario 11) — has
+   * to be a curated slug distinct from `model` above, small enough that
+   * pulling it in-scenario is cheap. Not `model` itself: the scenario is
+   * pulling AND switching, and switching to what is already current would
+   * prove nothing about either half.
+   */
+  secondModel: env('NOVA_E2E_SECOND_MODEL', 'qwen3:4b'),
+  /**
    * The owner this walk mints. Registration closes after the FIRST owner, so
    * whatever is used here is the credential that instance keeps, permanently,
    * until somebody resets its database.

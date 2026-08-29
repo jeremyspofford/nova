@@ -78,10 +78,13 @@ jobs:
   # with one command — see tests/e2e/README.md.
   #
   # Timing, measured on this project's own hardware so the decision is made
-  # against a number: the ten scenarios run in ~4.2 minutes end to end with
-  # qwen3:1.7b on the CPU, from a first-run instance including the 1.4 GB
-  # model pull. That is inside a hosted runner's budget; what is not yet
-  # decided is whether a 1.7B's answers are stable enough to gate a push on.
+  # against a number: the first ten scenarios ran in ~4.2 minutes end to end
+  # with qwen3:1.7b on the CPU, from a first-run instance including the
+  # 1.4 GB model pull. Three more (11-13, slice-02e-model-surface) were
+  # authored later and have not been timed yet — re-measure before using this
+  # number to size a job timeout. That original figure is inside a hosted
+  # runner's budget; what is not yet decided is whether a 1.7B's answers are
+  # stable enough to gate a push on.
   #
   # To enable: decide the profile (a tiny CPU model? a hosted GPU runner? a
   # remote-endpoint backend instead of the bundled one?), then drop `if: false`.

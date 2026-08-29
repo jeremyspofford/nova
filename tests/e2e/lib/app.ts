@@ -123,6 +123,22 @@ export async function settingsMap(page: Page): Promise<Record<string, unknown>> 
 }
 
 /**
+ * Settings -> Models' per-model card, scoped by slug.
+ *
+ * ModelCard (apps/web/src/pages/settings/ModelsSection.tsx) carries no
+ * data-testid of its own — the slug is the only thing on the card
+ * guaranteed unique, rendered verbatim in its own <p>, so this locates that
+ * exact text node and walks up to the card's root. `exact: true` matters:
+ * curated slugs share prefixes (`qwen3:4b` is not a substring of
+ * `qwen3:1.7b` or vice versa, but a loose match would still be one text
+ * search away from picking up a neighbour on a longer catalog).
+ */
+export const modelCard = (page: Page, slug: string) =>
+  page
+    .getByText(slug, { exact: true })
+    .locator('xpath=ancestor::div[contains(@class, "rounded-lg")][1]')
+
+/**
  * Send a message and wait for the turn to settle.
  *
  * Settled means one of two visible outcomes: an assistant bubble that has

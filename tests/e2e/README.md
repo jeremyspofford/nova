@@ -1,6 +1,6 @@
 # End-to-end walks
 
-Ten scenarios against a real running stack — a real model, a real pull, a
+Thirteen scenarios against a real running stack — a real model, a real pull, a
 real restart, real files on a real volume. They are not unit tests and they
 are not isolated from each other: they are one walk through one instance, run
 in file order in a single worker.
@@ -17,6 +17,26 @@ in file order in a single worker.
 | 8 | `08-activity-page.spec.ts` | The tool turn is reachable by clicking Activity in the sidebar, its row carries the tool count, drilling in renders every span the API returned, and a streamed tool turn really carries `{"activity"}` frames on the wire. |
 | 9 | `09-follow-up.spec.ts` | "Add dragon fruit vinegar to that list" changes the file on disk — read off the volume afterwards, because the previous reply is in the prompt and a convincing "added it" costs the model nothing. |
 | 10 | `10-tool-honest-failure.spec.ts` | A tool that refuses is recorded `ok=false`, shown as an error on the Activity page, and admitted in the reply — never narrated as a success. |
+| 11 | `11-change-model.spec.ts` | S2e DoD item 1: pull a second curated model from Settings -> Models (T1's own pull control, not the wizard's), switch to it, and the very next chat turn's `chat-model` header names the new model — no restart, no reload. **Authored in S2e-T4, not yet run** — see below. |
+| 12 | `12-fit-render.spec.ts` | S2e DoD item 2: every curated model in Settings -> Models carries a fit verdict and a verified/estimated badge that matches `GET /api/v1/models/suggest` verbatim; a `wont_fit` model renders its warning as a `role=alert`, not just a colored badge. **Authored in S2e-T4, not yet run.** |
+| 13 | `13-re-run-onboarding.spec.ts` | S2e DoD item 3: "Re-run setup" in Settings clears `onboarding.completed` and lands on the wizard's resume shape (Hardware first) — never `CreateAccount`, so the owner account is provably not re-minted — then walks the wizard back to a finished `/chat`. Runs last on purpose (see the file header). **Authored in S2e-T4, not yet run.** |
+
+## Scenarios 11-13 (S2e model & settings surface)
+
+Authored against slice-02e-model-surface's shipped T1 (change-model-from-UI,
+re-run onboarding) and T2 (fit-aware, diversified, verified catalog) —
+`docs/plans/rebuild/slice-02e-model-surface.md`. Written by reading the
+actual shipped components (`ModelsSection.tsx`, `ModelFitNotice.tsx`,
+`OnboardingWizard.tsx`, `services/gateway/app/fit.py`) rather than guessed
+selectors, but **not run**: at authoring time the running `nova-web` /
+`nova-gateway` containers were a build that predates the whole slice (checked
+directly — the live gateway container's `admin.py` has no `fit` field and no
+`app/fit.py` module at all), so there was nothing at `:3000` yet for a
+browser to exercise. They run for the first time, in file order alongside
+1-10, once the stack is rebuilt from this source — `tests/e2e/isolated.sh up`
+(builds fresh) or the real stack after a deploy. Treat a first run of these
+three the way scenario 6 was treated after S2-T4: read what actually happens
+before trusting the selectors blind, per this suite's own README precedent.
 
 ## Run it
 
@@ -117,6 +137,7 @@ host run needs nothing else exported.
 | `NOVA_E2E_BASE_URL` | `http://127.0.0.1:3000` | `http://web:80` in the container |
 | `NOVA_E2E_MEMORY_URL` | `http://127.0.0.1:8002` | |
 | `NOVA_E2E_MODEL` | `qwen3:1.7b` | **must be a slug the wizard actually offers on this host** |
+| `NOVA_E2E_SECOND_MODEL` | `qwen3:4b` | scenario 11's switch target — must be curated and different from `NOVA_E2E_MODEL` |
 | `NOVA_E2E_OWNER_NAME` | `Jeremy` | the owner scenario 1 mints |
 | `NOVA_E2E_OWNER_PASSWORD` | **required, no default** | scenario 1 refuses to run without it — see below |
 | `NOVA_E2E_PROJECT` | `nova-e2e` | HOST runs only. In-container the project is read off the runner's own compose label and this is refused if it disagrees — which stack may be stopped and restarted is not a setting. |
