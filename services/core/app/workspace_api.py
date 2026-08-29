@@ -21,8 +21,10 @@ quietly.
 from __future__ import annotations
 
 import mimetypes
+import re
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,6 +35,34 @@ from app.tools.base import ToolFailure
 from app.tools.workspace import _display, _resolve_within, iter_contained_files, root_from_env
 
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
+
+# _resolve_within only forbids a path escaping the root — it says nothing
+# about which characters make up the final component, and the write
+# tool's _atomic_write does not either. A POSIX filename may legally
+# contain a double-quote or a raw CR/LF (proved in test_workspace_api.py
+# by creating exactly such files directly on disk), so a filename is never
+# trusted to go straight into a header value: control characters (CR/LF
+# among them — that pair is what turns one header into an injected
+# second one) and the quote that would terminate an RFC 6266 quoted-string
+# early are stripped from the ASCII fallback name.
+_UNSAFE_IN_QUOTED_ASCII = re.compile(r'["\x00-\x1f\x7f]')
+
+
+def _content_disposition(filename: str) -> str:
+    """An `attachment` Content-Disposition value safe to interpolate
+    verbatim into a response header, whatever `filename` actually
+    contains. The RFC 5987 `filename*` parameter carries the real name
+    intact — percent-encoding neutralises the quote, CR/LF and everything
+    else a raw byte could do inside a header — and `filename=` is the
+    plain ASCII fallback RFC 6266 reserves for clients that do not
+    understand `filename*`, with anything that could break out of its
+    quoted-string stripped rather than the real name ever reaching the
+    header unescaped.
+    """
+    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    ascii_name = _UNSAFE_IN_QUOTED_ASCII.sub("_", ascii_name)
+    encoded = quote(filename, safe="")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 
 # The listing cap protects the response size the same way the tool's
 # MAX_LIST_ENTRIES protects the model's context — a different number
@@ -139,5 +169,5 @@ async def get_workspace_raw(
     return Response(
         content=data,
         media_type=media_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{target.name}"'},
+        headers={"Content-Disposition": _content_disposition(target.name)},
     )

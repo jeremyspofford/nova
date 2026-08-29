@@ -15,6 +15,9 @@ route uses, per conftest.py.
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 import pytest
 
 from app import workspace_api
@@ -231,6 +234,69 @@ async def test_raw_route_refuses_paths_that_leave_the_workspace(
 ):
     resp = await owner_client.get(f"/api/v1/workspace/raw?path={path}")
     assert resp.status_code == 400
+
+
+# -- Content-Disposition: a filename is not a trusted string ----------------
+#
+# workspace_write_file's own path argument goes through _resolve_within, but
+# that gate only forbids ESCAPING the root — it says nothing about which
+# characters make up the final path component, and _atomic_write does not
+# either. A POSIX filename may legally contain a double-quote or raw CR/LF,
+# so both files below are created directly on disk (bypassing the write
+# tool entirely, which never rejects them either) to prove the /raw route
+# cannot be made to emit a malformed or injected header no matter what name
+# Nova gave the file.
+
+
+async def test_raw_content_disposition_is_well_formed_for_a_quote_in_the_filename(
+    owner_client, workspace
+):
+    name = 'evil".md'
+    (workspace / name).write_bytes(b"data")
+
+    resp = await owner_client.get(f"/api/v1/workspace/raw?path={quote(name, safe='')}")
+    assert resp.status_code == 200
+    assert resp.content == b"data"
+
+    disposition = resp.headers["content-disposition"]
+    assert "\r" not in disposition
+    assert "\n" not in disposition
+    # The ascii filename="..." parameter must be a well-formed quoted
+    # string: exactly one opening and one closing quote, nothing in
+    # between that could terminate the value early or start a new
+    # parameter.
+    match = re.search(r'filename="([^"]*)"', disposition)
+    assert match is not None, f"no well-formed filename= parameter in {disposition!r}"
+    assert '"' not in match.group(1)
+    # The real name survives intact in the RFC 5987 parameter, which
+    # percent-encodes the quote rather than ever emitting it raw.
+    assert "filename*=UTF-8''" in disposition
+    assert quote(name, safe="") in disposition
+
+
+async def test_raw_content_disposition_is_well_formed_for_crlf_in_the_filename(
+    owner_client, workspace
+):
+    name = "evil\r\nX-Injected: yes.md"
+    (workspace / name).write_bytes(b"data")
+
+    resp = await owner_client.get(f"/api/v1/workspace/raw?path={quote(name, safe='')}")
+    assert resp.status_code == 200
+    assert resp.content == b"data"
+
+    disposition = resp.headers["content-disposition"]
+    # No raw CR or LF anywhere in the header value — that byte pair is
+    # exactly what turns one header into an injected second one. The
+    # literal text "X-Injected: yes.md" is fine to see here as long as it
+    # stays inert prose inside a single well-formed filename= value —
+    # which the two checks below are what actually proves.
+    assert "\r" not in disposition
+    assert "\n" not in disposition
+    match = re.search(r'filename="([^"]*)"', disposition)
+    assert match is not None, f"no well-formed filename= parameter in {disposition!r}"
+    assert '"' not in match.group(1)
+    # The real name (CRLF and all) survives, percent-encoded, in filename*.
+    assert quote(name, safe="") in disposition
 
 
 # -- never writes ------------------------------------------------------------
