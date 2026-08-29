@@ -94,7 +94,10 @@ export async function postLogout(): Promise<void> {
 
 export interface SettingDef {
   key: string
-  type: 'bool' | 'str'
+  // Mirrors core's settings registry (services/core/app/settings_store.py).
+  // 'int' arrived with the tool loop's round cap; a union that lies about
+  // what the API can return is worse than no union at all.
+  type: 'bool' | 'str' | 'int'
   default: unknown
   description: string
   value: unknown
@@ -110,7 +113,7 @@ export function settingValue<T>(settings: SettingDef[], key: string, fallback: T
   return found === undefined ? fallback : (found.value as T)
 }
 
-export async function putSetting(key: string, value: boolean | string): Promise<void> {
+export async function putSetting(key: string, value: boolean | string | number): Promise<void> {
   await apiSend('/api/v1/settings', 'PUT', { key, value })
 }
 
