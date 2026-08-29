@@ -199,6 +199,59 @@ export async function getMessages(conversationId: string): Promise<StoredMessage
   return body.messages
 }
 
+// ── activity (the turn ledger, read-only) ───────────────────────────────
+
+export interface ActivityTurn {
+  id: string
+  kind: string
+  model: string | null
+  // NULL means unfinished — never coerced by this client into 'ok' or
+  // 'error'; see services/core/app/activity.py and pages/activity.
+  status: 'ok' | 'error' | 'interrupted' | null
+  started_at: string
+  duration_ms: number | null
+  tool_call_count: number
+  llm_round_count: number
+  conversation_id: string | null
+}
+
+export interface ActivitySpan {
+  kind: string
+  name: string | null
+  started_at: string
+  duration_ms: number | null
+  // Shape varies by span kind, and args_redacted inside a tool span's meta
+  // is itself polymorphic (object or clipped string) — see
+  // pages/activity/activityFormat.ts's viewArgs, which is where that
+  // quirk is actually handled.
+  meta: Record<string, unknown>
+}
+
+export interface ActivityTurnDetail {
+  turn: ActivityTurn
+  spans: ActivitySpan[]
+}
+
+export const ACTIVITY_PAGE_SIZE = 50
+
+/**
+ * A page is "the last one" when it comes back shorter than the limit asked
+ * for — there is no separate has-more flag, so a caller never has more to
+ * track than the rows it already fetched.
+ */
+export async function getActivity(
+  opts: { limit?: number; before?: string } = {},
+): Promise<ActivityTurn[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? ACTIVITY_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ turns: ActivityTurn[] }>(`/api/v1/activity?${params.toString()}`)
+  return body.turns
+}
+
+export const getActivityTurn = (turnId: string) =>
+  apiGet<ActivityTurnDetail>(`/api/v1/activity/${turnId}`)
+
 // ── model pull (newline-delimited JSON, not SSE) ────────────────────────
 
 export interface PullLine {

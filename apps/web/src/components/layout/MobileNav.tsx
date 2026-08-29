@@ -4,6 +4,7 @@ import {
   MessageSquare,
   Ellipsis,
   X,
+  Activity,
   Settings,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -31,6 +32,7 @@ const moreItems: { label?: string; items: NavItem[] }[] = [
   {
     label: 'System',
     items: [
+      { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },

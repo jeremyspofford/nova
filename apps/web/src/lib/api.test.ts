@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { parsePullLine, pullModel, type PullLine } from './api'
+import { parsePullLine, pullModel, getActivity, type PullLine } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -58,6 +58,39 @@ describe('parsePullLine', () => {
   it('refuses valid JSON that is not an object', () => {
     expect(parsePullLine('42').error).toBeTruthy()
     expect(parsePullLine('null').error).toBeTruthy()
+  })
+})
+
+describe('getActivity', () => {
+  function stubJson(body: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+
+  it('defaults the limit and omits before when there is no cursor yet', async () => {
+    stubJson({ turns: [] })
+    await getActivity()
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/activity?limit=50')
+  })
+
+  it('carries an explicit limit and cursor through as query params', async () => {
+    stubJson({ turns: [] })
+    await getActivity({ limit: 10, before: 'turn-9' })
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/activity?limit=10&before=turn-9')
+  })
+
+  it('returns the turns array, not the wrapper object', async () => {
+    stubJson({ turns: [{ id: 't1' }] })
+    expect(await getActivity()).toEqual([{ id: 't1' }])
   })
 })
 
