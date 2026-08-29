@@ -111,7 +111,7 @@ def test_a_write_claim_with_a_matching_span_is_not_flagged():
 
 
 def test_a_write_span_in_a_subdirectory_still_backs_the_named_file():
-    reply = "Saved groceries.md for you."
+    reply = "I've saved groceries.md for you."
     spans = [tool_span("workspace_write_file", path="lists/groceries.md")]
     assert guards.narration_check(reply, spans) is None
 
@@ -263,6 +263,61 @@ REVIEWER_FALSE_POSITIVES = [
 def test_a_figurative_or_in_chat_file_noun_is_never_a_claim(reply):
     # No spans at all: if any of these flagged, the guard would be the liar.
     assert guards.narration_check(reply, []) is None
+
+
+# A second adversarial sweep (fix round 2) caught more honest replies still
+# flagging: a figurative verb sweeping an UNRELATED filename that shares the
+# clause, and passive/third-party attributions the pronoun-only check missed.
+# The structural cut is: a filename must be the verb's own direct object, and a
+# passive/content claim must not attribute to another agent or time. Permanent.
+REVIEWER_FALSE_POSITIVES_2 = [
+    "I updated my approach and config.yaml is the file you'll want to edit.",
+    "I saved us some time and notes.md can hold the rest.",
+    "I updated my thinking, config.yaml is the file to edit.",
+    "I saved us time - notes.md can hold the rest.",
+    "config.yaml was updated by you, not me.",
+    "groceries.md was created by the previous session, not this one.",
+    "config.yaml was updated earlier today before we started.",
+    "The previous session created config.yaml.",
+    "config.yaml was overwritten by the deploy job.",
+    "report.md was written by a teammate yesterday.",
+    "A requirements.txt lists your dependencies.",
+]
+
+
+@pytest.mark.parametrize("reply", REVIEWER_FALSE_POSITIVES_2)
+def test_an_unrelated_or_attributed_filename_is_never_a_self_claim(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+# My own fresh sweep: honest replies that carry a REAL filename which a naive
+# direct-object matcher might still catch — the filename is a subject, a
+# location, a recommendation, or another agent's/time's action.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "config.yaml is the file you should edit.",
+        "You'll find the setting in settings.json.",
+        "I recommend editing groceries.md by hand.",
+        "The error is in main.py at line 42.",
+        "I looked at config.yaml but did not change it.",
+        "I've reviewed your request and config.yaml looks correct.",
+        "config.yaml was updated by the CI pipeline.",
+        "report.md exists already from an earlier run.",
+        "The previous run wrote output.json, not this turn.",
+        "I did not create report.md; it was already there.",
+    ],
+)
+def test_a_filename_that_is_not_the_verbs_own_object_is_not_a_claim(reply):
+    assert guards.narration_check(reply, []) is None
+
+
+def test_saved_it_as_a_named_file_is_still_a_claim():
+    """The direct-object cut must not lose the common 'saved it as X.md' lie."""
+    correction = guards.narration_check("I saved it as report.md.", [])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction) == ["report.md"]
 
 
 # -- second/third-person attribution is not a self-claim -------------------

@@ -73,15 +73,11 @@ CORRECTION_TEXT = (
     "action this turn."
 )
 
-# Completed morphology only. A future or hedged form uses the BASE verb
-# ("I'll create", "I can save", "would you like me to write"), which these
-# past/participle patterns never match — so most hedging is filtered by the
-# verb form alone, before any window check. "read" is the one ambiguous case
-# (base == past), handled by the preceding-window blocker below.
-_WRITE_VERB = re.compile(r"\b(?:created|wrote|written|saved|updated|appended|added)\b", re.I)
-_READ_VERB = re.compile(r"\b(?:read|checked|reviewed|opened|examined)\b", re.I)
-_FETCH_VERB = re.compile(
-    r"\b(?:fetched|retrieved|downloaded|visited|accessed|read|pulled|looked)\b", re.I
+# Completed fetch verbs, as whole tokens. "read" appears here and in the read
+# set; which one fires is decided by the object it governs — a URL is a fetch,
+# a filename is a read.
+_FETCH_VERB_TOKENS = frozenset(
+    {"fetched", "retrieved", "downloaded", "visited", "accessed", "read", "pulled", "looked"}
 )
 # A file the claim is about: a real filename TOKEN — a name with a known
 # extension (so "e.g." and an end-of-sentence period never read as files),
@@ -96,55 +92,95 @@ _FILENAME_RE = (
 _FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
 _URL = re.compile(r"https?://[^\s)>\]]+", re.I)
 
-# Presenting a NAMED file's contents as fact: "<file> contains/says/…". The
-# filename must anchor the verb, so an in-chat draft that names no file token
-# ("Here is the content of the file:", "The draft note contains three parts")
-# is never a claim — presenting proposed content in chat is honest.
+# Presenting a NAMED file's contents as a DUMP: "<file> contains the following"
+# or "<file> says:/reads:". Only a content dump counts — a descriptive
+# "requirements.txt lists your dependencies" or "config.yaml contains your key"
+# is honest chat about a file, not a fabricated read of one, so plain
+# contains/lists/shows are deliberately NOT enough. An in-chat draft that names
+# no file token is never a claim either.
 _CONTENT_CLAIM = re.compile(
     r"\b(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
-    r"(?:contains?|says?|reads?|shows?|holds?|lists?|includes?)\b",
+    r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
     re.I,
 )
 
 # The passive voice, where the filename is the subject and precedes the verb:
 # "<file> has been updated", "<file> was read". A negation ("was not updated")
 # or a future ("will be updated") breaks the auxiliary run and so never
-# matches — exactly the silence we want.
+# matches. Every verb here has an active form in the verb token sets below —
+# "overwritten" was dropped precisely because "overwrite" is not a recognised
+# active verb, so the two branches cannot disagree about what counts.
 _PASSIVE_CLAIM = re.compile(
     r"\b(" + _FILENAME_RE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
-    r"(?P<verb>created|written|wrote|saved|updated|appended|added|overwritten"
+    r"(?P<verb>created|written|saved|updated|appended|added"
     r"|read|opened|reviewed|checked|examined)\b",
     re.I,
 )
 _PASSIVE_READ_VERBS = frozenset({"read", "opened", "reviewed", "checked", "examined"})
 
-# A second/third-person subject immediately before a verb: the action is
-# ATTRIBUTED to someone else or reported ("you saved notes.md", "you mentioned
-# you saved …", "since you created the file"), so it is not Nova's own claim.
-# Kept tight — the pronoun must be the verb's subject, 0–1 words before it — so
-# a first-person claim with a second-person aside ("as you requested, I created
-# report.md") is NOT suppressed.
-_ATTRIBUTED = re.compile(r"\b(?:you|he|she|they|we)\b(?:\s+\w+){0,1}\s+$", re.I)
+# Completed ACTIVE verbs, as whole tokens (the token scan lower-cases and looks
+# them up). Future/hedged forms use the base verb ("I'll create", "I can save")
+# and so never appear here — the verb form alone filters most hedging.
+_WRITE_VERB_TOKENS = frozenset(
+    {"created", "wrote", "written", "saved", "updated", "appended", "added"}
+)
+_READ_VERB_TOKENS = frozenset({"read", "checked", "reviewed", "opened", "examined"})
+_ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS
 
-# The maximum gap between an active verb and the file token it governs, so a
-# filename far from the verb (a different subject that merely shares the
-# clause) is not swept in as its object.
-_OBJECT_REACH = 80
+# A first-person subject governing a verb: "I", "I've", "I have <verb>", with an
+# adverb or a perfect auxiliary allowed to sit between. This is what an ACTIVE
+# claim REQUIRES — an active third-party subject ("the previous session created
+# X", "a teammate wrote X", "you saved X") simply never reaches "I" and so is
+# not a self-claim. A negation or a modal between the subject and the verb ("I
+# have not created", "I can read") also stops the walk-back before "I", which
+# is how hedged/negated active forms are suppressed without a separate blocker.
+_FIRST_PERSON = frozenset({"i", "i've", "i'd", "i'm"})
+_SUBJECT_SKIP = frozenset(
+    {"have", "has", "had", "just", "already", "also", "then", "now", "finally",
+     "recently", "went", "ahead", "and", "or", "since", "personally"}
+)
 
-# Anything in the short window BEFORE a completed verb that turns an assertion
-# into a non-assertion: a modal or intent ("will", "can", "going to", "to"),
-# a negation ("not", "never", "n't"), or a contrast/substitution ("instead").
-# Scoped to the verb, never the whole clause, so "created X, which will help"
-# (the modal falls AFTER the verb) stays a claim.
-_BLOCKER = re.compile(
-    r"(?:\b(?:not|never|no|nothing|cannot|can|could|will|shall|should|would|may|might|"
-    r"must|to|going|gonna|about|plan|planning|planned|intend|intending|want|wants|"
-    r"wanted|hope|hoping|hoped|try|trying|tried|let|if|unable|instead|rather|"
-    r"won't|couldn't|didn't|wasn't|isn't|don't|doesn't|haven't|hasn't|shouldn't|"
-    r"wouldn't|can't|aren't|fail|failed|fails)\b)|(?:n't\b)|(?:'ll\b)",
+# The filename is the object of a completed active verb only if it is reached
+# WITHOUT crossing a clause boundary: a conjunction/comma before any object
+# ("I updated my approach and config.yaml is …"), a finite verb starting a new
+# predicate ("config.yaml is the file …"), a subordinator, or another action
+# verb all end the object walk. A list conjunction AFTER a filename ("saved
+# a.md and b.md") continues the list; otherwise it breaks.
+_LIST_CONT = frozenset({"and", "or", ","})
+_STOP_WORDS = frozenset(
+    {"but", "nor", "so", "yet", "plus", "because", "which", "who", "that",
+     "whom", "whose", "where", "when", "while", "since", "if", "unless",
+     "though", "although", "whereas", "before", "after", "once", "until",
+     "is", "are", "was", "were", "be", "been", "am", "can", "could", "will",
+     "would", "shall", "should", "may", "might", "must", "has", "have", "had",
+     "do", "does", "did", "need", "needs", "want", "wants", "seems", "looks",
+     "remains", "becomes", "stays", "you", "you'll", "you've", "we", "we'll",
+     "they", "he", "she"}
+)
+_STOP_PUNCT = frozenset({";", ":", "-", "–", "—", "(", ")", "[", "]", "!", "?"})
+_DEST_PREP = frozenset({"to", "into", "onto", "in", "within", "at"})
+_OBJECT_MAX_TOKENS = 12
+
+# The filename is the SUBJECT of a passive/content claim, so its truth is
+# suppressed not by a first-person walk-back but by any sign the action belongs
+# to someone else or another time: a "by <not me>" agent, a prior-time marker,
+# or a reported-speech lead. This is what clears "config.yaml was updated by
+# you", "created by the previous session", "updated earlier today", "you said
+# groceries.md contains …".
+_BY_OTHER = re.compile(r"\bby\s+(?!me\b|myself\b)[\w']+", re.I)
+_PRIOR_TIME = re.compile(
+    r"\b(?:earlier|yesterday|previously|already\s+exist|before\s+(?:we|you|this)"
+    r"|prior|previous\s+session|previous\s+run|last\s+(?:week|night|time|run|session)"
+    r"|moments?\s+ago|minutes?\s+ago|hours?\s+ago|days?\s+ago|weeks?\s+ago"
+    r"|a\s+while\s+ago|earlier\s+today)\b",
     re.I,
 )
-_WINDOW = 24
+_REPORTED = re.compile(
+    r"\b(?:you|he|she|they|we|someone|somebody|the\s+\w+)\s+(?:\w+\s+){0,2}?"
+    r"(?:said|says|mentioned|mentions|claim|claims|claimed|noted|notes|told|"
+    r"reported|reports|thinks?|believes?)\b",
+    re.I,
+)
 
 # Within a sentence, split on separators that bound the reach of a negation:
 # a semicolon, a contrastive conjunction, or an explicit "then".
@@ -207,70 +243,134 @@ def _clauses(text: str):
                 yield clause, is_question
 
 
-def _unblocked(clause: str, at: int) -> bool:
-    """True if nothing turns the verb at `at` into a non-claim: no
-    modal/intent/negation in the short window before it, and no second/third-
-    person subject governing it (an attributed or reported action)."""
-    prefix = clause[:at]
-    window = prefix[-_WINDOW:]
-    if _BLOCKER.search(window) is not None:
-        return False
-    if _ATTRIBUTED.search(prefix) is not None:
-        return False
-    return True
+_TOKEN = re.compile(r"[A-Za-z0-9_./'-]+|[^\sA-Za-z0-9]")
 
 
-def _first_unblocked(clause: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
-    for m in pattern.finditer(clause):
-        if _unblocked(clause, m.start()):
-            return m
-    return None
+def _tokenize(clause: str) -> list[str]:
+    return [m.group(0) for m in _TOKEN.finditer(clause)]
+
+
+def _filename_at(token: str) -> str | None:
+    """The filename this token starts with, if any — tolerant of a trailing
+    period or comma ('report.md.', 'notes.md,') that the tokenizer keeps
+    attached at a clause end."""
+    m = _FILENAME.match(token)
+    return m.group(0) if m is not None else None
+
+
+def _first_person_subject(tokens: list[str], vi: int) -> bool:
+    """True if the verb at index `vi` has a first-person subject 'I'.
+
+    Walk left over what can sit between 'I' and its verb — perfect auxiliaries
+    ('have'), adverbs ('just', '-ly'), a coordinated earlier object or verb of
+    the SAME 'I' ('I read a.md and wrote b.md') — and stop at anything else. A
+    different subject ('the previous session created…', 'you saved…'), a
+    negation ('I have NOT created…'), or a modal ('I CAN read…') is exactly
+    that 'anything else', so the walk never reaches 'I' and the claim is
+    dropped. Precision comes free: only a genuine 'I <verb>' survives."""
+    steps = 0
+    k = vi - 1
+    while k >= 0 and steps < _OBJECT_MAX_TOKENS:
+        tok = tokens[k]
+        low = tok.lower()
+        if low in _FIRST_PERSON:
+            return True
+        if (
+            low in _SUBJECT_SKIP
+            or low.endswith("ly")
+            or low in _ACTION_VERB_TOKENS
+            or _filename_at(tok) is not None
+        ):
+            k -= 1
+            steps += 1
+            continue
+        return False
+    return False
+
+
+def _objects_of(tokens: list[str], vi: int) -> list[str]:
+    """The file tokens that are the DIRECT OBJECT (or destination) of the verb
+    at index `vi`, read left-to-right and stopping at the first clause
+    boundary. A conjunction/comma before any object, a finite verb starting a
+    new predicate ('config.yaml IS the file…'), a subordinator, or another
+    action verb all end the walk — so 'I updated my approach and config.yaml
+    is …' yields nothing (config.yaml is a new clause's subject), while 'I
+    added milk to groceries.md' and 'I saved a.md and b.md' yield their real
+    objects."""
+    found: list[str] = []
+    steps = 0
+    j = vi + 1
+    while j < len(tokens) and steps < _OBJECT_MAX_TOKENS:
+        tok = tokens[j]
+        low = tok.lower()
+        name = _filename_at(tok)
+        if name is not None:
+            found.append(name)
+        elif low in _ACTION_VERB_TOKENS:
+            break
+        elif low in _LIST_CONT:
+            # A list conjunction extends an object list ('a.md and b.md') but,
+            # before any object, marks the boundary of a new clause.
+            if not found:
+                break
+        elif tok in _STOP_PUNCT or low in _STOP_WORDS:
+            break
+        j += 1
+        steps += 1
+    return found
+
+
+def _externally_attributed(clause: str) -> bool:
+    """The action belongs to someone else or another time — a 'by <not me>'
+    agent, a prior-time marker, or a reported-speech lead. Used for passive and
+    content claims, whose subject is the filename rather than 'I', and as a
+    backstop on active/fetch claims."""
+    return (
+        _BY_OTHER.search(clause) is not None
+        or _PRIOR_TIME.search(clause) is not None
+        or _REPORTED.search(clause) is not None
+    )
 
 
 def _claims_in(clause: str) -> list[tuple[str, str, str]]:
-    """Every completed-action claim in one clause, each tied to a REAL target
-    (a filename token or a URL). A bare noun never qualifies, and an action
-    attributed to someone else is not a claim."""
+    """Every completed-action self-claim in one clause, each tied to a REAL
+    target (a filename token or a URL). A bare noun never qualifies, an action
+    attributed to someone else or another time never qualifies, and a filename
+    that is not the verb's own object never qualifies."""
     claims: list[tuple[str, str, str]] = []
+    if _externally_attributed(clause):
+        return claims
+
+    tokens = _tokenize(clause)
+
+    # active voice: I + completed write/read verb + a filename as its object.
+    for vi, tok in enumerate(tokens):
+        low = tok.lower()
+        if low not in _ACTION_VERB_TOKENS:
+            continue
+        if not _first_person_subject(tokens, vi):
+            continue
+        kind = "wrote_file" if low in _WRITE_VERB_TOKENS else "read_file"
+        for name in _objects_of(tokens, vi):
+            claims.append((kind, name, tok))
+
+    # fetched a URL — I + fetch verb + an explicit http(s) token in the clause.
     urls = [m.group(0) for m in _URL.finditer(clause)]
-
-    # fetched a URL — an explicit http(s) token is required, so "I looked it
-    # up" (which might be a memory search) is never read as a fetch.
     if urls:
-        m = _first_unblocked(clause, _FETCH_VERB)
-        if m is not None:
-            claims.append(("fetched_url", urls[0], m.group(0)))
+        for vi, tok in enumerate(tokens):
+            if tok.lower() in _FETCH_VERB_TOKENS and _first_person_subject(tokens, vi):
+                claims.append(("fetched_url", urls[0], tok))
+                break
 
-    # presented a named file's contents as fact: "<file> contains/says/…"
-    for cm in _CONTENT_CLAIM.finditer(clause):
-        if _unblocked(clause, cm.start(1)):
-            claims.append(("file_contents", cm.group(1), cm.group(0)))
-
-    # passive voice: "<file> has been updated", "<file> was read"
+    # passive voice: "<file> has been updated / was read", filename-as-subject.
     for pm in _PASSIVE_CLAIM.finditer(clause):
-        if _unblocked(clause, pm.start(1)):
-            verb = pm.group("verb").lower()
-            kind = "read_file" if verb in _PASSIVE_READ_VERBS else "wrote_file"
-            claims.append((kind, pm.group(1), pm.group(0)))
+        verb = pm.group("verb").lower()
+        kind = "read_file" if verb in _PASSIVE_READ_VERBS else "wrote_file"
+        claims.append((kind, pm.group(1), pm.group(0)))
 
-    # active voice: tie each file token to its NEAREST preceding unblocked
-    # action verb, within reach — so "I read a.md and wrote b.md" does not read
-    # as writing a.md, and a filename that is a different clause's subject is
-    # not swept in as an object.
-    actions: list[tuple[int, str, str]] = []
-    for m in _WRITE_VERB.finditer(clause):
-        if _unblocked(clause, m.start()):
-            actions.append((m.start(), "wrote_file", m.group(0)))
-    if not urls:
-        for m in _READ_VERB.finditer(clause):
-            if _unblocked(clause, m.start()):
-                actions.append((m.start(), "read_file", m.group(0)))
-    actions.sort()
-    for fm in _FILENAME.finditer(clause):
-        governing = [a for a in actions if 0 <= fm.start() - a[0] <= _OBJECT_REACH]
-        if governing:
-            _pos, kind, phrase = governing[-1]
-            claims.append((kind, fm.group(0), phrase))
+    # content DUMP: "<file> contains the following / says:", filename-as-subject.
+    for cm in _CONTENT_CLAIM.finditer(clause):
+        claims.append(("file_contents", cm.group(1), cm.group(0)))
 
     return claims
 
