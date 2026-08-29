@@ -59,12 +59,23 @@ export function ActivityPage({
   const [exhausted, setExhausted] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [details, setDetails] = useState<Record<string, DetailState>>({})
-  // Which ids a fetch has ever been started for — a ref, not derived from
-  // `details`, so the effect below does not depend on state IT writes:
-  // depending on `details` would re-run the effect the moment it calls
-  // setDetails(loading), whose cleanup would then mark the in-flight
-  // fetch's own closure stale before its promise ever resolves.
-  const requestedRef = useRef<Set<string>>(new Set())
+  // Which ids a fetch has actually SETTLED for — a ref, not derived from
+  // `details`, so the effect below does not depend on state IT writes
+  // (depending on `details` would re-run the effect the moment it calls
+  // setDetails(loading), whose cleanup would mark the in-flight fetch's
+  // own closure stale before its promise ever resolves).
+  //
+  // Marked only from inside the live-gated `.then`/`.catch` below — i.e.
+  // only when a result was actually committed to `details` — never at the
+  // moment a fetch merely STARTS. An id marked at start time and never
+  // unmarked is exactly the bug this once was: collapse (or switch to a
+  // different row) before the fetch resolves flips `live` to false in the
+  // cleanup, the eventual settle becomes a no-op, and re-expanding would
+  // see the id already "requested" and never ask again — a row stuck on
+  // the loading Skeleton forever, no error, no retry. Marking on settle
+  // instead means an abandoned fetch simply leaves no mark, so a later
+  // re-expand is indistinguishable from a first expand and tries again.
+  const settledRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     let live = true
@@ -99,22 +110,27 @@ export function ActivityPage({
       .finally(() => setLoadingMore(false))
   }, [api, turns, pageSize])
 
-  // A turn's spans are fetched exactly once per id, the first time it is
-  // expanded — collapsing and re-expanding reuses what is already cached
-  // in `details` rather than asking again.
+  // A turn's spans are fetched once per id that actually SETTLES — see
+  // settledRef above. Collapsing and re-expanding a row whose fetch
+  // already landed reuses the cached `details` entry; re-expanding one
+  // that never got the chance to land (abandoned mid-flight) retries.
   useEffect(() => {
-    if (expandedId === null || requestedRef.current.has(expandedId)) return
-    requestedRef.current.add(expandedId)
+    if (expandedId === null || settledRef.current.has(expandedId)) return
+    const id = expandedId
     let live = true
-    setDetails(prev => ({ ...prev, [expandedId]: { status: 'loading' } }))
+    setDetails(prev => ({ ...prev, [id]: { status: 'loading' } }))
     api
-      .getActivityTurn(expandedId)
+      .getActivityTurn(id)
       .then(detail => {
-        if (live) setDetails(prev => ({ ...prev, [expandedId]: { status: 'ready', detail } }))
+        if (live) {
+          settledRef.current.add(id)
+          setDetails(prev => ({ ...prev, [id]: { status: 'ready', detail } }))
+        }
       })
       .catch(err => {
         if (live) {
-          setDetails(prev => ({ ...prev, [expandedId]: { status: 'error', reason: reasonOf(err) } }))
+          settledRef.current.add(id)
+          setDetails(prev => ({ ...prev, [id]: { status: 'error', reason: reasonOf(err) } }))
         }
       })
     return () => {

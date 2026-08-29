@@ -38,6 +38,16 @@ function fakeApi(turns: ActivityTurn[][], details: Record<string, ActivityTurnDe
   }
 }
 
+/** A promise this test can settle whenever it wants — for pinning down
+ * behaviour that depends on a fetch NOT having resolved yet. */
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(res => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 describe('ActivityPage — the list', () => {
   it('shows the EmptyState when there is nothing yet', async () => {
     render(<ActivityPage api={fakeApi([[]])} />)
@@ -217,5 +227,110 @@ describe('ActivityPage — drill-in', () => {
     fireEvent.click(row)
     await screen.findByTestId('activity-detail-t1')
     expect(api.getActivityTurn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ActivityPage — drill-in races', () => {
+  // A row expanded and then abandoned (collapsed, or the operator jumps to
+  // a different row) before its fetch resolves must not be stuck showing
+  // the loading Skeleton forever the next time it is opened — the fetch
+  // that would have filled it in was thrown away along with the request,
+  // so re-expanding has to ask again.
+
+  it('re-expanding a row abandoned mid-fetch retries instead of hanging forever', async () => {
+    const first = deferred<ActivityTurnDetail>()
+    let calls = 0
+    const api = {
+      getActivity: vi.fn(async () => [turn({ id: 't1' })]),
+      getActivityTurn: vi.fn((_id: string) => {
+        calls += 1
+        return calls === 1 ? first.promise : Promise.resolve(detail())
+      }),
+    }
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+
+    fireEvent.click(row) // expand — starts the first fetch, which never settles here
+    await screen.findByTestId('activity-detail-t1')
+    fireEvent.click(row) // collapse before that fetch resolves
+    expect(screen.queryByTestId('activity-detail-t1')).toBeNull()
+
+    fireEvent.click(row) // re-expand: must be a NEW request, not the abandoned one
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText(/no spans were recorded/i)
+    expect(api.getActivityTurn).toHaveBeenCalledTimes(2)
+
+    // The first, abandoned fetch resolving late must never land on screen.
+    first.resolve(
+      detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'stale-from-abandoned-fetch',
+            started_at: new Date().toISOString(),
+            duration_ms: 1,
+            meta: {},
+          },
+        ],
+      }),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(screen.queryByText('stale-from-abandoned-fetch')).toBeNull()
+  })
+
+  it('switching straight from one expanded row to another shows the second, never a stale first', async () => {
+    const aFetch = deferred<ActivityTurnDetail>()
+    const api = {
+      getActivity: vi.fn(async () => [turn({ id: 'a' }), turn({ id: 'b' })]),
+      getActivityTurn: vi.fn((id: string) => {
+        if (id === 'a') return aFetch.promise
+        return Promise.resolve(
+          detail({
+            spans: [
+              {
+                kind: 'tool',
+                name: 'b-tool',
+                started_at: new Date().toISOString(),
+                duration_ms: 1,
+                meta: { ok: true, result_head: 'done' },
+              },
+            ],
+          }),
+        )
+      }),
+    }
+    render(<ActivityPage api={api} />)
+    const rowA = await screen.findByTestId('activity-row-a')
+    const rowB = await screen.findByTestId('activity-row-b')
+
+    fireEvent.click(rowA) // expand A — its fetch is held open
+    await screen.findByTestId('activity-detail-a')
+    fireEvent.click(rowB) // straight to B, without collapsing A first
+
+    const panelB = await screen.findByTestId('activity-detail-b')
+    await within(panelB).findByText('b-tool')
+    expect(screen.queryByTestId('activity-detail-a')).toBeNull()
+
+    // A's fetch finally resolves after the switch — it must not resurrect
+    // A's panel or otherwise disturb what B is now showing.
+    aFetch.resolve(
+      detail({
+        spans: [
+          {
+            kind: 'tool',
+            name: 'stale-a-tool',
+            started_at: new Date().toISOString(),
+            duration_ms: 1,
+            meta: {},
+          },
+        ],
+      }),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(screen.queryByTestId('activity-detail-a')).toBeNull()
+    expect(screen.queryByText('stale-a-tool')).toBeNull()
+    expect(screen.getByTestId('activity-detail-b')).toBeDefined()
   })
 })
