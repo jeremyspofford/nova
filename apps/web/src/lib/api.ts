@@ -152,6 +152,22 @@ export interface Suggestion {
 
 export const getSuggestion = () => apiGet<Suggestion>('/api/v1/models/suggest')
 
+/** One entry of the gateway's OpenAI-compat GET /v1/models list. */
+export interface InstalledModel {
+  id: string
+}
+
+/**
+ * The models actually installed on the active backend (core's passthrough
+ * to the gateway's GET /v1/models — ollama's tags, or a remote/cloud
+ * endpoint's own list). Settings -> Models uses this to mark which curated
+ * slugs are already usable versus still needing a pull.
+ */
+export async function getInstalledModels(): Promise<string[]> {
+  const body = await apiGet<{ data: InstalledModel[] }>('/api/v1/models')
+  return body.data.map(m => m.id)
+}
+
 export interface BackendConfig {
   kind: EngineKind
   url: string | null

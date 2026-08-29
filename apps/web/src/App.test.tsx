@@ -37,6 +37,9 @@ function gateOpener() {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // A test that starts on a non-default route (the re-run-setup test below)
+  // must not leave the jsdom URL there for whichever test renders <App/> next.
+  window.history.pushState({}, '', '/')
 })
 
 describe('App gate', () => {
@@ -195,6 +198,65 @@ describe('App gate', () => {
     await waitFor(() => expect(screen.getByText('What this machine has')).toBeDefined())
     expect(screen.queryByText('Welcome to Nova')).toBeNull()
     expect(screen.getByText('Account')).toBeDefined()
+  })
+
+  // S2e T1: proves the whole "Re-run setup" loop end to end, not just that
+  // ModelsSection calls a callback — the real gate (settings re-probe ->
+  // outcome flip -> onboarding Routes' own catch-all) has to actually land
+  // on the wizard, at Hardware rather than CreateAccount since the account
+  // already exists.
+  it('re-run setup in Settings clears onboarding.completed and returns to the wizard at Hardware', async () => {
+    let onboardingCompleted = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const json = (body: unknown, status = 200) =>
+        ({ ok: status < 400, status, text: async () => JSON.stringify(body), json: async () => body }) as Response
+
+      if (url.startsWith('/api/v1/auth/state')) return json({ has_users: true })
+      if (url.startsWith('/api/v1/auth/me')) {
+        return json({ person: { id: 'p1', name: 'Ada', role: 'owner' } })
+      }
+      if (url === '/api/v1/settings' && method === 'PUT') {
+        const body = JSON.parse(String(init?.body)) as { key: string; value: unknown }
+        if (body.key === 'onboarding.completed') onboardingCompleted = body.value as boolean
+        return json({ key: body.key, value: body.value })
+      }
+      if (url === '/api/v1/settings') {
+        return json({
+          settings: [
+            { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: onboardingCompleted },
+            { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+          ],
+        })
+      }
+      if (url.startsWith('/api/v1/models/suggest')) {
+        return json({ tier: '8-12B', engine_suggestion: 'ollama', models: [], rationale: 'x' })
+      }
+      if (url.startsWith('/api/v1/models')) {
+        return json({ object: 'list', data: [{ id: 'qwen3:8b', object: 'model', created: 0, owned_by: 'ollama' }] })
+      }
+      if (url.startsWith('/api/v1/inference/backend')) {
+        return json({ kind: 'ollama', url: null, provider: null, model: null, api_key: null })
+      }
+      if (url.startsWith('/api/v1/system/hardware')) {
+        return json({ gpus: [], ram_mb: 32768, disk_free_gb: 900 })
+      }
+      return json({ detail: 'not mocked' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    window.history.pushState({}, '', '/settings')
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByText('Re-run setup')).toBeDefined())
+    fireEvent.click(screen.getByText('Re-run setup'))
+
+    await waitFor(() => expect(screen.getByText('What this machine has')).toBeDefined())
+    expect(onboardingCompleted).toBe(false)
+    // The account already exists, so the run resumes at Hardware — never
+    // CreateAccount, which nothing after Welcome can reach back to.
+    expect(screen.queryByText('Create your owner account')).toBeNull()
   })
 
   it('states a core it cannot reach instead of guessing a route', async () => {

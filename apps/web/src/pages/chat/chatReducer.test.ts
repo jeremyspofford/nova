@@ -65,6 +65,33 @@ describe('chatReducer — a healthy turn', () => {
     expect(state.conversationId).toBe('c7')
   })
 
+  // The frontend half of the mid-session model-switch property (S2e T1):
+  // core reads chat.model fresh per turn (proven server-side in
+  // services/core/tests/test_chat.py), and this is what makes that visible —
+  // a later meta frame's model REPLACES the earlier one rather than the
+  // badge sticking to whatever the conversation opened with.
+  it('a later turn’s meta frame replaces the model an earlier turn reported', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:8b', turnId: 't1' },
+    })
+    expect(state.model).toBe('qwen3:8b')
+
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    state = chatReducer(state, {
+      type: 'send',
+      userId: 'u2',
+      assistantId: 'a2',
+      text: 'and now?',
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:14b', turnId: 't2' },
+    })
+    expect(state.model).toBe('qwen3:14b')
+  })
+
   it('closes the assistant row on [DONE]', () => {
     let state = started()
     state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'done text' } })
