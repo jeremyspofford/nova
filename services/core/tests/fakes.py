@@ -166,6 +166,10 @@ class FakeGateway:
                 Route("/admin/probe", self._admin, methods=["POST"]),
                 Route("/admin/backend", self._admin, methods=["GET", "PUT"]),
                 Route("/admin/pull", self._pull, methods=["POST"]),
+                # Not under /admin — this is the OpenAI-compat data-plane route
+                # (services/gateway/app/data_plane.py), reused here since the
+                # fake only needs to echo admin_body and record the call.
+                Route("/v1/models", self._admin, methods=["GET"]),
             ]
         )
 

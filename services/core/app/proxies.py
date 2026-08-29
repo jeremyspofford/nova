@@ -116,6 +116,16 @@ async def get_backend(request: Request) -> Response:
     return await _forward(request, "GET", "/admin/backend")
 
 
+@router.get("/models")
+async def list_models(request: Request) -> Response:
+    """The gateway's OpenAI-compat GET /v1/models — not under /admin, since
+    it is the data plane's own route (services/gateway/app/data_plane.py),
+    but the browser still only ever reaches it through core (ruling R8).
+    Settings -> Models uses this to know which curated slugs are already
+    installed."""
+    return await _forward(request, "GET", "/v1/models")
+
+
 @router.put("/inference/backend")
 async def put_backend(request: Request) -> Response:
     return await _forward(request, "PUT", "/admin/backend", timeout=BACKEND_PUT_TIMEOUT)

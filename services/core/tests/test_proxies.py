@@ -17,6 +17,10 @@ ROUTES = [
     ("POST", "/api/v1/models/probe", "/admin/probe", {"model": "qwen3:8b"}),
     ("GET", "/api/v1/inference/backend", "/admin/backend", None),
     ("PUT", "/api/v1/inference/backend", "/admin/backend", {"kind": "ollama"}),
+    # The Settings "Models" section's installed-models list (S2e T1): the
+    # gateway's OpenAI-compat GET /v1/models, not an /admin/* route — the
+    # browser still only ever reaches it through core (ruling R8).
+    ("GET", "/api/v1/models", "/v1/models", None),
 ]
 
 

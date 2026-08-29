@@ -239,6 +239,30 @@ async def test_the_second_turn_reuses_the_active_conversation(owner_client, pool
     assert await pool.fetchval("SELECT count(*) FROM conversations") == 1
 
 
+async def test_switching_the_model_between_turns_is_used_by_the_very_next_one(
+    owner_client, pool, mount_peers
+):
+    """The load-bearing property behind Settings -> Models "switch persists
+    live": chat.model is read fresh at the top of every chat_stream call
+    (app/chat.py), never cached for the life of a conversation or a process,
+    so an operator switching it mid-session is honoured by the very next
+    turn — no restart, no new conversation required."""
+    mount_peers(gateway=FakeGateway(deltas=("ok",)))
+
+    await _set_model(owner_client, "qwen3:8b")
+    first_meta = (await _say(owner_client, "one"))[1][0]["meta"]
+    assert first_meta["model"] == "qwen3:8b"
+
+    await _set_model(owner_client, "qwen3:14b")
+    second_meta = (await _say(owner_client, "two"))[1][0]["meta"]
+    assert second_meta["model"] == "qwen3:14b"
+    # Same conversation both times — this is a live switch, not a new session.
+    assert second_meta["conversation_id"] == first_meta["conversation_id"]
+
+    turns = await pool.fetch("SELECT model FROM turns ORDER BY started_at")
+    assert [t["model"] for t in turns] == ["qwen3:8b", "qwen3:14b"]
+
+
 async def test_someone_elses_conversation_is_a_404(owner_client, pool, mount_peers):
     mount_peers(gateway=FakeGateway(), memory=FakeMemory())
     stranger = await pool.fetchval(
