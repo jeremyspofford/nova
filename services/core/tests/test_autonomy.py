@@ -13,7 +13,10 @@ read by test_policy.py/test_policy_funnel.py's fetch_url-based tests.
 """
 from __future__ import annotations
 
-from app import autonomy, governance
+import asyncio
+import uuid
+
+from app import autonomy, consents, governance
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -53,6 +56,34 @@ async def _row(pool, action_class: str):
 async def _of_kind(pool, kind: str, action_class: str) -> list:
     events = await governance.recent_events(pool, action_class=action_class)
     return [e for e in events if e["kind"] == kind]
+
+
+async def _operator(pool) -> uuid.UUID:
+    """A real people row — raising/deciding a consent binds to one (FK)."""
+    return await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('op', 'owner') RETURNING id"
+    )
+
+
+async def _raise_and_decide(pool, action_class: str, *, approve: bool, operator: uuid.UUID):
+    """Raise a real consent card for `action_class` and decide it — the exact
+    path the operator API drives, so the deny reset is exercised through
+    consents.decide, not a shortcut."""
+    card = await consents.raise_consent(
+        pool,
+        action_class=action_class,
+        args={"url": "https://example.com/x"},
+        summary="s",
+        person_id=operator,
+        agent="chat",
+        conversation_id=None,
+    )
+    return await consents.decide(
+        pool,
+        consent_id=uuid.UUID(card["consent_id"]),
+        approve=approve,
+        decided_by=operator,
+    )
 
 
 # -- graduation_runs setting -------------------------------------------------
@@ -116,6 +147,118 @@ async def test_an_already_auto_class_succeeding_again_does_not_re_promote_or_re_
     assert row["disposition"] == "auto"
     assert row["consecutive_successes"] == 0
     assert await _of_kind(pool, governance.AUTONOMY_PROMOTED, "earn_already_auto") == []
+
+
+# -- concurrency: FOR UPDATE serializes same-class outcomes -------------------
+
+
+async def test_two_concurrent_successes_promote_exactly_once(pool):
+    """Two burned-and-succeeded outcomes for the SAME class, fired concurrently
+    over TWO separate pool connections (asyncio.gather, each record_outcome
+    acquires its own conn), must promote it exactly once. record_outcome's
+    SELECT ... FOR UPDATE takes a row lock, so the two transactions serialize:
+    whichever wins the lock promotes (consent -> auto, counter -> 0); the other
+    then reads the already-auto row and hits the no-op branch — never a second
+    promotion, never a double-counted event. The sequential promotion tests
+    above pass even if the FOR UPDATE is dropped; only real contention pins it,
+    mirroring test_consents.py's concurrent-burn test."""
+    n = await autonomy.graduation_runs(pool)
+    await _seed(pool, "grad_race", consecutive_successes=n - 1)  # one run short of auto
+
+    await asyncio.gather(
+        autonomy.record_outcome(pool, action_class="grad_race", succeeded=True),
+        autonomy.record_outcome(pool, action_class="grad_race", succeeded=True),
+    )
+
+    row = await _row(pool, "grad_race")
+    assert row["disposition"] == "auto"
+    assert row["earned"] is True
+    assert row["consecutive_successes"] == 0
+    promoted = await _of_kind(pool, governance.AUTONOMY_PROMOTED, "grad_race")
+    assert len(promoted) == 1  # exactly one promotion event, not two
+
+
+# -- deny resets the graduation streak (an operator's strongest distrust) ------
+
+
+async def test_a_deny_resets_the_streak_but_never_demotes(pool):
+    """An operator DENY is the strongest distrust signal there is — stronger
+    than a failure (a failure is Nova's fault; a deny is 'no, not this action')
+    — so it zeroes the graduation counter of the still-consent class it denied,
+    in the SAME transaction as the deny + its consent.decided event. It does
+    NOT demote: disposition/earned belong to the failure/revoke path, not a
+    deny. And after the reset a fresh burned-and-succeeded run resumes at 1,
+    nowhere near the threshold the deny wiped — so the class cannot auto-graduate
+    on its very next approval."""
+    n = await autonomy.graduation_runs(pool)
+    await _seed(pool, "deny_reset", consecutive_successes=n - 1)  # one run short of auto
+    operator = await _operator(pool)
+
+    decided = await _raise_and_decide(pool, "deny_reset", approve=False, operator=operator)
+    assert decided["status"] == "denied"
+
+    row = await _row(pool, "deny_reset")
+    assert row["consecutive_successes"] == 0  # streak broken
+    assert row["disposition"] == "consent"  # NOT demoted — a deny only breaks the streak
+    assert row["earned"] is False
+
+    # One later burned-and-succeeded run resumes at 1, not at the threshold.
+    await autonomy.record_outcome(pool, action_class="deny_reset", succeeded=True)
+    row = await _row(pool, "deny_reset")
+    assert row["consecutive_successes"] == 1
+    assert row["disposition"] == "consent"
+
+
+async def test_an_approve_does_not_reset_the_graduation_counter(pool):
+    """Approve is a STEP toward graduation, not a distrust signal — it must
+    leave the counter untouched. Only the burned+succeeded run that follows an
+    approval (via record_outcome) moves it."""
+    await _seed(pool, "approve_no_reset", consecutive_successes=2)
+    operator = await _operator(pool)
+
+    decided = await _raise_and_decide(pool, "approve_no_reset", approve=True, operator=operator)
+    assert decided["status"] == "approved"
+
+    row = await _row(pool, "approve_no_reset")
+    assert row["consecutive_successes"] == 2  # untouched by the approve
+
+
+async def test_a_double_decide_deny_writes_no_second_reset_or_event(pool):
+    """A card decided once returns None on a second decide (consents.decide's
+    no-op), so the deny-reset must not fire again: no second counter write, no
+    second consent.decided event."""
+    await _seed(pool, "double_decide", consecutive_successes=3)
+    operator = await _operator(pool)
+    card = await consents.raise_consent(
+        pool,
+        action_class="double_decide",
+        args={"url": "https://example.com/x"},
+        summary="s",
+        person_id=operator,
+        agent="chat",
+        conversation_id=None,
+    )
+    cid = uuid.UUID(card["consent_id"])
+
+    # First deny: resets the counter to 0 and records one consent.decided event.
+    assert (
+        await consents.decide(pool, consent_id=cid, approve=False, decided_by=operator)
+        is not None
+    )
+    # Bump the counter so a spurious second reset would be plainly visible.
+    await pool.execute(
+        "UPDATE action_classes SET consecutive_successes = 4 WHERE action_class = $1",
+        "double_decide",
+    )
+    # Second deny of the same card is a no-op (decide returns None) — no reset.
+    assert (
+        await consents.decide(pool, consent_id=cid, approve=False, decided_by=operator) is None
+    )
+
+    row = await _row(pool, "double_decide")
+    assert row["consecutive_successes"] == 4  # the no-op did NOT re-zero it
+    decided_events = await _of_kind(pool, governance.CONSENT_DECIDED, "double_decide")
+    assert len(decided_events) == 1  # only the first decide recorded an event
 
 
 # -- failure: reset, and demote only when earned -----------------------------

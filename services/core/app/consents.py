@@ -29,7 +29,7 @@ from typing import Any
 
 import asyncpg
 
-from app import governance
+from app import autonomy, governance
 
 # How long an approval stays burnable, from when the card was raised. Generous
 # because the operator decides on their own time and the model re-attempts in a
@@ -213,6 +213,15 @@ async def decide(
             subject_ref=consent_id,
             meta={"decision": status},
         )
+        if not approve:
+            # A deny breaks this class's graduation streak, in THIS transaction
+            # so the deny, its event and the reset commit or roll back together.
+            # Only denied — an approve is a step toward graduation, not a
+            # distrust signal, so it must not reset. This zeroes the counter
+            # only; it never demotes (disposition/earned are the failure/revoke
+            # path's business). A double-decide returned None above, so this is
+            # never reached for a no-op decision — no second reset.
+            await autonomy.reset_streak_on_deny(conn, row["action_class"])
         return card_spec(row)
 
 

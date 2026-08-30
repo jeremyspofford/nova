@@ -12,7 +12,7 @@ Who calls this, and when:
     consent-tier ALLOW that just burned a consent (a candidate for
     promotion), or an already-earned-auto class (a candidate for demotion on
     failure). A plain seeded-auto call (get_time, memory_save, ...) is never
-    tracked — see policy.py's `_disposition`/`Decision.track_outcome`.
+    tracked — see policy.py's `_class_row`/`Decision.track_outcome`.
   * `revoke` — the operator, via autonomy_api.py's POST .../revoke, from
     Settings -> Autonomy. Only ever demotes a class this module itself
     promoted (`earned=true`); revoking a seeded-auto class is refused (the
@@ -108,6 +108,28 @@ async def record_outcome(pool: asyncpg.Pool, *, action_class: str, succeeded: bo
                 action_class,
                 new_count,
             )
+
+
+async def reset_streak_on_deny(conn: asyncpg.Connection, action_class: str) -> None:
+    """An operator DENY breaks a consent-tier class's graduation streak. It is
+    the strongest distrust signal there is — stronger than a failure (a failure
+    is Nova's fault; a deny is the operator saying "no, not this action") — so
+    the class's `consecutive_successes` goes back to 0.
+
+    Runs on the CONNECTION the caller passes (consents.decide's own
+    transaction, never a pool), so the counter reset and the deny + its
+    governance event commit or roll back as one — never a denied card with a
+    stale counter. It ONLY zeroes the counter: it must NEVER touch disposition
+    or earned. A deny breaks the streak of a still-consent class; it does not
+    demote (that is the failure/revoke path). Zeroing a class already at 0, or —
+    defensively — one somehow already `auto` (an auto class raises no card, so
+    this should not happen), is harmless: disposition and earned stay put.
+    """
+    await conn.execute(
+        "UPDATE action_classes SET consecutive_successes = 0, updated_at = now() "
+        "WHERE action_class = $1",
+        action_class,
+    )
 
 
 async def revoke(pool: asyncpg.Pool, *, action_class: str, actor: str | None) -> bool:

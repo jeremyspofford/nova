@@ -108,7 +108,10 @@ async def read_values(pool: asyncpg.Pool) -> dict[str, Any]:
     return {d.key: stored.get(d.key, d.default) for d in SETTING_DEFS}
 
 
-async def read_value(pool: asyncpg.Pool, key: str) -> Any:
+async def read_value(pool: asyncpg.Pool | asyncpg.Connection, key: str) -> Any:
+    # Accepts a pool OR a live transaction connection: autonomy.record_outcome
+    # reads the graduation threshold on its own transaction's conn so the read
+    # sees the same snapshot as the row it just locked. Both expose .fetchrow.
     definition = DEFS_BY_KEY[key]
     row = await pool.fetchrow("SELECT value FROM settings WHERE key = $1", key)
     return definition.default if row is None else row["value"]
