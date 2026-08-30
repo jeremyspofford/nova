@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import conversations, db, guards, identity, peers, settings_store, tools, traces
+from app import consents, conversations, db, guards, identity, peers, settings_store, tools, traces
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -474,15 +474,51 @@ async def _persist_assistant(pool: asyncpg.Pool, conversation_id: uuid.UUID, tex
     )
 
 
+async def record_consent_resolution(
+    pool: asyncpg.Pool,
+    conversation_id: uuid.UUID | None,
+    summary: str,
+    decision: str,
+) -> None:
+    """Put a DECIDED consent back into its conversation as an assistant turn.
+
+    Called by the decide API (consents_api.py) so the message-format concern
+    lives in the chat layer and consents.py stays a pure policy primitive. Two
+    jobs, both from the live walk's third defect: (a) the operator sees the deny
+    in chat, and (b) — the load-bearing half — the resolution enters history, so
+    the model's NEXT turn no longer reads a stale "awaiting your approval" line
+    and re-narrates a pending state that no longer exists.
+
+    DENY only: an APPROVE is already covered by the continuation message the
+    client posts as a real turn (consentCard.ts continuationMessage), so posting
+    here too would double up. A null conversation_id (a card raised outside any
+    conversation) has nowhere to land, so this is a no-op rather than a crash.
+    """
+    if conversation_id is None or decision != "denied":
+        return
+    await _persist_assistant(
+        pool, conversation_id, f"The request to {summary} was denied — I won't do that."
+    )
+
+
 async def _run_tool(
     turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall
-) -> tuple[str, bool]:
+) -> tuple[str, bool, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
     dispatch() decides ok; nothing here reads the result text to work out
     whether it worked, so the span and the activity frame say what actually
     happened rather than what the prose looked like.
+
+    The third return value is `awaiting`: this call raised an approval card
+    (REQUIRE_CONSENT). It is detected MECHANICALLY — the consent_sink GREW during
+    dispatch — never by sniffing the result string (line 482's contract). An
+    awaiting call is ok=False because nothing ran, but it is NOT a failure: the
+    span records `consent_pending` and deliberately leaves `error` UNSET, so the
+    Activity page renders it as pending, not as a red error (the funnel's own
+    S3-T1 contract: REQUIRE_CONSENT → ok=False but not an Error).
     """
+    sink = ctx.consent_sink
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         # Pre-set, and overwritten the moment dispatch answers. A turn the
@@ -491,12 +527,18 @@ async def _run_tool(
         # success.
         span.meta["ok"] = False
         span.meta["result_head"] = "(the turn ended before this call returned)"
+        before = len(sink) if sink is not None else 0
         result, ok = await tools.dispatch(call.name, call.arguments, ctx)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
-        if not ok:
+        awaiting = sink is not None and len(sink) > before
+        if awaiting:
+            # A card is waiting on the operator — not an error. ok stays False
+            # (the executor never ran) but error is left unset on purpose.
+            span.meta["consent_pending"] = True
+        elif not ok:
             span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
-    return result, ok
+    return result, ok, awaiting
 
 
 async def _run_turn(
@@ -661,8 +703,12 @@ async def _run_turn(
             # problem worth having yet.
             for call in calls:
                 emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
-                result, ok = await _run_tool(turn, tool_ctx, call)
-                emit(_frame({"activity": {"tool": call.name, "status": "ok" if ok else "error"}}))
+                result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
+                # A card-raising call is "awaiting", not "error": ok is False
+                # (nothing ran) but the operator's decision is pending, so the
+                # live tile must match the span rather than flashing a failure.
+                status = "awaiting" if awaiting else ("ok" if ok else "error")
+                emit(_frame({"activity": {"tool": call.name, "status": status}}))
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": result}
                 )
@@ -737,6 +783,40 @@ async def _run_turn(
                 span.meta["backing_span"] = False
             text = f"{text}\n\n{correction.text}"
             emit(_frame({"correction": correction.text}))
+
+        # The pending-approval guard: a reply cannot claim an action is awaiting
+        # the operator's approval when nothing is. The fact is MECHANICAL — a
+        # card raised THIS turn (the sink is non-empty), or one still pending in
+        # this conversation. A lookup that RAISES fails toward has_pending=True,
+        # so a database blip never turns an honest awaiting reply into a false
+        # correction (that would make the guard the liar). Same fail-OPEN as
+        # narration_check, and its correction is appended the same way — each
+        # distinct correction once, never a double-stacked block.
+        this_turn_raised_a_card = bool(tool_ctx.consent_sink)
+        if this_turn_raised_a_card:
+            has_pending_consent = True
+        else:
+            try:
+                has_pending_consent = bool(
+                    await consents.pending_for_conversation(pool, conversation_id)
+                )
+            except Exception:
+                logger.exception(
+                    "pending-consent lookup failed; treating the turn as having "
+                    "a pending card so an honest awaiting reply is not falsely "
+                    "corrected"
+                )
+                has_pending_consent = True
+        try:
+            consent_correction = guards.consent_claim_check(text, has_pending_consent)
+        except Exception:
+            logger.exception("consent-claim guard raised; shipping the reply uncorrected")
+            consent_correction = None
+        if consent_correction is not None:
+            with turn.span("guard", "consent_claim") as span:
+                span.meta["has_pending_consent"] = has_pending_consent
+            text = f"{text}\n\n{consent_correction.text}"
+            emit(_frame({"correction": consent_correction.text}))
 
         await _persist_assistant(pool, conversation_id, text)
         _queue_ingest(app, turn, person, conversation_id, {"user": message, "assistant": text})

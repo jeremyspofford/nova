@@ -23,7 +23,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import consents, db, identity
+from app import chat, consents, db, identity
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/consents", tags=["consents"])
@@ -70,5 +70,19 @@ async def decide_consent(
         raise HTTPException(
             status_code=404,
             detail=f"no pending consent {consent_id} to decide — it may already be decided",
+        )
+    if body.decision == "deny":
+        # A deny leaves history still showing "awaiting your approval…", which
+        # the model then re-narrates as a pending state that no longer exists
+        # (the live walk's third defect). Recording the resolution puts the
+        # decision in chat AND in the model's next-turn context. Deny only —
+        # approve is covered by the client's continuation turn (record_consent_
+        # resolution no-ops on anything but a deny / a null conversation).
+        conversation_id = card["conversation_id"]
+        await chat.record_consent_resolution(
+            pool,
+            uuid.UUID(conversation_id) if conversation_id else None,
+            card["summary"],
+            card["status"],
         )
     return {"consent": card}

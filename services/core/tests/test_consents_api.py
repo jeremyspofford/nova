@@ -171,3 +171,68 @@ async def test_an_invalid_decision_value_is_a_422(owner_client, pool):
         f"/api/v1/consents/{card['consent_id']}/decide", json={"decision": "maybe"}
     )
     assert resp.status_code == 422
+
+
+# -- Fix C: a decided consent is made visible in its conversation -------
+
+
+async def _messages(pool, conversation_id: uuid.UUID) -> list:
+    return await pool.fetch(
+        "SELECT role, content FROM messages WHERE conversation_id = $1 ORDER BY created_at",
+        conversation_id,
+    )
+
+
+async def test_a_deny_records_exactly_one_resolution_message_in_the_conversation(
+    owner_client, pool
+):
+    """After a DENY, history still showed 'awaiting your approval…' and the
+    model re-narrated it. The resolution message puts the deny in chat AND in
+    the model's next-turn context so it stops re-narrating a stale pending
+    state."""
+    resp = await owner_client.get("/api/v1/auth/me")
+    person = Person(id=uuid.UUID(resp.json()["person"]["id"]), name="jeremy", role="owner")
+    conv = await _conversation(pool, person)
+    card = await _raise(pool, person, conversation_id=conv)
+
+    resp = await owner_client.post(
+        f"/api/v1/consents/{card['consent_id']}/decide", json={"decision": "deny"}
+    )
+    assert resp.status_code == 200
+
+    msgs = await _messages(pool, conv)
+    assert len(msgs) == 1
+    assert msgs[0]["role"] == "assistant"
+    assert "denied" in msgs[0]["content"]
+    assert card["summary"] in msgs[0]["content"]
+
+
+async def test_an_approve_does_not_post_a_resolution_message(owner_client, pool):
+    """APPROVE is covered by the client's continuation turn (ruling S3-R4), so
+    the API must not double-post here."""
+    resp = await owner_client.get("/api/v1/auth/me")
+    person = Person(id=uuid.UUID(resp.json()["person"]["id"]), name="jeremy", role="owner")
+    conv = await _conversation(pool, person)
+    card = await _raise(pool, person, conversation_id=conv)
+
+    resp = await owner_client.post(
+        f"/api/v1/consents/{card['consent_id']}/decide", json={"decision": "approve"}
+    )
+    assert resp.status_code == 200
+    assert await _messages(pool, conv) == []
+
+
+async def test_a_deny_on_a_null_conversation_card_does_not_crash(owner_client, pool):
+    """A card raised outside any conversation has nowhere to land the
+    resolution — the deny still succeeds, it just posts nothing."""
+    resp = await owner_client.get("/api/v1/auth/me")
+    person = Person(id=uuid.UUID(resp.json()["person"]["id"]), name="jeremy", role="owner")
+    card = await _raise(pool, person, conversation_id=None)
+
+    resp = await owner_client.post(
+        f"/api/v1/consents/{card['consent_id']}/decide", json={"decision": "deny"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["consent"]["status"] == "denied"
+    # Nothing was inserted anywhere — no crash, no orphan message.
+    assert await pool.fetchval("SELECT count(*) FROM messages") == 0

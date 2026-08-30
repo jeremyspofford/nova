@@ -15,7 +15,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
-from app import consents, tools
+from app import consents, guards, tools
 from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
@@ -227,3 +227,118 @@ async def test_approve_then_reattempt_runs_it_and_burns_the_consent(
     sent3 = await _say(owner_client, "and once more")
     assert spy.calls == [{"url": URL}]  # still just the one run
     assert len(consent_frames(sent3)) == 1
+
+
+def _activities(sent: list) -> list[tuple[str, str]]:
+    return [
+        (f["activity"]["tool"], f["activity"]["status"])
+        for f in sent
+        if isinstance(f, dict) and "activity" in f
+    ]
+
+
+def _corrections(sent: list) -> list[str]:
+    return [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
+
+
+# -- Fix A: a card-raising call is "awaiting", never an error -------------
+
+
+async def test_a_raised_card_is_awaiting_not_an_error_in_span_and_activity(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """A REQUIRE_CONSENT tool result is NOT a failure. The tool span records
+    consent_pending and leaves `error` UNSET (so Activity renders it amber, not
+    red), and the live activity frame's status is 'awaiting'. And because a card
+    really is pending this turn, the model's honest 'Awaiting your approval'
+    reply is NOT corrected by the pending-approval guard (the toggle)."""
+    _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (fetch_call("c1", URL),),
+            (text("Awaiting your approval."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "check the pricing page")
+
+    # The live activity frame for the card-raising call is 'awaiting'.
+    assert _activities(sent) == [("fetch_url", "start"), ("fetch_url", "awaiting")]
+
+    # The tool span says pending, not error.
+    row = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE kind = 'tool' AND name = 'fetch_url'"
+    )
+    meta = row["meta"]
+    assert meta["ok"] is False
+    assert meta["consent_pending"] is True
+    assert "error" not in meta
+
+    # A card really is pending this turn, so the honest awaiting reply stands.
+    assert _corrections(sent) == []
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+# -- Fix B: a pending-approval claim needs a real pending consent ---------
+
+
+async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
+    owner_client, pool, mount_peers
+):
+    """The walk's core defect: the model claims a fetch is awaiting approval but
+    made no tool call and nothing is pending. The guard contradicts it in the
+    persisted reply and on its own frame, and records a guard span."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                text(
+                    "That fetch is awaiting your approval — I can't complete it "
+                    "without you OK'ing it."
+                ),
+            ),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "what's new on bigblueview.com")
+
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored.endswith(guards.CONSENT_CLAIM_CORRECTION)
+    guard = await pool.fetchrow("SELECT name, meta FROM turn_spans WHERE kind = 'guard'")
+    assert guard["name"] == "consent_claim"
+    assert guard["meta"]["has_pending_consent"] is False
+    # No card was invented — the whole point.
+    assert await consents.pending_all(pool) == []
+
+
+async def test_an_awaiting_reply_is_not_corrected_when_a_card_is_pending_in_the_conversation(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The toggle via the DB path: a card raised in an EARLIER turn is still
+    pending in this conversation, so restating the pending state this turn is
+    TRUE and must not be corrected — even though this turn raised no card."""
+    _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (fetch_call("c1", URL),),
+            (text("Awaiting your approval."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "check the pricing page")
+    conv_id = first[0]["meta"]["conversation_id"]
+    assert consent_frames(first)  # a card really is pending now
+
+    # Same conversation, no new tool call — just a reply restating the state.
+    gateway2 = ScriptedGateway(rounds=((text("It's still pending your approval."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "any update?", "conversation_id": conv_id},
+    )
+    sent2 = frames(resp.text)
+
+    assert _corrections(sent2) == []
+    assert await pool.fetchval("SELECT status FROM turns WHERE id <> $1", first[0]["meta"]["turn_id"]) == "ok"

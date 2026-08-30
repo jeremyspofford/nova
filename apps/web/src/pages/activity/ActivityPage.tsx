@@ -324,8 +324,14 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
   }
 
   if (span.kind === 'tool') {
+    // A REQUIRE_CONSENT call is ok=false (nothing ran) but it is NOT a failure:
+    // chat.py marks its span consent_pending and leaves `error` unset. So it
+    // gets its own amber "Awaiting approval" state, and `failed` excludes it so
+    // the red error styling (badge + result border) never applies to a card
+    // that is simply waiting on the operator.
+    const consentPending = span.meta.consent_pending === true
     const ok = span.meta.ok === true
-    const failed = span.meta.ok === false
+    const failed = span.meta.ok === false && !consentPending
     const args = viewArgs(span.meta.args_redacted)
     const resultHead = typeof span.meta.result_head === 'string' ? span.meta.result_head : null
     // Only the two file-scoped workspace tools carry a path worth opening,
@@ -353,6 +359,11 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
           {ok && (
             <Badge color="success" size="sm">
               ok
+            </Badge>
+          )}
+          {consentPending && (
+            <Badge color="warning" size="sm">
+              Awaiting approval
             </Badge>
           )}
           {failed && (
