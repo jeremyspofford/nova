@@ -247,6 +247,31 @@ async def test_the_policy_kernel_walks_the_entire_dod(owner_client, pool, monkey
     pending = await consents.pending_for_conversation(pool, conv)
     assert len(pending) == 1 and pending[0]["consent_id"] != card2["consent_id"]
 
+    # (c2) ARGS-BINDING: an approval for args A cannot be spent on args B. -----
+    # v3's D-029 id-only-burn loophole is NOT carried — the burn binds to the
+    # EXACT args_hash. This proves it inside the walk itself (not only in
+    # test_consents.py): approve a card for URL-A, then dispatch URL-B — B must
+    # raise its OWN card and run nothing, and A's approval must stay unspent.
+    # (No successful burn happens here, so the graduation counter is untouched
+    # and step (d)'s _seed_consent_class re-zeroes it regardless.)
+    args_a = {"url": "https://example.com/bound-A"}
+    args_b = {"url": "https://example.com/bound-B"}
+    calls_before = len(spy.calls)
+    _, ok = await tools.dispatch(ACTION, args_a, _ctx(person, conversation_id=conv))
+    assert ok is False  # A raises its own card
+    card_a = next(
+        c for c in await consents.pending_all(pool)
+        if c["action_class"] == ACTION and c["args"] == args_a
+    )
+    await consents.decide(
+        pool, consent_id=uuid.UUID(card_a["consent_id"]), approve=True, decided_by=person.id
+    )
+    # A dispatch for B must NOT burn A's approval — it re-raises its own card.
+    result, ok = await tools.dispatch(ACTION, args_b, _ctx(person, conversation_id=conv))
+    assert ok is False and result.startswith("Awaiting your approval")
+    assert len(spy.calls) == calls_before  # B never ran on A's approval
+    assert (await consents.get(pool, uuid.UUID(card_a["consent_id"])))["used_at"] is None
+
     # (d) N approve+succeed cycles -> PROMOTED to auto; next call needs no card.
     await _graduate(pool, person, spy, tag="promote")
     promoted = [e for e in await _events(pool) if e["kind"] == governance.AUTONOMY_PROMOTED]
