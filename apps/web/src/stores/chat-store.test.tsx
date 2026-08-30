@@ -507,3 +507,117 @@ describe('ChatProvider — decideConsent (S3-T2: approve has an executor)', () =
     expect(updated && updated.kind === 'consent' && updated.card.status).toBe('denied')
   })
 })
+
+/**
+ * S3-T3's folded fix (T2 review Important #2): an approved card whose
+ * continuation never fired — decided from the Approvals page (a different
+ * conversation than whatever this tab has open, or none open at all), or
+ * decided while this store was already mid-turn — needs an explicit "go
+ * ahead" the operator can trigger from anywhere. `resumeApprovedCard` is
+ * that trigger: it makes sure the store's own conversation matches the
+ * card's (fetching it via the injected `chatApi` seam when it does not
+ * already), then sends the SAME real continuation turn decideConsent's
+ * auto-fire path sends — never a fake "it happened".
+ */
+describe('ChatProvider — resumeApprovedCard (S3-T3: go ahead on an approved card)', () => {
+  function card(overrides: Partial<ConsentCard> = {}): ConsentCard {
+    return {
+      consent_id: 'c-1',
+      action_class: 'fetch_url',
+      args_hash: 'hash',
+      args: { url: 'https://example.com/pricing' },
+      summary: 'Run fetch_url with url=https://example.com/pricing',
+      status: 'approved',
+      conversation_id: 'conv-1',
+      requested_by: { person_id: 'p-1', agent: 'chat' },
+      created_at: '2026-08-30T00:00:00Z',
+      expires_at: '2026-08-31T00:00:00Z',
+      ...overrides,
+    }
+  }
+
+  it('sends the continuation directly when the right conversation is already open', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const chatApi = {
+      getActiveConversation: vi.fn(),
+      getMessages: vi.fn(),
+    }
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} chatApi={chatApi}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+
+    await act(async () => {
+      await probe.store!.resumeApprovedCard(card())
+    })
+
+    expect(chatApi.getActiveConversation).not.toHaveBeenCalled()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).message).toBe(continuationMessage(card()))
+    expect(probe.store!.state.streaming).toBe(true)
+  })
+
+  it('fetches and loads the active conversation first when a different (or no) one is open', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const chatApi = {
+      getActiveConversation: vi.fn(async () => ({
+        id: 'conv-1',
+        title: null,
+        created_at: '2026-08-30T00:00:00Z',
+        pending_turn: false,
+      })),
+      getMessages: vi.fn(async () => [
+        { id: 'u1', role: 'user', content: 'earlier', created_at: '2026-08-30T00:00:00Z' },
+      ]),
+    }
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} chatApi={chatApi}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    // Nothing loaded yet — simulates arriving from the Approvals page with no
+    // conversation open in this tab at all.
+    expect(probe.store!.state.conversationId).toBeNull()
+
+    await act(async () => {
+      await probe.store!.resumeApprovedCard(card())
+    })
+
+    expect(chatApi.getActiveConversation).toHaveBeenCalledTimes(1)
+    expect(chatApi.getMessages).toHaveBeenCalledWith('conv-1')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).message).toBe(continuationMessage(card()))
+    expect(probe.store!.state.streaming).toBe(true)
+  })
+
+  it('refuses to fire a second continuation while a turn is already streaming', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const chatApi = { getActiveConversation: vi.fn(), getMessages: vi.fn() }
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} chatApi={chatApi}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+    act(() => probe.store!.sendMessage('already talking'))
+    await tick()
+    expect(probe.store!.state.streaming).toBe(true)
+
+    await expect(probe.store!.resumeApprovedCard(card())).rejects.toThrow(/already running/i)
+    // Only the live turn's own fetch ever went out — no second, clobbering one.
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+})

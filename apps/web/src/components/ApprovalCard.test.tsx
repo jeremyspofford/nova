@@ -35,9 +35,9 @@ describe('ApprovalCard', () => {
     expect(onDecide).toHaveBeenCalledWith('deny')
   })
 
-  it('a decided card shows its status instead of the buttons', () => {
+  it('a decided card shows its status instead of the approve/deny buttons', () => {
     render(<ApprovalCard card={card({ status: 'approved' })} onDecide={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /deny/i })).toBeNull()
     expect(screen.getByText(/approved/i)).toBeTruthy()
   })
@@ -45,6 +45,41 @@ describe('ApprovalCard', () => {
   it('a denied card reads as denied, not as a generic failure', () => {
     render(<ApprovalCard card={card({ status: 'denied' })} onDecide={vi.fn()} />)
     expect(screen.getByText(/denied/i)).toBeTruthy()
+  })
+
+  it('an approved card offers Go ahead when a handler is given', () => {
+    const onGoAhead = vi.fn()
+    render(
+      <ApprovalCard card={card({ status: 'approved' })} onDecide={vi.fn()} onGoAhead={onGoAhead} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /go ahead/i }))
+    expect(onGoAhead).toHaveBeenCalled()
+  })
+
+  it('an approved card with no onGoAhead shows no such button (e.g. auto-continued already)', () => {
+    render(<ApprovalCard card={card({ status: 'approved' })} onDecide={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /go ahead/i })).toBeNull()
+  })
+
+  it('a denied card never offers Go ahead, even if a handler is given', () => {
+    render(
+      <ApprovalCard card={card({ status: 'denied' })} onDecide={vi.fn()} onGoAhead={vi.fn()} />,
+    )
+    expect(screen.queryByRole('button', { name: /go ahead/i })).toBeNull()
+  })
+
+  it('disables Go ahead while it is in flight', () => {
+    render(
+      <ApprovalCard
+        card={card({ status: 'approved' })}
+        onDecide={vi.fn()}
+        onGoAhead={vi.fn()}
+        goAheadBusy
+      />,
+    )
+    expect(
+      (screen.getByRole('button', { name: /go ahead/i }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('disables both buttons while a decision is in flight', () => {

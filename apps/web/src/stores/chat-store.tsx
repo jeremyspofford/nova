@@ -7,7 +7,11 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { decideConsent as apiDecideConsent } from '../lib/api'
+import {
+  decideConsent as apiDecideConsent,
+  getActiveConversation as apiGetActiveConversation,
+  getMessages as apiGetMessages,
+} from '../lib/api'
 import type { ConsentCard } from '../lib/consentCard'
 import { continuationMessage } from '../lib/consentCard'
 import { streamChat, type FetchLike } from '../lib/streamChat'
@@ -95,12 +99,35 @@ interface ChatStore {
    * that is already busy with a turn of its own.
    */
   decideConsent: (card: ConsentCard, decision: 'approve' | 'deny') => Promise<ConsentCard>
+  /**
+   * S3-T3's folded fix (T2 review Important #2): decideConsent's own
+   * auto-continue only fires when the card's conversation is ALREADY the one
+   * open here and this store is idle — an approve from the Approvals page,
+   * or one decided while a turn was mid-stream, never gets that nudge, and
+   * without one the operator has no way to make Nova actually run the now-
+   * approved action. This is the explicit "go ahead": it makes sure the
+   * store's conversation matches the card's — fetching and reconciling the
+   * active conversation via `chatApi` first when it does not (or none is
+   * open at all) — then sends the SAME real continuation turn the auto-fire
+   * path sends. Throws (rather than silently doing nothing) when a turn is
+   * already streaming, since queuing behind it would send into whatever
+   * conversation that turn resolves to, not necessarily this card's.
+   */
+  resumeApprovedCard: (card: ConsentCard) => Promise<void>
 }
 
 /** The DI seam for the decide call — same idiom as `fetchImpl`: production
  * uses the real api.decideConsent, tests inject a spy. */
 interface ConsentsApi {
   decideConsent: typeof apiDecideConsent
+}
+
+/** The DI seam resumeApprovedCard uses to find/load the active conversation
+ * when the card's is not already open here — same idiom as ChatPage's own
+ * `api` prop, which reads these same two calls on mount. */
+interface ChatApi {
+  getActiveConversation: typeof apiGetActiveConversation
+  getMessages: typeof apiGetMessages
 }
 
 const ChatContext = createContext<ChatStore | null>(null)
@@ -110,6 +137,7 @@ export function ChatProvider({
   fetchImpl,
   personId = null,
   consentsApi = { decideConsent: apiDecideConsent },
+  chatApi = { getActiveConversation: apiGetActiveConversation, getMessages: apiGetMessages },
 }: {
   children: ReactNode
   /** Test seam only — production always uses the real fetch. */
@@ -118,6 +146,8 @@ export function ChatProvider({
   personId?: string | null
   /** Test seam only — production always uses the real api.decideConsent. */
   consentsApi?: ConsentsApi
+  /** Test seam only — production always uses the real conversation reads. */
+  chatApi?: ChatApi
 }) {
   const [state, dispatch] = useReducer(chatReducer, undefined, emptyChat)
   // Read inside the send loop via a ref, not the `state` closed over at call
@@ -223,9 +253,41 @@ export function ChatProvider({
     [consentsApi, sendMessage],
   )
 
+  const resumeApprovedCard = useCallback(
+    async (card: ConsentCard) => {
+      if (stateRef.current.streaming) {
+        // Sending now would queue behind whatever turn is already running,
+        // into whatever conversation THAT turn resolves to — not
+        // necessarily this card's. Refuse rather than guess.
+        throw new Error(
+          'a turn is already running in this chat — wait for it to finish, then try again',
+        )
+      }
+      if (card.conversation_id !== stateRef.current.conversationId) {
+        // Not (yet) the conversation open here — the Approvals-page case, or
+        // no conversation loaded in this tab at all. Fetch and reconcile the
+        // active one first, the same read ChatPage itself does on mount, so
+        // sendMessage below has real history to hang the continuation off.
+        const conversation = await chatApi.getActiveConversation()
+        const messages = await chatApi.getMessages(conversation.id)
+        loadConversation(conversation.id, messages)
+      }
+      sendMessage(continuationMessage(card))
+    },
+    [chatApi, loadConversation, sendMessage],
+  )
+
   return (
     <ChatContext.Provider
-      value={{ state, sendMessage, loadConversation, resolveServerTurn, setModel, decideConsent }}
+      value={{
+        state,
+        sendMessage,
+        loadConversation,
+        resolveServerTurn,
+        setModel,
+        decideConsent,
+        resumeApprovedCard,
+      }}
     >
       {children}
     </ChatContext.Provider>

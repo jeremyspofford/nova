@@ -14,17 +14,32 @@ import type { ConsentCard } from '../lib/consentCard'
  * The summary is EXACTLY what the kernel computed from the call's own args
  * (policy._summary) — never re-derived here, so the card can never promise
  * more or less than what will actually run if approved.
+ *
+ * `onGoAhead` (S3-T3, folding T2 review Important #2): an approved card does
+ * not run itself (ruling S3-R4) — the model re-attempts it in a later turn,
+ * which happens automatically only when the deciding conversation is the one
+ * currently open and idle. When `onGoAhead` is given, an approved card shows
+ * a "Go ahead" button that triggers that re-attempt explicitly, so approving
+ * from the Approvals page (or while another turn was mid-stream) still has a
+ * path to actually running the action. Omitted entirely — never shown
+ * disabled — when there is nothing for it to do (a caller passes it only
+ * while the card genuinely has not been resumed yet).
  */
 export function ApprovalCard({
   card,
   onDecide,
+  onGoAhead,
   busy,
+  goAheadBusy,
 }: {
   card: ConsentCard
   onDecide: (decision: 'approve' | 'deny') => void
+  onGoAhead?: () => void
   busy?: boolean
+  goAheadBusy?: boolean
 }) {
   const decided = card.status !== 'pending'
+  const canGoAhead = card.status === 'approved' && onGoAhead !== undefined
 
   return (
     <div
@@ -38,9 +53,16 @@ export function ApprovalCard({
       </div>
       <p className="text-compact text-content-secondary break-words">{card.summary}</p>
       {decided ? (
-        <Badge color={card.status === 'approved' ? 'success' : 'neutral'} size="sm">
-          {card.status}
-        </Badge>
+        <div className="flex items-center gap-2 pt-1">
+          <Badge color={card.status === 'approved' ? 'success' : 'neutral'} size="sm">
+            {card.status}
+          </Badge>
+          {canGoAhead && (
+            <Button size="sm" onClick={onGoAhead} disabled={goAheadBusy}>
+              Go ahead
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="flex gap-2 pt-1">
           <Button size="sm" onClick={() => onDecide('approve')} disabled={busy}>
