@@ -441,3 +441,66 @@ export async function* pullModel(
     reader.cancel().catch(() => {})
   }
 }
+
+// ── earned autonomy (services/core/app/autonomy_api.py) ─────────────────
+
+/**
+ * One action class's current disposition and graduation progress, verbatim
+ * off autonomy.state() — `consecutive_successes`/`graduation_runs` are the
+ * REAL stored counter and threshold, never computed or guessed client-side.
+ */
+export interface AutonomyClass {
+  action_class: string
+  risk_tier: string
+  disposition: 'auto' | 'consent' | 'deny'
+  /** True only for a class THIS loop promoted — see services/core/app/
+   * autonomy.py's module docstring. Only an earned class can be revoked. */
+  earned: boolean
+  consecutive_successes: number
+  graduation_runs: number
+  updated_at: string
+}
+
+export async function getAutonomyState(): Promise<AutonomyClass[]> {
+  const body = await apiGet<{ classes: AutonomyClass[] }>('/api/v1/autonomy')
+  return body.classes
+}
+
+/** Demotes an earned-auto class back to consent (a governance event); the
+ * server 404s a class that never graduated rather than a silent no-op. */
+export async function revokeAutonomy(actionClass: string): Promise<AutonomyClass[]> {
+  const body = await apiSend<{ classes: AutonomyClass[] }>(
+    `/api/v1/autonomy/${encodeURIComponent(actionClass)}/revoke`,
+    'POST',
+  )
+  return body.classes
+}
+
+// ── governance audit (services/core/app/governance_api.py) ──────────────
+
+/** One row of the append-only ledger: every decision, verbatim. Never
+ * derived or filtered by this client — see governance.py's own docstring. */
+export interface GovernanceEvent {
+  id: string
+  kind: string
+  action_class: string | null
+  actor: string | null
+  subject_ref: string | null
+  meta: Record<string, unknown>
+  created_at: string
+}
+
+export const GOVERNANCE_PAGE_SIZE = 50
+
+export async function getGovernanceEvents(
+  opts: { limit?: number; before?: string; actionClass?: string } = {},
+): Promise<GovernanceEvent[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? GOVERNANCE_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  if (opts.actionClass) params.set('action_class', opts.actionClass)
+  const body = await apiGet<{ events: GovernanceEvent[] }>(
+    `/api/v1/governance?${params.toString()}`,
+  )
+  return body.events
+}

@@ -7,6 +7,7 @@ import { getSettings, putSetting, settingValue, type SettingDef } from '../../li
 import { AppearanceSection } from './AppearanceSection'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
+import { AutonomySection } from './AutonomySection'
 
 /**
  * The S1 settings shell: two sections and no tab machinery yet. The tabs and
@@ -105,6 +106,7 @@ export function SettingsPage() {
               }}
               onRerunSetup={handleRerunSetup}
             />
+            <AutonomySection />
           </>
         )}
         <AccountSection />

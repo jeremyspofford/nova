@@ -17,6 +17,7 @@ import { SettingsPage } from './pages/settings/SettingsPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
 import { ApprovalsPage } from './pages/approvals/ApprovalsPage'
+import { GovernancePage } from './pages/governance/GovernancePage'
 
 function Centred({ children }: { children: React.ReactNode }) {
   return (
@@ -69,6 +70,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
       <Routes>
         <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
         <Route path="/approvals" element={<ApprovalsPage />} />
+        <Route path="/governance" element={<GovernancePage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/settings" element={<SettingsPage />} />
