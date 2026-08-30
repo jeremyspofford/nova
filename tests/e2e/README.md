@@ -20,6 +20,8 @@ in file order in a single worker.
 | 11 | `11-change-model.spec.ts` | S2e DoD item 1: pull a second curated model from Settings -> Models (T1's own pull control, not the wizard's), switch to it, and the very next chat turn's `chat-model` header names the new model — no restart, no reload. **Authored in S2e-T4, not yet run** — see below. |
 | 12 | `12-fit-render.spec.ts` | S2e DoD item 2: every curated model in Settings -> Models carries a fit verdict and a verified/estimated badge that matches `GET /api/v1/models/suggest` verbatim; a `wont_fit` model renders its warning as a `role=alert`, not just a colored badge. **Authored in S2e-T4, not yet run.** |
 | 13 | `13-re-run-onboarding.spec.ts` | S2e DoD item 3: "Re-run setup" in Settings clears `onboarding.completed` and lands on the wizard's resume shape (Hardware first) — never `CreateAccount`, so the owner account is provably not re-minted — then walks the wizard back to a finished `/chat`. Runs last on purpose (see the file header). **Authored in S2e-T4, not yet run.** |
+| 14 | `14-policy-card-ui.spec.ts` | S3 DoD items 1 & 4, the model-independent halves: a pending consent seeded straight into postgres renders on the Approvals page through the real `GET /api/v1/consents` — the same `ApprovalCard` the inline chat card uses — with the exact args summary and Approve/Deny; deciding needs auth (`401` with no session); Deny leaves the pending list and the stored row reads `denied`, in the governance audit; Approve flips it to `approved` (stored too) and it stays with a "Go ahead", because approving runs nothing at the kernel (ruling S3-R4). The model-driven inline-card-in-chat and approve-then-it-runs flows are the owner's live walk. **Authored in S3-T4, not yet run.** |
+| 15 | `15-autonomy-governance.spec.ts` | S3 DoD items 3 & 4, the model-independent halves: Settings → Autonomy shows each class's real disposition and, for a class still earning it, its real `consecutive_successes / graduation_runs` straight off `GET /api/v1/autonomy`; an earned-auto class offers Revoke, and revoking calls the API and returns the class to consent (a governance event, and the row loses its Revoke); the Governance page lists decisions newest-first off `GET /api/v1/governance`. Full model-driven graduation is the owner's live walk. **Authored in S3-T4, not yet run.** |
 
 ## Scenarios 11-13 (S2e model & settings surface)
 
@@ -199,9 +201,81 @@ NOVA_E2E_MODEL=qwen3:8b tests/e2e/isolated.sh walk
 `qwen3:8b` and `qwen3.8:27b` both passed scenario 7 on the GPU — see
 `measurements/s2-two-model.json` for their load times, VRAM and round counts.
 
-Nothing in the running system currently refuses a reply that claims a file
-operation no span records; the system prompt asks for that behaviour, and a
-prompt is a request.
+Since S2d, the running system DOES refuse a reply that claims a file (or
+fetch, or memory) operation no span records. The post-turn honesty guard
+(`services/core/app/guards.py` `narration_check`) reads the turn's spans
+against the reply text and appends a stated correction when a past-tense
+action claim has no successful span to back it — derived from spans (facts),
+never from the prompt, which is the mechanical-over-prompts rule made real.
+Its precision-first calibration and the exact S2 fabrication corpus (the
+"groceries updated" zero-span claim, the invented invoice) are pinned by
+`services/core/tests/test_guards.py` and wired post-turn by
+`services/core/tests/test_chat_honesty.py`. This is why the S3 DoD's item 5
+below is not a new E2E: the correction is proven mechanically there, and the
+model that fabricates readily (the 1.7B) is exercised in the owner's live
+walk.
+
+## S3 policy DoD walk
+
+Slice 3 (`docs/plans/rebuild/slice-03-policy.md`) is behaviour-changing, so its
+definition of done is walked live before it is the owner's daily driver. Two of
+its five items turn on the SERVING MODEL choosing to emit a `fetch_url` tool
+call — and the small curated model does that unreliably (the scenarios 9/10
+counts above are the same honesty problem). So the DoD is split deliberately
+between what is proven mechanically and what the owner walks:
+
+**Proven mechanically, model-independent (the regression gate):**
+
+* `services/core/tests/test_policy_e2e.py` — one test walks the ENTIRE DoD in
+  order through the real `dispatch → policy.authorize → consents → autonomy →
+  governance` stack with a spy executor, driving `dispatch()`,
+  `consents.decide()` and `autonomy.revoke()` directly: no consent → awaits
+  (executor untouched, `consent.raised`); deny → authorizes nothing, streak 0,
+  still awaits (`consent.decided{denied}`); approve + re-attempt → runs once and
+  burns (`consent.burned`), a second re-attempt does not double-spend and
+  re-raises; N approve+succeed cycles → promoted (`autonomy.promoted`), the next
+  call ALLOWs with no card; revoke → back to consent (`autonomy.revoked`), the
+  card returns; a promoted class that fails → demoted (`autonomy.demoted`); and
+  the governance audit holds a row of every kind, including `policy.denied`.
+  Every assertion reads the ledger and the tables, never a reply string.
+* Scenarios 14 and 15 above — the Approvals / Autonomy / Governance UI renders
+  and DECIDES real backend state (deterministic parts seeded straight into
+  postgres, then driven through the real authenticated API and UI).
+* DoD item 5 (a narration is mechanically corrected) — the honesty guard,
+  pinned by `test_guards.py` + `test_chat_honesty.py` (see the paragraph above).
+
+**The owner's live gate (behaviour-changing, run against the rebuilt stack):**
+
+* DoD item 1/2 — ask Nova to fetch a URL: an approval card appears INLINE in
+  chat (the `{consent}` SSE frame, model-driven), deny it → Activity proves no
+  `fetch_url` span ran and the turn states the refusal; approve a re-run → the
+  model re-attempts, the funnel burns the consent, the span appears and the
+  reply is honest.
+* DoD item 3 — repeat the fetch class to the graduation threshold with real
+  approvals until Settings → Autonomy shows it auto-runs and the next fetch
+  needs no card; revoke there → the card returns on the next fetch.
+* DoD item 5 — induce a narration on the 1.7B model and see the turn corrected.
+
+These are the model-driven flows above: they are the reason the slice is walked,
+not the reason a flaky assertion is written. The controller runs them after
+review; the mechanical suite is what guards against regression between walks.
+
+## Scenarios 14-15 (S3 policy kernel)
+
+Authored against slice-03-policy's shipped surfaces (`ConsentCardRow.tsx`,
+`ApprovalCard.tsx`, `ApprovalsPage.tsx`, `AutonomySection.tsx`,
+`GovernancePage.tsx`) by reading the actual components for real selectors —
+`data-testid="approval-card-<id>"` and `data-testid="governance-row-<id>"`
+where they exist, and the shipped DOM (the `AutonomyRow` carries no testid) for
+the autonomy rows — rather than guessed ones, but **not run**: at authoring time
+there was no rebuilt stack at `:3000` for a browser to exercise (the S3 UI post-
+dates the running containers). They run for the first time, in file order
+alongside 1-13, once the stack is rebuilt from this source. Both seed their
+deterministic state inside the postgres container over the docker socket
+(`lib/policy.ts`), the same place `lib/evidence.ts` READS the ledger, because
+postgres is deliberately not published outside the compose network. Treat a
+first run the way scenario 6 was treated after S2-T4: read what actually happens
+before trusting the selectors blind.
 
 ## Re-running scenario 1
 
