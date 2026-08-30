@@ -7,6 +7,7 @@ approval intact and retryable, never a spent consent with no record.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -209,3 +210,51 @@ async def test_a_denied_card_never_burns(pool):
         pool, consent_id=uuid.UUID(card["consent_id"]), approve=False, decided_by=person.id
     )
     assert await _burn(pool, person) is False
+
+
+# -- concurrent double-spend (the property SKIP LOCKED actually buys) -------
+#
+# Sequential single-use above cannot catch a regression to check-then-update or
+# a dropped SKIP LOCKED — those pass every sequential test and double-spend only
+# under contention. These fire many burns of the SAME approval at once and pin
+# that the atomic claim (_BURN_SQL: one UPDATE ... WHERE ... id = (SELECT ...
+# FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING) spends each approved row exactly
+# once no matter how many callers race for it.
+
+_RACERS = 12
+
+
+async def _used_count(pool) -> int:
+    return await pool.fetchval("SELECT count(*) FROM consents WHERE used_at IS NOT NULL")
+
+
+async def _burned_events(pool) -> int:
+    return await pool.fetchval(
+        "SELECT count(*) FROM governance_events WHERE kind = $1", governance.CONSENT_BURNED
+    )
+
+
+async def test_concurrent_burns_of_one_approval_spend_it_exactly_once(pool):
+    person = await _person(pool)
+    await _approved(pool, person)  # exactly one approved consent
+
+    results = await asyncio.gather(*[_burn(pool, person) for _ in range(_RACERS)])
+
+    assert results.count(True) == 1, results  # exactly one racer wins
+    assert results.count(False) == _RACERS - 1
+    assert await _used_count(pool) == 1  # exactly one row consumed
+    assert await _burned_events(pool) == 1  # exactly one burn recorded
+
+
+async def test_concurrent_burns_win_once_per_approved_row(pool):
+    person = await _person(pool)
+    # Two approvals for the same args/requestor: the first is approved (so no
+    # longer pending), so the second raise_consent does not dedupe into it.
+    await _approved(pool, person)
+    await _approved(pool, person)
+
+    results = await asyncio.gather(*[_burn(pool, person) for _ in range(_RACERS)])
+
+    assert results.count(True) == 2, results  # exactly two rows, exactly two wins
+    assert await _used_count(pool) == 2
+    assert await _burned_events(pool) == 2

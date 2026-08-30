@@ -6,7 +6,7 @@ module under app/ constructs an allow.
 """
 from __future__ import annotations
 
-import re
+import ast
 import uuid
 from pathlib import Path
 
@@ -15,23 +15,100 @@ from app.identity import Person
 from app.tools.base import ToolContext
 from tests.conftest import requires_db
 
-# -- the grep pin: this one is pure, no DB ---------------------------------
+# -- the single-authorizer pin: pure, no DB --------------------------------
+#
+# D-012 says exactly one module may CONSTRUCT an allow Decision (policy.py).
+# A regex over the source is too weak: it misses Decision(outcome=policy.ALLOW),
+# an aliased `from app.policy import ALLOW as GO`, or a name bound to ALLOW and
+# passed as outcome. So this AST-walks every *.py under app/ (recursively,
+# except policy.py itself), and for each Decision(...) call checks whether its
+# outcome argument references an ALLOW by ANY spelling — the bare name ALLOW, a
+# `.ALLOW` attribute (policy.ALLOW), the literal "allow", or a local name/import
+# alias bound to any of those. It is deliberately conservative: if an outcome
+# expression references ALLOW at all it is flagged, because a false positive on
+# a strange construction is cheap and a missed one defeats the tripwire.
+
+
+def _is_allow_leaf(node: ast.AST, tainted: set[str]) -> bool:
+    """A single node that IS an allow value: the "allow" literal, any `.ALLOW`
+    attribute access, or a name known to be bound to an allow value."""
+    if isinstance(node, ast.Constant) and node.value == "allow":
+        return True
+    if isinstance(node, ast.Attribute) and node.attr == "ALLOW":
+        return True
+    return isinstance(node, ast.Name) and node.id in tainted
+
+
+def _references_allow(node: ast.AST, tainted: set[str]) -> bool:
+    """True if any sub-expression of `node` is an allow leaf (covers ternaries,
+    calls wrapping ALLOW, etc.)."""
+    return any(_is_allow_leaf(sub, tainted) for sub in ast.walk(node))
+
+
+def _tainted_names(tree: ast.AST) -> set[str]:
+    """Every local name that carries an allow value in this module: the bare
+    `ALLOW`, any `from app.policy import ALLOW [as X]` binding, and any name a
+    (possibly chained) assignment binds to an allow-valued expression."""
+    tainted = {"ALLOW"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "ALLOW":
+                    tainted.add(alias.asname or alias.name)
+    for _ in range(5):  # a few passes so `a = ALLOW; b = a` propagates
+        before = len(tainted)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and _references_allow(node.value, tainted):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        tainted.add(target.id)
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and node.value is not None
+                and isinstance(node.target, ast.Name)
+                and _references_allow(node.value, tainted)
+            ):
+                tainted.add(node.target.id)
+        if len(tainted) == before:
+            break
+    return tainted
+
+
+def _constructs_allow_decision(tree: ast.AST) -> bool:
+    """True if the module has any `Decision(...)`/`x.Decision(...)` call whose
+    outcome argument (keyword `outcome=` or the first positional) references an
+    allow value."""
+    tainted = _tainted_names(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        name = callee.id if isinstance(callee, ast.Name) else (
+            callee.attr if isinstance(callee, ast.Attribute) else None
+        )
+        if name != "Decision":
+            continue
+        outcome = next((kw.value for kw in node.keywords if kw.arg == "outcome"), None)
+        if outcome is None and node.args:
+            outcome = node.args[0]
+        if outcome is not None and _references_allow(outcome, tainted):
+            return True
+    return False
+
 
 def test_only_policy_constructs_an_allow_decision():
-    """D-012, pinned mechanically: search every module under app/ for the
-    construction of an allow Decision. Exactly one file — policy.py — may."""
+    """D-012, pinned by AST: no module under app/ except policy.py may build an
+    allow Decision, by any spelling of ALLOW."""
     app_dir = Path(policy.__file__).parent
-    allow = re.compile(
-        r"outcome\s*=\s*ALLOW|outcome\s*=\s*['\"]allow['\"]|Decision\(\s*ALLOW\b"
-    )
     offenders = [
         str(py.relative_to(app_dir))
         for py in sorted(app_dir.rglob("*.py"))
-        if py.name != "policy.py" and allow.search(py.read_text(encoding="utf-8"))
+        if py.name != "policy.py"
+        and _constructs_allow_decision(ast.parse(py.read_text(encoding="utf-8")))
     ]
-    assert offenders == [], f"only policy.py may construct an ALLOW, found: {offenders}"
+    assert offenders == [], f"only policy.py may construct an ALLOW Decision, found: {offenders}"
     # Meaningful only if policy.py actually does construct one.
-    assert allow.search(Path(policy.__file__).read_text(encoding="utf-8"))
+    assert _constructs_allow_decision(ast.parse(Path(policy.__file__).read_text(encoding="utf-8")))
 
 
 # -- the decisions ---------------------------------------------------------
