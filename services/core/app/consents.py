@@ -231,3 +231,15 @@ async def pending_for_conversation(
         conversation_id,
     )
     return [card_spec(row) for row in rows]
+
+
+async def pending_all(pool: asyncpg.Pool) -> list[dict]:
+    """Every card still awaiting a decision, across every conversation —
+    T2's Approvals page (services/core/app/consents_api.py's GET route with
+    no conversation_id filter). Same predicate as pending_for_conversation
+    (status='pending', unexpired), just not scoped to one conversation."""
+    rows = await pool.fetch(
+        "SELECT * FROM consents WHERE status = 'pending' AND expires_at > now() "
+        "ORDER BY created_at DESC"
+    )
+    return [card_spec(row) for row in rows]

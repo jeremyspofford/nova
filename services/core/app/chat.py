@@ -4,6 +4,10 @@ Frame contract (each line is `data: <json>`):
     {"meta": {conversation_id, model, turn_id}}   exactly once, first
     {"t": "<delta>"}                              zero or more
     {"activity": {"tool", "status"}}              zero or more, while tools run
+    {"consent": {<card_spec>}}                    zero or more, when the policy
+                                                   kernel raises an approval card
+                                                   this turn (see app/consents.py's
+                                                   card_spec and app/policy.py)
     {"error": "<stated reason>"}                  at most one, on failure
     [DONE]                                        always last
 
@@ -553,9 +557,17 @@ async def _run_turn(
         advertised = tools.advertised_tools()
         # conversation_id rides the context so a consent the policy kernel
         # raises this turn is bound to the conversation it was asked in, and
-        # renders inline where the operator can see it (T2 builds the card UI +
-        # the {consent} frame; a NULL conversation_id would hide the card).
-        tool_ctx = tools.context_for(app, person, conversation_id=conversation_id)
+        # renders inline where the operator can see it (a NULL conversation_id
+        # would hide the card). consent_sink is this turn's OWN list — the
+        # funnel appends a card_spec to it on REQUIRE_CONSENT, and the loop
+        # below diffs it after each tool call to emit the {consent} frame.
+        tool_ctx = tools.context_for(
+            app, person, conversation_id=conversation_id, consent_sink=[]
+        )
+        # How much of tool_ctx.consent_sink has already been streamed — a
+        # count, not a "seen ids" set, because the sink is append-only for
+        # this turn and nothing upstream ever removes an entry from it.
+        consents_emitted = 0
 
         # A round is one gateway call plus the tool calls it asks for. The
         # cap counts gateway calls: reaching it with tools still pending
@@ -654,6 +666,16 @@ async def _run_turn(
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": result}
                 )
+                # One frame per card the policy kernel raised on THIS call —
+                # never more than once each, even if the same card gets
+                # appended again (raise_consent reuses an existing pending
+                # row, but the sink still records every dispatch that hit
+                # it): the slice beyond `consents_emitted` is exactly what is
+                # new since the last time this loop looked.
+                new_cards = tool_ctx.consent_sink[consents_emitted:]
+                for card in new_cards:
+                    emit(_frame({"consent": card}))
+                consents_emitted = len(tool_ctx.consent_sink)
 
         if failure is not None:
             stated = failure
