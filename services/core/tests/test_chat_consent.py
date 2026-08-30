@@ -84,7 +84,11 @@ async def _owner_id(pool) -> uuid.UUID:
 
 def _spy_fetch(monkeypatch) -> Spy:
     spy = Spy()
-    monkeypatch.setitem(tools.REGISTRY, "fetch_url", Tool("fetch_url", "d", FETCH_SCHEMA, spy))
+    # ephemeral=True mirrors the REAL fetch_url (web.py): a live, point-in-time
+    # read whose result the turn loop must not ingest, or recall serves it stale.
+    monkeypatch.setitem(
+        tools.REGISTRY, "fetch_url", Tool("fetch_url", "d", FETCH_SCHEMA, spy, ephemeral=True)
+    )
     return spy
 
 
@@ -408,6 +412,52 @@ async def test_an_ordinary_turn_is_still_ingested(owner_client, pool, mount_peer
 
     await chat.drain_background()
     assert len(memory.ingests) == 1
+
+
+def test_the_real_fetch_url_tool_is_ephemeral():
+    """Pin the flag the ingest skip derives from: a web fetch is a live read.
+    If a refactor drops it, the stale-page regurgitation bug returns silently."""
+    assert any(t.name == "fetch_url" and t.ephemeral for t in web.TOOLS)
+
+
+async def test_a_successful_web_fetch_turn_is_not_ingested_because_it_is_ephemeral(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """A web fetch is a live, point-in-time read whose result goes stale. The
+    turn that actually RUNS fetch_url (the approved re-attempt — ok=True, no new
+    card, so neither the consent nor capability plumbing skips apply) must still
+    NOT be ingested, because fetch_url is ephemeral. Otherwise recall serves the
+    cached page as 'the latest' and the model regurgitates it instead of
+    fetching again — the owner's walk: byte-identical content, same stale
+    timestamp, no fresh card. The skip is DERIVED from the tool's ephemeral flag,
+    not its name."""
+    spy = _spy_fetch(monkeypatch)  # ephemeral fetch_url; returns "Fetched it."
+    gateway = ScriptedGateway(
+        rounds=((fetch_call("c1", URL),), (text("Awaiting your approval."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+    sent = await _say(owner_client, "what's the latest?")
+    card = consent_frames(sent)[0]
+
+    await consents.decide(
+        pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=await _owner_id(pool)
+    )
+
+    # The approved re-attempt runs the fetch (ok=True) with no new card.
+    gateway2 = ScriptedGateway(
+        rounds=((fetch_call("c2", URL),), (text("Here are the latest updates."),))
+    )
+    mount_peers(gateway=gateway2, memory=memory)
+    sent2 = await _say(owner_client, "go ahead now")
+
+    assert spy.calls == [{"url": URL}]  # it actually fetched
+    assert consent_frames(sent2) == []  # no new card — ran under the approval
+    await chat.drain_background()
+    # Neither turn ingested: the first raised a card (plumbing), the second ran
+    # an ephemeral fetch. So a later "what's the latest?" re-fetches, never
+    # recalls a stale snapshot.
+    assert memory.ingests == []
 
 
 async def test_a_fired_narration_guard_keeps_appending_to_preserve_real_content(

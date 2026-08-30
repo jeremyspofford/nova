@@ -249,5 +249,9 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=fetch_url,
+        # A web page is a live read that goes stale: the turn is not ingested
+        # into memory, so "what's the latest?" always re-fetches instead of
+        # recalling a cached snapshot and serving it as current.
+        ephemeral=True,
     ),
 )

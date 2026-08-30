@@ -144,7 +144,11 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "the system shows them an approval card and the tool answers 'Awaiting your "
         "approval'. That means your request is waiting for their OK, not that you are "
         "unable to do it — say you've requested their approval, and never deny having "
-        "the capability."
+        "the capability. "
+        "A web fetch is a LIVE, point-in-time read. For anything time-sensitive — "
+        "'the latest', current news, today's status — call fetch_url again to get "
+        "fresh results; never answer with what an earlier fetch or a recalled note "
+        "said and present it as current."
     )
 
 
@@ -615,6 +619,12 @@ async def _run_turn(
         # count, not a "seen ids" set, because the sink is append-only for
         # this turn and nothing upstream ever removes an entry from it.
         consents_emitted = 0
+        # Did this turn run an EPHEMERAL tool (a live, point-in-time read like a
+        # web fetch)? Its result goes stale, so the turn is not ingested into
+        # long-term memory — otherwise recall would serve the cached snapshot as
+        # "the latest" and the model would re-narrate it instead of fetching
+        # again. Derived from the tool's own `ephemeral` flag, not a name here.
+        read_ephemeral = False
 
         # A round is one gateway call plus the tool calls it asks for. The
         # cap counts gateway calls: reaching it with tools still pending
@@ -709,6 +719,9 @@ async def _run_turn(
             for call in calls:
                 emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
                 result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
+                ran_tool = tools.REGISTRY.get(call.name)
+                if ok and ran_tool is not None and ran_tool.ephemeral:
+                    read_ephemeral = True
                 # A card-raising call is "awaiting", not "error": ok is False
                 # (nothing ran) but the operator's decision is pending, so the
                 # live tile must match the span rather than flashing a failure.
@@ -911,7 +924,13 @@ async def _run_turn(
             or consent_correction is not None
             or capability_correction is not None
         )
-        if not plumbing_turn:
+        # A turn that only READ live external data (a web fetch — an ephemeral
+        # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it
+        # makes recall serve a stale page as "the latest": the model regurgitates
+        # the cached result instead of fetching again (byte-identical, same old
+        # timestamp — the owner's walk caught exactly this). So skip it too; the
+        # next "what's the latest?" re-fetches and raises a fresh card.
+        if not plumbing_turn and not read_ephemeral:
             _queue_ingest(
                 app, turn, person, conversation_id, {"user": message, "assistant": persisted}
             )
