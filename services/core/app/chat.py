@@ -551,7 +551,11 @@ async def _run_turn(
         snippets = await _recall(app, turn, person, message)
         messages = base_messages(model, snippets, history, message)
         advertised = tools.advertised_tools()
-        tool_ctx = tools.context_for(app, person)
+        # conversation_id rides the context so a consent the policy kernel
+        # raises this turn is bound to the conversation it was asked in, and
+        # renders inline where the operator can see it (T2 builds the card UI +
+        # the {consent} frame; a NULL conversation_id would hide the card).
+        tool_ctx = tools.context_for(app, person, conversation_id=conversation_id)
 
         # A round is one gateway call plus the tool calls it asks for. The
         # cap counts gateway calls: reaching it with tools still pending

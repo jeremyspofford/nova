@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 from app.tools import memory_tools, schema, util, web, workspace
 from app.tools.base import ERROR_PREFIX, Tool, ToolContext, ToolFailure
@@ -51,11 +52,27 @@ def tool_names() -> list[str]:
     return sorted(REGISTRY)
 
 
-def context_for(app, person) -> ToolContext:
+def context_for(
+    app,
+    person,
+    *,
+    conversation_id: uuid.UUID | None = None,
+    agent: str = "chat",
+    consent_sink: list[dict] | None = None,
+) -> ToolContext:
     """The context a turn hands its tools. The workspace root is read from
     the environment once, here, so a single read decides the boundary for
-    every filesystem call that turn makes."""
-    return ToolContext(app=app, person=person, workspace_root=workspace.root_from_env())
+    every filesystem call that turn makes. `conversation_id`/`agent` are what
+    the policy kernel binds a raised consent to; `consent_sink`, when given,
+    collects any card the funnel raises this turn for the caller to surface."""
+    return ToolContext(
+        app=app,
+        person=person,
+        workspace_root=workspace.root_from_env(),
+        agent=agent,
+        conversation_id=conversation_id,
+        consent_sink=consent_sink,
+    )
 
 
 def advertised_tools() -> list[dict]:
@@ -129,6 +146,39 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     problem = schema.validate(tool.parameters, parsed)
     if problem is not None:
         return _retryable(problem), False
+
+    # The policy gate (D-012): the executor below is reachable ONLY on an ALLOW
+    # from the one kernel. This wraps dispatch's schema/executor contract rather
+    # than replacing it — validation still runs first, and the (ok mechanical,
+    # no throw) guarantees still hold, including here: an authorizer that itself
+    # fails is a fail-closed stated refusal, never an exception into the stream.
+    from app import policy  # local import keeps the tools package import-cycle-free
+
+    try:
+        decision = await policy.authorize(ctx, name, parsed)
+    except Exception as exc:
+        logger.exception("authorizing %s failed", name)
+        return (
+            _retryable(f"could not authorize {name} — {type(exc).__name__}: {exc}"),
+            False,
+        )
+
+    if decision.outcome == policy.DENY:
+        # A stated refusal the model must relay, not retry: it starts with the
+        # error prefix so the transcript reads it as a refusal.
+        return f"{ERROR_PREFIX}{decision.reason}", False
+    if decision.outcome == policy.REQUIRE_CONSENT:
+        # NOT an error: the action is waiting on the operator, so the model
+        # should tell them, not loop retrying. The card is already persisted;
+        # the sink lets the caller surface it inline.
+        card = decision.card_spec or {}
+        if ctx.consent_sink is not None:
+            ctx.consent_sink.append(card)
+        return f"Awaiting your approval: {card.get('summary', name)}", False
+    if not decision.is_allow:
+        # An outcome this funnel does not know how to act on is refused, never
+        # run — the kernel gained a decision the executor path has not.
+        return _retryable(f"{name} was neither allowed nor refused cleanly"), False
 
     try:
         result = await tool.executor(parsed, ctx)

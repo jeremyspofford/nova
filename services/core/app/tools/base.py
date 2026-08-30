@@ -6,6 +6,7 @@ without importing each other.
 """
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,14 +33,23 @@ class ToolContext:
 
     `app` carries the outbound seams (peer links, and the by-URL transport
     map tests mount local ASGI stand-ins on). `person` scopes the memory
-    tools — a tool never picks its own owner. `workspace_root` is resolved
-    once per turn so a single env read decides the boundary for every
-    filesystem call in that turn.
+    tools — a tool never picks its own owner — and, with `agent`, is the
+    principal the policy kernel binds a consent to. `workspace_root` is
+    resolved once per turn so a single env read decides the boundary for every
+    filesystem call in that turn. `conversation_id` is where a consent card is
+    raised, so it renders inline where it was asked for (a NULL one hides it).
+
+    `consent_sink`, when present, is the return channel for a raised card: the
+    funnel appends each card_spec it raises so the caller (the chat loop / T2's
+    inline card) can surface it without changing dispatch's (text, ok) result.
     """
 
     app: Any
     person: Any
     workspace_root: Path
+    agent: str = "chat"
+    conversation_id: uuid.UUID | None = None
+    consent_sink: list[dict] | None = None
 
 
 @dataclass(frozen=True)
