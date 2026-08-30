@@ -118,6 +118,13 @@ async def _free_and_total_vram_gb(
     because reachability IS part of the answer: an unreachable /api/ps
     means "resident, and therefore free-after-switch, is unknown", which is
     a different fact from "free is the whole card".
+
+    This `total_gb` is deliberately never reduced by the ~2.6GB non-model
+    baseline (Xwayland/WSL2) this host always carries — see fit.py's
+    module docstring, "THE FRAME, STATED ONCE": that baseline already
+    lives on the NEEDED side (curated_models.json's whole-card estimates,
+    and `_footprint_vram_mb`'s nvidia-smi reading, both include it), so
+    subtracting it here too would double-count it.
     """
     total_gb = suggest_mod.largest_single_gpu_vram_gb(hardware)
     if total_gb is None:
@@ -259,17 +266,21 @@ async def pull(request: Request) -> Response:
 async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:
     """(total VRAM in use right now, in MiB, reason-if-unavailable).
 
-    Ruling S2f-R3 (the 17-vs-22 bug): a model's real footprint is weights +
-    KV cache + compute buffers, which only shows up as a whole-card delta —
-    ollama's own /api/ps size_vram is weights only (see fit.py's module
-    docstring). This is the raw ingredient the probe brackets before/after
-    a load; it is not meaningful on its own as a per-model number, only as
-    one half of a delta the caller computes.
+    Ruling S2f-R3 (the 17-vs-22 bug): a model's real footprint is the
+    WHOLE-CARD figure nvidia-smi reports — baseline non-model usage
+    (Xwayland/WSL2, ~2.6GB on this host) + weights + KV cache + compute
+    buffers — not ollama's own /api/ps size_vram, which is weights only
+    (see fit.py's module docstring for the full "whole-card frame"
+    reasoning). `_footprint_vram_mb` below calls this exactly ONCE, right
+    after a load succeeds, and records the reading AS-IS: never a
+    before/after delta (a first version of this fix did that and review
+    caught it as eviction-contaminated — see `_footprint_vram_mb`'s
+    docstring).
 
     Summed across every line nvidia-smi prints: this host has exactly one
     GPU, so summing and "the one GPU's figure" are the same number today. A
     multi-GPU host where the probed model lands on a DIFFERENT card than
-    whatever else is running would make this delta noisy — the same
+    whatever else is running would make this reading noisy — the same
     single-GPU assumption `suggest.largest_single_gpu_vram_gb` already
     makes for `total_gb`, not solved here either.
 
@@ -307,26 +318,44 @@ async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:
     return total_mb, None
 
 
-async def _footprint_vram_mb(before_mb: float | None) -> int | None:
-    """The just-loaded model's real total footprint: an nvidia-smi snapshot
-    taken right after the load, minus one taken right before it (`before_mb`
-    — None if that first snapshot could not be taken at all).
+async def _footprint_vram_mb() -> int | None:
+    """The just-loaded model's real total footprint, in the WHOLE-CARD
+    frame: a single nvidia-smi used-MiB reading taken immediately AFTER
+    the completion request that loads the model answers. Recorded AS-IS —
+    never a before/after delta.
 
-    A non-positive delta is reported as unreliable (None), never stored:
-    a model that just loaded must use SOME positive VRAM, so zero or
-    negative means the bracket was contaminated — most likely the model was
-    ALREADY resident before the 'before' snapshot (a warm, not cold, probe:
-    see fit.py's module docstring), so its footprint was already counted on
-    both sides and netted out. Storing that number anyway would poison a
-    'verified' badge with a figure that measured nothing.
+    A before/after delta was this fix's first (wrong) shape, and review
+    caught two compounding bugs in it: (1) eviction-contaminated — Fix B's
+    own premise is that loading a different local model EVICTS whatever
+    ollama had resident, so probing model B while model A was resident
+    would have recorded (baseline+B) - (baseline+A) = B-A, wildly
+    understating B whenever A != B (chatting on the 8B, then probing the
+    27B, would have stored ~10GB as "verified" and read the 27B
+    `comfortable` — the exact bug this whole slice exists to kill,
+    reintroduced one layer down); and (2) even probing the SAME model
+    twice, a delta EXCLUDES the ~2.6GB non-model baseline (Xwayland/WSL2)
+    that the curated whole-card figures INCLUDE, so probed and curated
+    needed_gb lived in two different frames that could never agree.
+
+    A single AFTER reading fixes both: it is eviction-IMMUNE (whatever the
+    completion just answered from IS what is resident at that instant,
+    regardless of what came before — ollama already evicted anything
+    else), and it is the same whole-card quantity — baseline included —
+    that curated_models.json states and that nvidia-smi shows the
+    operator. See fit.py's module docstring for why free_gb/total_gb must
+    therefore stay the FULL card, never total-minus-baseline: the baseline
+    already lives on the needed side of every comparison this module
+    makes.
+
+    A non-positive reading is reported as unreliable (None), never stored:
+    a card with anything resident always uses SOME VRAM greater than zero,
+    so zero or negative means nvidia-smi itself is unreliable right now,
+    not a real measurement.
     """
-    if before_mb is None:
-        return None
     after_mb, _reason = await _nvidia_smi_used_mb()
-    if after_mb is None:
+    if after_mb is None or after_mb <= 0:
         return None
-    delta = after_mb - before_mb
-    return int(delta) if delta > 0 else None
+    return int(after_mb)
 
 
 @router.post("/probe")
@@ -352,12 +381,6 @@ async def probe(request: Request) -> dict:
         ok = False
         error = f"no base URL configured for backend kind={kind}"
     else:
-        # The 'before' snapshot has to happen BEFORE the request that loads
-        # the model — only meaningful for a local ollama model, since a
-        # remote/cloud backend consumes no VRAM on this host at all.
-        before_mb: float | None = None
-        if kind == "ollama":
-            before_mb, _reason = await _nvidia_smi_used_mb()
         client = backends.http_client(
             request.app, PROBE_TIMEOUT, base_url=base_url, headers=backends.auth_headers(config)
         )
@@ -374,8 +397,13 @@ async def probe(request: Request) -> dict:
                 )
                 resp.raise_for_status()
                 latency_ms = int((time.monotonic() - started) * 1000)
+                # Only meaningful for a local ollama model — a remote/cloud
+                # backend consumes no VRAM on this host at all. Read AFTER
+                # the request answers (never before it too — see
+                # `_footprint_vram_mb`'s docstring for why a before/after
+                # delta was wrong).
                 if kind == "ollama":
-                    vram_mb = await _footprint_vram_mb(before_mb)
+                    vram_mb = await _footprint_vram_mb()
         except httpx.HTTPError as exc:
             ok = False
             error = backends.reason(exc)

@@ -66,31 +66,55 @@ future non-reclaimable case (a pinned model, a second engine sharing the
 card) has an obvious place to subtract instead of being silently modeled
 away.
 
-## The probe's needed_gb is now a bracketed nvidia_smi delta (ruling S2f-R3
-— the 17-vs-22 bug)
+## needed_gb is a WHOLE-CARD figure (ruling S2f-R3 — the 17-vs-22 bug, and
+the delta-by-construction landmine review caught in the first fix)
 /api/ps's size_vram is ollama's own count of a model's WEIGHTS (+ its own
-KV cache accounting) — not the full total footprint (weights + KV at the
-serving context + ollama's transient compute buffers) that actually has to
-fit in VRAM. The 2026-08-29 walk measured qwen3.8:27b at size_vram=17.4GB
-while nvidia-smi showed 22369/24576 MiB (~21.8GB) actually in use with it
-resident — the gap this ruling exists to close. curated_models.json's
-min_vram_gb for it is re-anchored to 22 (rounded up from that 21.8GB
-measurement, not down, so the estimate stays honest on the tight side).
-admin.py's POST /admin/probe now measures that real footprint directly: an
-nvidia-smi snapshot taken
-immediately BEFORE the request that loads the model, and another
-immediately after it answers, with the difference recorded as `vram_mb`.
-This is safe in a way an undirected nvidia_smi read is not (see above):
-the snapshot is bracketed tightly around ONE specific load, on a host doing
-nothing else, so the delta is attributable to that model — not a raw
-instantaneous total that could be anyone's activity. It is still only
-clean when the probed model was NOT already resident before the bracket
-started (a genuinely cold load) — probing a model that is already loaded
-nets its own footprint against itself and reads near zero, which is why
-admin.py treats a non-positive delta as unreliable rather than a real
-measurement. `needed_gb_for` below is unchanged: a probe row's measured
-`vram_mb` still wins over the curated estimate, it just now MEANS total
-footprint instead of weights.
+KV cache accounting) — not the full total footprint (baseline non-model
+GPU usage + weights + KV at the serving context + ollama's transient
+compute buffers) that actually has to fit in VRAM. This host always
+carries a real, non-zero baseline (Xwayland/WSL2, ~2.6GB) even with no
+model loaded at all — nvidia-smi's "used" counter includes it, and so does
+what the operator sees when they check. The 2026-08-29 walk measured
+qwen3.8:27b at size_vram=17.4GB while nvidia-smi showed 22369/24576 MiB
+(~21.8GB) actually in use with it resident — the gap this ruling exists to
+close. curated_models.json's min_vram_gb for it is re-anchored to 22
+(rounded up from that 21.8GB measurement, not down): a WHOLE-CARD figure,
+baseline included, because that is the number that genuinely has to fit
+under `total_gb`.
+
+admin.py's POST /admin/probe now measures the SAME whole-card quantity: a
+SINGLE nvidia-smi used-MiB reading taken immediately AFTER the request
+that loads the model answers — never a before/after delta. A first version
+of this fix bracketed before/after and recorded the DIFFERENCE, and review
+caught two compounding bugs in that shape: (1) eviction-contaminated — a
+switch EVICTS whatever was resident before (`free_vram_gb_for_switch`'s
+own premise, above), so probing model B while model A was resident would
+have recorded (baseline+B) - (baseline+A) = B-A, wildly understating B
+whenever A != B — chatting on the 8B, then probing the 27B, would have
+stored roughly 10GB as "verified" and made the 27B read `comfortable`,
+reintroducing the exact bug this whole slice exists to kill, one layer
+down; and (2) even probing the SAME model twice, a delta EXCLUDES the
+~2.6GB baseline the curated whole-card figure INCLUDES, so probed and
+curated `needed_gb` lived in two different frames that could never agree.
+A single AFTER reading fixes both: it is eviction-IMMUNE (whatever the
+completion just answered from IS what's resident at that instant,
+regardless of what came before), and it lands in the same whole-card frame
+as the curated catalog. See admin.py's `_footprint_vram_mb` for the full
+reasoning and the non-positive-reading guard.
+
+## THE FRAME, STATED ONCE, SO THE TWO SIDES CANNOT DRIFT AGAIN
+`needed_gb` — curated estimate OR probed measurement, `needed_gb_for`
+below makes no distinction — is ALWAYS a whole-card figure: baseline
+non-model usage + weights + KV + buffers, the number that has to fit under
+`total_gb`. `free_gb`/`total_gb` (`free_vram_gb_for_switch` above) are
+therefore the card's FULL capacity, never total-minus-baseline: the
+baseline already lives on the NEEDED side of every comparison this module
+makes, so subtracting it from FREE too would double-count it — which is
+also why Fix B's "nothing resident today is non-swappable, so free equals
+total" is correct in this frame, not despite it. Whoever adds a new source
+of `needed_gb` (a different probe strategy, a smarter estimate) must keep
+it in this same whole-card frame, or the two sides silently stop meaning
+the same thing again.
 """
 from __future__ import annotations
 
