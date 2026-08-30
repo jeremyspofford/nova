@@ -56,6 +56,17 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "saying so, never silently."
         ),
     ),
+    SettingDef(
+        key="autonomy.graduation_runs",
+        type="int",
+        default=5,
+        description=(
+            "Consecutive approved-and-succeeded runs of a consent-tier action "
+            "class before it is promoted to auto (ruling S3-R5). A failure or "
+            "an operator revoke resets the count and, for an earned class, "
+            "demotes it back to consent."
+        ),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}

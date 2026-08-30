@@ -15,10 +15,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import (
     activity,
     auth_api,
+    autonomy_api,
     chat,
     consents_api,
     conversations,
     db,
+    governance_api,
     proxies,
     settings_store,
     workspace_api,
@@ -64,6 +66,8 @@ app.include_router(conversations.router)
 app.include_router(chat.router)
 app.include_router(activity.router)
 app.include_router(consents_api.router)
+app.include_router(autonomy_api.router)
+app.include_router(governance_api.router)
 app.include_router(proxies.router)
 app.include_router(workspace_api.router)
 

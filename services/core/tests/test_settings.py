@@ -8,12 +8,15 @@ pytestmark = requires_db
 # Every key the registry defines, pinned so a setting cannot appear or
 # vanish unnoticed. It moved from three to four in S2: the tool loop needs
 # a round cap the operator can see and change (agents.max_tool_rounds),
-# which is also the first "int" setting the registry has ever had.
+# which is also the first "int" setting the registry has ever had. S3-T3
+# moves it to five: autonomy.graduation_runs is the N earned-autonomy
+# promotes a consent-tier class after (app/autonomy.py) — see test_autonomy.py.
 KNOWN_KEYS = {
     "onboarding.completed",
     "chat.model",
     "appearance.default_preset",
     "agents.max_tool_rounds",
+    "autonomy.graduation_runs",
 }
 
 

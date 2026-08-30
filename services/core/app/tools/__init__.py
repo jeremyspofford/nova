@@ -182,19 +182,33 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
 
     try:
         result = await tool.executor(parsed, ctx)
+        ok = True
     except ToolFailure as exc:
-        return f"{ERROR_PREFIX}{exc}", False
+        result, ok = f"{ERROR_PREFIX}{exc}", False
     except Exception as exc:
         # Not a refusal anybody wrote — a bug. It is reported to the log in
         # full and to the model in one line, and it still cannot reach the
         # stream as an exception.
         logger.exception("tool %s raised", name)
-        return f"{ERROR_PREFIX}{name} failed unexpectedly — {type(exc).__name__}: {exc}", False
+        result = f"{ERROR_PREFIX}{name} failed unexpectedly — {type(exc).__name__}: {exc}"
+        ok = False
+    else:
+        if not isinstance(result, str) or not result.strip():
+            # An empty tool result reads to the model as "it worked, and
+            # there was nothing to say" — which is a claim nothing checked.
+            # A tool that has nothing to report says so in words or it failed.
+            logger.error("tool %s returned an empty result", name)
+            result = f"{ERROR_PREFIX}{name} returned an empty result, so nothing was confirmed"
+            ok = False
 
-    if not isinstance(result, str) or not result.strip():
-        # An empty tool result reads to the model as "it worked, and there
-        # was nothing to say" — which is a claim nothing checked. A tool
-        # that has nothing to report says so in words or it failed.
-        logger.error("tool %s returned an empty result", name)
-        return f"{ERROR_PREFIX}{name} returned an empty result, so nothing was confirmed", False
-    return result, True
+    if decision.track_outcome:
+        # Earned autonomy (S3-R5): policy.authorize marked this run — a
+        # burned consent, or an already-earned-auto class — as one to count.
+        # This is the ONLY place the run's real ok/fail reaches autonomy.py;
+        # the kernel decided beforehand, this never re-decides, only records.
+        from app import autonomy, db  # local import: same import-cycle reason as policy above
+
+        pool = await db.get_pool()
+        await autonomy.record_outcome(pool, action_class=name, succeeded=ok)
+
+    return result, ok
