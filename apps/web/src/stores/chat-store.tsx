@@ -7,6 +7,9 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
+import { decideConsent as apiDecideConsent } from '../lib/api'
+import type { ConsentCard } from '../lib/consentCard'
+import { continuationMessage } from '../lib/consentCard'
 import { streamChat, type FetchLike } from '../lib/streamChat'
 import { chatReducer, emptyChat, type ChatState } from '../pages/chat/chatReducer'
 
@@ -76,6 +79,28 @@ interface ChatStore {
    * both read (SettingsPage bridges the two: see its own docstring).
    */
   setModel: (model: string) => void
+  /**
+   * S3-T2's approve→executor reconciliation (ruling S3-R4): the policy
+   * kernel never runs the gated action at decide time — only flips the
+   * consent's status. So this (a) calls the decide API and publishes the
+   * result onto any matching row in the transcript (chatReducer's
+   * 'consentDecided'), then (b) on a SUCCESSFUL APPROVE of a card tied to
+   * the conversation currently open here, fires a real continuation chat
+   * turn (the same sendMessage every other message uses — a traced turn,
+   * never a fake "it happened") so the model re-issues the same call and the
+   * funnel burns the now-approved consent. Deny never continues. A card
+   * belonging to some OTHER conversation, or an approve arriving while this
+   * store is already mid-turn, also never continues — there is nothing safe
+   * to send into a transcript that is not the one the card was raised in, or
+   * that is already busy with a turn of its own.
+   */
+  decideConsent: (card: ConsentCard, decision: 'approve' | 'deny') => Promise<ConsentCard>
+}
+
+/** The DI seam for the decide call — same idiom as `fetchImpl`: production
+ * uses the real api.decideConsent, tests inject a spy. */
+interface ConsentsApi {
+  decideConsent: typeof apiDecideConsent
 }
 
 const ChatContext = createContext<ChatStore | null>(null)
@@ -84,12 +109,15 @@ export function ChatProvider({
   children,
   fetchImpl,
   personId = null,
+  consentsApi = { decideConsent: apiDecideConsent },
 }: {
   children: ReactNode
   /** Test seam only — production always uses the real fetch. */
   fetchImpl?: FetchLike
   /** The signed-in person's id, or null when signed out. */
   personId?: string | null
+  /** Test seam only — production always uses the real api.decideConsent. */
+  consentsApi?: ConsentsApi
 }) {
   const [state, dispatch] = useReducer(chatReducer, undefined, emptyChat)
   // Read inside the send loop via a ref, not the `state` closed over at call
@@ -180,9 +208,24 @@ export function ChatProvider({
     dispatch({ type: 'modelSwitched', model })
   }, [])
 
+  const decideConsent = useCallback(
+    async (card: ConsentCard, decision: 'approve' | 'deny') => {
+      const updated = await consentsApi.decideConsent(card.consent_id, decision)
+      dispatch({ type: 'consentDecided', card: updated })
+      const sameConversation =
+        updated.conversation_id !== null &&
+        updated.conversation_id === stateRef.current.conversationId
+      if (decision === 'approve' && sameConversation && !stateRef.current.streaming) {
+        sendMessage(continuationMessage(updated))
+      }
+      return updated
+    },
+    [consentsApi, sendMessage],
+  )
+
   return (
     <ChatContext.Provider
-      value={{ state, sendMessage, loadConversation, resolveServerTurn, setModel }}
+      value={{ state, sendMessage, loadConversation, resolveServerTurn, setModel, decideConsent }}
     >
       {children}
     </ChatContext.Provider>

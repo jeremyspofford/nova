@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { chatReducer, emptyChat, type ChatState, type ChatRow } from './chatReducer'
+import type { ConsentCard } from '../../lib/consentCard'
 
 function started(): ChatState {
   return chatReducer(emptyChat(), {
@@ -463,6 +464,78 @@ describe('chatReducer — a dropped connection', () => {
     const assistant = messages(state)[1]
     expect(assistant.text).toBe('')
     expect(assistant.interrupted).toBe(true)
+  })
+})
+
+function consentRows(state: ChatState): Extract<ChatRow, { kind: 'consent' }>[] {
+  return state.rows.filter((r): r is Extract<ChatRow, { kind: 'consent' }> => r.kind === 'consent')
+}
+
+function card(overrides: Partial<ConsentCard> = {}): ConsentCard {
+  return {
+    consent_id: 'c-1',
+    action_class: 'fetch_url',
+    args_hash: 'hash',
+    args: { url: 'https://example.com/pricing' },
+    summary: 'Run fetch_url with url=https://example.com/pricing',
+    status: 'pending',
+    conversation_id: 'conv-1',
+    requested_by: { person_id: 'p-1', agent: 'chat' },
+    created_at: '2026-08-30T00:00:00Z',
+    expires_at: '2026-08-31T00:00:00Z',
+    ...overrides,
+  }
+}
+
+describe('chatReducer — the approval card (S3-T2)', () => {
+  it('a consent frame appends a new row carrying the card', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'consent', card: card() } })
+    expect(consentRows(state)).toHaveLength(1)
+    expect(consentRows(state)[0].card).toEqual(card())
+    // Appended alongside the message rows, not instead of the pending bubble.
+    expect(messages(state)).toHaveLength(2)
+  })
+
+  it('a repeated frame for the same consent_id updates the row in place, never duplicates', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'consent', card: card() } })
+    state = chatReducer(state, { type: 'event', event: { type: 'consent', card: card() } })
+    expect(consentRows(state)).toHaveLength(1)
+  })
+
+  it('the turn keeps streaming after a card is raised — awaiting approval is not a failure', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'consent', card: card() } })
+    expect(state.streaming).toBe(true)
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'Awaiting your approval: run fetch_url' },
+    })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(state.streaming).toBe(false)
+    expect(errors(state)).toHaveLength(0)
+    expect(consentRows(state)).toHaveLength(1)
+  })
+
+  it('consentDecided updates the matching row\'s status without touching other rows', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'consent', card: card() } })
+    state = chatReducer(state, {
+      type: 'consentDecided',
+      card: card({ status: 'approved' }),
+    })
+    expect(consentRows(state)[0].card.status).toBe('approved')
+    expect(messages(state)).toHaveLength(2)
+  })
+
+  it('consentDecided for an id not present is a safe no-op', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'consentDecided',
+      card: card({ consent_id: 'no-such-id', status: 'denied' }),
+    })
+    expect(consentRows(state)).toHaveLength(0)
   })
 })
 

@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import { ChatProvider, useChatStore } from './chat-store'
 import type { ChatState } from '../pages/chat/chatReducer'
+import type { ConsentCard } from '../lib/consentCard'
+import { continuationMessage } from '../lib/consentCard'
 
 /**
  * The nav bug: the SSE stream used to be owned by ChatPage, so navigating
@@ -354,5 +356,154 @@ describe('ChatProvider — the identity boundary (sign-out, or someone else sign
       'hi, B',
     )
     expect(probe.store!.state.conversationId).toBe('b-convo')
+  })
+})
+
+/**
+ * S3-T2's approve→executor reconciliation (ruling S3-R4): the kernel never
+ * runs the action at decide time, so decideConsent's own job is (a) call the
+ * decide API and publish the result into the row (b) — on a SUCCESSFUL
+ * approve tied to the conversation currently open — fire a real continuation
+ * turn so the model re-issues the same call and the funnel burns the
+ * now-approved consent. `consentsApi` is the same DI seam as `fetchImpl`:
+ * production uses the real api.decideConsent, these tests inject a spy.
+ */
+describe('ChatProvider — decideConsent (S3-T2: approve has an executor)', () => {
+  function card(overrides: Partial<ConsentCard> = {}): ConsentCard {
+    return {
+      consent_id: 'c-1',
+      action_class: 'fetch_url',
+      args_hash: 'hash',
+      args: { url: 'https://example.com/pricing' },
+      summary: 'Run fetch_url with url=https://example.com/pricing',
+      status: 'pending',
+      conversation_id: 'conv-1',
+      requested_by: { person_id: 'p-1', agent: 'chat' },
+      created_at: '2026-08-30T00:00:00Z',
+      expires_at: '2026-08-31T00:00:00Z',
+      ...overrides,
+    }
+  }
+
+  it('approving a card tied to the open conversation sends a real, traced continuation turn', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const decideConsentApi = vi.fn(async () => card({ status: 'approved' }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} consentsApi={{ decideConsent: decideConsentApi }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+
+    await act(async () => {
+      await probe.store!.decideConsent(card(), 'approve')
+    })
+
+    expect(decideConsentApi).toHaveBeenCalledWith('c-1', 'approve')
+    // A real chat turn — the same fetch sendMessage always uses, not a
+    // separate/fake "it happened" path.
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/chat/stream')
+    const body = JSON.parse(String(init.body))
+    expect(body.message).toBe(continuationMessage(card({ status: 'approved' })))
+    expect(body.conversation_id).toBe('conv-1')
+    expect(probe.store!.state.streaming).toBe(true)
+  })
+
+  it('denying a card never sends a continuation', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const decideConsentApi = vi.fn(async () => card({ status: 'denied' }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} consentsApi={{ decideConsent: decideConsentApi }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+
+    await act(async () => {
+      await probe.store!.decideConsent(card(), 'deny')
+    })
+
+    expect(decideConsentApi).toHaveBeenCalledWith('c-1', 'deny')
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(probe.store!.state.streaming).toBe(false)
+  })
+
+  it('approving a card from a DIFFERENT conversation than the one open here does not continue it', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const decideConsentApi = vi.fn(async () => card({ status: 'approved', conversation_id: 'other-convo' }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} consentsApi={{ decideConsent: decideConsentApi }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+
+    await act(async () => {
+      await probe.store!.decideConsent(card({ conversation_id: 'other-convo' }), 'approve')
+    })
+
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('approving while a live turn is already streaming does not clobber it with a continuation', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const decideConsentApi = vi.fn(async () => card({ status: 'approved' }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} consentsApi={{ decideConsent: decideConsentApi }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+    act(() => probe.store!.sendMessage('already talking'))
+    await tick()
+    expect(probe.store!.state.streaming).toBe(true)
+
+    await act(async () => {
+      await probe.store!.decideConsent(card(), 'approve')
+    })
+
+    // Only the one fetch — the live turn's own — ever went out.
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('publishes the decided card onto a matching consent row already in the transcript', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const decideConsentApi = vi.fn(async () => card({ status: 'denied' }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} consentsApi={{ decideConsent: decideConsentApi }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+    act(() => probe.store!.sendMessage('check the pricing page'))
+    await tick()
+    stream.push(`data: {"consent":${JSON.stringify(card())}}\n\n`)
+    await tick()
+    const row = probe.store!.state.rows.find(r => r.kind === 'consent')
+    expect(row && row.kind === 'consent' && row.card.status).toBe('pending')
+
+    await act(async () => {
+      await probe.store!.decideConsent(card(), 'deny')
+    })
+
+    const updated = probe.store!.state.rows.find(r => r.kind === 'consent')
+    expect(updated && updated.kind === 'consent' && updated.card.status).toBe('denied')
   })
 })

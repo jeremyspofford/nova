@@ -1,3 +1,4 @@
+import type { ConsentCard } from '../../lib/consentCard'
 import type { StreamEvent } from '../../lib/streamChat'
 
 /**
@@ -36,7 +37,20 @@ export type ErrorRow = {
   reason: string
 }
 
-export type ChatRow = MessageRow | ErrorRow
+/** An approval card raised mid-turn (S3-T2's {"consent":...} frame). `id` is
+ * the card's consent_id, so a repeated frame for the SAME card (the funnel
+ * can append it more than once — see chat.py's consent_sink docstring)
+ * updates this row in place instead of stacking a duplicate. `card.status`
+ * starts 'pending' and is the only thing consentDecided ever changes —
+ * nothing here runs the action; that is the funnel's re-attempt, a whole
+ * separate turn (ruling S3-R4). */
+export type ConsentRow = {
+  kind: 'consent'
+  id: string
+  card: ConsentCard
+}
+
+export type ChatRow = MessageRow | ErrorRow | ConsentRow
 
 export interface ChatState {
   rows: ChatRow[]
@@ -67,6 +81,11 @@ export type ChatAction =
     }
   | { type: 'reset' }
   | { type: 'modelSwitched'; model: string }
+  // Dispatched by chat-store.tsx's decideConsent AFTER the decide API call
+  // succeeds — the card it returns is the new truth for that row. Never
+  // dispatched from a stream event: deciding is an operator action against
+  // an HTTP route, not something the model's turn reports.
+  | { type: 'consentDecided'; card: ConsentCard }
 
 export const NO_REPLY = 'the turn finished without a reply'
 
@@ -130,6 +149,29 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         // the two states someone reading the bubble actually needs.
         activity: event.status === 'ok' ? null : { tool: event.tool, status: event.status },
       }))
+
+    case 'consent': {
+      // A card is appended alongside the message rows, never inside the
+      // pending bubble — the turn keeps streaming (Nova's own stated "Awaiting
+      // your approval" text still lands in the bubble via 'delta', same as
+      // any other tool result). A repeated frame for the same consent_id
+      // (the funnel can append it more than once this turn) updates the
+      // existing row rather than stacking a duplicate card.
+      const id = event.card.consent_id
+      const existing = state.rows.some(row => row.kind === 'consent' && row.id === id)
+      if (existing) {
+        return {
+          ...state,
+          rows: state.rows.map(row =>
+            row.kind === 'consent' && row.id === id ? { ...row, card: event.card } : row,
+          ),
+        }
+      }
+      return {
+        ...state,
+        rows: [...state.rows, { kind: 'consent', id, card: event.card }],
+      }
+    }
 
     case 'error':
       if (state.pendingId === null) {
@@ -253,5 +295,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case 'event':
       return applyEvent(state, action.event)
+
+    case 'consentDecided':
+      return {
+        ...state,
+        rows: state.rows.map(row =>
+          row.kind === 'consent' && row.id === action.card.consent_id
+            ? { ...row, card: action.card }
+            : row,
+        ),
+      }
   }
 }
