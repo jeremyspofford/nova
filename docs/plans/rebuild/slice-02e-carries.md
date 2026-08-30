@@ -69,3 +69,17 @@ they show the (now-correct) estimate. Fix later: probe should warm/allow a
 longer load window for large models (or a two-phase load-then-measure), so
 verified fit is reachable for the flagship model. Not blocking — the 27B's
 corrected estimate (17GB → comfortable) is accurate.
+
+## S2f — model fit & switch correctness SHIPPED (2026-08-29)
+Fixed the three S2e-walk bugs: (A) a model switch now updates the current
+marker + chat badge with no message; (B) fit is eviction-aware (a switch
+evicts the resident model, so an 8B reads comfortable even while the 27B
+is resident); (C) needed_gb is the WHOLE-CARD footprint (weights+KV+
+buffers+baseline = what nvidia-smi shows), not ollama size_vram/weights —
+27B re-anchored 17→22 (tight, reversing the S2e size_vram error), and the
+probe records a single post-load nvidia-smi `after` reading (eviction-
+immune), needing the gateway GPU override (deploy/docker-compose.gpu.yml)
+to measure. Remaining carries: stale S2e 8b probe row (weights frame) must
+be re-probed post-deploy to read correct; ctx-aware KV footprint (needed
+scales with context) is still a later model-slice item; probe force-loads
+a model (GPU time) — a "probe this model" button is future UX.
