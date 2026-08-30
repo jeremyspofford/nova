@@ -9,9 +9,12 @@
  */
 import type { Role } from './roles'
 import type { Person } from './gate'
+import type { ConsentCard } from './consentCard'
 import { failureReason } from './streamChat'
 import { statedReason } from './statedReason'
 import { createLineBuffer } from './lineBuffer'
+
+export type { ConsentCard }
 
 /** The three backends core's PUT /inference/backend accepts. */
 export type EngineKind = 'ollama' | 'remote' | 'cloud'
@@ -294,6 +297,37 @@ export async function getActivity(
 
 export const getActivityTurn = (turnId: string) =>
   apiGet<ActivityTurnDetail>(`/api/v1/activity/${turnId}`)
+
+// ── consents (approval cards — services/core/app/consents_api.py) ───────
+
+/**
+ * Pending approval cards. With no conversationId, every pending card across
+ * every conversation (the Approvals page); with one, only that conversation's
+ * (the inline card's reconciliation path, if a page ever needs it).
+ */
+export async function getConsents(conversationId?: string): Promise<ConsentCard[]> {
+  const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : ''
+  const body = await apiGet<{ consents: ConsentCard[] }>(`/api/v1/consents${query}`)
+  return body.consents
+}
+
+/**
+ * Approve or deny a card. Returns the updated card — status flipped, nothing
+ * else: the kernel runs nothing at decide time (ruling S3-R4), so this alone
+ * never makes the action happen. chat-store.tsx's decideConsent is what
+ * layers the re-attempt continuation on top of this call.
+ */
+export async function decideConsent(
+  consentId: string,
+  decision: 'approve' | 'deny',
+): Promise<ConsentCard> {
+  const body = await apiSend<{ consent: ConsentCard }>(
+    `/api/v1/consents/${consentId}/decide`,
+    'POST',
+    { decision },
+  )
+  return body.consent
+}
 
 // ── workspace files (read-only view over Nova's workspace volume) ───────
 

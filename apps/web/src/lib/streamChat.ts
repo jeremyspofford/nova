@@ -30,8 +30,17 @@
  * gesture at as a hypothetical: `{"activity":{"tool":"<name>","status":
  * "start"|"ok"|"error"}}`, sent once per tool call while a round's tools
  * run. It graduates from "unknown, tolerated" to "known, understood" here.
+ *
+ * `consent` (S3-T2) is the same graduation for the policy kernel's approval
+ * cards: `{"consent": <card_spec>}`, sent once per card the funnel raises
+ * this turn (services/core/app/consents.py's card_spec, services/core/app/
+ * chat.py's consent_sink diff). The card is carried verbatim — this parser
+ * only checks that the three fields every consumer needs (consent_id,
+ * action_class, summary) are actually strings, the same "known key, wrong
+ * shape is still an error" stance `activity` takes above.
  */
 
+import type { ConsentCard } from './consentCard'
 import { createLineBuffer } from './lineBuffer'
 import { statedReason } from './statedReason'
 
@@ -43,6 +52,7 @@ export type StreamEvent =
   // union so a status this client has not seen yet is still a real event,
   // not a type error waiting to happen.
   | { type: 'activity'; tool: string; status: string }
+  | { type: 'consent'; card: ConsentCard }
   | { type: 'error'; reason: string }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
@@ -67,7 +77,7 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity'])
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'consent'])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -102,6 +112,18 @@ function frameToEvent(payload: string): StreamEvent | null {
     // Falls through to the generic "known key, wrong shape" refusal below
     // rather than being treated as an unknown frame — `activity` IS known,
     // it just did not carry the two fields it promises.
+  }
+  if (obj.consent !== null && typeof obj.consent === 'object') {
+    const card = obj.consent as Record<string, unknown>
+    if (
+      typeof card.consent_id === 'string' &&
+      typeof card.action_class === 'string' &&
+      typeof card.summary === 'string'
+    ) {
+      return { type: 'consent', card: card as unknown as ConsentCard }
+    }
+    // Same stance as `activity` above: a known key with the wrong shape is
+    // a contract violation, not an unknown frame — falls through below.
   }
   if (!Object.keys(obj).some(key => KNOWN_FRAME_KEYS.has(key))) {
     // Every key here is one this client has never heard of — a future frame

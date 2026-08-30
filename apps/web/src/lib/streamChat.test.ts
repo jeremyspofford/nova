@@ -154,6 +154,37 @@ describe('createSseParser', () => {
     expect(parseAll(['data: {"activity":null}\n\n'])[0].type).toBe('error')
   })
 
+  // S3-T2's approval card: the policy kernel raises a consent this turn and
+  // chat.py streams its card_spec verbatim. S2-T1's forward-compat allowance
+  // is what let an older client silently ignore these before this client
+  // knew what they meant; now it graduates from unknown to known, same as
+  // `activity` did for S2's tool loop.
+  it('turns a consent frame into a consent event carrying the card', () => {
+    const card = {
+      consent_id: 'c-1',
+      action_class: 'fetch_url',
+      args_hash: 'deadbeef',
+      args: { url: 'https://example.com/pricing' },
+      summary: 'Run fetch_url with url=https://example.com/pricing',
+      status: 'pending',
+      conversation_id: 'conv-1',
+      requested_by: { person_id: 'p-1', agent: 'chat' },
+      created_at: '2026-08-30T00:00:00Z',
+      expires_at: '2026-08-31T00:00:00Z',
+    }
+    expect(parseAll([`data: {"consent":${JSON.stringify(card)}}\n\n`])).toEqual([
+      { type: 'consent', card },
+    ])
+  })
+
+  it('errors a consent frame missing consent_id, action_class or summary rather than dropping it', () => {
+    expect(parseAll(['data: {"consent":{"action_class":"fetch_url","summary":"x"}}\n\n'])[0].type).toBe(
+      'error',
+    )
+    expect(parseAll(['data: {"consent":"not an object"}\n\n'])[0].type).toBe('error')
+    expect(parseAll(['data: {"consent":null}\n\n'])[0].type).toBe('error')
+  })
+
   it('still errors malformed/non-JSON lines — the amendment only covers well-formed unknowns', () => {
     const events = parseAll(['data: not json at all\n\n'])
     expect(events).toHaveLength(1)
