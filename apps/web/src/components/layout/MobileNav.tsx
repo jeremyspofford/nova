@@ -7,6 +7,7 @@ import {
   Activity,
   FolderOpen,
   Settings,
+  ShieldCheck,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
@@ -33,6 +34,7 @@ const moreItems: { label?: string; items: NavItem[] }[] = [
   {
     label: 'System',
     items: [
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin' },
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },

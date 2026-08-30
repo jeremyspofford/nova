@@ -16,6 +16,7 @@ import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
+import { ApprovalsPage } from './pages/approvals/ApprovalsPage'
 
 function Centred({ children }: { children: React.ReactNode }) {
   return (
@@ -67,6 +68,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
     <AppLayout fullWidth={fullWidth}>
       <Routes>
         <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
+        <Route path="/approvals" element={<ApprovalsPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/settings" element={<SettingsPage />} />

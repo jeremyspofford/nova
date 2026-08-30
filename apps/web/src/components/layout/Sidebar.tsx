@@ -4,6 +4,7 @@ import {
   Activity,
   FolderOpen,
   Settings,
+  ShieldCheck,
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react'
@@ -38,6 +39,7 @@ export const navSections: NavSection[] = [
   {
     label: 'System',
     items: [
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin' },
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },

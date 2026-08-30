@@ -5,6 +5,7 @@ import {
 } from '../../lib/api'
 import { useChatStore } from '../../stores/chat-store'
 import { ChatInput } from './ChatInput'
+import { ConsentCardRow } from './ConsentCardRow'
 import { ErrorBubble, MessageBubble } from './MessageBubble'
 
 /**
@@ -210,13 +211,11 @@ export function ChatPage({
             </p>
           )}
 
-          {state.rows.map(row =>
-            row.kind === 'message' ? (
-              <MessageBubble key={row.id} row={row} />
-            ) : (
-              <ErrorBubble key={row.id} row={row} />
-            ),
-          )}
+          {state.rows.map(row => {
+            if (row.kind === 'message') return <MessageBubble key={row.id} row={row} />
+            if (row.kind === 'error') return <ErrorBubble key={row.id} row={row} />
+            return <ConsentCardRow key={row.id} card={row.card} />
+          })}
 
           {responding && (
             <p
