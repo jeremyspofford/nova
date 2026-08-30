@@ -633,3 +633,128 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
     if not unbacked:
         return None
     return Correction(claims=tuple(unbacked))
+
+
+# -- the pending-approval claim guard --------------------------------------
+#
+# A sibling of narration_check, for a lie the live walk caught: after the
+# operator DENIED a fetch, the model answered a follow-up by PARROTING the prior
+# turn's "that fetch is awaiting your approval" line — no tool call, no card,
+# nothing pending anywhere. The operator was stranded on an approval that did
+# not exist. The system prompt asking the model not to fake it is a request;
+# this is the line of code that refuses.
+#
+# consent_claim_check(reply_text, has_pending_consent) fires ONLY when the reply
+# asserts a specific action is CURRENTLY awaiting / pending / blocked-on the
+# operator's approval AND has_pending_consent is False. `has_pending_consent` is
+# the mechanical fact the caller computes (a card raised THIS turn, or one still
+# pending in this conversation); when it is True the very same sentence is TRUE,
+# so the guard stays silent — the SAME words flip verdict on that one boolean.
+#
+# It is built to narration_check's two rules: PURE (text + one boolean; no
+# model, network or clock, so it can never itself become a source of narration)
+# and PRECISION-first (a wrongly-corrected honest reply makes the guard itself
+# the liar, worse than a missed lie). It reuses _clauses so a question or an
+# offer ("Want me to fetch it?") is never read as an assertion, and every
+# trigger is a CURRENT-state phrase — future/conditional forms ("that would need
+# your approval", "I'd have to request approval", "I can ask for approval") use
+# other words and so never match.
+CONSENT_CLAIM_CORRECTION = (
+    "Correction: nothing is actually awaiting your approval — I have not "
+    "started that. Ask me to do it and I'll raise an approval card you can "
+    "approve or deny."
+)
+
+# Present/present-perfect state phrases asserting an action is blocked on the
+# operator's approval RIGHT NOW: "(is) awaiting your approval", "pending (your)
+# approval", "waiting for you to approve / on your OK", "queued ... for your
+# approval". The state word itself is the anchor; a bare "approval" or a
+# request-to-approve verb ("I'll request approval") is deliberately not enough.
+_PENDING_STATE = re.compile(
+    r"awaiting\s+(?:your\s+|the\s+)?(?:ok|okay|approval|sign-?off|go-?ahead)"
+    r"|pending\s+(?:your\s+|the\s+)?approval"
+    r"|waiting\s+(?:for\s+you\s+to\s+approve"
+    r"|(?:for|on)\s+your\s+(?:ok|okay|approval|sign-?off|go-?ahead))"
+    r"|queued\s+(?:\w+\s+){0,3}?for\s+(?:your\s+)?approval",
+    re.I,
+)
+# "It/that/this needs|requires your approval" — a CURRENT blocked state tied to a
+# SPECIFIC action by its demonstrative subject. That subject is exactly what
+# separates it from the general capability statement ("Fetching external URLs
+# requires your approval") and from the conditional ("That WOULD need your
+# approval" — "would" breaks the it/that/this→needs adjacency), both of which
+# must stay clean.
+_NEEDS_APPROVAL = re.compile(
+    r"\b(?:it|that|this)\s+(?:still\s+|currently\s+)?"
+    r"(?:needs?|requires?)\s+(?:your\s+)?approval\b",
+    re.I,
+)
+# A general-capability qualifier: "requires your approval IN GENERAL" is a fact
+# about a class of actions, not a claim that one is pending, so its clause never
+# fires.
+_IN_GENERAL = re.compile(r"\bin\s+general\b", re.I)
+# Words that, appearing before a state phrase, mean it is not a real current
+# pending state: a negation anywhere before it ("nothing is pending approval",
+# "not awaiting") or a future auxiliary immediately before it ("will BE waiting
+# for your approval"). Scanning only the text BEFORE the match is deliberate —
+# the owner's own case, "…awaiting your approval — I can't complete it", carries
+# its "can't" AFTER the trigger, and must still fire.
+_NEGATORS = frozenset({"no", "not", "never", "nothing", "none", "without"})
+_FUTURE_AUX = frozenset({"be", "been"})
+_WORD = re.compile(r"[A-Za-z']+")
+
+
+def _has_negator(before: str) -> bool:
+    """True if any negation word appears in the text before a state phrase."""
+    for word in _WORD.findall(before):
+        low = word.lower()
+        if low in _NEGATORS or low.endswith("n't"):
+            return True
+    return False
+
+
+def _last_word(before: str) -> str | None:
+    words = _WORD.findall(before)
+    return words[-1].lower() if words else None
+
+
+def _asserts_pending(clause: str) -> bool:
+    """True if this clause asserts a specific action is CURRENTLY blocked on the
+    operator's approval, with the precision guards that keep a future, negated,
+    or general form from counting."""
+    if _IN_GENERAL.search(clause):
+        return False
+    m = _PENDING_STATE.search(clause)
+    if m is not None:
+        before = clause[: m.start()]
+        if not _has_negator(before) and _last_word(before) not in _FUTURE_AUX:
+            return True
+    n = _NEEDS_APPROVAL.search(clause)
+    if n is not None and not _has_negator(clause[: n.start()]):
+        return True
+    return False
+
+
+def consent_claim_check(reply_text: str, has_pending_consent: bool) -> Correction | None:
+    """Contradict a 'pending your approval' claim that no real consent backs.
+
+    Returns a Correction when the reply asserts a specific action is CURRENTLY
+    awaiting/pending/blocked-on the operator's approval AND has_pending_consent
+    is False; None otherwise — an honest reply, a question/offer/future/general
+    form, or a card that really IS pending. Pure and precision-first (see the
+    section header). The caller fails OPEN and, on ANY doubt about whether a card
+    is pending (e.g. the lookup raised), passes has_pending_consent=True, so an
+    honest awaiting reply is never turned into a false correction.
+    """
+    if has_pending_consent:
+        # A card really is pending: the same sentence the guard would flag is
+        # then TRUE, so it must stay silent.
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # a question/offer ("Want me to fetch it?") asserts nothing
+        if _asserts_pending(clause):
+            return Correction(claims=(), text=CONSENT_CLAIM_CORRECTION)
+    return None
