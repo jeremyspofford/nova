@@ -756,22 +756,46 @@ async def _run_turn(
             emit(DONE_FRAME)
             return
 
-        # The honesty guard: a reply is a claim, the spans are the fact. A
-        # completed-action claim (created/read a file, fetched a URL) that no
-        # successful span backs is contradicted before it reaches the
-        # operator — appended to the text that persists AND streamed as its
-        # own frame, so the durable record and the screen both carry it. The
-        # correction rides the FINAL text on purpose: the ingest below then
-        # remembers the corrected reply, never the lie. Derived from spans,
-        # never the prompt (the prompt's honesty line still stands; this is
-        # the enforcement).
+        # The honesty guards: a reply is a claim, the spans (and the consent
+        # state) are the fact. Both run on the model's ACTUAL streamed reply —
+        # `text` is left untouched between them so each judges what the model
+        # really said, not a copy already carrying the other's correction (a
+        # correction sentence names no file/url and no pending state, so the
+        # verdicts are the same either way; reading the raw reply just keeps
+        # that guarantee obvious). Each is PURE and fail-OPEN: a guard that
+        # crashes logs and yields no correction, never an error frame and never
+        # a lost reply. Derived from the spans/consent state, never the prompt
+        # (the prompt's honesty line still stands; this is the enforcement).
+        #
+        # What a fired guard does to the DURABLE record (persist + ingest, i.e.
+        # what the NEXT turn's history_window feeds back to the model) differs
+        # by the SHAPE of the lie, and that difference is this fix:
+        #
+        #  * narration_check catches a fabricated COMPLETED-action claim ("I
+        #    created X.md") that routinely sits BESIDE real content — a genuine
+        #    summary, the answer the user asked for. There is no clean
+        #    mechanical way to tell "the whole reply is the lie" from "one false
+        #    claim beside real content" (the guard anchors on a short phrase,
+        #    not the reply's bounds), and persisting correction-only would throw
+        #    away that real content. So the correction is APPENDED: the durable
+        #    reply carries both what was said and the contradiction.
+        #  * consent_claim_check catches a reply whose WHOLE stance is a
+        #    fabricated pending state ("that fetch is awaiting your approval").
+        #    Nothing there is salvageable — the entire message is predicated on
+        #    an approval that does not exist. Appending and persisting BOTH
+        #    would feed the lie back through history_window and train the small
+        #    model to pattern-complete "awaiting approval" next turn instead of
+        #    calling the tool (the context-poisoning loop the owner's walk hit).
+        #    So a fired consent guard REPLACES: the persisted and ingested text
+        #    is the correction ALONE. The original prose already streamed as `t`
+        #    frames this turn; what must not survive is what the NEXT turn reads.
+        #
+        # Streaming is unchanged: every correction still ships on its own
+        # {correction} frame, in order, so the live screen shows the
+        # contradiction. Only the durable text is composed, once, below.
         try:
             correction = guards.narration_check(text, turn.spans)
         except Exception:
-            # Fail OPEN: a guard that crashes the reply is worse than the lie
-            # it might have caught. A matcher bug must never turn an honest
-            # turn into an error frame or lose the text — it is logged and the
-            # reply ships unchanged.
             logger.exception("narration guard raised; shipping the reply uncorrected")
             correction = None
         if correction is not None:
@@ -781,17 +805,13 @@ async def _run_turn(
                     for claim in correction.claims
                 ]
                 span.meta["backing_span"] = False
-            text = f"{text}\n\n{correction.text}"
             emit(_frame({"correction": correction.text}))
 
-        # The pending-approval guard: a reply cannot claim an action is awaiting
-        # the operator's approval when nothing is. The fact is MECHANICAL — a
-        # card raised THIS turn (the sink is non-empty), or one still pending in
-        # this conversation. A lookup that RAISES fails toward has_pending=True,
-        # so a database blip never turns an honest awaiting reply into a false
-        # correction (that would make the guard the liar). Same fail-OPEN as
-        # narration_check, and its correction is appended the same way — each
-        # distinct correction once, never a double-stacked block.
+        # The pending-approval fact is MECHANICAL — a card raised THIS turn (the
+        # sink is non-empty), or one still pending in this conversation. A
+        # lookup that RAISES fails toward has_pending=True, so a database blip
+        # never turns an honest awaiting reply into a false correction (that
+        # would make the guard the liar).
         this_turn_raised_a_card = bool(tool_ctx.consent_sink)
         if this_turn_raised_a_card:
             has_pending_consent = True
@@ -815,11 +835,30 @@ async def _run_turn(
         if consent_correction is not None:
             with turn.span("guard", "consent_claim") as span:
                 span.meta["has_pending_consent"] = has_pending_consent
-            text = f"{text}\n\n{consent_correction.text}"
             emit(_frame({"correction": consent_correction.text}))
 
-        await _persist_assistant(pool, conversation_id, text)
-        _queue_ingest(app, turn, person, conversation_id, {"user": message, "assistant": text})
+        # Compose the DURABLE text once, from the outcome above. When the
+        # consent guard fired, the fabricated prose is DROPPED — the record
+        # becomes the correction(s) alone, so the next turn never replays
+        # "awaiting approval". If narration ALSO fired on the same turn (a
+        # doubly-fabricated reply), its correction is kept too: the two
+        # corrections stand adjacent, each once, with NO lie between them — the
+        # coherent composition, not two blocks stacked around the fabrication.
+        # When only narration fired, its correction is APPENDED, preserving any
+        # real content the reply carried. When neither fired, the reply stands.
+        if consent_correction is not None:
+            persisted = "\n\n".join(
+                c.text for c in (correction, consent_correction) if c is not None
+            )
+        elif correction is not None:
+            persisted = f"{text}\n\n{correction.text}"
+        else:
+            persisted = text
+
+        await _persist_assistant(pool, conversation_id, persisted)
+        _queue_ingest(
+            app, turn, person, conversation_id, {"user": message, "assistant": persisted}
+        )
         decided = "ok"
         emit(DONE_FRAME)
     except Exception as exc:

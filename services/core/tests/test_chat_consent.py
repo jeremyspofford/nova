@@ -15,7 +15,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
-from app import consents, guards, tools
+from app import chat, consents, guards, tools
 from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
@@ -287,25 +287,27 @@ async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
     owner_client, pool, mount_peers
 ):
     """The walk's core defect: the model claims a fetch is awaiting approval but
-    made no tool call and nothing is pending. The guard contradicts it in the
-    persisted reply and on its own frame, and records a guard span."""
-    gateway = ScriptedGateway(
-        rounds=(
-            (
-                text(
-                    "That fetch is awaiting your approval — I can't complete it "
-                    "without you OK'ing it."
-                ),
-            ),
-        )
+    made no tool call and nothing is pending. The guard contradicts it on its
+    own frame, records a guard span — and the PERSISTED reply is the correction
+    ALONE (the anti-poison fix): the fabricated prose must not survive into the
+    record, or the next turn's history would replay it."""
+    fabrication = (
+        "That fetch is awaiting your approval — I can't complete it "
+        "without you OK'ing it."
     )
+    gateway = ScriptedGateway(rounds=((text(fabrication),),))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client, "what's new on bigblueview.com")
 
     assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored.endswith(guards.CONSENT_CLAIM_CORRECTION)
+    # REPLACE, not append: correction only, none of the fabricated prose. (The
+    # correction itself says "nothing is actually awaiting your approval", so the
+    # tell is the model's OWN wording — "That fetch is awaiting", "OK'ing it".)
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    assert "That fetch is awaiting" not in stored
+    assert "OK'ing it" not in stored
     guard = await pool.fetchrow("SELECT name, meta FROM turn_spans WHERE kind = 'guard'")
     assert guard["name"] == "consent_claim"
     assert guard["meta"]["has_pending_consent"] is False
@@ -342,3 +344,95 @@ async def test_an_awaiting_reply_is_not_corrected_when_a_card_is_pending_in_the_
 
     assert _corrections(sent2) == []
     assert await pool.fetchval("SELECT status FROM turns WHERE id <> $1", first[0]["meta"]["turn_id"]) == "ok"
+
+
+# -- the anti-poison fix: a contradicted stance does not persist the lie ----
+
+
+async def test_a_fired_consent_guard_keeps_only_the_correction_in_memory(
+    owner_client, pool, mount_peers
+):
+    """The context-poisoning fix, the MEMORY half. The owner's walk failed
+    because the fabricated 'awaiting approval' prose was persisted (correction
+    appended AFTER it), so history_window/recall fed it back and the small model
+    pattern-completed it instead of calling the tool. What ingest remembers now
+    is the correction ALONE — the lie is not what any later turn reads."""
+    fabrication = "That fetch is awaiting your approval."
+    gateway = ScriptedGateway(rounds=((text(fabrication),),))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client, "what's new on bigblueview.com")
+
+    await chat.drain_background()
+    assert len(memory.ingests) == 1
+    ingested = memory.ingests[0]["exchange"]["assistant"]
+    # The correction (which itself mentions "awaiting") is kept; the model's own
+    # fabricated wording is not — so a later recall cannot feed the lie back.
+    assert ingested == guards.CONSENT_CLAIM_CORRECTION
+    assert "That fetch is awaiting" not in ingested
+
+
+async def test_a_fired_narration_guard_keeps_appending_to_preserve_real_content(
+    owner_client, pool, mount_peers
+):
+    """The documented scope decision: REPLACE (persist correction-only) is
+    scoped to consent_claim_check — where the whole reply is predicated on a
+    non-existent pending state. narration keeps APPEND, because a fabricated
+    completed-action claim routinely sits BESIDE real content the operator asked
+    for (here a real summary), and there is no clean mechanical way to separate
+    'the whole reply is the lie' from 'one false claim beside real content'.
+    Correction-only would throw the substance away, a worse failure than the
+    claim persisting; so the substance survives and the claim is contradicted."""
+    reply = (
+        "KV offloading moves the attention cache to CPU RAM to free VRAM. "
+        "I've saved this to kv_offloading.md."
+    )
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "summarize kv offloading and save it")
+
+    assert _corrections(sent) == [guards.CORRECTION_TEXT]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    # Append, not replace: the real summary is preserved, the correction added.
+    assert stored.startswith("KV offloading moves the attention cache")
+    assert stored.endswith(guards.CORRECTION_TEXT)
+    guards_seen = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
+    assert [g["name"] for g in guards_seen] == ["narration"]
+
+
+async def test_both_guards_firing_compose_coherently_without_the_lie(
+    owner_client, pool, mount_peers
+):
+    """A doubly-fabricated reply: a completed-action claim with no span AND a
+    pending-approval claim with no card. Both guards fire. The persisted record
+    must be coherent — the two corrections adjacent, each once, with NEITHER
+    fabrication between them (never two correction blocks stacked around the
+    lie). Because the consent guard fired, the whole record is corrections-only:
+    the fabricated prose does not survive to poison the next turn."""
+    reply = "I've created report.md. That fetch is awaiting your approval."
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "make a report and check the page")
+
+    # Both corrections streamed, in order (narration, then consent), each once.
+    assert _corrections(sent) == [
+        guards.CORRECTION_TEXT,
+        guards.CONSENT_CLAIM_CORRECTION,
+    ]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == f"{guards.CORRECTION_TEXT}\n\n{guards.CONSENT_CLAIM_CORRECTION}"
+    # Neither fabrication survives into the record (the consent correction does
+    # legitimately contain "awaiting", so the tell is the model's own wording).
+    assert "report.md" not in stored
+    assert "That fetch is awaiting" not in stored
+
+    # Both guard firings are on record, and memory keeps only the corrections.
+    guards_seen = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
+    assert sorted(g["name"] for g in guards_seen) == ["consent_claim", "narration"]
+    await chat.drain_background()
+    ingested = memory.ingests[0]["exchange"]["assistant"]
+    assert ingested == f"{guards.CORRECTION_TEXT}\n\n{guards.CONSENT_CLAIM_CORRECTION}"
