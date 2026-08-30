@@ -1,19 +1,20 @@
 """fetch_url: the SSRF guard, the caps, and the text extraction.
 
-No test here touches the real network. The address guard is exercised
-directly and through dispatch with a stubbed resolver, and the content
-behaviour runs against a local ASGI fake mounted by origin — so the code
-under test is the real one (guard, redirect walk, byte cap, tag strip),
-not a rehearsal of it.
+No test here touches the real network. The address guard is exercised directly,
+and the content behaviour runs the executor against a local ASGI fake mounted
+by origin — so the code under test is the real one (guard, redirect walk, byte
+cap, tag strip), not a rehearsal of it. These exercise the EXECUTOR at its own
+layer; fetch_url is consent-tiered, so its journey through the policy gate in
+dispatch() is covered by the funnel suite (test_policy_funnel.py), not here —
+running it through dispatch now would only ever return "awaiting approval".
 """
 from __future__ import annotations
 
 import pytest
 
-from app import tools
 from app.main import app
 from app.tools import web
-from app.tools.base import ToolContext
+from app.tools.base import ERROR_PREFIX, ToolContext, ToolFailure
 from tests import fakes
 
 PUBLIC_ADDRESS = "93.184.216.34"
@@ -43,8 +44,18 @@ def web_ctx(monkeypatch, tmp_path):
     app.state.peer_transports = {}
 
 
+async def _run(ctx, url: str) -> tuple[str, bool]:
+    """Run the executor and adapt it to dispatch's (result, ok) shape — the
+    same shape the funnel produces, minus the policy gate this layer isn't
+    testing (a ToolFailure is a stated refusal; anything else propagates)."""
+    try:
+        return await web.fetch_url({"url": url}, ctx), True
+    except ToolFailure as exc:
+        return f"{ERROR_PREFIX}{exc}", False
+
+
 async def _fetch(ctx, path: str) -> tuple[str, bool]:
-    return await tools.dispatch("fetch_url", {"url": f"{fakes.WEB_ORIGIN}{path}"}, ctx)
+    return await _run(ctx, f"{fakes.WEB_ORIGIN}{path}")
 
 
 # -- the address guard, on its own -----------------------------------------
@@ -97,7 +108,7 @@ def test_something_that_is_not_an_address_at_all_is_refused():
 )
 async def test_only_http_and_https_are_fetched(web_ctx, url):
     ctx, fake = web_ctx
-    result, ok = await tools.dispatch("fetch_url", {"url": url}, ctx)
+    result, ok = await _run(ctx, url)
     assert ok is False
     assert "http" in result
     assert fake.requested == []
@@ -105,7 +116,7 @@ async def test_only_http_and_https_are_fetched(web_ctx, url):
 
 async def test_a_host_that_resolves_privately_is_refused_before_connecting(web_ctx):
     ctx, fake = web_ctx
-    result, ok = await tools.dispatch("fetch_url", {"url": "http://private.test/secret"}, ctx)
+    result, ok = await _run(ctx, "http://private.test/secret")
     assert ok is False
     assert "10.0.0.5" in result
     assert "private" in result
@@ -123,7 +134,7 @@ async def test_a_redirect_into_private_space_is_refused_at_the_hop(web_ctx):
 
 async def test_a_host_that_does_not_resolve_is_a_stated_error(web_ctx):
     ctx, _fake = web_ctx
-    result, ok = await tools.dispatch("fetch_url", {"url": "http://nowhere.test/x"}, ctx)
+    result, ok = await _run(ctx, "http://nowhere.test/x")
     assert ok is False
     assert "resolve" in result
 

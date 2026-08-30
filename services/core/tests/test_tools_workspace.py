@@ -13,6 +13,19 @@ import pytest
 from app import tools
 from app.tools import workspace
 from app.tools.base import ToolContext
+from tests.conftest import requires_db
+
+# dispatch() authorizes every call now, and the workspace tools are all
+# disposition=auto in the seeded action-class table — so these need a live DB
+# for the kernel to read that seed and allow the executor to run. The pool
+# fixture builds and seeds it; the autouse dependency below makes db.get_pool()
+# (which policy.authorize calls) resolve to it.
+pytestmark = requires_db
+
+
+@pytest.fixture(autouse=True)
+async def _authorized(pool):
+    return pool
 
 
 def _ctx(tmp_path) -> ToolContext:

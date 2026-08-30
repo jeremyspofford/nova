@@ -602,9 +602,10 @@ async def test_the_stable_prompt_names_the_tools_it_advertises(
         assert name in stable
 
 
-async def test_a_tool_cut_off_mid_call_leaves_a_span_that_says_so(monkeypatch, tmp_path):
+async def test_a_tool_cut_off_mid_call_leaves_a_span_that_says_so(monkeypatch, tmp_path, pool):
     """A client that hangs up while a tool is running still files the span,
-    and it must not read as a success nobody checked."""
+    and it must not read as a success nobody checked. The gate must let the
+    executor be reached first, so the spy is seeded auto (pool builds the DB)."""
     turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
 
     async def never_returns(args, ctx):
@@ -619,6 +620,10 @@ async def test_a_tool_cut_off_mid_call_leaves_a_span_that_says_so(monkeypatch, t
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             executor=never_returns,
         ),
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition) "
+        "VALUES ('spy', 'test', 'auto') ON CONFLICT (action_class) DO NOTHING"
     )
     ctx = tools.ToolContext(app=None, person=None, workspace_root=tmp_path)
 

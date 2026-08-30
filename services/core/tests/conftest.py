@@ -28,7 +28,20 @@ BASE_URL = "http://test"
 OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 
 # Truncation order is child-before-parent so CASCADE never surprises us.
-_TABLES = ("turn_spans", "turns", "messages", "conversations", "sessions", "settings", "people")
+# action_classes is deliberately NOT here: it carries the migration seed the
+# policy kernel reads, so it persists across tests like schema, not per-test
+# state. consents/governance_events ARE per-test state and are truncated.
+_TABLES = (
+    "governance_events",
+    "consents",
+    "turn_spans",
+    "turns",
+    "messages",
+    "conversations",
+    "sessions",
+    "settings",
+    "people",
+)
 
 _schema_built = False
 
@@ -37,7 +50,10 @@ async def _build_schema() -> None:
     """Drop anything this suite owns, then migrate from empty."""
     conn = await asyncpg.connect(TEST_DSN)
     try:
-        await conn.execute(f"DROP TABLE IF EXISTS {', '.join(_TABLES)} CASCADE")
+        # action_classes is not in _TABLES (it is never per-test truncated) but
+        # must still be dropped for a clean re-migration, or migration 004's
+        # CREATE would collide with a leftover from a prior run.
+        await conn.execute(f"DROP TABLE IF EXISTS {', '.join(_TABLES)}, action_classes CASCADE")
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
     finally:
         await conn.close()
