@@ -139,7 +139,12 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "Use one when it gets a real answer instead of a guess. "
         "After writing a file, read it back before you say it worked. "
         "When a tool answers with a line starting 'Error:', say plainly what failed "
-        "and do not claim the work was done."
+        "and do not claim the work was done. "
+        "Some actions need the operator's approval first: when you call such a tool "
+        "the system shows them an approval card and the tool answers 'Awaiting your "
+        "approval'. That means your request is waiting for their OK, not that you are "
+        "unable to do it — say you've requested their approval, and never deny having "
+        "the capability."
     )
 
 
@@ -789,6 +794,16 @@ async def _run_turn(
         #    So a fired consent guard REPLACES: the persisted and ingested text
         #    is the correction ALONE. The original prose already streamed as `t`
         #    frames this turn; what must not survive is what the NEXT turn reads.
+        #  * capability_claim_check catches a false CAPABILITY denial ("I cannot
+        #    access external websites") of a tool that is actually registered —
+        #    the T7 defect, where the model disowned fetch_url the same turn it
+        #    called it. Like the consent lie, this is a whole-stance fabrication:
+        #    the reply exists to refuse the request, and replaying "I can't do X"
+        #    through history primes the small model to keep refusing. So it too
+        #    REPLACES — the durable record becomes the honest correction (which
+        #    NAMES the real tool), never the disavowal. A rare bit of real
+        #    content sharing the reply is sacrificed to keep the self-limiting
+        #    denial out of the next turn's context; it already streamed live.
         #
         # Streaming is unchanged: every correction still ships on its own
         # {correction} frame, in order, so the live screen shows the
@@ -837,18 +852,42 @@ async def _run_turn(
                 span.meta["has_pending_consent"] = has_pending_consent
             emit(_frame({"correction": consent_correction.text}))
 
-        # Compose the DURABLE text once, from the outcome above. When the
-        # consent guard fired, the fabricated prose is DROPPED — the record
-        # becomes the correction(s) alone, so the next turn never replays
-        # "awaiting approval". If narration ALSO fired on the same turn (a
-        # doubly-fabricated reply), its correction is kept too: the two
-        # corrections stand adjacent, each once, with NO lie between them — the
-        # coherent composition, not two blocks stacked around the fabrication.
-        # When only narration fired, its correction is APPENDED, preserving any
-        # real content the reply carried. When neither fired, the reply stands.
-        if consent_correction is not None:
+        # The capability-denial guard, on the same raw reply, same fail-OPEN
+        # contract. Derived from the live tool registry (tools.tool_names()): a
+        # denial is only false when its satisfying tool is actually available, so
+        # granting/removing a tool moves the verdict by itself.
+        try:
+            capability_correction = guards.capability_claim_check(text, tools.tool_names())
+        except Exception:
+            logger.exception("capability-claim guard raised; shipping the reply uncorrected")
+            capability_correction = None
+        if capability_correction is not None:
+            with turn.span("guard", "capability_claim") as span:
+                span.meta["capabilities"] = [
+                    {"tool": claim.target, "phrase": claim.phrase}
+                    for claim in capability_correction.claims
+                ]
+            emit(_frame({"correction": capability_correction.text}))
+
+        # Compose the DURABLE text once, from the outcome above. The consent and
+        # capability guards are REPLACE-class: each catches a whole-stance
+        # fabrication (a non-existent pending state, or a disowned capability)
+        # that must not survive into the next turn's context, so a fired one
+        # DROPS the model's prose and the record becomes the correction(s) alone.
+        # If narration ALSO fired on the same turn (a doubly-fabricated reply),
+        # its correction is kept too: the corrections stand adjacent, each once,
+        # in a stable order, with NO lie between them — the coherent composition,
+        # not blocks stacked around the fabrication. When ONLY narration fired,
+        # its correction is APPENDED, preserving any real content the reply
+        # carried. When none fired, the reply stands.
+        replace_corrections = [
+            c for c in (consent_correction, capability_correction) if c is not None
+        ]
+        if replace_corrections:
             persisted = "\n\n".join(
-                c.text for c in (correction, consent_correction) if c is not None
+                c.text
+                for c in (correction, consent_correction, capability_correction)
+                if c is not None
             )
         elif correction is not None:
             persisted = f"{text}\n\n{correction.text}"
@@ -856,18 +895,23 @@ async def _run_turn(
             persisted = text
 
         await _persist_assistant(pool, conversation_id, persisted)
-        # Memory hygiene: a consent-flow turn is interaction PLUMBING, not
-        # knowledge. A turn that raised an approval card (consent_sink non-empty)
-        # or that the consent guard had to correct is "awaiting your approval"
-        # noise; ingesting it makes /recall re-inject that noise into later turns
-        # — even in other conversations, since memory is per-person — which
-        # trains the model to narrate "awaiting approval" instead of calling the
-        # tool (the cross-conversation poison the owner's walk hit). The
-        # transcript still persists above; only the durable MEMORY must not carry
-        # it. Nothing is lost: the funnel raises a fresh card mechanically the
-        # next time the model calls the tool.
-        consent_flow_turn = bool(tool_ctx.consent_sink) or consent_correction is not None
-        if not consent_flow_turn:
+        # Memory hygiene: a guarded consent/capability turn is interaction
+        # PLUMBING, not knowledge. A turn that raised an approval card
+        # (consent_sink non-empty), that the consent guard had to correct, or
+        # that the capability guard had to correct is "awaiting approval" / "I
+        # can't do that" noise; ingesting it makes /recall re-inject that noise
+        # into later turns — even in other conversations, since memory is
+        # per-person — which trains the model to narrate a pending state or
+        # disown a tool instead of calling it (the cross-conversation poison the
+        # owner's walk hit). The transcript still persists above; only the
+        # durable MEMORY must not carry it. Nothing is lost: the funnel raises a
+        # fresh card mechanically the next time the model calls the tool.
+        plumbing_turn = (
+            bool(tool_ctx.consent_sink)
+            or consent_correction is not None
+            or capability_correction is not None
+        )
+        if not plumbing_turn:
             _queue_ingest(
                 app, turn, person, conversation_id, {"user": message, "assistant": persisted}
             )

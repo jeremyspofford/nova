@@ -475,3 +475,113 @@ async def test_both_guards_firing_compose_coherently_without_the_lie(
     assert sorted(g["name"] for g in guards_seen) == ["consent_claim", "narration"]
     await chat.drain_background()
     assert memory.ingests == []
+
+
+# -- T7: a false CAPABILITY denial is contradicted ------------------------
+#
+# The owner's live walk: the model disowned a tool (fetch_url) it holds. These
+# prove the wiring — the capability guard runs on the raw reply with the live
+# registry, streams a {correction} frame, records a "capability_claim" guard
+# span, REPLACES the disavowal in the durable record, and skips ingest.
+
+CAP_DENIAL = (
+    "I cannot access external websites or real-time data, including bigblueview.com."
+)
+
+
+async def test_a_false_capability_denial_is_corrected_and_replaces_the_lie(
+    owner_client, pool, mount_peers
+):
+    """The T7 defect (no-card branch): the model denies a capability it holds
+    (fetch_url is registered) without even calling the tool. The guard
+    contradicts it on its own frame, records a 'capability_claim' guard span
+    naming the real tool, and the PERSISTED reply is the correction ALONE — the
+    self-limiting denial must not survive into history to train the model to keep
+    disowning the tool."""
+    gateway = ScriptedGateway(rounds=((text(CAP_DENIAL),),))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "what's the latest from bigblueview.com?")
+
+    corrections = _corrections(sent)
+    assert len(corrections) == 1
+    assert corrections[0].startswith("Correction: I can do that")
+    assert "fetch_url" in corrections[0]
+
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == corrections[0]  # REPLACE: none of the false denial survives
+    assert "I cannot access external websites" not in stored
+
+    guard = await pool.fetchrow("SELECT name, meta FROM turn_spans WHERE kind = 'guard'")
+    assert guard["name"] == "capability_claim"
+    assert guard["meta"]["capabilities"][0]["tool"] == "fetch_url"
+
+    await chat.drain_background()
+    assert memory.ingests == []  # a guard-corrected turn is plumbing, not knowledge
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_the_owner_scenario_card_raised_then_capability_denied(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The exact live-walk trace: the model CALLS fetch_url (the funnel raises a
+    real card and returns 'Awaiting your approval'), then answers with a false
+    capability denial. The consent guard stays silent (a card really IS pending),
+    the capability guard fires (fetch_url is registered), and the durable record
+    is the honest correction — never the disavowal."""
+    spy = _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (fetch_call("c1", URL),),
+            (text("I cannot access external websites, so I can't get that."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "what's the latest from bigblueview.com?")
+
+    assert consent_frames(sent)  # a real card was raised
+    assert spy.calls == []  # never executed on raise
+    corrections = _corrections(sent)
+    assert len(corrections) == 1
+    assert "fetch_url" in corrections[0]  # the capability guard fired
+
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert "I cannot access external websites" not in stored
+    assert stored == corrections[0]
+
+    guard_names = [
+        g["name"] for g in await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
+    ]
+    assert guard_names == ["capability_claim"]  # consent guard silent — card is pending
+
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_an_honest_specific_result_reply_is_not_capability_corrected_and_still_ingests(
+    owner_client, pool, mount_peers
+):
+    """Precision at the seam: a reply about ONE specific failed attempt ('I
+    couldn't fetch that page — it returned a 404') is an honest result, not a
+    denial of the ability, so the capability guard stays silent — and because no
+    guard fired, the turn is ordinary knowledge and is still ingested (it is not
+    wrongly marked plumbing)."""
+    reply = "I couldn't fetch that page — it returned a 404, so there's nothing to show."
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "what's the latest from bigblueview.com?")
+
+    assert _corrections(sent) == []  # honest specific result, left alone
+    guard_names = [
+        g["name"] for g in await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
+    ]
+    assert guard_names == []
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == reply  # untouched — no guard fired
+    await chat.drain_background()
+    assert len(memory.ingests) == 1  # ordinary turn, not plumbing

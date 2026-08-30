@@ -758,3 +758,196 @@ def consent_claim_check(reply_text: str, has_pending_consent: bool) -> Correctio
         if _asserts_pending(clause):
             return Correction(claims=(), text=CONSENT_CLAIM_CORRECTION)
     return None
+
+
+# -- the capability-claim guard --------------------------------------------
+#
+# A third sibling, for the class the live walk hit last: asked "what's the latest
+# from bigblueview.com?", the model CALLED fetch_url, the funnel raised a real
+# approval card and returned "Awaiting your approval" — and then the model
+# answered "I cannot access external websites or real-time data ... my
+# capabilities don't include web browsing." A FALSE CAPABILITY DENIAL: it denied
+# a tool (fetch_url) it had JUST exercised. narration_check is for fabricated
+# COMPLETED actions and consent_claim_check for fabricated PENDING states;
+# neither contradicts a model that disowns a capability it actually holds.
+#
+# capability_claim_check(reply_text, available_tools) fires ONLY when the reply
+# asserts a FIRST-PERSON, PRESENT-TENSE denial of a capability whose satisfying
+# tool is ACTUALLY REGISTERED (present in available_tools). The map from a
+# capability phrase to the tool that provides it is the control's only knowledge,
+# and it is checked against the LIVE tool set the caller passes — never a
+# hardcoded belief about what exists (CLAUDE.md: "granting an MCP filesystem
+# server silences the filesystem check by itself"). If the satisfying tool is NOT
+# registered the denial is HONEST and the guard stays silent — the SAME sentence
+# flips verdict on that one membership test, which is the derived-not-hardcoded
+# property (mirroring consent_claim_check's has_pending toggle).
+#
+# Built to the two family rules: PURE (text + the tool names; no model, network
+# or clock, so it can never itself narrate) and PRECISION-first (a wrongly-
+# corrected honest reply makes the guard the liar, worse than a missed one). Two
+# precision cuts carry that:
+#
+#   * A capability phrase is a GENERAL ability ("access websites", "read files",
+#     "fetch URLs") — a plural or indefinite noun, never a specific target. So a
+#     SPECIFIC failed attempt ("I can't find a file named report.md", "I couldn't
+#     fetch that page — it 404'd", "that URL didn't load") never matches a phrase:
+#     "that page"/"report.md" are not the general noun, and a past-tense
+#     "couldn't" is not a present denial. An honest result about ONE attempt is
+#     left alone; only a denial of the ABILITY itself is contradicted.
+#   * The denial must be first-person and present: "I" governs the inability
+#     ("I can't", "I'm unable to", "my capabilities don't include"), so a
+#     hedge ("I might not be able to"), a question, a future form, a past attempt
+#     ("I couldn't"), or another subject ("you can't", "it cannot") never reaches
+#     that form and so never fires.
+
+# Capability phrase -> the tool that satisfies it. DERIVED against the live tool
+# set at the call site: a phrase only counts as a false denial when its tool is
+# in available_tools. A new tool that provides a capability is added here the
+# same way narration's _KIND_TOOLS is — and the pinned corpus in
+# test_capability_guard.py goes red the day a shipped tool's capability is
+# unmapped, which is the intended alarm. Every phrase is a GENERAL ability, never
+# a specific target: plural/indefinite nouns only, so "read files"/"read a file"
+# match but "read that file"/"read report.md" do not.
+_CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"browse\s+(?:the\s+)?(?:web|internet|websites?)"
+            r"|browsing\s+(?:the\s+)?(?:web|internet)"
+            r"|web\s+browsing"
+            r"|access(?:ing)?\s+(?:external\s+)?websites?"
+            r"|access(?:ing)?\s+the\s+(?:web|internet)"
+            r"|access(?:ing)?\s+(?:external|real-?time)\s+data"
+            r"|real-?time\s+data"
+            r"|fetch(?:ing)?\s+(?:a\s+)?urls?",
+            re.I,
+        ),
+        "fetch_url",
+    ),
+    (
+        re.compile(
+            r"read(?:ing)?\s+(?:a\s+)?files?\b"
+            r"|access(?:ing)?\s+(?:your\s+|the\s+)?files?\b",
+            re.I,
+        ),
+        "workspace_read_file",
+    ),
+    (
+        re.compile(
+            r"(?:write|writing|save|saving|create|creating)\s+(?:a\s+)?files?\b",
+            re.I,
+        ),
+        "workspace_write_file",
+    ),
+    (
+        re.compile(
+            r"list(?:ing)?\s+(?:your\s+|the\s+)?files?\b"
+            r"|list(?:ing)?\s+(?:the\s+contents\s+of\s+)?director(?:y|ies)\b",
+            re.I,
+        ),
+        "workspace_list_files",
+    ),
+    (
+        re.compile(
+            r"sav(?:e|ing)\s+(?:\w+\s+){0,2}?to\s+(?:your\s+)?memory"
+            r"|stor(?:e|ing)\s+(?:\w+\s+){0,2}?(?:in|to)\s+(?:your\s+)?memory"
+            r"|remember(?:ing)?\s+(?:things?|information|anything)\b",
+            re.I,
+        ),
+        "memory_save",
+    ),
+    (
+        re.compile(
+            r"search(?:ing)?\s+(?:my\s+|your\s+|through\s+)?memor(?:y|ies)"
+            r"|search(?:ing)?\s+(?:my\s+|your\s+)?notes"
+            r"|recall(?:ing)?\s+(?:things?|information|our\s+past)\b",
+            re.I,
+        ),
+        "memory_search",
+    ),
+)
+
+# A first-person, PRESENT-tense inability lead — the capability denied follows
+# it. Past ("I couldn't"), other subjects ("you can't", "it cannot") and hedges
+# ("I might not be able to") use other words and so never match, which is how a
+# past/attributed/hedged form is dropped without a separate blocker. The
+# optional "'m"/" am" lets the contraction ("I'm unable to") and the full form
+# ("I am unable to") share one pattern.
+_DENIAL_LEAD = re.compile(
+    r"\bi(?:'m|\s+am)?\s+(?:"
+    r"cannot|can'?t|can\s+not"
+    r"|unable\s+to"
+    r"|not\s+able\s+to"
+    r"|don'?t\s+have\s+the\s+ability\s+to|do\s+not\s+have\s+the\s+ability\s+to"
+    r"|lack\s+the\s+ability\s+to"
+    r"|don'?t\s+have\s+access\s+to|do\s+not\s+have\s+access\s+to"
+    r")"
+    r"|\bmy\s+capabilit(?:y|ies)\s+(?:don'?t|do\s+not|doesn'?t|does\s+not)\s+include",
+    re.I,
+)
+# The trailing denial form, where the capability phrase comes FIRST:
+# "<capability> is not something I can do."
+_TRAILING_DENIAL = re.compile(r"\bis\s+not\s+something\s+i\s+can\s+do\b", re.I)
+
+
+def _capability_correction_text(tools_named: Sequence[str]) -> str:
+    """The stated correction: honest, and it NAMES the real tool(s) — derived
+    from the registry the caller passed, so the operator sees exactly which
+    capability was wrongly disowned. Deliberately worded to carry no inability
+    lead and no pending-state phrase, so running any guard on it (self-reference)
+    comes back clean."""
+    listed = ", ".join(dict.fromkeys(tools_named))  # dedupe, preserve order
+    return (
+        f"Correction: I can do that — I have a tool for it ({listed}). "
+        "If it needs the operator's approval first, calling the tool raises an "
+        "approval card for them to approve; that request waiting on their OK is "
+        "not a limit on what I can do."
+    )
+
+
+def capability_claim_check(
+    reply_text: str, available_tools: Sequence[str]
+) -> Correction | None:
+    """Contradict a first-person denial of a capability a registered tool holds.
+
+    Returns a Correction naming the wrongly-disowned tool(s), or None when the
+    reply is honest — a denial of a capability with NO registered tool, a
+    specific failed attempt, a hedge/question/future/past/other-subject form, or
+    a plain reply. Pure and precision-first (see the section header). Derived
+    from `available_tools`: a denial is only false when its satisfying tool is
+    actually in that set, so the verdict reads the live registry, never a list.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    registered = frozenset(available_tools)
+    denied: list[tuple[str, str]] = []  # (matched capability phrase, tool)
+    seen: set[str] = set()
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # a question/offer asserts no inability
+        lead = _DENIAL_LEAD.search(clause)
+        trailing = _TRAILING_DENIAL.search(clause)
+        if lead is None and trailing is None:
+            continue
+        for pattern, tool in _CAPABILITY_TOOLS:
+            if tool not in registered or tool in seen:
+                # No such tool -> the denial is HONEST; already seen -> counted.
+                continue
+            for m in pattern.finditer(clause):
+                # A LEAD form governs the capability that FOLLOWS it; the
+                # trailing form governs the capability BEFORE it. Requiring the
+                # phrase on the denial's own side keeps an unrelated capability
+                # verb elsewhere in the clause from being swept in.
+                after_lead = lead is not None and m.start() >= lead.end()
+                before_trailing = trailing is not None and m.end() <= trailing.start()
+                if after_lead or before_trailing:
+                    seen.add(tool)
+                    denied.append((m.group(0).strip(), tool))
+                    break
+    if not denied:
+        return None
+    tools_named = [tool for _phrase, tool in denied]
+    claims = tuple(
+        UnbackedClaim(kind="capability_denied", target=tool, phrase=phrase[:80])
+        for phrase, tool in denied
+    )
+    return Correction(claims=claims, text=_capability_correction_text(tools_named))
