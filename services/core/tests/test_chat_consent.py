@@ -349,14 +349,19 @@ async def test_an_awaiting_reply_is_not_corrected_when_a_card_is_pending_in_the_
 # -- the anti-poison fix: a contradicted stance does not persist the lie ----
 
 
-async def test_a_fired_consent_guard_keeps_only_the_correction_in_memory(
+async def test_a_consent_flow_turn_is_not_ingested_into_memory(
     owner_client, pool, mount_peers
 ):
-    """The context-poisoning fix, the MEMORY half. The owner's walk failed
-    because the fabricated 'awaiting approval' prose was persisted (correction
-    appended AFTER it), so history_window/recall fed it back and the small model
-    pattern-completed it instead of calling the tool. What ingest remembers now
-    is the correction ALONE — the lie is not what any later turn reads."""
+    """The context-poisoning fix, the MEMORY half — and the deeper root cause the
+    owner's second walk exposed. A consent-flow turn is interaction PLUMBING, not
+    knowledge: ingesting an 'awaiting approval' reply makes /recall re-inject that
+    noise into LATER turns — even in other conversations, since memory is
+    per-person — training the small model to narrate 'awaiting approval' (or hedge
+    and defer) instead of calling the tool. So a turn the consent guard fired on
+    ingests NOTHING. The transcript still keeps the correction for the operator
+    (asserted in test_a_parroted_pending_claim_with_no_real_card_is_corrected);
+    only durable memory must stay clean, because memory is what crosses
+    conversations."""
     fabrication = "That fetch is awaiting your approval."
     gateway = ScriptedGateway(rounds=((text(fabrication),),))
     memory = FakeMemory()
@@ -365,12 +370,44 @@ async def test_a_fired_consent_guard_keeps_only_the_correction_in_memory(
     await _say(owner_client, "what's new on bigblueview.com")
 
     await chat.drain_background()
+    assert memory.ingests == []  # plumbing is not knowledge — nothing to recall later
+
+
+async def test_a_turn_that_raises_a_real_card_is_not_ingested(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """Even a LEGITIMATE awaiting turn — a real card actually raised — is
+    plumbing, not knowledge, and must not be ingested: recall would prime
+    'awaiting approval' in later turns exactly as a fabrication would. The signal
+    is mechanical (the turn's consent_sink is non-empty), not the prose."""
+    _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((fetch_call("c1", URL),), (text("I've raised an approval card for that."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "check the pricing page")
+
+    assert consent_frames(sent)  # a real card was raised this turn
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_an_ordinary_turn_is_still_ingested(owner_client, pool, mount_peers):
+    """The skip is SCOPED to consent-flow turns: an ordinary reply — no card
+    raised, no guard correction — is ingested exactly as before, so the memory
+    hygiene fix does not silently stop Nova from remembering real exchanges."""
+    gateway = ScriptedGateway(
+        rounds=((text("KV offloading moves the attention cache to CPU RAM to free VRAM."),),)
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client, "what is kv offloading?")
+
+    await chat.drain_background()
     assert len(memory.ingests) == 1
-    ingested = memory.ingests[0]["exchange"]["assistant"]
-    # The correction (which itself mentions "awaiting") is kept; the model's own
-    # fabricated wording is not — so a later recall cannot feed the lie back.
-    assert ingested == guards.CONSENT_CLAIM_CORRECTION
-    assert "That fetch is awaiting" not in ingested
 
 
 async def test_a_fired_narration_guard_keeps_appending_to_preserve_real_content(
@@ -430,9 +467,11 @@ async def test_both_guards_firing_compose_coherently_without_the_lie(
     assert "report.md" not in stored
     assert "That fetch is awaiting" not in stored
 
-    # Both guard firings are on record, and memory keeps only the corrections.
+    # Both guard firings are on record. The transcript keeps the coherent
+    # correction (asserted above, for the operator); but this is a consent-flow
+    # turn, so durable MEMORY ingests nothing — neither fabrication nor
+    # correction crosses into later turns' recall.
     guards_seen = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
     assert sorted(g["name"] for g in guards_seen) == ["consent_claim", "narration"]
     await chat.drain_background()
-    ingested = memory.ingests[0]["exchange"]["assistant"]
-    assert ingested == f"{guards.CORRECTION_TEXT}\n\n{guards.CONSENT_CLAIM_CORRECTION}"
+    assert memory.ingests == []

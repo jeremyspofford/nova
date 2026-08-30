@@ -856,9 +856,21 @@ async def _run_turn(
             persisted = text
 
         await _persist_assistant(pool, conversation_id, persisted)
-        _queue_ingest(
-            app, turn, person, conversation_id, {"user": message, "assistant": persisted}
-        )
+        # Memory hygiene: a consent-flow turn is interaction PLUMBING, not
+        # knowledge. A turn that raised an approval card (consent_sink non-empty)
+        # or that the consent guard had to correct is "awaiting your approval"
+        # noise; ingesting it makes /recall re-inject that noise into later turns
+        # — even in other conversations, since memory is per-person — which
+        # trains the model to narrate "awaiting approval" instead of calling the
+        # tool (the cross-conversation poison the owner's walk hit). The
+        # transcript still persists above; only the durable MEMORY must not carry
+        # it. Nothing is lost: the funnel raises a fresh card mechanically the
+        # next time the model calls the tool.
+        consent_flow_turn = bool(tool_ctx.consent_sink) or consent_correction is not None
+        if not consent_flow_turn:
+            _queue_ingest(
+                app, turn, person, conversation_id, {"user": message, "assistant": persisted}
+            )
         decided = "ok"
         emit(DONE_FRAME)
     except Exception as exc:
