@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg",
     "httpx",
     "argon2-cffi",
+    "cryptography",
 ]
 
 [dependency-groups]
