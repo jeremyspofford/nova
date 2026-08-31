@@ -93,6 +93,107 @@ async def test_no_results_is_an_honest_non_empty_answer_not_a_failure(search_ctx
     assert "No web results" in result
 
 
+# -- recency: news category, with a general fallback -----------------------
+# Measured on live searxng: "latest / news / 2026" phrasing gets junk from the
+# general engine and 143 relevant, current articles from categories=news. These
+# pin that the recency path routes to news, falls back to general on an empty
+# news day, and states a failure only when BOTH engines come back empty.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "what's the latest on the pixel",
+        "openai news",
+        "quantum breakthroughs in 2026",
+    ],
+)
+async def test_a_recency_query_hits_the_news_category(search_ctx, query):
+    ctx, searx = search_ctx
+    searx.results = ({"title": "t", "url": "https://example.com/n", "content": "c"},)
+    result, ok = await _run(ctx, query=query)
+    assert ok is True
+    # One request, routed to the NEWS engine (the measured fix). News answered
+    # with results, so there is no general fallback.
+    assert searx.categories == ["news"]
+    assert result.startswith("Top 1 news results")
+
+
+async def test_a_non_recency_query_stays_on_the_general_engine(search_ctx):
+    ctx, searx = search_ctx
+    searx.results = ({"title": "t", "url": "https://example.com/g", "content": "c"},)
+    result, ok = await _run(ctx, query="how to set up a raspberry pi")
+    assert ok is True
+    # No news category: a how-to must still get the general web engine.
+    assert searx.categories == [""]
+    assert "news" not in searx.categories
+    assert result.startswith("Top 1 web results")
+
+
+async def test_empty_news_falls_back_to_a_general_search(search_ctx):
+    ctx, searx = search_ctx
+    searx.news_results = ()  # a quiet news day
+    searx.results = (
+        {"title": "General hit", "url": "https://example.com/g", "content": "still relevant"},
+    )
+    result, ok = await _run(ctx, query="latest on the pixel")
+    assert ok is True
+    # News first (empty), THEN a general fallback that answered — two requests.
+    assert searx.categories == ["news", ""]
+    assert "General hit" in result
+    assert result.startswith("Top 1 web results")  # labeled as web, not news
+
+
+async def test_both_engines_empty_is_a_stated_failure_not_a_fake_empty(search_ctx):
+    ctx, searx = search_ctx
+    searx.results = ()
+    searx.news_results = ()
+    result, ok = await _run(ctx, query="latest on asdfqwerzxcv nonexistent")
+    # Two searches (news, then general) both came back empty: a stated failure,
+    # never a fake-empty "no results" for a live-info query.
+    assert ok is False
+    assert result.startswith(ERROR_PREFIX)
+    assert searx.categories == ["news", ""]
+    assert "no news or general web results" in result
+
+
+# -- the recency marker detection itself -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "what's the latest on the pixel",
+        "openai news",
+        "recent AI papers",
+        "current weather",
+        "what happened today",
+        "pixel 11 released",
+        "google announcement",
+        "updates to the tax code",
+        "events this week",
+        "best phone in 2026",
+        "news",
+    ],
+)
+def test_recency_phrasings_are_detected(query):
+    assert web_search._is_recency_query(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "how to set up a raspberry pi",
+        "python list comprehension syntax",
+        "capital of france",
+        "newsletter design tips",  # whole-word: 'news' inside 'newsletter' must not trip
+        "recentavsky biography",  # nor 'recent' inside a name
+    ],
+)
+def test_non_recency_phrasings_are_not_detected(query):
+    assert web_search._is_recency_query(query) is False
+
+
 # -- caps ------------------------------------------------------------------
 
 

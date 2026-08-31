@@ -190,7 +190,10 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "A web fetch is a LIVE, point-in-time read. For anything time-sensitive — "
         "'the latest', current news, today's status — call fetch_url again to get "
         "fresh results; never answer with what an earlier fetch or a recalled note "
-        "said and present it as current."
+        "said and present it as current. "
+        "If a search's results do not actually answer the question, refine the query "
+        "and search again — a couple of tries is fine — instead of asking the "
+        "operator to search or whether you should; just do it."
     )
 
 

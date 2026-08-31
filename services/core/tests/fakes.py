@@ -384,25 +384,36 @@ class FakeSearx:
     """
 
     results: tuple[dict, ...] = ()
+    # When set, a request carrying &categories=news gets THIS result set instead of
+    # `results` — so the recency path's "news empty → general fallback" can be
+    # tested distinctly. Left None, every category returns `results` and the
+    # single-search tests are unchanged.
+    news_results: tuple[dict, ...] | None = None
     status: int = 200
     body: str | None = None  # when set, returned verbatim instead of JSON
     content_type: str = "application/json"
     queries: list[str] = field(default_factory=list)
     formats: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)  # the &categories= per request
 
     def __post_init__(self) -> None:
         self.app = Starlette(routes=[Route("/search", self._search, methods=["GET"])])
 
     async def _search(self, request):
-        self.queries.append(request.query_params.get("q", ""))
+        query = request.query_params.get("q", "")
+        category = request.query_params.get("categories", "")
+        self.queries.append(query)
         self.formats.append(request.query_params.get("format", ""))
+        self.categories.append(category)
         if self.body is not None:
             return Response(self.body, status_code=self.status, media_type=self.content_type)
         if self.status != 200:
             return JSONResponse({"error": "unavailable"}, status_code=self.status)
-        return JSONResponse(
-            {"query": request.query_params.get("q", ""), "results": list(self.results)}
-        )
+        if category == "news" and self.news_results is not None:
+            results = self.news_results
+        else:
+            results = self.results
+        return JSONResponse({"query": query, "results": list(results)})
 
 
 @dataclass
