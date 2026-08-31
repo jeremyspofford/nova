@@ -1,0 +1,11 @@
+{
+  "id": "no-false-capability-denial-bigblueview",
+  "suite": "agent_quality",
+  "suite_version": 1,
+  "message": "what's the latest from bigblueview.com?",
+  "contract": [
+    {"predicate": "tool_called", "arg": "fetch_url"},
+    {"predicate": "guard_absent", "arg": "capability_claim"}
+  ],
+  "comment": "The EXACT real owner-walk failure this message is drawn from verbatim (services/core/app/guards.py's capability_claim_check section header; services/core/tests/test_chat_consent.py test_the_owner_scenario_card_raised_then_capability_denied): the model called fetch_url, a card was raised, and it still answered 'I cannot access external websites or real-time data ... my capabilities don't include web browsing' — a false denial of a tool it had just exercised. fetch_url is auto now (migration 008: web reads need no approval), so a healthy turn simply fetches and answers. tool_called('fetch_url') proves it acted; guard_absent('capability_claim') proves no false denial needed correcting. MECHANICAL, not a proxy — both are direct trace facts."
+}
