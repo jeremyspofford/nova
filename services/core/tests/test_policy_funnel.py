@@ -14,14 +14,22 @@ from pathlib import Path
 
 from app import consents, policy, tools
 from app.identity import Person
-from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
 
 pytestmark = requires_db
 
 NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
-FETCH_SCHEMA = next(t.parameters for t in web.TOOLS if t.name == "fetch_url")
+
+# The consent-MECHANISM is proven with a PRIVATE consent-tier class, decoupled
+# from fetch_url's real disposition (migration 008 made fetch_url 'auto' by owner
+# directive). Mirrors test_policy_e2e.py's e2e_walk_fetch: a monkeypatched Tool +
+# an action_classes row seeded 'consent', so the card->await->approve->burn gate
+# is still exercised end to end even though no SEEDED tool is consent-tier now.
+CONSENT_ACTION = "funnel_consent_probe"
+# A permissive url property (no declared type) validates any value — enough for
+# the mechanism, same shape test_policy_e2e.py's WALK_SCHEMA uses.
+CONSENT_SCHEMA = {"type": "object", "properties": {"url": {}}, "additionalProperties": True}
 
 
 @dataclass
@@ -32,6 +40,25 @@ class Spy:
     async def __call__(self, args: dict, ctx: ToolContext) -> str:
         self.calls.append(args)
         return self.result
+
+
+async def _arm_consent_tool(pool, monkeypatch, spy: Spy) -> None:
+    """Register the private consent-tier tool + its action_classes row.
+
+    action_classes is deliberately NOT per-test truncated (it carries the
+    migration seed the kernel reads), so ON CONFLICT re-asserts 'consent' with a
+    zeroed streak each run, keeping the class in a known consent state regardless
+    of a prior test's burn."""
+    monkeypatch.setitem(
+        tools.REGISTRY, CONSENT_ACTION, Tool(CONSENT_ACTION, "d", CONSENT_SCHEMA, spy)
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+        "consecutive_successes) VALUES ($1, 'outward', 'consent', false, 0) "
+        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
+        "earned = false, consecutive_successes = 0, updated_at = now()",
+        CONSENT_ACTION,
+    )
 
 
 async def _person(pool, role: str = "owner") -> Person:
@@ -83,14 +110,13 @@ async def test_an_auto_tool_runs_through_the_gate(pool):
 
 async def test_a_consent_tool_awaits_approval_without_running(pool, monkeypatch):
     spy = Spy()
-    monkeypatch.setitem(
-        tools.REGISTRY, "fetch_url", Tool("fetch_url", "d", FETCH_SCHEMA, spy)
-    )
+    await _arm_consent_tool(pool, monkeypatch, spy)
     person = await _person(pool)
     conv = await _conversation(pool, person)
     sink: list[dict] = []
     result, ok = await tools.dispatch(
-        "fetch_url", {"url": "https://example.com/x"}, _ctx(person, conversation_id=conv, sink=sink)
+        CONSENT_ACTION, {"url": "https://example.com/x"},
+        _ctx(person, conversation_id=conv, sink=sink),
     )
 
     assert ok is False
@@ -98,7 +124,7 @@ async def test_a_consent_tool_awaits_approval_without_running(pool, monkeypatch)
     assert result.startswith("Awaiting your approval")
     assert spy.calls == []  # the executor never ran — nothing fetched
     # The card was raised, surfaced via the sink, and is pending in the DB.
-    assert len(sink) == 1 and sink[0]["action_class"] == "fetch_url"
+    assert len(sink) == 1 and sink[0]["action_class"] == CONSENT_ACTION
     assert len(await consents.pending_for_conversation(pool, conv)) == 1
 
 
@@ -107,14 +133,12 @@ async def test_a_consent_tool_awaits_approval_without_running(pool, monkeypatch)
 
 async def test_an_approved_consent_lets_the_funnel_run_and_burns_it(pool, monkeypatch):
     spy = Spy()
-    monkeypatch.setitem(
-        tools.REGISTRY, "fetch_url", Tool("fetch_url", "d", FETCH_SCHEMA, spy)
-    )
+    await _arm_consent_tool(pool, monkeypatch, spy)
     person = await _person(pool)
     args = {"url": "https://example.com/x"}
     card = await consents.raise_consent(
         pool,
-        action_class="fetch_url",
+        action_class=CONSENT_ACTION,
         args=args,
         summary="s",
         person_id=person.id,
@@ -125,14 +149,14 @@ async def test_an_approved_consent_lets_the_funnel_run_and_burns_it(pool, monkey
         pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=person.id
     )
 
-    result, ok = await tools.dispatch("fetch_url", args, _ctx(person))
+    result, ok = await tools.dispatch(CONSENT_ACTION, args, _ctx(person))
     assert ok is True
     assert spy.calls == [args]  # it actually ran, exactly once
     row = await consents.get(pool, uuid.UUID(card["consent_id"]))
     assert row["used_at"] is not None  # and the approval is spent
 
     # Single-use: an identical call now awaits a fresh approval.
-    result2, ok2 = await tools.dispatch("fetch_url", args, _ctx(person))
+    result2, ok2 = await tools.dispatch(CONSENT_ACTION, args, _ctx(person))
     assert ok2 is False and result2.startswith("Awaiting your approval")
     assert spy.calls == [args]  # still just the one run
 

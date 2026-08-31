@@ -115,6 +115,23 @@ def test_only_policy_constructs_an_allow_decision():
 
 pytestmark = requires_db
 
+# The consent-tier decisions are proven with a PRIVATE class, not fetch_url:
+# migration 008 made fetch_url 'auto' by owner directive (web reads need no
+# approval), so it no longer requires consent. The kernel reads action_classes
+# (never tools.REGISTRY), so a seeded consent row is all these need. action_classes
+# is not per-test truncated, so ON CONFLICT re-asserts 'consent' each run.
+CONSENT_ACTION = "policy_consent_probe"
+
+
+async def _seed_consent_class(pool) -> None:
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+        "consecutive_successes) VALUES ($1, 'outward', 'consent', false, 0) "
+        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
+        "earned = false, consecutive_successes = 0, updated_at = now()",
+        CONSENT_ACTION,
+    )
+
 
 async def _person(pool, role: str = "owner") -> Person:
     pid = await pool.fetchval(
@@ -151,14 +168,15 @@ async def test_an_unknown_action_class_is_denied_fail_closed(pool):
 
 
 async def test_a_consent_tool_without_approval_requires_consent(pool):
+    await _seed_consent_class(pool)
     person = await _person(pool)
     conv = await _conversation(pool, person)
     args = {"url": "https://example.com/pricing"}
-    decision = await policy.authorize(_ctx(person, conv), "fetch_url", args)
+    decision = await policy.authorize(_ctx(person, conv), CONSENT_ACTION, args)
 
     assert decision.outcome == policy.REQUIRE_CONSENT
     card = decision.card_spec
-    assert card["action_class"] == "fetch_url"
+    assert card["action_class"] == CONSENT_ACTION
     assert card["args_hash"] == consents.args_hash(args)
     assert card["conversation_id"] == str(conv)
     assert card["requested_by"] == {"person_id": str(person.id), "agent": "chat"}
@@ -169,21 +187,23 @@ async def test_a_consent_tool_without_approval_requires_consent(pool):
 
 
 async def test_asking_twice_reuses_the_one_pending_card(pool):
+    await _seed_consent_class(pool)
     person = await _person(pool)
     conv = await _conversation(pool, person)
     args = {"url": "https://example.com/pricing"}
-    first = await policy.authorize(_ctx(person, conv), "fetch_url", args)
-    second = await policy.authorize(_ctx(person, conv), "fetch_url", args)
+    first = await policy.authorize(_ctx(person, conv), CONSENT_ACTION, args)
+    second = await policy.authorize(_ctx(person, conv), CONSENT_ACTION, args)
     assert first.card_spec["consent_id"] == second.card_spec["consent_id"]
     assert len(await consents.pending_for_conversation(pool, conv)) == 1
 
 
 async def test_an_approved_consent_is_burned_and_allows(pool):
+    await _seed_consent_class(pool)
     person = await _person(pool)
     args = {"url": "https://example.com/pricing"}
     card = await consents.raise_consent(
         pool,
-        action_class="fetch_url",
+        action_class=CONSENT_ACTION,
         args=args,
         summary="s",
         person_id=person.id,
@@ -194,19 +214,20 @@ async def test_an_approved_consent_is_burned_and_allows(pool):
         pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=person.id
     )
 
-    decision = await policy.authorize(_ctx(person), "fetch_url", args)
+    decision = await policy.authorize(_ctx(person), CONSENT_ACTION, args)
     assert decision.outcome == policy.ALLOW
 
     # Single-use: the approval is now spent, so a second identical request
     # falls back to raising a fresh card.
     row = await consents.get(pool, uuid.UUID(card["consent_id"]))
     assert row["used_at"] is not None
-    again = await policy.authorize(_ctx(person), "fetch_url", args)
+    again = await policy.authorize(_ctx(person), CONSENT_ACTION, args)
     assert again.outcome == policy.REQUIRE_CONSENT
 
 
 async def test_a_consent_tool_with_no_identity_is_denied(pool):
     """A consent must bind to a requestor; with no person there is nothing to
     bind, so it is refused (fail-closed) rather than raised unbound."""
-    decision = await policy.authorize(_ctx(None), "fetch_url", {"url": "https://x/y"})
+    await _seed_consent_class(pool)
+    decision = await policy.authorize(_ctx(None), CONSENT_ACTION, {"url": "https://x/y"})
     assert decision.outcome == policy.DENY

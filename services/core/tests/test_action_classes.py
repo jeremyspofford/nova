@@ -1,9 +1,15 @@
 """The action-class table: the DATA the kernel reads, and its tripwire.
 
-The seed is ruling S3-R1 (fetch_url=consent, everything else auto), and the
-load-bearing property is the tripwire: every REGISTERED tool must have a row,
-or it is denied by default AND this suite reddens — a new tool is never auto by
-accident, and the day one lands without a migration row this test says so.
+The seed was ruling S3-R1 (fetch_url=consent, everything else auto); migration
+008 then flipped fetch_url to auto as an owner-directed disposition edit (web
+reads need no approval — a read-only, SSRF-guarded fetch is a contained read).
+So the seed the kernel now reads is: EVERY currently-registered tool is auto.
+The load-bearing property is unchanged and independent of that: every REGISTERED
+tool must have a row, or it is denied by default AND this suite reddens — a new
+tool is never auto by accident, and the day one lands without a migration row
+this test says so. (The consent MECHANISM is proven with a private consent-tier
+class in test_chat_consent.py / test_policy_funnel.py, decoupled from fetch_url's
+real disposition — see those files.)
 """
 from __future__ import annotations
 
@@ -13,13 +19,17 @@ from tests.conftest import requires_db
 pytestmark = requires_db
 
 
-async def test_the_seed_makes_fetch_url_consent_and_the_rest_auto(pool):
+async def test_the_seed_makes_every_registered_tool_auto(pool):
+    # Deliberate tripwire update (migration 008): fetch_url was seeded 'consent'
+    # under S3-R1 and is now 'auto' by owner directive. The seed carries no
+    # consent-tier class at all anymore; the consent flow is exercised via a
+    # PRIVATE class in the consent-mechanism suites so it stays fully proven.
     rows = {
         r["action_class"]: r["disposition"]
         for r in await pool.fetch("SELECT action_class, disposition FROM action_classes")
     }
-    assert rows["fetch_url"] == "consent"
     for name in (
+        "fetch_url",
         "workspace_write_file",
         "workspace_read_file",
         "workspace_list_files",

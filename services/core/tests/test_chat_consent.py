@@ -8,6 +8,14 @@ run, and an APPROVED card is not executed by the decision itself — only a
 re-attempt through the funnel, in a later turn, actually runs the action and
 burns the consent (ruling S3-R4). No fake success anywhere: the spy executor
 proves exactly when the real tool body did or did not run.
+
+The consent-MECHANISM tests drive a PRIVATE consent-tier class (CONSENT_ACTION,
+armed by _arm_consent_tool), NOT fetch_url: migration 008 made fetch_url 'auto'
+by owner directive (web reads need no approval), so it no longer raises a card.
+Decoupling the mechanism from fetch_url's real disposition keeps the
+card->deny->approve->burn loop fully proven while the auto-fetch tests below
+prove the new no-card path (a fetch_url turn runs directly and, being ephemeral,
+is still not ingested — round 5). This mirrors test_policy_e2e.py's e2e_walk_fetch.
 """
 from __future__ import annotations
 
@@ -68,6 +76,17 @@ def fetch_call(call_id: str, url: str) -> dict:
     return call_delta(0, call_id=call_id, name="fetch_url", arguments=json.dumps({"url": url}))
 
 
+# The private consent-tier class the mechanism tests raise a card with (fetch_url
+# is auto now — see the module docstring).
+CONSENT_ACTION = "consent_probe"
+
+
+def probe_call(call_id: str, url: str) -> dict:
+    return call_delta(
+        0, call_id=call_id, name=CONSENT_ACTION, arguments=json.dumps({"url": url})
+    )
+
+
 async def _say(client, message: str) -> list:
     resp = await client.post("/api/v1/chat/stream", json={"message": message})
     assert resp.status_code == 200, resp.text
@@ -92,16 +111,37 @@ def _spy_fetch(monkeypatch) -> Spy:
     return spy
 
 
+async def _arm_consent_tool(pool, monkeypatch) -> Spy:
+    """Register a PRIVATE consent-tier tool + its action_classes row, so the
+    card->deny->approve->burn mechanism stays proven even though no SEEDED tool
+    is consent-tier anymore (migration 008). Mirrors test_policy_e2e.py's
+    e2e_walk_fetch. action_classes is not per-test truncated, so ON CONFLICT
+    re-asserts 'consent' with a zeroed streak each run — a prior test's burn
+    cannot leak an earned/auto disposition into this one."""
+    spy = Spy()
+    monkeypatch.setitem(
+        tools.REGISTRY, CONSENT_ACTION, Tool(CONSENT_ACTION, "d", FETCH_SCHEMA, spy)
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+        "consecutive_successes) VALUES ($1, 'outward', 'consent', false, 0) "
+        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
+        "earned = false, consecutive_successes = 0, updated_at = now()",
+        CONSENT_ACTION,
+    )
+    return spy
+
+
 # -- the frame, on raise -----------------------------------------------
 
 
 async def test_a_raised_card_streams_as_its_own_frame_and_persists(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    spy = _spy_fetch(monkeypatch)
+    spy = await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("Awaiting your approval."),),
         )
     )
@@ -112,7 +152,7 @@ async def test_a_raised_card_streams_as_its_own_frame_and_persists(
     cards = consent_frames(sent)
     assert len(cards) == 1
     card = cards[0]
-    assert card["action_class"] == "fetch_url"
+    assert card["action_class"] == CONSENT_ACTION
     assert card["args"] == {"url": URL}
     assert card["status"] == "pending"
     assert spy.calls == []  # never executed on raise
@@ -133,10 +173,10 @@ async def test_a_raised_card_streams_as_its_own_frame_and_persists(
 async def test_deny_runs_nothing_and_a_fresh_attempt_re_raises(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    spy = _spy_fetch(monkeypatch)
+    spy = await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("Awaiting your approval."),),
         )
     )
@@ -155,7 +195,7 @@ async def test_deny_runs_nothing_and_a_fresh_attempt_re_raises(
     # funnel raises a brand-new pending card rather than running anything.
     gateway2 = ScriptedGateway(
         rounds=(
-            (fetch_call("c2", URL),),
+            (probe_call("c2", URL),),
             (text("Still awaiting."),),
         )
     )
@@ -175,10 +215,10 @@ async def test_deny_runs_nothing_and_a_fresh_attempt_re_raises(
 async def test_approve_then_reattempt_runs_it_and_burns_the_consent(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    spy = _spy_fetch(monkeypatch)
+    spy = await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("Awaiting your approval."),),
         )
     )
@@ -201,7 +241,7 @@ async def test_approve_then_reattempt_runs_it_and_burns_the_consent(
     # The re-attempt: a normal continuation turn re-issues the SAME call.
     gateway2 = ScriptedGateway(
         rounds=(
-            (fetch_call("c2", URL),),
+            (probe_call("c2", URL),),
             (text("Here's what the page said."),),
         )
     )
@@ -215,7 +255,7 @@ async def test_approve_then_reattempt_runs_it_and_burns_the_consent(
         for f in sent2
         if isinstance(f, dict) and "activity" in f
     ]
-    assert activities == [("fetch_url", "start"), ("fetch_url", "ok")]
+    assert activities == [(CONSENT_ACTION, "start"), (CONSENT_ACTION, "ok")]
 
     row = await consents.get(pool, uuid.UUID(card["consent_id"]))
     assert row["used_at"] is not None  # burned
@@ -223,7 +263,7 @@ async def test_approve_then_reattempt_runs_it_and_burns_the_consent(
     # Single-use: a THIRD identical attempt awaits a fresh approval again.
     gateway3 = ScriptedGateway(
         rounds=(
-            (fetch_call("c3", URL),),
+            (probe_call("c3", URL),),
             (text("Awaiting your approval, again."),),
         )
     )
@@ -256,10 +296,10 @@ async def test_a_raised_card_is_awaiting_not_an_error_in_span_and_activity(
     red), and the live activity frame's status is 'awaiting'. And because a card
     really is pending this turn, the model's honest 'Awaiting your approval'
     reply is NOT corrected by the pending-approval guard (the toggle)."""
-    _spy_fetch(monkeypatch)
+    await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("Awaiting your approval."),),
         )
     )
@@ -268,11 +308,11 @@ async def test_a_raised_card_is_awaiting_not_an_error_in_span_and_activity(
     sent = await _say(owner_client, "check the pricing page")
 
     # The live activity frame for the card-raising call is 'awaiting'.
-    assert _activities(sent) == [("fetch_url", "start"), ("fetch_url", "awaiting")]
+    assert _activities(sent) == [(CONSENT_ACTION, "start"), (CONSENT_ACTION, "awaiting")]
 
     # The tool span says pending, not error.
     row = await pool.fetchrow(
-        "SELECT meta FROM turn_spans WHERE kind = 'tool' AND name = 'fetch_url'"
+        "SELECT meta FROM turn_spans WHERE kind = 'tool' AND name = $1", CONSENT_ACTION
     )
     meta = row["meta"]
     assert meta["ok"] is False
@@ -325,10 +365,10 @@ async def test_an_awaiting_reply_is_not_corrected_when_a_card_is_pending_in_the_
     """The toggle via the DB path: a card raised in an EARLIER turn is still
     pending in this conversation, so restating the pending state this turn is
     TRUE and must not be corrected — even though this turn raised no card."""
-    _spy_fetch(monkeypatch)
+    await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("Awaiting your approval."),),
         )
     )
@@ -384,9 +424,9 @@ async def test_a_turn_that_raises_a_real_card_is_not_ingested(
     plumbing, not knowledge, and must not be ingested: recall would prime
     'awaiting approval' in later turns exactly as a fabrication would. The signal
     is mechanical (the turn's consent_sink is non-empty), not the prose."""
-    _spy_fetch(monkeypatch)
+    await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
-        rounds=((fetch_call("c1", URL),), (text("I've raised an approval card for that."),))
+        rounds=((probe_call("c1", URL),), (text("I've raised an approval card for that."),))
     )
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
@@ -420,43 +460,37 @@ def test_the_real_fetch_url_tool_is_ephemeral():
     assert any(t.name == "fetch_url" and t.ephemeral for t in web.TOOLS)
 
 
-async def test_a_successful_web_fetch_turn_is_not_ingested_because_it_is_ephemeral(
+async def test_a_no_card_auto_fetch_runs_directly_and_is_not_ingested(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """A web fetch is a live, point-in-time read whose result goes stale. The
-    turn that actually RUNS fetch_url (the approved re-attempt — ok=True, no new
-    card, so neither the consent nor capability plumbing skips apply) must still
-    NOT be ingested, because fetch_url is ephemeral. Otherwise recall serves the
-    cached page as 'the latest' and the model regurgitates it instead of
-    fetching again — the owner's walk: byte-identical content, same stale
-    timestamp, no fresh card. The skip is DERIVED from the tool's ephemeral flag,
-    not its name."""
+    """The owner-directed auto path, end to end (migration 008 + round 5).
+
+    fetch_url is 'auto' now, so a "what's the latest?" turn calls it and it runs
+    DIRECTLY: no approval card raised (consent_frames empty), ok=True (the live
+    tile goes start->ok), content returned — the whole no-card auto fetch path.
+    AND because fetch_url is EPHEMERAL, that successful fetch turn is STILL not
+    ingested: recall must never serve a cached page as 'the latest' (the owner's
+    walk — byte-identical content, same stale timestamp), so the next such turn
+    re-fetches instead of regurgitating a snapshot. The ingest skip is DERIVED
+    from the tool's ephemeral flag, not its name or its (now auto) disposition."""
     spy = _spy_fetch(monkeypatch)  # ephemeral fetch_url; returns "Fetched it."
     gateway = ScriptedGateway(
-        rounds=((fetch_call("c1", URL),), (text("Awaiting your approval."),))
+        rounds=((fetch_call("c1", URL),), (text("Here are the latest updates."),))
     )
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
+
     sent = await _say(owner_client, "what's the latest?")
-    card = consent_frames(sent)[0]
 
-    await consents.decide(
-        pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=await _owner_id(pool)
-    )
+    assert consent_frames(sent) == []  # auto: no approval card was ever raised
+    assert spy.calls == [{"url": URL}]  # it ran directly, exactly once
+    # The live tile resolves cleanly (start -> ok), not 'awaiting' and not error.
+    assert _activities(sent) == [("fetch_url", "start"), ("fetch_url", "ok")]
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
-    # The approved re-attempt runs the fetch (ok=True) with no new card.
-    gateway2 = ScriptedGateway(
-        rounds=((fetch_call("c2", URL),), (text("Here are the latest updates."),))
-    )
-    mount_peers(gateway=gateway2, memory=memory)
-    sent2 = await _say(owner_client, "go ahead now")
-
-    assert spy.calls == [{"url": URL}]  # it actually fetched
-    assert consent_frames(sent2) == []  # no new card — ran under the approval
     await chat.drain_background()
-    # Neither turn ingested: the first raised a card (plumbing), the second ran
-    # an ephemeral fetch. So a later "what's the latest?" re-fetches, never
-    # recalls a stale snapshot.
+    # Ephemeral read: not ingested, so a later "what's the latest?" re-fetches
+    # rather than recalling this snapshot.
     assert memory.ingests == []
 
 
@@ -575,15 +609,18 @@ async def test_a_false_capability_denial_is_corrected_and_replaces_the_lie(
 async def test_the_owner_scenario_card_raised_then_capability_denied(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """The exact live-walk trace: the model CALLS fetch_url (the funnel raises a
-    real card and returns 'Awaiting your approval'), then answers with a false
-    capability denial. The consent guard stays silent (a card really IS pending),
-    the capability guard fires (fetch_url is registered), and the durable record
-    is the honest correction — never the disavowal."""
-    spy = _spy_fetch(monkeypatch)
+    """The exact live-walk trace: the model CALLS a consent-tier tool (the funnel
+    raises a real card and returns 'Awaiting your approval'), then answers with a
+    false capability denial. The consent guard stays silent (a card really IS
+    pending), the capability guard fires (fetch_url is registered), and the
+    durable record is the honest correction — never the disavowal. The card here
+    comes from the private consent class (fetch_url is auto now), while the false
+    denial is still about fetch_url — the guard names it because it is registered,
+    independent of which tool raised the card."""
+    spy = await _arm_consent_tool(pool, monkeypatch)
     gateway = ScriptedGateway(
         rounds=(
-            (fetch_call("c1", URL),),
+            (probe_call("c1", URL),),
             (text("I cannot access external websites, so I can't get that."),),
         )
     )

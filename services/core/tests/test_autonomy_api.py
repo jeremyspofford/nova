@@ -40,8 +40,11 @@ async def test_get_reports_the_real_stored_state(owner_client, pool):
     assert entry["graduation_runs"] == 5
     assert entry["earned"] is False
     # The seeded classes are visible too — this really is every gateable class.
+    # fetch_url is 'auto' now (migration 008: owner-directed, web reads need no
+    # approval); it stays LISTED here so Settings -> Autonomy can set it back to
+    # consent later, which is exactly what makes this route "every gateable class".
     assert "fetch_url" in classes
-    assert classes["fetch_url"]["disposition"] == "consent"
+    assert classes["fetch_url"]["disposition"] == "auto"
 
 
 async def test_revoking_an_earned_auto_class_demotes_it_and_is_a_governance_event(
