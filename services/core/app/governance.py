@@ -28,6 +28,15 @@ POLICY_DENIED = "policy.denied"
 AUTONOMY_PROMOTED = "autonomy.promoted"
 AUTONOMY_DEMOTED = "autonomy.demoted"
 AUTONOMY_REVOKED = "autonomy.revoked"
+# Devices (slice 5). A paired machine's whole arc is readable here: which key
+# was bound to which name and on whose pairing code, every time its grants
+# moved and to what, and the revoke that ended it. DEVICE_AUDIT_BREAK is
+# written by T2 when a replayed device audit chain does not join up — never a
+# silent reindex, because a chain that quietly heals proves nothing afterwards.
+DEVICE_ENROLLED = "device.enrolled"
+DEVICE_GRANTS_CHANGED = "device.grants_changed"
+DEVICE_REVOKED = "device.revoked"
+DEVICE_AUDIT_BREAK = "device.audit_break"
 
 
 async def record_event(
