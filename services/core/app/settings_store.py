@@ -67,6 +67,27 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "demotes it back to consent."
         ),
     ),
+    SettingDef(
+        key="agents.responsiveness_check",
+        type="bool",
+        default=False,
+        # The description IS the operator-facing disclaimer — the web toggle
+        # renders it verbatim (S3 walk-fix round 9). It states the trade-off
+        # (extra model calls), what it helps (small-model drift), and that it
+        # is an AI judgment, not a guarantee. Default False: opt-in, and when
+        # off the chat turn makes ZERO extra model calls.
+        description=(
+            "Double-check each reply is on-topic. When on, after Nova answers, "
+            "a quick model check judges whether the reply addresses your "
+            "message; if it drifted (e.g. to an earlier topic — common on "
+            "smaller local models), Nova re-answers once, focused on your "
+            "question. Trade-off: 1-2 extra model calls per reply, so replies "
+            "are slower and use more compute (most noticeable on local "
+            "models). The check is itself an AI judgment — in this version the "
+            "same model reviewing its own reply — so it is a helpful safety "
+            "net, not a guarantee. Off by default."
+        ),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}

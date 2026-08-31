@@ -11,12 +11,15 @@ pytestmark = requires_db
 # which is also the first "int" setting the registry has ever had. S3-T3
 # moves it to five: autonomy.graduation_runs is the N earned-autonomy
 # promotes a consent-tier class after (app/autonomy.py) — see test_autonomy.py.
+# S3 walk-fix round 9 makes it six: agents.responsiveness_check is the opt-in,
+# default-OFF, LLM-judged relevance guard — see test_chat_responsiveness.py.
 KNOWN_KEYS = {
     "onboarding.completed",
     "chat.model",
     "appearance.default_preset",
     "agents.max_tool_rounds",
     "autonomy.graduation_runs",
+    "agents.responsiveness_check",
 }
 
 
@@ -34,6 +37,10 @@ async def test_every_def_is_listed_with_its_default_when_unset(owner_client):
     assert items["onboarding.completed"]["value"] is False
     assert items["chat.model"]["value"] == ""
     assert items["appearance.default_preset"]["value"] == "default"
+    # The responsiveness check is opt-in: it must default OFF and unset.
+    assert items["agents.responsiveness_check"]["type"] == "bool"
+    assert items["agents.responsiveness_check"]["default"] is False
+    assert items["agents.responsiveness_check"]["value"] is False
     assert all(item["description"] for item in items.values())
 
 

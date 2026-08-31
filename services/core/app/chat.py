@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -53,6 +54,29 @@ INGEST_TIMEOUT = httpx.Timeout(10.0)
 GATEWAY_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.0)
 EMPTY_REPLY = "the model returned nothing"
 DONE_FRAME = "data: [DONE]\n\n"
+
+# The OPT-IN responsiveness check (agents.responsiveness_check, default False).
+# A cheap judge call gets a short timeout — a slow judge must not hold the whole
+# turn hostage; on timeout the turn fails OPEN and ships the original reply. The
+# token cap keeps the one-word verdict cheap; the redirect regeneration below
+# runs uncapped, like any normal reply.
+JUDGE_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+JUDGE_MAX_TOKENS = 16
+# The judge's whole job: message-vs-reply relevance, one word out. Kept off the
+# turn's history on purpose — the drift case is visible from the pair alone, so
+# there is no reason to pay for the whole transcript here.
+JUDGE_SYSTEM = (
+    "You judge only whether the assistant's reply addresses the user's most "
+    "recent message. Reply with exactly one word: on_topic or off_topic."
+)
+# The live note shown before the corrected reply — its own frame, so the screen
+# shows what happened (the drift, then the refocus). It carries no completed-
+# action claim and no pending-state phrase, so the mechanical guards, were they
+# ever run over it, come back clean.
+REFOCUS_NOTE = "Refocusing on your question — that reply drifted off-topic."
+# The verdict token, tolerant of on-topic / off_topic / "off topic" spellings.
+# off_topic contains no on_topic substring, so the first match wins cleanly.
+_VERDICT_RE = re.compile(r"\b(on|off)[_\s-]?topic\b", re.I)
 
 # How much of a tool call lands in its span. The result head is the
 # Activity page's evidence that the call did what it says; the argument
@@ -550,6 +574,176 @@ async def _run_tool(
     return result, ok, awaiting
 
 
+# -- the opt-in responsiveness check ---------------------------------------
+#
+# A SOFT, LLM-JUDGED, OPT-IN quality guard — the first LLM-judgment control in a
+# guard family that is otherwise mechanical (narration/consent/capability derive
+# their verdict from spans/consent-state/the registry — facts). This one ASKS a
+# model "does this reply address the user's message?", a judgment that can be
+# wrong, so it is opt-in (default OFF), fail-OPEN (never breaks a turn), and
+# bounded (one redirect, no re-judge loop). It catches RELEVANCE drift — the
+# "asked about the pixel, answered about openai" case, most common on small
+# local models — NOT factual accuracy, which the mechanical guards and tools own.
+
+
+async def _collect_completion(
+    app, model: str, messages: Sequence[dict], *, max_tokens: int | None = None
+) -> str:
+    """One non-tool gateway call, every content delta concatenated into a string.
+
+    A plain completion (no tools advertised): the judge wants a word, the
+    redirect wants a focused reply, and neither needs the tool loop. Reuses the
+    same peer client, bearer and SSE parsing as the turn's own rounds. Raises
+    GatewayFailure/httpx errors on a bad round; the callers turn any raise into
+    fail-open (ship the original reply), so this never has to swallow anything.
+    """
+    payload: dict = {"messages": list(messages), "stream": True}
+    if model:
+        # An empty chat.model means "the gateway default"; sending "" would ask
+        # for a model literally named "".
+        payload["model"] = model
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    collected: list[str] = []
+    async with peers.client(app, peers.GATEWAY, JUDGE_TIMEOUT) as client:
+        async with client.stream(
+            "POST", "/v1/chat/completions", json=payload
+        ) as response:
+            if response.status_code != 200:
+                detail = (await response.aread()).decode(errors="replace")[:200]
+                raise GatewayFailure(
+                    f"the gateway refused ({response.status_code}): {detail}"
+                )
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta, _usage, error, _fragments = _chunk_parts(chunk)
+                if error is not None:
+                    raise GatewayFailure(f"the gateway reported: {error}")
+                if delta:
+                    collected.append(delta)
+    return "".join(collected)
+
+
+def _parse_verdict(raw: str) -> str | None:
+    """"on_topic" or "off_topic" from the judge's text, or None if neither is
+    there. None is the unparseable case, which the caller treats as on_topic
+    (fail-open): a judge that did not answer clearly must never trigger a
+    redirect."""
+    match = _VERDICT_RE.search(raw)
+    if match is None:
+        return None
+    return "off_topic" if match.group(1).lower() == "off" else "on_topic"
+
+
+async def _judge_verdict(app, model: str, message: str, reply: str) -> str:
+    """The cheap judge call: does `reply` address `message`? on_topic/off_topic.
+
+    Inputs are the pair alone, not the turn's history — the drift is visible from
+    message-vs-reply and the whole point is to stay cheap. An unparseable answer
+    is on_topic (fail-open); a gateway/transport error raises, and the caller
+    treats that as on_topic too.
+    """
+    judge_messages = [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {
+            "role": "user",
+            "content": f"User message:\n{message}\n\nAssistant reply:\n{reply}",
+        },
+    ]
+    raw = await _collect_completion(
+        app, model, judge_messages, max_tokens=JUDGE_MAX_TOKENS
+    )
+    return _parse_verdict(raw) or "on_topic"
+
+
+async def _responsiveness_redirect(
+    app,
+    turn: traces.Turn,
+    model: str,
+    message: str,
+    reply: str,
+    messages: Sequence[dict],
+    emit: Callable[[str | None], None],
+) -> tuple[str, bool]:
+    """Judge `reply` for drift and, if it drifted, regenerate ONCE, focused.
+
+    Returns (durable_text, redirected). On an on_topic verdict the original
+    reply stands. On off_topic, one corrective regeneration runs off the turn's
+    EXISTING message context (so this turn's tool results are reused) plus a
+    nudge to answer the latest message directly; the corrected reply is emitted
+    after a brief refocus note and REPLACES the durable text (history/memory keep
+    the good one, like the anti-poison replace) — the drift already streamed live
+    as `t` frames but must not be what the next turn reads.
+
+    FAIL-OPEN throughout: a judge error, a gateway error, an empty regeneration,
+    or an unparseable verdict all ship the ORIGINAL reply unchanged, logged,
+    never an error frame and never a lost turn. Bounded to ONE redirect — the
+    corrected reply is never re-judged. Records exactly one 'responsiveness'
+    guard span; the caller only reaches here when the setting is on, so a span
+    always means the check actually ran.
+
+    v1 uses the turn's own chat.model as the judge — the same model reviewing its
+    own reply (the disclaimer says so). A different/stronger judge model is an S4
+    upgrade.
+    """
+    with turn.span("guard", "responsiveness") as span:
+        span.meta["checked"] = True
+        try:
+            verdict = await _judge_verdict(app, model, message, reply)
+        except Exception as exc:
+            span.meta.update(verdict="on_topic", redirected=False, error=peers.reason(exc))
+            logger.warning(
+                "responsiveness judge failed, shipping the reply as-is: %s",
+                peers.reason(exc),
+            )
+            return reply, False
+        span.meta["verdict"] = verdict
+        if verdict != "off_topic":
+            span.meta["redirected"] = False
+            return reply, False
+
+        nudge = {
+            "role": "system",
+            "content": (
+                f"Focus only on the user's latest message: {message}. "
+                "Do not drift to earlier topics; answer it directly."
+            ),
+        }
+        try:
+            corrected = (
+                await _collect_completion(app, model, [*messages, nudge])
+            ).strip()
+        except Exception as exc:
+            span.meta.update(redirected=False, error=peers.reason(exc))
+            logger.warning(
+                "responsiveness redirect failed, shipping the original reply: %s",
+                peers.reason(exc),
+            )
+            return reply, False
+        if not corrected:
+            # A redirect that produced nothing is not a correction — keep the
+            # original rather than persist an empty reply.
+            span.meta["redirected"] = False
+            logger.warning(
+                "responsiveness redirect produced no text, shipping the original reply"
+            )
+            return reply, False
+
+        span.meta["redirected"] = True
+        emit(_frame({"correction": REFOCUS_NOTE}))
+        emit(_frame({"t": corrected}))
+        return corrected, True
+
+
 async def _run_turn(
     app,
     pool: asyncpg.Pool,
@@ -906,6 +1100,41 @@ async def _run_turn(
             persisted = f"{text}\n\n{correction.text}"
         else:
             persisted = text
+
+        # The OPT-IN responsiveness check (agents.responsiveness_check, default
+        # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
+        # user's question and re-answers ONCE. It runs here, on the durable text,
+        # AFTER the mechanical guards — and NEVER second-guesses one of them:
+        # when a mechanical guard fired (the hard line), its handling stands and
+        # this soft check is skipped, because a regeneration could re-introduce
+        # the very fabrication the hard guard just removed (the mechanical guards
+        # do not re-run over the regenerated reply). In the common case no
+        # mechanical guard fired, so `persisted` is exactly the model's reply.
+        #
+        # When the setting is OFF there is ZERO overhead — the model is not
+        # called and no span is recorded. When ON, the redirect (if any) REPLACES
+        # `persisted`, so the corrected reply is what persists and ingests below;
+        # the drift already streamed live but is not what the next turn reads.
+        mechanical_guard_fired = (
+            correction is not None
+            or consent_correction is not None
+            or capability_correction is not None
+        )
+        try:
+            responsiveness_on = bool(
+                await settings_store.read_value(pool, "agents.responsiveness_check")
+            )
+        except Exception:
+            # Fail toward OFF: a settings read that raises must not silently
+            # start spending extra model calls on every turn.
+            logger.exception("responsiveness setting read failed; treating it as off")
+            responsiveness_on = False
+        if responsiveness_on and not mechanical_guard_fired:
+            # The redirect REPLACES persisted on drift; its redirected flag is
+            # recorded in the span it files, not needed further here.
+            persisted, _redirected = await _responsiveness_redirect(
+                app, turn, model, message, persisted, messages, emit
+            )
 
         await _persist_assistant(pool, conversation_id, persisted)
         # Memory hygiene: a guarded consent/capability turn is interaction
