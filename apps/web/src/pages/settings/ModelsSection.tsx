@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, Cloud, Cpu, Download, RefreshCw, Server } from 'lucide-react'
+import { AlertTriangle, Check, Cloud, Cpu, Download, Info, RefreshCw, Server } from 'lucide-react'
 import {
   Badge,
   Button,
@@ -20,7 +20,11 @@ import {
   type PullLine,
   type Suggestion,
 } from '../../lib/api'
-import { mergeModels, type MergedModel } from './modelsFormat'
+import {
+  ACCURACY_DISCLAIMER,
+  ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
+} from '../../lib/modelDisclaimer'
+import { isSmallerTier, mergeModels, type MergedModel } from './modelsFormat'
 
 /**
  * `api` is a dependency-injection seam, the same idiom as ActivityPage's and
@@ -357,6 +361,9 @@ export function ModelsSection({
   }
 
   const merged = mergeModels(chatModel, installed, suggestion?.models ?? null)
+  // Derived from the catalog's own params_b, never a hardcoded model list —
+  // see modelsFormat.isSmallerTier.
+  const currentIsSmaller = isSmallerTier(merged, chatModel)
 
   const backendItems = backend
     ? [
@@ -399,6 +406,29 @@ export function ModelsSection({
             >
               {chatModel || 'not set'}
             </p>
+          </div>
+
+          {/* Honest, qualitative accuracy disclaimer (S3 walk-fix round 12) —
+              no invented number, just the trade-off stated plainly. Emphasized
+              (info -> warning tone, one extra sentence) when the model in use
+              right now is on the smaller end of the catalog; the base note
+              always shows regardless, since the trade-off is true of every
+              small/local model, not just the current pick. */}
+          <div
+            data-testid="model-accuracy-disclaimer"
+            role="note"
+            className={
+              'flex items-start gap-2 rounded-sm border px-3 py-2 text-caption ' +
+              (currentIsSmaller
+                ? 'border-warning/30 bg-warning-dim text-content-primary'
+                : 'border-info/30 bg-info-dim text-content-secondary')
+            }
+          >
+            <Info size={14} className="shrink-0 mt-0.5" />
+            <span>
+              {ACCURACY_DISCLAIMER}
+              {currentIsSmaller && ` ${ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER}`}
+            </span>
           </div>
 
           {installedError && (

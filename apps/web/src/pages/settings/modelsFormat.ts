@@ -19,6 +19,10 @@ export interface MergedModel {
    * uncatalogued model, or chat.model given its own entry below — since
    * there is no tier estimate or probe row to compute a verdict from. */
   fit: ModelFit | null
+  /** Billions of parameters, straight from the curated catalog's params_b —
+   * null for the same "never covered" cases fit is null for. The only size
+   * signal isSmallerTier below is allowed to use; nothing here is estimated. */
+  paramsB: number | null
 }
 
 /**
@@ -49,6 +53,7 @@ export function mergeModels(
       curated: true,
       isCurrent: c.slug === chatModel,
       fit: c.fit ?? null,
+      paramsB: c.params_b,
     })
   }
 
@@ -63,6 +68,7 @@ export function mergeModels(
       curated: false,
       isCurrent: slug === chatModel,
       fit: null,
+      paramsB: null,
     })
   }
 
@@ -76,6 +82,7 @@ export function mergeModels(
       curated: false,
       isCurrent: true,
       fit: null,
+      paramsB: null,
     })
   }
 
@@ -84,4 +91,27 @@ export function mergeModels(
     if (a.installed !== b.installed) return a.installed ? -1 : 1
     return a.slug.localeCompare(b.slug)
   })
+}
+
+/**
+ * True when `slug`'s parameter count sits below the mean of every known
+ * paramsB in `models` — a comparison relative to what the catalog actually
+ * offers right now, on this box, never a hardcoded "8B is small" cutoff
+ * (CLAUDE.md's "derived, never hardcoded" rule). Backs the size-aware
+ * emphasis on the accuracy disclaimer in ModelsSection and ModelSelector —
+ * see lib/modelDisclaimer.ts.
+ *
+ * A model missing paramsB (installed-but-uncatalogued, or chat.model
+ * standing in for a remote/cloud id) can't be placed on the scale and reads
+ * as not-smaller — nothing is invented for data that isn't there. Also
+ * false with fewer than two known sizes to compare, since "smaller" has no
+ * meaning without a spread to be smaller relative to.
+ */
+export function isSmallerTier(models: MergedModel[], slug: string): boolean {
+  const known = models.map(m => m.paramsB).filter((n): n is number => n !== null)
+  if (known.length < 2) return false
+  const target = models.find(m => m.slug === slug)?.paramsB
+  if (target == null) return false
+  const mean = known.reduce((sum, n) => sum + n, 0) / known.length
+  return target < mean
 }

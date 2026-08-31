@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Cpu } from 'lucide-react'
+import { Check, ChevronDown, Cpu, Info } from 'lucide-react'
 import clsx from 'clsx'
 import {
   getInstalledModels as apiGetInstalledModels,
@@ -7,7 +7,8 @@ import {
   putSetting as apiPutSetting,
   type SuggestedModel,
 } from '../../lib/api'
-import { mergeModels } from '../settings/modelsFormat'
+import { ACCURACY_DISCLAIMER_SHORT } from '../../lib/modelDisclaimer'
+import { isSmallerTier, mergeModels } from '../settings/modelsFormat'
 
 /**
  * A compact, inline model switcher for the chat input row — the same catalog
@@ -95,6 +96,9 @@ export function ModelSelector({
   }, [open])
 
   const merged = mergeModels(currentModel, installed, curated)
+  // Derived from the catalog's own params_b, never a hardcoded model list —
+  // see modelsFormat.isSmallerTier. Backs the note's emphasis below.
+  const currentIsSmaller = isSmallerTier(merged, currentModel)
 
   const choose = async (slug: string) => {
     setOpen(false)
@@ -140,31 +144,48 @@ export function ModelSelector({
 
       {open && (
         <div
-          role="listbox"
           data-testid="chat-model-menu"
-          className="absolute bottom-full left-0 mb-1 z-50 min-w-[14rem] max-w-[20rem] max-h-60 overflow-y-auto custom-scrollbar rounded-lg border border-border bg-surface-card shadow-lg py-1 glass-overlay dark:border-white/[0.10]"
+          className="absolute bottom-full left-0 mb-1 z-50 min-w-[14rem] max-w-[20rem] rounded-lg border border-border bg-surface-card shadow-lg glass-overlay dark:border-white/[0.10]"
         >
-          {merged.length === 0 ? (
-            <p className="px-3 py-2 text-caption text-content-tertiary">No models to show yet.</p>
-          ) : (
-            merged.map(model => (
-              <button
-                key={model.slug}
-                type="button"
-                role="option"
-                aria-selected={model.slug === currentModel}
-                data-testid={`chat-model-option-${model.slug}`}
-                onClick={() => choose(model.slug)}
-                className={clsx(
-                  'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-compact hover:bg-surface-card-hover transition-colors duration-fast',
-                  model.slug === currentModel ? 'text-accent' : 'text-content-primary',
-                )}
-              >
-                <span className="font-mono truncate">{model.slug}</span>
-                {model.slug === currentModel && <Check size={13} className="shrink-0" />}
-              </button>
-            ))
-          )}
+          <div role="listbox" className="max-h-60 overflow-y-auto custom-scrollbar py-1">
+            {merged.length === 0 ? (
+              <p className="px-3 py-2 text-caption text-content-tertiary">No models to show yet.</p>
+            ) : (
+              merged.map(model => (
+                <button
+                  key={model.slug}
+                  type="button"
+                  role="option"
+                  aria-selected={model.slug === currentModel}
+                  data-testid={`chat-model-option-${model.slug}`}
+                  onClick={() => choose(model.slug)}
+                  className={clsx(
+                    'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-compact hover:bg-surface-card-hover transition-colors duration-fast',
+                    model.slug === currentModel ? 'text-accent' : 'text-content-primary',
+                  )}
+                >
+                  <span className="font-mono truncate">{model.slug}</span>
+                  {model.slug === currentModel && <Check size={13} className="shrink-0" />}
+                </button>
+              ))
+            )}
+          </div>
+
+          {/* Light affordance (S3 walk-fix round 12): one caption, only while
+              the dropdown is open, so the compact always-visible trigger stays
+              uncluttered — see ModelsSection for the prominent version of the
+              same honest, qualitative note (lib/modelDisclaimer.ts). Warmer
+              tone when the model in use is on the smaller end of the catalog. */}
+          <div
+            data-testid="chat-model-accuracy-note"
+            className={clsx(
+              'flex items-start gap-1.5 border-t border-border-subtle px-3 py-1.5 text-micro',
+              currentIsSmaller ? 'text-warning' : 'text-content-tertiary',
+            )}
+          >
+            <Info size={11} className="shrink-0 mt-0.5" />
+            <span>{ACCURACY_DISCLAIMER_SHORT}</span>
+          </div>
         </div>
       )}
 

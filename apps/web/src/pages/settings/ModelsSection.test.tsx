@@ -284,6 +284,51 @@ describe('ModelsSection', () => {
     expect(within(otherCard).getByText('Available to pull', { exact: true })).toBeDefined()
   })
 
+  it('shows the accuracy disclaimer with no fabricated number, not emphasized when the current model is not on the smaller end', async () => {
+    // Two models the same size (both 8B): no spread to be "smaller" relative
+    // to, so isSmallerTier is false for both — the base note still shows.
+    const api = fakeApi({
+      installed: ['qwen3:8b'],
+      suggest: suggestion({
+        models: [
+          { slug: 'qwen3:8b', label: 'Qwen3 8B', params_b: 8, min_vram_gb: 10, note: '' },
+          { slug: 'llama3.5:8b', label: 'Llama3.5 8B', params_b: 8, min_vram_gb: 10, note: '' },
+        ],
+      }),
+    })
+    render(
+      <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
+    )
+
+    const note = await screen.findByTestId('model-accuracy-disclaimer')
+    expect(note.textContent).toContain('Smaller and local models trade some accuracy for speed')
+    expect(note.textContent).toContain('qualitative')
+    // No invented figure anywhere in the note (no-fake-numbers rail).
+    expect(note.textContent).not.toMatch(/\d+%/)
+    // Not emphasized: same size on both sides means nothing is "smaller".
+    expect(note.textContent).not.toContain('on the smaller end of what')
+    expect(note.className).toContain('border-info/30')
+  })
+
+  it('emphasizes the accuracy disclaimer when the current model is on the smaller end of the catalog', async () => {
+    const api = fakeApi({
+      installed: ['qwen3:8b'],
+      suggest: suggestion({
+        models: [
+          { slug: 'qwen3:8b', label: 'Qwen3 8B', params_b: 8, min_vram_gb: 10, note: '' },
+          { slug: 'qwen3:27b', label: 'Qwen3 27B', params_b: 27, min_vram_gb: 24, note: '' },
+        ],
+      }),
+    })
+    render(
+      <ModelsSection chatModel="qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />,
+    )
+
+    const note = await screen.findByTestId('model-accuracy-disclaimer')
+    expect(note.textContent).toContain("on the smaller end of what's offered here")
+    expect(note.className).toContain('border-warning/30')
+  })
+
   it('degrades honestly when the installed-models fetch fails: nothing is claimed installed, and the current model never shows as pullable', async () => {
     const api = fakeApi({ installedFails: true })
     render(

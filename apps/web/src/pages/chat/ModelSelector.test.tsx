@@ -105,4 +105,26 @@ describe('ModelSelector', () => {
     expect(api.putSetting).not.toHaveBeenCalled()
     expect(onModelChanged).not.toHaveBeenCalled()
   })
+
+  it('exposes a light accuracy note only while the dropdown is open, with no fabricated number', async () => {
+    const api = fakeApi()
+    await renderSelector({ currentModel: 'qwen3:8b', onModelChanged: vi.fn(), api })
+
+    // Not cluttering the compact, always-visible trigger.
+    expect(screen.queryByTestId('chat-model-accuracy-note')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('chat-model-trigger'))
+    const note = await screen.findByTestId('chat-model-accuracy-note')
+    expect(note.textContent).toMatch(/accuracy/i)
+    expect(note.textContent).not.toMatch(/\d+%/)
+  })
+
+  it("emphasizes the inline note's tone when the current model is on the smaller end of the catalog", async () => {
+    const api = fakeApi()
+    await renderSelector({ currentModel: 'qwen3:8b', onModelChanged: vi.fn(), api })
+    fireEvent.click(screen.getByTestId('chat-model-trigger'))
+    const note = await screen.findByTestId('chat-model-accuracy-note')
+    // qwen3:8b is the smaller of the two catalog entries (8B vs 14B).
+    expect(note.className).toContain('text-warning')
+  })
 })
