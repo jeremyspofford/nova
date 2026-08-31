@@ -26,13 +26,18 @@ COOKIE_NAME = "nova_session"
 SESSION_TTL_DAYS = 30
 SESSION_TTL_SECONDS = SESSION_TTL_DAYS * 24 * 60 * 60
 
-# The three routes that cannot require an identity: the wizard reads state
-# and mints one. Everything else under /api/v1 needs a cookie or a bearer.
+# The four routes that cannot require an identity: the wizard reads state and
+# mints one, and a daemon on a machine that has never talked to this instance
+# enrolls with a pairing code as its only credential (minted by an
+# authenticated operator, shown once, stored hashed, single-use, ten-minute
+# TTL — and rate-limited in devices_api). Everything else under /api/v1 needs a
+# cookie or a bearer.
 PUBLIC_PATHS = frozenset(
     {
         "/api/v1/auth/state",
         "/api/v1/auth/register",
         "/api/v1/auth/login",
+        "/api/v1/devices/enroll",
     }
 )
 

@@ -445,7 +445,11 @@ async def test_an_unknown_capability_name_is_refused(pool):
     assert await _events(pool, "device.grants_changed") == []
 
 
-async def test_the_known_capability_set_is_exactly_the_nine_slice_five_names(pool):
+async def test_the_known_capability_set_is_exactly_the_slice_five_names(pool):
+    """Eight capabilities behind T2's nine tools (device_list reads core's own
+    database and needs no capability at all). Moving this set is a two-sided
+    change — core signs for it, the daemon has code for it — so it is pinned
+    rather than left to drift."""
     assert devices.KNOWN_CAPABILITIES == frozenset(
         {
             "system.info",
@@ -565,3 +569,296 @@ async def test_a_revoked_devices_burned_code_cannot_walk_back_in(pool):
             hostname="h",
         )
     assert await pool.fetchval("SELECT count(*) FROM devices WHERE revoked_at IS NULL") == 0
+
+
+# ======================================================================
+# /api/v1/devices — the operator's routes, and the one public one
+# ======================================================================
+
+
+async def _api_enrol(client, code: str, **overrides) -> object:
+    body = {
+        "code": code,
+        "pubkey": PUBKEY_A,
+        "name": "laptop",
+        "platform": "linux",
+        "hostname": "thinkpad",
+    }
+    body.update(overrides)
+    return await client.post("/api/v1/devices/enroll", json=body)
+
+
+async def _api_code(owner_client) -> str:
+    resp = await owner_client.post("/api/v1/devices/pairing-code")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["code"]
+
+
+# -- auth --------------------------------------------------------------
+
+
+async def test_every_device_route_except_enroll_needs_an_identity(client, pool):
+    """Minting a pairing code is the authorisation for an entire machine. If
+    that route were reachable without an identity, enrollment being public
+    would stop meaning anything."""
+    device_id = uuid.uuid4()
+    assert (await client.post("/api/v1/devices/pairing-code")).status_code == 401
+    assert (await client.get("/api/v1/devices")).status_code == 401
+    rename = await client.patch(f"/api/v1/devices/{device_id}", json={"name": "x"})
+    assert rename.status_code == 401
+    grants = await client.put(
+        f"/api/v1/devices/{device_id}/grants", json={"capabilities": [], "fs_roots": []}
+    )
+    assert grants.status_code == 401
+    assert (await client.post(f"/api/v1/devices/{device_id}/revoke")).status_code == 401
+
+
+async def test_enroll_is_reachable_with_no_identity_at_all(client, pool):
+    """The daemon has no cookie and no bearer — the pairing code IS its
+    credential. This is the only write in core that works unauthenticated, so
+    it is pinned rather than assumed. `client` here carries neither: the
+    service bearer is configured in the environment but never sent, and every
+    other route on this router answers 401 to it (test above)."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+
+    resp = await _api_enrol(client, minted["code"])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["device_id"]
+
+
+# -- POST /pairing-code -------------------------------------------------
+
+
+async def test_minting_returns_the_code_once_and_an_expiry(owner_client, pool):
+    resp = await owner_client.post("/api/v1/devices/pairing-code")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"code", "expires_at"}
+    assert len(body["code"]) == devices.PAIRING_CODE_LENGTH
+    assert await pool.fetchval("SELECT count(*) FROM pairing_codes") == 1
+
+
+# -- POST /enroll ------------------------------------------------------
+
+
+async def test_enroll_returns_the_device_id_name_and_cores_pubkey(owner_client, pool):
+    """The daemon writes core_pubkey to disk and verifies every envelope
+    against it from then on, so the response shape is a wire contract."""
+    resp = await _api_enrol(owner_client, await _api_code(owner_client))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"device_id", "name", "core_pubkey"}
+    assert body["name"] == "laptop"
+    assert body["core_pubkey"] == await devices.core_public_key_hex(pool)
+    uuid.UUID(body["device_id"])
+
+
+async def test_enrolling_with_a_used_code_is_a_stated_refusal(owner_client):
+    code = await _api_code(owner_client)
+    assert (await _api_enrol(owner_client, code)).status_code == 200
+
+    again = await _api_enrol(owner_client, code, name="second", pubkey=PUBKEY_B)
+    assert again.status_code == 403
+    assert "pairing code" in again.json()["error"]
+
+
+async def test_enrolling_with_an_expired_code_is_refused(owner_client, pool):
+    code = await _api_code(owner_client)
+    await pool.execute("UPDATE pairing_codes SET expires_at = now() - interval '1 second'")
+    resp = await _api_enrol(owner_client, code)
+    assert resp.status_code == 403
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 0
+
+
+async def test_enrolling_a_malformed_pubkey_is_refused_without_spending_the_code(
+    owner_client, pool
+):
+    code = await _api_code(owner_client)
+    resp = await _api_enrol(owner_client, code, pubkey="nope")
+    assert resp.status_code == 400
+    assert "pubkey" in resp.json()["error"]
+    assert await pool.fetchval("SELECT used_at IS NULL FROM pairing_codes") is True
+
+
+async def test_enrolling_a_taken_name_is_a_409(owner_client):
+    assert (await _api_enrol(owner_client, await _api_code(owner_client))).status_code == 200
+    clash = await _api_enrol(owner_client, await _api_code(owner_client), pubkey=PUBKEY_B)
+    assert clash.status_code == 409
+    assert "already enrolled" in clash.json()["error"]
+
+
+async def test_repeated_bad_codes_from_one_address_are_rate_limited(owner_client, pool):
+    """Enrollment is the one unauthenticated write in core, so a wrong code has
+    to cost something. Only the code refusal counts: a name collision is an
+    operator typing a name twice, not somebody guessing."""
+    from app import devices_api
+
+    for _ in range(devices_api.MAX_ENROLL_FAILURES):
+        assert (await _api_enrol(owner_client, "ZZZZZZZZ")).status_code == 403
+
+    blocked = await _api_enrol(owner_client, "ZZZZZZZZ")
+    assert blocked.status_code == 429
+    assert "too many" in blocked.json()["error"]
+
+    # A real code is refused too while the window is open — failing closed is
+    # the point, and this instance pairs a machine every few months.
+    assert (await _api_enrol(owner_client, await _api_code(owner_client))).status_code == 429
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 0
+
+
+async def test_a_successful_enrollment_clears_the_failure_window(owner_client, pool):
+    from app import devices_api
+
+    for _ in range(devices_api.MAX_ENROLL_FAILURES - 1):
+        assert (await _api_enrol(owner_client, "ZZZZZZZZ")).status_code == 403
+
+    assert (await _api_enrol(owner_client, await _api_code(owner_client))).status_code == 200
+    # The window is clear, so the next mistake starts a fresh count instead of
+    # tripping the limiter on the operator's second machine.
+    assert (await _api_enrol(owner_client, "ZZZZZZZZ", name="two")).status_code == 403
+
+
+# -- GET /devices ------------------------------------------------------
+
+
+async def test_listing_is_empty_before_anything_is_paired(owner_client):
+    resp = await owner_client.get("/api/v1/devices")
+    assert resp.status_code == 200
+    assert resp.json() == {"devices": []}
+
+
+async def test_listing_returns_the_full_tile_shape(owner_client):
+    await _api_enrol(owner_client, await _api_code(owner_client))
+    resp = await owner_client.get("/api/v1/devices")
+    assert resp.status_code == 200
+    (device,) = resp.json()["devices"]
+    assert device["name"] == "laptop"
+    assert device["platform"] == "linux"
+    assert device["hostname"] == "thinkpad"
+    assert device["capabilities"] == ["system.info"]
+    assert device["fs_roots"] == []
+    assert device["last_seen"] is None
+    assert device["revoked_at"] is None
+    assert device["connected"] is False
+
+
+async def test_a_revoked_device_is_still_listed_and_says_so(owner_client):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    await owner_client.post(f"/api/v1/devices/{enrolled['device_id']}/revoke")
+
+    (device,) = (await owner_client.get("/api/v1/devices")).json()["devices"]
+    assert device["revoked_at"] is not None
+
+
+# -- PATCH /{id} -------------------------------------------------------
+
+
+async def test_rename_returns_the_updated_device(owner_client):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    resp = await owner_client.patch(
+        f"/api/v1/devices/{enrolled['device_id']}", json={"name": "thinkpad"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["device"]["name"] == "thinkpad"
+
+
+async def test_renaming_an_unknown_device_is_a_404(owner_client):
+    resp = await owner_client.patch(f"/api/v1/devices/{uuid.uuid4()}", json={"name": "ghost"})
+    assert resp.status_code == 404
+
+
+# -- PUT /{id}/grants --------------------------------------------------
+
+
+async def test_setting_grants_returns_the_updated_device(owner_client, pool):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    resp = await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["system.info", "fs.read"], "fs_roots": ["/home/jeremy/notes"]},
+    )
+    assert resp.status_code == 200
+    device = resp.json()["device"]
+    assert device["capabilities"] == ["fs.read", "system.info"]
+    assert device["fs_roots"] == ["/home/jeremy/notes"]
+
+    events = await _events(pool, "device.grants_changed")
+    assert len(events) == 1
+    # The person who clicked it, not "the system".
+    me = (await owner_client.get("/api/v1/auth/me")).json()["person"]["id"]
+    assert events[0]["actor"] == me
+
+
+async def test_an_unknown_capability_is_refused_by_name(owner_client, pool):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    resp = await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["fs.raed"], "fs_roots": []},
+    )
+    assert resp.status_code == 400
+    assert "fs.raed" in resp.json()["error"]
+    row = await devices.get(pool, uuid.UUID(enrolled["device_id"]))
+    assert row["capabilities"] == ["system.info"]
+
+
+async def test_a_relative_fs_root_is_refused(owner_client):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    resp = await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["fs.read"], "fs_roots": ["notes"]},
+    )
+    assert resp.status_code == 400
+    assert "absolute" in resp.json()["error"]
+
+
+# -- POST /{id}/revoke -------------------------------------------------
+
+
+async def test_revoke_marks_the_device_and_then_refuses_edits(owner_client, pool):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    device_id = enrolled["device_id"]
+
+    resp = await owner_client.post(f"/api/v1/devices/{device_id}/revoke")
+    assert resp.status_code == 200
+    assert resp.json()["device"]["revoked_at"] is not None
+
+    rename = await owner_client.patch(f"/api/v1/devices/{device_id}", json={"name": "zombie"})
+    assert rename.status_code == 409
+    assert "revoked" in rename.json()["error"]
+
+    grants = await owner_client.put(
+        f"/api/v1/devices/{device_id}/grants",
+        json={"capabilities": ["shell.exec"], "fs_roots": []},
+    )
+    assert grants.status_code == 409
+
+    # And it can no longer connect: get_live is what T2's hub authenticates on.
+    assert await devices.get_live(pool, uuid.UUID(device_id)) is None
+
+
+async def test_revoking_twice_is_a_stated_refusal(owner_client):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    first = await owner_client.post(f"/api/v1/devices/{enrolled['device_id']}/revoke")
+    assert first.status_code == 200
+    second = await owner_client.post(f"/api/v1/devices/{enrolled['device_id']}/revoke")
+    assert second.status_code == 409
+
+
+async def test_the_whole_arc_reads_back_off_the_governance_ledger(owner_client, pool):
+    """DoD 6: enrolled -> grants_changed -> revoked, in order, off the ledger
+    rather than off anything's prose."""
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["fs.read"], "fs_roots": ["/home/jeremy"]},
+    )
+    await owner_client.post(f"/api/v1/devices/{enrolled['device_id']}/revoke")
+
+    kinds = [
+        r["kind"]
+        for r in await pool.fetch(
+            "SELECT kind FROM governance_events WHERE subject_ref = $1 ORDER BY created_at",
+            uuid.UUID(enrolled["device_id"]),
+        )
+    ]
+    assert kinds == ["device.enrolled", "device.grants_changed", "device.revoked"]

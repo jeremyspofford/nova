@@ -96,9 +96,12 @@ async def pool(monkeypatch):
 async def client(pool, monkeypatch):
     """ASGI client with the service bearer configured (the normal state)."""
     monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
-    from app import auth_api
+    from app import auth_api, devices_api
 
+    # Both limiters are process-global by design (one household, one process),
+    # so a test that trips one would otherwise lock the next test out.
     auth_api._LOGIN_FAILURES.clear()
+    devices_api._ENROLL_FAILURES.clear()
     async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as c:
         yield c
 
