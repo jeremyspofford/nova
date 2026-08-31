@@ -24,12 +24,15 @@ async def test_the_seed_makes_every_registered_tool_auto(pool):
     # under S3-R1 and is now 'auto' by owner directive. The seed carries no
     # consent-tier class at all anymore; the consent flow is exercised via a
     # PRIVATE class in the consent-mechanism suites so it stays fully proven.
+    # web_search joined 'auto' with migration 009 (the search half of the same
+    # owner directive that flipped fetch_url — web reads need no approval).
     rows = {
         r["action_class"]: r["disposition"]
         for r in await pool.fetch("SELECT action_class, disposition FROM action_classes")
     }
     for name in (
         "fetch_url",
+        "web_search",
         "workspace_write_file",
         "workspace_read_file",
         "workspace_list_files",

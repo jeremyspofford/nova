@@ -123,6 +123,11 @@ MEMORY_TOKEN = "memory-link-token"
 # real; the suites that use it point tools.web.resolve_addresses at a
 # public-looking address so the SSRF guard runs for real and passes.
 WEB_ORIGIN = "http://public.test"
+# The bundled SearXNG's URL for web_search's tests. Set as SEARXNG_URL so the
+# tool reads it, and mounted as the origin FakeSearx answers on. Unlike
+# WEB_ORIGIN there is no SSRF guard in web_search — searxng is a trusted,
+# in-network battery, not a URL the model chose.
+SEARXNG_URL = "http://searxng.test"
 
 
 def _bearer_ok(request, token: str) -> bool:
@@ -364,6 +369,40 @@ class FakeWeb:
     async def _echo_method(self, request):
         self._seen(request)
         return Response(request.method, media_type="text/plain")
+
+
+@dataclass
+class FakeSearx:
+    """The SearXNG JSON API for web_search: GET /search?format=json.
+
+    Reached through the same by-URL transport map FakeWeb uses, so web_search's
+    real request, JSON parse and formatting run with no socket. `results` is
+    handed back verbatim as SearXNG's results[] array; `status`, `body` and
+    `content_type` let a test make the service answer an error, or a 200 that is
+    not JSON (the botdetection HTML block page settings.yml disables the limiter
+    to avoid), so the tool's stated-failure paths are exercised for real.
+    """
+
+    results: tuple[dict, ...] = ()
+    status: int = 200
+    body: str | None = None  # when set, returned verbatim instead of JSON
+    content_type: str = "application/json"
+    queries: list[str] = field(default_factory=list)
+    formats: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(routes=[Route("/search", self._search, methods=["GET"])])
+
+    async def _search(self, request):
+        self.queries.append(request.query_params.get("q", ""))
+        self.formats.append(request.query_params.get("format", ""))
+        if self.body is not None:
+            return Response(self.body, status_code=self.status, media_type=self.content_type)
+        if self.status != 200:
+            return JSONResponse({"error": "unavailable"}, status_code=self.status)
+        return JSONResponse(
+            {"query": request.query_params.get("q", ""), "results": list(self.results)}
+        )
 
 
 @dataclass

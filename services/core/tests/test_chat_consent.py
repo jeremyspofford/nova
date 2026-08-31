@@ -24,8 +24,10 @@ import uuid
 from dataclasses import dataclass, field
 
 from app import chat, consents, guards, tools
-from app.tools import web
+from app.main import app
+from app.tools import web, web_search
 from app.tools.base import Tool, ToolContext
+from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 
@@ -74,6 +76,12 @@ def text(piece: str) -> dict:
 
 def fetch_call(call_id: str, url: str) -> dict:
     return call_delta(0, call_id=call_id, name="fetch_url", arguments=json.dumps({"url": url}))
+
+
+def search_call(call_id: str, query: str) -> dict:
+    return call_delta(
+        0, call_id=call_id, name="web_search", arguments=json.dumps({"query": query})
+    )
 
 
 # The private consent-tier class the mechanism tests raise a card with (fetch_url
@@ -492,6 +500,47 @@ async def test_a_no_card_auto_fetch_runs_directly_and_is_not_ingested(
     # Ephemeral read: not ingested, so a later "what's the latest?" re-fetches
     # rather than recalling this snapshot.
     assert memory.ingests == []
+
+
+def test_the_real_web_search_tool_is_ephemeral():
+    """The ingest skip below derives from this flag, not the tool's name. If a
+    refactor drops it, a stale search result gets served as 'the latest'."""
+    assert any(t.name == "web_search" and t.ephemeral for t in web_search.TOOLS)
+
+
+async def test_a_web_search_turn_runs_directly_and_is_not_ingested(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """web_search end to end (migration 009): the model asks for it, the auto
+    disposition lets it run DIRECTLY (no card — consent_frames empty), the real
+    executor reaches a mocked SearXNG and the live tile resolves start->ok. AND
+    because web_search is EPHEMERAL, that successful turn is STILL not ingested —
+    a later 'what's the latest?' re-searches rather than recalling this snapshot
+    and narrating it as current. Mirrors the auto-fetch test above."""
+    monkeypatch.setenv("SEARXNG_URL", fakes.SEARXNG_URL)
+    searx = fakes.FakeSearx(
+        results=(
+            {"title": "OpenAI news", "url": "https://example.com/a", "content": "latest"},
+        )
+    )
+    gateway = ScriptedGateway(
+        rounds=((search_call("c1", "latest on openai"),), (text("Here's the latest."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+    # mount_peers set app.state.peer_transports fresh; add the searxng origin the
+    # real web_search executor will reach for. Its teardown resets the whole map.
+    app.state.peer_transports[fakes.SEARXNG_URL] = fakes.StreamingASGITransport(searx.app)
+
+    sent = await _say(owner_client, "what's the latest on openai?")
+
+    assert consent_frames(sent) == []  # auto: no approval card was ever raised
+    assert searx.queries == ["latest on openai"]  # the real tool ran, once
+    assert _activities(sent) == [("web_search", "start"), ("web_search", "ok")]
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+    await chat.drain_background()
+    assert memory.ingests == []  # ephemeral read: not ingested
 
 
 async def test_a_fired_narration_guard_keeps_appending_to_preserve_real_content(

@@ -84,7 +84,10 @@ async def allow_spy(pool):
 # -- advertisement ---------------------------------------------------------
 
 
-def test_the_seven_tools_are_registered_by_name():
+def test_the_registered_tools_are_exactly_this_set_by_name():
+    # Deliberate snapshot update (migration 009): web_search joined the registry,
+    # so this pinned set moved from seven to eight. A tool appearing or vanishing
+    # here without this line moving is a mistake the test is meant to catch.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -93,6 +96,7 @@ def test_the_seven_tools_are_registered_by_name():
         "memory_save",
         "get_time",
         "fetch_url",
+        "web_search",
     }
 
 
