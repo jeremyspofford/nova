@@ -188,6 +188,28 @@ async def test_enrollment_burns_the_code_and_records_who_authorised_it(pool):
     assert events[0]["meta"]["pubkey"] == PUBKEY_A
 
 
+async def test_a_key_core_cannot_produce_costs_the_operator_nothing(pool, monkeypatch):
+    """The daemon is only enrolled once it holds core_pubkey. If core could
+    fail to produce its key AFTER the burn, the result would be a device row
+    whose machine can never verify a command and a code already spent — the
+    worst kind of half-success. The key is resolved first, so the failure costs
+    nothing but a retry."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+
+    async def _no_key(_pool):
+        raise RuntimeError("core signing key could not be stored or read")
+
+    monkeypatch.setattr(devices, "signing_key", _no_key)
+    with pytest.raises(RuntimeError):
+        await devices.enroll(
+            pool, code=minted["code"], pubkey=PUBKEY_A, name="x", platform="linux", hostname="h"
+        )
+
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 0
+    assert await pool.fetchval("SELECT used_at IS NULL FROM pairing_codes") is True
+
+
 async def test_a_reused_code_is_refused(pool):
     person = await _owner(pool)
     minted = await devices.mint_pairing_code(pool, created_by=person.id)

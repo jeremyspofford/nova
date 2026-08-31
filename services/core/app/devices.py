@@ -235,11 +235,17 @@ async def enroll(
     the operator their code. Everything after the burn shares one transaction
     with the governance event, so a name collision (caught from the partial
     unique index — a pre-SELECT would be a race) rolls the burn back too.
+
+    Core's own key is resolved FIRST, for the same reason: the daemon is only
+    enrolled once it holds core_pubkey, so failing to produce it after the burn
+    would leave a device row whose machine can never verify a command and whose
+    code is already spent. Order it before, and that failure costs nothing.
     """
     clean_pubkey = _clean_pubkey(pubkey)
     clean_name = _clean_name(name)
     clean_platform = (platform or "").strip() or "unknown"
     clean_hostname = (hostname or "").strip() or "unknown"
+    core_pubkey = await core_public_key_hex(pool)
 
     async with pool.acquire() as conn:
         try:
@@ -279,11 +285,7 @@ async def enroll(
                 status_code=409,
             ) from exc
 
-    return {
-        "device_id": str(row["id"]),
-        "name": row["name"],
-        "core_pubkey": await core_public_key_hex(pool),
-    }
+    return {"device_id": str(row["id"]), "name": row["name"], "core_pubkey": core_pubkey}
 
 
 # -- lookups -----------------------------------------------------------
