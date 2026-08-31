@@ -102,9 +102,16 @@ async def list_activity(
     pool = await db.get_pool()
     capped = min(limit, MAX_LIMIT)
 
+    # kind='eval' turns are the evals harness replaying a case against a model
+    # (app/evals/runner.py); they are NOT something "Nova did" for the operator,
+    # so they are filtered out of this feed. The drill-in below is deliberately
+    # NOT filtered — an eval_runs row links to its turn's trace, and T3 needs
+    # /activity/<id> to resolve for it.
     if before is None:
         rows = await pool.fetch(
-            f"{_TURN_SELECT} ORDER BY t.started_at DESC, t.id DESC LIMIT $1", capped
+            f"{_TURN_SELECT} WHERE t.kind <> 'eval' ORDER BY t.started_at DESC, t.id DESC "
+            "LIMIT $1",
+            capped,
         )
         return {"turns": [_turn_json(row) for row in rows]}
 
@@ -116,7 +123,7 @@ async def list_activity(
         raise HTTPException(status_code=404, detail=f"no turn {before} to page before")
 
     rows = await pool.fetch(
-        f"{_TURN_SELECT} WHERE (t.started_at, t.id) < ($1, $2) "
+        f"{_TURN_SELECT} WHERE (t.started_at, t.id) < ($1, $2) AND t.kind <> 'eval' "
         "ORDER BY t.started_at DESC, t.id DESC LIMIT $3",
         cursor["started_at"],
         before,

@@ -34,6 +34,7 @@ OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 _TABLES = (
     "governance_events",
     "consents",
+    "eval_runs",
     "turn_spans",
     "turns",
     "messages",
