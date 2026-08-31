@@ -522,3 +522,154 @@ export async function getGovernanceEvents(
   )
   return body.events
 }
+
+// ── AI Quality / evals (services/core/app/evals_api.py) ─────────────────
+
+/** One suite the git corpus defines. `suite_version` pins comparability — a
+ * score is only ever compared across runs of the SAME version. */
+export interface EvalSuite {
+  suite: string
+  suite_version: number
+  case_count: number
+}
+
+export async function getEvalSuites(): Promise<EvalSuite[]> {
+  const body = await apiGet<{ suites: EvalSuite[] }>('/api/v1/evals/suites')
+  return body.suites
+}
+
+/** One predicate's outcome inside a scored case — WHAT the contract checked
+ * (predicate + optional arg) and whether it held. Mirrors the runner's
+ * detail.predicates; extra explanatory fields the scorer may add are kept. */
+export interface EvalPredicateResult {
+  predicate: string
+  arg?: string | null
+  passed: boolean
+  [k: string]: unknown
+}
+
+/** The persisted detail of one scored case: for a gradeable run, the reply
+ * excerpt and each predicate's outcome; for an ungradeable one, the turn's
+ * stated error reason instead. */
+export interface EvalCaseDetail {
+  reply?: string
+  predicates?: EvalPredicateResult[]
+  reason?: string
+  status?: string
+  [k: string]: unknown
+}
+
+export interface EvalCaseResult {
+  case_id: string
+  /** The replayed message, joined from the suite by case_id — null only if the
+   * case no longer exists at this version. */
+  message: string | null
+  /** null EXACTLY when ungradeable (the turn errored) — never coerced to false.
+   * An ungradeable case is excluded from the pass rate, not scored 0. */
+  passed: boolean | null
+  ungradeable: boolean
+  detail: EvalCaseDetail
+  turn_id: string | null
+}
+
+export interface EvalScoreSummary {
+  total: number
+  gradeable: number
+  ungradeable: number
+  passed: number
+  /** null when nothing is gradeable — an empty state, never a fabricated 0. */
+  pass_rate: number | null
+}
+
+export interface EvalRunResult {
+  suite: string
+  suite_version: number
+  model: string
+  cases: EvalCaseResult[]
+  summary: EvalScoreSummary
+}
+
+/**
+ * The latest stored run per case for (suite, model) at the suite's CURRENT
+ * version — so the page shows prior results without re-running, and only ever
+ * within one suite_version. Empty `cases` with a null pass_rate is the honest
+ * "no runs yet" state, never a 0/0 score.
+ */
+export async function getEvalRuns(suite: string, model: string): Promise<EvalRunResult> {
+  const params = new URLSearchParams({ suite, model })
+  return apiGet<EvalRunResult>(`/api/v1/evals/runs?${params.toString()}`)
+}
+
+/**
+ * POST /api/v1/evals/run — run the suite against the model through the REAL
+ * funnel and stream the outcome. Each case is a real turn (the model loads,
+ * tools run), so a suite takes MINUTES; the route streams newline-delimited
+ * JSON — one `{case}` per finished case, then a final `{summary,…}` — over the
+ * same createLineBuffer the model pull uses.
+ *
+ * `onCase` fires as each case lands so the page fills its table live with REAL
+ * progress (a case genuinely finished), never a fabricated percentage. Resolves
+ * with the completed run once the summary line arrives. An `{error}` line (an
+ * infra/harness failure mid-run) is thrown, and a stream that ends with no
+ * summary is thrown too — a truncated run must never read as a finished score.
+ */
+export async function runEvalSuite(
+  suite: string,
+  model: string,
+  onCase?: (result: EvalCaseResult) => void,
+  signal?: AbortSignal,
+): Promise<EvalRunResult> {
+  const response = await request('/api/v1/evals/run', {
+    method: 'POST',
+    body: JSON.stringify({ suite, model }),
+    signal,
+  })
+  if (!response.body) {
+    throw new ApiError(0, 'the server answered the run with no stream to read')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const lines = createLineBuffer()
+  const cases: EvalCaseResult[] = []
+  let summary: EvalScoreSummary | null = null
+  let suiteVersion = 0
+
+  const handle = (raw: string) => {
+    const line = raw.trim()
+    if (line === '') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      throw new ApiError(0, `unreadable run line: ${line.slice(0, 200)}`)
+    }
+    const obj = parsed as Record<string, unknown>
+    if (obj.error) throw new ApiError(0, String(obj.error))
+    if (obj.case) {
+      const result = obj.case as EvalCaseResult
+      cases.push(result)
+      onCase?.(result)
+    } else if (obj.summary) {
+      summary = obj.summary as EvalScoreSummary
+      suiteVersion = Number(obj.suite_version)
+    }
+  }
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (const raw of lines.push(decoder.decode(value, { stream: true }))) handle(raw)
+    }
+    for (const raw of lines.flush()) handle(raw)
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+
+  const finalSummary = summary
+  if (finalSummary === null) {
+    throw new ApiError(0, 'the run ended before a summary — it did not finish')
+  }
+  return { suite, suite_version: suiteVersion, model, cases, summary: finalSummary }
+}
