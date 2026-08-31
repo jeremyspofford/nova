@@ -395,7 +395,9 @@ async def test_an_awaiting_reply_is_not_corrected_when_a_card_is_pending_in_the_
     sent2 = frames(resp.text)
 
     assert _corrections(sent2) == []
-    assert await pool.fetchval("SELECT status FROM turns WHERE id <> $1", first[0]["meta"]["turn_id"]) == "ok"
+    turn_id = first[0]["meta"]["turn_id"]
+    status = await pool.fetchval("SELECT status FROM turns WHERE id <> $1", turn_id)
+    assert status == "ok"
 
 
 # -- the anti-poison fix: a contradicted stance does not persist the lie ----

@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-from app import chat, guards
+from app import chat
 from app.main import app as core_app
 from tests import fakes
 from tests.conftest import requires_db

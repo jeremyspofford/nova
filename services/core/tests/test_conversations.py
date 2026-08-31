@@ -180,13 +180,20 @@ async def test_clear_leaves_the_audit_trail_and_conversation_intact(owner_client
     assert resp.status_code == 200
 
     # Transcript gone...
-    assert (
-        await pool.fetchval("SELECT count(*) FROM messages WHERE conversation_id = $1", conversation)
-    ) == 0
+    msg_count = await pool.fetchval(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1", conversation
+    )
+    assert msg_count == 0
     # ...but every audit row remains, and the conversation still exists.
     assert await pool.fetchval("SELECT count(*) FROM turns") == 1
-    assert await pool.fetchval("SELECT conversation_id FROM turns WHERE id = $1", turn_id) is not None
-    assert await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn_id) == 1
+    conversation_id = await pool.fetchval(
+        "SELECT conversation_id FROM turns WHERE id = $1", turn_id
+    )
+    assert conversation_id is not None
+    span_count = await pool.fetchval(
+        "SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn_id
+    )
+    assert span_count == 1
     assert await pool.fetchval("SELECT count(*) FROM governance_events") == 1
     assert (
         await pool.fetchval("SELECT count(*) FROM conversations WHERE id = $1", conversation)

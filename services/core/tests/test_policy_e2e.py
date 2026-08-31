@@ -39,7 +39,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app import autonomy, consents, db, governance, policy, tools
+from app import autonomy, consents, governance, policy, tools
 from app.identity import Person
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db

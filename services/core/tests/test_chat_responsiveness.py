@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from app import chat
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, Refusal, ScriptedGateway
