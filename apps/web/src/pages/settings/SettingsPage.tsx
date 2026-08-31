@@ -8,6 +8,7 @@ import { AppearanceSection } from './AppearanceSection'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
 import { AutonomySection } from './AutonomySection'
+import { ResponseQualitySection } from './ResponseQualitySection'
 
 /**
  * The S1 settings shell: two sections and no tab machinery yet. The tabs and
@@ -47,6 +48,10 @@ export function SettingsPage() {
   const storedPreset = settings ? settingValue(settings, 'appearance.default_preset', 'default') : null
   const chatModel =
     chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
+  // Opt-in, default OFF — reflects the stored value, unset reads false.
+  const responsivenessCheck = settings
+    ? settingValue(settings, 'agents.responsiveness_check', false)
+    : false
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -105,6 +110,10 @@ export function SettingsPage() {
                 setModel(model)
               }}
               onRerunSetup={handleRerunSetup}
+            />
+            <ResponseQualitySection
+              checked={responsivenessCheck}
+              onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
             />
             <AutonomySection />
           </>
