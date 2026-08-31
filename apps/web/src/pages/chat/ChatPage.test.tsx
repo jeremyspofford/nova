@@ -185,6 +185,22 @@ describe('ChatPage — Clear chat button (with a light confirm)', () => {
     expect(assistantBubbles()).toHaveLength(0)
   })
 
+  it('renders the Clear control (and model selector) in the input control row, not the header', async () => {
+    const clearConversation = vi.fn(async () => ({ id: 'c1', cleared: 2 }))
+    renderChatWithClear(loadedApi, clearConversation)
+    await screen.findByText('a real reply')
+
+    // The Clear control now lives in the input-adjacent control row...
+    const controls = screen.getByTestId('chat-controls')
+    expect(within(controls).getByTestId('chat-clear')).toBeDefined()
+    expect(within(controls).getByTestId('chat-model')).toBeDefined()
+
+    // ...and the header no longer carries the Clear control or the model badge.
+    const header = screen.getByTestId('chat-header')
+    expect(within(header).queryByTestId('chat-clear')).toBeNull()
+    expect(within(header).queryByTestId('chat-model')).toBeNull()
+  })
+
   it('cancel dismisses the confirm without clearing anything', async () => {
     const clearConversation = vi.fn(async () => ({ id: 'c1', cleared: 2 }))
     renderChatWithClear(loadedApi, clearConversation)

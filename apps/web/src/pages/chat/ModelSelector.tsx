@@ -1,0 +1,178 @@
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, Cpu } from 'lucide-react'
+import clsx from 'clsx'
+import {
+  getInstalledModels as apiGetInstalledModels,
+  getSuggestion as apiGetSuggestion,
+  putSetting as apiPutSetting,
+  type SuggestedModel,
+} from '../../lib/api'
+import { mergeModels } from '../settings/modelsFormat'
+
+/**
+ * A compact, inline model switcher for the chat input row — the same catalog
+ * and switch contract Settings -> Models uses, in a small dropdown rather than
+ * the full section. It REUSES the model API directly: `getInstalledModels` +
+ * `getSuggestion` for the list, `mergeModels` to merge/mark them, and
+ * `putSetting('chat.model', slug)` to switch — no duplicated fetch/merge/switch
+ * logic (see ModelsSection.tsx, which is the same three calls).
+ *
+ * `currentModel` is the live chat model (chat-store's `state.model`, falling
+ * back to the settings snapshot ChatPage was handed). The trigger shows exactly
+ * that slug — the same `chat-model` testid the read-only header badge used, and
+ * the same contract the Settings<->chat bridge and the e2e change-model spec
+ * assert against. On a switch this calls `onModelChanged` ONLY after the PUT
+ * returns ok (no fake success); the caller (ChatPage) passes chat-store's
+ * `setModel`, which is what makes the new slug show here immediately.
+ *
+ * `api` is the same dependency-injection seam ModelsSection/ChatPage use:
+ * production takes DEFAULT_API, a test injects fakes.
+ */
+
+interface ModelSelectorApi {
+  getInstalledModels: typeof apiGetInstalledModels
+  getSuggestion: typeof apiGetSuggestion
+  putSetting: typeof apiPutSetting
+}
+
+const DEFAULT_API: ModelSelectorApi = {
+  getInstalledModels: apiGetInstalledModels,
+  getSuggestion: apiGetSuggestion,
+  putSetting: apiPutSetting,
+}
+
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+export function ModelSelector({
+  currentModel,
+  onModelChanged,
+  api = DEFAULT_API,
+}: {
+  currentModel: string
+  onModelChanged: (model: string) => void
+  api?: ModelSelectorApi
+}) {
+  const [installed, setInstalled] = useState<string[] | null>(null)
+  const [curated, setCurated] = useState<SuggestedModel[] | null>(null)
+  const [open, setOpen] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    // Two independent reads, each degrading on its own: a failed installed-list
+    // or catalog fetch just leaves the dropdown thinner (mergeModels still
+    // surfaces the current model), never a thrown/uncaught error — the same
+    // "claim nothing you did not confirm" stance ModelsSection takes.
+    api.getInstalledModels().then(
+      list => {
+        if (!cancelled) setInstalled(list)
+      },
+      () => {},
+    )
+    api.getSuggestion().then(
+      s => {
+        if (!cancelled) setCurated(s.models)
+      },
+      () => {},
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  // Close on an outside click, the same lightweight pattern ModelPicker uses.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const merged = mergeModels(currentModel, installed, curated)
+
+  const choose = async (slug: string) => {
+    setOpen(false)
+    if (slug === currentModel) return
+    setError(null)
+    setSwitching(true)
+    try {
+      await api.putSetting('chat.model', slug)
+      // Reflected only now the server confirmed the write — never optimistically.
+      onModelChanged(slug)
+    } catch (err) {
+      setError(reasonOf(err))
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        data-testid="chat-model-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={switching}
+        onClick={() => setOpen(o => !o)}
+        title="Model Nova answers with — click to switch"
+        className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast disabled:opacity-60"
+      >
+        <Cpu size={13} className="shrink-0" />
+        {/* The slug alone lives in this span — the icon and chevron are
+            siblings — so its textContent is exactly the model id, which the
+            Settings<->chat bridge test and the e2e change-model spec both
+            assert with toHaveText(slug). */}
+        <span data-testid="chat-model" className="font-mono truncate max-w-[10rem]">
+          {currentModel || 'Select a model'}
+        </span>
+        <ChevronDown
+          size={13}
+          className={clsx('shrink-0 transition-transform duration-fast', open && 'rotate-180')}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          data-testid="chat-model-menu"
+          className="absolute bottom-full left-0 mb-1 z-50 min-w-[14rem] max-w-[20rem] max-h-60 overflow-y-auto custom-scrollbar rounded-lg border border-border bg-surface-card shadow-lg py-1 glass-overlay dark:border-white/[0.10]"
+        >
+          {merged.length === 0 ? (
+            <p className="px-3 py-2 text-caption text-content-tertiary">No models to show yet.</p>
+          ) : (
+            merged.map(model => (
+              <button
+                key={model.slug}
+                type="button"
+                role="option"
+                aria-selected={model.slug === currentModel}
+                data-testid={`chat-model-option-${model.slug}`}
+                onClick={() => choose(model.slug)}
+                className={clsx(
+                  'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-compact hover:bg-surface-card-hover transition-colors duration-fast',
+                  model.slug === currentModel ? 'text-accent' : 'text-content-primary',
+                )}
+              >
+                <span className="font-mono truncate">{model.slug}</span>
+                {model.slug === currentModel && <Check size={13} className="shrink-0" />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
+      {error && (
+        <p role="alert" className="mt-1 text-micro text-danger">
+          Could not switch model: {error}
+        </p>
+      )}
+    </div>
+  )
+}
