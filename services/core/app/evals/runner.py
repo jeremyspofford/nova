@@ -336,15 +336,27 @@ async def runs_for(
     return [dict(row) for row in rows]
 
 
-def score_summary(runs: Sequence[EvalRun]) -> dict:
-    """The pass rate, with UNGRADEABLE runs excluded from the denominator. Returns
-    pass_rate=None when nothing is gradeable — an empty state, never a fake 0."""
-    gradeable = [r for r in runs if not r.ungradeable]
-    passed = [r for r in gradeable if r.passed]
+def summarize(outcomes: Sequence[tuple[bool | None, bool]]) -> dict:
+    """The pass rate over (passed, ungradeable) pairs — the ONE place the rate is
+    computed, so the in-memory `score_summary` (fresh EvalRun objects) and the
+    runs API (persisted eval_runs rows) can never drift on the null-not-0 rule.
+
+    UNGRADEABLE outcomes are excluded from the denominator; pass_rate is None when
+    nothing is gradeable — an empty state, never a fake 0 (the v3 tournament
+    lesson: an ungradeable run is not a zero)."""
+    total = len(outcomes)
+    gradeable = [passed for passed, ungradeable in outcomes if not ungradeable]
+    passed_count = sum(1 for passed in gradeable if passed)
     return {
-        "total": len(runs),
+        "total": total,
         "gradeable": len(gradeable),
-        "ungradeable": len(runs) - len(gradeable),
-        "passed": len(passed),
-        "pass_rate": (len(passed) / len(gradeable)) if gradeable else None,
+        "ungradeable": total - len(gradeable),
+        "passed": passed_count,
+        "pass_rate": (passed_count / len(gradeable)) if gradeable else None,
     }
+
+
+def score_summary(runs: Sequence[EvalRun]) -> dict:
+    """The pass rate for a set of fresh EvalRun objects — `summarize` over their
+    (passed, ungradeable) pairs. See `summarize` for the null-not-0 rule."""
+    return summarize([(r.passed, r.ungradeable) for r in runs])

@@ -20,6 +20,7 @@ from app import (
     consents_api,
     conversations,
     db,
+    evals_api,
     governance_api,
     proxies,
     settings_store,
@@ -68,6 +69,7 @@ app.include_router(activity.router)
 app.include_router(consents_api.router)
 app.include_router(autonomy_api.router)
 app.include_router(governance_api.router)
+app.include_router(evals_api.router)
 app.include_router(proxies.router)
 app.include_router(workspace_api.router)
 
